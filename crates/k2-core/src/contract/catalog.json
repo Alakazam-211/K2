@@ -161,6 +161,11 @@
       "label": "Turn on camera and share the screen in a call (with voice:join)"
     },
     {
+      "name": "voice:record",
+      "exposure": ["app"],
+      "label": "Start and stop recordings in a call (with voice:join; each person still consents)"
+    },
+    {
       "name": "guests:chat",
       "exposure": ["app"],
       "label": "Give its own guests chat (an owner grant per App, never a guest's)"

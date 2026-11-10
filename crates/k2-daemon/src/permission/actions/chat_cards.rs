@@ -172,6 +172,7 @@ fn caps_words(caps: &[String]) -> String {
             "chat:respond" => "answer in threads",
             "voice:join" => "join calls",
             "voice:video" => "turn on video",
+            "voice:record" => "start and stop recordings",
             other => other,
         })
         .collect();

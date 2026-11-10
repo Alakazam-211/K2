@@ -119,6 +119,18 @@ pub fn app_pass_caps(caps: Vec<String>, app: Option<&str>) -> Vec<String> {
     }
 }
 
+/// Sew 0.9.0: `voice:record` rides a pass only to a Sew that reports
+/// `voice_record_cap` (PRD K-b, amendment B4: the mint site's filter, since
+/// [`ChatPassClaims::with_caps`] is pure). An older Sew refuses a pass with
+/// an unknown cap, so without the flag it is dropped and the rest of the
+/// ceiling stays.
+pub fn record_cap_gate(mut caps: Vec<String>, sew_takes_record: bool) -> Vec<String> {
+    if !sew_takes_record {
+        caps.retain(|c| c != k2_core::skin::CAP_VOICE_RECORD);
+    }
+    caps
+}
+
 /// Sew 0.5.0's `app` grammar ([`k2_core::tool_hook::sew_wire::is_app_id`]):
 /// 1–64 of `[a-z0-9][a-z0-9._-]*`; Sew answers anything else 401
 /// `bad_app`. K2's service ids are `uuid::Uuid::new_v4().to_string()` (36

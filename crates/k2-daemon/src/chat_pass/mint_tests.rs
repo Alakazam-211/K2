@@ -104,7 +104,7 @@ fn caps_claim_is_optional_closed_and_verifies() {
     assert_eq!(plain.clone().with_caps(vec![]).expect("empty").caps, None);
     assert!(plain.clone().with_caps(vec!["thread:read".into()]).is_err());
     assert!(plain.clone().with_caps(vec!["admin".into()]).is_err());
-    assert_eq!(CHAT_CAPS, ["chat:read", "chat:post", "chat:respond", "voice:join", "voice:video"]);
+    assert_eq!(CHAT_CAPS, ["chat:read", "chat:post", "chat:respond", "voice:join", "voice:video", "voice:record"]);
     // A12: voice:video rides the claim (Sew 0.4.1 reads it; an older Sew
     // ignores the unknown, well-formed cap).
     let video = plain.clone().with_caps(vec!["voice:video".into(), "voice:join".into()]).expect("video");
@@ -831,6 +831,58 @@ fn app_role_chat_caps_ride_the_pass_a1() {
         assert!(!c.caps.unwrap().iter().any(|x| x == "voice:video" || x == "voice:join"), "no voice: a real ceiling");
     });
     assert!(!plain.is_empty());
+}
+
+/// Sew 0.9.0 (K-b, PRD §8 "mint"): a role holding `voice:record` mints a
+/// pass without it while Sew lacks `voice_record_cap` (Sew 0.8.x refuses a
+/// pass with an unknown cap), and with it once Sew reports the flag. The
+/// rest of the ceiling is the same either way.
+#[test]
+fn voice_record_rides_a_pass_only_to_a_sew_with_voice_record_cap() {
+    struct Flagged(bool);
+    impl SewStatus for Flagged {
+        fn install_id(&self) -> Result<String, String> {
+            Ok(INSTALL.into())
+        }
+        fn voice_record_cap(&self) -> bool {
+            self.0
+        }
+    }
+    let _home = TempHome::new();
+    k2_core::recording::set_for_tests(true, false);
+    let r = ring("k-b-record");
+    let mut policy = k2_core::skin::RoomPolicy::new();
+    policy.insert("room-a".into(), vec!["thread:read".into(), "voice:join".into(), "voice:record".into()]);
+    k2_core::skin::create_role("hosts", &policy).expect("a role with voice:record (the pin's const on)");
+    let ho = k2_core::skin::add_principal("ho").expect("principal");
+    k2_core::skin::insert_chat_grant_for_tests(&ho.id).expect("chat grant");
+    k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: ho.id.clone(),
+        kind: "app".into(),
+        target_id: HEARTH_SVC.into(),
+        role: Some("hosts".into()),
+        scope: None,
+        created_by: None,
+    })
+    .expect("app grant with the role");
+    let tok = k2_core::skin::create_app_session_token("ho", HEARTH_SVC).expect("ho → Hearth");
+    let jwks = r.ring.public_jwks(T0).expect("jwks");
+    let limiter = Limiter::new(PER_SID, PER_DAEMON);
+    let codes = handoff::Store::default();
+    let sign = |c: &ChatPassClaims| r.ring.sign(c, T0);
+    for (flag, want) in [(false, json!(["chat:read", "voice:join"])), (true, json!(["chat:read", "voice:join", "voice:record"]))] {
+        let status = Flagged(flag);
+        let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &status, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate, keyed_gate: &not_keyed };
+        let x = mint::handle_pass_with(&req(Some(&tok.raw), b"{}"), &d);
+        assert_eq!(x.response.status, "200 OK", "{}", x.response.body);
+        let b = body(&x);
+        assert_eq!(b["caps"], want, "voice_record_cap={flag}: {b}");
+        let c = verify_with_jwks(b["pass"].as_str().expect("pass"), &jwks, AUD, T0).expect("verifies");
+        assert_eq!(serde_json::to_value(&c.caps).unwrap(), want, "the JWS carries the same ceiling");
+    }
+    assert_eq!(super::record_cap_gate(vec!["voice:join".into(), "voice:record".into()], false), vec!["voice:join".to_string()]);
+    k2_core::recording::set_for_tests(false, false);
 }
 
 /// Sew 0.5.0: an App role without `voice:video` mints a pass whose caps

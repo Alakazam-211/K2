@@ -820,6 +820,9 @@ pub fn app_removed(conn: &Connection, app_id: &str, actor: &str, now: i64) -> Re
     }
     conn.execute("DELETE FROM tool_app_member_lists WHERE app_id = ?1", params![app_id])
         .map_err(|e| format!("app lists forget: {e}"))?;
+    // Sew 0.9.0: its recording rollout row (B11; its recordings stay in
+    // Sew, R4).
+    super::recording::forget_app(conn, app_id)?;
     Ok(spaces)
 }
 

@@ -98,18 +98,21 @@ export const SKIN_AGENT_CONFIG_CAP = 'files:agentconfig' as const
 export const SKIN_AGENT_CONFIG_LABEL: string = K2_CAPS[SKIN_AGENT_CONFIG_CAP].label
 
 /** Toggle `cap` in a room's cap set. Dropping `files:write` also drops the
- *  `.k2/` opt-in, and dropping `voice:join` drops `voice:video` (each means
- *  nothing alone and the daemon refuses it); `voice:video` brings
- *  `voice:join` with it. */
+ *  `.k2/` opt-in, and dropping `voice:join` drops `voice:video` and
+ *  `voice:record` (each means nothing alone and the daemon refuses it);
+ *  `voice:video` and `voice:record` bring `voice:join` with them. */
 export function toggleSkinCap(prev: ReadonlySet<string>, cap: string, on: boolean): Set<string> {
   const next = new Set(prev)
   if (on) {
     next.add(cap)
-    if (cap === 'voice:video') next.add('voice:join')
+    if (cap === 'voice:video' || cap === 'voice:record') next.add('voice:join')
   } else {
     next.delete(cap)
     if (cap === 'files:write') next.delete(SKIN_AGENT_CONFIG_CAP)
-    if (cap === 'voice:join') next.delete('voice:video')
+    if (cap === 'voice:join') {
+      next.delete('voice:video')
+      next.delete('voice:record')
+    }
   }
   return next
 }
@@ -172,17 +175,25 @@ export function skinCapChoices(appHeartbeats: boolean, agentIdentity: boolean, f
 // mints a chat pass), and only when the server ships them (`app-chat-caps`).
 export const SKIN_CHAT_CAPS = ['chat:read', 'chat:post', 'chat:respond', 'voice:join', 'voice:video'] as const
 export type SkinChatCap = (typeof SKIN_CHAT_CAPS)[number]
+// Sew 0.9.0 (recording in Apps): "Record", tied to "Voice" like video. A
+// ceiling only: each person in the call still consents. Offered only by a
+// server that reports `app-voice-record-v1` (its Sew 0.9.0 pin is in; an
+// older server refuses the unknown cap).
+export const SKIN_RECORD_CAP = 'voice:record' as const
+export const VOICE_RECORD_FEATURE = 'app-voice-record-v1' as const
 
 /** Every cap a role line may show, with its label. */
 export const ROLE_CAP_LABELS: Readonly<Record<string, string>> = {
   ...SKIN_CAP_LABELS,
   ...Object.fromEntries(SKIN_CHAT_CAPS.map((cap) => [cap, K2_CAPS[cap].label])),
+  [SKIN_RECORD_CAP]: K2_CAPS[SKIN_RECORD_CAP].label,
 }
 
 /** A role line's choices: the room caps, then the chat caps when the
- *  server ships them. */
-export function roleCapChoices(base: readonly SkinCap[], appChat: boolean): readonly string[] {
-  return appChat ? [...base, ...SKIN_CHAT_CAPS] : base
+ *  server ships them, then Record when it takes `voice:record`. */
+export function roleCapChoices(base: readonly SkinCap[], appChat: boolean, record = false): readonly string[] {
+  if (!appChat) return base
+  return record ? [...base, ...SKIN_CHAT_CAPS, SKIN_RECORD_CAP] : [...base, ...SKIN_CHAT_CAPS]
 }
 
 export type FrontDoorMode = 'connect' | 'direct'
@@ -638,11 +649,18 @@ export function SkinAccessSection(): React.JSX.Element {
   const fileDownload = useServerSupports('thread-download')
   const phonePairing = useServerSupports('app-phone-pairing')
   const appChat = useServerSupports('app-chat-caps')
+  const recordCap = useMemo(() => {
+    try {
+      return primaryScope().serverSupports(VOICE_RECORD_FEATURE)
+    } catch {
+      return false
+    }
+  }, [])
   const capChoices = useMemo(
     () => skinCapChoices(appHeartbeats, agentIdentity, fileDownload),
     [appHeartbeats, agentIdentity, fileDownload],
   )
-  const roleChoices = useMemo(() => roleCapChoices(capChoices, appChat), [capChoices, appChat])
+  const roleChoices = useMemo(() => roleCapChoices(capChoices, appChat, recordCap), [capChoices, appChat, recordCap])
   const [users, setUsers] = useState<SkinUser[]>([])
   const [roles, setRoles] = useState<SkinRole[]>([])
   const [tokens, setTokens] = useState<SkinTokenRow[]>([])

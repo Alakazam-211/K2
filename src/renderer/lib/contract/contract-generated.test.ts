@@ -418,6 +418,8 @@ describe('TUWA10: one cap table', () => {
       'chat:respond': 'Answer chat cards',
       'voice:join': 'Join voice channels and calls',
       'voice:video': 'Turn on camera and share the screen in a call (with voice:join)',
+      // Sew 0.9.0 recording in Apps: a ceiling, accepted from K2's Sew 0.9.0 pin.
+      'voice:record': 'Start and stop recordings in a call (with voice:join; each person still consents)',
       // An owner grant to the App itself, never a role's or a pass's cap.
       'guests:chat': "Give its own guests chat (an owner grant per App, never a guest's)",
       // 0.46.6 Sew for Apps A9 (catalog v35): the App's own cap, held for the owner once.

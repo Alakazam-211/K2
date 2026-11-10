@@ -32,6 +32,11 @@ pub trait SewStatus: Send + Sync {
     fn ready_gate(&self) -> Result<(), serde_json::Value> {
         Ok(())
     }
+    /// Sew 0.9.0: does this Sew take `voice:record` on a pass (flag
+    /// `voice_record_cap`)? Fails closed: a double that says nothing says no.
+    fn voice_record_cap(&self) -> bool {
+        false
+    }
 }
 
 /// Production: the supervisor's `sew_server` row, read on every call.
@@ -52,6 +57,9 @@ impl SewStatus for SewRow {
             return Ok(());
         }
         crate::sew::health::mint_gate(&crate::sew::supervisor::live())
+    }
+    fn voice_record_cap(&self) -> bool {
+        k2_core::tool_hook::sew_has(k2_core::tool_hook::features::VOICE_RECORD_CAP).unwrap_or(false)
     }
 }
 

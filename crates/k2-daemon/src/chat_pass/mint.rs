@@ -540,6 +540,8 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
     let app = app_claim(&ident);
     // Sew 0.5.0: an App pass always carries caps (no claim = no ceiling).
     let caps = super::app_pass_caps(ident.caps.clone(), app.as_deref());
+    // Sew 0.9.0: never `voice:record` to a Sew without `voice_record_cap`.
+    let caps = super::record_cap_gate(caps, d.status.voice_record_cap());
     let claims = match ChatPassClaims::new(&install_id, &ident.sub, &ident.sid, d.now)
         .and_then(|c| c.with_caps(caps))
         .and_then(|c| c.with_app(app.as_deref()))

@@ -132,6 +132,8 @@ pub mod api_keys;
 // Skin capability passes (prd-skin-auth-v1): guest list + hashed `k2skn_`
 // tokens in `~/.k2/skin.db`. Overlay Thread rooms; never grid. See module docs.
 pub mod skin;
+// Recording in Apps (Sew 0.9.0): the release consts. See module docs.
+pub mod recording;
 // The App-facing route table shared by the browser helper and the App
 // gateway link (runtime S14, AR8). See module docs.
 pub mod app_surface;

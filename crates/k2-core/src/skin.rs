@@ -299,8 +299,17 @@ pub const CAP_VOICE_JOIN: &str = "voice:join";
 /// alone). A Sew older than 0.4.1 ignores it (an unknown, well-formed cap
 /// grants nothing there), so its roles alone decide video.
 pub const CAP_VOICE_VIDEO: &str = "voice:video";
+/// Start and stop recordings in a call (Sew 0.9.0, PassCap::VoiceRecord).
+/// A ceiling only: it never grants Sew's RECORD_CALLS, and each person in
+/// the call still consents for themselves. Means nothing without
+/// [`CAP_VOICE_JOIN`] (you record a call you are in; [`parse_caps`] refuses
+/// it alone). Accepted in roles and manifests only once
+/// [`crate::recording::in_apps`] (the Sew 0.9.0 pin); a pass carries it
+/// only to a Sew that reports `voice_record_cap` (the mint drops it
+/// otherwise: an older Sew refuses a pass with an unknown cap).
+pub const CAP_VOICE_RECORD: &str = "voice:record";
 /// The chat caps, in the order a pass lists them.
-pub const CHAT_CAPS: &[&str] = &[CAP_CHAT_READ, CAP_CHAT_POST, CAP_CHAT_RESPOND, CAP_VOICE_JOIN, CAP_VOICE_VIDEO];
+pub const CHAT_CAPS: &[&str] = &[CAP_CHAT_READ, CAP_CHAT_POST, CAP_CHAT_RESPOND, CAP_VOICE_JOIN, CAP_VOICE_VIDEO, CAP_VOICE_RECORD];
 
 /// Is `cap` one of [`CHAT_CAPS`]?
 pub fn is_chat_cap(cap: &str) -> bool {
@@ -355,6 +364,7 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_CHAT_RESPOND,
     CAP_VOICE_JOIN,
     CAP_VOICE_VIDEO,
+    CAP_VOICE_RECORD,
 ];
 
 /// Connect / Server Access names — never a skin role. `viewer` stays
@@ -366,6 +376,16 @@ const CONNECT_ROLE_NAME_ERR: &str = "Connect role names cannot be skin roles (ow
 
 fn accepted_caps_csv() -> String {
     ACCEPTED_CAPS.join(", ")
+}
+
+/// The refusal of `voice:record` before the Sew 0.9.0 pin
+/// ([`crate::recording::in_apps`] off): an unknown capability, as before.
+pub fn record_cap_not_yet() -> String {
+    let now: Vec<&str> = ACCEPTED_CAPS.iter().copied().filter(|c| *c != CAP_VOICE_RECORD).collect();
+    format!(
+        "unknown capability \"{CAP_VOICE_RECORD}\" on this K2 (recording in Apps comes with K2's Sew 0.9.0 release); accepted: {}",
+        now.join(", ")
+    )
 }
 
 fn is_connect_role_name(name: &str) -> bool {
@@ -613,6 +633,9 @@ pub fn parse_caps(raw: Option<&[String]>) -> Result<Vec<String>, String> {
                 if t.is_empty() {
                     continue;
                 }
+                if t == CAP_VOICE_RECORD && !crate::recording::in_apps() {
+                    return Err(record_cap_not_yet());
+                }
                 if ACCEPTED_CAPS.contains(&t) {
                     if !out.iter().any(|c| c == t) {
                         out.push(t.to_string());
@@ -640,6 +663,11 @@ pub fn parse_caps(raw: Option<&[String]>) -> Result<Vec<String>, String> {
             if out.iter().any(|c| c == CAP_VOICE_VIDEO) && !out.iter().any(|c| c == CAP_VOICE_JOIN) {
                 return Err(format!(
                     "{CAP_VOICE_VIDEO} only widens {CAP_VOICE_JOIN} (camera and screen in a call); list {CAP_VOICE_JOIN} too"
+                ));
+            }
+            if out.iter().any(|c| c == CAP_VOICE_RECORD) && !out.iter().any(|c| c == CAP_VOICE_JOIN) {
+                return Err(format!(
+                    "{CAP_VOICE_RECORD} only widens {CAP_VOICE_JOIN} (start and stop recordings in a call you are in); list {CAP_VOICE_JOIN} too"
                 ));
             }
         }
@@ -1708,6 +1736,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     crate::tool_hook::governed::ensure_schema(&conn)?;
     // Voice rooms (Sew 0.7.0): the K2 Admin Space, its members and rooms.
     crate::tool_hook::admin_space::ensure_schema(&conn)?;
+    // Sew 0.9.0: recording in Apps (the cap rollout, locks, the feed).
+    crate::tool_hook::recording::ensure_schema(&conn)?;
     // S24-1: numbered, additive steps on top of the idempotent block above.
     run_schema_steps(&mut conn)?;
     // skin.db AND its -wal/-shm: the WAL holds recent pages (guest
@@ -7779,7 +7809,8 @@ mod tests {
     /// never implied, and `voice:video` needs `voice:join` beside it.
     #[test]
     fn parse_caps_accepts_chat_caps_never_implied_a1() {
-        let all: Vec<String> = CHAT_CAPS.iter().map(|c| c.to_string()).collect();
+        // `voice:record` waits for the Sew 0.9.0 pin (its own test below).
+        let all: Vec<String> = CHAT_CAPS.iter().filter(|c| **c != CAP_VOICE_RECORD).map(|c| c.to_string()).collect();
         assert_eq!(parse_caps(Some(&all)).expect("chat caps"), all);
         for c in CHAT_CAPS {
             assert!(is_chat_cap(c), "{c}");
@@ -7797,6 +7828,29 @@ mod tests {
         let err = parse_caps(Some(&["voice:speak".into()])).unwrap_err();
         assert!(err.contains("unknown capability") && err.contains("voice:video"), "the accepted list names them: {err}");
         assert!(!is_chat_cap("thread:read") && !is_chat_cap("chat:manage"));
+    }
+
+    /// Sew 0.9.0 (K-b, PRD §8): before the pin `voice:record` is an unknown
+    /// capability, as on every K2 before it; with the pin's const on it is a
+    /// chat cap that only widens `voice:join`, like `voice:video`.
+    #[test]
+    fn voice_record_waits_for_the_pin_and_only_widens_voice_join() {
+        crate::recording::set_for_tests(false, false);
+        for list in [vec!["voice:record"], vec!["voice:join", "voice:record"]] {
+            let caps: Vec<String> = list.iter().map(|c| c.to_string()).collect();
+            let err = parse_caps(Some(&caps)).unwrap_err();
+            assert!(err.starts_with("unknown capability \"voice:record\""), "{err}");
+            assert!(!err.split_once("accepted: ").expect("list").1.contains("voice:record"), "{err}");
+        }
+        crate::recording::set_for_tests(true, false);
+        let err = parse_caps(Some(&["voice:record".into()])).unwrap_err();
+        assert!(err.contains("voice:record only widens voice:join"), "{err}");
+        let err = parse_caps(Some(&["voice:record".into(), "chat:post".into()])).unwrap_err();
+        assert!(err.contains("list voice:join too"), "{err}");
+        let ok = parse_caps(Some(&["voice:record".into(), "voice:join".into()])).expect("with voice:join");
+        assert_eq!(ok, vec![CAP_VOICE_RECORD.to_string(), CAP_VOICE_JOIN.to_string()]);
+        assert!(is_chat_cap(CAP_VOICE_RECORD) && CHAT_CAPS.last() == Some(&CAP_VOICE_RECORD), "after voice:video, one list");
+        crate::recording::set_for_tests(false, false);
     }
 
     /// A1: a role's chat caps reach the session snapshot (its union) from

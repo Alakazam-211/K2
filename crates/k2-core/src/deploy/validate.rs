@@ -364,7 +364,10 @@ fn check_contract(m: &Manifest, errors: &mut Vec<Issue>, _warnings: &mut Vec<Iss
     use crate::contract::{catalog, Exposure};
     let cat = catalog();
     for c in &m.caps {
-        match cat.cap(c) {
+        // Sew 0.9.0's `voice:record` is in the catalog but waits for the pin
+        // (`recording::in_apps`): unknown here until then, as before.
+        let known = cat.cap(c).filter(|_| c != crate::skin::CAP_VOICE_RECORD || crate::recording::in_apps());
+        match known {
             None => errors.push(issue("cap_unknown", format!("cap \"{c}\" is not in K2's catalog"), Some(format!("caps: {c}")))),
             Some(row) if !row.exposure.contains(&Exposure::App) => {
                 errors.push(issue("cap_not_for_apps", format!("cap \"{c}\" is not available to Apps"), Some(format!("caps: {c}"))))
@@ -806,6 +809,33 @@ mod tests {
         for want in ["cap_unknown", "role_invalid", "cap_outside_ceiling", "feature_unknown", "k2_version_unmet"] {
             assert!(codes.contains(&want), "{want} missing from {codes:?}");
         }
+    }
+
+    /// Sew 0.9.0 (K-b, PRD §8): before the pin a manifest's `voice:record` is
+    /// `cap_unknown`, as before; with the pin's const on, a role line that
+    /// asks for it outside the App's caps is `cap_outside_ceiling`, and one
+    /// inside them passes.
+    #[test]
+    fn voice_record_waits_for_the_pin_then_sits_inside_the_ceiling() {
+        let h = TempHome::new();
+        let chat = r#"{"schema":1,"kind":"app","id":"meet","name":"Meet","version":"1.0.0",
+          "caps":["thread:read","chat:read","voice:join"CAPS],
+          "bindings":{"room":{"type":"room","max":1,"caps":["thread:read"]}},
+          "roles":{"host":{"room":["voice:join","voice:record"]}},
+          "host":{"mode":"cmd","start":["node","server.js"]}}"#;
+        let codes = |m: &str| -> Vec<String> {
+            let (r, _) = validate_tree(&app(h.path(), m), &Options::default());
+            r.errors.iter().map(|e| format!("{}@{}", e.code, e.at.clone().unwrap_or_default())).collect()
+        };
+        crate::recording::set_for_tests(false, false);
+        let before = codes(&chat.replace("CAPS", r#","voice:record""#));
+        assert!(before.contains(&"cap_unknown@caps: voice:record".to_string()), "{before:?}");
+        crate::recording::set_for_tests(true, false);
+        let outside = codes(&chat.replace("CAPS", ""));
+        assert_eq!(outside, vec!["cap_outside_ceiling@roles.host.room".to_string()], "the role asks outside the App's caps");
+        let inside = codes(&chat.replace("CAPS", r#","voice:record""#));
+        assert!(inside.is_empty(), "{inside:?}");
+        crate::recording::set_for_tests(false, false);
     }
 
     #[test]

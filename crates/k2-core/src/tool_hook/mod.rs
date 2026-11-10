@@ -48,6 +48,7 @@ pub mod home;
 pub mod members;
 pub mod outbox;
 pub mod policy;
+pub mod recording;
 pub mod reconcile;
 pub mod sew_wire;
 
@@ -1296,6 +1297,38 @@ pub fn sew_recording_features() -> Result<features::RecordingFeatures, String> {
         return Ok(features::RecordingFeatures::default());
     }
     crate::skin::with_skin_conn(|conn| features::RecordingFeatures::read(conn, CHAT_KIND))
+}
+
+// ── Recording in Apps (Sew 0.9.0, [`recording`]) ─────────────────────
+
+/// The Apps with a Sew settings row (their service ids).
+pub fn recording_apps() -> Result<Vec<String>, String> {
+    if !skin_store_exists() {
+        return Ok(Vec::new());
+    }
+    crate::skin::with_skin_conn(home::apps)
+}
+
+/// The cap rollout's next step for `app_id` ([`recording::step`]).
+pub fn recording_rollout_step(app_id: &str, manifest: &recording::ManifestChat, record_cap: bool) -> Result<recording::Step, String> {
+    crate::skin::with_skin_conn(|conn| recording::step(conn, app_id, manifest, record_cap))
+}
+
+/// Record the App's grandfather step ([`recording::note_grandfathered`]).
+pub fn recording_note_grandfathered(app_id: &str, roles: &[String]) -> Result<(), String> {
+    let now = outbox::now_secs();
+    crate::skin::with_skin_conn(|conn| recording::note_grandfathered(conn, app_id, roles, now))
+}
+
+/// Set the App's `cap_required` ([`recording::set_cap_required`]) and wake
+/// the sweep's sender.
+pub fn recording_set_cap_required(app_id: &str) -> Result<bool, String> {
+    let now = outbox::now_secs();
+    let changed = crate::skin::with_skin_conn(|conn| recording::set_cap_required(conn, app_id, now))?;
+    if changed {
+        kick_reconcile();
+    }
+    Ok(changed)
 }
 
 /// Every flag the box's Sew last reported (empty before any sweep).

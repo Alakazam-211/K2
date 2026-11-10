@@ -168,6 +168,11 @@ export const REPORTED_FEATURES = {
    *  `/cli/product-feedback/*` and `product_feedback_status`. Without it the
    *  dialog only offers Copy as text and Alakazam's address. */
   'product-feedback-v1': 'product-feedback-v1',
+  /** Sew 0.9.0 recording in Apps (K2 0.46.11 pin, `boot_status.rs`
+   *  `FEATURE_VOICE_RECORD`): App manifests and role lines take
+   *  `voice:record`. Settings → User Access offers "Record" only for a
+   *  server that lists it. */
+  'app-voice-record-v1': 'app-voice-record-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

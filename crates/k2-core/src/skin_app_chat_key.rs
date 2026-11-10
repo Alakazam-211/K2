@@ -143,6 +143,10 @@ pub fn normalize_caps(raw: &[String]) -> Result<Vec<String>, String> {
     if let Some(bad) = raw.iter().map(|c| c.trim()).find(|c| !CHAT_CAPS.contains(c)) {
         return Err(format!("'{bad}' is not a chat cap (caps: {})", CHAT_CAPS.join(" ")));
     }
+    // Sew 0.9.0's `voice:record` waits for the pin, as in roles.
+    if !crate::recording::in_apps() && raw.iter().any(|c| c.trim() == super::CAP_VOICE_RECORD) {
+        return Err(super::record_cap_not_yet());
+    }
     Ok(CHAT_CAPS.iter().filter(|c| raw.iter().any(|r| r.trim() == **c)).map(|c| c.to_string()).collect())
 }
 

@@ -119,6 +119,7 @@ export const K2_CAPS = {
   'chat:respond': { label: 'Answer chat cards', exposure: ['app'] },
   'voice:join': { label: 'Join voice channels and calls', exposure: ['app'] },
   'voice:video': { label: 'Turn on camera and share the screen in a call (with voice:join)', exposure: ['app'] },
+  'voice:record': { label: 'Start and stop recordings in a call (with voice:join; each person still consents)', exposure: ['app'] },
   'guests:chat': { label: "Give its own guests chat (an owner grant per App, never a guest's)", exposure: ['app'] },
   'chat:channels': { label: 'Make chat channels in its own Space and add its users to them', exposure: ['app'] },
   'git:read': {

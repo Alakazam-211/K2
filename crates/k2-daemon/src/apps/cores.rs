@@ -25,7 +25,8 @@
 //!   (MCS11–12) lands. No App cap belongs to it yet, and App mail sends
 //!   stay held for the owner even then (N4).
 //! - **Sew** (enforced since Sew for Apps A1, 0.46.6): the chat caps
-//!   (`chat:read|post|respond`, `voice:join`, `voice:video`) are its caps,
+//!   (`chat:read|post|respond`, `voice:join`, `voice:video`, and Sew
+//!   0.9.0's `voice:record` once the pin accepts it) are its caps,
 //!   so a ticked Sew pre-approves an App asking for them.
 //! - **Unticking** stops future automatic additions. Caps an App already
 //!   has stay until the owner narrows that App (Q4: nothing that runs
@@ -366,7 +367,7 @@ mod tests {
         let n = need(&v(&["mail", "sew"]), &v(&["thread:read"]));
         assert_eq!(n.cores, vec!["thread"]);
         // Sew for Apps A1: the chat caps are Sew's.
-        let chat = v(&["chat:read", "chat:post", "voice:join", "voice:video"]);
+        let chat = v(&["chat:read", "chat:post", "voice:join", "voice:video", "voice:record"]);
         assert_eq!(need(&v(&["thread"]), &chat).cores, vec!["sew"]);
         assert!(need(&v(&["sew"]), &chat).is_empty(), "a ticked Sew pre-approves the chat caps");
     }

@@ -1210,6 +1210,15 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
         // Decision 13: each chat App's signalling origin, then the settings
         // Sew's feature flags say it takes (never by version).
         crate::sew::home::refresh_origins();
+        // Sew 0.9.0: the voice:record cap rollout (inert before the pin
+        // and on a Sew without voice_record_cap), before the settings step
+        // sends what it set.
+        if k == hook::CHAT_KIND {
+            let r = crate::sew::recording_rollout::run(&status.features);
+            if !r.grandfathered.is_empty() || !r.capped.is_empty() {
+                log_debug!("[recording] rollout: grandfathered {:?}, capped {:?}", r.grandfathered, r.capped);
+            }
+        }
         hook::apply_settings(&k, &status.features, &policy_read)?;
         // Voice rooms (preview): the K2 Admin Space, its members and rooms,
         // after the flags above are recorded. Its failure is logged, never

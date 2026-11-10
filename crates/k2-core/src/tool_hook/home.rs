@@ -39,6 +39,12 @@
 //! `max_level` (`member | moderator | admin`) and `uploads` (bool) come
 //! from its chat key ([`set_app_chat`]) and go only once Sew reports
 //! `app_governed_spaces`.
+//!
+//! **Recording (Sew 0.9.0):** an App's `recording {start_level, required,
+//! cap_required, server_read, audio_max_days}` ([`super::recording`]) goes
+//! only once Sew reports `app_recording`, and `cap_required` only with
+//! `voice_record_cap`. The home client never takes it (Sew answers 409
+//! `home_client_cannot_govern`; amendment B22).
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -101,6 +107,33 @@ fn merge(conn: &Connection, subject: &str, fields: Map<String, Value>, actor: &s
 
 fn obj(v: Value) -> Map<String, Value> {
     v.as_object().cloned().unwrap_or_default()
+}
+
+/// An App's wanted settings body (`None` = no row).
+pub fn app_body(conn: &Connection, app_id: &str) -> Result<Option<Map<String, Value>>, String> {
+    body_of(conn, &format!("{APP_PREFIX}{app_id}"))
+}
+
+/// Merge one top-level field into an App's row (recording's object,
+/// [`super::recording::set_app_recording`]). A new row starts not hidden.
+pub(crate) fn merge_app_field(conn: &Connection, app_id: &str, key: &str, value: Value, actor: &str, now: i64) -> Result<bool, String> {
+    let subject = format!("{APP_PREFIX}{app_id}");
+    let mut f = Map::new();
+    f.insert(key.to_string(), value);
+    if body_of(conn, &subject)?.is_none() {
+        f.insert("hidden_from_home".into(), Value::Bool(false));
+    }
+    merge(conn, &subject, f, actor, now)
+}
+
+/// The install's home client, as K2 wants it (`None` = none set).
+pub fn home_client(conn: &Connection) -> Result<Option<String>, String> {
+    Ok(body_of(conn, HOME_SUBJECT)?.and_then(|b| b.get("app_id").and_then(Value::as_str).map(str::to_string)))
+}
+
+/// Is `app_id` the install's home client?
+pub fn is_home_client(conn: &Connection, app_id: &str) -> Result<bool, String> {
+    Ok(home_client(conn)?.as_deref() == Some(app_id))
 }
 
 /// Set (or clear, `None`) the install's home client: the App id whose
@@ -248,6 +281,20 @@ pub fn sendable(subject: &str, body: &Map<String, Value>, flags: &[String]) -> O
                 }
             }
         }
+        // Sew 0.9.0: `recording` only with `app_recording`, its
+        // `cap_required` only with `voice_record_cap` (an older Sew denies
+        // the unknown field, and with it the whole body).
+        if has(features::APP_RECORDING) {
+            if let Some(r) = body.get("recording").and_then(Value::as_object) {
+                let mut rec = r.clone();
+                if !has(features::VOICE_RECORD_CAP) {
+                    rec.remove("cap_required");
+                }
+                if !rec.is_empty() {
+                    out.insert("recording".into(), Value::Object(rec));
+                }
+            }
+        }
         if out.is_empty() {
             return None;
         }
@@ -269,6 +316,18 @@ pub struct Setting {
     pub updated_by: String,
 }
 
+/// [`sendable`] as the sweep sends it: the home client's row carries no
+/// `recording` (B22).
+pub fn sendable_now(conn: &Connection, subject: &str, body: &Map<String, Value>, flags: &[String]) -> Result<Option<Value>, String> {
+    let mut body = body.clone();
+    if let Some(app) = subject.strip_prefix(APP_PREFIX) {
+        if is_home_client(conn, app)? {
+            body.remove("recording");
+        }
+    }
+    Ok(sendable(subject, &body, flags))
+}
+
 pub fn list(conn: &Connection) -> Result<Vec<Setting>, String> {
     let flags = features::list(conn, CHAT_KIND)?;
     let mut st = conn
@@ -281,16 +340,18 @@ pub fn list(conn: &Connection) -> Result<Vec<Setting>, String> {
         .map_err(|e| format!("sew settings list: {e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("sew settings row: {e}"))?;
-    Ok(rows
-        .into_iter()
-        .map(|(subject, body, sent, updated_at, updated_by)| {
-            let body: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
-            let sent: Option<Value> = sent.and_then(|s| serde_json::from_str(&s).ok());
-            let want = body.as_object().and_then(|b| sendable(&subject, b, &flags));
-            let delivered = want.is_none_or(|w| sent.as_ref() == Some(&w));
-            Setting { subject, body, sent, delivered, updated_at, updated_by }
-        })
-        .collect())
+    let mut out = Vec::with_capacity(rows.len());
+    for (subject, body, sent, updated_at, updated_by) in rows {
+        let body: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        let sent: Option<Value> = sent.and_then(|s| serde_json::from_str(&s).ok());
+        let want = match body.as_object() {
+            Some(b) => sendable_now(conn, &subject, b, &flags)?,
+            None => None,
+        };
+        let delivered = want.is_none_or(|w| sent.as_ref() == Some(&w));
+        out.push(Setting { subject, body, sent, delivered, updated_at, updated_by });
+    }
+    Ok(out)
 }
 
 /// The sweep: one op per subject whose sendable part (by Sew's flags) isn't
@@ -317,7 +378,7 @@ pub fn plan(conn: &Connection, busy: &std::collections::HashSet<String>) -> Resu
             continue;
         }
         let Some(body) = serde_json::from_str::<Value>(&body).ok().and_then(|v| v.as_object().cloned()) else { continue };
-        let Some(want) = sendable(&subject, &body, &flags) else { continue };
+        let Some(want) = sendable_now(conn, &subject, &body, &flags)? else { continue };
         if sent.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).as_ref() == Some(&want) {
             continue;
         }
@@ -448,6 +509,21 @@ mod tests {
         let home = obj(json!({"app_id": null}));
         assert_eq!(sendable(HOME_SUBJECT, &home, &f(&["app_origin"])), None);
         assert_eq!(sendable(HOME_SUBJECT, &home, &f(&["home_client"])), Some(json!({"app_id": null})));
+        // Sew 0.9.0: recording waits for `app_recording`, its cap_required
+        // for `voice_record_cap`.
+        let rec = obj(json!({"display_name": "Jobs", "recording": {"start_level": "member", "cap_required": true, "server_read": false}}));
+        assert_eq!(sendable("app:x", &rec, &f(&["home_client"])), Some(json!({"display_name": "Jobs"})), "Sew 0.8.x: no recording field");
+        assert_eq!(
+            sendable("app:x", &rec, &f(&["app_recording"])),
+            Some(json!({"recording": {"start_level": "member", "server_read": false}})),
+            "no cap_required without voice_record_cap"
+        );
+        assert_eq!(
+            sendable("app:x", &rec, &f(&["app_recording", "voice_record_cap"])),
+            Some(json!({"recording": {"start_level": "member", "cap_required": true, "server_read": false}}))
+        );
+        let only_cap = obj(json!({"recording": {"cap_required": true}}));
+        assert_eq!(sendable("app:x", &only_cap, &f(&["app_recording"])), None, "nothing left to send");
         // The chat key's ceiling (I7) waits for `app_governed_spaces`.
         let keyed = obj(json!({"display_name": "Jobs", "max_level": "moderator", "uploads": false}));
         assert_eq!(sendable("app:x", &keyed, &f(&["home_client"])), Some(json!({"display_name": "Jobs"})));

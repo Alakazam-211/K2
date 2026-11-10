@@ -37,6 +37,7 @@ import {
   SKIN_AGENT_CONFIG_LABEL,
   toggleSkinCap,
   SKIN_CHAT_CAPS,
+  SKIN_RECORD_CAP,
   ROLE_CAP_LABELS,
   roleCapChoices,
   parseFrontDoor,
@@ -1018,6 +1019,18 @@ describe('TUWA10: Settings → Apps reads the shared cap table', () => {
     const off = toggleSkinCap(on, 'voice:join', false)
     expect([...off]).toEqual(['thread:read'])
     expect([...toggleSkinCap(on, 'voice:video', false)].sort()).toEqual(['thread:read', 'voice:join'])
+  })
+
+  it('Sew 0.9.0: Record rides Voice like video, and shows only on a server that takes voice:record', () => {
+    const base = skinCapChoices(true, true, true)
+    expect(roleCapChoices(base, true)).not.toContain(SKIN_RECORD_CAP)
+    expect(roleCapChoices(base, true, true)).toEqual([...base, ...SKIN_CHAT_CAPS, 'voice:record'])
+    expect(roleCapChoices(base, false, true)).toEqual(base)
+    expect(ROLE_CAP_LABELS[SKIN_RECORD_CAP]).toContain('each person still consents')
+    const on = toggleSkinCap(new Set(['thread:read']), 'voice:record', true)
+    expect([...on].sort()).toEqual(['thread:read', 'voice:join', 'voice:record'])
+    expect([...toggleSkinCap(on, 'voice:join', false)]).toEqual(['thread:read'])
+    expect([...toggleSkinCap(on, 'voice:record', false)].sort()).toEqual(['thread:read', 'voice:join'])
   })
 
   it('files:download is its own group, never default, never a files cap, and gated by the server', () => {

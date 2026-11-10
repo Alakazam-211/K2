@@ -1279,6 +1279,10 @@ pub fn features() -> Vec<&'static str> {
     if crate::voice::occupancy::hosts_rooms() {
         out.push(FEATURE_VOICE_ROOMS);
     }
+    // Sew 0.9.0: App roles take `voice:record` (the pin's const).
+    if k2_core::recording::in_apps() {
+        out.push(FEATURE_VOICE_RECORD);
+    }
     // Last on purpose: boot_status_views_integration pins it as the tail.
     out.push(FEATURE_BOOT_STATUS_VIEWS);
     out
@@ -1295,6 +1299,11 @@ pub const FEATURE_BOOT_STATUS_VIEWS: &str = "boot-status-views-v1";
 /// ready, Pro, at least one room; `voice::occupancy::hosts_rooms`). The
 /// client shows its headset button only for servers that list it.
 pub const FEATURE_VOICE_ROOMS: &str = "voice-rooms-v1";
+/// Sew 0.9.0 (recording in Apps): this K2 accepts `voice:record` in App
+/// manifests and role lines (`k2_core::recording::in_apps`, flipped by the
+/// pin slice). Settings → User Access offers "Record" only for a server
+/// that lists it.
+pub const FEATURE_VOICE_RECORD: &str = "app-voice-record-v1";
 /// `me.events` and `me.get.chat`: an open App screen hears when its person's
 /// access changes (`K2_ACCESS_HUB`, default on).
 pub const FEATURE_LIVE_ACCESS: &str = "live-access-v1";

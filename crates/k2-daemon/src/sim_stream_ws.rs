@@ -5,7 +5,7 @@
 //! **One capture per device, one encode per layer.** The device's frames go
 //! through the stream engine (`crate::stream`, fix 10): one hub per sim
 //! session (`SourceKey::Sim`), whose capture thread pulls the lane's
-//! [`FrameSource`] through a [`PixelLayers`] adapter and encodes each frame
+//! `FrameSource` through a `PixelLayers` adapter and encodes each frame
 //! once per layer (codec, fps tier, local or remote), never per viewer:
 //! H.264 through VideoToolbox on a Mac, JPEG elsewhere (a lane JPEG that
 //! fits streams as it is). Each layer keeps its own fixed schedule; the
@@ -60,12 +60,11 @@ use tokio_tungstenite::tungstenite::Message;
 
 use k2_core::log_debug;
 use k2_core::sim::hold::HoldView;
-use k2_core::sim::lane::{Action, FrameOpts, FrameSize, FrameSource, KeyMods, Point, TouchPhase};
+use k2_core::sim::lane::{Action, FrameOpts, FrameSize, KeyMods, Point, TouchPhase};
 use k2_core::sim::manager::{self, Ws};
 use k2_core::sim::stream::*;
 use k2_core::sim::video::flow::{AckWindow, ACK_EXPIRY};
 use k2_core::sim::video;
-use k2_core::stream::pixel::PixelLayers;
 use k2_core::stream::{Codec as UnitCodec, EncodedSource, EncodedUnit, SourceKey, SourceKind};
 
 use crate::sidecar_routes::Caller;
@@ -100,10 +99,9 @@ pub fn join(ws: &Ws, want: Want) -> Result<(i64, Subscription), manager::SimErro
     let m = manager::manager();
     let row = m.running(ws)?;
     let sim_id = row.id;
-    let open = || -> Result<Box<dyn EncodedSource>, manager::SimError> {
-        let source: Box<dyn FrameSource> = m.frames(&row, hub_opts(LOCAL_MAX_FPS))?;
-        Ok(Box::new(PixelLayers::new(source, hub_opts(LOCAL_MAX_FPS), hub_frame_size())))
-    };
+    // S3b: the lane picks (iOS on protocol 4 relays the helper's own units;
+    // every other lane goes through `PixelLayers`).
+    let open = || -> Result<Box<dyn EncodedSource>, manager::SimError> { m.stream_source(&row, hub_opts(LOCAL_MAX_FPS), hub_frame_size()) };
     match crate::stream::join(SourceKey::Sim(sim_id), want, open) {
         Ok(sub) => Ok((sim_id, sub)),
         Err(JoinError::Open(e)) => Err(e),

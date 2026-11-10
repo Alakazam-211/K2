@@ -839,6 +839,129 @@ fn a_failed_encoder_falls_back_to_jpeg_on_the_same_socket() {
     shut_down(b);
 }
 
+/// A protocol-4 stand-in (S3b): the "device" encodes itself, as the iOS
+/// helper does. Each on H.264 layer gets a unit every 1/fps s, a key unit
+/// (SPS + PPS + IDR) first and on request, else a delta, each with its own
+/// bytes; it records what it gave the hub.
+struct NativeUnits {
+    /// (spec, last seq, next due, key wanted)
+    layers: Vec<(k2_core::stream::LayerSpec, u64, Instant, bool)>,
+    gave: Arc<std::sync::Mutex<Vec<EncodedUnit>>>,
+}
+
+fn native_payload(layer: u8, seq: u64, key: bool) -> Vec<u8> {
+    let mut v = if key { vec![0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1f, 0, 0, 0, 1, 0x68, 0xce, 0, 0, 0, 1, 0x65] } else { vec![0, 0, 0, 1, 0x41] };
+    v.extend_from_slice(format!("native layer {layer} unit {seq}").as_bytes());
+    v
+}
+
+impl EncodedSource for NativeUnits {
+    fn next_unit(&mut self, wait: Duration) -> Result<Option<EncodedUnit>, k2_core::stream::SourceError> {
+        let Some(i) = (0..self.layers.len()).min_by_key(|i| self.layers[*i].2) else {
+            std::thread::sleep(wait);
+            return Ok(None);
+        };
+        let due = self.layers[i].2;
+        let now = Instant::now();
+        if due > now {
+            std::thread::sleep(wait.min(due - now));
+            if Instant::now() < due {
+                return Ok(None);
+            }
+        }
+        let (spec, seq, next, want_key) = &mut self.layers[i];
+        *seq += 1;
+        let key = std::mem::take(want_key) || *seq == 1;
+        *next = due + Duration::from_secs_f64(1.0 / spec.fps.max(1) as f64);
+        let w = if spec.max_width > 0 { spec.max_width } else { 8 };
+        let at = Instant::now();
+        let u = EncodedUnit {
+            codec: UnitCodec::H264,
+            key,
+            source_start: *seq == 1,
+            layer: spec.id,
+            width: w,
+            height: w * 2,
+            width_pt: 4,
+            height_pt: 8,
+            seq: *seq,
+            captured_at: at,
+            stamps: Default::default(),
+            pulled_at: at,
+            encode: None,
+            data: k2_core::stream::Bytes::from(native_payload(spec.id, *seq, key)),
+        };
+        self.gave.lock().expect("gave").push(u.clone());
+        Ok(Some(u))
+    }
+
+    fn set_layers(&mut self, layers: &[k2_core::stream::LayerSpec]) {
+        let mut next = Vec::new();
+        for s in layers.iter().filter(|s| s.on && s.codec == UnitCodec::H264) {
+            match self.layers.iter().find(|l| l.0.id == s.id) {
+                Some(l) => next.push((*s, l.1, l.2, l.3)),
+                None => next.push((*s, 0, Instant::now(), true)),
+            }
+        }
+        self.layers = next;
+    }
+
+    fn request_keyframe(&mut self, layer: u8, _since: Option<Instant>) {
+        if let Some(l) = self.layers.iter_mut().find(|l| l.0.id == layer) {
+            l.3 = true;
+        }
+    }
+
+    fn sizes(&self) -> Option<k2_core::stream::SourceSizes> {
+        Some(k2_core::stream::SourceSizes { points: 4, native_px: Some(8) })
+    }
+}
+
+/// S3b: a lane whose device encodes itself (the iOS helper on protocol 4)
+/// is the hub's source as it is. A K2SV viewer gets each unit's own bytes,
+/// byte for byte, with the source's seq, key flag and size, and the daemon
+/// encodes nothing: no encoder opens, no frame source opens.
+#[test]
+fn a_video_viewer_on_a_protocol_4_source_gets_its_bytes_with_no_daemon_encode() {
+    let _serial = crate::sim_routes::sim_test_lock();
+    let _f = fake::FACTORY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let log = fake::install(); // the host "has H.264"; a daemon encode would show here
+    let b = boot_fake("native");
+    let gave = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let g2 = gave.clone();
+    *b.fake.native.lock() = Some(Box::new(move || -> Box<dyn EncodedSource> { Box::new(NativeUnits { layers: vec![], gave: g2.clone() }) }));
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("rt");
+    let got = rt.block_on(async {
+        let (mut c, server) = open(&b, &[("codecs", "h264,jpeg"), ("win", "8"), ("fps", "60"), ("pw", "6")]).await;
+        let hello = next_text(&mut c).await;
+        assert_eq!((hello["codec"].as_str(), hello["fps"].as_u64()), (Some("h264"), Some(60)));
+        let mut got = Vec::new();
+        while got.len() < 30 {
+            let m = next_binary(&mut c, Duration::from_secs(5)).await.expect("units keep coming");
+            let (h, au) = VideoHeader::decode(&m).expect("K2SV");
+            ack(&mut c, h.seq).await;
+            got.push((h, au.to_vec()));
+        }
+        drop(c);
+        tokio::time::timeout(Duration::from_secs(5), server).await.expect("server ends").expect("join");
+        got
+    });
+    let gave = gave.lock().expect("gave").clone();
+    assert!(got[0].0.key, "a key unit first");
+    for (h, au) in &got {
+        let u = gave.iter().find(|u| u.seq as u32 == h.seq).unwrap_or_else(|| panic!("wire seq {} is a source unit", h.seq));
+        assert_eq!(&au[..], &u.data[..], "unit {}: the source's bytes, unchanged", u.seq);
+        assert_eq!((h.key, h.width_px, h.height_px, h.width_pt, h.height_pt), (u.key, 6, 12, 4, 8), "unit {}", u.seq);
+        assert!(u.encode.is_none());
+    }
+    assert!(got.windows(2).all(|w| w[1].0.seq > w[0].0.seq), "in order");
+    fake::uninstall();
+    let l = log.lock().expect("log").clone();
+    assert!(l.opened.is_empty() && l.frames.is_empty(), "no daemon encode: {l:?}");
+    assert!(b.fake.frame_opts.lock().is_empty(), "no frame source opened");
+    shut_down(b);
+}
+
 /// A host with no H.264 (Linux today) answers a video offer with JPEG.
 #[cfg(not(target_os = "macos"))]
 #[test]

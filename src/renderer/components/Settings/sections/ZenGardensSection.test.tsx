@@ -611,14 +611,12 @@ describe('Settings → Gardens: where it shows', () => {
     expect(SECTION_LABELS['zen-widget-data']).toBe('Local Data')
   })
 
-  it('the copied layout is still Settings → LLMs’ (AgentsSection source)', () => {
+  it('gets the same content-area treatment from Settings as Providers / Models', () => {
+    // Providers / Models is one column of card groups now (0.46.11), so
+    // Gardens no longer copies its old two-column classes; both pages still
+    // own their chrome and scroll, with no padding from Settings.
     // (jsdom: `import.meta.url` isn't a file URL; vitest runs from the repo root.)
     const dir = join(process.cwd(), 'src/renderer/components/Settings')
-    const src = readFileSync(join(dir, 'sections/AgentsSection.tsx'), 'utf8')
-    expect(src).toContain(`<div className="${LLMS_ROW}">`)
-    expect(src).toContain(`<div className="${LLMS_LEFT} space-y-8">`)
-    expect(src).toContain(`<div className="${LLMS_RIGHT}">`)
-    // Both pages get the same content-area treatment from Settings.
     const settings = readFileSync(join(dir, 'Settings.tsx'), 'utf8')
     const list = settings.slice(settings.indexOf("activeSection === 'general' ||"), settings.indexOf("? 'overflow-hidden p-0'"))
     expect(list).toContain("activeSection === 'agents'")

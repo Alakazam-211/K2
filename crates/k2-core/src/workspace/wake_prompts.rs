@@ -781,4 +781,19 @@ mod tests {
         assert!(wakeup_template_for("agent-template").is_none());
         assert!(wakeup_template_for("bogus").is_none());
     }
+
+    /// The heartbeat repair (workspace::migrations) tells an untouched
+    /// scaffold from a person's own wakeup by this marker, so every shipped
+    /// template must open with it.
+    #[test]
+    fn shipped_templates_open_with_the_default_template_marker() {
+        for (name, body) in [
+            ("workspace", WAKEUP_TEMPLATE_WORKSPACE),
+            ("manager", WAKEUP_TEMPLATE_MANAGER),
+            ("custom", WAKEUP_TEMPLATE_CUSTOM),
+            ("k2so", WAKEUP_TEMPLATE_K2SO),
+        ] {
+            assert!(body.starts_with("<!-- DEFAULT TEMPLATE"), "{name}.md: {body}");
+        }
+    }
 }

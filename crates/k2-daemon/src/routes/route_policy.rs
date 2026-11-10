@@ -1138,6 +1138,12 @@ pub const ROUTES: &[Route] = &[
     get("/cli/heartbeat/list-all", Member),
     get("/cli/heartbeat/list-archived", Member),
     post("/cli/heartbeat/preview-schedule", NoLogin),
+    // 0.46.11: one-time reminders; an agent's reach is its own workspace.
+    post("/cli/heartbeat/reminder/add", Member),
+    post("/cli/heartbeat/reminder/cancel", Member),
+    get("/cli/heartbeat/reminder/list", Member),
+    get("/cli/heartbeat/reminder/show", Member),
+    post("/cli/heartbeat/reminder/snooze", Member),
     post("/cli/heartbeat/remove", Owner),
     post("/cli/heartbeat/rename", Member),
     // 0.46.9: an agent restarts its own heartbeat's session (no hire switch).
@@ -2615,6 +2621,9 @@ pub const FORMERLY_GET_WRITES: &[&str] = &[
     "/cli/heartbeat/enable",
     "/cli/heartbeat/fire",
     "/cli/heartbeat/launch",
+    "/cli/heartbeat/reminder/add",
+    "/cli/heartbeat/reminder/cancel",
+    "/cli/heartbeat/reminder/snooze",
     "/cli/heartbeat/remove",
     "/cli/heartbeat/rename",
     // 0.46.9: new, never a GET; listed for the same query-param POST shape

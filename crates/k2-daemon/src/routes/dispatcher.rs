@@ -14957,6 +14957,18 @@ async fn handle_one_request(
             .await;
         }
         p if p.starts_with("/cli/heartbeat/") || p == "/cli/heartbeat-log" => {
+            // 0.46.11: a reminder is created and changed by POST only.
+            if !is_post && crate::heartbeat_routes::is_reminder_write(p) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "405 Method Not Allowed",
+                    "application/json",
+                    r#"{"error":"POST required"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
             // AH6: six writes are `both(…)` in route_policy, so an owner /
             // Connect / passport POST reaches here with a JSON body. Its
             // fields fold into the params (query wins on a clash).

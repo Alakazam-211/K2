@@ -31,6 +31,16 @@ const WAIT_PASS_INTERVAL: Duration = Duration::from_secs(60);
 /// entry point here, so library users (tests) get events too.
 pub fn install_listener() {
     wait::set_change_listener(emit_roster_changed);
+    k2_core::heartbeats::reminders::set_note_sink(post_reminder_note);
+}
+
+/// A reminder's note to the people on this workspace's Thread (fired,
+/// missed, failed). A failed note is logged: the reminder's own state does
+/// not depend on it.
+fn post_reminder_note(project_path: &str, text: &str) {
+    if let Err(e) = crate::overlay_routes::post_workspace_note(project_path, text, "k2-reminder") {
+        log_debug!("[reminders] Thread note for {project_path}: {e}");
+    }
 }
 
 fn emit_roster_changed(project_path: &str) {

@@ -35,6 +35,11 @@ pub mod control;
 // wait_reason, their one writer, and the overdue watchdog.
 pub mod wait;
 
+/// 0278: one-time Reminders (`kind = 'reminder'`).
+pub mod reminders;
+/// 0278: the one parser for a reminder's `--in`, `--at`, `--on`, `--tz`.
+pub mod when;
+
 pub use wait::{boot_reconcile, WAIT_SCHEDULE_ERROR, WAIT_WAKEUP_EMPTY};
 
 /// Heartbeat S3 (HB19) — re-derive the workspace's stored wait state
@@ -48,6 +53,8 @@ fn refresh_wait_after_write(project_path: &str) {
 // Heartbeat S2: missed-run (D7) and next-slot (D4) tests.
 #[cfg(test)]
 mod missed_run_tests;
+#[cfg(test)]
+mod reminder_tick_tests;
 // App heartbeats surface: not-found, instructions writer, change rows.
 #[cfg(test)]
 mod change_tests;
@@ -330,6 +337,9 @@ pub fn k2so_heartbeat_list(project_path: String) -> Result<Vec<AgentHeartbeat>, 
     let project_id = resolve_project_id(&conn, &project_path)
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
     let mut rows = AgentHeartbeat::list_active(&conn, &project_id).map_err(|e| e.to_string())?;
+    // 0278: reminders have their own list (`reminders::list`); a client
+    // that knows only heartbeats must not draw a row with no WAKEUP.md.
+    rows.retain(|h| !h.is_reminder());
     // S3: wait_reason / next_fire_at are the stored columns (single
     // source). `no_ticks` is computed at read time, never stored (HB21).
     wait::overlay_no_ticks_now(&conn, &mut rows);
@@ -346,7 +356,9 @@ pub fn k2so_heartbeat_list_archived(
     let conn = db.lock();
     let project_id = resolve_project_id(&conn, &project_path)
         .ok_or_else(|| format!("Project not found: {}", project_path))?;
-    AgentHeartbeat::list_archived(&conn, &project_id).map_err(|e| e.to_string())
+    let mut rows = AgentHeartbeat::list_archived(&conn, &project_id).map_err(|e| e.to_string())?;
+    rows.retain(|h| !h.is_reminder());
+    Ok(rows)
 }
 
 /// Soft-archive a heartbeat. Sets `archived_at` to the current
@@ -723,8 +735,11 @@ pub fn k2so_heartbeat_set_session(
 
 /// S5 HB34 — the frequencies `cron::evaluate` can run. Write paths
 /// (add, edit) refuse anything else with a 400 that lists these.
-pub const ALLOWED_FREQUENCIES: [&str; 6] =
-    ["hourly", "daily", "weekly", "monthly", "yearly", "scheduled"];
+///
+/// 0278 (W4): `scheduled` is gone (it never had a cron case and could not
+/// fire). `once` is a reminder's frequency and is not here on purpose:
+/// `/cli/heartbeat/add` and `/edit` must not create one (`reminder/add` does).
+pub const ALLOWED_FREQUENCIES: [&str; 5] = ["hourly", "daily", "weekly", "monthly", "yearly"];
 
 /// S5 HB34 — the shortest interval an `hourly` heartbeat may use.
 pub const MIN_EVERY_SECONDS: u64 = 60;
@@ -1058,6 +1073,12 @@ fn heartbeat_tick_candidates(project_path: &str) -> Vec<HeartbeatFireCandidate> 
                 // audit row, then count the schedule from now so the
                 // next tick sees the next real slot.
                 clear_schedule_error_if_set(&conn, &project_id, &hb);
+                if hb.is_reminder() {
+                    // A reminder has no next slot. It retires, and the
+                    // owner hears about it: none vanish silently.
+                    retire_missed_reminder(&conn, &project_id, &agent_name, project_path, &hb, missed_at);
+                    continue;
+                }
                 skip_missed_slot(&conn, &project_id, &agent_name, &hb, missed_at);
                 continue;
             }
@@ -1092,6 +1113,36 @@ fn heartbeat_tick_candidates(project_path: &str) -> Vec<HeartbeatFireCandidate> 
             }
         };
         clear_schedule_error_if_set(&conn, &project_id, &hb);
+
+        // 0278: a reminder carries its own text (W6), so none of the
+        // WAKEUP.md checks below apply. Its caps do.
+        if hb.is_mail_digest() {
+            // The launcher decides if there's anything to say (no mail, no
+            // wake). Its WAKEUP.md is optional, so no file checks.
+            candidates.push(HeartbeatFireCandidate {
+                name: hb.name,
+                agent_name: agent_name.clone(),
+                wakeup_path_abs: String::new(),
+                wakeup_path_rel: hb.wakeup_path,
+                catchup_of,
+                evaluated_last_fired: hb.last_fired,
+            });
+            continue;
+        }
+        if hb.is_reminder() {
+            if hold_reminder_at_cap(&conn, &project_id, &agent_name, &hb, tick_start) {
+                continue;
+            }
+            candidates.push(HeartbeatFireCandidate {
+                name: hb.name,
+                agent_name: agent_name.clone(),
+                wakeup_path_abs: String::new(),
+                wakeup_path_rel: hb.wakeup_path,
+                catchup_of,
+                evaluated_last_fired: hb.last_fired,
+            });
+            continue;
+        }
 
         let wakeup_abs = std::path::Path::new(project_path).join(&hb.wakeup_path);
         if !wakeup_abs.exists() {
@@ -1185,6 +1236,93 @@ fn heartbeat_tick_candidates(project_path: &str) -> Vec<HeartbeatFireCandidate> 
         });
     }
     candidates
+}
+
+/// 0278 — a reminder more than 24 h late retires as `missed`, with one
+/// audit row and one note on the owner's Thread. The note is sent after the
+/// row is retired, so a slow Thread write can't make the next tick post it
+/// again.
+fn retire_missed_reminder(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    agent_name: &str,
+    project_path: &str,
+    hb: &AgentHeartbeat,
+    missed_at: chrono::DateTime<chrono::Local>,
+) {
+    let reason = format!(
+        "reminder was due {} and is more than 24h late (asleep or K2 not running); retired as missed",
+        missed_at.to_rfc3339()
+    );
+    match reminders::retire(conn, project_id, &hb.name, "missed", chrono::Utc::now()) {
+        Ok(0) => return, // another tick got here first
+        Ok(_) => {}
+        Err(e) => {
+            log_debug!("[heartbeat-tick] {} retire missed: {e}", hb.name);
+            return;
+        }
+    }
+    if let Err(e) = HeartbeatFire::insert_with_schedule(
+        conn, project_id, Some(agent_name), Some(&hb.name), &hb.frequency, "skipped_missed", Some(&reason), None, None, None,
+    ) {
+        log_debug!("[heartbeat-tick] {} skipped_missed audit: {e}", hb.name);
+    }
+    reminders::post_note(
+        project_path,
+        &reminders::missed_note(hb, "it was more than 24 hours late (this computer was asleep or K2 wasn't running)"),
+    );
+    log_debug!("[heartbeat-tick] {} {reason}", hb.name);
+}
+
+/// 0278 — a due reminder at a cap (its workspace's 20 fires an hour, or the
+/// agent's shared wake budget) waits a minute instead of firing. One audit
+/// row per wait; `next_retry_at` keeps the scan from re-asking until then.
+fn hold_reminder_at_cap(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    agent_name: &str,
+    hb: &AgentHeartbeat,
+    tick_start: std::time::Instant,
+) -> bool {
+    let now = chrono::Utc::now();
+    let at_workspace_cap = match reminders::fires_last_hour(conn, project_id, now) {
+        Ok(n) => n >= reminders::MAX_FIRES_PER_HOUR,
+        Err(e) => {
+            log_debug!("[heartbeat-tick] {} reminder cap: {e}", hb.name);
+            false
+        }
+    };
+    let decision = if at_workspace_cap {
+        reminders::DECISION_DEFERRED_CAP
+    } else {
+        match crate::wake_budget::has_room(conn, project_id, now.timestamp()) {
+            Ok(true) => return false,
+            Ok(false) => crate::wake_budget::DECISION_AGENT_CAP,
+            Err(e) => {
+                log_debug!("[heartbeat-tick] {} wake budget: {e}", hb.name);
+                return false;
+            }
+        }
+    };
+    let retry = (now + chrono::Duration::seconds(60)).to_rfc3339();
+    if let Err(e) = AgentHeartbeat::defer_retry(conn, project_id, &hb.name, &retry) {
+        log_debug!("[heartbeat-tick] {} defer: {e}", hb.name);
+    }
+    if let Err(e) = HeartbeatFire::insert_with_schedule(
+        conn,
+        project_id,
+        Some(agent_name),
+        Some(&hb.name),
+        &hb.frequency,
+        decision,
+        Some("reminder held a minute: at the hourly cap"),
+        None,
+        None,
+        Some(tick_start.elapsed().as_millis() as i64),
+    ) {
+        log_debug!("[heartbeat-tick] {} cap audit: {e}", hb.name);
+    }
+    true
 }
 
 /// D7 — record one `skipped_missed` audit row for a slot missed by more
@@ -1386,8 +1524,9 @@ pub fn k2so_heartbeat_fires_list_all(
 pub fn k2so_heartbeat_list_all() -> Result<Vec<serde_json::Value>, String> {
     let db = crate::db::shared();
     let conn = db.lock();
-    let rows = AgentHeartbeat::list_all_active_with_project(&conn)
+    let mut rows = AgentHeartbeat::list_all_active_with_project(&conn)
         .map_err(|e| format!("list_all_active: {}", e))?;
+    rows.retain(|(h, _, _)| !h.is_reminder());
     // S3: stored wait state (single source) + the read-time `no_ticks`
     // overlay (HB21), same as the per-workspace list.
     let last_tick = wait::last_tick_at(&conn);
@@ -1982,7 +2121,7 @@ mod tests {
     /// whole number of seconds, at least 60.
     #[test]
     fn s5_unknown_frequency_and_short_interval_are_refused_on_write() {
-        let allowed = "hourly|daily|weekly|monthly|yearly|scheduled";
+        let allowed = "hourly|daily|weekly|monthly|yearly";
         let err = k2so_heartbeat_add_with_instructions(
             "/fixture/s5-never-registered".into(),
             "reggie".into(),

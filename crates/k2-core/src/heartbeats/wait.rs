@@ -418,7 +418,13 @@ fn refresh_rows(project_path: &str, now: DateTime<Local>) -> Result<bool, String
 
     let mut changed = false;
     for hb in rows {
-        let wakeup = wakeup_body(&Path::new(project_path).join(&hb.wakeup_path));
+        // W6: a reminder's text is in the row, so it has no file to be
+        // missing or empty (a digest's WAKEUP.md is optional).
+        let wakeup = if hb.kind == crate::db::schema::HEARTBEAT_KIND {
+            wakeup_body(&Path::new(project_path).join(&hb.wakeup_path))
+        } else {
+            WakeupBody::Present
+        };
         // S5 D4: while a `wakeup_added` episode is open the schedule
         // counts from when the instructions were seen. A body that
         // appeared since the last tick (episode still `Empty`) will be
@@ -964,6 +970,13 @@ mod s3_derive_tests {
             next_fire_at: None,
             wait_since: None,
             overdue_noted_at: None,
+            kind: crate::db::schema::HEARTBEAT_KIND.to_string(),
+            fire_at: None,
+            tz: None,
+            body: None,
+            retired_at: None,
+            retired_reason: None,
+            created_by: String::new(),
         }
     }
 

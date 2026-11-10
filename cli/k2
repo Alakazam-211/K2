@@ -468,7 +468,7 @@ _cli_tool_id_for_verb() {
         # daemon sees the session passport, never the owner token, and the
         # agent's "Manage K2 projects" switch applies to its mutations.
         project) echo "project" ;;
-        heartbeat) echo "heartbeat" ;;
+        heartbeat|remind|reminders) echo "heartbeat" ;;
         mail|hostmail) echo "mail" ;;
         # Calendars S3 (CAL23.4, security): `k2 calendar` rides the mail
         # tool id. Unmapped verbs are "open" and re-source the OWNER token
@@ -2665,6 +2665,9 @@ hb_parse_spec() {
             --unit)    unit="$2"; shift 2 ;;
             --start)   start="$2"; shift 2 ;;
             --end)     end="$2"; shift 2 ;;
+            --once|--in|--at|--on)
+                echo "Error: $1 is for a one-time wake: k2 heartbeat remind \"<text>\" --in 45m (see k2 heartbeat remind --help). A heartbeat repeats." >&2
+                exit 2 ;;
             *)
                 # GH#23/#24: unknown flags used to be silently swallowed,
                 # so `--interval 1` / `--frequency hourly` typos produced
@@ -2744,6 +2747,327 @@ if '$end': spec['end'] = '$end'
 print(json.dumps(spec))
 print('FREQ:' + '$frequency')
 "
+}
+
+# ── One-time reminders (a heartbeat that fires once, 0.46.11) ─────────
+cmd_help_remind() {
+    cat <<'EOF'
+k2 heartbeat remind — a one-time heartbeat: fires once, then goes away
+(Short form: k2 remind. Some people call this a reminder, an alarm or a
+one-shot; repeating ones are heartbeats: k2 heartbeat --help.)
+
+SET ONE
+  k2 heartbeat remind "<text>" (--in 45m | --at 13:00 | --on 2026-10-30 [--at 09:00])
+                      [--tz Area/City] [--name n] [--file path]
+                      [--session pinned|own] [--workspace <ws>] [--json]
+
+  --in 45m      s m h d w, combined: 1h30m. At least 1 minute, at most 365 days.
+  --at 13:00    The next 13:00: today if it's still ahead, else tomorrow.
+                (For "tomorrow at 13:00" on a certain day, use --on.)
+  --at 2026-10-30T09:00            That date and time.
+  --at 2026-10-30T09:00:00-06:00   That exact instant (--tz is ignored).
+  --on 2026-10-30                  That date at 09:00.
+  --on 2026-10-30 --at 14:30       That date and time ('--on "2026-10-30 14:30"' too).
+  --tz Area/City  IANA zone. Default: the owner's timezone
+                  (Settings → General), else this computer's clock.
+  --name n      Lowercase letters, digits, hyphens. Default: r-<6 chars>.
+                The name of a finished reminder can be used again.
+  --file path   A file in this workspace the reminder points the agent to.
+  --session     pinned (default): the workspace's pinned chat.
+                own: a session of its own, started for this fire.
+
+  Times in the past are refused. Text is at most 2000 characters; put more
+  in a file and use --file.
+
+MANAGE
+  k2 heartbeat remind list [--all] [--json]   pending; --all adds finished (90 days)
+  k2 heartbeat remind show <name> [--json]    one, with its fire history
+  k2 heartbeat remind snooze <name> <10m>     fires again that long FROM NOW (or
+                                              --in/--at/--on [--tz] for a set time);
+                                              also re-arms one that already fired
+  k2 heartbeat remind cancel <name>           stops a pending one, keeps the history
+  k2 reminders                                = k2 heartbeat remind list
+
+WHAT HAPPENS
+  At its time the agent gets one line in its session:
+    [reminder:call-jane · set by Rosson 10-26 09:12] Call Jane back.
+  A reminder a person set also posts "Reminder fired: …" to the Thread. An
+  agent's own reminder stays in its session.
+
+  Late (this computer was asleep, K2 was off): it fires up to 24 hours late,
+  with "· late by 3h 10m" in the stamp. Later than that it finishes as
+  missed and tells the owner on the Thread. A reminder never vanishes.
+  If it can't be delivered: retried with backoff, then after 5 tries it
+  finishes as failed and tells the owner.
+
+  It fires once, even across a restart or a sleep: it is retired in the same
+  step that records the fire. Limits: 100 pending per workspace, 20 fires an
+  hour per workspace, and the agent's 30 automatic wakes an hour shared with
+  mail and Sources (anything over waits for the next minute).
+
+Exit codes: 0 ok, 1 error, 2 bad input (a past time, a bad flag), 3 gated.
+More: k2 study heartbeats
+EOF
+}
+
+_remind_show_result() {
+    # stdin: a daemon reply. Prints an error and exits by its code, or passes
+    # the JSON on to $1 (python source reading stdin) with $2.. as argv.
+    local resp code
+    resp="$(cat)"
+    if [ -z "$resp" ] || printf '%s' "$resp" | python3 -c "
+import json,sys
+try:
+    d=json.loads(sys.stdin.read())
+except Exception:
+    sys.exit(0)
+sys.exit(0 if isinstance(d,dict) and ('error' in d or d.get('ok') is False) else 1)
+" 2>/dev/null; then
+        printf '%s' "$resp" | _hb_print_err
+        return $?
+    fi
+    printf '%s' "$resp"
+}
+
+# Common --workspace flag. The daemon refuses an agent naming another
+# workspace (exit 3).
+_remind_workspace_param() {
+    local w="$1"
+    if [ -d "$w" ]; then w="$(cd "$w" && pwd)"; fi
+    printf 'workspace=%s' "$(urlencode "$w")"
+}
+
+cmd_heartbeat_remind() {
+    local first="${1:-}" has_when=0 a
+    for a in "$@"; do
+        case "$a" in --in|--at|--on) has_when=1 ;; esac
+    done
+    # `list` as a reminder's text is `k2 remind list --in 1m`: with a time,
+    # the first word is text; without one, a verb.
+    if [ "$has_when" = 0 ]; then
+        case "$first" in
+            ""|-h|--help|help) cmd_help_remind; return 0 ;;
+            list)   shift; _remind_list "$@"; return $? ;;
+            show)   shift; _remind_show "$@"; return $? ;;
+            snooze) shift; _remind_snooze "$@"; return $? ;;
+            cancel) shift; _remind_cancel "$@"; return $? ;;
+        esac
+    fi
+    _remind_add "$@"
+}
+
+_remind_add() {
+    local usage="Usage: k2 heartbeat remind \"<text>\" (--in 45m | --at 13:00 | --on 2026-10-30 [--at 09:00]) [--tz Area/City] [--name n] [--file path] [--session pinned|own] [--json]"
+    local text="" in_="" at="" on="" tz="" name="" file="" session="" as_json=0 ws_param=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) cmd_help_remind; return 0 ;;
+            --in|--at|--on|--tz|--name|--file|--session|--workspace|--project)
+                if [ $# -lt 2 ]; then
+                    echo "Error: $1 needs a value" >&2; echo "$usage" >&2; exit 2
+                fi
+                case "$1" in
+                    --in) in_="$2" ;;
+                    --at) at="$2" ;;
+                    --on) on="$2" ;;
+                    --tz) tz="$2" ;;
+                    --name) name="$2" ;;
+                    --file) file="$2" ;;
+                    --session) session="$2" ;;
+                    --workspace|--project) ws_param="$(_remind_workspace_param "$2")" ;;
+                esac
+                shift 2 ;;
+            --json) as_json=1; shift ;;
+            --*)
+                echo "Error: unknown flag: $1" >&2; echo "$usage" >&2; exit 2 ;;
+            *)
+                if [ -z "$text" ]; then text="$1"; else text="$text $1"; fi
+                shift ;;
+        esac
+    done
+    if [ -z "$text" ] && [ -z "$file" ]; then
+        echo "Error: a reminder needs some text, or --file" >&2; echo "$usage" >&2; exit 2
+    fi
+    if [ -z "$in_$at$on" ]; then
+        echo "Error: say when: --in 45m, --at 13:00 or --on 2026-10-30" >&2; echo "$usage" >&2; exit 2
+    fi
+    local params="text=$(urlencode "$text")"
+    [ -n "$in_" ] && params="$params&in=$(urlencode "$in_")"
+    [ -n "$at" ] && params="$params&at=$(urlencode "$at")"
+    [ -n "$on" ] && params="$params&on=$(urlencode "$on")"
+    [ -n "$tz" ] && params="$params&tz=$(urlencode "$tz")"
+    [ -n "$name" ] && params="$params&name=$(urlencode "$name")"
+    [ -n "$file" ] && params="$params&file=$(urlencode "$file")"
+    [ -n "$session" ] && params="$params&session=$(urlencode "$session")"
+    [ -n "$ws_param" ] && params="$params&$ws_param"
+    local out rc=0
+    out="$(cli_send cli_request_post "/cli/heartbeat/reminder/add" "$params" | _remind_show_result)" || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    if [ "$as_json" = 1 ]; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    printf '%s' "$out" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+n = d["name"]
+print("Reminder %s set: %s." % (n, d["fires"]))
+print("  Cancel: k2 heartbeat remind cancel %s   Snooze: k2 heartbeat remind snooze %s <when>" % (n, n))
+'
+}
+
+_remind_list() {
+    local as_json=0 all=0 ws_param=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) cmd_help_remind; return 0 ;;
+            --json) as_json=1; shift ;;
+            --all) all=1; shift ;;
+            --workspace|--project)
+                [ $# -ge 2 ] || { echo "Error: $1 needs a value" >&2; exit 2; }
+                ws_param="$(_remind_workspace_param "$2")"; shift 2 ;;
+            *) echo "Error: unknown argument: $1" >&2; echo "Usage: k2 heartbeat remind list [--all] [--json]" >&2; exit 2 ;;
+        esac
+    done
+    local args=()
+    [ "$all" = 1 ] && args+=("all=1")
+    [ -n "$ws_param" ] && args+=("$ws_param")
+    local out rc=0
+    out="$(cli_send cli_request "/cli/heartbeat/reminder/list" ${args[@]+"${args[@]}"} | _remind_show_result)" || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    if [ "$as_json" = 1 ]; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    printf '%s' "$out" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)
+if not rows:
+    print("No reminders. Set one: k2 heartbeat remind \"text\" --in 45m")
+    sys.exit(0)
+for r in rows:
+    when = r.get("fireAt") or "?"
+    state = r.get("state")
+    text = (r.get("text") or "").replace("\n", " ")
+    if len(text) > 70: text = text[:67] + "..."
+    print("%-22s %-10s %s  %s" % (r["name"], state, when, text))
+'
+}
+
+_remind_show() {
+    local name="" as_json=0 ws_param=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) cmd_help_remind; return 0 ;;
+            --json) as_json=1; shift ;;
+            --workspace|--project)
+                [ $# -ge 2 ] || { echo "Error: $1 needs a value" >&2; exit 2; }
+                ws_param="$(_remind_workspace_param "$2")"; shift 2 ;;
+            --*) echo "Error: unknown flag: $1" >&2; exit 2 ;;
+            *) [ -z "$name" ] && name="$1"; shift ;;
+        esac
+    done
+    [ -z "$name" ] && { echo "Usage: k2 heartbeat remind show <name> [--json]" >&2; exit 2; }
+    local args=("name=$(urlencode "$name")")
+    [ -n "$ws_param" ] && args+=("$ws_param")
+    local out rc=0
+    out="$(cli_send cli_request "/cli/heartbeat/reminder/show" "${args[@]}" | _remind_show_result)" || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    if [ "$as_json" = 1 ]; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    printf '%s' "$out" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+print("Reminder %s (%s)" % (r["name"], r["state"]))
+print("  fires:   %s%s" % (r.get("fireAt"), " (%s)" % r["tz"] if r.get("tz") else ""))
+print("  text:    %s" % (r.get("text") or ""))
+print("  set by:  %s" % (r.get("createdBy") or "?"))
+if r.get("firedAt"): print("  fired:   %s" % r["firedAt"])
+if r.get("waitReason"): print("  waiting: %s%s" % (r["waitReason"], " (%s)" % r["waitDetail"] if r.get("waitDetail") else ""))
+fires = r.get("fires") or []
+if fires:
+    print("  history:")
+    for f in fires:
+        print("    %s  %s  %s" % (f.get("firedAt", f.get("fired_at", "")), f.get("decision", ""), f.get("reason") or ""))
+'
+}
+
+_remind_snooze() {
+    local name="" when="" in_="" at="" on="" tz="" ws_param="" as_json=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) cmd_help_remind; return 0 ;;
+            --in|--at|--on|--tz|--workspace|--project)
+                [ $# -ge 2 ] || { echo "Error: $1 needs a value" >&2; exit 2; }
+                case "$1" in
+                    --in) in_="$2" ;;
+                    --at) at="$2" ;;
+                    --on) on="$2" ;;
+                    --tz) tz="$2" ;;
+                    *) ws_param="$(_remind_workspace_param "$2")" ;;
+                esac
+                shift 2 ;;
+            --json) as_json=1; shift ;;
+            --*) echo "Error: unknown flag: $1" >&2; exit 2 ;;
+            *)
+                if [ -z "$name" ]; then name="$1"
+                elif [ -z "$when" ]; then when="$1"
+                else echo "Error: unexpected argument: $1" >&2; exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [ -z "$in_" ] && in_="$when"
+    if [ -z "$name" ] || [ -z "$in_$at$on" ]; then
+        echo "Usage: k2 heartbeat remind snooze <name> <10m> (or --in/--at/--on [--tz Area/City])" >&2
+        exit 2
+    fi
+    local params="name=$(urlencode "$name")"
+    [ -n "$in_" ] && params="$params&in=$(urlencode "$in_")"
+    [ -n "$at" ] && params="$params&at=$(urlencode "$at")"
+    [ -n "$on" ] && params="$params&on=$(urlencode "$on")"
+    [ -n "$tz" ] && params="$params&tz=$(urlencode "$tz")"
+    [ -n "$ws_param" ] && params="$params&$ws_param"
+    local out rc=0
+    out="$(cli_send cli_request_post "/cli/heartbeat/reminder/snooze" "$params" | _remind_show_result)" || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    if [ "$as_json" = 1 ]; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    printf '%s' "$out" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print("Reminder %s now fires %s." % (d["name"], d["fires"]))
+'
+}
+
+_remind_cancel() {
+    local name="" ws_param="" as_json=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) cmd_help_remind; return 0 ;;
+            --json) as_json=1; shift ;;
+            --workspace|--project)
+                [ $# -ge 2 ] || { echo "Error: $1 needs a value" >&2; exit 2; }
+                ws_param="$(_remind_workspace_param "$2")"; shift 2 ;;
+            --*) echo "Error: unknown flag: $1" >&2; exit 2 ;;
+            *) [ -z "$name" ] && name="$1"; shift ;;
+        esac
+    done
+    [ -z "$name" ] && { echo "Usage: k2 heartbeat remind cancel <name>" >&2; exit 2; }
+    local params="name=$(urlencode "$name")"
+    [ -n "$ws_param" ] && params="$params&$ws_param"
+    local out rc=0
+    out="$(cli_send cli_request_post "/cli/heartbeat/reminder/cancel" "$params" | _remind_show_result)" || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    if [ "$as_json" = 1 ]; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    echo "Reminder $name cancelled."
 }
 
 cmd_heartbeat_add() {
@@ -47245,9 +47569,25 @@ cmd_schema() {
     {
       "name": "heartbeat",
       "usage": "k2 heartbeat",
-      "description": "List this workspace's active heartbeat schedules (named scheduled wakes; = 'heartbeat schedule list'). --help anywhere prints usage and never mutates.",
+      "description": "List this workspace's active heartbeat schedules (named scheduled wakes; = 'heartbeat schedule list'). Some people call these routines, scheduled tasks or cron jobs. --help anywhere prints usage and never mutates.",
       "args": [],
       "flags": []
+    },
+    {
+      "name": "heartbeat remind",
+      "usage": "k2 heartbeat remind \"<text>\" (--in 45m|--at 13:00|--on 2026-10-30 [--at 09:00]) [--tz Area/City] [--name n] [--file path] [--session pinned|own] [--json]",
+      "description": "Set a one-time wake (a reminder): a heartbeat that fires once and goes away. Short form: k2 remind. Also list [--all], show <n>, snooze <n> <when>, cancel <n>. A past time is refused (exit 2). Fires once across restarts and sleep; up to 24 hours late with a late stamp, then it finishes as missed and tells the owner. POST /cli/heartbeat/reminder/add.",
+      "args": [{"name": "text", "required": true}],
+      "flags": [
+        {"name": "--in", "arg": "duration", "description": "s m h d w, combined (1h30m). At least 1 minute, at most 365 days."},
+        {"name": "--at", "arg": "time", "description": "13:00 (next one), 2026-10-30T09:00, or an RFC 3339 instant."},
+        {"name": "--on", "arg": "date", "description": "A date; 09:00 unless --at gives the time."},
+        {"name": "--tz", "arg": "zone", "description": "IANA zone. Default: the owner's timezone, else this computer's clock."},
+        {"name": "--name", "arg": "n", "description": "Default: r-<6 chars>."},
+        {"name": "--file", "arg": "path", "description": "A file in this workspace the reminder points the agent to."},
+        {"name": "--session", "arg": "pinned|own", "description": "Where it lands. Default: the pinned chat."},
+        {"name": "--json", "description": "Raw JSON."}
+      ]
     },
     {
       "name": "heartbeat schedule",
@@ -49404,7 +49744,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs folder-trust email-notifications box-move board chat-refresh"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs heartbeats folder-trust email-notifications box-move board chat-refresh"
 
 _study_usage() {
     cat <<'EOF'
@@ -49427,7 +49767,7 @@ Topics:
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
   publish-visibility  publish-dev  compute  compute-shared  ci  vault
   notifications  data-sources  projects  hooks  agent-hire
-  garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  jobs
+  garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  jobs  heartbeats
   folder-trust  email-notifications  box-move  board  chat-refresh
 EOF
 }
@@ -49489,6 +49829,7 @@ _study_title() {
         ci) echo "CI on K2 Compute" ;;
         vault) echo "Secrets (the vault)" ;;
         jobs) echo "Scheduled jobs the daemon runs" ;;
+        heartbeats) echo "Heartbeats and one-time reminders (routines, cron)" ;;
         folder-trust) echo "Who may start AI tools in a folder" ;;
         email-notifications) echo "One-way email from senders no agent can read" ;;
         box-move) echo "Moving a box: the vault and the tunnel token" ;;
@@ -49611,6 +49952,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   ci                  CI on compute: .k2/ci.toml, k2 ci run/watch, GitHub statuses
   vault               Secrets: fetch not paste; references; who sets what
   jobs                Scripts on a schedule: k2 job, job:<name> secrets, logs, kill
+  heartbeats          Wake yourself on a schedule or once (routines, reminders, cron)
   notifications       Your Thread posts may push a phone; who gets it; post less
   data-sources        Checks this server runs: try, propose, approve; triggers; keys
   projects            k2 project: open by default; the per-agent switch
@@ -49704,6 +50046,7 @@ _study_page() {
         docs) _study_page_docs ;;
         vault) _study_page_vault ;;
         jobs) _study_page_jobs ;;
+        heartbeats) _study_page_heartbeats ;;
         folder-trust) _study_page_folder_trust ;;
         notifications) _study_page_notifications ;;
         projects) _study_page_projects ;;
@@ -51511,6 +51854,46 @@ WHAT IT CAN'T DO (honest limits)
   What it does stop: K2's own silent trust, and any session K2 starts
   (spawn, heartbeat, wake, pinned or wallet login) running start-up code
   from outside that no person has seen.
+EOF
+}
+
+_study_page_heartbeats() {
+    cat <<'EOF'
+k2 study heartbeats — wake an agent on a schedule, or once
+
+THE WORDS
+  K2 calls a scheduled wake of an agent a HEARTBEAT. Some people call these
+  routines, scheduled tasks or cron jobs: same thing here. One that fires
+  once is a REMINDER (an alarm, a one-shot): it is a heartbeat that goes away.
+  k2 job is different: it runs a program with no agent and no model.
+
+WHICH ONE
+  Every day at 9, keep doing this      k2 heartbeat schedule add --name n --daily --time 09:00 --instructions "..."
+  Once, in 45 minutes                  k2 remind "check the deploy" --in 45m
+  Once, at a time                      k2 remind "call Jane back" --at 13:00
+  Once, on a date                      k2 remind "renew cert" --on 2026-10-30
+  Run a script, no agent               k2 job add ... (k2 study jobs)
+
+HEARTBEATS REPEAT
+  Each one is a WAKEUP.md under .k2/heartbeats/<name>/. It fires into your
+  pinned chat by default. A missed slot catches up once within 12 hours;
+  older than that it is skipped and the schedule carries on.
+  k2 heartbeat --help has every verb.
+
+REMINDERS FIRE ONCE
+  k2 heartbeat remind --help has every flag. k2 remind is the short form.
+  k2 reminders lists them. Snooze with k2 remind snooze <n> 10m.
+  The text is delivered as one line:
+    [reminder:call-jane · set by Rosson 10-26 09:12] Call Jane back.
+  It fires up to 24 hours late with a late stamp; later than that it
+  finishes as missed and tells the owner on the Thread.
+  Times are in --tz, then the owner's timezone (Settings → General), then
+  this computer's clock.
+
+LIMITS
+  100 pending reminders per workspace; 20 reminder fires an hour; and every
+  agent takes 30 automatic wakes an hour (Sources, reminders and mail
+  combined). Over a limit, a reminder waits for the next minute.
 EOF
 }
 
@@ -57085,6 +57468,8 @@ print(json.dumps({"topics": topics}, separators=(",", ":")))
         exit 0
     fi
 
+    # What people call heartbeats, so a search lands on the right page.
+    case "$topic" in routines|routine|reminders|reminder|cron) topic="heartbeats" ;; esac
     if ! _study_is_topic "$topic" && ! { [ "$topic" = permissions ] && _permission_cli_enabled; }; then
         echo "Error: unknown study topic '$topic'" >&2
         _study_usage_all >&2
@@ -61767,6 +62152,9 @@ cmd_help_heartbeat() {
 k2 heartbeat [<family> <subcommand>]
 
 Manage workspace-scoped scheduled wakes.
+Some people call these routines, scheduled tasks or cron jobs: if you were
+looking for those, heartbeats are it. For a wake that happens once (a
+reminder), use `k2 heartbeat remind` below.
 
 DEFAULT (no args)
   k2 heartbeat                                Lists active heartbeat schedules
@@ -61819,6 +62207,11 @@ SCHEDULE (CRUD on heartbeat definitions)
        declined). Don't run disable again: it stays paused until someone
        resumes it. No "Ask with:" line (cards off): ask your person to run
        the same command themselves.
+
+REMIND (a one-time heartbeat: fires once, then goes away)
+  heartbeat remind "<text>" (--in 45m | --at 13:00 | --on 2026-10-30 [--at 09:00]) [--tz Area/City]
+       Short form: k2 remind. Also: heartbeat remind list [--all] | show <n> |
+       snooze <n> <when> | cancel <n>. Full details: k2 heartbeat remind --help
 
 SIGNAL (immediate one-shot triggers)
   heartbeat signal fire <n> [--force]
@@ -94646,16 +95039,32 @@ EOF
         # Phase 2.1: hard-deprecated. Use settings --mode.
         fail_deprecated "mode" "k2 settings --mode <off|agent|manager>"
         ;;
+    remind)
+        shift
+        cmd_heartbeat_remind "$@"
+        ;;
+    reminders)
+        shift
+        cmd_heartbeat_remind list "$@"
+        ;;
     heartbeat)
         # GH#22/#23/#24: introspection must NEVER mutate state. --help/-h
         # anywhere in the arg vector prints usage and exits 0 — before any
         # arm below can consume it as a name or schedule spec.
+        # (`remind` prints its own help: its text may be any words.)
         for hb_arg in "${@:2}"; do
             case "$hb_arg" in
-                --help|-h) cmd_help_heartbeat; exit 0 ;;
+                --help|-h)
+                    case "${2:-}" in
+                        remind|reminders) ;;
+                        *) cmd_help_heartbeat; exit 0 ;;
+                    esac ;;
             esac
         done
         case "${2:-}" in
+            # 0.46.11: a one-time heartbeat (k2 remind is the short form).
+            remind)         shift 2; cmd_heartbeat_remind "$@" ;;
+            reminders)      shift 2; cmd_heartbeat_remind list "$@" ;;
             # GH#10/#24: documented default — bare `k2 heartbeat` lists
             # active schedules (the old bare-verb triage POST hit a route
             # removed in 0.40.31 and exited 0 on the error).

@@ -1851,6 +1851,11 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // its conversation is absent. Renumber freely on a slip (and edit the
         // migration-order tests).
         ("0277_workspace_sessions_unstarted_id", include_str!("../../drizzle_sql/0277_workspace_sessions_unstarted_id.sql")),
+        // 0278 — one-time Reminders and the `kind` column (0.46.11,
+        // prd-routines-reminders-and-agent-mail-v1 R1). Additive, plus the
+        // W4 repair of frequency='scheduled' rows. Renumber freely on a slip
+        // (and edit the migration-order tests).
+        ("0278_heartbeat_reminders", include_str!("../../drizzle_sql/0278_heartbeat_reminders.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2530,9 +2535,81 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0277_workspace_sessions_unstarted_id",
+            last_name, "0278_heartbeat_reminders",
             "unexpected last migration name: {last_name}"
         );
+    }
+
+    /// 0278 (M-0): upgrading an existing database moves nothing. Every old
+    /// column keeps its value, every row reads as a heartbeat on the box
+    /// clock, and a `scheduled` row is repaired by what it really was
+    /// (W4), never by turning it into a daily.
+    #[test]
+    fn migration_0278_keeps_every_old_row_and_repairs_scheduled_by_its_spec() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        // Back to the shape before 0278: this is the pre-0278 row set.
+        conn.execute_batch(
+            "DROP INDEX idx_workspace_heartbeats_kind;
+             ALTER TABLE workspace_heartbeats DROP COLUMN created_by;
+             ALTER TABLE workspace_heartbeats DROP COLUMN retired_reason;
+             ALTER TABLE workspace_heartbeats DROP COLUMN retired_at;
+             ALTER TABLE workspace_heartbeats DROP COLUMN body;
+             ALTER TABLE workspace_heartbeats DROP COLUMN tz;
+             ALTER TABLE workspace_heartbeats DROP COLUMN fire_at;
+             ALTER TABLE workspace_heartbeats DROP COLUMN kind;
+             DELETE FROM _migrations WHERE name = '0278_heartbeat_reminders';",
+        )
+        .unwrap();
+        conn.execute("INSERT INTO projects (id, name, path) VALUES ('p', 'p', '/tmp/p-0278')", []).unwrap();
+        let rows = [
+            ("a", "hourly", r#"{"every_seconds":60,"start":"09:00","end":"17:00"}"#),
+            ("b", "daily", r#"{"time":"09:00"}"#),
+            ("c", "weekly", r#"{"time":"09:00","days":["mon"]}"#),
+            ("d", "monthly", r#"{"ordinal":"first","ordinal_day":"mon"}"#),
+            ("e", "yearly", r#"{"months":["jan"],"days_of_month":[1]}"#),
+            ("s-weekly", "scheduled", r#"{"frequency":"weekly","time":"08:00","days":["fri"]}"#),
+            ("s-junk", "scheduled", r#"{"time":"08:00"}"#),
+        ];
+        for (name, freq, spec) in rows {
+            conn.execute(
+                "INSERT INTO workspace_heartbeats (id, project_id, name, frequency, spec_json, wakeup_path, enabled, last_fired, created_at) \
+                 VALUES (?1, 'p', ?1, ?2, ?3, '.k2/x', 1, '2026-01-02T03:04:05+00:00', 1000)",
+                params![name, freq, spec],
+            )
+            .unwrap();
+        }
+        run_migrations(&conn).unwrap();
+
+        for (name, freq, spec) in rows.iter().filter(|r| r.1 != "scheduled") {
+            let (f, sp, en, last, kind, tz, created): (String, String, i64, String, String, Option<String>, String) = conn
+                .query_row(
+                    "SELECT frequency, spec_json, enabled, last_fired, kind, tz, created_by FROM workspace_heartbeats WHERE name = ?1",
+                    params![name],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+                )
+                .unwrap();
+            assert_eq!((f.as_str(), sp.as_str(), en), (*freq, *spec, 1), "{name}: nothing moved");
+            assert_eq!(last, "2026-01-02T03:04:05+00:00", "{name}: last_fired kept");
+            assert_eq!((kind.as_str(), tz, created.as_str()), ("heartbeat", None, ""), "{name}: reads as a heartbeat on the box clock");
+        }
+        let (f, en, err): (String, i64, Option<String>) = conn
+            .query_row(
+                "SELECT frequency, enabled, schedule_error FROM workspace_heartbeats WHERE name = 's-weekly'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((f.as_str(), en, err), ("weekly", 1, None), "the real frequency came from spec_json");
+        let (f, en, reason, err): (String, i64, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT frequency, enabled, disabled_reason, schedule_error FROM workspace_heartbeats WHERE name = 's-junk'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((f.as_str(), en, reason.as_deref()), ("scheduled", 0, Some("schedule_invalid")), "off, not a daily");
+        assert!(err.expect("visible reason").contains("retired in 0278"));
     }
 
     /// 0.45.5 tail: compute nodes, vault, node admin, Thread push prefs
@@ -2677,6 +2754,8 @@ mod tests {
                 "0276_compute_gpu_grant",
                 // 0.46.11: a main chat's pre-allocated, not-yet-started id.
                 "0277_workspace_sessions_unstarted_id",
+                // 0.46.11: Reminders.
+                "0278_heartbeat_reminders",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2831,6 +2910,8 @@ mod tests {
                 "0276_compute_gpu_grant",
                 // 0.46.11: a main chat's pre-allocated, not-yet-started id.
                 "0277_workspace_sessions_unstarted_id",
+                // 0.46.11: Reminders.
+                "0278_heartbeat_reminders",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3103,7 +3184,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0277_workspace_sessions_unstarted_id", "0277 (0.46.11) runs last");
+        assert_eq!(top, "0278_heartbeat_reminders", "0278 (0.46.11) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3165,9 +3246,10 @@ mod tests {
                 "0274_compute_node_roster",
                 "0275_compute_seat_lane",
                 "0276_compute_gpu_grant",
-                "0277_workspace_sessions_unstarted_id"
+                "0277_workspace_sessions_unstarted_id",
+                "0278_heartbeat_reminders"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277 and 0278)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -4009,7 +4091,10 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
-            // 0277 (a main chat's pre-allocated id, 0.46.11) is the newest:
+            // 0278 (Reminders, 0.46.11) is the newest: its record goes (its
+            // column re-adds are skipped as duplicates).
+            conn.execute("DELETE FROM _migrations WHERE name = '0278_heartbeat_reminders'", []).unwrap();
+            // 0277 (a main chat's pre-allocated id, 0.46.11) came before it:
             // its record goes (its column re-add is skipped as a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0277_workspace_sessions_unstarted_id'", []).unwrap();
             // 0276 (GPU jobs, 0.46.11) came before it: its record goes (its

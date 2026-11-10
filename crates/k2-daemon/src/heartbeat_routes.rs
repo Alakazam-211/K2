@@ -635,6 +635,134 @@ fn owner_show(project_path: &str, name: &str) -> Result<String, String> {
     Ok(v.to_string())
 }
 
+/// The reminder routes that change something (POST-only).
+pub fn is_reminder_write(path: &str) -> bool {
+    matches!(
+        path,
+        "/cli/heartbeat/reminder/add" | "/cli/heartbeat/reminder/snooze" | "/cli/heartbeat/reminder/cancel"
+    )
+}
+
+/// A refusal the CLI shows as usage (exit 2): the input was wrong.
+fn usage_err(msg: String) -> String {
+    format!("{USAGE_ERR_PREFIX}{msg}")
+}
+
+/// Marks an `Err` from [`dispatch_get`] as a usage error.
+pub const USAGE_ERR_PREFIX: &str = "usage: ";
+
+fn when_input(params: &HashMap<String, String>) -> k2_core::heartbeats::when::WhenInput<'_> {
+    let get = |k: &str| params.get(k).map(String::as_str).filter(|v| !v.trim().is_empty());
+    k2_core::heartbeats::when::WhenInput { in_: get("in"), at: get("at"), on: get("on"), tz: get("tz") }
+}
+
+fn dispatch_reminder(
+    verb: &str,
+    project_path: &str,
+    params: &HashMap<String, String>,
+) -> Result<String, String> {
+    use k2_core::heartbeats::reminders::{self as rem, NewReminder, SessionChoice};
+    let now = chrono::Utc::now();
+    // The TCP arm stamps a request actor; the cell socket is always an
+    // agent, and its passport says which.
+    let actor = request_actor()
+        .or_else(|| {
+            crate::caller_workspace::principal_from_params(params)
+                .map(|p| crate::routes::http::agent_actor_label(&p))
+        })
+        .unwrap_or_default();
+    let name = params.get("name").map(String::as_str).unwrap_or_default().trim();
+    let need_name = || -> Result<(), String> {
+        if name.is_empty() {
+            return Err(usage_err("Missing 'name' parameter".to_string()));
+        }
+        Ok(())
+    };
+    let result = match verb {
+        "add" => {
+            let session = match params.get("session").map(String::as_str).unwrap_or("pinned") {
+                "" | "pinned" => SessionChoice::Pinned,
+                "own" => SessionChoice::Own,
+                other => return Err(usage_err(format!("--session '{other}' is not one of pinned or own"))),
+            };
+            let new = NewReminder {
+                text: params.get("text").map(String::as_str).unwrap_or_default(),
+                when: when_input(params),
+                name: params.get("name").map(String::as_str),
+                file: params.get("file").map(String::as_str).filter(|f| !f.trim().is_empty()),
+                session,
+                created_by: &actor,
+            };
+            rem::add(project_path, new, now).map(|v| v.to_string()).map_err(usage_err)?
+        }
+        "list" => {
+            let all = params.get("all").is_some_and(|v| v == "1" || v == "true");
+            serde_json::to_string(&rem::list(project_path, all)?).map_err(|e| e.to_string())?
+        }
+        "show" => {
+            need_name()?;
+            rem::show(project_path, name)?.to_string()
+        }
+        "snooze" => {
+            need_name()?;
+            rem::snooze(project_path, name, when_input(params), &actor, now).map(|v| v.to_string()).map_err(|e| {
+                if k2_core::heartbeats::is_no_such_heartbeat(&e) { e } else { usage_err(e) }
+            })?
+        }
+        "cancel" => {
+            need_name()?;
+            rem::cancel(project_path, name, &actor, now).map(|v| v.to_string()).map_err(|e| {
+                if k2_core::heartbeats::is_no_such_heartbeat(&e) { e } else { usage_err(e) }
+            })?
+        }
+        other => return Err(format!("Unknown reminder route: {other}")),
+    };
+    Ok(result)
+}
+
+/// The heartbeat verbs that assume a WAKEUP.md and a repeating schedule
+/// don't apply to a reminder (or to the mail digest row, which `k2 mail
+/// watch` owns). Refuse them by name with where to go instead, rather than
+/// half-working on a row that has no file.
+pub(crate) fn refuse_special_row(
+    path: &str,
+    project_path: &str,
+    params: &HashMap<String, String>,
+) -> Result<(), String> {
+    let guarded = matches!(
+        path,
+        "/cli/heartbeat/edit"
+            | "/cli/heartbeat/rename"
+            | "/cli/heartbeat/enable"
+            | "/cli/heartbeat/archive"
+            | "/cli/heartbeat/unarchive"
+            | "/cli/heartbeat/remove"
+            | "/cli/heartbeat/show"
+    );
+    if !guarded {
+        return Ok(());
+    }
+    let Some(name) = params.get("name").filter(|n| !n.is_empty()) else {
+        return Ok(());
+    };
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_identity::resolve_project_id(&conn, project_path)
+            .and_then(|pid| k2_core::db::schema::AgentHeartbeat::get_by_name(&conn, &pid, name).ok().flatten())
+    };
+    match row {
+        // Plain words: the heartbeat verbs print a route's error text as is.
+        Some(r) if r.is_reminder() && path != "/cli/heartbeat/remove" => Err(format!(
+            "'{name}' is a reminder, not a heartbeat. Use: k2 heartbeat remind show|snooze|cancel {name}"
+        )),
+        Some(r) if r.is_mail_digest() && path != "/cli/heartbeat/show" => Err(format!(
+            "'{name}' is this agent's mail digest. Change it with: k2 mail watch digest"
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Dispatch an authenticated `/cli/heartbeat/*` request to the matching
 /// core function. Returns the JSON response body on success or an error
 /// message the caller turns into a 400 (a `no_such_heartbeat` error into
@@ -649,6 +777,10 @@ pub fn dispatch_get(
     project_path: &str,
     params: &HashMap<String, String>,
 ) -> Result<String, String> {
+    if let Some(rest) = path.strip_prefix("/cli/heartbeat/reminder/") {
+        return dispatch_reminder(rest, project_path, params);
+    }
+    refuse_special_row(path, project_path, params)?;
     match path {
         "/cli/heartbeat/add" => {
             let name = params.get("name").cloned().unwrap_or_default();

@@ -155,7 +155,7 @@ fn add_route_writes_instructions_on_the_daemon_disk() {
 fn add_and_edit_routes_answer_400_for_bad_frequencies() {
     let _g = lock();
     let ws = workspace("bad-freq");
-    let allowed = "hourly|daily|weekly|monthly|yearly|scheduled";
+    let allowed = "hourly|daily|weekly|monthly|yearly";
 
     let (status, out) = dispatch(
         "/cli/heartbeat/add",

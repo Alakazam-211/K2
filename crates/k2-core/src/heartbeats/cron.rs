@@ -46,7 +46,7 @@
 //!   behavior of the legacy gate is gone by design.
 
 use crate::db::schema::AgentHeartbeat;
-use chrono::{DateTime, Duration, Local, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike};
 use croner::Cron;
 use serde_json::Value;
 use std::str::FromStr;
@@ -64,6 +64,12 @@ pub const ON_TIME_GRACE_SECS: i64 = 15 * 60;
 /// when it is at most this late. Older misses are skipped and audited
 /// `skipped_missed`. 12 hours.
 pub const MISSED_RUN_GRACE_SECS: i64 = 12 * 60 * 60;
+
+/// 0278 — a one-time reminder has no next slot, so being late is better
+/// than being skipped: it fires up to 24 hours late (with a "late by"
+/// stamp), and beyond that retires as `missed` with a note to the owner.
+/// Separate from [`MISSED_RUN_GRACE_SECS`], which is about repeats.
+pub const REMINDER_LATE_GRACE_SECS: i64 = 24 * 60 * 60;
 
 /// Iteration cap for the backward occurrence walk (latest in-window
 /// occurrence). Generous — a window has to appear within this many
@@ -121,20 +127,31 @@ pub enum DueStatus {
 /// from spec_json `start`/`end` ("HH:MM"). Same in-window test the
 /// legacy hourly gate used: `[start, end)`, with overnight wrap when
 /// `start > end` (e.g. 22:00–06:00).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// 0278: `window_days` (`["mon",..]`) limits the window to those weekdays,
+/// and the row's `tz` is the zone the window is read in. Both are unset on
+/// every row that existed before 0278, which keeps box-local, every day. The
+/// key is `window_days`, not `days`: `days` already means the weekly
+/// schedule's own days, and a weekly catch-up must not start holding for
+/// next week's slot. Only the mail digest row sets these today.
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct FiringWindow {
     start_mins: u32,
     end_mins: u32,
+    /// Monday-first: `days[0]` is Monday. `None` = every day.
+    days: Option<[bool; 7]>,
+    tz: Option<chrono_tz::Tz>,
 }
 
 impl FiringWindow {
     /// `Ok(None)` when the spec has no window keys; `Err` when a key
     /// is present but malformed (surfaced as `Invalid` — a typo'd
     /// window must not silently widen to always-open).
-    fn parse(spec: &Value) -> Result<Option<Self>, String> {
+    fn parse(spec: &Value, tz: Option<&str>) -> Result<Option<Self>, String> {
         let start = spec.get("start").and_then(|s| s.as_str());
         let end = spec.get("end").and_then(|s| s.as_str());
-        if start.is_none() && end.is_none() {
+        let raw_days = spec.get("window_days");
+        if start.is_none() && end.is_none() && raw_days.is_none() {
             return Ok(None);
         }
         let start_mins = match start {
@@ -147,18 +164,61 @@ impl FiringWindow {
                 .ok_or_else(|| format!("firing window end '{s}' is not HH:MM"))?,
             None => 24 * 60 - 1,
         };
-        Ok(Some(FiringWindow { start_mins, end_mins }))
+        let days = match raw_days {
+            None => None,
+            Some(v) => Some(parse_window_days(v)?),
+        };
+        let tz = match tz.map(str::trim).filter(|t| !t.is_empty()) {
+            None => None,
+            Some(t) => Some(
+                t.parse::<chrono_tz::Tz>()
+                    .map_err(|_| format!("firing window zone '{t}' is not an IANA time zone"))?,
+            ),
+        };
+        Ok(Some(FiringWindow { start_mins, end_mins, days, tz }))
+    }
+
+    /// Minute-of-day and weekday (Monday = 0) of `t` in the window's zone.
+    fn local_parts(&self, t: DateTime<Local>) -> (u32, usize) {
+        match self.tz {
+            Some(tz) => {
+                let z = t.with_timezone(&tz);
+                (z.hour() * 60 + z.minute(), z.weekday().num_days_from_monday() as usize)
+            }
+            None => (t.hour() * 60 + t.minute(), t.weekday().num_days_from_monday() as usize),
+        }
     }
 
     fn contains(&self, t: DateTime<Local>) -> bool {
-        let mins = t.hour() * 60 + t.minute();
-        if self.start_mins <= self.end_mins {
+        let (mins, weekday) = self.local_parts(t);
+        let in_time = if self.start_mins <= self.end_mins {
             mins >= self.start_mins && mins < self.end_mins
         } else {
             // Overnight window (e.g. 22:00–06:00).
             mins >= self.start_mins || mins < self.end_mins
-        }
+        };
+        in_time && self.days.map_or(true, |d| d[weekday])
     }
+}
+
+/// `["mon","tue",…]` → Monday-first flags. An empty or unknown list is an
+/// error: a typo must not widen to every day, or close the window forever.
+fn parse_window_days(v: &Value) -> Result<[bool; 7], String> {
+    const NAMES: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    let arr = v.as_array().ok_or_else(|| "window_days must be a list of weekdays".to_string())?;
+    if arr.is_empty() {
+        return Err("window_days is empty".to_string());
+    }
+    let mut days = [false; 7];
+    for item in arr {
+        let name = item.as_str().map(str::to_ascii_lowercase).unwrap_or_default();
+        let i = NAMES
+            .iter()
+            .position(|n| *n == name)
+            .ok_or_else(|| format!("window_days has an unknown weekday {item}"))?;
+        days[i] = true;
+    }
+    Ok(days)
 }
 
 /// Parse `HH:MM` → minute-of-day (0..=1439).
@@ -188,7 +248,10 @@ pub fn evaluate_with_now(hb: &AgentHeartbeat, now: DateTime<Local>) -> DueStatus
             }
         }
     };
-    let window = match FiringWindow::parse(&spec) {
+    if hb.frequency == "once" {
+        return evaluate_once(hb, now);
+    }
+    let window = match FiringWindow::parse(&spec, hb.tz.as_deref()) {
         Ok(w) => w,
         Err(reason) => return DueStatus::Invalid { reason },
     };
@@ -199,12 +262,40 @@ pub fn evaluate_with_now(hb: &AgentHeartbeat, now: DateTime<Local>) -> DueStatus
     // pure interval after the reference point.
     match hb.frequency.as_str() {
         "hourly" => evaluate_interval(&spec, reference, now, window),
-        "daily" | "weekly" | "monthly" | "yearly" | "scheduled" => {
+        "daily" | "weekly" | "monthly" | "yearly" => {
             evaluate_cron(&spec, &hb.frequency, reference, now, window)
         }
         other => DueStatus::Invalid {
             reason: format!("unknown frequency '{other}'"),
         },
+    }
+}
+
+/// 0278 — a reminder has one instant. Not before it; `Due` for
+/// [`ON_TIME_GRACE_SECS`] after it; a late `DueCatchUp` up to
+/// [`REMINDER_LATE_GRACE_SECS`] (W8: never `classify`'s 12 hours, which is
+/// about repeats); `SkippedMissed` beyond that, which the tick turns into a
+/// retirement with a note. A reminder that retired is never asked again: it
+/// is archived, so `list_enabled` leaves it out.
+fn evaluate_once(hb: &AgentHeartbeat, now: DateTime<Local>) -> DueStatus {
+    let Some(at) = hb
+        .fire_at
+        .as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|t| t.with_timezone(&Local))
+    else {
+        return DueStatus::Invalid { reason: "this reminder has no valid fire_at".to_string() };
+    };
+    if now < at {
+        return DueStatus::NotYet { next: Some(at) };
+    }
+    let late = (now - at).num_seconds();
+    if late > REMINDER_LATE_GRACE_SECS {
+        DueStatus::SkippedMissed { missed_at: at }
+    } else if late <= ON_TIME_GRACE_SECS {
+        DueStatus::Due { scheduled_for: at }
+    } else {
+        DueStatus::DueCatchUp { missed_at: at }
     }
 }
 
@@ -465,9 +556,12 @@ pub fn next_fire_estimate(hb: &AgentHeartbeat, now: DateTime<Local>) -> Option<D
         DueStatus::NotYet { next } => next,
         DueStatus::HoldWindow { .. } => {
             let spec: Value = serde_json::from_str(&hb.spec_json).ok()?;
-            let window = FiringWindow::parse(&spec).ok()??;
+            let window = FiringWindow::parse(&spec, hb.tz.as_deref()).ok()??;
             Some(window_opens_after(window, now))
         }
+        // A reminder past its late window retires at the next tick: nothing
+        // to wake the machine for.
+        DueStatus::SkippedMissed { .. } if hb.is_reminder() => None,
         // The tick re-anchors a skipped slot at now; plan from there.
         DueStatus::SkippedMissed { .. } => {
             let mut anchored = hb.clone();
@@ -490,21 +584,48 @@ pub fn next_fire_estimate(hb: &AgentHeartbeat, now: DateTime<Local>) -> Option<D
     })
 }
 
-/// The next time at or after `now` the window opens (its `start`).
+/// True when `t` is inside this row's firing window (no window: always).
+pub fn window_contains(hb: &AgentHeartbeat, t: DateTime<Local>) -> bool {
+    let spec: Value = serde_json::from_str(&hb.spec_json).unwrap_or(Value::Null);
+    match FiringWindow::parse(&spec, hb.tz.as_deref()) {
+        Ok(Some(w)) => w.contains(t),
+        // A window that can't be read is treated as closed, the safe answer
+        // for "may this interrupt the agent now".
+        Err(_) => false,
+        Ok(None) => true,
+    }
+}
+
+/// The next time at or after `now` the window opens (its `start`), on a
+/// weekday the window allows, read in the window's zone.
 fn window_opens_after(window: FiringWindow, now: DateTime<Local>) -> DateTime<Local> {
     let (h, m) = (window.start_mins / 60, window.start_mins % 60);
-    let at_day = |d: chrono::NaiveDate| {
-        d.and_hms_opt(h, m, 0)
-            .and_then(|ndt| Local.from_local_datetime(&ndt).earliest())
+    let at_day = |d: chrono::NaiveDate| -> Option<DateTime<Local>> {
+        let ndt = d.and_hms_opt(h, m, 0)?;
+        match window.tz {
+            Some(tz) => tz.from_local_datetime(&ndt).earliest().map(|t| t.with_timezone(&Local)),
+            None => Local.from_local_datetime(&ndt).earliest(),
+        }
     };
-    let today = now.date_naive();
-    match at_day(today) {
-        Some(t) if t > now => t,
-        _ => today
-            .succ_opt()
-            .and_then(at_day)
-            .unwrap_or(now + Duration::days(1)),
+    let today = match window.tz {
+        Some(tz) => now.with_timezone(&tz).date_naive(),
+        None => now.date_naive(),
+    };
+    // Today, then each later day; a week and a day covers every weekday set.
+    let mut day = today;
+    for _ in 0..8 {
+        let allowed = window.days.map_or(true, |d| d[day.weekday().num_days_from_monday() as usize]);
+        if allowed {
+            if let Some(t) = at_day(day).filter(|t| *t > now) {
+                return t;
+            }
+        }
+        match day.succ_opt() {
+            Some(next) => day = next,
+            None => break,
+        }
     }
+    now + Duration::days(1)
 }
 
 /// Compute when this heartbeat is *next* due after a reference time
@@ -524,7 +645,7 @@ pub fn next_fire_time_after(
                 .unwrap_or(3600);
             Some(after + Duration::seconds(every_secs))
         }
-        "daily" | "weekly" | "monthly" | "yearly" | "scheduled" => {
+        "daily" | "weekly" | "monthly" | "yearly" => {
             let expr = build_cron_expression(&spec, &hb.frequency).ok()?;
             let cron = Cron::from_str(expr.as_str()).ok()?;
             cron.find_next_occurrence(&after, false).ok()
@@ -739,6 +860,13 @@ mod tests {
             next_fire_at: None,
             wait_since: None,
             overdue_noted_at: None,
+            kind: crate::db::schema::HEARTBEAT_KIND.to_string(),
+            fire_at: None,
+            tz: None,
+            body: None,
+            retired_at: None,
+            retired_reason: None,
+            created_by: String::new(),
         }
     }
 

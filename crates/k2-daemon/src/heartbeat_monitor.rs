@@ -67,6 +67,11 @@ pub fn spawn() -> tokio::task::JoinHandle<()> {
         let mut wall_jump = crate::wall_jump::Detector::new(WALL_JUMP_THRESHOLD_SECS);
         let mut last_tick = Instant::now();
         let mut last_transport_check = Instant::now();
+        // W10: the due-scan's 60 s would make a `--in 1m` reminder up to a
+        // minute late. Each reminder gets one pass the moment it comes due;
+        // the watermark keeps a reminder that can't fire yet (a cap, backoff,
+        // no agent) from driving a pass every 5 s. The 60 s tick retries it.
+        let mut reminder_watermark: Option<String> = None;
         loop {
             tokio::time::sleep(POLL_INTERVAL).await;
 
@@ -86,7 +91,8 @@ pub fn spawn() -> tokio::task::JoinHandle<()> {
                 crate::power::hold_for("heartbeat wake scan", WAKE_HOLD);
             }
 
-            let tick_due = woke || last_tick.elapsed() >= TICK_INTERVAL;
+            let reminder_due = newly_due_reminder(&mut reminder_watermark).await;
+            let tick_due = woke || reminder_due || last_tick.elapsed() >= TICK_INTERVAL;
             if tick_due {
                 last_tick = Instant::now();
                 pass = Some(match pass.take() {
@@ -112,6 +118,32 @@ pub fn spawn() -> tokio::task::JoinHandle<()> {
             }
         }
     })
+}
+
+/// True when a pending reminder came due since the last time this said so.
+async fn newly_due_reminder(watermark: &mut Option<String>) -> bool {
+    let after = watermark.clone();
+    let found = tokio::task::spawn_blocking(move || {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::heartbeats::reminders::newly_due(&conn, after.as_deref(), chrono::Utc::now())
+    })
+    .await;
+    match found {
+        Ok(Ok(Some(t))) => {
+            *watermark = Some(t);
+            true
+        }
+        Ok(Ok(None)) => false,
+        Ok(Err(e)) => {
+            log_debug!("[daemon/heartbeat-monitor] reminder due check: {e}");
+            false
+        }
+        Err(e) => {
+            log_debug!("[daemon/heartbeat-monitor] reminder due join error: {e}");
+            false
+        }
+    }
 }
 
 /// HB17 — one due scan in its own task, then a wake re-plan. A panic

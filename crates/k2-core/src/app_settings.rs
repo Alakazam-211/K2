@@ -408,6 +408,14 @@ pub struct AppSettings {
     /// field — an untyped key would never persist.
     #[serde(default)]
     pub owner_display_name: Option<String>,
+    /// 0.46.11 — the owner's IANA time zone, for times a person says in
+    /// words: reminders (`--at 13:00`) and a mail check window. Empty or
+    /// `None` = this box's own clock. Daemon-owned so a headless Linux box on
+    /// UTC still gets the owner's 9 AM. Existing heartbeats ignore it: they
+    /// stay on the box clock, so nothing moves. Admin floor, like every
+    /// other server-wide setting that changes what agents do.
+    #[serde(default)]
+    pub owner_timezone: Option<String>,
     /// Composer 1c (D4 / red-team H1) — per-host opt-in that lets a
     /// CONNECT-USER (role >= Member) instruct agents via the composer route
     /// `POST /cli/terminal/send-message`. The OWNER token is ALWAYS allowed
@@ -1232,6 +1240,7 @@ impl Default for AppSettings {
             last_active_workspace_id: None,
             active_window_hours: default_active_window_hours(),
             owner_display_name: None,
+            owner_timezone: None,
             allow_remote_instruct: false,
             dns_manage_enabled: false,
             agents_can_create_connections: false,

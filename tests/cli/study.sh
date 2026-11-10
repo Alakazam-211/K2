@@ -66,6 +66,15 @@ assert_contains "MIT License" "$source_out" "open source under the MIT License, 
 assert_contains "releases up to 0.46.9 stay FSL" "$source_out" "up to and including 0.46.9 were FSL-1.1-Apache-2.0"
 assert_absent "no not-MIT claim" "$source_out" "not MIT"
 
+echo "== k2 study heartbeats (found by the words people use for them) =="
+hb_words="$("$K2" study heartbeats)"
+for word in routines "cron jobs" reminder "k2 remind"; do
+    assert_contains "study heartbeats names '$word'" "$hb_words" "$word"
+done
+assert_contains "routines is a route to heartbeats" "$("$K2" study routines)" "k2 study heartbeats"
+assert_contains "reminders is a route to heartbeats" "$("$K2" study reminders)" "k2 study heartbeats"
+assert_contains "cron is a route to heartbeats" "$("$K2" study cron)" "k2 study heartbeats"
+
 echo "== k2 study app-heartbeats (AH23 / T13: every wait reason) =="
 hb_out="$("$K2" study app-heartbeats)"
 WAIT_FIXTURE="$PROJECT_ROOT/crates/k2-core/src/heartbeats/fixtures/wait-reasons.json"

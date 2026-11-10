@@ -146,7 +146,41 @@ impl Drop for FireActorGuard {
     }
 }
 
+/// The lane and the after-fire step around one launch. A reminder fires on
+/// its agent's one-at-a-time lane (`agent_wake`); a heartbeat keeps its own
+/// lease and concurrency policy, unchanged.
 fn smart_launch_checked(
+    project_path: &str,
+    name: &str,
+    catchup_of: Option<&str>,
+    check: LeaseCheck<'_>,
+) -> serde_json::Value {
+    let special = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        resolve_project_id(&conn, project_path).and_then(|pid| {
+            match AgentHeartbeat::get_by_name(&conn, &pid, name) {
+                Ok(Some(h)) if h.kind != k2_core::db::schema::HEARTBEAT_KIND => Some((pid, h)),
+                _ => None,
+            }
+        })
+    };
+    let Some((project_id, hb)) = special else {
+        return smart_launch_inner(project_path, name, catchup_of, check);
+    };
+    let out = crate::agent_wake::with_agent(&project_id, || {
+        smart_launch_inner(project_path, name, catchup_of, check)
+    });
+    if out["success"].as_bool() == Some(true) && k2_core::heartbeats::reminders::set_by_a_person(&hb.created_by) {
+        // A person set it, so a person hears it went off. An agent's own
+        // reminder stays in its session (Chatter records the line).
+        let short: String = hb.body.as_deref().unwrap_or_default().chars().take(200).collect();
+        k2_core::heartbeats::reminders::post_note(project_path, &format!("Reminder fired: {short}"));
+    }
+    out
+}
+
+fn smart_launch_inner(
     project_path: &str,
     name: &str,
     catchup_of: Option<&str>,
@@ -173,7 +207,9 @@ fn smart_launch_checked(
     // Validate WAKEUP.md is present so we can deliver content in any
     // of the three branches below.
     let wakeup_abs = Path::new(project_path).join(&hb.wakeup_path);
-    if !wakeup_abs.exists() {
+    // W6: a reminder's text is in the row; it has no WAKEUP.md to lose. A
+    // mail digest's WAKEUP.md is optional.
+    if hb.kind == k2_core::db::schema::HEARTBEAT_KIND && !wakeup_abs.exists() {
         write_audit(&project_id, &agent_name, &hb, "wakeup_file_missing",
             &format!("manual launch failed: {} not found", hb.wakeup_path));
         return error_value("wakeup_file_missing",
@@ -734,7 +770,7 @@ fn run_fresh_fire(
     catchup_of: Option<&str>,
     cause: FreshCause,
 ) -> serde_json::Value {
-    let Some(delivery) = wake::compose_wake_delivery_from_path(wakeup_abs, &hb.name) else {
+    let Some(delivery) = row_delivery(hb, wakeup_abs) else {
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
     };
     let prompt = delivery.prompt.clone();
@@ -1030,7 +1066,7 @@ fn run_workspace_session_delivery(
     wakeup_abs: &Path,
     catchup_of: Option<&str>,
 ) -> serde_json::Value {
-    let Some(delivery) = wake::compose_wake_delivery_from_path(wakeup_abs, &hb.name) else {
+    let Some(delivery) = row_delivery(hb, wakeup_abs) else {
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
     };
 
@@ -1044,14 +1080,30 @@ fn run_workspace_session_delivery(
     // wake a dormant canonical session (that's the whole point of the
     // schedule firing), so pass `wake: true` with the default bounded
     // readiness timeout.
-    let result = crate::workspace_msg::deliver_live(
-        project_path,
-        &delivery.prompt,
-        "heartbeat",
-        "",
-        true,
-        crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
-    );
+    let result = if hb.kind != k2_core::db::schema::HEARTBEAT_KIND {
+        // W14: one stamp, not `[from heartbeat] [reminder:…]`. The live
+        // path frames the note as `[from <stamp>] <text>`, so the stamp
+        // moves into `from` (the sources pattern, `sources::wake::live_text`).
+        let (stamp, text) = split_reminder_stamp(&delivery.prompt);
+        crate::workspace_msg::deliver_live_with_via(
+            project_path,
+            text,
+            stamp,
+            "",
+            true,
+            crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+            "reminder",
+        )
+    } else {
+        crate::workspace_msg::deliver_live(
+            project_path,
+            &delivery.prompt,
+            "heartbeat",
+            "",
+            true,
+            crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+        )
+    };
 
     if result.success {
         crate::active_reaper::note_workspace_need(project_id);
@@ -1105,26 +1157,33 @@ fn run_inject(
     live: session_lookup::LiveSession,
     catchup_of: Option<&str>,
 ) -> serde_json::Value {
-    let body_raw = match std::fs::read_to_string(wakeup_abs) {
-        Ok(s) => s,
-        Err(e) => {
-            return record_fire_failure(
-                project_id, agent_name, hb,
-                &format!("inject failed reading WAKEUP.md: {e}"),
-            );
+    let delivery = if hb.kind != k2_core::db::schema::HEARTBEAT_KIND {
+        match row_delivery(hb, wakeup_abs) {
+            Some(d) => d,
+            None => return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs),
         }
+    } else {
+        let body_raw = match std::fs::read_to_string(wakeup_abs) {
+            Ok(s) => s,
+            Err(e) => {
+                return record_fire_failure(
+                    project_id, agent_name, hb,
+                    &format!("inject failed reading WAKEUP.md: {e}"),
+                );
+            }
+        };
+        let body = wake::strip_frontmatter(&body_raw);
+        let body_trimmed = body.trim();
+        if body_trimmed.is_empty() {
+            // S5 HB33: empty is a wait, not a failure (no backoff, no
+            // failure count). The helper sees the empty file and answers
+            // `wakeup_empty` without disabling.
+            return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
+        }
+        // 0.45.6: a long body goes as a pointer to the file, never pasted
+        // where the TUI could keep only its tail.
+        wake::wake_delivery_for_body(body_trimmed.to_string(), wakeup_abs, &hb.name)
     };
-    let body = wake::strip_frontmatter(&body_raw);
-    let body_trimmed = body.trim();
-    if body_trimmed.is_empty() {
-        // S5 HB33: empty is a wait, not a failure (no backoff, no
-        // failure count). The helper sees the empty file and answers
-        // `wakeup_empty` without disabling.
-        return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
-    }
-    // 0.45.6: a long body goes as a pointer to the file, never pasted
-    // where the TUI could keep only its tail.
-    let delivery = wake::wake_delivery_for_body(body_trimmed.to_string(), wakeup_abs, &hb.name);
 
     // 0.45.6: the same locked, framed inject `k2 msg` uses (was a raw
     // write + 150ms + CR that raced a human composer and could not tell
@@ -1250,7 +1309,7 @@ fn run_resume_and_fire(
     resolved: &k2_core::workspace::agent_resolve::ResolvedAgentCommand,
     catchup_of: Option<&str>,
 ) -> serde_json::Value {
-    let Some(delivery) = wake::compose_wake_delivery_from_path(wakeup_abs, &hb.name) else {
+    let Some(delivery) = row_delivery(hb, wakeup_abs) else {
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
     };
 
@@ -1445,7 +1504,34 @@ fn record_fire_failure(
     write_audit(project_id, agent_name, hb, "error",
         &format!("{reason} (failure {new_count}/{MAX_CONSECUTIVE_FAILURES})"));
 
-    if new_count >= MAX_CONSECUTIVE_FAILURES {
+    if new_count >= MAX_CONSECUTIVE_FAILURES && hb.is_reminder() {
+        // 0278: no `auto_disabled_failing` limbo. A reminder that can't be
+        // delivered retires and tells its owner.
+        let retired = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::heartbeats::reminders::retire(&conn, project_id, &hb.name, "failed", chrono::Utc::now())
+        };
+        match retired {
+            Ok(0) => {}
+            Ok(_) => {
+                write_audit(project_id, agent_name, hb, "auto_disabled_failing",
+                    &format!("reminder retired after {new_count} failed deliveries; last error: {reason}"));
+                let path = {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    k2_core::db::schema::Project::get(&conn, project_id).ok().map(|p| p.path)
+                };
+                if let Some(path) = path {
+                    k2_core::heartbeats::reminders::post_note(
+                        &path,
+                        &k2_core::heartbeats::reminders::missed_note(hb, &format!("it couldn't be delivered ({reason})")),
+                    );
+                }
+            }
+            Err(e) => k2_core::log_debug!("[heartbeat] retire failed reminder {}: {e}", hb.name),
+        }
+    } else if new_count >= MAX_CONSECUTIVE_FAILURES {
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -1570,10 +1656,18 @@ fn release_lease(project_id: &str, hb_name: &str) {
 /// only on successful spawn paths; the failure paths use
 /// `release_lease` and leave `last_fired` untouched so the heartbeat
 /// stays eligible for the next tick.
+///
+/// W9: a stamp that failed leaves `last_fired` unchanged, so the lease
+/// re-check would let the fire happen again. That is worth a log line,
+/// loudly, not a dropped Result.
 fn stamp_fired_and_release(project_id: &str, hb_name: &str) {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let _ = AgentHeartbeat::stamp_fired_and_release(&conn, project_id, hb_name);
+    if let Err(e) = AgentHeartbeat::stamp_fired_and_release(&conn, project_id, hb_name) {
+        k2_core::log_debug!(
+            "[heartbeat] ERROR: could not stamp hb={hb_name} project={project_id} as fired: {e}; it may fire again"
+        );
+    }
 }
 
 /// Success-path audit: `fired` for an on-time fire, `fired_catchup`
@@ -1613,6 +1707,30 @@ fn write_audit(
         &hb.frequency, decision, Some(reason),
         None, None, None, actor.as_deref(),
     );
+}
+
+/// What a fire sends: a reminder's line, or the heartbeat's WAKEUP.md.
+fn row_delivery(hb: &AgentHeartbeat, wakeup_abs: &Path) -> Option<wake::WakeDelivery> {
+    if hb.is_reminder() {
+        return Some(reminder_delivery(hb));
+    }
+    wake::compose_wake_delivery_from_path(wakeup_abs, &hb.name)
+}
+
+/// A reminder is always inline: its body is capped well under the
+/// file-pointer cutoff, and the agent needs the words, not a pointer.
+fn reminder_delivery(hb: &AgentHeartbeat) -> wake::WakeDelivery {
+    let prompt = k2_core::heartbeats::reminders::fire_prompt(hb, chrono::Utc::now());
+    let body_bytes = prompt.len();
+    wake::WakeDelivery { prompt, mode: wake::WakePromptMode::Inline, body_bytes }
+}
+
+/// `[stamp] text` → (`stamp`, `text`), for the live path's `[from …]` frame.
+fn split_reminder_stamp(prompt: &str) -> (&str, &str) {
+    prompt
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once("] "))
+        .unwrap_or(("k2", prompt))
 }
 
 fn error_value(decision: &str, reason: &str, name: &str) -> serde_json::Value {

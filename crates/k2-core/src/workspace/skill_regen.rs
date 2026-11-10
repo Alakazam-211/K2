@@ -656,6 +656,9 @@ k2 store put <name> --id <id> --json '{…}'  # JSONB in the same DB — create 
 ```
 
 ## Heartbeats
+A heartbeat is a scheduled wake of this agent. Some people call these routines,
+scheduled tasks or cron jobs. One that fires once is a reminder:
+`k2 remind "check the deploy" --in 45m` (`k2 reminders` lists them).
 ```
 k2 heartbeat                                   # list active schedules
 k2 heartbeat schedule list [--archived]
@@ -747,7 +750,7 @@ chat-voice, chat-voice-rooms, voice-rooms, tauri, tauri-voice, skins, feedback-l
 sidecars, sessions, llm-tokens, llm-accounts, publish-framing,
 publish-visibility, publish-dev, compute, compute-shared, ci, vault,
 notifications, data-sources, projects, hooks, agent-hire, garden-data,
-garden-access, garden-changes, changes, docs, sim, design, db-upgrade, jobs, folder-trust,
+garden-access, garden-changes, changes, docs, sim, design, db-upgrade, jobs, heartbeats, folder-trust,
 email-notifications, box-move, board, chat-refresh.
 Building an App or widget that shows live state (an agent working, counts,
 unread) → `k2 study live`: every surface, its caps, read + live verbs, and

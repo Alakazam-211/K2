@@ -26,6 +26,7 @@ mod federation_peer_rosters_integration;
 mod folder_trust_integration;
 mod git_tools_integration;
 mod grokbots_routes_integration;
+mod heartbeat_reminders_integration;
 #[cfg(unix)]
 mod homes_sync_cell_integration;
 mod homes_sync_integration;

@@ -2234,6 +2234,54 @@ pub struct AgentHeartbeat {
     /// longer overdue.
     #[serde(default)]
     pub overdue_noted_at: Option<String>,
+    /// 0278 — `heartbeat` (every row before 0278), `reminder` (fires once,
+    /// then retires itself) or `mail_digest` (an agent's mail digest).
+    #[serde(default = "default_heartbeat_kind")]
+    pub kind: String,
+    /// 0278 — a reminder's one instant, UTC RFC3339. NULL otherwise.
+    #[serde(default)]
+    pub fire_at: Option<String>,
+    /// 0278 — IANA zone a reminder was set in (display); on a `mail_digest`
+    /// row, the zone its window is evaluated in. NULL = this box's local
+    /// time, which is what every pre-0278 row keeps.
+    #[serde(default)]
+    pub tz: Option<String>,
+    /// 0278 — a reminder's text. Reminders have no WAKEUP.md folder.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// 0278 — when a reminder finished, UTC RFC3339.
+    #[serde(default)]
+    pub retired_at: Option<String>,
+    /// 0278 — why: `fired`, `missed`, `failed` or `cancelled`.
+    #[serde(default)]
+    pub retired_reason: Option<String>,
+    /// 0278 — who set a reminder, the `request_actor` label
+    /// (`owner-token`, `user:<login>`, `agent:<handle>`, or empty).
+    #[serde(default)]
+    pub created_by: String,
+}
+
+fn default_heartbeat_kind() -> String {
+    HEARTBEAT_KIND.to_string()
+}
+
+/// [`AgentHeartbeat::kind`] of every row that is not a reminder or a digest.
+pub const HEARTBEAT_KIND: &str = "heartbeat";
+/// [`AgentHeartbeat::kind`] of a one-time reminder.
+pub const REMINDER_KIND: &str = "reminder";
+/// [`AgentHeartbeat::kind`] of an agent's mail digest row.
+pub const MAIL_DIGEST_KIND: &str = "mail_digest";
+
+impl AgentHeartbeat {
+    /// A one-time reminder (fires once, then retires itself).
+    pub fn is_reminder(&self) -> bool {
+        self.kind == REMINDER_KIND
+    }
+
+    /// An agent's mail digest row.
+    pub fn is_mail_digest(&self) -> bool {
+        self.kind == MAIL_DIGEST_KIND
+    }
 }
 
 impl AgentHeartbeat {
@@ -2289,7 +2337,7 @@ impl AgentHeartbeat {
 
     /// Column list for SELECTs. Centralised so adding a new column means
     /// updating one constant + `from_row`, not five query strings.
-    const COLS: &'static str = "id, project_id, name, frequency, spec_json, wakeup_path, enabled, last_fired, last_session_id, archived_at, created_at, concurrency_policy, starting_deadline_secs, active_deadline_secs, in_flight_started_at, active_terminal_id, use_workspace_session, consecutive_failures, next_retry_at, disabled_reason, schedule_error, session_provider, schedule_anchor_at, next_fire_at, wait_reason, wait_detail, wait_since, overdue_noted_at";
+    const COLS: &'static str = "id, project_id, name, frequency, spec_json, wakeup_path, enabled, last_fired, last_session_id, archived_at, created_at, concurrency_policy, starting_deadline_secs, active_deadline_secs, in_flight_started_at, active_terminal_id, use_workspace_session, consecutive_failures, next_retry_at, disabled_reason, schedule_error, session_provider, schedule_anchor_at, next_fire_at, wait_reason, wait_detail, wait_since, overdue_noted_at, kind, fire_at, tz, body, retired_at, retired_reason, created_by";
 
     pub fn get_by_name(conn: &Connection, project_id: &str, name: &str) -> Result<Option<AgentHeartbeat>> {
         let sql = format!(
@@ -2843,6 +2891,10 @@ impl AgentHeartbeat {
     /// a single statement, so a tick never observes the row in a
     /// half-finished state. 0062: a success also resets the
     /// consecutive-failure counter + backoff window.
+    ///
+    /// 0278 (W9): a reminder retires in this same UPDATE, so all four
+    /// delivery paths retire it and no path can stamp `last_fired` without
+    /// retiring: a row that fired and did not retire would fire again.
     pub fn stamp_fired_and_release(
         conn: &Connection,
         project_id: &str,
@@ -2852,9 +2904,22 @@ impl AgentHeartbeat {
         conn.execute(
             "UPDATE workspace_heartbeats \
              SET last_fired = ?1, in_flight_started_at = NULL, \
-                 consecutive_failures = 0, next_retry_at = NULL \
+                 consecutive_failures = 0, next_retry_at = NULL, \
+                 enabled = CASE WHEN kind = 'reminder' THEN 0 ELSE enabled END, \
+                 retired_at = CASE WHEN kind = 'reminder' THEN ?1 ELSE retired_at END, \
+                 retired_reason = CASE WHEN kind = 'reminder' THEN 'fired' ELSE retired_reason END, \
+                 archived_at = CASE WHEN kind = 'reminder' THEN ?1 ELSE archived_at END \
              WHERE project_id = ?2 AND name = ?3",
             params![now, project_id, name],
+        )
+    }
+
+    /// 0278 — hold a due reminder until `next_retry_at` without counting a
+    /// failure (it hit a cap; nothing went wrong).
+    pub fn defer_retry(conn: &Connection, project_id: &str, name: &str, next_retry_at: &str) -> Result<usize> {
+        conn.execute(
+            "UPDATE workspace_heartbeats SET next_retry_at = ?1 WHERE project_id = ?2 AND name = ?3",
+            params![next_retry_at, project_id, name],
         )
     }
 
@@ -2934,12 +2999,19 @@ impl AgentHeartbeat {
             wait_detail: row.get(25)?,
             wait_since: row.get(26)?,
             overdue_noted_at: row.get(27)?,
+            kind: row.get(28)?,
+            fire_at: row.get(29)?,
+            tz: row.get(30)?,
+            body: row.get(31)?,
+            retired_at: row.get(32)?,
+            retired_reason: row.get(33)?,
+            created_by: row.get(34)?,
         })
     }
 
     /// Number of columns in [`Self::COLS`] — the first index past the
     /// row's own fields in a joined SELECT.
-    const COL_COUNT: usize = 28;
+    const COL_COUNT: usize = 35;
 
     /// Heartbeat S3 (HB19) — the ONE writer of `next_fire_at` /
     /// `wait_reason` / `wait_detail`. Writes only when a value differs

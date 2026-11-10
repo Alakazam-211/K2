@@ -169,6 +169,16 @@ fn heartbeat_workspace(params: &HashMap<String, String>, project: String) -> Res
     Ok(path)
 }
 
+/// A `usage: …` refusal from the heartbeat routes, as the CLI reads it (exit 2).
+fn heartbeat_usage_response(msg: &str) -> CliResponse {
+    let hint = msg.strip_prefix(crate::heartbeat_routes::USAGE_ERR_PREFIX).unwrap_or(msg);
+    CliResponse {
+        status: "400 Bad Request",
+        content_type: "application/json",
+        body: serde_json::json!({ "ok": false, "error": { "code": "usage", "hint": hint } }).to_string(),
+    }
+}
+
 /// A heartbeat verb's `workspace=` (handle, name, path or id) → its path.
 /// 400 `workspace not found: …` (the CLI exits 4) or `AMBIG: …`.
 pub(crate) fn resolve_heartbeat_workspace(ws: &str) -> Result<String, CliResponse> {
@@ -1132,6 +1142,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     // Pause / resume: people may name another workspace;
                     // an agent is refused with a card to ask (0.46.6).
                     if p == crate::heartbeat_other::ROUTE {
+                        // Not for a reminder or the mail digest row, whose
+                        // own verbs own their on/off.
+                        if let Err(msg) = crate::heartbeat_routes::refuse_special_row(p, &pp, params) {
+                            return Some(heartbeat_usage_response(&msg));
+                        }
                         return Some(crate::heartbeat_other::route(params, &pp));
                     }
                     let pp = match heartbeat_workspace(params, pp) {
@@ -1148,6 +1163,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         // AH13: an unknown name is a 404, never a success.
                         Err(msg) if k2_core::heartbeats::is_no_such_heartbeat(&msg) => {
                             crate::heartbeat_app_routes::no_such_heartbeat_response(&msg)
+                        }
+                        Err(msg) if msg.starts_with(crate::heartbeat_routes::USAGE_ERR_PREFIX) => {
+                            heartbeat_usage_response(&msg)
                         }
                         Err(msg) => CliResponse::bad_request(msg),
                     }

@@ -791,6 +791,12 @@ async fn async_main() {
             ),
             Err(e) => log_debug!("[daemon] WARN: heartbeat_fires prune: {e}"),
         }
+        // 0278: finished reminders are kept on the same 90-day clock.
+        match k2_core::heartbeats::reminders::prune_retired(&conn, chrono::Utc::now()) {
+            Ok(0) => {}
+            Ok(n) => log_debug!("[daemon] pruned {n} finished reminder row(s) older than 90 days"),
+            Err(e) => log_debug!("[daemon] WARN: reminder prune: {e}"),
+        }
     }
 
     // 0036: clear `active_terminal_id` for any heartbeat whose pointed-at

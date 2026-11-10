@@ -159,6 +159,7 @@ pub mod voice_rooms;
 // checks the daemon polls, their state, card view and triggers. Pure half;
 // the poller and routes live in k2-daemon. See module docs.
 pub mod sources;
+pub mod wake_budget;
 // Sew chat for agents (`k2 chat`, slice S30 core): levels, approval modes,
 // addressed rules, limits, and the access / action / approval-queue store
 // (migration 0167). Pure half; routes and the Sew seam live in k2-daemon.

@@ -117,6 +117,7 @@ pub mod agent_identity_routes;
 pub mod heartbeat_launch;
 // 0.46.9: is a heartbeat's session still good to wake (limit, sign-in, token).
 pub mod hb_stale;
+pub mod agent_wake;
 pub mod heartbeat_monitor;
 // 0.46.6: pause / resume another workspace's heartbeat (people; agents ask).
 pub mod heartbeat_other;

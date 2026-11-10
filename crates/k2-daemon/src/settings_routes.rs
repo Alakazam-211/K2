@@ -56,6 +56,9 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // 0.44.4 (noun-tiers A3): the global agent mail-send default is an
     // agent permission switch like DNS/connections above — Admin floor.
     "mailAgentSend",
+    // 0.46.11: the zone a person's "13:00" means on this server, for
+    // reminders and mail check windows. Admin floor (vs-live W12).
+    "ownerTimezone",
     // MCS3: calendars on linked inboxes, the same switch as
     // `k2 mail link calendars on|off` (Admin floor there too).
     "linkedCalendars",
@@ -499,6 +502,14 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
     // TODO grant announce — if partial flips dnsManageEnabled false→true,
     // best-effort append a one-line DNS-manage capability note (daemon
     // agent follow-up). Same hook as per-workspace `/cli/dns-manage`.
+    // 0.46.11: a typo here would quietly make every "13:00" mean box time.
+    if let Some(tz) = partial.get("ownerTimezone").and_then(|v| v.as_str()) {
+        if !tz.trim().is_empty() && tz.trim().parse::<chrono_tz::Tz>().is_err() {
+            return CliResponse::bad_request(format!(
+                "\"{tz}\" is not an IANA time zone (for example America/Denver)"
+            ));
+        }
+    }
     let agent_hooks_touched = partial.get("agentHooks").is_some();
     let cores_touched = partial.get(k2_core::docs_cores::SETTING_KEY).is_some();
     let voice_touched = ["voiceRoomsPreview", "voiceRoomsCount"].iter().any(|k| partial.get(*k).is_some());

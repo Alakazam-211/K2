@@ -1,0 +1,40 @@
+$ k2 study heartbeats
+exit: 0
+--- stdout
+k2 study heartbeats — wake an agent on a schedule, or once
+
+THE WORDS
+  K2 calls a scheduled wake of an agent a HEARTBEAT. Some people call these
+  routines, scheduled tasks or cron jobs: same thing here. One that fires
+  once is a REMINDER (an alarm, a one-shot): it is a heartbeat that goes away.
+  k2 job is different: it runs a program with no agent and no model.
+
+WHICH ONE
+  Every day at 9, keep doing this      k2 heartbeat schedule add --name n --daily --time 09:00 --instructions "..."
+  Once, in 45 minutes                  k2 remind "check the deploy" --in 45m
+  Once, at a time                      k2 remind "call Jane back" --at 13:00
+  Once, on a date                      k2 remind "renew cert" --on 2026-10-30
+  Run a script, no agent               k2 job add ... (k2 study jobs)
+
+HEARTBEATS REPEAT
+  Each one is a WAKEUP.md under .k2/heartbeats/<name>/. It fires into your
+  pinned chat by default. A missed slot catches up once within 12 hours;
+  older than that it is skipped and the schedule carries on.
+  k2 heartbeat --help has every verb.
+
+REMINDERS FIRE ONCE
+  k2 heartbeat remind --help has every flag. k2 remind is the short form.
+  k2 reminders lists them. Snooze with k2 remind snooze <n> 10m.
+  The text is delivered as one line:
+    [reminder:call-jane · set by Rosson 10-26 09:12] Call Jane back.
+  It fires up to 24 hours late with a late stamp; later than that it
+  finishes as missed and tells the owner on the Thread.
+  Times are in --tz, then the owner's timezone (Settings → General), then
+  this computer's clock.
+
+LIMITS
+  100 pending reminders per workspace; 20 reminder fires an hour; and every
+  agent takes 30 automatic wakes an hour (Sources, reminders and mail
+  combined). Over a limit, a reminder waits for the next minute.
+--- stderr
+--- requests

@@ -2162,9 +2162,25 @@ exit: 0
     {
       "name": "heartbeat",
       "usage": "k2 heartbeat",
-      "description": "List this workspace's active heartbeat schedules (named scheduled wakes; = 'heartbeat schedule list'). --help anywhere prints usage and never mutates.",
+      "description": "List this workspace's active heartbeat schedules (named scheduled wakes; = 'heartbeat schedule list'). Some people call these routines, scheduled tasks or cron jobs. --help anywhere prints usage and never mutates.",
       "args": [],
       "flags": []
+    },
+    {
+      "name": "heartbeat remind",
+      "usage": "k2 heartbeat remind \"<text>\" (--in 45m|--at 13:00|--on 2026-10-30 [--at 09:00]) [--tz Area/City] [--name n] [--file path] [--session pinned|own] [--json]",
+      "description": "Set a one-time wake (a reminder): a heartbeat that fires once and goes away. Short form: k2 remind. Also list [--all], show <n>, snooze <n> <when>, cancel <n>. A past time is refused (exit 2). Fires once across restarts and sleep; up to 24 hours late with a late stamp, then it finishes as missed and tells the owner. POST /cli/heartbeat/reminder/add.",
+      "args": [{"name": "text", "required": true}],
+      "flags": [
+        {"name": "--in", "arg": "duration", "description": "s m h d w, combined (1h30m). At least 1 minute, at most 365 days."},
+        {"name": "--at", "arg": "time", "description": "13:00 (next one), 2026-10-30T09:00, or an RFC 3339 instant."},
+        {"name": "--on", "arg": "date", "description": "A date; 09:00 unless --at gives the time."},
+        {"name": "--tz", "arg": "zone", "description": "IANA zone. Default: the owner's timezone, else this computer's clock."},
+        {"name": "--name", "arg": "n", "description": "Default: r-<6 chars>."},
+        {"name": "--file", "arg": "path", "description": "A file in this workspace the reminder points the agent to."},
+        {"name": "--session", "arg": "pinned|own", "description": "Where it lands. Default: the pinned chat."},
+        {"name": "--json", "description": "Raw JSON."}
+      ]
     },
     {
       "name": "heartbeat schedule",

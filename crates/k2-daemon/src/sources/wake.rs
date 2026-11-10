@@ -43,15 +43,14 @@ impl Waker for DaemonWaker {
         deliver_with(
             req,
             &|ws, text, from| {
-                let r = crate::workspace_msg::deliver_live_with_via(
-                    ws,
+                let r = crate::agent_wake::deliver(crate::agent_wake::Wake {
+                    workspace: ws,
+                    agent: ws,
                     text,
                     from,
-                    "",
-                    true,
-                    crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
-                    "source",
-                );
+                    via: "source",
+                    wake_timeout: crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+                });
                 LiveResult { success: r.success, session_id: r.target_session_id, woke: r.woke, reason: r.reason }
             },
             &|id| crate::compute_routes::ws_by_id(id).map(|w| w.path),
@@ -349,7 +348,7 @@ fn judge(conn: &Connection, source: &SourceRow, ts_in: &[Transition], now: i64, 
                 now,
                 last_fire_at: trow.last_fire_at,
                 fires_today: ts::fires_since(conn, &trow.id, triggers::utc_day_start(now)).unwrap_or(0),
-                agent_fires_last_hour: ts::agent_fires_since(conn, &trow.target_project_id, now - 3600).unwrap_or(0),
+                agent_fires_last_hour: k2_core::wake_budget::wakes_since(conn, &trow.target_project_id, now - 3600).unwrap_or(0),
                 already_fired_incident: false,
                 in_gap,
                 draining,

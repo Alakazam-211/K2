@@ -190,6 +190,9 @@ pub mod secrets;
 pub mod fwd_message;
 #[cfg(test)]
 mod fake_jmap;
+// OA0 (0.46.11): people's mailboxes through a named workspace, end to end.
+#[cfg(test)]
+mod mailbox_guard_tests;
 pub mod send;
 pub mod submit;
 pub mod sieve_user;

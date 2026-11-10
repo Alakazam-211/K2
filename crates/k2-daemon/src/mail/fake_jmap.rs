@@ -28,6 +28,11 @@ pub(crate) struct FakeState {
     pub gets: Vec<serde_json::Value>,
     /// Answer every upload with this HTTP status instead of storing it.
     pub upload_status: Option<u16>,
+    /// Each `Email/set` update (`accountId`, email id, the patch): marking
+    /// read lands here.
+    pub updates: Vec<(String, String, serde_json::Value)>,
+    /// Account id → the email ids `Email/query` lists for it, newest first.
+    pub inbox: HashMap<String, Vec<String>>,
 }
 
 pub(crate) struct FakeJmap {
@@ -142,6 +147,21 @@ fn route(method: &str, path: &str, body: &[u8], state: &Mutex<FakeState>) -> (u1
                 "Identity/get" => serde_json::json!({ "list": [] }),
                 "Identity/set" => serde_json::json!({ "created": { "k2": { "id": "ident-1" } } }),
                 "Mailbox/query" => serde_json::json!({ "ids": ["mb-drafts"] }),
+                "Email/query" => {
+                    let account = args["accountId"].as_str().unwrap_or("");
+                    let ids = st.inbox.get(account).cloned().unwrap_or_default();
+                    serde_json::json!({ "ids": ids, "position": 0 })
+                }
+                "Email/set" if args.get("update").is_some() => {
+                    let account = args["accountId"].as_str().unwrap_or("").to_string();
+                    let update = args["update"].as_object().expect("Email/set update");
+                    let mut updated = serde_json::Map::new();
+                    for (id, patch) in update {
+                        st.updates.push((account.clone(), id.clone(), patch.clone()));
+                        updated.insert(id.clone(), serde_json::Value::Null);
+                    }
+                    serde_json::json!({ "updated": updated })
+                }
                 "Email/set" => {
                     let create = args["create"].as_object().expect("Email/set create");
                     let mut created = serde_json::Map::new();

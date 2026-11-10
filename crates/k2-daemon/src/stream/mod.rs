@@ -23,7 +23,11 @@
 //! sizes (its first frame). Its
 //! bitrate is [`bitrate_for`] of its last unit's size, tier and
 //! remote-ness, stepped by a per-layer [`RateCtl`] that follows the layer's
-//! most congested viewer. The hub sends the whole list whenever it changes;
+//! most congested viewer. A viewer congested for [`MOVE_DOWN_AFTER`] while
+//! another on its layer isn't moves to the next layer down (the next lower
+//! tier of its codec and remote-ness, or the nearest lower layer when no
+//! more fit; [`HubEvent::Moved`]); a lone viewer stays (the rate is its
+//! own). The hub sends the whole list whenever it changes;
 //! a layer with no viewers leaves the list (paused). Ids are small u8s,
 //! stable while the layer lives and not reused at once.
 //!
@@ -31,7 +35,11 @@
 //! `request_keyframe(layer, now)` at once, never throttled, and nothing on
 //! that layer until a key unit. A viewer's own ask is throttled per layer
 //! ([`KEYFRAME_MIN_GAP`]); a catching-up viewer's ([`Subscription::catch_up`])
-//! to one per [`CATCH_UP_GAP`] per layer.
+//! to one per [`CATCH_UP_GAP`] per layer. A throttled catch-up isn't lost:
+//! while a viewer on the layer still waits for a key unit and none has
+//! reached it, the hub asks again as soon as the gap ends (S4), so a viewer
+//! that skips twice inside a second waits at most the gap and a frame.
+//! What makes a viewer skip is [`ViewerGate`]'s (R8, S4).
 //!
 //! **Codecs.** H.264, VP8 and JPEG layers are alike to the hub. A pixel
 //! source never encodes VP8: a VP8 layer on one fails at once and its
@@ -69,6 +77,9 @@ pub const MAX_LAYERS: usize = 3;
 pub const KEYFRAME_MIN_GAP: Duration = Duration::from_millis(250);
 /// Catch-up asks (a viewer that dropped deltas): one per layer per this.
 pub const CATCH_UP_GAP: Duration = Duration::from_secs(1);
+/// A viewer congested this long while another on its layer isn't moves to
+/// the next layer down (PRD remote desktop §3.5, rate control per layer).
+pub const MOVE_DOWN_AFTER: Duration = Duration::from_secs(5);
 /// Units a viewer may have queued before the hub drops its newer ones.
 pub const VIEWER_QUEUE: usize = 8;
 /// How long the capture thread waits in `next_unit` before it looks at the
@@ -117,8 +128,9 @@ pub struct Want {
 /// What a hub tells one viewer besides units.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HubEvent {
-    /// Its layer's encoder failed: it is on `layer` now, a JPEG layer at
-    /// `fps` (the JPEG row of the rate table).
+    /// It is on `layer` now, at `fps`: its layer's encoder failed (a JPEG
+    /// layer, the JPEG row of the rate table), or its link stayed congested
+    /// while its layer's others didn't (the same codec, the next rate down).
     Moved { layer: u8, codec: Codec, fps: u32, why: String },
     /// The source ended (the device stopped).
     Ended(String),
@@ -149,7 +161,30 @@ struct Sub {
     units: mpsc::Sender<EncodedUnit>,
     events: mpsc::UnboundedSender<HubEvent>,
     congested: bool,
+    /// Since when it has been congested on this layer.
+    congested_since: Option<Instant>,
+    /// It asked for a catch-up key unit and none has reached its queue.
+    waiting: bool,
 }
+
+impl Sub {
+    fn new(layer: u8, want: Want, units: mpsc::Sender<EncodedUnit>, events: mpsc::UnboundedSender<HubEvent>) -> Self {
+        Sub { layer, want, units, events, congested: false, congested_since: None, waiting: false }
+    }
+
+    /// On a new layer: its link starts clear there, and the hub asked for
+    /// its key as a joiner's.
+    fn fresh(&mut self) {
+        self.congested = false;
+        self.congested_since = None;
+        self.waiting = false;
+    }
+}
+
+/// The hub's clock (a fake one in tests).
+type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+/// Keyframe asks for the source: (layer, since).
+type Asks = Vec<(u8, Option<Instant>)>;
 
 #[derive(Default)]
 struct State {
@@ -158,8 +193,8 @@ struct State {
     next_id: u8,
     /// The layer list changed since the source last got it.
     dirty: bool,
-    /// Keyframe asks for the source: (layer, since).
-    asks: Vec<(u8, Option<Instant>)>,
+    /// Keyframe asks for the source.
+    asks: Asks,
     /// The list the source has now.
     sent: Vec<LayerSpec>,
     sizes: Option<SourceSizes>,
@@ -175,6 +210,7 @@ pub struct Hub {
     cpu_ns: AtomicU64,
     units: AtomicU64,
     key_asks: AtomicU64,
+    clock: Clock,
 }
 
 fn hubs() -> &'static Mutex<HashMap<SourceKey, Arc<Hub>>> {
@@ -212,15 +248,7 @@ pub fn join<E>(key: SourceKey, want: Want, open: impl FnOnce() -> Result<Box<dyn
     }
     let source = open().map_err(JoinError::Open)?;
     static GEN: AtomicU64 = AtomicU64::new(1);
-    let hub = Arc::new(Hub {
-        key: key.clone(),
-        gen: GEN.fetch_add(1, Ordering::SeqCst),
-        state: Mutex::new(State::default()),
-        stats_viewers: AtomicUsize::new(0),
-        cpu_ns: AtomicU64::new(0),
-        units: AtomicU64::new(0),
-        key_asks: AtomicU64::new(0),
-    });
+    let hub = Arc::new(Hub::new(key.clone(), GEN.fetch_add(1, Ordering::SeqCst), Arc::new(Instant::now)));
     let sub = Hub::subscribe(&hub, want);
     let h2 = hub.clone();
     std::thread::Builder::new().name(format!("k2-stream-{key}")).spawn(move || capture(h2, source)).map_err(|e| JoinError::Thread(format!("capture thread: {e}")))?;
@@ -229,6 +257,23 @@ pub fn join<E>(key: SourceKey, want: Want, open: impl FnOnce() -> Result<Box<dyn
 }
 
 impl Hub {
+    fn new(key: SourceKey, gen: u64, clock: Clock) -> Hub {
+        Hub {
+            key,
+            gen,
+            state: Mutex::new(State::default()),
+            stats_viewers: AtomicUsize::new(0),
+            cpu_ns: AtomicU64::new(0),
+            units: AtomicU64::new(0),
+            key_asks: AtomicU64::new(0),
+            clock,
+        }
+    }
+
+    fn now(&self) -> Instant {
+        (self.clock)()
+    }
+
     pub fn key(&self) -> &SourceKey {
         &self.key
     }
@@ -261,7 +306,7 @@ impl Hub {
         let (events_tx, events) = mpsc::unbounded_channel();
         let mut st = lock(&hub.state);
         let layer = hub.attach(&mut st, id, want);
-        st.viewers.insert(id, Sub { layer, want, units: units_tx, events: events_tx, congested: false });
+        st.viewers.insert(id, Sub::new(layer, want, units_tx, events_tx));
         hub.refresh_width(&mut st, layer);
         drop(st);
         if want.stats {
@@ -287,7 +332,7 @@ impl Hub {
         if let Some(id) = found {
             let others = st.viewers.iter().any(|(v, s)| *v != me && s.layer == id);
             if others {
-                let now = Instant::now();
+                let now = self.now();
                 if let Some(l) = st.layers.iter_mut().find(|l| l.id == id) {
                     l.last_key_ask = Some(now);
                 }
@@ -346,7 +391,8 @@ impl Hub {
     }
 
     /// A unit off the source: to every viewer of its layer that has room
-    /// in its queue (the rest lose it and catch up on a key unit).
+    /// in its queue (the rest lose it and catch up on a key unit). A key
+    /// unit in a waiting viewer's queue ends its wait.
     fn fan_out(&self, u: EncodedUnit) {
         self.units.fetch_add(1, Ordering::SeqCst);
         let mut st = lock(&self.state);
@@ -362,8 +408,82 @@ impl Hub {
             }
         }
         st.dirty |= retuned;
-        for s in st.viewers.values().filter(|s| s.layer == u.layer) {
-            let _ = s.units.try_send(u.clone());
+        for s in st.viewers.values_mut().filter(|s| s.layer == u.layer) {
+            if s.units.try_send(u.clone()).is_ok() && u.key {
+                s.waiting = false;
+            }
+        }
+    }
+
+    /// One turn of the capture loop's bookkeeping at `now`: moves down,
+    /// rates, catch-up asks whose gap ended; then the layer list if it
+    /// changed (the layers whose width is known) and the keyframe asks for
+    /// the source.
+    fn step(&self, now: Instant) -> (Option<Vec<LayerSpec>>, Asks) {
+        let mut st = lock(&self.state);
+        self.move_down(&mut st, now);
+        self.rate_tick(&mut st, now);
+        self.due_catch_ups(&mut st, now);
+        // A layer whose width isn't known yet stays out (paused).
+        let layers = std::mem::take(&mut st.dirty).then(|| st.layers.iter().filter(|l| l.max_width.is_some()).map(Layer::spec).collect::<Vec<_>>());
+        if let Some(l) = &layers {
+            st.sent = l.clone();
+        }
+        (layers, std::mem::take(&mut st.asks))
+    }
+
+    /// A catch-up ask that was throttled is asked once the layer's gap
+    /// ends, while one of its viewers still waits for a key unit.
+    fn due_catch_ups(&self, st: &mut State, now: Instant) {
+        let State { layers, viewers, asks, .. } = st;
+        for l in layers.iter_mut() {
+            let due = l.last_catch_up.is_none_or(|t| now.saturating_duration_since(t) >= CATCH_UP_GAP);
+            if due && viewers.values().any(|s| s.layer == l.id && s.waiting) {
+                l.last_catch_up = Some(now);
+                asks.push((l.id, None));
+                self.key_asks.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    /// The rate a viewer leaving the layer `from` for being congested goes
+    /// to: the next tier down when that layer runs or one more fits, else
+    /// the nearest lower layer of its codec and remote-ness; none from the
+    /// lowest.
+    fn lower_fps(st: &State, from: &LayerKey) -> Option<u32> {
+        let next = TIERS.iter().copied().find(|t| *t < from.fps)?;
+        let same = |l: &&Layer| l.key.codec == from.codec && l.key.remote == from.remote;
+        if st.layers.len() < MAX_LAYERS || st.layers.iter().filter(same).any(|l| l.key.fps == next) {
+            return Some(next);
+        }
+        st.layers.iter().filter(same).map(|l| l.key.fps).filter(|f| *f < from.fps).max()
+    }
+
+    /// Each video viewer congested for [`MOVE_DOWN_AFTER`] while another on
+    /// its layer isn't goes to the next layer down. A lone viewer, or a
+    /// layer whose viewers are all congested, is the rate control's.
+    fn move_down(&self, st: &mut State, now: Instant) {
+        let long = |s: &Sub| s.want.codec.is_video() && s.congested_since.is_some_and(|t| now.saturating_duration_since(t) >= MOVE_DOWN_AFTER);
+        let clear_beside = |me: u64, layer: u8| st.viewers.iter().any(|(o, x)| *o != me && x.layer == layer && !x.congested);
+        let movers: Vec<u64> = st.viewers.iter().filter(|(id, s)| long(s) && clear_beside(**id, s.layer)).map(|(id, _)| *id).collect();
+        for id in movers {
+            let Some((from, old)) = st.viewers.get(&id).map(|s| (s.layer, s.want)) else { continue };
+            let Some(key) = st.layers.iter().find(|l| l.id == from).map(|l| l.key) else { continue };
+            let Some(fps) = Self::lower_fps(st, &key) else { continue };
+            let want = Want { fps, ..old };
+            if let Some(s) = st.viewers.get_mut(&id) {
+                s.layer = u8::MAX;
+            }
+            self.detach(st, from);
+            let to = self.attach(st, id, want);
+            if let Some(s) = st.viewers.get_mut(&id) {
+                s.layer = to;
+                s.want = want;
+                s.fresh();
+                let why = format!("its link stayed congested for {} s while its layer's others didn't", MOVE_DOWN_AFTER.as_secs());
+                let _ = s.events.send(HubEvent::Moved { layer: to, codec: want.codec, fps, why });
+            }
+            self.refresh_width(st, to);
         }
     }
 
@@ -407,7 +527,7 @@ impl Hub {
             if let Some(s) = st.viewers.get_mut(&id) {
                 s.layer = to;
                 s.want = want;
-                s.congested = false;
+                s.fresh();
                 let _ = s.events.send(HubEvent::Moved { layer: to, codec: Codec::Jpeg, fps: want.fps, why: why.to_string() });
             }
             self.refresh_width(&mut st, to);
@@ -442,16 +562,7 @@ fn capture(hub: Arc<Hub>, mut source: Box<dyn EncodedSource>) {
                 return;
             }
         }
-        let (layers, asks) = {
-            let mut st = lock(&hub.state);
-            hub.rate_tick(&mut st, Instant::now());
-            // A layer whose width isn't known yet stays out (paused).
-            let layers = std::mem::take(&mut st.dirty).then(|| st.layers.iter().filter(|l| l.max_width.is_some()).map(Layer::spec).collect::<Vec<_>>());
-            if let Some(l) = &layers {
-                st.sent = l.clone();
-            }
-            (layers, std::mem::take(&mut st.asks))
-        };
+        let (layers, asks) = hub.step(hub.now());
         if let Some(l) = layers {
             source.set_layers(&l);
         }
@@ -528,18 +639,20 @@ impl Subscription {
         self.ask(false)
     }
 
-    /// A viewer that dropped deltas asks for a key unit: one per layer per
-    /// [`CATCH_UP_GAP`]. True when passed on. (S2: two skips inside that
-    /// second can leave a viewer on its last frame for up to a second; S4
-    /// owns the skip rule and its thresholds.)
+    /// A viewer that skipped asks for a key unit: one per layer per
+    /// [`CATCH_UP_GAP`]. True when passed on now. A throttled ask is kept:
+    /// the hub asks when the gap ends if this viewer (or another on the
+    /// layer) still waits and no key unit reached it.
     pub fn catch_up(&self) -> bool {
         self.ask(true)
     }
 
     fn ask(&self, catch_up: bool) -> bool {
         let mut st = lock(&self.hub.state);
-        let Some(id) = st.viewers.get(&self.id).map(|s| s.layer) else { return false };
-        let now = Instant::now();
+        let Some(me) = st.viewers.get_mut(&self.id) else { return false };
+        me.waiting |= catch_up;
+        let id = me.layer;
+        let now = self.hub.now();
         let Some(l) = st.layers.iter_mut().find(|l| l.id == id) else { return false };
         let (last, gap) = if catch_up { (&mut l.last_catch_up, CATCH_UP_GAP) } else { (&mut l.last_key_ask, KEYFRAME_MIN_GAP) };
         if last.is_some_and(|t| now.saturating_duration_since(t) < gap) {
@@ -573,7 +686,10 @@ impl Subscription {
         if let Some(s) = st.viewers.get_mut(&self.id) {
             s.layer = to;
             s.want = want;
-            s.congested = false;
+            // Back on its own layer (no other fits): nothing new to wait for.
+            if to != old.0 {
+                s.fresh();
+            }
         }
         self.hub.refresh_width(&mut st, to);
         to
@@ -581,7 +697,13 @@ impl Subscription {
 
     /// The viewer's link state (its ack window's `congested`).
     pub fn set_congested(&self, congested: bool) {
+        let now = self.hub.now();
         if let Some(s) = lock(&self.hub.state).viewers.get_mut(&self.id) {
+            if congested && !s.congested {
+                s.congested_since = Some(now);
+            } else if !congested {
+                s.congested_since = None;
+            }
             s.congested = congested;
         }
     }
@@ -595,6 +717,10 @@ impl Drop for Subscription {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "hub_tests.rs"]
+mod hub_tests;
 
 #[cfg(test)]
 mod tests {

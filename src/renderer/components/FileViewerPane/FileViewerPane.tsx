@@ -1092,7 +1092,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
             aria-label="Your unsaved text"
             value={textLock.keptText}
             onFocus={(e) => e.currentTarget.select()}
-            className="flex-1 resize-none rounded-[var(--radius-field-multiline)] border border-[var(--color-border)] bg-[var(--color-bg-stripe)] p-2 font-mono text-xs text-[var(--color-text-primary)] focus:outline-none"
+            className="flex-1 resize-none rounded-[var(--radius-box)] border border-[var(--color-border)] bg-[var(--color-bg-stripe)] p-2 font-mono text-xs text-[var(--color-text-primary)] focus:outline-none"
             style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
           />
         </div>

@@ -464,6 +464,11 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     const group = groupIndex
     const barCwd = cwd
     const rect = e.currentTarget.getBoundingClientRect()
+    const altAtClick = e.altKey
+    // The agent list is loaded by the launch bar; with the bar hidden (a
+    // fresh install, Rosson 2026-11-10) nothing has loaded it yet, and the
+    // menu would show no agents. Load it here first.
+    if (!usePresetsStore.getState().presetsLoaded) await usePresetsStore.getState().fetchPresets()
     const presets = usePresetsStore.getState().presets
     const defaultId = defaultPresetIdForCwd(room, barCwd, presets)
     // Home M5: open in sandbox takes the owner daemon token on the server
@@ -479,7 +484,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     const board = !isWebClient() && reportedSupports(room.scope.hostKey, 'board-file-v1') && scopeMayWrite(room.scope, 'board/file/create')
     // Snapshot Option. selectItem resolves an id only, so the click and Enter
     // that call it have to record altKey before that promise continues.
-    let optionHeld = e.altKey
+    let optionHeld = altAtClick
     let shown = optionHeld
     // Changes is always listed (no pop-in); it is greyed until the bar's
     // folder has changes. Paint from the last answer at once ('checking'

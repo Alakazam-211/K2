@@ -255,6 +255,24 @@ describe('tab bar plus menu', () => {
     expect((item.data as BrowserItemData).url).toBe('')
   })
 
+  it('with the launch bar hidden and the agent list never loaded, + loads it and lists the agents', async () => {
+    const fetchPresets = vi.fn(async () => {
+      usePresetsStore.setState({
+        presets: [preset({ id: 'claude', label: 'Claude', icon: null, command: 'claude', enabled: 1 })],
+        presetsLoaded: true,
+      })
+    })
+    usePresetsStore.setState({ presets: [], presetsLoaded: false, showPresetsBar: false, fetchPresets })
+    seedTabs(1, 1)
+    useTabsStore.setState({ activeGroupIndex: 0 })
+    renderBar(1)
+    await openPlus()
+
+    expect(fetchPresets).toHaveBeenCalledTimes(1)
+    const items = useContextMenuStore.getState().items
+    expect(items.filter((item) => item.id.startsWith('preset:')).map((item) => item.label)).toEqual(['Claude'])
+  })
+
   it('a preset row launches into this bar group in strip order, and disabled rows are absent', async () => {
     usePresetsStore.setState({
       presets: [

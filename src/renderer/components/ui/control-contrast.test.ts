@@ -125,3 +125,11 @@ describe('Information text on every ground', () => {
     }
   })
 })
+
+describe('Toggle', () => {
+  it('a disabled switch in Glass light greys its knob and drops the lift, as the dark looks show it', () => {
+    const body = rule(generated, '[data-style="glass"][data-palette="veil"] .k2-switch:disabled .k2-switch-knob:not([data-zen-root] *)')
+    expect(body).toContain('background-color: color-mix(in srgb, var(--color-control-edge) 50%, var(--color-bg-surface))')
+    expect(body).toContain('box-shadow: none')
+  })
+})

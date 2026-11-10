@@ -1015,6 +1015,13 @@
   background-color: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
 }
+/* Disabled in Veil: a white knob on a pale track looked live (the 50% fade
+   that greys it on dark grounds leaves white on white), so it goes flat and
+   grey, as the other looks show it. */
+[data-style="glass"][data-palette="veil"] .k2-switch:disabled .k2-switch-knob:not([data-zen-root] *) {
+  background-color: color-mix(in srgb, var(--color-control-edge) 50%, var(--color-bg-surface));
+  box-shadow: none;
+}
 [data-style="glass"] .k2-switch:not([data-zen-root] *),
 [data-style="glass"] .k2-switch-knob:not([data-zen-root] *) {
   transition: background-color var(--motion-duration-medium) var(--motion-ease-standard),

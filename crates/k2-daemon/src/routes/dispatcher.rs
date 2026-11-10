@@ -9148,6 +9148,39 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Send feedback to K2 (prd-k2-product-feedback-v1 PF17, 0.46.11):
+        // never under `/cli/feedback/` (the tickets' POST prefix arm). People
+        // (owner token, Connect logins at the Member floor) and passports;
+        // the handler refuses App passes and API keys. POST-only rows 405 a
+        // GET; every branch consumes its request (keep-alive).
+        p if crate::product_feedback_routes::is_route(p) => {
+            if crate::product_feedback_routes::is_post_only(p) && !is_post {
+                let _ = super::http::require_post(&mut *stream, &mut buf, is_post).await;
+                return DispatchOutcome::KeepAlive;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::product_feedback_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::product_feedback_routes::too_large();
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::product_feedback_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::product_feedback_routes::handle(&p_owned, is_post, who, &body_bytes, &params)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if crate::home_avatar_routes::is_route(p) => {
             let is_post_row = crate::home_avatar_routes::POST_ROUTES.contains(&p);
             if is_post_row && !is_post {

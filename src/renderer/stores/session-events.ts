@@ -836,6 +836,16 @@ export interface GrokbotsChangedEvent {
   agents: string[]
 }
 
+/** APP-LEVEL — Send feedback to K2 (prd-k2-product-feedback-v1 PF18): one
+ *  outbox row changed state. The id and state only, never the text: the
+ *  Sent tab refetches `GET /cli/product-feedback/list`. */
+export interface ProductFeedbackStatusEvent {
+  kind: 'product_feedback_status'
+  id: string
+  state: 'queued' | 'sending' | 'sent' | 'failed' | 'refused' | 'cancelled'
+  error: string | null
+}
+
 /** APP-LEVEL — Settings → Cores → Multiplayer (prd-multiplayer-cores-settings-v1
  *  §3): an Owner or Admin turned one core on or off. `cores` is every core's
  *  state after the flip; `by` is the person's display name. Every client
@@ -994,6 +1004,7 @@ export type SessionEventMessage =
   | SourcesChangedEvent
   | GardenDataChangedEvent
   | GrokbotsChangedEvent
+  | ProductFeedbackStatusEvent
   | DocCoresChangedEvent
   | HooksInstallFailedEvent
   | ActivityChangedEvent
@@ -1483,6 +1494,7 @@ type ZenAgentsOrderChangedHandler = () => void
 type SourcesChangedHandler = (rev: number) => void
 type GardenDataChangedHandler = (space: string, rev: number) => void
 type GrokbotsChangedHandler = (e: GrokbotsChangedEvent) => void
+type ProductFeedbackStatusHandler = (e: ProductFeedbackStatusEvent) => void
 type DocCoresChangedHandler = (e: DocCoresChangedEvent) => void
 type HooksInstallFailedHandler = (e: HooksInstallFailedEvent) => void
 type ActivityChangedHandler = (e: ActivityChangedEvent) => void
@@ -1586,6 +1598,7 @@ interface AppBusHandlers {
   sourcesChanged: Set<SourcesChangedHandler>
   gardenDataChanged: Set<GardenDataChangedHandler>
   grokbotsChanged: Set<GrokbotsChangedHandler>
+  productFeedbackStatus: Set<ProductFeedbackStatusHandler>
   docCoresChanged: Set<DocCoresChangedHandler>
   hooksInstallFailed: Set<HooksInstallFailedHandler>
   activityChanged: Set<ActivityChangedHandler>
@@ -1651,6 +1664,7 @@ function createBusState(scopeId: string): BusState {
       sourcesChanged: new Set(),
       gardenDataChanged: new Set(),
       grokbotsChanged: new Set(),
+      productFeedbackStatus: new Set(),
       docCoresChanged: new Set(),
       hooksInstallFailed: new Set(),
       activityChanged: new Set(),
@@ -1898,6 +1912,12 @@ export function onGardenDataChanged(scope: ServerScope, fn: GardenDataChangedHan
  *  server (0.45.7). Ids only; refetch the list / thread. */
 export function onGrokbotsChanged(scope: ServerScope, fn: GrokbotsChangedHandler): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.grokbotsChanged, fn)
+}
+
+/** Send feedback to K2 — subscribe to APP-LEVEL `product_feedback_status`
+ *  on `scope`'s server (one outbox row changed state). */
+export function onProductFeedbackStatus(scope: ServerScope, fn: ProductFeedbackStatusHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.productFeedbackStatus, fn)
 }
 
 /** Settings → Cores → Multiplayer — subscribe to APP-LEVEL
@@ -2296,6 +2316,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   grokbots_changed: (h, m) => {
     for (const fn of h.grokbotsChanged) fn(m)
+  },
+  product_feedback_status: (h, m) => {
+    for (const fn of h.productFeedbackStatus) fn(m)
   },
   doc_cores_changed: (h, m) => {
     for (const fn of h.docCoresChanged) fn(m)

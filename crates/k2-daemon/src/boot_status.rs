@@ -1252,6 +1252,9 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_FILES_DOWNLOAD);
     // 0.46.9: resumable uploads, download tokens and the transfer door.
     out.push(crate::transfer_routes::FEATURE);
+    // 0.46.11: Send feedback to K2 (`/cli/product-feedback/*`, the
+    // `product_feedback_status` event). Clients hide the button without it.
+    out.push(k2_core::product_feedback::FEATURE);
     if post_idempotency_ready() {
         out.push(FEATURE_POST_IDEMPOTENCY);
     }
@@ -1425,6 +1428,7 @@ mod tests {
                 "companion-pairing-v1",
                 "files-download-v1",
                 "transfers-v1",
+                "product-feedback-v1",
                 "post-idempotency-v1",
                 "remote-desktop-v1",
                 "boot-status-views-v1"

@@ -1947,6 +1947,11 @@ async fn async_main() {
     // federation is off or every queue is empty.
     let _federation_drain_handle = federation_drain::spawn();
 
+    // Send feedback to K2 (prd-k2-product-feedback-v1 PF16): `sending`
+    // rows go back to `queued`, then a 60 s sweep. Nothing leaves while
+    // air-gap is on, sending is off, or there is no K2 Connect pairing.
+    let _product_feedback_drain_handle = product_feedback_drain::spawn();
+
     // Sew S31 delivery hub: one poller per agent workspace with chat
     // access types its Sew deliveries into its terminal (`via = chat`).
     // Idle while Sew chat is off (always on a Mac); kicked by chat grant

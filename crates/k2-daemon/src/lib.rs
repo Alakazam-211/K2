@@ -179,6 +179,10 @@ pub mod pinned_chat;
 pub mod presence;
 pub mod access_live;
 pub mod socket_access;
+// Send feedback to K2 (prd-k2-product-feedback-v1, 0.46.11): the outbox
+// drain and `/cli/product-feedback/*`. Not the tickets.
+pub mod product_feedback_drain;
+pub mod product_feedback_routes;
 pub mod project_config_routes;
 pub mod project_group_routes;
 pub mod providers;

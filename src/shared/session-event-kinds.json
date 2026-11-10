@@ -28,6 +28,7 @@
   "open_url": "app",
   "project_groups_changed": "app",
   "feedback_changed": "app",
+  "product_feedback_status": "app",
   "app_approvals_changed": "app",
   "doc_cores_changed": "app",
   "board_file_changed": "app",

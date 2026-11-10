@@ -99,6 +99,9 @@ export const SESSION_EVENT_ROUTES = {
   open_url: { class: 'app', app: true },
   project_groups_changed: { class: 'app', app: true },
   feedback_changed: { class: 'app', app: true },
+  // 0.46.11 Send feedback to K2: the Sent tab refetches on it
+  // (`onProductFeedbackStatus`). Not carried: it reads the window's server.
+  product_feedback_status: { class: 'app', app: true },
   // 0.46.4: Settings → App Approvals and its badge (`onAppApprovalsChanged`).
   app_approvals_changed: { class: 'app', app: true },
   // prd-app-tickets-websocket-v1: the per-ticket twin for the app gateway.

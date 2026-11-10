@@ -1365,6 +1365,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
+        // Send feedback to K2 (prd-k2-product-feedback-v1, 0.46.11): the
+        // handler classifies the passport (agent limits, the owner's
+        // switches) and refuses a passport's settings writes.
+        "/cli/product-feedback/",
         // Garden v3 data sources (contract-sources-v1 §4, GV52): every
         // `/cli/sources/*` path is served on the cell socket for the bound
         // session; handlers refuse person steps with 403 person_only.

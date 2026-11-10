@@ -1553,6 +1553,17 @@ pub const ROUTES: &[Route] = &[
     post("/cli/presets/reorder", Admin),
     post("/cli/presets/reset", Admin),
     post("/cli/presets/update", Admin),
+    // Send feedback to K2 (prd-k2-product-feedback-v1 PF17, 0.46.11). Every
+    // route is any login at Member and up; list/show narrow to the caller's
+    // own rows unless Owner/Admin, and the server switches in `settings`
+    // are Admin in the handler (a person, never a passport). The handler
+    // refuses App passes and API keys.
+    post("/cli/product-feedback/cancel", Member),
+    get("/cli/product-feedback/list", Member),
+    post("/cli/product-feedback/retry", Member),
+    post("/cli/product-feedback/send", Member),
+    both("/cli/product-feedback/settings", Member),
+    get("/cli/product-feedback/show", Member),
     get("/cli/project-config/get", Member),
     get("/cli/project-config/has-run-command", Member),
     get("/cli/project-config/run-command", Member),

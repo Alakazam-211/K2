@@ -845,6 +845,20 @@ mod unix_impl {
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::capabilities::handle(who, params))
             }
+            // 0.46.11 (prd-k2-product-feedback-v1): `k2 send-feedback` from a
+            // K2 terminal. The handler gates agents (the switch, the box
+            // limits, diagnostics only with agentDiagnostics) and refuses a
+            // passport's settings writes.
+            p if crate::product_feedback_routes::is_route(p) => {
+                if crate::product_feedback_routes::is_post_only(p) && !is_post {
+                    return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
+                }
+                if body.len() > crate::product_feedback_routes::MAX_BODY {
+                    return from_cli(crate::product_feedback_routes::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::product_feedback_routes::handle(p, is_post, who, body, params))
+            }
             // 0.46.6: the firewall view (any passport reads it) and the
             // owner's options (a passport's change is `owner_only`, except
             // tightening its own App's guard).

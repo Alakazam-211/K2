@@ -720,6 +720,17 @@ pub enum SessionEvent {
     /// Refetch signal only, no item payload.
     FeedbackChanged { reason: String },
 
+    /// Send feedback to K2 (prd-k2-product-feedback-v1 PF18, 0.46.11): one
+    /// outbox row changed state (not the tickets above). APP-LEVEL.
+    ///
+    /// Wire: `{ "kind": "product_feedback_status", "id": "pf_…", "state":
+    /// "queued" | "sending" | "sent" | "failed" | "refused" | "cancelled",
+    /// "error": string | null }`. The id and state only, never the text:
+    /// the Sent tab refetches `GET /cli/product-feedback/list`, which shows
+    /// each caller only the rows it may see. `error` is the stored reason
+    /// (`service_unreachable: …` while the service isn't reachable yet).
+    ProductFeedbackStatus { id: String, state: String, error: Option<String> },
+
     /// 0.46.4 (field report: a held `k2 app install` was in `k2 app
     /// approvals` but the owner's App Approvals showed nothing) — the held
     /// App requests changed: filed (or re-asked), approved, denied,
@@ -1190,6 +1201,7 @@ impl SessionEvent {
             SessionEvent::OpenUrl { .. } => "open_url",
             SessionEvent::ProjectGroupsChanged { .. } => "project_groups_changed",
             SessionEvent::FeedbackChanged { .. } => "feedback_changed",
+            SessionEvent::ProductFeedbackStatus { .. } => "product_feedback_status",
             SessionEvent::AppApprovalsChanged { .. } => "app_approvals_changed",
             SessionEvent::DocCoresChanged { .. } => "doc_cores_changed",
             SessionEvent::BoardFileChanged { .. } => "board_file_changed",

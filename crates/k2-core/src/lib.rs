@@ -353,6 +353,9 @@ pub mod port_claim;
 // prd-daemon-activity-and-thread-working-v1 DA14: live process lookup for
 // the hook owner check (macOS proc_pidinfo, Linux /proc).
 pub mod proc_ancestry;
+// Send feedback to K2 (prd-k2-product-feedback-v1, 0.46.11): the outbox,
+// the wire contract and the consented diagnostics. Not the tickets.
+pub mod product_feedback;
 pub mod project_config;
 pub mod project_dashboard_layout;
 // Linux package SHA256SUMS parsing + verification (desktop updater pkexec

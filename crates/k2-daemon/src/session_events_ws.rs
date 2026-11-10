@@ -745,6 +745,9 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // never cross the tunnel.
         SessionEvent::ProjectGroupsChanged { .. } => None,
         SessionEvent::FeedbackChanged { .. } => None,
+        // 0.46.11 — Send feedback to K2: one outbox row's state (id and
+        // state only); the server's outbox has no workspace.
+        SessionEvent::ProductFeedbackStatus { .. } => None,
         // 0.46.4 — held App requests are box-global (the owner's list).
         SessionEvent::AppApprovalsChanged { .. } => None,
         // Multiplayer cores are box-wide switches (every client).
@@ -1168,6 +1171,7 @@ mod tests {
             SessionEvent::OpenUrl { url: "https://example.com".into(), source: "shim".into() },
             SessionEvent::ProjectGroupsChanged { reason: "groups-changed".into(), group_id: None },
             SessionEvent::FeedbackChanged { reason: "created".into() },
+            SessionEvent::ProductFeedbackStatus { id: "pf_0123456789012345678901".into(), state: "queued".into(), error: None },
             SessionEvent::AppApprovalsChanged { pending: 1 },
             SessionEvent::DocCoresChanged { cores: Default::default(), core: "markdown".into(), on: true, by: "Anna".into() },
             SessionEvent::BoardFileChanged { workspace: "/x/foo".into(), rel: "a.k5board".into(), hash: "sha256-0".into(), by: "agent:x".into() },

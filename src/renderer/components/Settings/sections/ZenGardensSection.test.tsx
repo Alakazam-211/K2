@@ -42,6 +42,8 @@ const h = vi.hoisted(() => ({
   gardens: [] as FakeGarden[],
   setUp: true,
   outdated: false,
+  /** `GET zen/gardens` answers `{}` (no list): the parser refuses it. */
+  badList: false,
   global: 'default',
   themes: ['default', 'paper', 'midnight'],
   failNext: null as null | string,
@@ -123,6 +125,7 @@ function syncRow(g: FakeGarden, i: number): Record<string, unknown> {
 
 function fakeGet(route: string): unknown {
   if (h.outdated && route.startsWith('zen/')) throw new Error('unknown zen route')
+  if (h.badList && route === 'zen/gardens') return {}
   if (route === 'zen/sync') {
     return { ok: true, liveDefaults: 'd-1111222233334444', k2Version: '0.45.5', previousDefaults: 'd-3f9a12c0b1e4d7a2', gardens: h.gardens.map(syncRow) }
   }
@@ -448,6 +451,7 @@ beforeEach(() => {
   ]
   h.setUp = true
   h.outdated = false
+  h.badList = false
   h.global = 'default'
   h.themes = ['default', 'paper', 'midnight']
   h.failNext = null
@@ -1013,7 +1017,7 @@ describe('Settings → Gardens: the section', () => {
 
   it('+ New Garden opens the New Garden modal: “Start with the default” sends texting, “Start empty and ask my agent” sends blank', async () => {
     await mountSection()
-    fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New Garden' }))
     // An older daemon (no templates route): the two starts, as cards.
     await waitFor(() => expect(newGardenCards()).toEqual(['texting', 'blank']))
     fireEvent.change(screen.getByRole('textbox', { name: 'New Garden name' }), { target: { value: 'Launch room' } })
@@ -1022,7 +1026,7 @@ describe('Settings → Gardens: the section', () => {
     expect(nameField(rowNames()[3]).value).toBe('Launch room')
     await waitFor(() => expect(document.querySelector('[data-testid="zen-new-garden-modal"]')).toBeNull())
 
-    fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New Garden' }))
     fireEvent.click(newGardenEl('[data-zen-new-garden-card="blank"]'))
     // Left unnamed: the first free "Garden N".
     expect((screen.getByRole('textbox', { name: 'New Garden name' }) as HTMLInputElement).value).toBe('Garden 5')
@@ -1039,7 +1043,7 @@ describe('Settings → Gardens: the section', () => {
 
   it('+ New Garden onto a taken name shows the 409 in the modal', async () => {
     await mountSection()
-    fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New Garden' }))
     h.failNext = 'garden_exists'
     fireEvent.change(screen.getByRole('textbox', { name: 'New Garden name' }), { target: { value: 'Ideas' } })
     fireEvent.click(newGardenEl('[data-zen-new-garden-card="blank"]'))
@@ -1099,13 +1103,35 @@ describe('Settings → Gardens: the section', () => {
     h.outdated = true
     render(<ZenGardensSection />)
     await waitFor(() => expect(screen.getByTestId('zen-gardens-load-error')).toBeTruthy())
-    expect(screen.getByTestId('zen-gardens-load-error').textContent).toBe(
-      'K2 on this computer is older than this app. Update it to use Gardens.',
-    )
+    const card = screen.getByTestId('zen-gardens-load-error')
+    expect(card.textContent).toContain('K2 couldn’t read your Gardens from this computer')
+    expect(card.textContent).toContain('The server said: K2 on this computer is older than this app. Update it to use Gardens.')
     h.outdated = false
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3']))
     expect(screen.queryByTestId('zen-gardens-load-error')).toBeNull()
+  })
+})
+
+describe('Settings → Gardens: a reply K2 can’t read', () => {
+  it('says so in plain words, never the parser’s own text, with Try again', async () => {
+    h.badList = true
+    render(<ZenGardensSection />)
+    const card = await screen.findByTestId('zen-gardens-load-error')
+    expect(card.textContent).toContain('K2 couldn’t read your Gardens from this computer')
+    expect(card.textContent).toContain('Its answer wasn’t a Gardens list K2 can read.')
+    expect(card.textContent).not.toContain('no gardens in the answer')
+    expect(card.textContent).not.toContain('The server said')
+    expect(card.getAttribute('role')).toBe('alert')
+    h.badList = false
+    fireEvent.click(within(card).getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3']))
+  })
+
+  it('before the first answer it says it’s loading', async () => {
+    render(<ZenGardensSection />)
+    expect(screen.getByTestId('zen-gardens-loading').textContent).toContain('Loading your Gardens…')
+    await waitFor(() => expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3']))
   })
 })
 
@@ -1297,7 +1323,7 @@ describe('Settings → Gardens: the Garden catalog, and no widget permissions (p
   it('Rosson 2026-10-08: the Diary is the first card in + New Garden; Create posts no grant (no permissions)', async () => {
     h.templates = [...STARTS, DIARY]
     await mountSection()
-    fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New Garden' }))
     await waitFor(() => expect(newGardenCards()).toEqual(['diary', 'texting', 'blank']))
     expect(newGardenEl('[data-zen-new-garden-card="diary"]').getAttribute('aria-checked')).toBe('true')
     expect(newGardenEl('[data-zen-new-garden-card="diary"] [data-zen-garden-sketch="diary"]')).not.toBeNull()
@@ -1314,7 +1340,7 @@ describe('Settings → Gardens: the Garden catalog, and no widget permissions (p
     h.templates = [...STARTS, DIARY]
     await mountSection()
     expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3'])
-    fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New Garden' }))
     await waitFor(() => expect(newGardenCards()).toEqual(['diary', 'texting', 'blank']))
     fireEvent.click(newGardenEl('[data-zen-new-garden-card="texting"]'))
     expect(document.querySelector('[data-zen-new-garden-consent]')).toBeNull()

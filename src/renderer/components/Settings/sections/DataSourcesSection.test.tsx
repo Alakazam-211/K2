@@ -229,7 +229,7 @@ describe('DataSourcesSection', () => {
     expect(r.textContent).toContain('Fleet boxes')
     expect(r.textContent).toContain('ok · 18 ok, 2 unknown · 40 s ago · 1 trigger')
     expect(r.textContent).toContain('pinned')
-    expect(screen.getByTestId('sources-runs-on').textContent).toBe('Runs on akzm.k2.dev · always on')
+    expect(screen.getByTestId('sources-runs-on').textContent).toBe('They run on akzm.k2.dev, which is always on.')
     expect(screen.queryByTestId('sources-mac-hint')).toBeNull()
     expect(await screen.findByTestId('sources-poller')).toHaveProperty('textContent', 'Poller: 1 source · 20 targets · on time')
   })

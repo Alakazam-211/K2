@@ -1,23 +1,21 @@
 // Settings → Gardens with Garden access ON (prd-garden-access-v1 §6,
 // G25–G27; Rosson 2026-10-22: "auditable in one place"). Master-detail,
-// modelled on Settings → Apps (`SkinAccessSection`): a `w-60` sidebar and a
-// right pane (`flex-1 overflow-y-auto p-6`, `max-w-2xl` content).
+// laid out like Settings → Workspaces / Agents: a list column on the left
+// (`w-72`) and the selected entry on the right (title, one line, then card
+// groups of rows at one content width).
 //
-//   Sidebar (G25):  Gardens / Your Zen pages on this computer.
+//   List (G25):     Gardens / one line.
 //                   Styles                 ← the computer-wide look, first
-//                   each Garden            ← lock glyph, "N editors", "made by X"; drag the row (Alt+↑/↓)
-//                   + New Garden           ← the existing modal
-//                   ▸ Deleted Gardens (n)  ← Restore and read-only History
-//   Garden pane (G26): History… · Rename · ⋯ (Delete); "Made by X · date";
-//                   Agents who can edit (Remove with an 8 s Undo, + Add agent
-//                   through the A–Z picker); "Sees: Everything you can see";
-//                   Lock; Get K2's design updates; Widgets (last signer, History…);
-//                   then (Rosson 2026-10-23) the Garden's Local Data (its
-//                   placed widgets' data) and External Data (the sources its
-//                   cards read): the old pages' lists, filtered, same actions.
-//   Last rail entry, "Not in a Garden": data and sources no Garden uses, so
-//   nothing is unreachable now that Local Data and External Data aren't
-//   Settings pages of their own (`gardens-landing.ts` routes their links).
+//                   Your Gardens           ← lock glyph, "N editors", "made by X"; drag a row (Alt+↑/↓)
+//                   Deleted Gardens (n)    ← Restore and read-only History
+//                   Not in a Garden        ← data and sources no Garden uses
+//                   New Garden             ← the existing modal, in the footer
+//   Garden (G26):   History… · Rename · ⋯ (Delete); "Made by X · date";
+//                   Agents who can edit (Remove with an 8 s Undo, Add agent
+//                   through the A–Z picker); this Garden's settings (what it
+//                   sees, Lock, Get K2's design updates); Widgets (last
+//                   signer, History…); then (Rosson 2026-10-23) the Garden's
+//                   Local Data and External Data.
 //   History lives only in modals (G26a, `ZenGardenHistoryModal`); "not
 //   signed" and Sign live only there too, never on this page.
 //
@@ -26,17 +24,18 @@
 // control posts one gesture. Re-read on open, on a Garden change
 // (`zen_changed` re-reads the Garden list, and this page follows it), after
 // each gesture and on window focus. No polling, no `fetchProjects()`.
+// Every failed read shows the shared load card: what failed in plain words,
+// the server's reason quietly, and Try again.
 //
 // Garden access is always on from 0.46.3 (Rosson 2026-10-23: no switch);
-// `ZenGardensSection` shows this page once Gardens are set up. The old page
-// stays only for tests of the retired path until 0.47.0.
+// `ZenGardensSection` shows this page once Gardens are set up.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
-import { SettingDropdown } from '../controls/SettingControls'
+import { SettingRow, SettingsGroup, SettingsLoadState, SETTING_ROW_HINT, SETTING_ROW_LABEL } from '../controls/SettingControls'
 import { ZenGardenSyncControls, useZenSyncLive } from './ZenGardenSyncControls'
-import { BTN, INPUT, InlineError, NewGarden, ZEN_TOKENS_IN_SETTINGS, attempt, revealLabel, themeOptions } from './zen-gardens-ui'
+import { InlineError, NewGarden, ZEN_TOKENS_IN_SETTINGS, attempt, revealLabel } from './zen-gardens-ui'
 import {
   checkZenGardenName,
   deleteZenSettingsGarden,
@@ -75,6 +74,7 @@ import {
 } from '@/lib/zen/garden-access-api'
 import { ZenGardenHistoryModal, type GardenHistoryTarget } from '@/components/Zen/widgets/ZenGardenHistoryModal'
 import { SearchableAgentList, tokenAndMatch, type AgentListSection } from '@/components/ui/SearchableAgentList'
+import { Button, Callout, Input, OverflowMenu, Surface, Tag } from '@/components/ui'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -84,11 +84,15 @@ import { ZenWidgetData } from './ZenWidgetData'
 import { DataSourcesSection } from './DataSourcesSection'
 import { gardensLandingSelection, takeGardensLanding, useGardensLandingStore } from '../gardens-landing'
 
-const MUTED = 'type-hint text-[var(--color-text-muted)]'
-const H3 = 'type-section text-[var(--color-text-muted)] uppercase tracking-wider'
-const SIDE_ROW = 'w-full text-left px-3 py-2 type-control no-drag cursor-pointer'
-const SIDE_ON = 'bg-[var(--color-accent)]/15'
-const SIDE_OFF = 'hover:bg-white/[0.03]'
+const CONTENT_WIDTH = 'max-w-[52rem]'
+/** A list row: the Workspaces list's row (selected: the accent wash and bar). */
+const LIST_ROW =
+  'relative w-full flex items-center gap-2 text-left px-3 py-2 no-drag cursor-pointer select-none outline-none k2-focus transition-colors'
+/** A two-line list row: the name over one line of detail. */
+const LIST_COL_ROW =
+  'relative w-full flex flex-col items-start text-left px-3 py-2 no-drag cursor-pointer select-none outline-none k2-focus transition-colors'
+const ROW_ON = 'bg-[var(--color-accent)]/15'
+const ROW_OFF = 'hover:bg-[var(--color-wash-1)]'
 
 /** Press-and-move distance before a Garden row starts dragging; less is a click. */
 export const DRAG_THRESHOLD_PX = 4
@@ -98,7 +102,7 @@ export const GARDEN_REORDER_HELP = 'Drag a Garden to reorder it, or press Alt+Up
 /** "Sees" (G26, Rosson Q1): a Garden sees everything the person sees. */
 export const GARDEN_SEES_TEXT = 'Everything you can see'
 
-/** The last rail entry: widget data and data sources no Garden uses
+/** The last list entry: widget data and data sources no Garden uses
  *  (Rosson 2026-10-23: nothing may become unreachable). */
 export const NOT_IN_A_GARDEN = 'Not in a Garden'
 
@@ -119,7 +123,7 @@ function LockGlyph(): React.JSX.Element {
   )
 }
 
-/** The sidebar row's second line (G25): "N editors" and/or "made by X". */
+/** The list row's second line (G25): "N editors" and/or "made by X". */
 export function gardenSidebarDetail(facts: GardenListFacts | undefined): string {
   if (!facts) return ''
   const parts: string[] = []
@@ -128,7 +132,44 @@ export function gardenSidebarDetail(facts: GardenListFacts | undefined): string 
   return parts.join(' · ')
 }
 
-// ── Sidebar ─────────────────────────────────────────────────────────
+/** The selected row's accent bar (the Workspaces list's). */
+function SelectedBar(): React.JSX.Element {
+  return <span aria-hidden="true" className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--color-accent)]" />
+}
+
+function ListHeading({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <div className="flex items-center h-7 mb-1 type-heading text-[var(--color-text-primary)]">{children}</div>
+}
+
+/** A pane's title and the one line under it. */
+function PaneHeader({ title, hint, actions, testId }: { title: React.ReactNode; hint?: React.ReactNode; actions?: React.ReactNode; testId?: string }): React.JSX.Element {
+  return (
+    <header className="flex items-start justify-between gap-4 min-w-0">
+      <div className="min-w-0 flex-1">
+        <h2 className="type-title text-[var(--color-text-primary)] truncate" data-garden-pane-title={testId}>
+          {title}
+        </h2>
+        {hint ? <p className={SETTING_ROW_HINT}>{hint}</p> : null}
+      </div>
+      {actions ? <div className="flex items-center gap-2 flex-shrink-0">{actions}</div> : null}
+    </header>
+  )
+}
+
+/** A failed gesture: what failed in plain words, the reason after it. */
+function ActionError({ text, onDismiss, testId }: { text: string | null; onDismiss(): void; testId?: string }): React.JSX.Element | null {
+  if (!text) return null
+  return (
+    <Callout tone="error" role="alert" data-testid={testId} className="flex items-start justify-between gap-4">
+      <p className="type-hint min-w-0 break-words">{text}</p>
+      <Button variant="quiet" className="flex-shrink-0" onClick={onDismiss}>
+        Dismiss
+      </Button>
+    </Callout>
+  )
+}
+
+// ── The list column ─────────────────────────────────────────────────
 
 function Sidebar({
   gardens,
@@ -236,135 +277,166 @@ function Sidebar({
     move(gardens[i], to)
   }
 
+  const stylesOn = sel.kind === 'styles'
+  const unplacedOn = sel.kind === 'unplaced'
   return (
-    <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0" data-gardens-sidebar="">
-      <div className="px-3 pt-3 pb-2 border-b border-[var(--color-border)]">
-        <h2 className="type-title text-[var(--color-text-primary)]">Gardens</h2>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">Your Zen pages on this computer.</p>
-      </div>
-      <div className="flex-1 overflow-y-auto min-h-0">
+    <aside
+      aria-label="Gardens"
+      className="w-72 flex-shrink-0 min-h-0 flex flex-col border-r border-[var(--color-border)]"
+      data-gardens-sidebar=""
+    >
+      <div className="flex-shrink-0 px-4 pt-6 pb-4 space-y-3">
+        <div>
+          <h2 className="type-title text-[var(--color-text-primary)]">Gardens</h2>
+          <p className={SETTING_ROW_HINT}>Your Zen pages on this computer, and who can change them.</p>
+        </div>
         <button
           type="button"
           data-gardens-side="styles"
+          data-k2-chamfer="control"
           aria-label="Styles"
-          aria-current={sel.kind === 'styles' ? 'page' : undefined}
-          className={`${SIDE_ROW} border-b border-[var(--color-border)] ${sel.kind === 'styles' ? SIDE_ON : SIDE_OFF}`}
+          aria-current={stylesOn ? 'page' : undefined}
+          className={`relative w-full flex flex-col items-start px-3 py-2 rounded-[var(--radius-selector)] text-left no-drag cursor-pointer transition-colors k2-focus ${
+            stylesOn ? 'bg-[var(--color-accent)]/15' : 'hover:bg-[var(--color-wash-1)]'
+          }`}
           onClick={() => onSelect({ kind: 'styles' })}
         >
-          <span className="block text-[var(--color-text-primary)]">Styles</span>
-          <span className="block type-hint text-[var(--color-text-muted)]">The look of every Garden</span>
+          <span className="type-name text-[var(--color-text-primary)]">Styles</span>
+          <span className="type-hint text-[var(--color-text-secondary)]">The look of every Garden</span>
         </button>
-        <p id={GARDEN_REORDER_HELP_ID} className="sr-only">
-          {GARDEN_REORDER_HELP}
-        </p>
-        <div ref={listRef} data-gardens-side-list="">
-          {gardens.map((g, i) => {
-            const on = sel.kind === 'garden' && sel.id === g.id
-            const detail = gardenSidebarDetail(facts.get(g.id))
-            return (
-              <div
-                key={g.id}
-                data-garden-side-row={g.id}
-                className={`relative flex items-stretch ${dragId === g.id ? 'opacity-30' : ''}`}
-              >
-                {dropSlot === i && dragId !== null && (
-                  <div data-garden-side-drop="top" className="absolute left-0 right-0 -top-px h-[2px] bg-[var(--color-accent)] z-10" />
-                )}
-                {dropSlot === gardens.length && i === gardens.length - 1 && dragId !== null && (
-                  <div data-garden-side-drop="bottom" className="absolute left-0 right-0 -bottom-px h-[2px] bg-[var(--color-accent)] z-10" />
-                )}
-                <button
-                  type="button"
-                  data-gardens-side="garden"
-                  data-gardens-side-id={g.id}
-                  data-garden-draggable=""
-                  aria-label={`Open ${g.name}`}
-                  aria-current={on ? 'page' : undefined}
-                  aria-describedby={GARDEN_REORDER_HELP_ID}
-                  aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
-                  onMouseDown={(e) => onRowMouseDown(e, i)}
-                  onKeyDown={(e) => onRowKeyDown(e, i)}
-                  className={`flex-1 min-w-0 text-left px-3 py-2 no-drag select-none ${
-                    dragId === g.id ? 'cursor-grabbing' : 'cursor-pointer'
-                  } ${on ? SIDE_ON : SIDE_OFF}`}
-                  onClick={() => {
-                    if (justDragged.current) {
-                      justDragged.current = false
-                      return
-                    }
-                    onSelect({ kind: 'garden', id: g.id })
-                  }}
-                >
-                  <span className="flex items-center gap-1.5 type-row text-[var(--color-text-primary)]">
-                    <span className="truncate">{g.name}</span>
-                    {locked(g.id) ? (
-                      <span className="text-[var(--color-text-muted)]" data-garden-side-locked="">
-                        <LockGlyph />
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-5 [scrollbar-gutter:stable]">
+        <section>
+          <ListHeading>Your Gardens</ListHeading>
+          <p id={GARDEN_REORDER_HELP_ID} className="sr-only">
+            {GARDEN_REORDER_HELP}
+          </p>
+          <Surface chamfer material="tile" className="overflow-hidden">
+            <div ref={listRef} data-gardens-side-list="" className="divide-y divide-[var(--color-border)]">
+              {gardens.map((g, i) => {
+                const on = sel.kind === 'garden' && sel.id === g.id
+                const detail = gardenSidebarDetail(facts.get(g.id))
+                return (
+                  <div
+                    key={g.id}
+                    data-garden-side-row={g.id}
+                    className={`relative flex items-stretch ${dragId === g.id ? 'opacity-30' : ''}`}
+                  >
+                    {dropSlot === i && dragId !== null && (
+                      <div data-garden-side-drop="top" className="absolute left-0 right-0 -top-px h-[2px] bg-[var(--color-accent)] z-10" />
+                    )}
+                    {dropSlot === gardens.length && i === gardens.length - 1 && dragId !== null && (
+                      <div data-garden-side-drop="bottom" className="absolute left-0 right-0 -bottom-px h-[2px] bg-[var(--color-accent)] z-10" />
+                    )}
+                    <button
+                      type="button"
+                      data-gardens-side="garden"
+                      data-gardens-side-id={g.id}
+                      data-garden-draggable=""
+                      aria-label={`Open ${g.name}`}
+                      aria-current={on ? 'page' : undefined}
+                      aria-describedby={GARDEN_REORDER_HELP_ID}
+                      aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                      onMouseDown={(e) => onRowMouseDown(e, i)}
+                      onKeyDown={(e) => onRowKeyDown(e, i)}
+                      className={`${LIST_COL_ROW} ${dragId === g.id ? 'cursor-grabbing' : ''} ${on ? ROW_ON : ROW_OFF}`}
+                      onClick={() => {
+                        if (justDragged.current) {
+                          justDragged.current = false
+                          return
+                        }
+                        onSelect({ kind: 'garden', id: g.id })
+                      }}
+                    >
+                      {on && <SelectedBar />}
+                      <span className="flex items-center gap-1.5 type-name text-[var(--color-text-primary)] min-w-0 max-w-full">
+                        <span className="truncate">{g.name}</span>
+                        {locked(g.id) ? (
+                          <span className="text-[var(--color-text-secondary)]" data-garden-side-locked="">
+                            <LockGlyph />
+                          </span>
+                        ) : null}
                       </span>
-                    ) : null}
-                  </span>
-                  {detail ? (
-                    <span className="block type-hint text-[var(--color-text-muted)] truncate" data-garden-side-detail="">
-                      {detail}
-                    </span>
-                  ) : null}
-                </button>
-              </div>
-            )
-          })}
-        </div>
-        <div className="px-3 py-2">
-          <NewGarden gardens={gardens} className={BTN} />
-        </div>
+                      {detail ? (
+                        <span className="block type-hint text-[var(--color-text-secondary)] truncate max-w-full" data-garden-side-detail="">
+                          {detail}
+                        </span>
+                      ) : null}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </Surface>
+        </section>
         {deleted !== null && deleted.length > 0 ? (
-          <div className="border-t border-[var(--color-border)]" data-gardens-deleted="">
+          <section data-gardens-deleted="">
             <button
               type="button"
               aria-expanded={deletedOpen}
               data-gardens-deleted-toggle=""
-              className={`${SIDE_ROW} text-[var(--color-text-secondary)] ${SIDE_OFF}`}
+              className="flex items-center gap-1.5 h-7 mb-1 type-heading text-[var(--color-text-primary)] no-drag cursor-pointer k2-focus outline-none"
               onClick={() => setDeletedOpen((o) => !o)}
             >
-              {deletedOpen ? '▾' : '▸'} Deleted Gardens ({deleted.length})
+              <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.75} className={`w-3 h-3 transition-transform ${deletedOpen ? 'rotate-90' : ''}`}>
+                <path d="M6 3.5 10.5 8 6 12.5" />
+              </svg>
+              Deleted Gardens ({deleted.length})
             </button>
-            {deletedOpen &&
-              deleted.map((d) => {
-                const on = sel.kind === 'deleted' && sel.id === d.id
-                return (
-                  <button
-                    key={d.id}
-                    type="button"
-                    data-gardens-side="deleted"
-                    data-gardens-side-id={d.id}
-                    aria-label={`Open deleted ${d.name}`}
-                    className={`${SIDE_ROW} pl-6 text-[var(--color-text-muted)] ${on ? SIDE_ON : SIDE_OFF}`}
-                    onClick={() => onSelect({ kind: 'deleted', id: d.id })}
-                  >
-                    {d.name}
-                  </button>
-                )
-              })}
-          </div>
+            {deletedOpen && (
+              <Surface chamfer material="tile" className="overflow-hidden">
+                <div className="divide-y divide-[var(--color-border)]">
+                  {deleted.map((d) => {
+                    const on = sel.kind === 'deleted' && sel.id === d.id
+                    return (
+                      <button
+                        key={d.id}
+                        type="button"
+                        data-gardens-side="deleted"
+                        data-gardens-side-id={d.id}
+                        aria-label={`Open deleted ${d.name}`}
+                        className={`${LIST_ROW} type-row text-[var(--color-text-secondary)] ${on ? ROW_ON : ROW_OFF}`}
+                        onClick={() => onSelect({ kind: 'deleted', id: d.id })}
+                      >
+                        {on && <SelectedBar />}
+                        <span className="truncate">{d.name}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </Surface>
+            )}
+          </section>
         ) : null}
-        <button
-          type="button"
-          data-gardens-side="unplaced"
-          aria-label={NOT_IN_A_GARDEN}
-          aria-current={sel.kind === 'unplaced' ? 'page' : undefined}
-          className={`${SIDE_ROW} border-t border-[var(--color-border)] ${sel.kind === 'unplaced' ? SIDE_ON : SIDE_OFF}`}
-          onClick={() => onSelect({ kind: 'unplaced' })}
-        >
-          <span className="block text-[var(--color-text-primary)]">{NOT_IN_A_GARDEN}</span>
-          <span className="block type-hint text-[var(--color-text-muted)]">Data and sources no Garden uses</span>
-        </button>
+        <section>
+          <ListHeading>Other data</ListHeading>
+          <Surface chamfer material="tile" className="overflow-hidden">
+            <button
+              type="button"
+              data-gardens-side="unplaced"
+              aria-label={NOT_IN_A_GARDEN}
+              aria-current={unplacedOn ? 'page' : undefined}
+              className={`${LIST_COL_ROW} ${unplacedOn ? ROW_ON : ROW_OFF}`}
+              onClick={() => onSelect({ kind: 'unplaced' })}
+            >
+              {unplacedOn && <SelectedBar />}
+              <span className="type-name text-[var(--color-text-primary)]">{NOT_IN_A_GARDEN}</span>
+              <span className="type-hint text-[var(--color-text-secondary)]">Data and sources no Garden uses</span>
+            </button>
+          </Surface>
+        </section>
       </div>
-    </div>
+      {/* Solid, above the list, so rows scroll under it. */}
+      <div className="relative z-[1] flex-shrink-0 px-4 py-3 border-t border-[var(--color-border)] bg-[var(--color-bg)]">
+        <NewGarden gardens={gardens} block />
+      </div>
+    </aside>
   )
 }
 
 // ── A Garden's data (Rosson 2026-10-23) ─────────────────────────────
 
-/** Local Data and External Data for one rail entry: a Garden (`garden`
+/** Local Data and External Data for one list entry: a Garden (`garden`
  *  set: its widgets' data, the sources its cards read) or "Not in a Garden"
  *  (everything no Garden uses). The lists are the old pages' components,
  *  filtered; their actions are unchanged. */
@@ -390,14 +462,19 @@ function GardenDataSections({
   if (error) {
     return (
       <div data-garden-data-sections-error="">
-        <InlineError text={error} testId="garden-membership-error" />
-        <button type="button" className={`${BTN} mt-2`} onClick={onRetry}>
-          Try again
-        </button>
+        <SettingsLoadState
+          kind="error"
+          title="K2 couldn’t work out which data belongs where"
+          detail={error}
+          testId="garden-membership-error"
+          action={<Button variant="quiet" onClick={onRetry}>Try again</Button>}
+        >
+          Local Data and External Data show once K2 can read every Garden’s page.
+        </SettingsLoadState>
       </div>
     )
   }
-  if (!membership || !onlySources) return <p className={MUTED}>Loading…</p>
+  if (!membership || !onlySources) return <SettingsLoadState kind="loading" title="Loading this data…" />
   return (
     <>
       <section data-garden-local-data={garden ?? 'unplaced'}>
@@ -416,13 +493,11 @@ function GardenDataSections({
 
 function UnplacedPane(props: { membership: GardenMembership | null; error: string | null; onRetry(): void }): React.JSX.Element {
   return (
-    <div className="max-w-2xl space-y-6" data-gardens-pane="unplaced">
-      <div>
-        <h2 className="type-title text-[var(--color-text-primary)] mb-1">{NOT_IN_A_GARDEN}</h2>
-        <p className="type-hint text-[var(--color-text-muted)]">
-          Widget data and data sources on no Garden&apos;s page. A widget or source a Garden uses is under that Garden.
-        </p>
-      </div>
+    <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`} data-gardens-pane="unplaced">
+      <PaneHeader
+        title={NOT_IN_A_GARDEN}
+        hint="Widget data and data sources on no Garden’s page. A widget or source a Garden uses is under that Garden."
+      />
       <GardenDataSections garden={null} {...props} />
     </div>
   )
@@ -434,6 +509,8 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
   const st = useZenSettingsStore()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [justUsed, setJustUsed] = useState<string | null>(null)
+  const [justReset, setJustReset] = useState(false)
   const [revealError, setRevealError] = useState<string | null>(null)
   const [recent, setRecent] = useState<GardenHistoryItem[] | null>(null)
   const [recentError, setRecentError] = useState<string | null>(null)
@@ -447,6 +524,18 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
   // Re-read after a look change anywhere (the Garden list re-reads on every
   // `zen_changed`; the theme rides the same answer).
   useEffect(loadRecent, [loadRecent, st.globalTheme])
+  useEffect(() => {
+    if (!justUsed && !justReset) return
+    const t = window.setTimeout(() => {
+      setJustUsed(null)
+      setJustReset(false)
+    }, 2500)
+    return () => window.clearTimeout(t)
+  }, [justUsed, justReset])
+
+  const use = async (name: string): Promise<void> => {
+    if (await attempt(() => setZenGlobalTheme(name), setBusy, (e) => setError(e ? `K2 couldn’t switch to ${name}. ${e}` : null))) setJustUsed(name)
+  }
 
   const reset = async (): Promise<void> => {
     const yes = await useConfirmDialogStore.getState().confirm({
@@ -455,95 +544,143 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
       confirmLabel: 'Reset',
       destructive: true,
     })
-    if (yes && (await attempt(resetZenSettingsFile, setBusy, setError))) loadRecent()
+    if (yes && (await attempt(resetZenSettingsFile, setBusy, (e) => setError(e ? `K2 couldn’t reset Zen settings. ${e}` : null)))) {
+      setJustReset(true)
+      loadRecent()
+    }
   }
 
   return (
-    <div className="max-w-2xl space-y-6" data-gardens-pane="styles" data-settings-id="zen-gardens.advanced">
-      <div>
-        <h2 className="type-title text-[var(--color-text-primary)] mb-1">Styles</h2>
-        <p className="type-hint text-[var(--color-text-muted)]">The look every Garden uses on this computer.</p>
-      </div>
-      <section data-settings-id="zen-gardens.theme">
-        <h3 className={H3}>Theme</h3>
-        <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-          <div className="type-row text-[var(--color-text-primary)]">Global theme</div>
-          <SettingDropdown
-            ariaLabel="Global Zen theme"
-            value={st.globalTheme ?? ''}
-            options={themeOptions(st.themes)}
-            placeholder={st.globalTheme ?? 'No theme'}
-            disabled={busy || st.themes.length === 0}
-            onChange={(v) => void attempt(() => setZenGlobalTheme(v), setBusy, setError)}
-          />
-        </div>
-        <ul className="mt-1" data-gardens-theme-list="">
-          {st.themes.map((t) => (
-            <li key={t.name} className="flex items-baseline gap-2 py-1 type-row text-[var(--color-text-primary)]">
-              <span className="font-mono">{t.name}</span>
-              <span className={MUTED}>
-                {t.builtin ? 'built in' : 'yours'}
-                {t.summary ? ` · ${t.summary}` : ''}
-                {t.name === st.globalTheme ? ' · in use' : ''}
-              </span>
-            </li>
-          ))}
-        </ul>
-        <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-          <div className="type-row text-[var(--color-text-primary)]">
-            Zen settings <span className={`${MUTED} font-mono`}>zen.toml</span>
+    <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`} data-gardens-pane="styles" data-settings-id="zen-gardens.advanced">
+      <PaneHeader title="Styles" hint="The look every Garden uses on this computer. A Garden can pick its own theme in Zen." />
+      <ActionError text={error} onDismiss={() => setError(null)} testId="gardens-styles-error" />
+      <SettingsGroup title="Theme" hint="Every Garden without its own theme uses this one." settingId="zen-gardens.theme" card>
+        {st.themes.length === 0 ? (
+          <div className="px-4 py-3">
+            <p className={SETTING_ROW_LABEL}>No themes yet</p>
+            <p className={SETTING_ROW_HINT}>K2’s themes show here once Gardens finish setting up.</p>
           </div>
-          <button type="button" className={BTN} disabled={busy} data-gardens-reset-zen="" onClick={() => void reset()}>
-            Reset
-          </button>
-        </div>
-        <InlineError text={error} testId="gardens-styles-error" />
-      </section>
-      {st.path ? (
-        <section data-settings-id="zen-gardens.folder">
-          <h3 className={H3}>Folder</h3>
-          <div className="flex items-center justify-between gap-3 py-2 border-b border-[var(--color-border)]">
-            <span className="type-hint font-mono text-[var(--color-text-primary)] select-all truncate" data-zen-gardens-path="">
-              {st.path}
-            </span>
-            <button
-              type="button"
-              className={`${BTN} flex-shrink-0`}
+        ) : (
+          <ul data-gardens-theme-list="" className="divide-y divide-[var(--color-border)]">
+            {st.themes.map((t) => {
+              const inUse = t.name === st.globalTheme
+              return (
+                <li key={t.name} className="px-4 py-3 flex items-center justify-between gap-6 hover:bg-[var(--color-wash-1)] transition-colors">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="type-name text-[var(--color-text-primary)]">{t.name}</span>
+                      {inUse && <Tag tone="ok">In use</Tag>}
+                      {!t.builtin && <Tag tone="muted">Yours</Tag>}
+                      {justUsed === t.name && <DoneNote text="Switched" />}
+                    </div>
+                    <p className={SETTING_ROW_HINT}>{t.summary || (t.builtin ? 'Comes with K2.' : 'A theme you or your agents made.')}</p>
+                  </div>
+                  {!inUse && (
+                    <Button variant="quiet" className="flex-shrink-0" disabled={busy} aria-label={`Use ${t.name}`} onClick={() => void use(t.name)}>
+                      Use
+                    </Button>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </SettingsGroup>
+      <SettingsGroup title="Files" card>
+        {st.path ? (
+          <SettingRow
+            label="Gardens folder"
+            hint={
+              <span className="font-mono select-all break-all" data-zen-gardens-path="">
+                {st.path}
+              </span>
+            }
+            settingId="zen-gardens.folder"
+            below={revealError ? <InlineError text={`K2 couldn’t open the folder. ${revealError}`} testId="gardens-reveal-error" /> : undefined}
+          >
+            <Button
+              variant="quiet"
               onClick={() => {
                 setRevealError(null)
-                revealItemInDir(st.path as string).catch((err: unknown) =>
-                  setRevealError(err instanceof Error ? err.message : String(err)),
-                )
+                revealItemInDir(st.path as string).catch((err: unknown) => setRevealError(err instanceof Error ? err.message : String(err)))
               }}
             >
               {revealLabel()}
-            </button>
-          </div>
-          <InlineError text={revealError} testId="gardens-reveal-error" />
-        </section>
-      ) : null}
+            </Button>
+          </SettingRow>
+        ) : null}
+        <SettingRow
+          label={
+            <span className="inline-flex items-center gap-2">
+              Zen settings
+              {justReset && <DoneNote text="Reset" />}
+            </span>
+          }
+          hint="Puts zen.toml back to K2’s defaults. K2 keeps the current file in history first."
+        >
+          <Button variant="danger-quiet" disabled={busy} data-gardens-reset-zen="" onClick={() => void reset()}>
+            Reset…
+          </Button>
+        </SettingRow>
+      </SettingsGroup>
       <section data-gardens-look-history="">
-        <div className="flex items-center justify-between">
-          <h3 className={H3}>Recent look changes</h3>
-          <button
-            type="button"
-            className={BTN}
-            onClick={() => onHistory({ kind: 'garden', garden: '*', name: 'Styles' })}
+        {recentError ? (
+          <div className="space-y-2">
+            <h3 className="type-heading text-[var(--color-text-primary)] min-h-[1.5rem] flex items-center">Recent look changes</h3>
+            <SettingsLoadState
+              kind="error"
+              title="K2 couldn’t read the recent look changes"
+              detail={recentError}
+              testId="gardens-look-history-error"
+              action={<Button variant="quiet" onClick={loadRecent}>Try again</Button>}
+            >
+              Your Gardens look as they did. Try again in a moment.
+            </SettingsLoadState>
+          </div>
+        ) : (
+          <SettingsGroup
+            title="Recent look changes"
+            hint="Who changed a theme or reset Zen settings, newest first."
+            card
+            action={
+              <Button variant="quiet" onClick={() => onHistory({ kind: 'garden', garden: '*', name: 'Styles' })}>
+                History…
+              </Button>
+            }
           >
-            History…
-          </button>
-        </div>
-        <InlineError text={recentError} testId="gardens-look-history-error" />
-        {recent !== null && recent.length === 0 ? <p className={`${MUTED} mt-2`}>No changes yet.</p> : null}
-        <ul className="mt-1">
-          {(recent ?? []).map((it) => (
-            <li key={it.id} className="py-1 type-row text-[var(--color-text-primary)]" data-gardens-look-line={it.id}>
-              {gardenHistoryLine(it)} <span className={MUTED}>· {gardenWhen(it.at)}</span>
-            </li>
-          ))}
-        </ul>
+            {recent === null ? (
+              <div className="px-4 py-3">
+                <p className={SETTING_ROW_HINT}>Loading…</p>
+              </div>
+            ) : recent.length === 0 ? (
+              <div className="px-4 py-3">
+                <p className={SETTING_ROW_LABEL}>No changes yet</p>
+                <p className={SETTING_ROW_HINT}>A change to a theme shows here.</p>
+              </div>
+            ) : (
+              recent.slice(0, 6).map((it) => (
+                <div key={it.id} className="px-4 py-3" data-gardens-look-line={it.id}>
+                  <p className={SETTING_ROW_LABEL}>{gardenHistoryLine(it)}</p>
+                  <p className={SETTING_ROW_HINT}>{gardenWhen(it.at)}</p>
+                </div>
+              ))
+            )}
+          </SettingsGroup>
+        )}
       </section>
     </div>
+  )
+}
+
+/** A check and a word, for a moment, after a change lands. */
+function DoneNote({ text }: { text: string }): React.JSX.Element {
+  return (
+    <span role="status" className="inline-flex items-center gap-1 type-hint text-[var(--color-status-ok-soft)] whitespace-nowrap">
+      <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+        <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+      </svg>
+      {text}
+    </span>
   )
 }
 
@@ -586,7 +723,7 @@ function AddAgent({
   const [query, setQuery] = useState('')
   const [agents, setAgents] = useState<LocalAgent[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const menu = useAnchoredMenu<HTMLButtonElement>({ open, onClose: () => setOpen(false), gap: 4, width: 'min', minWidth: 280 })
+  const menu = useAnchoredMenu<HTMLButtonElement>({ open, onClose: () => setOpen(false), gap: 4, width: 'min', minWidth: 280, align: 'end' })
 
   // Read this computer's agents when the picker opens (a gesture).
   useEffect(() => {
@@ -604,10 +741,9 @@ function AddAgent({
   const sections = useMemo(() => gardenAddAgentSections(agents ?? [], listed), [agents, listed])
   return (
     <>
-      <button
+      <Button
         ref={menu.anchorRef}
-        type="button"
-        className={`${BTN} mt-2`}
+        variant="quiet"
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -617,22 +753,23 @@ function AddAgent({
           setOpen((o) => !o)
         }}
       >
-        + Add agent
-      </button>
+        Add agent
+      </Button>
       {open &&
         menu.portal(
           <div
             ref={menu.menuRef}
             data-garden-add-agent-picker=""
-            {...floatMaterial('menu')} className="no-drag border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg p-2"
+            {...floatMaterial('menu')}
+            className="no-drag border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-2"
             style={menu.style}
           >
             {error ? (
-              <p role="alert" className="type-hint text-[var(--color-status-error)] p-1">
-                {error}
+              <p role="alert" className="type-hint text-[var(--color-status-error-soft)] p-1">
+                K2 couldn’t list this computer’s agents. {error}
               </p>
             ) : agents === null ? (
-              <p className={`${MUTED} p-1`}>Loading…</p>
+              <p className={`${SETTING_ROW_HINT} p-1`}>Loading…</p>
             ) : (
               <SearchableAgentList
                 sections={sections}
@@ -661,49 +798,6 @@ function AddAgent({
 
 // ── Garden pane (G26) ───────────────────────────────────────────────
 
-function GardenMenu({ onDelete, name }: { onDelete(): void; name: string }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const menu = useAnchoredMenu<HTMLButtonElement>({ open, onClose: () => setOpen(false), gap: 4, width: 'min', minWidth: 140, align: 'end' })
-  return (
-    <>
-      <button
-        ref={menu.anchorRef}
-        type="button"
-        aria-label={`More for ${name}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        data-garden-pane-more=""
-        className={BTN}
-        onClick={() => setOpen((o) => !o)}
-      >
-        ⋯
-      </button>
-      {open &&
-        menu.portal(
-          <div
-            ref={menu.menuRef}
-            role="menu"
-            {...floatMaterial('menu')} className="no-drag flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg p-1"
-            style={menu.style}
-          >
-            <button
-              type="button"
-              role="menuitem"
-              data-garden-pane-delete=""
-              className="text-left px-3 py-1.5 type-control text-[var(--color-status-error)] hover:bg-white/[0.04] cursor-pointer"
-              onClick={() => {
-                setOpen(false)
-                onDelete()
-              }}
-            >
-              Delete
-            </button>
-          </div>,
-        )}
-    </>
-  )
-}
-
 function GardenPane({
   garden,
   gardens,
@@ -727,8 +821,10 @@ function GardenPane({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [renaming, setRenaming] = useState(false)
+  const [renamed, setRenamed] = useState(false)
   const [draft, setDraft] = useState(garden.name)
   const seq = useRef(0)
+  const renameRef = useRef<HTMLButtonElement>(null)
   const id = garden.id
 
   const load = useCallback(() => {
@@ -755,15 +851,20 @@ function GardenPane({
     setRenaming(false)
     setDraft(garden.name)
   }, [id, garden.name])
+  useEffect(() => {
+    if (!renamed) return
+    const t = window.setTimeout(() => setRenamed(false), 2500)
+    return () => window.clearTimeout(t)
+  }, [renamed])
 
-  const run = async (fn: () => Promise<unknown>): Promise<boolean> => {
+  const run = async (what: string, fn: () => Promise<unknown>): Promise<boolean> => {
     setBusy(true)
     setError(null)
     try {
       await fn()
       return true
     } catch (err) {
-      setError(gardenAccessErrorText(err))
+      setError(`${what} ${gardenAccessErrorText(err)}`)
       return false
     } finally {
       setBusy(false)
@@ -772,23 +873,29 @@ function GardenPane({
   }
 
   const add = (a: LocalAgent): void => {
-    void run(() => setGardenEditor(id, a.id, true)).then((ok) => {
+    void run(`K2 couldn’t let ${a.name} edit ${garden.name}.`, () => setGardenEditor(id, a.id, true)).then((ok) => {
       if (ok) useToastStore.getState().addToast(`${a.name} can edit ${garden.name}`, 'success')
     })
   }
 
   // G26: Remove with an 8 s Undo toast (ZenGardenSyncControls' toast).
   const remove = (agent: string, name: string): void => {
-    void run(() => setGardenEditor(id, agent, false)).then((ok) => {
+    void run(`K2 couldn’t remove ${name}.`, () => setGardenEditor(id, agent, false)).then((ok) => {
       if (!ok) return
       useToastStore.getState().addToast(`${name} can no longer edit ${garden.name}`, 'success', 8000, {
         label: 'Undo',
         onClick: () =>
           void setGardenEditor(id, agent, true)
-            .catch((err: unknown) => setError(gardenAccessErrorText(err)))
+            .catch((err: unknown) => setError(`K2 couldn’t add ${name} back. ${gardenAccessErrorText(err)}`))
             .finally(load),
       })
     })
+  }
+
+  const stopRenaming = (): void => {
+    setRenaming(false)
+    setDraft(garden.name)
+    requestAnimationFrame(() => renameRef.current?.focus())
   }
 
   const saveRename = async (): Promise<void> => {
@@ -800,29 +907,33 @@ function GardenPane({
       return
     }
     if (clean === garden.name) {
-      setRenaming(false)
+      stopRenaming()
       return
     }
-    if (await attempt(() => renameZenSettingsGardenNow(id, clean), setBusy, setError)) setRenaming(false)
+    if (await attempt(() => renameZenSettingsGardenNow(id, clean), setBusy, (e) => setError(e ? `K2 couldn’t rename ${garden.name}. ${e}` : null))) {
+      setRenaming(false)
+      setRenamed(true)
+    }
   }
 
   const askDelete = async (): Promise<void> => {
     const yes = await useConfirmDialogStore.getState().confirm({
       title: `Delete ${garden.name}?`,
-      message: 'Its page moves to history in the Gardens folder, so a copy stays.',
+      message: 'It leaves your Gardens. Its page moves to history in the Gardens folder, and you can restore it from Deleted Gardens.',
       confirmLabel: 'Delete',
       destructive: true,
     })
-    if (yes && (await attempt(() => deleteZenSettingsGarden(id), setBusy, setError))) onDeleted()
+    if (yes && (await attempt(() => deleteZenSettingsGarden(id), setBusy, (e) => setError(e ? `K2 couldn’t delete ${garden.name}. ${e}` : null)))) onDeleted()
   }
 
   const listed = useMemo(() => new Set((access?.editors ?? []).map((e) => e.agent)), [access])
+  const made = access?.made ? `Made by ${access.made.name}${access.made.at !== null ? ` · ${gardenDay(access.made.at)}` : ''}` : null
   return (
-    <div className="max-w-2xl space-y-6" data-gardens-pane="garden" data-garden-pane={id}>
-      <div>
-        <div className="flex items-center gap-2">
-          {renaming ? (
-            <input
+    <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`} data-gardens-pane="garden" data-garden-pane={id}>
+      <div className="space-y-3">
+        {renaming ? (
+          <div className="flex items-center gap-2" role="group" aria-label={`Rename ${garden.name}`}>
+            <Input
               autoFocus
               aria-label={`Name of ${garden.name}`}
               data-garden-pane-name=""
@@ -837,129 +948,164 @@ function GardenPane({
                 } else if (e.key === 'Escape') {
                   e.preventDefault()
                   e.stopPropagation()
-                  setRenaming(false)
-                  setDraft(garden.name)
+                  stopRenaming()
                 }
               }}
-              className={`${INPUT} flex-1 type-row`}
+              className="flex-1 min-w-0 type-control"
             />
-          ) : (
-            <h2 className="flex-1 min-w-0 truncate type-title text-[var(--color-text-primary)]" data-garden-pane-title="">
-              {garden.name}
-            </h2>
-          )}
-          <button
-            type="button"
-            className={BTN}
-            data-garden-pane-history=""
-            onClick={() => onHistory({ kind: 'garden', garden: id, name: garden.name })}
-          >
-            History…
-          </button>
-          {renaming ? (
-            <button type="button" className={BTN} disabled={busy} onClick={() => void saveRename()}>
+            <Button variant="quiet" onClick={stopRenaming}>
+              Cancel
+            </Button>
+            <Button variant="accent" disabled={busy || draft.trim() === ''} onClick={() => void saveRename()}>
               Save
-            </button>
-          ) : (
-            <button type="button" className={BTN} data-garden-pane-rename="" onClick={() => setRenaming(true)}>
-              Rename
-            </button>
-          )}
-          <GardenMenu name={garden.name} onDelete={() => void askDelete()} />
-        </div>
-        {access?.made ? (
-          <p className={`${MUTED} mt-1`} data-garden-pane-made="">
-            Made by {access.made.name}
-            {access.made.at !== null ? ` · ${gardenDay(access.made.at)}` : ''}
-          </p>
-        ) : null}
-        <InlineError text={error} testId="garden-pane-error" />
+            </Button>
+          </div>
+        ) : (
+          <PaneHeader
+            title={
+              <span className="inline-flex items-center gap-2 max-w-full">
+                <span className="truncate">{garden.name}</span>
+                {renamed && <DoneNote text="Renamed" />}
+              </span>
+            }
+            hint={<span data-garden-pane-made="">{made ?? 'A Zen page on this computer.'}</span>}
+            testId=""
+            actions={
+              <>
+                <Button variant="quiet" data-garden-pane-history="" onClick={() => onHistory({ kind: 'garden', garden: id, name: garden.name })}>
+                  History…
+                </Button>
+                <Button ref={renameRef} variant="quiet" data-garden-pane-rename="" onClick={() => setRenaming(true)}>
+                  Rename
+                </Button>
+                <OverflowMenu
+                  label={`More for ${garden.name}`}
+                  triggerProps={{ 'data-garden-pane-more': '' }}
+                  items={[{ id: 'delete', label: 'Delete…', onSelect: () => void askDelete(), danger: true }]}
+                />
+              </>
+            }
+          />
+        )}
+        <ActionError text={error} onDismiss={() => setError(null)} testId="garden-pane-error" />
       </div>
 
       {loadError ? (
-        <div>
-          <InlineError text={loadError} testId="garden-pane-load-error" />
-          <button type="button" className={`${BTN} mt-2`} onClick={load}>
-            Try again
-          </button>
+        <SettingsLoadState
+          kind="error"
+          title={`K2 couldn’t read who can edit ${garden.name}`}
+          detail={loadError}
+          testId="garden-pane-load-error"
+          action={<Button variant="quiet" onClick={load}>Try again</Button>}
+        >
+          Nothing changed. Try again in a moment.
+        </SettingsLoadState>
+      ) : access === null ? (
+        <SettingsLoadState kind="loading" title={`Loading ${garden.name}…`} />
+      ) : (
+        <div data-garden-editors="">
+          <SettingsGroup
+            title="Agents who can edit"
+            hint="These agents can change this Garden’s page and widgets. Anyone else asks first."
+            card
+            action={<AddAgent listed={listed} onPick={add} disabled={busy} />}
+          >
+            {access.editors.length === 0 ? (
+              <div className="px-4 py-3" data-garden-editors-empty="">
+                <p className={SETTING_ROW_LABEL}>No agents yet</p>
+                <p className={SETTING_ROW_HINT}>An agent that asks gets a card on its Thread with you.</p>
+              </div>
+            ) : (
+              <ul className="divide-y divide-[var(--color-border)]">
+                {access.editors.map((e) => (
+                  <li
+                    key={e.agent}
+                    data-garden-editor={e.agent}
+                    className="px-4 py-3 flex items-center gap-3 hover:bg-[var(--color-wash-1)] transition-colors"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="w-2 h-2 rounded-[var(--radius-pill)] flex-shrink-0"
+                      style={{ background: e.color ?? 'var(--color-text-muted)' }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="type-name text-[var(--color-text-primary)] truncate">{e.name}</p>
+                      <p className={SETTING_ROW_HINT} data-garden-editor-added="">
+                        {gardenEditorAddedWords(e)[0].toUpperCase() + gardenEditorAddedWords(e).slice(1)}
+                      </p>
+                    </div>
+                    <Button
+                      variant="quiet"
+                      className="flex-shrink-0"
+                      disabled={busy}
+                      aria-label={`Remove ${e.name}`}
+                      data-garden-editor-remove={e.agent}
+                      onClick={() => remove(e.agent, e.name)}
+                    >
+                      Remove
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </SettingsGroup>
         </div>
-      ) : null}
-
-      <section data-garden-editors="">
-        <h3 className={H3}>Agents who can edit</h3>
-        {access === null && !loadError ? <p className={`${MUTED} mt-2`}>Loading…</p> : null}
-        {access !== null && access.editors.length === 0 ? (
-          <p className={`${MUTED} mt-2`} data-garden-editors-empty="">
-            No agents yet. An agent that asks gets a card on its Thread with you.
-          </p>
-        ) : null}
-        <ul className="mt-1">
-          {(access?.editors ?? []).map((e) => (
-            <li
-              key={e.agent}
-              data-garden-editor={e.agent}
-              className="flex items-center gap-2 py-1.5 border-b border-[var(--color-border)]"
-            >
-              <span
-                aria-hidden="true"
-                className="w-2 h-2 rounded-[var(--radius-pill)] flex-shrink-0"
-                style={{ background: e.color ?? 'var(--color-text-muted)' }}
-              />
-              <span className="type-row text-[var(--color-text-primary)]">{e.name}</span>
-              <span className={`${MUTED} flex-1 min-w-0 truncate`} data-garden-editor-added="">
-                {gardenEditorAddedWords(e)}
-              </span>
-              <button
-                type="button"
-                className={BTN}
-                disabled={busy}
-                aria-label={`Remove ${e.name}`}
-                data-garden-editor-remove={e.agent}
-                onClick={() => remove(e.agent, e.name)}
-              >
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-        {access !== null ? <AddAgent listed={listed} onPick={add} disabled={busy} /> : null}
-      </section>
-
-      <section className="flex items-baseline gap-4" data-garden-sees="">
-        <h3 className={H3}>Sees</h3>
-        <span className="type-row text-[var(--color-text-primary)]">{GARDEN_SEES_TEXT}</span>
-      </section>
+      )}
 
       <section data-garden-pane-controls="">
-        <ZenGardenSyncControls garden={garden} variant="pane" />
+        <SettingsGroup title="This Garden" card>
+          <SettingRow label="What it can see" hint={`${GARDEN_SEES_TEXT}. Its widgets read what you can read on this computer.`} testId="garden-sees">
+            {null}
+          </SettingRow>
+          <ZenGardenSyncControls garden={garden} variant="pane" />
+        </SettingsGroup>
       </section>
 
-      <section data-garden-widgets="">
-        <h3 className={H3}>Widgets</h3>
-        {widgets !== null && widgets.length === 0 ? <p className={`${MUTED} mt-2`}>No widgets made for this Garden yet.</p> : null}
-        <ul className="mt-1">
-          {(widgets ?? []).map((w) => (
-            <li
-              key={w.widget}
-              data-garden-widget={w.widget}
-              className="flex items-center gap-2 py-1.5 border-b border-[var(--color-border)]"
-            >
-              <span className="type-row font-mono text-[var(--color-text-primary)]">{w.widget}</span>
-              <span className={`${MUTED} flex-1 min-w-0 truncate`} data-garden-widget-signer="">
-                {gardenWidgetSignerWords(w)}
-              </span>
-              <button
-                type="button"
-                className={BTN}
-                data-garden-widget-history={w.widget}
-                onClick={() => onHistory({ kind: 'widget', widget: w.widget, garden: id })}
-              >
-                History…
-              </button>
-            </li>
-          ))}
-        </ul>
-      </section>
+      {loadError ? null : (
+        <section data-garden-widgets="">
+          <SettingsGroup title="Widgets" hint="Widgets made for this Garden, and who last signed off on each." card>
+            {widgets === null ? (
+              <div className="px-4 py-3">
+                <p className={SETTING_ROW_HINT}>Loading…</p>
+              </div>
+            ) : widgets.length === 0 ? (
+              <div className="px-4 py-3">
+                <p className={SETTING_ROW_LABEL}>No widgets yet</p>
+                <p className={SETTING_ROW_HINT}>A widget an agent makes for this Garden shows here.</p>
+              </div>
+            ) : (
+              <ul className="divide-y divide-[var(--color-border)]">
+                {widgets.map((w) => {
+                  const signer = gardenWidgetSignerWords(w)
+                  return (
+                    <li
+                      key={w.widget}
+                      data-garden-widget={w.widget}
+                      className="px-4 py-3 flex items-center justify-between gap-6 hover:bg-[var(--color-wash-1)] transition-colors"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="type-name text-[var(--color-text-primary)] truncate">{w.title ?? w.widget}</p>
+                        <p className={SETTING_ROW_HINT} data-garden-widget-signer="">
+                          {signer ? signer[0].toUpperCase() + signer.slice(1) : w.widget}
+                        </p>
+                      </div>
+                      <Button
+                        variant="quiet"
+                        className="flex-shrink-0"
+                        data-garden-widget-history={w.widget}
+                        aria-label={`History of ${w.title ?? w.widget}`}
+                        onClick={() => onHistory({ kind: 'widget', widget: w.widget, garden: id })}
+                      >
+                        History…
+                      </Button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </SettingsGroup>
+        </section>
+      )}
 
       <GardenDataSections garden={id} membership={membership} error={membershipError} onRetry={onMembershipRetry} />
     </div>
@@ -979,43 +1125,42 @@ function DeletedPane({
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const who = garden.deletedBy ? gardenActorWords(garden.deletedBy).replace(/^You$/, 'you') : null
   return (
-    <div className="max-w-2xl space-y-4" data-gardens-pane="deleted" data-garden-deleted-pane={garden.id}>
-      <div>
-        <h2 className="type-title text-[var(--color-text-primary)]">{garden.name}</h2>
-        <p className={`${MUTED} mt-1`}>
-          Deleted
-          {garden.deletedBy ? ` by ${gardenActorWords(garden.deletedBy).replace(/^You$/, 'you')}` : ''}
-          {garden.deletedAt !== null ? ` · ${gardenDay(garden.deletedAt)}` : ''}. K2 keeps a copy in history.
-        </p>
-      </div>
-      <div className="flex gap-2">
-        <button
-          type="button"
-          className={BTN}
-          disabled={busy}
-          data-garden-restore=""
-          onClick={() => {
-            setBusy(true)
-            setError(null)
-            restoreDeletedGarden(garden.id)
-              .then(onRestored)
-              .catch((err: unknown) => setError(gardenAccessErrorText(err)))
-              .finally(() => setBusy(false))
-          }}
-        >
-          Restore
-        </button>
-        <button
-          type="button"
-          className={BTN}
-          data-garden-deleted-history=""
-          onClick={() => onHistory({ kind: 'garden', garden: garden.id, name: garden.name, readOnly: true })}
-        >
-          History…
-        </button>
-      </div>
-      <InlineError text={error} testId="garden-restore-error" />
+    <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`} data-gardens-pane="deleted" data-garden-deleted-pane={garden.id}>
+      <PaneHeader
+        title={garden.name}
+        hint={`Deleted${who ? ` by ${who}` : ''}${garden.deletedAt !== null ? ` · ${gardenDay(garden.deletedAt)}` : ''}. K2 keeps a copy in history.`}
+      />
+      <ActionError text={error} onDismiss={() => setError(null)} testId="garden-restore-error" />
+      <SettingsGroup title="This deleted Garden" card>
+        <SettingRow label="Restore" hint="Puts it back in your Gardens as it was when it was deleted.">
+          <Button
+            variant="accent"
+            disabled={busy}
+            data-garden-restore=""
+            onClick={() => {
+              setBusy(true)
+              setError(null)
+              restoreDeletedGarden(garden.id)
+                .then(onRestored)
+                .catch((err: unknown) => setError(`K2 couldn’t restore ${garden.name}. ${gardenAccessErrorText(err)}`))
+                .finally(() => setBusy(false))
+            }}
+          >
+            {busy ? 'Restoring…' : 'Restore'}
+          </Button>
+        </SettingRow>
+        <SettingRow label="History" hint="Every change to it before it was deleted. Read only.">
+          <Button
+            variant="quiet"
+            data-garden-deleted-history=""
+            onClick={() => onHistory({ kind: 'garden', garden: garden.id, name: garden.name, readOnly: true })}
+          >
+            History…
+          </Button>
+        </SettingRow>
+      </SettingsGroup>
     </div>
   )
 }
@@ -1024,8 +1169,8 @@ function DeletedPane({
 
 export function ZenGardensAccessPage(): React.JSX.Element {
   const st = useZenSettingsStore()
-  // The sidebar's lock glyphs read the sync store; keep it live here too
-  // (the pane's checkboxes aren't mounted while Styles is open).
+  // The list's lock glyphs read the sync store; keep it live here too
+  // (the pane's switches aren't mounted while Styles is open).
   useZenSyncLive()
   const sync = useZenSyncStore((s) => s.list)
   const [sel, setSel] = useState<GardensSelection>({ kind: 'styles' })
@@ -1034,9 +1179,10 @@ export function ZenGardensAccessPage(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [history, setHistory] = useState<GardenHistoryTarget | null>(null)
 
-  // The sidebar's facts and Deleted Gardens: re-read with the Garden list
+  // The list's facts and Deleted Gardens: re-read with the Garden list
   // (it re-reads on every local `zen_changed`) and on window focus.
   const loadSide = useCallback(() => {
+    setError(null)
     fetchGardenListFacts()
       .then(setFacts)
       .catch((err: unknown) => setError(gardenAccessErrorText(err)))
@@ -1099,19 +1245,29 @@ export function ZenGardensAccessPage(): React.JSX.Element {
 
   return (
     <div className="flex h-full min-h-0" data-zen-gardens-section="" data-gardens-master-detail="">
-      <Sidebar
-        gardens={st.gardens}
-        facts={facts}
-        locked={locked}
-        deleted={deleted}
-        sel={sel}
-        onSelect={setSel}
-      />
-      <div className="flex-1 overflow-y-auto p-6 min-h-0">
-        {error ? (
-          <p role="alert" className="type-hint text-[var(--color-status-error)] max-w-2xl mb-3" data-gardens-error="">
-            {error}
-          </p>
+      <Sidebar gardens={st.gardens} facts={facts} locked={locked} deleted={deleted} sel={sel} onSelect={setSel} />
+      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]">
+        {error || st.failure ? (
+          <div className={`w-full ${CONTENT_WIDTH} mb-6`} data-gardens-error="">
+            <SettingsLoadState
+              kind="error"
+              title={st.failure ? 'K2 couldn’t refresh the Gardens list' : 'K2 couldn’t read every detail of your Gardens'}
+              detail={st.failure?.kind === 'unreadable' ? null : (st.failure ? zenSettingsErrorText(new Error(st.failure.message)) : error)}
+              action={
+                <Button
+                  variant="quiet"
+                  onClick={() => {
+                    if (st.failure) void loadZenSettings()
+                    loadSide()
+                  }}
+                >
+                  Try again
+                </Button>
+              }
+            >
+              {st.failure ? 'What you see may be out of date.' : 'Who can edit each Garden, and Deleted Gardens, may be missing.'}
+            </SettingsLoadState>
+          </div>
         ) : null}
         {sel.kind === 'styles' ? <StylesPane onHistory={setHistory} /> : null}
         {selected ? (
@@ -1126,9 +1282,7 @@ export function ZenGardensAccessPage(): React.JSX.Element {
             onMembershipRetry={loadMembership}
           />
         ) : null}
-        {sel.kind === 'unplaced' ? (
-          <UnplacedPane membership={membership} error={membershipError} onRetry={loadMembership} />
-        ) : null}
+        {sel.kind === 'unplaced' ? <UnplacedPane membership={membership} error={membershipError} onRetry={loadMembership} /> : null}
         {selectedDeleted ? (
           <DeletedPane
             garden={selectedDeleted}
@@ -1143,9 +1297,7 @@ export function ZenGardensAccessPage(): React.JSX.Element {
           />
         ) : null}
       </div>
-      {history ? (
-        <ZenGardenHistoryModal target={history} vars={ZEN_TOKENS_IN_SETTINGS} onClose={() => setHistory(null)} />
-      ) : null}
+      {history ? <ZenGardenHistoryModal target={history} vars={ZEN_TOKENS_IN_SETTINGS} onClose={() => setHistory(null)} /> : null}
     </div>
   )
 }

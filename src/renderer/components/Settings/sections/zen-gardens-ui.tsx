@@ -14,6 +14,7 @@ import {
   type ZenSettingsTheme,
 } from '@/lib/zen/zen-settings'
 import { ZenNewGardenModal, zenNewGardenTurnsOn } from '@/components/Zen/widgets/ZenNewGardenModal'
+import { Button } from '@/components/ui'
 
 export const BTN =
   'px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
@@ -25,7 +26,7 @@ export const INPUT =
 export function InlineError({ text, testId }: { text: string | null; testId?: string }): React.JSX.Element | null {
   if (!text) return null
   return (
-    <p role="alert" data-testid={testId} className="type-hint text-[var(--color-status-error)] mt-1">
+    <p role="alert" data-testid={testId} className="type-hint text-[var(--color-status-error-soft)] mt-1">
       {text}
     </p>
   )
@@ -82,17 +83,20 @@ export const ZEN_TOKENS_IN_SETTINGS = {
  */
 export function NewGarden({
   gardens,
-  className = `${BTN} mb-3`,
+  block = false,
+  className,
 }: {
   gardens: readonly ZenSettingsGarden[]
   className?: string
+  /** Fill the width (the Gardens list's footer). */
+  block?: boolean
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   return (
     <>
-      <button type="button" data-zen-settings-new-garden="" onClick={() => setOpen(true)} className={className}>
-        + New Garden
-      </button>
+      <Button variant="quiet" data-zen-settings-new-garden="" onClick={() => setOpen(true)} className={block ? 'w-full justify-center' : className}>
+        New Garden
+      </Button>
       {open && (
         <ZenNewGardenModal
           taken={gardens.map((g) => g.name)}

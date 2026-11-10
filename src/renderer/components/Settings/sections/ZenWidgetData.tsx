@@ -47,13 +47,11 @@ import { onGardenDataChanged } from '@/stores/session-events'
 import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
+import { Button, OverflowMenu, Surface } from '@/components/ui'
+import { SettingsLoadState, SETTING_ROW_HINT } from '../controls/SettingControls'
 import { ZenWidgetFilesLine, ZenWidgetRestorePanel, saveBytes, zenDataZip } from './ZenWidgetDataRestore'
 
-const BTN =
-  'px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
-const DANGER_BTN =
-  'px-2 py-1 type-control border border-[var(--color-status-error)] text-[var(--color-status-error)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
-const MUTED = 'type-hint text-[var(--color-text-muted)]'
+const MUTED = 'type-hint text-[var(--color-text-secondary)]'
 
 /** One `GET zen/widgets` row, as far as this page reads it. `madeBy` is
  *  read when the daemon sends it (a widget with no data yet has no `spaces`
@@ -291,9 +289,9 @@ function GrantList({
           <span className="type-row text-[var(--color-text-primary)]">
             Grant admin: {g.subjectName ?? g.subjectId} · {g.level} · {g.prefix || 'everything'}
           </span>
-          <button type="button" className={BTN} disabled={act.busy} onClick={() => void unadmin(g)}>
+          <Button variant="quiet" disabled={act.busy} onClick={() => void unadmin(g)}>
             Remove
-          </button>
+          </Button>
         </div>
       ))}
       {plain.length === 0 && admins.length === 0 ? <p className={MUTED}>No agent can read or write this data.</p> : null}
@@ -308,13 +306,13 @@ function GrantList({
               </span>
             ) : null}
           </span>
-          <button type="button" className={BTN} disabled={act.busy} onClick={() => revoke(g)}>
+          <Button variant="quiet" disabled={act.busy} onClick={() => revoke(g)}>
             Revoke
-          </button>
+          </Button>
         </div>
       ))}
       {act.error ? (
-        <p className="type-hint text-[var(--color-status-error)] mt-1" data-testid="garden-data-grant-error">
+        <p className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="garden-data-grant-error">
           {act.error}
         </p>
       ) : null}
@@ -360,10 +358,10 @@ function DataLine({
   const offerLet = !accessOn && madeBy?.kind === 'agent' && !makerHasGrant(madeBy.handle, detail, space)
 
   return (
-    <div className="py-2 border-b border-[var(--color-border)]" data-garden-data-line={widget}>
+    <div className="px-4 py-3" data-garden-data-line={widget}>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="type-row text-[var(--color-text-primary)] truncate">
+          <div className="type-name text-[var(--color-text-primary)] truncate">
             {line.title && line.title !== widget ? `${line.title} (${widget})` : widget}
           </div>
           {line.large && (
@@ -381,9 +379,8 @@ function DataLine({
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           {offerLet && madeBy?.kind === 'agent' ? (
-            <button
-              type="button"
-              className={BTN}
+            <Button
+              variant="quiet"
               disabled={act.busy}
               onClick={() =>
                 void act
@@ -392,50 +389,49 @@ function DataLine({
               }
             >
               Let {madeBy.handle} use this data
-            </button>
+            </Button>
           ) : null}
           {offerClaim ? (
-            <button
-              type="button"
-              className={BTN}
+            <Button
+              variant="quiet"
               disabled={act.busy}
               title="Sign this version as yours: the widget then reads and writes its data with your rights"
               onClick={() => void act.run(() => claimWidget(widget), `${widget} is yours`).then((ok) => ok && reload())}
             >
               It's mine
-            </button>
+            </Button>
           ) : null}
           {space ? (
             <>
-              <button type="button" className={BTN} onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+              <Button variant="quiet" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
                 {accessOn ? (open ? 'Hide advanced' : 'Advanced') : open ? 'Hide grants' : 'Grants'}
-              </button>
-              <button type="button" className={BTN} disabled={act.busy} onClick={() => void act.run(() => exportAndSave(widget))}>
-                Export
-              </button>
-              <button
-                type="button"
-                className={BTN}
-                disabled={act.busy}
-                title="A zip of the data and the files (images, PDFs) its keys name"
-                onClick={() => void act.run(() => exportZipAndSave(widget))}
-              >
-                Export with images
-              </button>
-              <button type="button" className={BTN} onClick={() => setRestoring((r) => !r)} aria-expanded={restoring}>
-                Restore…
-              </button>
-              <button
-                type="button"
-                className={DANGER_BTN}
-                disabled={act.busy}
-                onClick={async () => {
-                  if (!(await confirmDelete(widget, space.bytes))) return
-                  if (await act.run(() => deleteGardenSpace(widget, widget), `${widget}'s data deleted (a snapshot was kept)`)) reload()
-                }}
-              >
-                Delete
-              </button>
+              </Button>
+              <OverflowMenu
+                label={`More actions for ${line.title ?? widget}`}
+                items={[
+                  { id: 'export', label: 'Export', onSelect: () => void act.run(() => exportAndSave(widget)), disabled: act.busy },
+                  {
+                    id: 'export-images',
+                    label: 'Export with images',
+                    hint: 'A zip of the data and the files its keys name',
+                    onSelect: () => void act.run(() => exportZipAndSave(widget)),
+                    disabled: act.busy,
+                  },
+                  { id: 'restore', label: restoring ? 'Hide restore' : 'Restore…', onSelect: () => setRestoring((r) => !r) },
+                  {
+                    id: 'delete',
+                    label: 'Delete…',
+                    danger: true,
+                    group: true,
+                    disabled: act.busy,
+                    onSelect: () =>
+                      void (async () => {
+                        if (!(await confirmDelete(widget, space.bytes))) return
+                        if (await act.run(() => deleteGardenSpace(widget, widget), `${widget}'s data deleted (a snapshot was kept)`)) reload()
+                      })(),
+                  },
+                ]}
+              />
             </>
           ) : null}
         </div>
@@ -443,9 +439,7 @@ function DataLine({
       {restoring && space ? <ZenWidgetRestorePanel widget={widget} onDone={reload} /> : null}
       {open && detail && accessOn ? (
         <div className="mt-2" data-garden-data-advanced={widget}>
-          <div className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-            Advanced · data grants
-          </div>
+          <div className="type-row text-[var(--color-text-primary)]">Advanced: data grants</div>
           <p className={MUTED}>
             Agents on a Garden&apos;s list already use the data of its widgets. These grants are for any other agent.
           </p>
@@ -455,7 +449,7 @@ function DataLine({
         <GrantList widget={widget} detail={detail} reload={reload} />
       ) : null}
       {act.error ? (
-        <p className="type-hint text-[var(--color-status-error)] mt-1" data-testid="garden-data-line-error">
+        <p className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="garden-data-line-error">
           {act.error}
         </p>
       ) : null}
@@ -466,17 +460,16 @@ function DataLine({
 function OrphanLine({ space, reload }: { space: GardenSpaceRow; reload: () => void }): React.JSX.Element {
   const act = useAction()
   return (
-    <div className="flex items-center justify-between gap-3 py-1.5" data-garden-data-orphan={space.widget}>
+    <div className="px-4 py-3 flex items-center justify-between gap-3" data-garden-data-orphan={space.widget}>
       <span className="type-row text-[var(--color-text-primary)]">
         {space.widget} <span className={MUTED}>({formatBytes(space.bytes)})</span>
       </span>
       <div className="flex items-center gap-1">
-        <button type="button" className={BTN} disabled={act.busy} onClick={() => void act.run(() => exportAndSave(space.widget))}>
+        <Button variant="quiet" disabled={act.busy} onClick={() => void act.run(() => exportAndSave(space.widget))}>
           Export
-        </button>
-        <button
-          type="button"
-          className={DANGER_BTN}
+        </Button>
+        <Button
+          variant="danger-quiet"
           disabled={act.busy}
           onClick={async () => {
             if (!(await confirmDelete(space.widget, space.bytes))) return
@@ -484,9 +477,9 @@ function OrphanLine({ space, reload }: { space: GardenSpaceRow; reload: () => vo
           }}
         >
           Delete
-        </button>
+        </Button>
       </div>
-      {act.error ? <p className="type-hint text-[var(--color-status-error)]">{act.error}</p> : null}
+      {act.error ? <p className="type-hint text-[var(--color-status-error-soft)]">{act.error}</p> : null}
     </div>
   )
 }
@@ -527,7 +520,9 @@ export function ZenWidgetData({ only = null, except = null, embedded = false }: 
         daemonCliGet<{ widgets?: WidgetRow[] }>(zenLocalScope(), 'zen/widgets'),
       ])
       if (mine !== seq.current) return
-      setSpaces(s)
+      // A reply without the list is a failed read, never a crash.
+      if (!s || !Array.isArray(s.spaces)) throw new Error('Its answer wasn’t a list of widget data K2 can read.')
+      setSpaces({ spaces: s.spaces, saves: Array.isArray(s.saves) ? s.saves : [] })
       setWidgets(Array.isArray(w.widgets) ? w.widgets : [])
       setError(null)
     } catch (err) {
@@ -558,58 +553,60 @@ export function ZenWidgetData({ only = null, except = null, embedded = false }: 
   const orphans = spaces && !only ? spaces.spaces.filter((s) => s.orphanedAt != null) : []
   const reload = (): void => void load()
 
+  const title = embedded ? 'Local Data' : accessOn ? 'Widget data' : 'Local Data'
+  const hint = embedded
+    ? only
+      ? 'The data each widget in this Garden keeps on this computer. Agents on its list use it; any other agent needs a grant, under Advanced.'
+      : 'Data of widgets no Garden places, and data whose widget is gone.'
+    : accessOn
+      ? 'Each custom widget keeps its data on this computer. The agents on a Garden’s list use the data of the widgets in it; any other agent needs a grant, under Advanced.'
+      : 'Each custom widget keeps its data on this computer. An agent reads or writes it only with a grant you give, or one a grant admin you named gives.'
   return (
-    <section data-settings-id="zen-gardens.data" data-garden-data="">
-      {embedded ? (
-        <>
-          <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">Local Data</h3>
-          <p className={`${MUTED} mt-1 mb-2`}>
-            {only
-              ? 'The data each widget in this Garden keeps on this computer. Agents on its list use it; any other agent needs a grant (under Advanced).'
-              : 'Data of widgets no Garden places, and data whose widget is gone.'}
-          </p>
-        </>
-      ) : (
-        <h2 className="type-title text-[var(--color-text-primary)] mb-1">{accessOn ? 'Widget data' : 'Local Data'}</h2>
-      )}
-      {embedded ? null : accessOn ? (
-        <p className="type-hint text-[var(--color-text-muted)] mb-6">
-          Each custom widget keeps its data on this computer. The agents on a Garden&apos;s list use the data of the widgets
-          in it; any other agent needs a grant (under Advanced).
-        </p>
-      ) : (
-        <p className="type-hint text-[var(--color-text-muted)] mb-6">
-          Each custom widget keeps its data on this computer. An agent reads or writes it only with a grant you give (or one a
-          grant admin you named gives).
-        </p>
-      )}
+    <section data-settings-id="zen-gardens.data" data-garden-data="" className="space-y-2">
+      <div className="mb-2">
+        {embedded ? (
+          <h3 className="type-heading text-[var(--color-text-primary)] min-h-[1.5rem] flex items-center">{title}</h3>
+        ) : (
+          <h2 className="type-title text-[var(--color-text-primary)]">{title}</h2>
+        )}
+        <p className={SETTING_ROW_HINT}>{hint}</p>
+      </div>
       {error ? (
-        <div className="mb-2">
-          <p className="type-hint text-[var(--color-status-error)]" data-testid="garden-data-load-error">
-            {error}
-          </p>
-          <button type="button" className={`${BTN} mt-1`} onClick={reload}>
-            Try again
-          </button>
-        </div>
-      ) : null}
-      {spaces === null && !error ? <p className={MUTED}>Loading…</p> : null}
-      {spaces !== null && lines.length === 0 && (!embedded || orphans.length === 0) ? (
-        <p className={MUTED}>{embedded ? (only ? 'No widget data in this Garden.' : 'Nothing here.') : 'No custom widgets yet.'}</p>
-      ) : null}
-      {lines.map((l) => (
-        <DataLine key={l.widget} line={l} reload={reload} accessOn={accessOn} />
-      ))}
-      {orphans.length > 0 ? (
-        <div className="mt-4" data-garden-data-orphans="">
-          <div className="type-row text-[var(--color-text-secondary)] mb-1">Data with no widget</div>
-          {orphans.map((s) => (
-            <OrphanLine key={s.widget} space={s} reload={reload} />
+        <SettingsLoadState
+          kind="error"
+          title="K2 couldn’t read the widget data on this computer"
+          detail={error}
+          testId="garden-data-load-error"
+          action={<Button variant="quiet" onClick={reload}>Try again</Button>}
+        >
+          The data is safe. Try again in a moment.
+        </SettingsLoadState>
+      ) : spaces === null ? (
+        <SettingsLoadState kind="loading" title="Loading widget data…" />
+      ) : lines.length === 0 && (!embedded || orphans.length === 0) ? (
+        <SettingsLoadState kind="empty" title={embedded ? (only ? 'No widget data in this Garden' : 'Nothing here') : 'No custom widgets yet'}>
+          {only ? 'A widget that keeps data shows here once it saves some.' : 'Widget data shows here when a widget keeps some.'}
+        </SettingsLoadState>
+      ) : (
+        <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
+          {lines.map((l) => (
+            <DataLine key={l.widget} line={l} reload={reload} accessOn={accessOn} />
           ))}
-          <p className={MUTED}>
-            Its widget folder is gone or renamed. The data stays until you delete it; `k2 zen data move &lt;old&gt; &lt;new&gt;` gives it
-            to a renamed widget.
-          </p>
+        </Surface>
+      )}
+      {orphans.length > 0 ? (
+        <div className="pt-4 space-y-2" data-garden-data-orphans="">
+          <div>
+            <h4 className="type-row text-[var(--color-text-primary)]">Data with no widget</h4>
+            <p className={SETTING_ROW_HINT}>
+              Its widget folder is gone or renamed. The data stays until you delete it, or an agent gives it to the renamed widget.
+            </p>
+          </div>
+          <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
+            {orphans.map((s) => (
+              <OrphanLine key={s.widget} space={s} reload={reload} />
+            ))}
+          </Surface>
         </div>
       ) : null}
     </section>

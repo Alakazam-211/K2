@@ -17,11 +17,13 @@
 // `zen-sync-v1` draws nothing.
 //
 // prd-garden-access-v1 G26: the Garden pane of the master-detail page (the
-// switch on) uses `variant="pane"`: the same two boxes and routes, with
-// Lock's caption shown beside it and sync named "Get K2's design updates".
+// switch on) uses `variant="pane"`: the same two settings and routes as
+// switch rows in the pane's card (label, one line under it, the switch on
+// the right), with sync named "Get K2's design updates".
 
 import React, { useEffect, useRef, useState } from 'react'
-import { Checkbox } from '@/components/ui'
+import { Checkbox, Toggle } from '@/components/ui'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL } from '../controls/SettingControls'
 import { useZenSettingsStore, zenTemplateLabel } from '@/lib/zen/zen-settings'
 import { useZenTemplatesStore } from '@/lib/zen/zen-templates'
 import { useToastStore } from '@/stores/toast'
@@ -175,6 +177,57 @@ export function ZenGardenSyncControls({
   const scratch = zenGardenFromScratch(garden.template)
   const synced = scratch ? false : zenSyncChecked(row)
   const templateLabel = garden.template ? zenTemplateLabel(garden.template) : null
+  const lock = (next: boolean): void =>
+    run(
+      async () => {
+        await setZenGardenLock(garden.id, next)
+        // Garden v3 (GV65): offer to pin the sources it shows.
+        if (next) void offerPinOnLock(garden.id, row.name).then(pinToast)
+      },
+      next ? `${row.name} is locked` : `${row.name} is unlocked`,
+      () => setZenGardenLock(garden.id, !next),
+    )
+  const sync = (next: boolean): void =>
+    run(
+      () => setZenGardenSyncBoth(garden.id, next),
+      next ? `${row.name} now keeps in sync` : `${row.name} no longer syncs`,
+      () => undoZenGardenSync(garden.id),
+    )
+
+  if (variant === 'pane') {
+    const follows = templateLabel ? `Follows the ${templateLabel} template.` : ''
+    const syncHint = scratch
+      ? 'Made from scratch, so there’s no template to follow.'
+      : synced === 'mixed'
+        ? `Part of it follows K2’s updates and part is your own copy. Turn this on to follow them for all of it. ${follows}`
+        : `${ZEN_SYNC_TIP} ${follows}`
+    return (
+      <>
+        {row.locked !== null && (
+          <div className="px-4 py-3 flex items-start justify-between gap-6" data-zen-garden-lock={garden.id}>
+            <div className="flex-1 min-w-0">
+              <div className={SETTING_ROW_LABEL}>{ZEN_LOCK_LABEL}</div>
+              <div className={SETTING_ROW_HINT}>{ZEN_LOCK_TIP}</div>
+            </div>
+            <Toggle checked={row.locked} disabled={busy} aria-label={ZEN_LOCK_LABEL} onChange={lock} />
+          </div>
+        )}
+        <div className="px-4 py-3 flex items-start justify-between gap-6" data-zen-garden-sync={garden.id}>
+          <div className="flex-1 min-w-0">
+            <div className={SETTING_ROW_LABEL}>{ZEN_DESIGN_UPDATES_LABEL}</div>
+            <div className={SETTING_ROW_HINT}>{syncHint.trim()}</div>
+            {error && (
+              <p role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1">
+                Couldn’t change it: {error.replace(/[.\s]+$/, '')}. Nothing changed; try again.
+              </p>
+            )}
+          </div>
+          <Toggle checked={synced === true} disabled={busy || scratch} aria-label={ZEN_DESIGN_UPDATES_LABEL} onChange={sync} />
+        </div>
+      </>
+    )
+  }
+
   const tag =
     synced !== false && templateLabel ? (
       <span
@@ -191,36 +244,19 @@ export function ZenGardenSyncControls({
           checked={row.locked}
           label={ZEN_LOCK_LABEL}
           tip={ZEN_LOCK_TIP}
-          caption={variant === 'pane' ? ZEN_LOCK_TIP : undefined}
           disabled={busy}
           dataAttr={{ 'data-zen-garden-lock': garden.id }}
-          onChange={(next) =>
-            run(
-              async () => {
-                await setZenGardenLock(garden.id, next)
-                // Garden v3 (GV65): offer to pin the sources it shows.
-                if (next) void offerPinOnLock(garden.id, row.name).then(pinToast)
-              },
-              next ? `${row.name} is locked` : `${row.name} is unlocked`,
-              () => setZenGardenLock(garden.id, !next),
-            )
-          }
+          onChange={lock}
         />
       )}
       <Check
         checked={synced}
-        label={variant === 'pane' ? ZEN_DESIGN_UPDATES_LABEL : ZEN_SYNC_LABEL}
+        label={ZEN_SYNC_LABEL}
         tip={scratch ? ZEN_SYNC_SCRATCH_TIP : ZEN_SYNC_TIP}
         disabled={busy || scratch}
         dataAttr={{ 'data-zen-garden-sync': garden.id }}
         tag={tag}
-        onChange={(next) =>
-          run(
-            () => setZenGardenSyncBoth(garden.id, next),
-            next ? `${row.name} now keeps in sync` : `${row.name} no longer syncs`,
-            () => undoZenGardenSync(garden.id),
-          )
-        }
+        onChange={sync}
       />
       {error && (
         <p role="alert" className="type-hint text-[var(--color-status-error)] mt-1">

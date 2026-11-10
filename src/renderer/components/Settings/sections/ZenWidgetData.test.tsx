@@ -183,6 +183,12 @@ function row(widget: string, extra: Partial<Row> = {}): Row {
   }
 }
 
+/** Open a data line's ⋯ menu and pick `item` (Export, Restore…, Delete…). */
+async function pick(widget: string, item: string): Promise<void> {
+  fireEvent.click(within(line(widget)).getByRole('button', { name: /^More actions for / }))
+  fireEvent.click(await screen.findByRole('menuitem', { name: new RegExp('^' + item.replace(/[.*+?^{}()|[\]\\]/g, '\\$&')) }))
+}
+
 function line(widget: string): HTMLElement {
   const el = document.querySelector<HTMLElement>(`[data-garden-data-line="${widget}"]`)
   if (!el) throw new Error(`no data line for ${widget}\n${document.body.innerHTML.slice(0, 2000)}`)
@@ -385,7 +391,7 @@ describe('ZenWidgetData', () => {
     h.spaces = [row('board')]
     await mount()
     await act(async () => {
-      fireEvent.click(within(line('board')).getByText('Export'))
+      await pick('board', 'Export$')
     })
     await waitFor(() => expect(h.downloads).toEqual([{ name: 'board-data.jsonl', text: '' }]))
   })
@@ -395,7 +401,7 @@ describe('ZenWidgetData', () => {
     h.spaces = [row('board')]
     await mount()
     await act(async () => {
-      fireEvent.click(within(line('board')).getByText('Delete'))
+      await pick('board', 'Delete…')
     })
     await waitFor(() => expect(screen.getByText("Delete board's data?")).toBeTruthy())
     await act(async () => {
@@ -403,7 +409,7 @@ describe('ZenWidgetData', () => {
     })
     expect(h.calls.some((c) => c[0] === 'delete')).toBe(false)
     await act(async () => {
-      fireEvent.click(within(line('board')).getByText('Delete'))
+      await pick('board', 'Delete…')
     })
     await act(async () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Delete data' }))
@@ -437,7 +443,8 @@ describe('ZenWidgetData', () => {
     vi.mocked(api.listGardenSpaces).mockRejectedValueOnce(new Error('store_unavailable'))
     render(<ZenWidgetData />)
     const err = await screen.findByTestId('garden-data-load-error')
-    expect(err.textContent).toBe('store_unavailable')
+    expect(err.textContent).toContain('K2 couldn’t read the widget data on this computer')
+    expect(err.textContent).toContain('The server said: store_unavailable.')
     await act(async () => {
       fireEvent.click(screen.getByText('Try again'))
     })
@@ -467,7 +474,7 @@ describe('0.46.6: files, export with images, restore (prd-garden-board-needs-v1 
       await mount()
       await waitFor(() => expect(line('board').querySelector('[data-garden-data-files]')?.textContent).toBe('Files: 1 KiB of 256.0 MiB'))
       await act(async () => {
-        fireEvent.click(within(line('board')).getByText('Export with images'))
+        await pick('board', 'Export with images')
       })
       await waitFor(() => expect(h.downloads.map((d) => d.name)).toEqual(['board-data.zip']))
     } finally {
@@ -490,7 +497,7 @@ describe('0.46.6: files, export with images, restore (prd-garden-board-needs-v1 
     h.restoreFamilies.board = ['board/', 'settings/']
     await mount()
     await act(async () => {
-      fireEvent.click(within(line('board')).getByText('Restore…'))
+      await pick('board', 'Restore…')
     })
     const panel = await waitFor(() => {
       const p = line('board').querySelector<HTMLElement>('[data-garden-data-restore]')

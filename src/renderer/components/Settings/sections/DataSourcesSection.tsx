@@ -8,6 +8,7 @@
 // [GV66], and re-reads on that server's `sources_changed` (never on a
 // timer of its own beyond the visible-page re-read below).
 
+import { SettingsLoadState } from '../controls/SettingControls'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
 import { primaryScope } from '@/kessel/server-scope'
@@ -97,6 +98,8 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
     void (async () => {
       try {
         const list = await listSources(scope)
+        // A reply without the list is a failed read, never a crash.
+        if (!list || !Array.isArray(list.sources)) throw new Error('Its answer wasn’t a list of data sources K2 can read.')
         setRows(list.sources)
         setRev(list.rev)
         setError(null)
@@ -140,18 +143,18 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
     <div className="max-w-4xl space-y-3" data-settings-id="data-sources.list" data-testid="sources-section">
       <div>
         {embedded ? (
-          <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">External Data</h3>
+          <h3 className="type-heading text-[var(--color-text-primary)] min-h-[1.5rem] flex items-center">External Data</h3>
         ) : (
           <h2 className="type-title text-[var(--color-text-primary)]">External Data</h2>
         )}
         <p className={`type-hint ${muted} mt-1 max-w-2xl`}>
           {embedded && only
             ? 'Checks this server runs that cards here read. They keep running when no window is open.'
-            : 'Checks this server runs for Garden cards and agents. They keep running when no window is open.'}
-        </p>
-        <p className={`type-hint ${muted}`} data-testid="sources-runs-on">
-          Runs on {scope.label}
-          {scope.isRemote ? ' · always on' : ''}
+            : 'Checks this server runs for Garden cards and agents. They keep running when no window is open.'}{' '}
+          <span data-testid="sources-runs-on">
+            They run on {scope.isRemote ? scope.label : scope.label.replace(/^This computer$/, 'this computer')}
+            {scope.isRemote ? ', which is always on.' : '.'}
+          </span>
         </p>
         {macHere && (
           <p className={`type-hint ${muted}`} data-testid="sources-mac-hint">
@@ -184,10 +187,9 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
         </p>
       )}
       {rows && rows.length === 0 && (
-        <p className={`type-hint ${muted}`}>
-          No sources yet. An agent can propose one: <code>k2 sources try</code> then <code>k2 sources propose</code> (see{' '}
-          <code>k2 study data-sources</code>).
-        </p>
+        <SettingsLoadState kind="empty" title="No sources yet" testId="sources-empty">
+          Ask an agent to add one. It waits here for you to approve it before it runs.
+        </SettingsLoadState>
       )}
 
       <div className="divide-y divide-[var(--color-border)]">
@@ -244,7 +246,7 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
         })}
       </div>
 
-      {status && (
+      {status && typeof status.sources === 'number' && !embedded && (
         <p className={`type-hint ${muted}`} data-testid="sources-poller">
           {pollerLine(status)}
         </p>

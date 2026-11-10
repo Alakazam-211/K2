@@ -390,7 +390,7 @@ async function mountPage(): Promise<void> {
 async function openGarden(id: string): Promise<HTMLElement> {
   fireEvent.click(q(`[data-gardens-side="garden"][data-gardens-side-id="${id}"]`))
   const pane = await waitFor(() => q(`[data-garden-pane="${id}"]`))
-  await waitFor(() => expect(pane.querySelector('[data-garden-editors] ul')).not.toBeNull())
+  await waitFor(() => expect(pane.querySelector('[data-garden-editors]')).not.toBeNull())
   return pane
 }
 
@@ -418,7 +418,7 @@ describe('no switch (Rosson 2026-10-23)', () => {
 })
 
 describe('the sidebar (G25)', () => {
-  it('Styles first, then each Garden (lock, editors, made by), + New Garden, Deleted Gardens (n), and last Not in a Garden', async () => {
+  it('Styles first, then each Garden (lock, editors, made by), Deleted Gardens (n), Not in a Garden, and New Garden in the footer', async () => {
     await mountPage()
     const side = q('[data-gardens-sidebar]')
     await waitFor(() => expect(side.querySelectorAll('[data-garden-side-row]').length).toBe(2))
@@ -426,7 +426,7 @@ describe('the sidebar (G25)', () => {
     const order = [...side.querySelectorAll('[data-gardens-side], [data-zen-settings-new-garden], [data-gardens-deleted-toggle]')].map(
       (el) => el.getAttribute('data-gardens-side') ?? (el.hasAttribute('data-zen-settings-new-garden') ? 'new' : 'deleted'),
     )
-    expect(order).toEqual(['styles', 'garden', 'garden', 'new', 'deleted', 'unplaced'])
+    expect(order).toEqual(['styles', 'garden', 'garden', 'deleted', 'unplaced', 'new'])
     expect(q('[data-gardens-side="unplaced"]').textContent).toBe('Not in a GardenData and sources no Garden uses')
     expect(q('[data-gardens-side="styles"]').getAttribute('aria-current')).toBe('page')
     const rows = [...side.querySelectorAll('[data-garden-side-row]')]
@@ -435,7 +435,8 @@ describe('the sidebar (G25)', () => {
     expect(rows[1].querySelector('[data-garden-side-locked]')).toBeNull()
     await waitFor(() => expect(q('[data-garden-side-detail]', rows[1]).textContent).toBe('2 editors · made by Billing'))
     expect(q('[data-garden-side-detail]', rows[0]).textContent).toBe('0 editors')
-    await waitFor(() => expect(q('[data-gardens-deleted-toggle]').textContent).toBe('▸ Deleted Gardens (1)'))
+    await waitFor(() => expect(q('[data-gardens-deleted-toggle]').textContent).toBe('Deleted Gardens (1)'))
+    expect(q('[data-gardens-deleted-toggle]').getAttribute('aria-expanded')).toBe('false')
   })
 
   it('Deleted Gardens hides when this daemon has no such route', async () => {
@@ -451,7 +452,7 @@ describe('the sidebar (G25)', () => {
     const pane = q('[data-gardens-pane="styles"]')
     expect(within(pane).queryByRole('switch')).toBeNull()
     await waitFor(() => expect(pane.querySelectorAll('[data-gardens-theme-list] li').length).toBe(2))
-    expect(q('[data-gardens-reset-zen]', pane).textContent).toBe('Reset')
+    expect(q('[data-gardens-reset-zen]', pane).textContent).toBe('Reset…')
     expect(q('[data-zen-gardens-path]', pane).textContent).toBe('/Users/r/.k2/zen')
     await waitFor(() => expect(q('[data-gardens-look-line="e-t"]', pane).textContent).toContain('You changed the theme to paper'))
     expect(gets('zen/garden/history')).toContainEqual({ garden: '*', limit: 20 })
@@ -597,17 +598,17 @@ describe('the Garden pane (G26)', () => {
     await waitFor(() => expect(q('[data-garden-pane-made]', pane).textContent).toMatch(/^Made by Billing · \d+ \w{3}$/))
     const editors = [...pane.querySelectorAll('[data-garden-editor]')]
     expect(editors.map((e) => e.getAttribute('data-garden-editor'))).toEqual(['p-ana', 'p-ops'])
-    expect(q('[data-garden-editor-added]', editors[0]).textContent).toMatch(/^added by you · /)
-    expect(q('[data-garden-editor-added]', editors[1]).textContent).toMatch(/^added automatically at upgrade · /)
-    expect(q('[data-garden-sees]', pane).textContent).toBe('SeesEverything you can see')
+    expect(q('[data-garden-editor-added]', editors[0]).textContent).toMatch(/^Added by you · /)
+    expect(q('[data-garden-editor-added]', editors[1]).textContent).toMatch(/^Added automatically at upgrade · /)
+    expect(within(pane).getByTestId('garden-sees').textContent).toBe('What it can seeEverything you can see. Its widgets read what you can read on this computer.')
     await waitFor(() => expect(pane.querySelector('[data-zen-garden-lock="g-2"]')).not.toBeNull())
     expect(q('[data-zen-garden-lock="g-2"]', pane).textContent).toBe('Lock gardenAgents can’t change this Garden. You still can, and K2’s updates to its libraries still apply.')
     expect(q('[data-zen-garden-sync="g-2"]', pane).textContent).toContain('Get K2’s design updates')
     await waitFor(() => expect(pane.querySelectorAll('[data-garden-widget]').length).toBe(2))
     const widgets = [...pane.querySelectorAll('[data-garden-widget]')]
     expect(widgets.map((w) => w.getAttribute('data-garden-widget'))).toEqual(['fleet-rollouts', 'fleet-edge'])
-    expect(q('[data-garden-widget-signer]', widgets[0]).textContent).toMatch(/^last signed by Ana · /)
-    expect(q('[data-garden-widget-signer]', widgets[1]).textContent).toMatch(/^last changed /)
+    expect(q('[data-garden-widget-signer]', widgets[0]).textContent).toMatch(/^Last signed by Ana · /)
+    expect(q('[data-garden-widget-signer]', widgets[1]).textContent).toMatch(/^Last changed /)
     // "Not signed" and Sign live only in the modals (G26a).
     expect(document.body.textContent).not.toContain('not signed')
     expect(document.body.textContent).not.toContain(GARDEN_NOT_SIGNED_TEXT)
@@ -660,7 +661,7 @@ describe('the Garden pane (G26)', () => {
     await mountPage()
     const pane = await openGarden('g-1')
     expect(q('[data-garden-editors-empty]', pane).textContent).toBe(
-      'No agents yet. An agent that asks gets a card on its Thread with you.',
+      'No agents yetAn agent that asks gets a card on its Thread with you.',
     )
   })
 })
@@ -750,7 +751,7 @@ describe('Widget data (G28)', () => {
     expect(line.textContent).not.toContain('use this data')
     await act(async () => fireEvent.click(within(line).getByRole('button', { name: 'Advanced' })))
     const adv = await waitFor(() => q('[data-garden-data-advanced="fleet-edge"]'))
-    expect(adv.textContent).toContain('Advanced · data grants')
+    expect(adv.textContent).toContain('Advanced: data grants')
     expect(adv.querySelector('[data-garden-data-grants="fleet-edge"]')).not.toBeNull()
   })
 
@@ -949,7 +950,8 @@ describe('a Garden’s Local Data and External Data (Rosson 2026-10-23)', () => 
     const ops = await openGarden('g-2')
     const local = await waitFor(() => q('[data-garden-local-data="g-2"]', ops))
     const line = await waitFor(() => q('[data-garden-data-line="rollouts"]', local))
-    await act(async () => fireEvent.click(within(line).getByRole('button', { name: 'Delete' })))
+    fireEvent.click(within(line).getByRole('button', { name: /^More actions for / }))
+    await act(async () => fireEvent.click(await screen.findByRole('menuitem', { name: /^Delete…/ })))
     expect(posts('zen/data/space/delete')).toEqual([{ widget: 'rollouts', confirm: 'rollouts' }])
     const ext = q('[data-garden-external-data="g-2"]', ops)
     const row = await waitFor(() => q('[data-source="deploys"]', ext))

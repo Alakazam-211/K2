@@ -28,7 +28,8 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import type { SettingEntry } from '../searchManifest'
-import { SettingDropdown } from '../controls/SettingControls'
+import { SettingDropdown, SettingsLoadState, SETTING_ROW_HINT } from '../controls/SettingControls'
+import { Button, Callout } from '@/components/ui'
 import { ZenGardenSyncControls } from './ZenGardenSyncControls'
 import { watchLocalZenChanged } from '@/lib/zen/zen-api'
 import {
@@ -579,6 +580,18 @@ function Advanced({
   )
 }
 
+/** Plain words for a failed read of the Gardens list (the reason, if any,
+ *  goes after it quietly; a parser's own words never show). */
+export function zenGardensLoadWords(failure: { kind: string; message: string }): { line: string; detail: string | null } {
+  if (failure.kind === 'unreadable') {
+    return {
+      line: 'Its answer wasn’t a Gardens list K2 can read. Your Gardens are safe on this computer. Try again, or update K2.',
+      detail: null,
+    }
+  }
+  return { line: 'Your Gardens are safe on this computer. Try again in a moment.', detail: zenSettingsErrorText(new Error(failure.message)) }
+}
+
 export function ZenGardensSection(): React.JSX.Element {
   const st = useZenSettingsStore()
   const [busy, setBusy] = useState(false)
@@ -598,57 +611,80 @@ export function ZenGardensSection(): React.JSX.Element {
   // G27: the master-detail page (always, on a 0.46.3+ daemon).
   if (accessOn === true && hasData && st.setUp) return <ZenGardensAccessPage />
 
-  return (
-    // Settings → LLMs' layout (AgentsSection): left = the title, New Garden,
-    // search and the list; right = Advanced, always shown, behind the
-    // full-height divider in the middle.
-    <div className={COLUMNS} data-zen-gardens-section="" data-zen-gardens-columns="">
-        <div className={LIST_COLUMN} data-zen-gardens-list-column="">
-          <h2 className="type-title text-[var(--color-text-primary)] mb-1">Gardens</h2>
-          <p className="type-hint text-[var(--color-text-muted)] mb-6">Your Zen pages on this computer.</p>
-          {st.failure ? (
-            <div className="mb-4">
-              <InlineError text={zenSettingsErrorText(new Error(st.failure.message))} testId="zen-gardens-load-error" />
-              <button type="button" onClick={() => void loadZenSettings()} className={`${BTN} mt-2`}>
-                Try again
-              </button>
-            </div>
-          ) : null}
-
-          {!hasData ? (
-            st.failure ? null : <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
-          ) : !st.setUp ? (
-            <div data-zen-gardens-setup="">
-              <p className="type-row text-[var(--color-text-secondary)] mb-3">Gardens aren’t set up on this computer yet.</p>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void attempt(setupZenGardens, setBusy, setError)}
-                className={BTN}
+  // Loading, a failed read, and Gardens not set up yet: the Settings page
+  // layout (a title and one line, then the shared load card).
+  if (!hasData || !st.setUp) {
+    const words = st.failure ? zenGardensLoadWords(st.failure) : null
+    return (
+      <div className="h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]" data-zen-gardens-section="">
+        <div className="w-full max-w-[52rem] space-y-6 pb-6">
+          <header className="min-w-0">
+            <h2 className="type-title text-[var(--color-text-primary)]">Gardens</h2>
+            <p className={SETTING_ROW_HINT}>Your Zen pages on this computer: the look they share, and who can change each one.</p>
+          </header>
+          {!hasData && st.failure && words ? (
+            <SettingsLoadState
+              kind="error"
+              title="K2 couldn’t read your Gardens from this computer"
+              detail={words.detail}
+              testId="zen-gardens-load-error"
+              action={
+                <Button variant="quiet" onClick={() => void loadZenSettings()}>
+                  Try again
+                </Button>
+              }
+            >
+              {words.line}
+            </SettingsLoadState>
+          ) : !hasData ? (
+            <SettingsLoadState kind="loading" title="Loading your Gardens…" testId="zen-gardens-loading" />
+          ) : (
+            <div data-zen-gardens-setup="" className="space-y-2">
+              <SettingsLoadState
+                kind="empty"
+                title="Gardens aren’t set up on this computer yet"
+                action={
+                  <Button variant="accent" disabled={busy} onClick={() => void attempt(setupZenGardens, setBusy, setError)}>
+                    {busy ? 'Setting up…' : 'Set up Gardens'}
+                  </Button>
+                }
               >
-                Set up Gardens
-              </button>
-              <InlineError text={error} testId="zen-gardens-setup-error" />
+                Gardens are pages you and your agents build in Zen. Set them up to make your first one.
+              </SettingsLoadState>
+              {error ? (
+                <Callout tone="error" role="alert" data-testid="zen-gardens-setup-error">
+                  <p className="type-hint">K2 couldn’t set up Gardens. {error}</p>
+                </Callout>
+              ) : null}
               {/* 0.46.3: External Data has no page of its own on a client
                   with Gardens; before Gardens are set up it lives here. */}
               {accessOn === true ? (
-                <div className="mt-8" data-zen-gardens-setup-sources="">
+                <div className="pt-6" data-zen-gardens-setup-sources="">
                   <DataSourcesSection embedded />
                 </div>
               ) : null}
             </div>
-          ) : (
-            <section data-settings-id="zen-gardens.list">
-              <NewGarden gardens={st.gardens} />
-              <GardenSearch value={query} onChange={setQuery} />
-              <GardenList gardens={st.gardens} query={query} />
-            </section>
           )}
         </div>
+      </div>
+    )
+  }
 
-        {hasData && (st.setUp || st.path) ? (
-          <Advanced setUp={st.setUp} path={st.path} themes={st.themes} globalTheme={st.globalTheme} />
-        ) : null}
+  return (
+    // The retired list page (a daemon that doesn't answer `gardenAccess:
+    // true`; tests only, goes in 0.47.0). Left: the title, New Garden,
+    // search and the list; right: Advanced behind the divider.
+    <div className={COLUMNS} data-zen-gardens-section="" data-zen-gardens-columns="">
+      <div className={LIST_COLUMN} data-zen-gardens-list-column="">
+        <h2 className="type-title text-[var(--color-text-primary)] mb-1">Gardens</h2>
+        <p className={`${SETTING_ROW_HINT} mb-6`}>Your Zen pages on this computer.</p>
+        <section data-settings-id="zen-gardens.list">
+          <NewGarden gardens={st.gardens} className="mb-3" />
+          <GardenSearch value={query} onChange={setQuery} />
+          <GardenList gardens={st.gardens} query={query} />
+        </section>
+      </div>
+      <Advanced setUp={st.setUp} path={st.path} themes={st.themes} globalTheme={st.globalTheme} />
     </div>
   )
 }

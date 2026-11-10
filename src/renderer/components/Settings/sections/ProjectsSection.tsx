@@ -654,6 +654,7 @@ export function ProjectsSection(): React.JSX.Element {
         data-selected={isSelected ? '' : undefined}
         role="button"
         tabIndex={0}
+        data-k2-focus=""
         aria-label={twoColumn ? `Show settings for ${p.name}` : `Open ${p.name}`}
         aria-current={isSelected ? 'true' : undefined}
         onClick={() => selectProject(p.id)}
@@ -670,7 +671,7 @@ export function ProjectsSection(): React.JSX.Element {
         }}
         onContextMenu={(e) => handleProjectContextMenu(e, p)}
         onMouseDown={(e) => { if (e.button === 0) handleReorderMouseDown(e, p.id, zone, containerSelector) }}
-        className={`relative flex items-center gap-3 ${twoColumn ? 'px-3 py-2' : 'px-4 py-2.5'} transition-colors no-drag cursor-pointer group select-none outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)] active:cursor-grabbing ${
+        className={`relative flex items-center gap-3 ${twoColumn ? 'px-3 py-2' : 'px-4 py-2.5'} transition-colors no-drag cursor-pointer group select-none outline-none active:cursor-grabbing ${
           isSelected
             ? 'bg-[var(--color-accent)]/15'
             : isKeyboardHighlighted ? 'bg-[var(--color-wash-1)]' : 'hover:bg-[var(--color-wash-1)]'
@@ -710,7 +711,8 @@ export function ProjectsSection(): React.JSX.Element {
             void togglePinned(p)
           }}
           onMouseDown={(e) => e.stopPropagation()}
-          className={`w-6 h-6 flex-shrink-0 flex items-center justify-center transition-colors no-drag cursor-pointer outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-[var(--color-accent)] ${
+          data-k2-focus=""
+          className={`relative w-6 h-6 flex-shrink-0 flex items-center justify-center transition-colors no-drag cursor-pointer outline-none ${
             p.pinned
               ? 'text-[var(--color-accent)]'
               : 'text-transparent group-hover:text-[var(--color-text-secondary)] group-focus-within:text-[var(--color-text-secondary)] focus-visible:text-[var(--color-text-secondary)] hover:!text-[var(--color-accent)]'
@@ -991,7 +993,7 @@ export function ProjectsSection(): React.JSX.Element {
               aria-current={showWorkspaceSettings ? 'true' : undefined}
               onClick={() => setShowWorkspaceSettings(true)}
               data-k2-chamfer="control"
-              className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-selector)] text-left type-control no-drag cursor-pointer transition-colors outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)] ${
+              className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-selector)] text-left type-control no-drag cursor-pointer transition-colors k2-focus ${
                 showWorkspaceSettings
                   ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
                   : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-1)]'
@@ -1626,7 +1628,8 @@ function ProjectDetail({
                 type="button"
                 aria-selected={active}
                 onClick={() => selectSettingsTab(id)}
-                className={`px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)] ${
+                data-k2-focus=""
+                className={`relative px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px outline-none ${
                   active
                     ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
                     : 'border-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'

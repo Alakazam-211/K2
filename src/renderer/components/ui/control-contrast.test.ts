@@ -160,6 +160,19 @@ describe('Keyboard focus', () => {
     )
   })
 
+  it('rows and tabs that opt in with data-k2-focus ring inside, in the theme\'s shape', () => {
+    const sel = '[data-k2-focus]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)::after'
+    const round = rule(globals, sel)
+    expect(round).toContain('box-shadow: inset 0 0 0 2px var(--color-accent-text)')
+    expect(round).toContain('border-radius: var(--radius-selector)')
+    expect(round).toContain('inset: 0')
+    const cut = rule(globals, `html[data-style="terminal"] ${sel}`)
+    expect(cut).toContain('--k2-ch-cut: var(--chamfer-control)')
+    expect(cut).toContain('border-radius: 0')
+    expect(cut).toContain('background: var(--color-accent-text)')
+    expect(cut).toMatch(/clip-path: polygon\(evenodd, /)
+  })
+
   it.each(LOOKS)('the readable accent clears 3:1 as a ring on a card and a raised control (%s %s)', (style, id) => {
     const p = palette(style, id)
     // Veil darkens it in overrides.css (80% accent, 20% black); elsewhere it is the accent.

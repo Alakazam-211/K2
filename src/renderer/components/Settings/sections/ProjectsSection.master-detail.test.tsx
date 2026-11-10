@@ -122,6 +122,22 @@ describe('side by side', () => {
     expect(shownName()).toBe('beacon')
   })
 
+  it('rows, their pin buttons and the tabs draw keyboard focus in the theme\'s shape', () => {
+    render(<ProjectsSection />)
+    for (const id of ['a', 'b', 'c', 'd']) {
+      expect(row(id).hasAttribute('data-k2-focus')).toBe(true)
+      expect(row(id).className).toContain('relative')
+      expect(row(id).className).not.toContain('focus-visible:outline')
+      const pin = within(row(id)).getByRole('button', { pressed: id === 'c' })
+      expect(pin.hasAttribute('data-k2-focus')).toBe(true)
+    }
+    for (const tab of screen.getAllByRole('tab')) {
+      expect(tab.hasAttribute('data-k2-focus')).toBe(true)
+      expect(tab.className).toContain('relative')
+      expect(tab.className).not.toContain('focus-visible:outline')
+    }
+  })
+
   it('keeps the tab while moving between workspaces', () => {
     render(<ProjectsSection />)
     fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))

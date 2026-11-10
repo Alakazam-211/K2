@@ -1272,7 +1272,7 @@ pub fn compose_agent_wake_context(
                     name, their_role, their_profile.to_string_lossy()
                 ));
             }
-            md.push_str("\nYou can create new agents (`k2so agents create <name> --role \"...\"`) or update existing ones (`k2so agent update --name <name> --field role --value \"...\"`).\n\n");
+            md.push_str("\nYou can create new agents (`k2 skills create <name> --role \"...\"`) or update existing ones (`k2 agent update --name <name> --field role --value \"...\"`).\n\n");
         } else {
             md.push_str("## Other Agents\n");
             md.push_str("You can delegate work to these agents:\n\n");
@@ -2469,6 +2469,38 @@ mod tests {
             !wake.is_empty(),
             "wake prompt must still include injected skill content"
         );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    /// A manager's wake context lists its team and says how to add to it.
+    /// That line must name verbs the CLI still runs.
+    #[test]
+    fn manager_wake_context_team_line_names_current_verbs() {
+        let proj = std::env::temp_dir().join(format!(
+            "k2so-wake-team-{}-{}",
+            std::process::id(),
+            Uuid::new_v4(),
+        ));
+        fs::create_dir_all(&proj).unwrap();
+        let path = proj.to_str().unwrap();
+        let primary = workspace_agent_path(path);
+        fs::create_dir_all(&primary).unwrap();
+        fs::write(
+            primary.join("AGENT.md"),
+            "---\nname: k2\ntype: manager\n---\n\nYou are the workspace manager.\n",
+        )
+        .unwrap();
+        let backend = agents_dir(path).join("backend");
+        fs::create_dir_all(&backend).unwrap();
+        fs::write(backend.join("AGENT.md"), "---\nname: backend\nrole: Backend engineer\n---\n").unwrap();
+
+        let wake = compose_agent_wake_context(path, "k2", None).expect("compose should succeed");
+        assert!(wake.contains("## Your Team"), "a manager's wake context lists its team:\n{wake}");
+        assert!(
+            wake.contains("`k2 skills create <name> --role"),
+            "the team line must name `k2 skills create`:\n{wake}"
+        );
+        assert_no_deprecated_verbs(&wake, "compose_agent_wake_context");
         fs::remove_dir_all(&proj).ok();
     }
 

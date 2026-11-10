@@ -362,6 +362,30 @@ mod tests {
         std::fs::remove_file(&tmp).ok();
     }
 
+    /// The default manager and agent-template bodies are written once
+    /// into a new agent's AGENT.md and then belong to the user, so they
+    /// must name only verbs the CLI still runs.
+    #[test]
+    fn default_agent_bodies_name_current_verbs_only() {
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        let manager = generate_default_agent_body("manager", "manager", "Lead", path);
+        let template = generate_default_agent_body("agent-template", "backend", "Backend", path);
+        for (which, body) in [("manager", &manager), ("agent-template", &template)] {
+            for old in ["agent create", "delegate <agent>", "work create", "work move"] {
+                assert!(!body.contains(old), "{which} body still names retired `{old}`:\n{body}");
+            }
+        }
+        for new in ["`k2 skills create <name>", "`k2 skills profile <agent>`", "`k2 inbox compose --title"] {
+            assert!(manager.contains(new), "manager body must name {new}:\n{manager}");
+        }
+        assert!(
+            template.contains("`k2 agent complete --agent backend --file <task>.md`"),
+            "agent-template body must name `k2 agent complete`:\n{template}"
+        );
+        std::fs::remove_dir_all(&proj).ok();
+    }
+
     fn scratch_project() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "k2so-writer-gate-{}-{}",
@@ -600,10 +624,10 @@ External (scan these proactively when woken — customize for your project):
 
 ## Tools Available
 
-- `k2so agent create --name "new-agent" --role "Specialization description"` — create a new agent template
+- `k2 skills create <name> --role "Specialization description"` — create a new agent template
 - `k2so agent update --name "agent-name" --field role --value "Updated role"` — update a member's profile
-- `k2so delegate <agent> <work-file>` — assign work (creates worktree + launches agent)
-- `k2so work create --agent <name> --title "..." --body "..."` — create a task for an agent
+- Delegate with your harness's sub-agent or worktree feature (K2 no longer spawns agents); hand it the agent's profile from `k2 skills profile <agent>`
+- `k2 inbox compose --title "..." --body "..."` — add a task to the workspace inbox
 - `k2so reviews` — see completed work ready for review
 - `k2so review approve <agent> <branch>` — merge completed work
 - `k2so terminal spawn --title "..." --command "..."` — run parallel tasks
@@ -624,7 +648,7 @@ External (scan these proactively when woken — customize for your project):
 
 - An agent is a role template, not a person — the same agent can run in multiple worktrees simultaneously
 - You orchestrate and review — you do NOT implement code yourself
-- When you need a new skill, create a new agent with `k2so agent create`
+- When you need a new skill, create it with `k2 skills create <name>`
 - Read agent templates' agent.md files to understand their strengths before delegating
 "#,
                 project_name = project_name,
@@ -651,7 +675,7 @@ r#"## Specialization
 2. Read the task file for full requirements and acceptance criteria
 3. Implement the changes — all work happens in your worktree
 4. Commit to your branch as you go
-5. When done: `k2so work move --agent {name} --file <task>.md --from active --to done`
+5. When done: `k2 agent complete --agent {name} --file <task>.md`
 6. Your work appears in the review queue for the Workspace Manager to approve or reject
 
 ## Standing Orders

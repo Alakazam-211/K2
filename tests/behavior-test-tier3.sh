@@ -1238,7 +1238,7 @@ SECTIONS=(
     "AgentSkillsSection:AGENT_SKILLS_MANIFEST"
     "TerminalSection:TERMINAL_MANIFEST"
     "CodeEditorSettingsSection:CODE_EDITOR_MANIFEST"
-    "EditorsAgentsSection:EDITORS_AGENTS_MANIFEST"
+    "EditorsSection:EDITORS_MANIFEST"
     "KeybindingsSection:KEYBINDINGS_MANIFEST"
     "TimerSection:TIMER_MANIFEST"
     "CompanionSection:COMPANION_MANIFEST"

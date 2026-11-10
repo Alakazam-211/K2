@@ -1305,8 +1305,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   //
   // MUST-STAY-EAGER — for these, spawning while hidden is the point:
   //   - `command`         — a real program must start running
-  //                         unwatched (BackgroundTerminalSpawner's
-  //                         heartbeat spawns, AgentPane/AgentChatPane
+  //                         unwatched (AgentPane/AgentChatPane
   //                         fallback claude launches, AIFileEditor);
   //   - `sessionId`       — the client KNOWS real work backs this tab
   //                         (creation- or reconcile-stamped): keep it

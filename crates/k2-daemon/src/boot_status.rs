@@ -1268,6 +1268,11 @@ pub fn features() -> Vec<&'static str> {
     // Remote desktop (prd-remote-desktop-tab-v1 §5): whenever the routes
     // exist, so clients show + → Desktop (Beta) and the off card.
     out.push(crate::desktop::FEATURE);
+    // Sew 0.9.0: App roles take `voice:record` (the pin's const, on since
+    // K2 0.46.11). Before the switch-gated keys, so they stay at the tail.
+    if k2_core::recording::in_apps() {
+        out.push(FEATURE_VOICE_RECORD);
+    }
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1, §10):
     // listed only while the global switch is on (setting or env; the
     // setting defaults on from 0.46.11, `permission_default`). Its flip
@@ -1286,10 +1291,6 @@ pub fn features() -> Vec<&'static str> {
     // Voice rooms (preview): only while this daemon hosts rooms.
     if crate::voice::occupancy::hosts_rooms() {
         out.push(FEATURE_VOICE_ROOMS);
-    }
-    // Sew 0.9.0: App roles take `voice:record` (the pin's const).
-    if k2_core::recording::in_apps() {
-        out.push(FEATURE_VOICE_RECORD);
     }
     // Last on purpose: boot_status_views_integration pins it as the tail.
     out.push(FEATURE_BOOT_STATUS_VIEWS);
@@ -1449,6 +1450,8 @@ mod tests {
                 "product-feedback-v1",
                 "post-idempotency-v1",
                 "remote-desktop-v1",
+                // Sew 0.9.0's pin: voice:record in App roles.
+                "app-voice-record-v1",
                 "boot-status-views-v1"
             ]
         );

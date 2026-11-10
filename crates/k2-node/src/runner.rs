@@ -333,6 +333,11 @@ impl JobDirs {
         Ok(())
     }
 
+    /// A secret job's dirs (protocol 9, a per-job uid): as [`Self::create_for`].
+    pub fn create_secret(&self, shared: bool) -> Result<(), String> {
+        self.create_for(shared)
+    }
+
     /// A job without code keeps its caches here (deleted with the job).
     pub fn private_cache(&self) -> PathBuf {
         self.root.join("cache")

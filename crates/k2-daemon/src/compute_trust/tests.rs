@@ -993,3 +993,152 @@ fn lane_secrets_end_to_end_between_two_servers() {
     drop(client_guard);
     drop(owner_guard);
 }
+
+// ── 11-07 trust + secrets review ─────────────────────────────────────
+
+/// A person's vault confirm through the real route, with the Mac sheet
+/// faked: what the sheet would say comes back with the answer.
+fn sheet(action: &str, secret_id: &str, label: &str) -> (u16, Value, String) {
+    use crate::vault::actor::{Channel, VaultCaller};
+    static SAID: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    SAID.lock().unwrap().clear();
+    crate::vault_routes::test_hooks::set_local_auth_fake(Some(|reason| {
+        *SAID.lock().unwrap() = reason.to_string();
+        Ok(())
+    }));
+    let owner = VaultCaller { actor: k2_vault::Actor::Owner, channel: Channel::Plain, session_id: None };
+    let body = json!({"action": action, "secretId": secret_id, "method": "local-auth", "label": label}).to_string();
+    let r = crate::vault_routes::handle_on(&vault(), crate::vault_routes::CONFIRM_FINISH, Ok(owner), body.as_bytes(), &HashMap::new(), "test", None);
+    crate::vault_routes::test_hooks::set_local_auth_fake(None);
+    let said = SAID.lock().unwrap().clone();
+    (r.status[..3].parse().unwrap(), serde_json::from_str(&r.body).unwrap(), said)
+}
+
+/// H1 (11-07 review): the Touch ID sheet for a trust approval, a secrets
+/// consent or a signer pairing says what the daemon stored, never words
+/// the caller chose (anything holding the owner token could otherwise show
+/// "reveal README" and get a token that approves a roster change). A
+/// confirm for nothing that waits is never minted.
+#[test]
+fn the_confirm_sheet_says_what_the_daemon_stored() {
+    let _ci = ci_on();
+    let _db = k2_core::db::scoped_for_test();
+    test_seams::set_owner_id(Some(OWNER));
+    owned_node("n1", Taint::Clean, P9);
+    let id = roster_set("n1", json!({}));
+    let summary = {
+        let h = k2_core::db::shared();
+        let c = h.lock();
+        trust::request_by_id(&c, &id).unwrap().summary
+    };
+    // The caller's label is ignored; the sheet says the stored request.
+    let (code, r, said) = sheet(trust::CONFIRM_TRUST, &id, "reveal README");
+    assert_eq!(code, 200, "{r}");
+    assert!(!said.contains("README"), "the caller's words never reach the sheet: {said}");
+    let head: String = summary.chars().take(40).collect();
+    assert!(said.contains(&head), "the sheet says the stored request: {said} / {summary}");
+    // No such request, or one already decided: no token at all.
+    let (code, r, _) = sheet(trust::CONFIRM_TRUST, "ctr_not_a_request", "approve");
+    assert_eq!(code, 400, "{r}");
+    approve(&id);
+    let (code, r, _) = sheet(trust::CONFIRM_TRUST, &id, "approve");
+    assert_eq!(code, 400, "a decided request gets no confirm: {r}");
+    // The secrets consent: the sheet names the pinned owner and its root.
+    let o = wire::ApprovalSigner::from_seed(&[9u8; 32]).unwrap();
+    {
+        let h = k2_core::db::shared();
+        trust::pin_owner(&h.lock(), &o.public(), "nodes.k2.dev", &"a".repeat(64), "owner", "local-auth", false, 1).unwrap();
+    }
+    let (code, r, said) = sheet(trust::CONFIRM_TRUST, &format!("consent:{}", o.public().fingerprint()), "turn on the lights");
+    assert_eq!(code, 200, "{r}");
+    assert!(said.contains("nodes.k2.dev") && said.contains("root") && !said.contains("lights"), "{said}");
+    let (code, _, _) = sheet(trust::CONFIRM_TRUST, &format!("consent:{}", "f".repeat(64)), "x");
+    assert_eq!(code, 400, "no pinned owner, no consent confirm");
+    // Signer pairing: the sheet says what pairs, never the label.
+    let (code, r, said) = sheet(trust::CONFIRM_SIGNER, "add:0123456789abcdef", "show a photo");
+    assert_eq!(code, 200, "{r}");
+    assert!(said.contains("0123456789abcdef") && said.contains("signer") && !said.contains("photo"), "{said}");
+    let (code, _, _) = sheet(trust::CONFIRM_SIGNER, "csp_not_a_pairing", "x");
+    assert_eq!(code, 400, "no such pairing, no confirm");
+    let (code, _, _) = sheet(trust::CONFIRM_SIGNER, "add:not-hex", "x");
+    assert_eq!(code, 400);
+}
+
+/// The proof a node sends to move from `old` to `new` (epoch `epoch`).
+fn rotation_proof(old: &SigningKey, new: &SigningKey, epoch: u32) -> KeyRotation {
+    let rot = RotationStatement {
+        v: 1,
+        old_fp: old.fingerprint(),
+        new_fp: new.fingerprint(),
+        new_spki: b64(new.spki_der()),
+        new_epoch: epoch,
+        at: 1_700_000_300,
+        reason: ci::RotationReason::Wall,
+    };
+    let st = NodeStatement { key_born_at: 1_700_000_300, issued_at: 1_700_000_301, ..statement(new, Taint::Clean, epoch, Some(old.fingerprint())) };
+    KeyRotation { rotation: rot.sign(old).unwrap(), statement: st.sign(new).unwrap() }
+}
+
+fn pinned_fp(node_id: &str) -> String {
+    store::node_by_id(&k2_core::db::shared().lock(), node_id).unwrap().fingerprint
+}
+
+fn open_rotations() -> Vec<Value> {
+    get(TRUST_REQUESTS, &Who::Owner)["requests"].as_array().unwrap().iter().filter(|r| r["body"]["op"] == "rotate").cloned().collect()
+}
+
+/// H2 (11-07 review): a node re-key moves the pinned key only after a
+/// person approves it (until then the node with the new key isn't let in);
+/// a key that isn't active in the roster can't hand over to a new one; and
+/// revoking a key as compromised revokes every key it handed over to (a
+/// thief who re-keyed first doesn't survive the revoke).
+#[test]
+fn a_rekey_waits_for_a_person_and_a_compromise_follows_the_chain() {
+    let _ci = ci_on();
+    let _db = k2_core::db::scoped_for_test();
+    test_seams::set_owner_id(Some(OWNER));
+    let (n1, old) = owned_node("n1", Taint::Clean, P9);
+    approve(&roster_set("n1", json!({})));
+    let new = SigningKey::generate().unwrap();
+    let proof = rotation_proof(&old, &new, 1);
+
+    // Held: the pin stays on the old key; one request, however often the
+    // node knocks.
+    let e = on_rotation(&proof).unwrap_err();
+    assert_eq!(e.0, "rekey_pending", "{e:?}");
+    assert_eq!(pinned_fp(&n1.id), old.fingerprint(), "no person yet: the pin stays");
+    assert!(on_rotation(&proof).is_err());
+    let held = open_rotations();
+    assert_eq!(held.len(), 1, "{held:?}");
+    let id = held[0]["id"].as_str().unwrap().to_string();
+    // A person approves: now the row moves, and the roster follows.
+    approve(&id);
+    assert_eq!(pinned_fp(&n1.id), new.fingerprint());
+    {
+        let h = k2_core::db::shared();
+        let r = trust::latest_own_roster(&h.lock()).unwrap();
+        assert_eq!(r.roster.entry(&old.fingerprint()).unwrap().status, KeyStatus::Retired);
+        assert_eq!(r.roster.entry(&new.fingerprint()).unwrap().status, KeyStatus::Active);
+    }
+
+    // A retired key can't re-key (nothing is filed, nothing moves).
+    let (n2, k2) = owned_node("n2", Taint::Clean, P9);
+    approve(&roster_set("n2", json!({})));
+    let r = call(ROSTER_PROPOSE, &Who::Owner, json!({"op": "retire", "node": "n2"})).unwrap();
+    approve(r["request"]["id"].as_str().unwrap());
+    let e = on_rotation(&rotation_proof(&k2, &SigningKey::generate().unwrap(), 1)).unwrap_err();
+    assert_eq!(e.0, tcodes::ROTATION_REFUSED, "{e:?}");
+    assert_eq!(pinned_fp(&n2.id), k2.fingerprint());
+    assert_eq!(open_rotations().len(), 0);
+
+    // n1's OLD key turns out stolen: revoking it revokes the key it handed
+    // over to as well.
+    let r = call(ROSTER_PROPOSE, &Who::Owner, json!({"op": "revoke", "node": old.fingerprint(), "reason": "compromised"})).unwrap();
+    approve(r["request"]["id"].as_str().unwrap());
+    let h = k2_core::db::shared();
+    let latest = trust::latest_own_roster(&h.lock()).unwrap();
+    assert_eq!(latest.roster.entry(&old.fingerprint()).unwrap().status, KeyStatus::Revoked);
+    let next = latest.roster.entry(&new.fingerprint()).unwrap();
+    assert_eq!((next.status, next.revoked_reason), (KeyStatus::Revoked, Some(ci::RevokeReason::Compromised)), "the chain follows the revoke");
+    assert!(trust::receipt_void(&h.lock(), &new.fingerprint(), Some(1)).is_some());
+}

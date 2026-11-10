@@ -276,6 +276,20 @@ fn refuse(c: &str, m: impl Into<String>) -> AdminRefusal {
     AdminRefusal::new(c, m)
 }
 
+/// Hand a secret job's tree to its per-job uid (`uid:gid`, never through a
+/// link) and close it to everyone but that uid and the node user
+/// (`node_user`, a name or a numeric uid), who writes, reads and finally
+/// deletes it. `setfacl` is the acl package's.
+pub fn close_job_tree(setfacl: &Path, root: &Path, uid: u32, gid: u32, node_user: &str) -> Result<(), AdminRefusal> {
+    crate::wall::reclaim(root, uid, gid).map_err(|e| refuse(code::FAILED, e))?;
+    // The default ACL too: the root inherited `d:g:k2t-<slot>:rwx` from
+    // the slot's `jobs/`, which would hand the slot's group every file
+    // the job makes at its top (root e2e, 2026-11-07).
+    let n = node_user;
+    let acl = format!("u::rwx,g::---,o::---,u:{n}:rwx,m::rwx,d:u::rwx,d:g::---,d:o::---,d:u:{n}:rwx,d:m::rwx");
+    super::exec::run_fixed(&setfacl.display().to_string(), &["-P", "--set", &acl, &root.display().to_string()]).map_err(|e| refuse(code::FAILED, e))
+}
+
 /// Refusal code: no per-job uid can be given now (every pool user busy or
 /// not proven empty, or the pool can't be set up). The job fails; it never
 /// runs as a shared uid instead.
@@ -409,14 +423,8 @@ impl Executor {
     /// writes, reads and finally deletes it), so no other job of the slot,
     /// which shares the group, can enter it.
     pub(crate) fn job_uid_take_tree(&self, root: &Path, uid: u32, gid: u32) -> Result<(), AdminRefusal> {
-        crate::wall::reclaim(root, uid, gid).map_err(|e| refuse(code::FAILED, e))?;
         let setfacl = jobs::find_program_in_sbin("setfacl").ok_or_else(|| refuse(code::NOT_CONFIGURED, "setfacl not found"))?;
-        // The default ACL too: the root inherited `d:g:k2t-<slot>:rwx` from
-        // the slot's `jobs/`, which would hand the slot's group every file
-        // the job makes at its top (root e2e, 2026-11-07).
-        let n = self.node_user();
-        let acl = format!("u::rwx,g::---,o::---,u:{n}:rwx,m::rwx,d:u::rwx,d:g::---,d:o::---,d:u:{n}:rwx,d:m::rwx");
-        super::exec::run_fixed(&setfacl.display().to_string(), &["-P", "--set", &acl, &root.display().to_string()]).map_err(|e| refuse(code::FAILED, e))
+        close_job_tree(&setfacl, root, uid, gid, &self.node_user())
     }
 
     /// `tenant.wipe` / `tenant.unuser`: every pool user of `slot` goes
@@ -593,6 +601,77 @@ mod tests {
         assert!(read_pool(&p).is_err(), "unknown keys: refused (the executor then holds every index)");
         assert_eq!(pool_user_name(1, 3), "k2job-1-3");
         assert_ne!(pool_user_name(1, 0), jobs::tenant_user_name(1));
+    }
+
+    /// The slot group a test pretends `jobs/` belongs to (`nogroup`): any
+    /// group works, the test user owns the files so it may name one.
+    #[cfg(target_os = "linux")]
+    const SLOT_GID: u32 = 65534;
+
+    /// A slot's `jobs/` as `tenant.prepare` sets it (tenants.rs): the slot
+    /// group may write, and every dir made under it inherits that.
+    #[cfg(target_os = "linux")]
+    fn slot_jobs_dir(tag: &str) -> PathBuf {
+        let setfacl = jobs::find_program_in_sbin("setfacl").expect("setfacl (the acl package) must be installed: this test never skips");
+        let d = crate::util::temp_dir(tag).join("jobs");
+        std::fs::create_dir_all(&d).unwrap();
+        let g = SLOT_GID;
+        let acl = format!("g:{g}:rwx,d:g:{g}:rwx,d:u::rwx,d:g::---,d:o::---,d:m::rwx");
+        super::super::exec::run_fixed(&setfacl.display().to_string(), &["-P", "-m", &acl, &d.display().to_string()]).unwrap();
+        d
+    }
+
+    /// Every ACL line under `root` (numeric ids, no headers).
+    #[cfg(target_os = "linux")]
+    fn acls(root: &Path) -> String {
+        let getfacl = jobs::find_program_in_sbin("getfacl").expect("getfacl (the acl package) must be installed: this test never skips");
+        let out = std::process::Command::new(getfacl).args(["-R", "-P", "-p", "-n"]).arg(root).output().unwrap();
+        assert!(out.status.success(), "getfacl: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    /// H3 (11-07 review): the node makes a secret job's dirs closed: none
+    /// inherits the slot group's entries from `jobs/`, so nothing the node
+    /// or the job later makes inside does either. Real ACLs on the test
+    /// user's own files (no root needed).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_secret_jobs_dirs_are_made_closed() {
+        let jobs_dir = slot_jobs_dir("pool-made-closed");
+        let control = jobs_dir.join("plain");
+        crate::runner::JobDirs::new(control.clone()).create_for(true).unwrap();
+        assert!(acls(&control).contains(&format!("group:{SLOT_GID}:")), "control: a plain job's root inherits the slot group");
+        let root = jobs_dir.join("secret");
+        let dirs = crate::runner::JobDirs::new(root.clone());
+        dirs.create_secret(true).unwrap();
+        std::fs::create_dir_all(dirs.src.join("crate")).unwrap();
+        let all = acls(&root);
+        assert!(!all.contains(&format!("group:{SLOT_GID}:")), "a secret job's dirs name no slot group:\n{all}");
+    }
+
+    /// H3: closing the tree for the per-job uid strips every inherited
+    /// entry at every depth, not only the root's: a file deep in `target/`
+    /// keeps no `g:k2t-<slot>` (it is readable by the slot group again the
+    /// moment it leaves the closed root: an artifact, a moved cache).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn closing_a_secret_job_tree_strips_the_slot_group_at_every_depth() {
+        use std::os::unix::fs::MetadataExt;
+        let setfacl = jobs::find_program_in_sbin("setfacl").expect("setfacl (the acl package) must be installed: this test never skips");
+        let jobs_dir = slot_jobs_dir("pool-close-deep");
+        // A tree made the old way: every dir inherited the slot group.
+        let root = jobs_dir.join("j1");
+        crate::runner::JobDirs::new(root.clone()).create_for(true).unwrap();
+        let deep = root.join("src/crate/target/release");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("out.bin"), "built with a secret").unwrap();
+        assert!(acls(&deep).contains(&format!("group:{SLOT_GID}:")), "control: the deep dir inherited the slot group");
+        let m = std::fs::metadata(&root).unwrap();
+        close_job_tree(&setfacl, &root, m.uid(), m.gid(), &m.uid().to_string()).unwrap();
+        let all = acls(&root);
+        assert!(!all.contains(&format!("group:{SLOT_GID}:")), "no slot group left anywhere in the tree:\n{all}");
+        // The root is still the node user's to write and delete.
+        std::fs::write(root.join("log"), "x").unwrap();
     }
 
     #[test]

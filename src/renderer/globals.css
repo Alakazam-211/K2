@@ -1640,7 +1640,10 @@ html[data-style="terminal"] .k2-switch-knob:not([data-zen-root] *, [data-k2-thre
 .k2-slider::-webkit-slider-runnable-track {
   height: var(--control-slider-track);
   border-radius: var(--radius-pill);
-  background: linear-gradient(to right, var(--color-accent) var(--k2-slider-pct, 0%), var(--color-control-track-off) var(--k2-slider-pct, 0%));
+  /* The unfilled part is the control edge, the one grey that holds 3:1 on
+     every ground a slider sits on (a switch's off track is softer because
+     its own edge carries that). */
+  background: linear-gradient(to right, var(--color-accent) var(--k2-slider-pct, 0%), var(--color-control-edge) var(--k2-slider-pct, 0%));
 }
 .k2-slider::-webkit-slider-thumb {
   -webkit-appearance: none;

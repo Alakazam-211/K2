@@ -323,6 +323,12 @@
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
 }
+/* On a white card the white thumb needs its own edge: the control edge, 3:1
+   on every Veil ground. Dark Glass keeps the soft one; there the thumb is the
+   brightest thing on the card. */
+[data-style="glass"][data-palette="veil"] .k2-slider:not([data-zen-root] *)::-webkit-slider-thumb {
+  box-shadow: 0 0 0 1px var(--color-control-edge), 0 1px 3px rgba(0, 0, 0, 0.2);
+}
 [data-style="glass"] .k2-slider:focus-visible:not([data-zen-root] *)::-webkit-slider-thumb {
   background: #ffffff;
   box-shadow: 0 0 0 2px var(--color-accent);

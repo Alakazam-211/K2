@@ -241,11 +241,11 @@ pub fn k2so_agents_delegate(
     let completion_protocol = format!(
         "When done:\n\
         1. Commit all your changes to branch `{branch}`\n\
-        2. Run: `k2so agent complete --agent {agent} --file {filename}`\n\
+        2. Run: `k2 agent complete --agent {agent} --file {filename}`\n\
         This will move your work to done and flag it for human review.\n\
         3. Notify the workspace manager that your work is ready for review:\n\
-        Run `k2so agents running` to find the manager's terminal ID (look for `.k2so/agents/manager` in the CWD),\n\
-        then run: `k2so terminal write <manager-terminal-id> \"Ready for review: {title}. Branch: {branch}\"`",
+        Run `k2 workspace list --running` to find the manager's workspace,\n\
+        then run: `k2 msg <manager-workspace> \"Ready for review: {title}. Branch: {branch}\"`",
         agent = target_agent, branch = worktree.branch, filename = item.filename, title = item.title,
     );
 

@@ -92,7 +92,7 @@ pub fn k2so_agents_build_launch(
                                 You are in worktree `{wt_path}` on branch `{branch}`.\n\
                                 Current task: **{title}** (priority: {priority})\n\
                                 Task file: `.k2so/agents/{agent}/work/active/{filename}`\n\n\
-                                Continue where you left off. When done: `k2so work move --agent {agent} --file {filename} --from active --to done`",
+                                Continue where you left off. When done: `k2 agent complete --agent {agent} --file {filename}`",
                                 claude_md,
                                 agent = agent_name, wt_path = wt_path, branch = branch,
                                 title = item.title, priority = item.priority, filename = item.filename,

@@ -1213,6 +1213,10 @@ fn manual_rollback_never_passes_a_data_loss_flag_and_explains_a_schema_refusal()
     // rollback (and an agent's card), never at an invented verb.
     assert!(f.hint.contains("k2 hostchat rollback --accept-data-loss") && f.hint.contains("sew.rollback-data-loss"), "{}", f.hint);
     assert!(f.hint.contains("in a terminal outside K2"), "{}", f.hint);
+    // Sew 0.9.0 (3 migrations): the way back is Sew's own flag, which K2
+    // passes for the person; the hint names both and that 0.9.0 is one.
+    assert!(f.hint.contains("--accept-data-loss-since=<the backup taken just before the upgrade>"), "{}", f.hint);
+    assert!(f.hint.contains("Sew 0.9.0"), "{}", f.hint);
     assert!(!f.hint.contains("backup list") && !f.hint.contains("backup restore"), "no invented verbs: {}", f.hint);
     assert!(t.ops.argvs().iter().all(|a| !a.contains("accept-data-loss")));
     // Success: the version Sew reports is recorded.

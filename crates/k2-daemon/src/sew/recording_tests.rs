@@ -415,3 +415,82 @@ fn the_routes_are_post_only_with_policy_rows_and_reach_the_handler_for_agents() 
         assert!(crate::session_token::is_agent_verb(p), "{p}");
     }
 }
+
+// ── pin day: the upgrade path (K2 0.46.11, Sew 0.9.0's order) ────────────
+
+const MEDIA: &str = "/home/k2/sew-media.tar.gz";
+
+/// A box on an older release (0.0.1, as a 0.8.x box is on pin day) with
+/// voice installed and, when `recorder`, the recorder too. The new
+/// sidecars come from the download (`k2 hostchat upgrade` takes no flags
+/// for them): a loopback server stands in for GitHub.
+fn on_old_release(recorder: bool) -> (T, crate::sew::fetch::test_server::Server, crate::sew::fetch::test_server::Scratch) {
+    use crate::sew::fetch::test_server::{Reply, Scratch, Server};
+    let t = t();
+    if recorder {
+        let (st, v) = t.enable(json!({}));
+        assert_eq!(st, "200 OK", "{v}");
+    }
+    t.ops.files.lock().unwrap().insert(MEDIA.into(), fixture("sew-media-0.0.2-x86_64-unknown-linux-gnu.tar.gz"));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    crate::sew::store::update(1, |r| r.installed_version = Some("0.0.1".into())).unwrap();
+    let s = Server::start();
+    let dir = Scratch::new("rec-upgrade");
+    *t.ops.release_source.lock().unwrap() =
+        crate::sew::fetch::Source { origin: s.origin(), cache_root: Some(dir.0.join("cache").join("sew")) };
+    for side in ["sew-recorder", "sew-transcriber"] {
+        let f = format!("{side}-0.0.2-x86_64-unknown-linux-gnu.tar.gz");
+        s.serve(&format!("/v0.0.2/{f}"), Reply::Bytes(fixture(&f)));
+    }
+    t.reset();
+    (t, s, dir)
+}
+
+fn upgrade(t: &T) -> Value {
+    use crate::sew::supervisor::{upgrade_begin, upgrade_machine, UpgradeRequest};
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), media_tarball_path: Some(MEDIA.into()), dry_run: false, accept_binary: None };
+    let (l, from) = upgrade_begin(&t.env, &req).unwrap().unwrap();
+    let p = upgrade_machine(&t.env, &req, &from);
+    drop(l);
+    p
+}
+
+/// Sew 0.9.0's upgrade path: `sew upgrade` (the old core swaps in the new
+/// one), then `sew media upgrade` through the NEW core (sew and sew-media
+/// move together), then, only where recording is installed, `sew recording
+/// upgrade` with the new release's pinned recorder and transcriber. A box
+/// without the recorder never stages or upgrades one.
+#[test]
+fn pin_day_upgrade_runs_sew_then_the_engine_then_the_recorder_only_where_installed() {
+    {
+        let (t, _s, _d) = on_old_release(true);
+        let p = upgrade(&t);
+        assert_eq!(p["result"], "done", "{p}");
+        // A recorder that didn't upgrade is recorded on the row (the upgrade itself stays done).
+        assert_eq!(crate::sew::store::load().expect("row").last_error, None, "{p}");
+        assert!(p["steps"].get("recording").is_some(), "{p}");
+        let calls = t.ops.calls.lock().unwrap().clone();
+        let argv: Vec<&str> = calls.iter().map(|c| c.argv.as_str()).collect();
+        let at = |a: &str| argv.iter().position(|x| *x == a).unwrap_or_else(|| panic!("{a} never ran: {argv:?}"));
+        let (core, media, rec) = (at("engine sew upgrade"), at("engine sew media upgrade"), at("engine sew recording upgrade"));
+        assert!(core < media && media < rec, "sew upgrade, then sew media upgrade, then sew recording upgrade: {argv:?}");
+        assert_eq!(argv.iter().filter(|a| **a == "engine sew recording upgrade").count(), 1, "{argv:?}");
+        let staged: Vec<Vec<u8>> =
+            calls[media..rec].iter().filter(|c| c.argv == "engine sew recording stage").map(|c| c.stdin.clone().expect("bytes")).collect();
+        assert_eq!(
+            staged,
+            [fixture("sew-recorder-0.0.2-x86_64-unknown-linux-gnu.tar.gz"), fixture("sew-transcriber-0.0.2-x86_64-unknown-linux-gnu.tar.gz")],
+            "the pin's own sidecars, staged after the engine, never a model"
+        );
+    }
+    let (t, _s, _d) = on_old_release(false);
+    let p = upgrade(&t);
+    assert_eq!(p["result"], "done", "{p}");
+    let argv: Vec<String> = t.ops.calls.lock().unwrap().iter().map(|c| c.argv.clone()).collect();
+    assert!(argv.iter().any(|a| a == "engine sew media upgrade"), "{argv:?}");
+    assert!(
+        !argv.iter().any(|a| a == "engine sew recording stage" || a == "engine sew recording upgrade"),
+        "no recorder, no recording step: {argv:?}"
+    );
+    assert!(p["steps"].get("recording").is_none(), "{p}");
+}

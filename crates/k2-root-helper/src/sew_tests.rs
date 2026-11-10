@@ -2437,7 +2437,7 @@ fn recording_status_reads_sews_status_and_each_sidecars_version() {
     assert_eq!(v["sew"]["installed"], true);
     assert_eq!(v["versions"]["recorder"]["version"], "0.0.2");
     assert!(v["versions"]["transcriber"].is_null(), "an unreadable version.json is null, never a guess");
-    assert_eq!(sew_calls(&t)[0].0, vec!["recording", "status", "--json"]);
+    assert_eq!(sew_calls(&t)[0].0, vec!["recording", "status", "--i-am-k2", "--json"]);
     let v = Verb::parse(&["engine", "sew", "recording", "status"]).unwrap();
     assert_eq!(v.class(), Class::Open);
     assert!(!v.takes_lock(), "read-only");
@@ -2466,7 +2466,7 @@ fn recording_plan_and_upgrade_use_the_pinned_model_and_staged_sidecars() {
     with_pin_installed(&t);
     sew_answers(&t, 0, r#"{"pick":"test-q8_0","fits":true}"#);
     ok(&t.call(&["engine", "sew", "recording", "plan"]));
-    assert_eq!(sew_calls(&t)[0].0, vec!["recording", "plan", "--model", "test-q8_0", "--json"]);
+    assert_eq!(sew_calls(&t)[0].0, vec!["recording", "plan", "--model", "test-q8_0", "--i-am-k2", "--json"]);
     let o = t.call(&["engine", "sew", "recording", "upgrade"]);
     assert_eq!(o.code, exit::STATE, "nothing staged: {}", o.stderr);
     ok(&t.call_in(&["engine", "sew", "recording", "stage"], &recorder_tarball()));

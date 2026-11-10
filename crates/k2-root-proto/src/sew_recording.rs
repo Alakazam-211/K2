@@ -18,15 +18,19 @@
 //! own fixed staging files. Sew's argv is built in ONE place, [`sew_argv`],
 //! so Sew's final 0.9.0 flags change one function.
 //!
-//! **Sew's verbs** (Sew, 2026-11-10; the final shape comes with 0.9.0's
-//! release notes): `sew recording install --recorder-tarball <f>
-//! --transcriber-tarball <f> --model-file <f> --model <name> --no-start`,
-//! then `sew recording enable`; `status`; `plan` (read-only, coming);
-//! `upgrade --recorder-tarball <f> --transcriber-tarball <f> --when-idle`
-//! (coming); `uninstall -y` (it stops the units itself). K2 never runs
-//! `sew recording disable`: K2's disable flips the org policy only. The guarded ones take the global `--i-am-k2`
-//! (a K2-managed box refuses them without it, exit 3 `k2_managed`); the
-//! helper adds `--json` to every Sew run.
+//! **Sew's verbs** (Sew 0.9.0's final argv, its release note of 2026-11-10,
+//! checked against the 0.9.0 binary's own `--help`): `sew recording plan
+//! --model <name>` (read-only; writes nothing), `sew recording install
+//! --recorder-tarball <f> --transcriber-tarball <f> --model-file <f> --model
+//! <name> --no-start`, then `sew recording enable` (it sets transcribe too);
+//! `status`; `upgrade --recorder-tarball <f> --transcriber-tarball <f>
+//! --when-idle` (after `sew upgrade`, only where recording is installed);
+//! `uninstall -y` (it stops the units itself). K2 never runs `sew recording
+//! disable`: K2's disable flips the org policy only. Every one takes the
+//! global `--i-am-k2`, as Sew's final argv names it (Sew refuses the
+//! guarded ones without it on a box marked K2-managed, exit 3 `k2_managed`;
+//! on the read-only ones it changes nothing); the helper adds `--json` to
+//! every Sew run.
 
 use serde::{Deserialize, Serialize};
 
@@ -322,8 +326,8 @@ pub fn sew_argv(step: SewStep) -> Vec<String> {
             I_AM_K2,
         ]),
         SewStep::Enable => s(&["recording", "enable", I_AM_K2]),
-        SewStep::Status => s(&["recording", "status"]),
-        SewStep::Plan { model } => s(&["recording", "plan", "--model", model]),
+        SewStep::Status => s(&["recording", "status", I_AM_K2]),
+        SewStep::Plan { model } => s(&["recording", "plan", "--model", model, I_AM_K2]),
         SewStep::Upgrade { recorder, transcriber } => {
             s(&["recording", "upgrade", "--recorder-tarball", recorder, "--transcriber-tarball", transcriber, "--when-idle", I_AM_K2])
         }
@@ -367,10 +371,16 @@ mod tests {
         assert!(SEW_ASR_MODELS.iter().all(|m| m.name != "auto"));
         let e = model_in(SEW_ASR_MODELS, "0.9.0").unwrap_err();
         assert!(e.starts_with(MODEL_UNPINNED) && e.contains("sew-asr-base-q8_0.gguf"), "{e}");
-        // The real pin (0.8.2) has no model row at all.
+        // The real pin is 0.9.0 and its release.json has no models[] yet
+        // (Sew 2026-11-10: the model waits on a licence point), so its row
+        // stays the placeholder and every model stage refuses.
         let pin = crate::sew::SEW_RELEASES.last().expect("real pins");
+        assert_eq!(pin.version, "0.9.0");
         let e = model_in(SEW_ASR_MODELS, pin.version).unwrap_err();
-        assert!(e.starts_with(MODEL_UNPINNED), "{e}");
+        assert!(e.starts_with(MODEL_UNPINNED) && e.contains("hasn't published"), "{e}");
+        // An older Sew has no row at all.
+        let e = model_in(SEW_ASR_MODELS, "0.8.3").unwrap_err();
+        assert!(e.starts_with(MODEL_UNPINNED) && e.contains("recording needs Sew 0.9.0"), "{e}");
     }
 
     #[test]
@@ -446,7 +456,14 @@ mod tests {
             assert!(sew_argv(step).iter().any(|a| a == I_AM_K2), "{step:?}");
         }
         assert_eq!(sew_argv(SewStep::Uninstall), ["recording", "uninstall", "-y", "--i-am-k2"]);
-        assert_eq!(sew_argv(SewStep::Status), ["recording", "status"], "read-only: not guarded");
+        // Sew 0.9.0's final argv: the read-only verbs carry it too.
+        assert_eq!(sew_argv(SewStep::Status), ["recording", "status", "--i-am-k2"]);
+        assert_eq!(sew_argv(SewStep::Plan { model: "base-q8_0" }), ["recording", "plan", "--model", "base-q8_0", "--i-am-k2"]);
+        assert_eq!(
+            sew_argv(SewStep::Upgrade { recorder: "/r", transcriber: "/t" }),
+            ["recording", "upgrade", "--recorder-tarball", "/r", "--transcriber-tarball", "/t", "--when-idle", "--i-am-k2"]
+        );
+        assert_eq!(sew_argv(SewStep::Enable), ["recording", "enable", "--i-am-k2"]);
         assert!(!inst.iter().any(|a| a == "auto"));
     }
 

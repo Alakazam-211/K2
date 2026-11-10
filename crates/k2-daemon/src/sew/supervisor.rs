@@ -3084,7 +3084,9 @@ pub fn rollback_with(env: &Env, req: &RollbackRequest) -> R<Value> {
 pub const ROLLBACK_ACROSS_SCHEMA_HINT: &str = "Nothing changed. The upgrade changed how Sew stores chat, so a plain rollback \
      would lose everything written since the upgrade, and it refuses to go back past it. To go back anyway (that chat \
      leaves the live chat; K2 backs it up first), the owner runs k2 hostchat rollback --accept-data-loss in a terminal \
-     outside K2. An agent asks the owner on a card: k2 permission request sew.rollback-data-loss --why \"<why>\"";
+     outside K2: K2 then runs Sew's rollback with --accept-data-loss-since=<the backup taken just before the upgrade> \
+     (an upgrade to Sew 0.9.0 is one of these). An agent asks the owner on a card: k2 permission request \
+     sew.rollback-data-loss --why \"<why>\"";
 
 /// Sew's verdict on the core's rollback is in (`v`, exit 0): K2's health
 /// check of the old core, the row, then (voice) the OLD core reinstalls its

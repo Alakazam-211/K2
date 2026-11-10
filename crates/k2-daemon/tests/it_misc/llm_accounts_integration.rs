@@ -18,7 +18,6 @@
 //! the audit log.
 // pending Windows LLM sign-in terminals (Phase 3 agent spawn): this suite runs
 // login shims from a /tmp home and checks Unix modes.
-#![cfg(unix)]
 
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
@@ -41,7 +40,7 @@ struct TestEnv {
     home: PathBuf,
     log: PathBuf,
     prev: Vec<(&'static str, Option<std::ffi::OsString>)>,
-    _guard: std::sync::MutexGuard<'static, ()>,
+    _guard: k2_core::test_env::SerialGuard,
 }
 
 const VARS: &[&str] = &[
@@ -113,7 +112,7 @@ exec /bin/cat
 }
 
 fn setup() -> TestEnv {
-    let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = k2_core::test_env::serial(&TEST_LOCK);
     k2_core::test_isolation::assert_no_prod_env();
     // Hermetic across tests: a sign-in an earlier test started (and
     // cancelled) emits its last llm_accounts_changed from its watcher

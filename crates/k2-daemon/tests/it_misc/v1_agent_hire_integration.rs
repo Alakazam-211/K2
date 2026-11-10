@@ -103,7 +103,7 @@ impl Drop for Env {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn hire_key_mints_hires_links_replays_and_retires_end_to_end() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     k2_core::test_isolation::assert_no_prod_env();
     let env = Env::set();
     let d = test_harness::start(OWNER_TOKEN).await;
@@ -217,7 +217,7 @@ async fn hire_key_mints_hires_links_replays_and_retires_end_to_end() {
 /// the key's ceiling; a rollback and a teardown remove the login.
 #[tokio::test(flavor = "multi_thread")]
 async fn hire_key_gives_app_logins_inside_its_ceiling_only() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     k2_core::test_isolation::assert_no_prod_env();
     let env = Env::set();
     let d = test_harness::start(OWNER_TOKEN).await;
@@ -358,7 +358,7 @@ fn agent_passport(workspace_id: &str) -> String {
 /// The CLI and the Settings body store the same limit.
 #[tokio::test(flavor = "multi_thread")]
 async fn owner_changes_a_hire_keys_app_access_limit() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     k2_core::test_isolation::assert_no_prod_env();
     let env = Env::set();
     let d = test_harness::start(OWNER_TOKEN).await;

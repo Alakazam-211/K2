@@ -73,7 +73,7 @@ fn futures_block<F: std::future::Future>(fut: F) -> F::Output {
 
 fn with_temp_home<F: FnOnce(&Path)>(f: F) {
     struct Restore {
-        _g: std::sync::MutexGuard<'static, ()>,
+        _g: k2_core::test_env::SerialGuard,
         prev_home: Option<std::ffi::OsString>,
         prev_shim: Option<std::ffi::OsString>,
         tmp: PathBuf,
@@ -91,7 +91,7 @@ fn with_temp_home<F: FnOnce(&Path)>(f: F) {
             let _ = std::fs::remove_dir_all(&self.tmp);
         }
     }
-    let g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let g = k2_core::test_env::serial(&TEST_LOCK);
     k2_core::test_isolation::assert_no_prod_env();
     let tmp = std::env::temp_dir().join(format!("k2-homes-sync-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
     let shim_dir = tmp.join("shim");

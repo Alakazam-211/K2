@@ -5,8 +5,6 @@
 //! Boots the REAL daemon binary under a throwaway HOME (never the real
 //! `~/.k2`), with an empty agent shim dir so nothing can spawn a real CLI.
 
-#![cfg(windows)]
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};

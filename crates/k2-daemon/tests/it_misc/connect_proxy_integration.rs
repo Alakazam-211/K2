@@ -269,8 +269,8 @@ fn assert_token_nowhere_under(dir: &std::path::Path) {
     }
 }
 
-fn setup() -> (std::sync::MutexGuard<'static, ()>, TempHome) {
-    let g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+fn setup() -> (k2_core::test_env::SerialGuard, TempHome) {
+    let g = k2_core::test_env::serial(&TEST_LOCK);
     let home = TempHome::new();
     install_vault();
     (g, home)

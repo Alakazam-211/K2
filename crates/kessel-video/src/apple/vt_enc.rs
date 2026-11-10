@@ -179,9 +179,12 @@ impl VtEncoder {
         // The sessions to try, in order: how to ask for hardware, and
         // whether to ask for low-latency rate control (not there for every
         // size and mode; without it the session still runs in real time).
-        // Preferring hardware first requires it, so a session that runs in
-        // hardware is known to (VideoToolbox's low-latency encoder doesn't
-        // answer "using hardware", and isn't in its encoder list).
+        // Preferring hardware first requires it, and each session is then
+        // checked against VideoToolbox's encoder list: a required-hardware
+        // ask with low-latency rate control can still be handed the
+        // low-latency encoder (`h264.rtvc`, macOS 26 on an M4 Mac mini),
+        // which doesn't answer "using hardware" and which the list marks as
+        // software.
         let plan: &[(Ask, bool)] = match cfg.implementation {
             ImplPreference::HardwareOnly => &[(Ask::Require, true), (Ask::Require, false)],
             ImplPreference::SoftwareOnly => &[(Ask::Disable, false)],
@@ -262,12 +265,14 @@ impl VtEncoder {
             };
             let reported =
                 enc.copy_bool(c"kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder");
-            let listed = if reported.is_none() && asked.is_none() {
+            // The list is read whenever the session doesn't say, even under
+            // a binding ask: a Require ask doesn't guarantee the encoder.
+            let listed = if reported.is_none() {
                 enc.listed_hardware()
             } else {
                 None
             };
-            enc.implementation = session_implementation(reported, asked, listed);
+            enc.implementation = session_implementation(reported, encoder_ask(asked), listed);
             if ask == Ask::Require && enc.implementation != Implementation::Hardware {
                 // Asked for hardware and not confirmed: drop it and go on.
                 unconfirmed = true;
@@ -571,15 +576,29 @@ enum Ask {
     Disable,
 }
 
+/// What an encoder's ask proves, failing closed: hardware disabled proves
+/// software ("never used"), but hardware required proves nothing. A
+/// required-hardware session has been seen running the low-latency
+/// software encoder `h264.rtvc` (macOS 26, M4 Mac mini), so an encoder is
+/// `Hardware` only when the session or the encoder list says so; with
+/// neither, it is `Unknown` (not known to be hardware), never a guess.
+pub(crate) fn encoder_ask(asked: Option<bool>) -> Option<bool> {
+    asked.filter(|hardware| !hardware)
+}
+
 /// What a VideoToolbox session runs, from what the OS tells, in order:
 ///
 /// - `reported`: the session's own "using hardware" property, when it
 ///   answers (many encoders and decoders don't);
-/// - `asked`: a binding ask the session was created under: `Some(true)`,
-///   hardware required (VideoToolbox fails the create without it);
-///   `Some(false)`, hardware disabled ("never used", Apple's headers say);
 /// - `listed`: what VideoToolbox's encoder list says about the session's
-///   encoder, when it lists it.
+///   encoder (its `EncoderID`), when it lists it. It comes before the ask:
+///   a session created with hardware required has been seen running the
+///   low-latency encoder `h264.rtvc`, which the list marks as software;
+/// - `asked`: a binding ask the session was created under: `Some(true)`,
+///   hardware required; `Some(false)`, hardware disabled ("never used",
+///   Apple's headers say). Trusted only when neither of the above says.
+///   Encoders pass it through [`encoder_ask`], so a required-hardware ask
+///   alone never makes an encoder `Hardware`.
 ///
 /// Nothing said: `Unknown`, never a guess.
 pub(crate) fn session_implementation(
@@ -587,7 +606,7 @@ pub(crate) fn session_implementation(
     asked: Option<bool>,
     listed: Option<bool>,
 ) -> Implementation {
-    match reported.or(asked).or(listed) {
+    match reported.or(listed).or(asked) {
         Some(true) => Implementation::Hardware,
         Some(false) => Implementation::Software,
         None => Implementation::Unknown,

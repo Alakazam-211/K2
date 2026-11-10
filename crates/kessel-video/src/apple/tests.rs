@@ -1175,10 +1175,9 @@ fn codec_threads_run_at_user_initiated_qos() {
 
 // ───────────────────── what the sessions really are ─────────────────────
 
-/// The session's own word wins; then a binding ask (hardware required,
-/// which fails the create otherwise, or disabled, which is never used);
-/// then VideoToolbox's encoder list. Nothing said is `Unknown`, never a
-/// guess.
+/// The session's own word wins; then VideoToolbox's encoder list; then a
+/// binding ask (hardware required, or disabled, which is never used).
+/// Nothing said is `Unknown`, never a guess.
 #[test]
 fn session_implementation_never_guesses() {
     use vt_enc::session_implementation as imp;
@@ -1189,13 +1188,40 @@ fn session_implementation_never_guesses() {
             assert_eq!(imp(Some(false), asked, listed), Implementation::Software);
         }
     }
-    for listed in opt {
-        assert_eq!(imp(None, Some(true), listed), Implementation::Hardware);
-        assert_eq!(imp(None, Some(false), listed), Implementation::Software);
+    for asked in opt {
+        assert_eq!(imp(None, asked, Some(true)), Implementation::Hardware);
+        assert_eq!(imp(None, asked, Some(false)), Implementation::Software);
     }
-    assert_eq!(imp(None, None, Some(true)), Implementation::Hardware);
-    assert_eq!(imp(None, None, Some(false)), Implementation::Software);
+    assert_eq!(imp(None, Some(true), None), Implementation::Hardware);
+    assert_eq!(imp(None, Some(false), None), Implementation::Software);
     assert_eq!(imp(None, None, None), Implementation::Unknown);
+}
+
+/// Hardware required with low-latency rate control, handed `h264.rtvc`
+/// (seen on macOS 26, M4 Mac mini): the session doesn't answer "using
+/// hardware", the encoder list marks it software, and the session is
+/// software, so a hardware-first plan drops it and tries the next ask.
+#[test]
+fn a_required_hardware_session_on_the_low_latency_software_encoder_is_software() {
+    use vt_enc::{encoder_ask, session_implementation as imp};
+    assert_eq!(imp(None, encoder_ask(Some(true)), Some(false)), Implementation::Software);
+}
+
+/// Fail closed: a required-hardware ask alone never makes an encoder
+/// `Hardware`. With no word from the session and no list entry it is
+/// `Unknown` (not known to be hardware, so a hardware-only plan drops it);
+/// a disabled-hardware ask still proves software.
+#[test]
+fn an_encoder_only_asked_for_hardware_is_not_hardware() {
+    use vt_enc::{encoder_ask, session_implementation as imp};
+    assert_eq!(encoder_ask(Some(true)), None);
+    assert_eq!(encoder_ask(Some(false)), Some(false));
+    assert_eq!(encoder_ask(None), None);
+    assert_eq!(imp(None, encoder_ask(Some(true)), None), Implementation::Unknown);
+    assert_ne!(imp(None, encoder_ask(Some(true)), None), Implementation::Hardware);
+    assert_eq!(imp(None, encoder_ask(Some(true)), Some(true)), Implementation::Hardware);
+    assert_eq!(imp(None, encoder_ask(Some(false)), None), Implementation::Software);
+    assert_eq!(imp(Some(true), encoder_ask(Some(true)), None), Implementation::Hardware, "the session's own word needs no list");
 }
 
 /// The capability entry comes from a real hardware-only session, probed

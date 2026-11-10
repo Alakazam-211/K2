@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+The encoder report now matches what VideoToolbox actually used.
+
+### The hardware check reads the encoder list before the ask (macOS and iOS)
+
+- Before, a VideoToolbox encoder session created with hardware required
+  counted as hardware whenever it didn't answer
+  `UsingHardwareAcceleratedVideoEncoder`. On macOS 26 (an M4 Mac mini), a
+  required-hardware ask with low-latency rate control is handed the
+  low-latency encoder `h264.rtvc`, which doesn't answer and which
+  VideoToolbox's encoder list marks as software, so `implementation()`
+  said `Hardware` for a software session.
+- Now, whenever a session doesn't answer, its `EncoderID` is looked up in
+  the encoder list, and the list wins over the ask. It fails closed: a
+  required-hardware ask alone never makes an encoder `Hardware`. An
+  encoder the list marks as software is `Software`; one the list doesn't
+  have, or a session that names none, is `Unknown` (not known to be
+  hardware). With `ImplPreference::HardwareOnly` or the default preference,
+  a required-hardware session that isn't confirmed is dropped and the next
+  ask (hardware without low-latency rate control) is tried. No API changes.
+
 ## 0.1.5
 
 A camera that goes away now ends its source on macOS and iOS, the camera

@@ -1,0 +1,24 @@
+/* ── Tab dividers ─────────────────────────────────────────────────────────
+   Short dividers between tabs, the top bar's colour and size (a size smaller in
+   a split pane's strip), the same rule as Glass. None beside the selected tab,
+   a hovered tab or a dragged tab, or at the end of the row. The room tabs keep
+   their 1px right border, now clear, so no tab changes width; the divider is
+   drawn over it. Pane tabs sit flush, so theirs is drawn inside the tab. */
+[data-style="terminal"] [data-room-tab-bar] [data-tab-id]:not([data-zen-root] *) { border-right-color: transparent; }
+[data-style="terminal"] [data-pane-tab-bar] [data-pane-tab-id]:not([data-zen-root] *) { position: relative; }
+[data-style="terminal"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-bar] [data-pane-tab-id]):not([data-selected]):not([data-zen-root] *)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -1px;
+  width: 1px;
+  height: 16px;
+  background: var(--color-divider);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+[data-style="terminal"] [data-pane-tab-bar] [data-pane-tab-id]:not([data-selected]):not([data-zen-root] *)::after {
+  right: 0;
+  height: 14px;
+}
+[data-style="terminal"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-bar] [data-pane-tab-id]):is(:last-child, :hover, [data-dragging], :has(+ [data-selected]), :has(+ :hover), :has(+ [data-dragging])):not([data-selected]):not([data-zen-root] *)::after { content: none; }

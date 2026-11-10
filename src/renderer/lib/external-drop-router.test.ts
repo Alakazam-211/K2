@@ -175,6 +175,13 @@ describe('buildTerminalDropPayload', () => {
     expect(payload.endsWith(BRACKETED_PASTE_END)).toBe(true)
     expect(payload).toContain('/tmp/shot.png')
   })
+
+  it('quotes an image path (Claude Code fs.exists() it) and backslash-escapes the rest', () => {
+    expect(buildTerminalDropPayload(['/Users/a/Screen Shot.png', '/Users/a/my notes.txt'])).toBe(
+      `${BRACKETED_PASTE_START}'/Users/a/Screen Shot.png' /Users/a/my\\ notes.txt ${BRACKETED_PASTE_END}`,
+    )
+    expect(buildTerminalDropPayload(['/Users/a/my notes.txt'])).toBe('/Users/a/my\\ notes.txt ')
+  })
 })
 
 describe('buildComposeDropPayload', () => {

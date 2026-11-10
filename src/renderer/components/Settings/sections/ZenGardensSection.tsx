@@ -47,7 +47,7 @@ import {
 } from '@/lib/zen/zen-settings'
 import { useGardenAccessSwitchStore, watchGardenAccessSwitch } from '@/lib/zen/garden-access-api'
 import { BTN, DANGER_BTN, INPUT, InlineError, NewGarden, attempt, revealLabel, themeOptions } from './zen-gardens-ui'
-import { ZenGardensAccessPage } from './ZenGardensAccessPage'
+import { GARDENS_LEAD, ZenGardensAccessPage } from './ZenGardensAccessPage'
 import { DataSourcesSection } from './DataSourcesSection'
 import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -620,7 +620,7 @@ export function ZenGardensSection(): React.JSX.Element {
         <div className="w-full max-w-[52rem] space-y-6 pb-6">
           <header className="min-w-0">
             <h2 className="type-title text-[var(--color-text-primary)]">Gardens</h2>
-            <p className={SETTING_ROW_HINT}>Your Zen pages on this computer: the look they share, and who can change each one.</p>
+            <p className={SETTING_ROW_HINT}>{GARDENS_LEAD}</p>
           </header>
           {!hasData && st.failure && words ? (
             <SettingsLoadState
@@ -649,7 +649,7 @@ export function ZenGardensSection(): React.JSX.Element {
                   </Button>
                 }
               >
-                Gardens are pages you and your agents build in Zen. Set them up to make your first one.
+                Gardens are pages you and your agents build in Zen Mode. Set them up to make your first one.
               </SettingsLoadState>
               {error ? (
                 <Callout tone="error" role="alert" data-testid="zen-gardens-setup-error">

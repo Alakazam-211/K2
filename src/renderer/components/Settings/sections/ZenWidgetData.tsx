@@ -75,6 +75,21 @@ export interface DataLineModel {
   large: string | null
 }
 
+/** A Data line's second line with Garden access on: size, how many items,
+ *  how many other agents or projects have their own access, and who last
+ *  signed it. "No data yet" before the widget saves anything. */
+export function dataSummaryWords(space: GardenSpaceRow | null, signer: string | null): string {
+  const parts: string[] = []
+  if (space) {
+    parts.push(formatBytes(space.bytes), `${space.keys} item${space.keys === 1 ? '' : 's'}`)
+    if (space.grants > 0) parts.push(`${space.grants} more with access`)
+  } else {
+    parts.push('No data yet')
+  }
+  if (signer) parts.push(signer)
+  return parts.join(' · ')
+}
+
 /** "2.1 MB", "812 B": the same units Finder uses (1000-based). */
 export function formatBytes(n: number): string {
   if (n < 1000) return `${n} B`
@@ -362,7 +377,7 @@ function DataLine({
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="type-name text-[var(--color-text-primary)] truncate">
-            {line.title && line.title !== widget ? `${line.title} (${widget})` : widget}
+            {accessOn ? (line.title ?? widget) : line.title && line.title !== widget ? `${line.title} (${widget})` : widget}
           </div>
           {line.large && (
             <div className={MUTED} data-zen-large-widget={widget}>
@@ -370,10 +385,14 @@ function DataLine({
             </div>
           )}
           <div className={MUTED} data-garden-data-summary="">
-            {space ? `${formatBytes(space.bytes)} · ${space.keys} key${space.keys === 1 ? '' : 's'}` : 'No data yet'}
-            {space ? ` · ${grants} grant${grants === 1 ? '' : 's'}` : ''}
-            {space && space.admins.length > 0 ? ` · grant admin: ${space.admins.join(', ')}` : ''}
-            {maker ? ` · ${maker}` : ''}
+            {accessOn ? dataSummaryWords(space, maker) : (
+              <>
+                {space ? `${formatBytes(space.bytes)} · ${space.keys} key${space.keys === 1 ? '' : 's'}` : 'No data yet'}
+                {space ? ` · ${grants} grant${grants === 1 ? '' : 's'}` : ''}
+                {space && space.admins.length > 0 ? ` · grant admin: ${space.admins.join(', ')}` : ''}
+                {maker ? ` · ${maker}` : ''}
+              </>
+            )}
           </div>
           {space ? <ZenWidgetFilesLine widget={widget} rev={rev} /> : null}
         </div>
@@ -404,7 +423,7 @@ function DataLine({
           {space ? (
             <>
               <Button variant="quiet" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-                {accessOn ? (open ? 'Hide advanced' : 'Advanced') : open ? 'Hide grants' : 'Grants'}
+                {accessOn ? (open ? 'Hide other agents' : 'Other agents') : open ? 'Hide grants' : 'Grants'}
               </Button>
               <OverflowMenu
                 label={`More actions for ${line.title ?? widget}`}
@@ -439,10 +458,8 @@ function DataLine({
       {restoring && space ? <ZenWidgetRestorePanel widget={widget} onDone={reload} /> : null}
       {open && detail && accessOn ? (
         <div className="mt-2" data-garden-data-advanced={widget}>
-          <div className="type-row text-[var(--color-text-primary)]">Advanced: data grants</div>
-          <p className={MUTED}>
-            Agents on a Garden&apos;s list already use the data of its widgets. These grants are for any other agent.
-          </p>
+          <div className="type-row text-[var(--color-text-primary)]">Other agents who can use this data</div>
+          <p className={SETTING_ROW_HINT}>Agents who can edit its Garden already can. Anyone listed here can too.</p>
           <GrantList widget={widget} detail={detail} reload={reload} />
         </div>
       ) : open && detail ? (
@@ -556,10 +573,10 @@ export function ZenWidgetData({ only = null, except = null, embedded = false }: 
   const title = embedded ? 'Local Data' : accessOn ? 'Widget data' : 'Local Data'
   const hint = embedded
     ? only
-      ? 'The data each widget in this Garden keeps on this computer. Agents on its list use it; any other agent needs a grant, under Advanced.'
-      : 'Data of widgets no Garden places, and data whose widget is gone.'
+      ? 'What this Garden’s widgets save on this computer. Its editors can use it.'
+      : 'What widgets no Garden uses have saved, and data whose widget is gone.'
     : accessOn
-      ? 'Each custom widget keeps its data on this computer. The agents on a Garden’s list use the data of the widgets in it; any other agent needs a grant, under Advanced.'
+      ? 'What each custom widget saves on this computer. Agents who can edit a Garden can use its widgets’ data.'
       : 'Each custom widget keeps its data on this computer. An agent reads or writes it only with a grant you give, or one a grant admin you named gives.'
   return (
     <section data-settings-id="zen-gardens.data" data-garden-data="" className="space-y-2">

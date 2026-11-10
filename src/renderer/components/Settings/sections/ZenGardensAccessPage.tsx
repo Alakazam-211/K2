@@ -6,10 +6,10 @@
 //
 //   List (G25):     Gardens / one line.
 //                   Styles                 ← the computer-wide look, first
-//                   Your Gardens           ← lock glyph, "N editors", "made by X"; drag a row (Alt+↑/↓)
+//                   Your Gardens           ← lock glyph, "N editors", "made by X"; drag a row (Alt+↑/↓);
+//                                            New Garden (the existing modal) is the group's action
 //                   Deleted Gardens (n)    ← Restore and read-only History
 //                   Not in a Garden        ← data and sources no Garden uses
-//                   New Garden             ← the existing modal, in the footer
 //   Garden (G26):   History… · Rename · ⋯ (Delete); "Made by X · date";
 //                   Agents who can edit (Remove with an 8 s Undo, Add agent
 //                   through the A–Z picker); this Garden's settings (what it
@@ -85,12 +85,14 @@ import { DataSourcesSection } from './DataSourcesSection'
 import { gardensLandingSelection, takeGardensLanding, useGardensLandingStore } from '../gardens-landing'
 
 const CONTENT_WIDTH = 'max-w-[52rem]'
-/** A list row: the Workspaces list's row (selected: the accent wash and bar). */
+/** A list row: the Workspaces list's row (selected: the accent wash and bar).
+ *  Keyboard focus is the list rows' ring (`data-k2-focus`), drawn inside the
+ *  row so the card's edge never clips it, in every look. */
 const LIST_ROW =
-  'relative w-full flex items-center gap-2 text-left px-3 py-2 no-drag cursor-pointer select-none outline-none k2-focus transition-colors'
+  'relative w-full flex items-center gap-2 text-left px-3 py-2 no-drag cursor-pointer select-none outline-none transition-colors'
 /** A two-line list row: the name over one line of detail. */
 const LIST_COL_ROW =
-  'relative w-full flex flex-col items-start text-left px-3 py-2 no-drag cursor-pointer select-none outline-none k2-focus transition-colors'
+  'relative w-full flex flex-col items-start text-left px-3 py-2 no-drag cursor-pointer select-none outline-none transition-colors'
 const ROW_ON = 'bg-[var(--color-accent)]/15'
 const ROW_OFF = 'hover:bg-[var(--color-wash-1)]'
 
@@ -98,6 +100,9 @@ const ROW_OFF = 'hover:bg-[var(--color-wash-1)]'
 export const DRAG_THRESHOLD_PX = 4
 const GARDEN_REORDER_HELP_ID = 'gardens-side-reorder-help'
 export const GARDEN_REORDER_HELP = 'Drag a Garden to reorder it, or press Alt+Up Arrow or Alt+Down Arrow to move it.'
+
+/** The page's lead line: what a Garden is, in the words of the app. */
+export const GARDENS_LEAD = 'The pages you see in Zen Mode, and who can change each one.'
 
 /** "Sees" (G26, Rosson Q1): a Garden sees everything the person sees. */
 export const GARDEN_SEES_TEXT = 'Everything you can see'
@@ -137,8 +142,15 @@ function SelectedBar(): React.JSX.Element {
   return <span aria-hidden="true" className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--color-accent)]" />
 }
 
-function ListHeading({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return <div className="flex items-center h-7 mb-1 type-heading text-[var(--color-text-primary)]">{children}</div>
+/** A list group's heading, with the group's action on the right (as a
+ *  Settings card group's). */
+function ListHeading({ children, action }: { children: React.ReactNode; action?: React.ReactNode }): React.JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-2 min-h-7 mb-2">
+      <h3 className="type-heading text-[var(--color-text-primary)]">{children}</h3>
+      {action}
+    </div>
+  )
 }
 
 /** A pane's title and the one line under it. */
@@ -288,7 +300,7 @@ function Sidebar({
       <div className="flex-shrink-0 px-4 pt-6 pb-4 space-y-3">
         <div>
           <h2 className="type-title text-[var(--color-text-primary)]">Gardens</h2>
-          <p className={SETTING_ROW_HINT}>Your Zen pages on this computer, and who can change them.</p>
+          <p className={SETTING_ROW_HINT}>{GARDENS_LEAD}</p>
         </div>
         <button
           type="button"
@@ -296,7 +308,7 @@ function Sidebar({
           data-k2-chamfer="control"
           aria-label="Styles"
           aria-current={stylesOn ? 'page' : undefined}
-          className={`relative w-full flex flex-col items-start px-3 py-2 rounded-[var(--radius-selector)] text-left no-drag cursor-pointer transition-colors k2-focus ${
+          className={`relative w-full flex flex-col items-start px-3 py-2 rounded-[var(--radius-selector)] text-left no-drag cursor-pointer outline-none transition-colors k2-focus ${
             stylesOn ? 'bg-[var(--color-accent)]/15' : 'hover:bg-[var(--color-wash-1)]'
           }`}
           onClick={() => onSelect({ kind: 'styles' })}
@@ -307,7 +319,7 @@ function Sidebar({
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-5 [scrollbar-gutter:stable]">
         <section>
-          <ListHeading>Your Gardens</ListHeading>
+          <ListHeading action={<NewGarden gardens={gardens} />}>Your Gardens</ListHeading>
           <p id={GARDEN_REORDER_HELP_ID} className="sr-only">
             {GARDEN_REORDER_HELP}
           </p>
@@ -333,6 +345,7 @@ function Sidebar({
                       data-gardens-side="garden"
                       data-gardens-side-id={g.id}
                       data-garden-draggable=""
+                      data-k2-focus=""
                       aria-label={`Open ${g.name}`}
                       aria-current={on ? 'page' : undefined}
                       aria-describedby={GARDEN_REORDER_HELP_ID}
@@ -375,7 +388,8 @@ function Sidebar({
               type="button"
               aria-expanded={deletedOpen}
               data-gardens-deleted-toggle=""
-              className="flex items-center gap-1.5 h-7 mb-1 type-heading text-[var(--color-text-primary)] no-drag cursor-pointer k2-focus outline-none"
+              data-k2-focus=""
+              className="relative flex items-center gap-1.5 min-h-7 -mx-2 px-2 mb-2 type-heading text-[var(--color-text-primary)] no-drag cursor-pointer outline-none"
               onClick={() => setDeletedOpen((o) => !o)}
             >
               <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.75} className={`w-3 h-3 transition-transform ${deletedOpen ? 'rotate-90' : ''}`}>
@@ -394,6 +408,7 @@ function Sidebar({
                         type="button"
                         data-gardens-side="deleted"
                         data-gardens-side-id={d.id}
+                        data-k2-focus=""
                         aria-label={`Open deleted ${d.name}`}
                         className={`${LIST_ROW} type-row text-[var(--color-text-secondary)] ${on ? ROW_ON : ROW_OFF}`}
                         onClick={() => onSelect({ kind: 'deleted', id: d.id })}
@@ -414,6 +429,7 @@ function Sidebar({
             <button
               type="button"
               data-gardens-side="unplaced"
+              data-k2-focus=""
               aria-label={NOT_IN_A_GARDEN}
               aria-current={unplacedOn ? 'page' : undefined}
               className={`${LIST_COL_ROW} ${unplacedOn ? ROW_ON : ROW_OFF}`}
@@ -425,10 +441,6 @@ function Sidebar({
             </button>
           </Surface>
         </section>
-      </div>
-      {/* Solid, above the list, so rows scroll under it. */}
-      <div className="relative z-[1] flex-shrink-0 px-4 py-3 border-t border-[var(--color-border)] bg-[var(--color-bg)]">
-        <NewGarden gardens={gardens} block />
       </div>
     </aside>
   )
@@ -496,7 +508,7 @@ function UnplacedPane(props: { membership: GardenMembership | null; error: strin
     <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`} data-gardens-pane="unplaced">
       <PaneHeader
         title={NOT_IN_A_GARDEN}
-        hint="Widget data and data sources on no Garden’s page. A widget or source a Garden uses is under that Garden."
+        hint="Data and sources no Garden uses. Anything a Garden uses is under that Garden."
       />
       <GardenDataSections garden={null} {...props} />
     </div>
@@ -539,12 +551,12 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
 
   const reset = async (): Promise<void> => {
     const yes = await useConfirmDialogStore.getState().confirm({
-      title: 'Reset Zen settings?',
-      message: 'zen.toml goes back to K2’s defaults. K2 keeps the current file in history first.',
+      title: 'Reset the shared look?',
+      message: 'Every change to the look your Gardens share goes back to K2’s defaults. Each Garden’s own page stays as it is. K2 keeps a copy in history first.',
       confirmLabel: 'Reset',
       destructive: true,
     })
-    if (yes && (await attempt(resetZenSettingsFile, setBusy, (e) => setError(e ? `K2 couldn’t reset Zen settings. ${e}` : null)))) {
+    if (yes && (await attempt(resetZenSettingsFile, setBusy, (e) => setError(e ? `K2 couldn’t reset the shared look. ${e}` : null)))) {
       setJustReset(true)
       loadRecent()
     }
@@ -552,9 +564,9 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
 
   return (
     <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`} data-gardens-pane="styles" data-settings-id="zen-gardens.advanced">
-      <PaneHeader title="Styles" hint="The look every Garden uses on this computer. A Garden can pick its own theme in Zen." />
+      <PaneHeader title="Styles" hint="How your Gardens look on this computer." />
       <ActionError text={error} onDismiss={() => setError(null)} testId="gardens-styles-error" />
-      <SettingsGroup title="Theme" hint="Every Garden without its own theme uses this one." settingId="zen-gardens.theme" card>
+      <SettingsGroup title="Theme" hint="Every Garden uses this theme unless it picks its own." settingId="zen-gardens.theme" card>
         {st.themes.length === 0 ? (
           <div className="px-4 py-3">
             <p className={SETTING_ROW_LABEL}>No themes yet</p>
@@ -590,16 +602,14 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
         {st.path ? (
           <SettingRow
             label="Gardens folder"
-            hint={
-              <span className="font-mono select-all break-all" data-zen-gardens-path="">
-                {st.path}
-              </span>
-            }
+            hint="Where K2 keeps each Garden’s page, your themes and their history."
             settingId="zen-gardens.folder"
             below={revealError ? <InlineError text={`K2 couldn’t open the folder. ${revealError}`} testId="gardens-reveal-error" /> : undefined}
           >
             <Button
               variant="quiet"
+              title={st.path}
+              data-zen-gardens-path={st.path}
               onClick={() => {
                 setRevealError(null)
                 revealItemInDir(st.path as string).catch((err: unknown) => setRevealError(err instanceof Error ? err.message : String(err)))
@@ -612,11 +622,11 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
         <SettingRow
           label={
             <span className="inline-flex items-center gap-2">
-              Zen settings
+              Shared look
               {justReset && <DoneNote text="Reset" />}
             </span>
           }
-          hint="Puts zen.toml back to K2’s defaults. K2 keeps the current file in history first."
+          hint="Undo every change to the look your Gardens share. K2 keeps a copy first."
         >
           <Button variant="danger-quiet" disabled={busy} data-gardens-reset-zen="" onClick={() => void reset()}>
             Reset…
@@ -640,7 +650,7 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
         ) : (
           <SettingsGroup
             title="Recent look changes"
-            hint="Who changed a theme or reset Zen settings, newest first."
+            hint="Who changed the theme or reset the shared look, newest first."
             card
             action={
               <Button variant="quiet" onClick={() => onHistory({ kind: 'garden', garden: '*', name: 'Styles' })}>
@@ -968,7 +978,7 @@ function GardenPane({
                 {renamed && <DoneNote text="Renamed" />}
               </span>
             }
-            hint={<span data-garden-pane-made="">{made ?? 'A Zen page on this computer.'}</span>}
+            hint={<span data-garden-pane-made="">{made ?? 'A Garden on this computer.'}</span>}
             testId=""
             actions={
               <>
@@ -1021,15 +1031,18 @@ function GardenPane({
                   <li
                     key={e.agent}
                     data-garden-editor={e.agent}
-                    className="px-4 py-3 flex items-center gap-3 hover:bg-[var(--color-wash-1)] transition-colors"
+                    className="px-4 py-3 flex items-center gap-6 hover:bg-[var(--color-wash-1)] transition-colors"
                   >
-                    <span
-                      aria-hidden="true"
-                      className="w-2 h-2 rounded-[var(--radius-pill)] flex-shrink-0"
-                      style={{ background: e.color ?? 'var(--color-text-muted)' }}
-                    />
                     <div className="flex-1 min-w-0">
-                      <p className="type-name text-[var(--color-text-primary)] truncate">{e.name}</p>
+                      <p className="flex items-center gap-2 min-w-0 type-name text-[var(--color-text-primary)]">
+                        <span className="truncate">{e.name}</span>
+                        <span
+                          aria-hidden="true"
+                          data-garden-editor-dot=""
+                          className="w-2 h-2 rounded-[var(--radius-pill)] flex-shrink-0"
+                          style={{ background: e.color ?? 'var(--color-text-muted)' }}
+                        />
+                      </p>
                       <p className={SETTING_ROW_HINT} data-garden-editor-added="">
                         {gardenEditorAddedWords(e)[0].toUpperCase() + gardenEditorAddedWords(e).slice(1)}
                       </p>

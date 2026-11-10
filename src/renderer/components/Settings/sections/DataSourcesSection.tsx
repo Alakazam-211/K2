@@ -8,7 +8,7 @@
 // [GV66], and re-reads on that server's `sources_changed` (never on a
 // timer of its own beyond the visible-page re-read below).
 
-import { SettingsLoadState } from '../controls/SettingControls'
+import { SettingsLoadState, SETTING_ROW_HINT } from '../controls/SettingControls'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
 import { primaryScope } from '@/kessel/server-scope'
@@ -147,20 +147,13 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
         ) : (
           <h2 className="type-title text-[var(--color-text-primary)]">External Data</h2>
         )}
-        <p className={`type-hint ${muted} mt-1 max-w-2xl`}>
-          {embedded && only
-            ? 'Checks this server runs that cards here read. They keep running when no window is open.'
-            : 'Checks this server runs for Garden cards and agents. They keep running when no window is open.'}{' '}
+        <p className={SETTING_ROW_HINT}>
+          {embedded && only ? 'Checks that feed the cards here.' : 'Checks that feed Garden cards and agents.'}{' '}
           <span data-testid="sources-runs-on">
-            They run on {scope.isRemote ? scope.label : scope.label.replace(/^This computer$/, 'this computer')}
-            {scope.isRemote ? ', which is always on.' : '.'}
+            K2 runs them on {scope.isRemote ? scope.label : scope.label.replace(/^This computer$/, 'this computer')}
+            {macHere ? <span data-testid="sources-mac-hint"> while it’s awake</span> : null}, even with no window open.
           </span>
         </p>
-        {macHere && (
-          <p className={`type-hint ${muted}`} data-testid="sources-mac-hint">
-            Checks run only while this Mac is awake. To keep them running, put them on an always-on server.
-          </p>
-        )}
         {legacy && (
           <p className="type-hint text-[var(--color-status-warn)]" data-testid="sources-legacy-token">
             This server is saved with an old host token, so it treats you as its owner. Sign in to it again with your Connect
@@ -182,13 +175,13 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
       )}
 
       {shownRows && shownRows.length === 0 && rows && rows.length > 0 && (
-        <p className={`type-hint ${muted}`} data-testid="sources-none-here">
-          No sources on this server are used here.
-        </p>
+        <SettingsLoadState kind="empty" title="None here yet" testId="sources-none-here">
+          A check shows here once a card here reads it.
+        </SettingsLoadState>
       )}
       {rows && rows.length === 0 && (
-        <SettingsLoadState kind="empty" title="No sources yet" testId="sources-empty">
-          Ask an agent to add one. It waits here for you to approve it before it runs.
+        <SettingsLoadState kind="empty" title="No checks yet" testId="sources-empty">
+          Ask an agent to add one. It waits here for your approval before it runs.
         </SettingsLoadState>
       )}
 

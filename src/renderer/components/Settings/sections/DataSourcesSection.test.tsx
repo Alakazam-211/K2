@@ -229,7 +229,7 @@ describe('DataSourcesSection', () => {
     expect(r.textContent).toContain('Fleet boxes')
     expect(r.textContent).toContain('ok · 18 ok, 2 unknown · 40 s ago · 1 trigger')
     expect(r.textContent).toContain('pinned')
-    expect(screen.getByTestId('sources-runs-on').textContent).toBe('They run on akzm.k2.dev, which is always on.')
+    expect(screen.getByTestId('sources-runs-on').textContent).toBe('K2 runs them on akzm.k2.dev, even with no window open.')
     expect(screen.queryByTestId('sources-mac-hint')).toBeNull()
     expect(await screen.findByTestId('sources-poller')).toHaveProperty('textContent', 'Poller: 1 source · 20 targets · on time')
   })
@@ -238,6 +238,7 @@ describe('DataSourcesSection', () => {
     scopeState.isRemote = false
     const { unmount } = render(<DataSourcesSection />)
     expect(await screen.findByTestId('sources-mac-hint')).toBeTruthy()
+    expect(screen.getByTestId('sources-runs-on').textContent).toMatch(/^K2 runs them on .+ while it’s awake, even with no window open\.$/)
     unmount()
     scopeState.isRemote = true
     scopeState.username = undefined

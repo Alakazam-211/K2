@@ -418,7 +418,7 @@ describe('no switch (Rosson 2026-10-23)', () => {
 })
 
 describe('the sidebar (G25)', () => {
-  it('Styles first, then each Garden (lock, editors, made by), Deleted Gardens (n), Not in a Garden, and New Garden in the footer', async () => {
+  it('Styles first, then Your Gardens with New Garden as its action, each Garden (lock, editors, made by), Deleted Gardens (n) and Not in a Garden', async () => {
     await mountPage()
     const side = q('[data-gardens-sidebar]')
     await waitFor(() => expect(side.querySelectorAll('[data-garden-side-row]').length).toBe(2))
@@ -426,7 +426,11 @@ describe('the sidebar (G25)', () => {
     const order = [...side.querySelectorAll('[data-gardens-side], [data-zen-settings-new-garden], [data-gardens-deleted-toggle]')].map(
       (el) => el.getAttribute('data-gardens-side') ?? (el.hasAttribute('data-zen-settings-new-garden') ? 'new' : 'deleted'),
     )
-    expect(order).toEqual(['styles', 'garden', 'garden', 'deleted', 'unplaced', 'new'])
+    expect(order).toEqual(['styles', 'new', 'garden', 'garden', 'deleted', 'unplaced'])
+    // Every list row draws the list rows' focus ring inside itself (never clipped by its card).
+    const rowsWithRing = [...side.querySelectorAll('[data-gardens-side="garden"], [data-gardens-side="unplaced"], [data-gardens-deleted-toggle]')]
+    expect(rowsWithRing.length).toBe(4)
+    for (const el of rowsWithRing) expect(el.hasAttribute('data-k2-focus')).toBe(true)
     expect(q('[data-gardens-side="unplaced"]').textContent).toBe('Not in a GardenData and sources no Garden uses')
     expect(q('[data-gardens-side="styles"]').getAttribute('aria-current')).toBe('page')
     const rows = [...side.querySelectorAll('[data-garden-side-row]')]
@@ -453,7 +457,10 @@ describe('the sidebar (G25)', () => {
     expect(within(pane).queryByRole('switch')).toBeNull()
     await waitFor(() => expect(pane.querySelectorAll('[data-gardens-theme-list] li').length).toBe(2))
     expect(q('[data-gardens-reset-zen]', pane).textContent).toBe('Reset…')
-    expect(q('[data-zen-gardens-path]', pane).textContent).toBe('/Users/r/.k2/zen')
+    // The folder's path is the Reveal button's tooltip, not printed text.
+    expect(q('[data-zen-gardens-path]', pane).getAttribute('title')).toBe('/Users/r/.k2/zen')
+    expect(pane.textContent).not.toContain('/Users/r/.k2/zen')
+    expect(pane.textContent).not.toContain('zen.toml')
     await waitFor(() => expect(q('[data-gardens-look-line="e-t"]', pane).textContent).toContain('You changed the theme to paper'))
     expect(gets('zen/garden/history')).toContainEqual({ garden: '*', limit: 20 })
   })
@@ -602,7 +609,7 @@ describe('the Garden pane (G26)', () => {
     expect(q('[data-garden-editor-added]', editors[1]).textContent).toMatch(/^Added automatically at upgrade · /)
     expect(within(pane).getByTestId('garden-sees').textContent).toBe('What it can seeEverything you can see. Its widgets read what you can read on this computer.')
     await waitFor(() => expect(pane.querySelector('[data-zen-garden-lock="g-2"]')).not.toBeNull())
-    expect(q('[data-zen-garden-lock="g-2"]', pane).textContent).toBe('Lock gardenAgents can’t change this Garden. You still can, and K2’s updates to its libraries still apply.')
+    expect(q('[data-zen-garden-lock="g-2"]', pane).textContent).toBe('Lock gardenAgents can’t change this Garden. You still can, and K2’s own updates still arrive.')
     expect(q('[data-zen-garden-sync="g-2"]', pane).textContent).toContain('Get K2’s design updates')
     await waitFor(() => expect(pane.querySelectorAll('[data-garden-widget]').length).toBe(2))
     const widgets = [...pane.querySelectorAll('[data-garden-widget]')]
@@ -738,7 +745,7 @@ describe('Widget data (G28)', () => {
     madeBy: { kind: 'agent', handle: 'ana' },
   }
 
-  it('on: "Widget data", the last signer, no It’s mine or Let … use, grants under Advanced', async () => {
+  it('on: "Widget data", the last signer, no It’s mine or Let … use, grants under Other agents', async () => {
     h.spaces = [SPACE]
     h.widgets = [{ name: 'fleet-edge', builtin: false, title: null }]
     setGardenAccessOn(true)
@@ -749,9 +756,10 @@ describe('Widget data (G28)', () => {
     expect(q('[data-garden-data-summary]', line).textContent).toContain('Last signed by ana')
     expect(line.textContent).not.toContain('It\'s mine')
     expect(line.textContent).not.toContain('use this data')
-    await act(async () => fireEvent.click(within(line).getByRole('button', { name: 'Advanced' })))
+    expect(q('[data-garden-data-summary]', line).textContent).toBe('1.2 KB · 3 items · Last signed by ana')
+    await act(async () => fireEvent.click(within(line).getByRole('button', { name: 'Other agents' })))
     const adv = await waitFor(() => q('[data-garden-data-advanced="fleet-edge"]'))
-    expect(adv.textContent).toContain('Advanced: data grants')
+    expect(adv.textContent).toContain('Other agents who can use this data')
     expect(adv.querySelector('[data-garden-data-grants="fleet-edge"]')).not.toBeNull()
   })
 

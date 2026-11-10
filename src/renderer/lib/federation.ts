@@ -1249,26 +1249,22 @@ export interface AggregatedRemoteConnection extends RemoteConnectionEntry {
  * empty, never throws into the render).
  */
 export async function listAllRemoteConnections(): Promise<AggregatedRemoteConnection[]> {
-  try {
-    const projects = await daemonCliGet<Array<{ id: string; name?: string; path: string }>>(primaryScope(),
-      'projects/list',
-    )
-    const list = Array.isArray(projects) ? projects : []
-    const out: AggregatedRemoteConnection[] = []
-    // Sequential (not Promise.all): the daemon serves one request per TCP
-    // connection, and the connection counts are small — bursting would just
-    // churn sockets. Each workspace failure degrades to none for that ws.
-    for (const p of list) {
-      if (!p?.path) continue
-      const conns = await listRemoteConnections(p.path)
-      for (const c of conns) {
-        out.push({ ...c, sourceWorkspace: p.name || p.path, sourcePath: p.path })
-      }
+  // Throws when the workspace list can't be read, so Settings can say so
+  // instead of showing "no agents".
+  const projects = await daemonCliGet<Array<{ id: string; name?: string; path: string }>>(primaryScope(), 'projects/list')
+  const list = Array.isArray(projects) ? projects : []
+  const out: AggregatedRemoteConnection[] = []
+  // Sequential (not Promise.all): the daemon serves one request per TCP
+  // connection, and the connection counts are small — bursting would just
+  // churn sockets. Each workspace failure degrades to none for that ws.
+  for (const p of list) {
+    if (!p?.path) continue
+    const conns = await listRemoteConnections(p.path)
+    for (const c of conns) {
+      out.push({ ...c, sourceWorkspace: p.name || p.path, sourcePath: p.path })
     }
-    return out
-  } catch {
-    return []
   }
+  return out
 }
 
 /** List the REMOTE (cross-daemon) connections recorded for a source

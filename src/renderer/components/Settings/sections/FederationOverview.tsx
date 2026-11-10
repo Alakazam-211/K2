@@ -9,16 +9,15 @@
 
 import React, { useCallback, useEffect, useState } from 'react'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import {
   listAllRemoteConnections,
   removeRemoteConnection,
   remoteConnectionGoneNote,
   type AggregatedRemoteConnection,
 } from '@/lib/federation'
-import { SettingsGroup } from '../controls/SettingControls'
-
-const BTN_DANGER =
-  'px-2 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default flex-shrink-0'
+import { Button, Callout, Surface } from '@/components/ui'
+import { ConnectionRow, HealthWord, MetaDot, SectionHeader, StateNote } from './ConnectionsParts'
 
 export function FederationOverview({
   /** Bump after pairing / connection edits so the list reloads. */
@@ -33,32 +32,50 @@ export function FederationOverview({
 
   const [loading, setLoading] = useState(true)
   const [conns, setConns] = useState<AggregatedRemoteConnection[]>([])
+  const confirm = useConfirmDialogStore((s) => s.confirm)
   const [removingKey, setRemovingKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** Couldn't read the list at all: not the same as "no agents". */
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const load = useCallback(async (isCancelled: () => boolean = () => false): Promise<void> => {
+    setLoading(true)
+    setLoadError(null)
+    try {
+      const list = await listAllRemoteConnections()
+      if (isCancelled()) return
+      setConns(list)
+    } catch (e) {
+      if (isCancelled()) return
+      setConns([])
+      setLoadError(e instanceof Error ? e.message : String(e))
+    } finally {
+      if (!isCancelled()) setLoading(false)
+    }
+  }, [])
 
   const reload = useCallback(async () => {
-    setLoading(true)
     setError(null)
-    const list = await listAllRemoteConnections()
-    setConns(list)
-    setLoading(false)
-  }, [])
+    await load()
+  }, [load])
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    void (async () => {
-      const list = await listAllRemoteConnections()
-      if (cancelled) return
-      setConns(list)
-      setLoading(false)
-    })()
+    void load(() => cancelled)
     return () => {
       cancelled = true
     }
-  }, [hostKey, refreshKey])
+  }, [load, hostKey, refreshKey])
 
   const handleRemove = async (c: AggregatedRemoteConnection): Promise<void> => {
+    const name = c.agent || c.address
+    const ok = await confirm({
+      title: c.host ? `Remove ${name} on ${c.host}?` : `Remove ${name}?`,
+      message: `${c.sourceWorkspace} will no longer be connected to ${name}. The server stays paired, so you can add the agent again from the workspace’s Connections tab.`,
+      confirmLabel: 'Remove',
+      destructive: true,
+    })
+    if (!ok) return
     const key = `${c.sourcePath}|${c.address}`
     setRemovingKey(key)
     setError(null)
@@ -73,70 +90,87 @@ export function FederationOverview({
   }
 
   return (
-    <div data-settings-id="connections.federation-overview">
-      <SettingsGroup title="Agents on other servers">
-        <p className="type-hint text-[var(--color-text-muted)] mb-2 leading-relaxed">
-          Agents on other servers connected to workspaces on{' '}
-          <span className="text-[var(--color-text-secondary)]">{hostLabel}</span>
-          . Removing one here doesn&apos;t unpair its server.
-        </p>
-        {error && (
-          <div className="mb-2 type-hint text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_25%,transparent)]">
-            {error}
-          </div>
-        )}
+    <section data-settings-id="connections.federation-overview">
+      <SectionHeader
+        title="Agents on other servers"
+        hint={
+          <>
+            Agents on other servers connected to workspaces on{' '}
+            <span className="text-[var(--color-text-primary)]">{hostLabel}</span>. Removing one here doesn&apos;t unpair
+            its server.
+          </>
+        }
+      />
+      {error && (
+        <Callout role="alert" className="mb-3 type-hint">
+          {error}
+        </Callout>
+      )}
+      <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
         {loading ? (
-          <div className="type-hint text-[var(--color-text-muted)] px-3 py-2">Loading…</div>
+          <StateNote title="Loading…" />
+        ) : loadError ? (
+          <StateNote
+            data-testid="connections-agents-error"
+            title="Couldn’t load agents on other servers."
+            hint={loadError}
+            action={
+              <Button variant="quiet" onClick={() => void reload()}>
+                Try again
+              </Button>
+            }
+          />
         ) : conns.length === 0 ? (
-          <div className="type-hint text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
-            No agents connected yet. Pair a server, then add agents from a workspace&apos;s
-            Connections tab.
-          </div>
+          <StateNote
+            title="No agents connected yet."
+            hint={<>Pair a server, then add agents from a workspace&apos;s Connections tab.</>}
+          />
         ) : (
-          <div className="space-y-2">
-            {conns.map((c) => {
-              const key = `${c.sourcePath}|${c.address}`
-              const busy = removingKey === key
-              return (
-                <div
-                  key={key}
-                  className="flex items-center gap-2 px-3 py-2 border border-[var(--color-border)]"
-                >
-                  <span className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)] bg-[var(--color-accent)]" />
-                  <div className="flex flex-col min-w-0 flex-1">
-                    <span className="type-row text-[var(--color-text-primary)] truncate" title={c.address}>
-                      <span className="font-medium">{c.agent || c.address}</span>
-                      {c.host ? (
-                        <span className="text-[var(--color-text-muted)] font-normal">
-                          {' '}on {c.host}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="type-hint text-[var(--color-text-muted)] truncate">
-                      Connected to{' '}
-                      <span className="text-[var(--color-text-secondary)]">{c.sourceWorkspace}</span>
+          conns.map((c) => {
+            const key = `${c.sourcePath}|${c.address}`
+            const busy = removingKey === key
+            return (
+              <ConnectionRow
+                key={key}
+                data-agent-row={c.address}
+                title={
+                  <span className="truncate" title={c.address}>
+                    {c.agent || c.address}
+                    {c.host ? (
+                      <span className="text-[var(--color-text-secondary)] font-normal"> on {c.host}</span>
+                    ) : null}
+                  </span>
+                }
+                meta={
+                  <>
+                    <span>
+                      Connected to <span className="text-[var(--color-text-primary)]">{c.sourceWorkspace}</span>
                     </span>
                     {c.gone && (
-                      <span className="type-hint text-[var(--color-text-muted)]" data-gone="true">
-                        Gone: {remoteConnectionGoneNote(c.host)}
-                      </span>
+                      <>
+                        <MetaDot />
+                        <span data-gone="true">
+                          <HealthWord tone="neutral">Gone:</HealthWord> {remoteConnectionGoneNote(c.host)}
+                        </span>
+                      </>
                     )}
-                  </div>
-                  <button
-                    type="button"
-                    className={BTN_DANGER}
+                  </>
+                }
+                actions={
+                  <Button
+                    variant="quiet"
                     disabled={busy || removingKey !== null}
                     onClick={() => void handleRemove(c)}
                     title="Remove this connection. The server stays paired."
                   >
                     {busy ? 'Removing…' : 'Remove'}
-                  </button>
-                </div>
-              )
-            })}
-          </div>
+                  </Button>
+                }
+              />
+            )
+          })
         )}
-      </SettingsGroup>
-    </div>
+      </Surface>
+    </section>
   )
 }

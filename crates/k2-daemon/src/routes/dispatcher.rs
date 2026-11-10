@@ -10872,6 +10872,67 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // The setup checklist (prd-setup-checklist-v1 C1) — `/cli/first-run/*`:
+        // a person's own list. The PERSON comes from the token (owner token →
+        // `owner`; a live Connect session → its person key), never the body.
+        // Agent passports never get here as agents (`/cli/first-run/` is on
+        // the passport denylist) and, like app passes and API keys, fail
+        // `validate_session` → 403 `first_run_person_only`. The Member floor
+        // already ran in `role_gate` (a Voice & Chat only login is refused
+        // there). A GET to a POST route was answered 405 before auth
+        // (`get_refused`).
+        p if crate::first_run_routes::is_route(p) => {
+            use crate::first_run_routes::MAX_BODY;
+            let actor = if super::http::token_is_owner(&query, state.token.as_str()) {
+                Some(crate::notify_routes::Actor::owner_token())
+            } else {
+                super::http::extract_token(&query)
+                    .filter(|t| !t.is_empty())
+                    .and_then(k2_core::connect_users::validate_session)
+                    .map(|u| crate::notify_routes::Actor::login(&u))
+            };
+            let Some(actor) = actor else {
+                if is_post {
+                    let _ = super::http::read_post_body_capped(&mut *stream, &mut buf, MAX_BODY).await;
+                } else {
+                    let _ = stream.read(&mut buf).await;
+                }
+                let r = crate::first_run_routes::not_a_person();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            };
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        super::http::refuse_body_too_large(
+                            &mut *stream,
+                            &refused,
+                            "413 Payload Too Large",
+                            "application/json",
+                            r#"{"ok":false,"error":{"code":"body_too_large","hint":"send {\"row\": \"<id>\"} only"}}"#,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::first_run_routes::handle(is_post, &p_owned, &body_bytes, &actor)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // C2: dual-auth (owner OR scoped) so agent-initiated compose into
         // another workspace is principal-bound and peer-gated. Compose
         // TARGET is `project=` — preserve it across stamp_principal

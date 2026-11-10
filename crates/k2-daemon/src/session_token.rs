@@ -494,6 +494,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/clone/",
         "/cli/tunnel/",
         "/cli/daemon/",
+        // The setup checklist (prd-setup-checklist-v1): a person's own list.
+        "/cli/first-run/",
         "/cli/sessions/v2/", // PTY spawn/close = RCE-adjacent
         // Sew (S28 §17 item 8, S32 §11.1): agents never get chat passes,
         // the key routes or the install owner. Exact paths, so S30's agent

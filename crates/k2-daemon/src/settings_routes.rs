@@ -191,6 +191,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // Clone permissions (prd-clone-carries-threads-and-vault-v1 CL22): the
     // master switch for cloning agents to people's personal computers.
     "allowClonePersonalComputers",
+    // The setup checklist (prd-setup-checklist-v1): shown in the app only
+    // once the owner turns it on. Off by default until it is polished.
+    "setupChecklist",
     // 0.46.6: the K2 Connect account server address. It decides where
     // k2.dev account passwords and refresh tokens are sent.
     "connectDbUrl",
@@ -574,6 +577,7 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
     let agent_hooks_touched = partial.get("agentHooks").is_some();
     let cores_touched = partial.get(k2_core::docs_cores::SETTING_KEY).is_some();
     let voice_touched = ["voiceRoomsPreview", "voiceRoomsCount"].iter().any(|k| partial.get(*k).is_some());
+    let checklist_touched = partial.get("setupChecklist").is_some();
     match k2_core::app_settings::update(partial) {
         Ok(merged) => {
             // Sync the federation master switch into the running process so the
@@ -626,6 +630,10 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
             // audit names `by`, and every client hears of it. The answer
             // waits for all of it.
             let cores_report = crate::docs::cores::sync_multiplayer_cores(&merged.multiplayer_cores, by);
+            // The setup checklist's `enabled` changed for everyone.
+            if checklist_touched {
+                crate::first_run_routes::emit_changed(None);
+            }
             // Local-window live-sync (v1): renderer listens on `sync:settings`.
             k2_core::agent_hooks::emit(
                 k2_core::agent_hooks::HookEvent::SyncSettings,

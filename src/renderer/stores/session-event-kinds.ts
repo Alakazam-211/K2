@@ -229,6 +229,12 @@ export const SESSION_EVENT_ROUTES = {
   // phone (`onPairCodeChanged`). Not carried: Settings and the profile modal
   // talk to their own server.
   pair_code_changed: { class: 'app', app: true },
+  // prd-setup-checklist-v1 (C1): the setup checklist changed. The checklist
+  // store (C3) reloads on it; until then nothing on this client reads it.
+  first_run_changed: {
+    class: 'app',
+    ignored: 'The setup checklist store (C3) is not built yet; it reloads GET /cli/first-run/status on this.',
+  },
   // inbox-stream-v1 (0.46.7): the phone inbox stream. Sent only to a
   // socket that subscribed with {"t":"inbox",…}; this client never does.
   inbox_subscribed: { class: 'inbox', ignored: INBOX_ONLY },

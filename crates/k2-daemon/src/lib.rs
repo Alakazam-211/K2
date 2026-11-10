@@ -212,6 +212,8 @@ pub mod people_picture_routes;
 pub mod homes_routes;
 /// stash-sync-v1 (0.46.7): `/cli/me/stash*`, a person's prompt stash between devices.
 pub mod stash_routes;
+/// The setup checklist (prd-setup-checklist-v1 C1): `/cli/first-run/*`.
+pub mod first_run_routes;
 /// post-idempotency-v1 (0.46.8): `clientMsgId` on Thread and project chat posts.
 pub mod client_msg_id;
 /// Send-delay fix 2 (0.46.8): Thread and project chat posts answer before

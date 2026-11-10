@@ -818,6 +818,9 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::PairCodeChanged { .. } => None,
         // Voice rooms (preview): one box-wide rooms list, APP-LEVEL.
         SessionEvent::VoiceRoomsChanged { .. } => None,
+        // The setup checklist: path-wise app-level; person-scoped when it
+        // names a person (the socket loop checks `SessionEvent::person`).
+        SessionEvent::FirstRunChanged { .. } => None,
 
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
         // in `workspace_path`; the cwd-prefix filter routes them to the
@@ -1229,6 +1232,7 @@ mod tests {
             SessionEvent::StashChanged { person: "owner".into(), cursor: 4 },
             pair_code_paired("owner"),
             SessionEvent::VoiceRoomsChanged { rev: 1 },
+            SessionEvent::FirstRunChanged { person: Some("owner".into()) },
         ]
     }
 

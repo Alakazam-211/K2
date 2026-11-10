@@ -1096,6 +1096,21 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "voice_rooms_changed", "rev": number }` (`rev` is
     /// the rooms list's own `rev`).
     VoiceRoomsChanged { rev: u64 },
+
+    /// prd-setup-checklist-v1 (C1): a setup checklist changed. Refetch
+    /// signal: clients re-read `GET /cli/first-run/status`. PERSON-SCOPED
+    /// like `homes_changed` when `person` is set (hide, show, skip and
+    /// finish: only that person's sockets, the owner token and every login
+    /// the owner linked being one person; the owner dismissing the account
+    /// prompt). `None` reaches every socket: something every list reads
+    /// changed (the owner linked a login, or the `setupChecklist` switch
+    /// flipped). Carries nothing else.
+    ///
+    /// Wire: `{ "kind": "first_run_changed" }`.
+    FirstRunChanged {
+        #[serde(skip)]
+        person: Option<String>,
+    },
 }
 
 /// The body of a `thread_read` / `project_read` frame (thread-read-v1).
@@ -1154,6 +1169,7 @@ impl SessionEvent {
             | SessionEvent::HomesDeviceRemoved { person, .. }
             | SessionEvent::StashChanged { person, .. }
             | SessionEvent::PairCodeChanged { person, .. } => Some(person.as_str()),
+            SessionEvent::FirstRunChanged { person } => person.as_deref(),
             _ => None,
         }
     }
@@ -1236,6 +1252,7 @@ impl SessionEvent {
             SessionEvent::StashChanged { .. } => "stash_changed",
             SessionEvent::PairCodeChanged { .. } => "pair_code_changed",
             SessionEvent::VoiceRoomsChanged { .. } => "voice_rooms_changed",
+            SessionEvent::FirstRunChanged { .. } => "first_run_changed",
         }
     }
 }

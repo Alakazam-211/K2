@@ -233,6 +233,8 @@ fn owner_account_prompt(is_post: bool, path: &str, actor: &Actor) -> CliResponse
         if let Err(e) = k2_core::owner_account_prompt::dismiss(version) {
             return error("500 Internal Server Error", "store", e);
         }
+        // The owner's setup checklist reads the prompt (own_sign_in).
+        crate::first_run_routes::emit_changed(Some(OWNER.to_string()));
     }
     match k2_core::owner_account_prompt::load_view(version) {
         Ok(v) => match serde_json::to_string(&v) {
@@ -623,6 +625,9 @@ fn owner_accounts_write(people: &People, actor: &Actor, body: &[u8]) -> CliRespo
     // The owner's names (and colour key) follow the linked account.
     crate::presence::rebroadcast();
     emit_changed();
+    // Setup checklists: the owner's own_sign_in and phone rows, and which
+    // logins are the owner person, may all have changed.
+    crate::first_run_routes::emit_changed(None);
     match People::load() {
         Ok(p) => owner_accounts_view(&p),
         Err(e) => error("500 Internal Server Error", "store", e),

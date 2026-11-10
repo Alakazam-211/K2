@@ -399,6 +399,14 @@ export interface StashChangedEvent {
  *  or it went `void` (a newer code replaced it, or the login changed).
  *  `deviceName` / `sessionId` (the phone's row id in `GET
  *  /cli/auth/devices`) are set on `paired` only. Never the code or a token. */
+/** APP-LEVEL (prd-setup-checklist-v1 C1) — a setup checklist changed:
+ *  re-read `GET /cli/first-run/status`. Person-scoped when the daemon
+ *  names a person (hide, show, skip, finish); sent to every socket when
+ *  something every list reads changed. No payload. */
+export interface FirstRunChangedEvent {
+  kind: 'first_run_changed'
+}
+
 export interface PairCodeChangedEvent {
   kind: 'pair_code_changed'
   codeId: string
@@ -1030,6 +1038,7 @@ export type SessionEventMessage =
   | HomesDeviceRemovedEvent
   | StashChangedEvent
   | PairCodeChangedEvent
+  | FirstRunChangedEvent
   | RemoteSessionAccessDeniedEvent
   | SewChangedEvent
   | VoiceRoomsChangedEvent

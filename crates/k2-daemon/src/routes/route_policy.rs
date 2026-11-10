@@ -1032,6 +1032,14 @@ pub const ROUTES: &[Route] = &[
     get("/cli/firewall/rules", Admin),
     post("/cli/firewall/ssh", Admin),
     post("/cli/firewall/upstream", Owner),
+    // The setup checklist (prd-setup-checklist-v1 C1): a person's own list,
+    // bound to the credential (owner token or a login). Member floor, so a
+    // Voice & Chat only login is refused; agent passports are on the
+    // `session_token` denylist (`/cli/first-run/`).
+    post("/cli/first-run/hide", Member),
+    post("/cli/first-run/show", Member),
+    post("/cli/first-run/skip", Member),
+    get("/cli/first-run/status", Member),
     post("/cli/focus-groups/assign", Member),
     post("/cli/focus-groups/create", Member),
     post("/cli/focus-groups/delete", Member),
@@ -2849,6 +2857,9 @@ pub const GET_READS_WITH_HOUSEKEEPING: &[(&str, &str)] = &[
     ("/cli/federation/peer-roster", "lazy-heals stale connection rows from the peer roster"),
     ("/cli/federation/peer-rosters", "lazy-heals stale connection rows from each peer roster"),
     ("/cli/federation/pubkey", "creates the host keypair once if missing"),
+    // The setup checklist: the first read that finds every row done or
+    // skipped records `finished_at` once (prd-setup-checklist-v1).
+    ("/cli/first-run/status", "records the person's list as finished, once, when every row is done or skipped"),
     ("/cli/heartbeat/active-session", "clears a dead active terminal id / records a live one"),
     ("/cli/host-sessions/list", "drops dead host-session PTYs from the session map"),
     ("/cli/mail/approvals/list", "auto-denies sends pending longer than 7 days"),
@@ -3910,6 +3921,54 @@ mod tests {
     // ── Voice & Chat only (prd-voice-chat-only-members-v1 §11) ─────────
 
     /// Every `(method, row floor)` cell the table declares.
+    /// The setup checklist (prd-setup-checklist-v1 C1) is a person's own
+    /// list: the Member floor on every route (so Voice & Chat is refused),
+    /// never on the Voice & Chat allowlist, never an agent verb, and the
+    /// GET chain (an agent's cell socket) refuses it too.
+    #[test]
+    fn the_setup_checklist_is_a_persons_list_at_the_member_floor() {
+        let routes = [
+            ("GET", "/cli/first-run/status"),
+            ("POST", "/cli/first-run/hide"),
+            ("POST", "/cli/first-run/show"),
+            ("POST", "/cli/first-run/skip"),
+        ];
+        for (method, p) in routes {
+            let row = lookup(p).unwrap_or_else(|| panic!("{p} is not classified"));
+            if method == "GET" {
+                assert_eq!((row.get, row.post), (Some(Floor::Member), None), "{p}");
+                assert!(!get_refused(p, ""), "{p} is a read");
+            } else {
+                assert_eq!((row.get, row.post), (None, Some(Floor::Member)), "{p}");
+                assert!(get_refused(p, ""), "{p}: a GET is refused");
+            }
+            assert!(
+                !VOICE_CHAT_ALLOWLIST.iter().any(|(_, a)| *a == p),
+                "{p} must not be on the Voice & Chat allowlist"
+            );
+            assert!(!crate::session_token::is_agent_verb(p), "{p}: an agent passport never reaches it");
+            let door = crate::first_run_routes::refuse_outside_person_arm(p, method == "POST")
+                .unwrap_or_else(|| panic!("{p}: the GET chain must refuse it"));
+            assert_eq!(door.status, "403 Forbidden", "{p}");
+        }
+        // Prefix: a future /cli/first-run/ route is denied to agents too.
+        assert!(!crate::session_token::is_agent_verb("/cli/first-run/anything-new"));
+        crate::test_support::with_temp_home(|| {
+            let vc = session("rp_fr_voice", Role::VoiceChat);
+            let member = session("rp_fr_member", Role::Member);
+            let passport = "sid-123.secret-abc";
+            assert!(connect_users::validate_session(passport).is_none(), "a passport is not a login session");
+            for (method, p) in routes {
+                let got = role_gate(method, p, &format!("token={vc}"), OWNER);
+                assert_eq!(status(&got), "403 Forbidden", "Voice & Chat on {method} {p}");
+                let got = role_gate(method, p, &format!("token={member}"), OWNER);
+                assert_eq!(status(&got), "pass", "a Member on {method} {p}");
+                let got = role_gate(method, p, &format!("token={OWNER}"), OWNER);
+                assert_eq!(status(&got), "pass", "the owner token on {method} {p}");
+            }
+        });
+    }
+
     fn cells() -> Vec<(&'static str, &'static Route, Floor)> {
         let mut out = Vec::new();
         for r in ROUTES {

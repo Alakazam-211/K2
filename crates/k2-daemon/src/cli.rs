@@ -182,6 +182,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     if let Some(resp) = crate::stash_routes::refuse_outside_person_arm(path, false) {
         return resp;
     }
+    // The setup checklist: the same door for `/cli/first-run/*`.
+    if let Some(resp) = crate::first_run_routes::refuse_outside_person_arm(path, false) {
+        return resp;
+    }
     if let Some(resp) = crate::push_routes::dispatch(path, params) {
         return resp;
     }

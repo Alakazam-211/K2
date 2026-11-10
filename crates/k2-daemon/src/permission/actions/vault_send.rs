@@ -72,7 +72,7 @@ pub(crate) static SEND: ActionSpec = ActionSpec {
     words: Words {
         setting: "Send {secrets} to {to}",
         what_changes: "Send {secrets} from {ws}'s vault to {to}, an agent on another server",
-        consequences: "A person gave {ws} {secrets}, so {them} leave this server only when you say so. K2 sends {them} as you, sealed to that server's vault: nobody sees the value on the way, and it waits there until a person on that server accepts it (unless {to} already accepts from {ws}). \"From now on\" also lets {ws} send {secrets} to {to} itself, without a card, until you remove it in {path}.{noted}",
+        consequences: "A person gave {ws} {secrets}, so {them} leave this server only when you say so. K2 sends {them} as you, sealed to that server's vault: nobody sees the value on the way, and it waits there until a person on that server accepts it, unless that server already lets {to} take secrets from {ws} without asking. \"From now on\" also lets {ws} send {secrets} to {to} itself, without a card, until you remove it in {path}.{noted}",
         scope: "{secrets} to {to}",
         duration: "once, unless you choose from now on",
         retry: "",
@@ -322,7 +322,7 @@ pub(crate) fn turn_on_always(ctx: &Ctx, who: &Answerer) -> Result<String, String
         added.push(name);
     }
     Ok(format!(
-        "{} may send {} to {to} itself from now on, without a card (remove it in {}).",
+        "From now on {} may send {} to {to} itself, without a card; any other secret or agent still asks (remove it in {}).",
         ctx.workspace_handle,
         and_list(&added),
         crate::federation_vault::send_allow_settings_path(&ctx.workspace_handle)

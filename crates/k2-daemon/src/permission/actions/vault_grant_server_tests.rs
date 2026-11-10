@@ -162,6 +162,7 @@ async fn the_owner_allows_it_with_the_confirm_and_the_grant_route_runs_as_the_ow
     let turn = last_turn(&ws);
     assert!(turn.contains("approved by owner") && turn.contains(&format!("You can use {name} (server) as env until someone removes it")), "{turn}");
     assert!(turn.contains("reaches new sessions only") && turn.contains("k2 agent refresh"), "{turn}");
+    assert!(!turn.contains("once,"), "a share that stays never reads as once: {turn}");
     assert!(!turn.contains("k2test-server-secret"), "never the value");
     // The agent sees it now.
     assert!(v.meta(&selector(&name), &agent_caller(&ws).actor).is_ok(), "shared with the workspace");

@@ -364,7 +364,7 @@ function AnswerControls({
         {step.answer === PERMISSION_LABEL.alwaysVaultSend && (
           <div data-testid="permission-always-covers" style={{ color: TEXT2 }}>
             This also lets it send these secrets to that agent itself from now on, without a card. Any other secret or agent
-            still asks. Revoke it in Settings → Workspaces → Permissions.
+            still asks. Revoke it in Settings → Workspaces → this agent → Permissions → Secrets it may send to other servers.
           </div>
         )}
         <ConfirmStep
@@ -500,7 +500,7 @@ function AnswerControls({
         )}
         {always && (
           <CardButton
-            label={always}
+            label={confirm ? `${always} (needs your confirm)` : always}
             testId="permission-always"
             disabled={busy || (confirm && !canConfirmHere)}
             onClick={() => (confirm ? setStep({ kind: 'confirm', answer: always }) : void send({ answer: always }))}

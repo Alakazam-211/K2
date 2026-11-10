@@ -176,7 +176,7 @@ fn use_words(name: &str, how: Delivery) -> String {
         _ => {
             let var = k2_vault::delivery::default_env_name(name);
             format!(
-                "new sessions get ${var}. An environment variable reaches new sessions only, so for ${var} in this chat run k2 agent refresh; until then k2 vault env-file --secret {name} --scope server works now."
+                "new sessions get ${var}. An environment variable reaches new sessions only, so for ${var} in this chat run k2 agent refresh (a new chat that carries on from this one); until then k2 vault env-file --secret {name} --scope server works now."
             )
         }
     }

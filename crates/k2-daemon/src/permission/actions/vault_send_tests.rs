@@ -337,7 +337,7 @@ async fn from_now_on_lets_later_sends_through_to_that_agent_only_until_it_is_rem
     assert_eq!(grants.len(), 1, "{grants:?}");
     assert_eq!((grants[0].to.clone(), grants[0].added_by.clone()), (format!("bob::{}", fx.peer_host), format!("connect:{admin}")));
     let turn = last_turn(&ws);
-    assert!(turn.contains(&format!("{} may send GEO_DB to bob::{} itself from now on", ws.handle, fx.peer_host)), "{turn}");
+    assert!(turn.contains(&format!("From now on {} may send GEO_DB to bob::{} itself, without a card", ws.handle, fx.peer_host)), "{turn}");
 
     // A later send of that secret to that agent: straight through, no card.
     let (st, j, raw) = agent_sends(&fx, &ws, "GEO_DB", "bob::heldbox").await;

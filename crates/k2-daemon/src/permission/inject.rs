@@ -78,7 +78,10 @@ pub(crate) fn outcome_line(req: &PermissionRequest, now: i64) -> Option<String> 
                 Grant::Standing => format!("{setting} is now {on} for {scope}, {duration}."),
                 Grant::OneTime => {
                     let tail = if msg.trim().is_empty() { String::new() } else { format!(" {}", msg.trim()) };
-                    format!("once, for {scope}.{tail}")
+                    // A share that stays (`vault.grant-server`) is approved
+                    // once but lasts: its turn never says "once".
+                    let once = if req.action == super::actions::vault_grant_server::ACTION { "" } else { "once, " };
+                    format!("{once}for {scope}.{tail}")
                 }
             };
             format!("{p} approved by {by}: {head}{retry}")

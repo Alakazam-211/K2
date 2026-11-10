@@ -266,11 +266,11 @@ fn grant_out_of_reach(c: &VaultCaller, body: &[u8], e: &VaultError) -> Option<Cl
     let as_flag = how.map(|d| format!(" --as {d}")).unwrap_or_default();
     let hint = if k2_core::permission::gate::enabled_for(own) {
         format!(
-            "you can't see a server secret named {name}: no one shared it with you, or there is none (a secret in your own workspace is yours already). A person can share it with you on a card: run the line below. Then K2 says how to use it."
+            "you can't see a server secret named {name}: it isn't shared with you, or there is no such secret (K2 doesn't say which). If {name} is in your own workspace, it's yours already: leave out --scope server. A person can share it with you on a card: run the line below. Then K2 says how to use it."
         )
     } else {
         format!(
-            "you can't see a server secret named {name}: no one shared it with you, or there is none (a secret in your own workspace is yours already). Ask your person (an Owner or Admin) to share it with you: in Settings → Vault, Share on {name}, with {label}; or from their own terminal (Terminal or iTerm, not a K2 terminal): k2 vault grant {name} --scope server --to ws:{label}{as_flag}"
+            "you can't see a server secret named {name}: it isn't shared with you, or there is no such secret (K2 doesn't say which). If {name} is in your own workspace, it's yours already: leave out --scope server. Ask your person (an Owner or Admin) to share it with you: in Settings → Vault, Share on {name}, with {label}; or from their own terminal (Terminal or iTerm, not a K2 terminal): k2 vault grant {name} --scope server --to ws:{label}{as_flag}"
         )
     };
     let mut error = json!({ "code": GRANT_OUT_OF_REACH, "hint": hint, "secret": name });

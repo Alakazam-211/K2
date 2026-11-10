@@ -500,10 +500,10 @@ fn held_response(c: &VaultCaller, name: &str, agent: &str, host: &str, note: &st
     let cards = c.workspace_id().is_some_and(k2_core::permission::gate::enabled_for);
     let hint = match (&label, cards) {
         (Some(_), true) => format!(
-            "a person gave {name}, so it goes to another server only when a person on this server says so. Ask them with the line below: K2 puts a card on your Thread, and an Owner or Admin sends it from there with their vault confirm (once, or they let you send {name} to {to} yourself from now on). Several secrets for the same agent? Ask once with secret=A,B,C."
+            "a person gave {name}, so it goes to another server only when a person on this server says so. Ask them with the line below: K2 puts a card on your Thread, and an Owner or Admin sends it from there with their vault confirm, once, or they also let you send {name} to {to} yourself from now on, without a card. Several secrets for the same agent? Ask once with secret=A,B,C (one --why covers them)."
         ),
         (Some(ws), false) => format!(
-            "a person gave {name}, so it goes to another server only when a person on this server says so. Ask your person (an Owner or Admin) to do one of these: in {path}, add {name} for {to}, then you run this again; or send it themselves from their own terminal (Terminal or iTerm, not a K2 terminal; it asks for their vault confirm): k2 vault send {name} --scope ws:{ws} --to {to}",
+            "a person gave {name}, so it goes to another server only when a person on this server says so. Ask your person (an Owner or Admin) to do one of these: in {path}, add {name} for {to} (that lets you send it there from now on), then run this again; or send it themselves from their own terminal (Terminal or iTerm, not a K2 terminal; it asks for their vault confirm): k2 vault send {name} --scope ws:{ws} --to {to}",
             path = send_allow_settings_path(ws)
         ),
         (None, _) => format!(

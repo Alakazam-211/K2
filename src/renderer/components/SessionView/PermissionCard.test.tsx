@@ -183,7 +183,7 @@ describe('PermissionCard: a confirm action (§17.11.3, §17.4)', () => {
     expect(screen.queryByTestId('permission-always')).toBeNull()
     cleanup()
     draw(permissionDoc({ view: CONFIRM_VIEW, options: ['Allow', 'Deny', always] }), actions)
-    expect(text('permission-always')).toBe(always)
+    expect(text('permission-always')).toBe(`${always} (needs your confirm)`)
     fireEvent.click(screen.getByTestId('permission-always'))
     expect(actions.answer).not.toHaveBeenCalled()
     expect(text('permission-always-covers')).toContain('Never a box login')
@@ -208,7 +208,7 @@ describe('PermissionCard: a confirm action (§17.11.3, §17.4)', () => {
     const view = { ...CONFIRM_VIEW, proof: { kind: 'confirm', action: 'vault-share-service', secretId: 'pr_send' } }
     draw(permissionDoc({ view, options: ['Allow', 'Deny', always] }), actions)
     expect(text('permission-allow')).toBe('Allow (needs your confirm)')
-    expect(text('permission-always')).toBe(always)
+    expect(text('permission-always')).toBe(`${always} (needs your confirm)`)
     fireEvent.click(screen.getByTestId('permission-always'))
     expect(actions.answer).not.toHaveBeenCalled()
     expect(text('permission-always-covers')).toContain('Any other secret or agent still asks')

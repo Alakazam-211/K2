@@ -501,10 +501,16 @@ mod tests {
 
     /// Pull until the fake clock passes `until`.
     fn run(p: &mut PixelLayers<Screen>, t: &T, until: Instant) -> Vec<EncodedUnit> {
+        run_timed(p, t, until).into_iter().map(|(u, _)| u).collect()
+    }
+
+    /// [`run`] with each unit's send time: the fake clock when `next_unit`
+    /// handed it over (encodes don't move the fake clock).
+    fn run_timed(p: &mut PixelLayers<Screen>, t: &T, until: Instant) -> Vec<(EncodedUnit, Instant)> {
         let mut out = Vec::new();
         while *t.lock().unwrap() < until {
             match p.next_unit(Duration::from_millis(50)) {
-                Ok(Some(u)) => out.push(u),
+                Ok(Some(u)) => out.push((u, *t.lock().unwrap())),
                 Ok(None) => {}
                 Err(e) => panic!("{e:?}"),
             }
@@ -534,17 +540,19 @@ mod tests {
         let t0 = *t.lock().unwrap();
         let mut p = layers_on(Screen::new(&t, 60), &t);
         p.set_layers(&[spec(0, Codec::Jpeg, 60), spec(1, Codec::Jpeg, 30), spec(2, Codec::Jpeg, 24), spec(3, Codec::Jpeg, 15)]);
-        let units = run(&mut p, &t, t0 + Duration::from_secs(10));
+        let timed = run_timed(&mut p, &t, t0 + Duration::from_secs(10));
+        let units: Vec<EncodedUnit> = timed.iter().map(|(u, _)| u.clone()).collect();
         for (id, fps) in [(0u8, 60u32), (1, 30), (2, 24), (3, 15)] {
             let l = of(&units, id);
             let want = fps as usize * 10;
             assert!((want - 2..=want + 2).contains(&l.len()), "layer {id} at {fps}: {} units", l.len());
             let gap = Duration::from_secs_f64(1.0 / fps as f64);
-            assert!(l.windows(2).all(|w| w[1].captured_at - w[0].captured_at >= gap * 3 / 4), "layer {id} bunches");
+            let sent: Vec<Instant> = timed.iter().filter(|(u, _)| u.layer == id).map(|(_, at)| *at).collect();
+            assert!(sent.windows(2).all(|w| w[1] - w[0] >= gap * 3 / 4), "layer {id} bunches");
             assert!(l.windows(2).all(|w| w[1].seq == w[0].seq + 1), "seq +1 per unit");
             assert!(l[0].key && l[0].source_start && l.iter().skip(1).all(|u| u.key && !u.source_start), "JPEG is always key; one source start");
         }
-        assert_eq!(p.encodes() as usize, units.len(), "one encode per unit");
+        assert_eq!(p.encodes() as usize, units.len() + p.ready.len(), "one encode per unit (some still queued)");
         // The inner source was retuned once, to the fastest layer (it was
         // opened at 60 points already: no retune).
         assert!(p.source.retunes.lock().unwrap().is_empty());
@@ -560,9 +568,10 @@ mod tests {
         s.stall = Some((t0 + Duration::from_secs(1), Duration::from_secs(1)));
         let mut p = layers_on(s, &t);
         p.set_layers(&[spec(0, Codec::Jpeg, 30)]);
-        let units = run(&mut p, &t, t0 + Duration::from_secs(3));
+        let timed = run_timed(&mut p, &t, t0 + Duration::from_secs(3));
         let gap = Duration::from_secs_f64(1.0 / 30.0);
-        assert!(units.windows(2).all(|w| w[1].captured_at - w[0].captured_at >= gap * 3 / 4), "no burst");
+        assert!(timed.windows(2).all(|w| w[1].1 - w[0].1 >= gap * 3 / 4), "no burst");
+        let units: Vec<EncodedUnit> = timed.into_iter().map(|(u, _)| u).collect();
         let back = t0 + Duration::from_secs(2);
         let after: Vec<&EncodedUnit> = units.iter().filter(|u| u.captured_at >= back).collect();
         assert_eq!(after[0].captured_at, back, "the first frame after the stall goes at once");
@@ -586,7 +595,7 @@ mod tests {
         // then holds frame 3 (early) until a quarter gap past due and sends it.
         assert_eq!(units.len(), 2, "{units:?}");
         assert!(units[0].key && !units[1].key);
-        assert_eq!(units[1].captured_at, t0 + Duration::from_secs_f64(2.0 / 60.0), "the newest frame, not a stale one");
+        assert_eq!(units[1].captured_at, t0 + Duration::from_secs_f64(1.0 / 60.0) * 2, "the newest frame, not a stale one");
         // A joiner's ask on the still screen: no newer frame comes, so the
         // newest is keyed one layer gap after the ask.
         let asked = *t.lock().unwrap();

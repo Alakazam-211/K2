@@ -840,7 +840,8 @@ describe('Settings → LLMs show launch bar', () => {
     render(<AgentsSection />)
     const box = screen.getByRole('switch', { name: 'Show launch bar' })
     expect(box.getAttribute('aria-checked')).toBe('true')
-    const defaults = screen.getByRole('heading', { name: 'Default agent' })
+    // Default agent is a row now (Settings hill-climb): its picker carries the name.
+    const defaults = document.querySelector('[aria-label="Default agent"]') as Element
     const presets = screen.getByRole('heading', { name: 'Launch presets' })
     expect(defaults.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     expect(box.compareDocumentPosition(presets) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)

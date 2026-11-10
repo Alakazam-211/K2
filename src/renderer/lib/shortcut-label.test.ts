@@ -33,9 +33,9 @@ describe('metaChordLabel', () => {
 
 describe('platform copy', () => {
   it('Default AI Agent names the real chord', () => {
-    expect(defaultAgentLaunchCopy('mac')).toBe('Launched with ⇧⌘T or from the assistant')
-    expect(defaultAgentLaunchCopy('linux')).toBe('Launched with Super+Shift+T or from the assistant')
-    expect(defaultAgentLaunchCopy('windows')).toBe('Launched from the tab + menu or the assistant')
+    expect(defaultAgentLaunchCopy('mac')).toBe('Opens with ⇧⌘T and when the assistant starts an agent.')
+    expect(defaultAgentLaunchCopy('linux')).toBe('Opens with Super+Shift+T and when the assistant starts an agent.')
+    expect(defaultAgentLaunchCopy('windows')).toBe('Opens from the tab + menu and when the assistant starts an agent.')
   })
 
   it('hire confirm offers Touch ID only on a Mac', () => {

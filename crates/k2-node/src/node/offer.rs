@@ -123,8 +123,14 @@ impl Node {
                 qs.expires_in_secs = os.expires_in_secs;
                 qs.skew_secs = os.skew_secs;
                 qs.quotes = os.quotes.clone();
+                // Moves all the time, like free disk: only 1 GiB is news.
+                qs.disk_used_bytes = os.disk_used_bytes;
             }
-            q == o && p.free.disk_free_bytes.abs_diff(o.free.disk_free_bytes) < (1 << 30)
+            let share_disk_moved = match (p.share.as_ref().and_then(|s| s.disk_used_bytes), o.share.as_ref().and_then(|s| s.disk_used_bytes)) {
+                (Some(a), Some(b)) => a.abs_diff(b) >= (1 << 30),
+                (a, b) => a.is_some() != b.is_some(),
+            };
+            q == o && !share_disk_moved && p.free.disk_free_bytes.abs_diff(o.free.disk_free_bytes) < (1 << 30)
         });
         if same {
             o.revision = last.as_ref().map(|p| p.revision).unwrap_or(0);
@@ -301,6 +307,8 @@ impl Node {
             // Does this server's Priority count here (`queue.toml`, T7)?
             // Protocol 5 only.
             priority: t.speaks_tiers().then(|| self.fairq.priority(t.slot)),
+            // What the 60 s pass last measured (the owner has no share).
+            disk_used_bytes: if t.is_owner() { None } else { self.tenant_disk_used(t.slot) },
         })
     }
 }

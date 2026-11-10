@@ -1903,6 +1903,7 @@ mod tests {
             cpu_secs_today: 7,
             expires_in_secs: Some(100),
             skew_secs: None,
+            disk_used_bytes: None,
             quotes: vec![],
             priority: None,
         };
@@ -1991,6 +1992,7 @@ mod tests {
             cpu_secs_today: 0,
             expires_in_secs: None,
             skew_secs: None,
+            disk_used_bytes: None,
             quotes: vec![],
             priority: None,
         };

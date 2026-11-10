@@ -345,6 +345,10 @@ pub(crate) const ROWS: &[Row] = &[
     row(ask("compute.manage", Floor::Owner), code(403, "owner_only"), "/cli/compute/", ANY),
     // `need_owner` only: no switch admits an agent.
     row(Target::Cannot { r#where: IN_SETTINGS }, code(403, "owner_only"), "/cli/compute/nodes/remove", ANY),
+    // An agent always reaches its own workspace's caches; this refusal is
+    // only for another workspace's. It answered compute.manage before, and
+    // that card says "already on" when the switch is on (the loop).
+    row(Target::Cannot { r#where: IN_SETTINGS }, code(403, "owner_only"), "/cli/compute/cache", ANY),
     row(Target::Cannot { r#where: IN_SETTINGS }, code(403, "owner_only"), "/cli/compute/local/", ANY),
     Row {
         params: &[("request", &[ParamFrom::Body("/request"), ParamFrom::Body("/id"), ParamFrom::Query("request")])],
@@ -1646,6 +1650,13 @@ mod tests {
         for req in [json!({"token": "x"}), json!({"app_id": "1", "key_pem": "x"}), json!({"clear": true})] {
             let p = teach_of(403, "POST", "/cli/compute/git-access/setup", &[], Some(req.clone()), json!({"error":{"code":"owner_only","hint":"x"}})).unwrap();
             assert_eq!(p["command"], setup, "{req}: {p}");
+        }
+        // Another workspace's job caches can't be asked for at all: the
+        // compute.manage card this named answered "already on" (a loop).
+        for path in ["/cli/compute/cache", "/cli/compute/cache/clear"] {
+            let p = teach_of(403, "POST", path, &[], None, json!({"error":{"code":"owner_only","hint":"x"}})).unwrap();
+            assert_eq!(p["requestable"], false, "{path}: {p}");
+            assert_eq!(p.get("action"), None, "{path}: {p}");
         }
         // owner_only elsewhere under /cli/compute/ is still compute.manage's.
         let p = teach_of(403, "POST", "/cli/compute/nodes/pause", &[], None, json!({"error":{"code":"owner_only","hint":"x"}})).unwrap();

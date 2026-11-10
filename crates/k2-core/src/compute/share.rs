@@ -250,7 +250,7 @@ pub fn human_eta(secs: u64) -> String {
 pub fn share_line(v: &ShareView) -> String {
     let l = &v.limits;
     format!(
-        "running {}/{} · queued {}/{} · today {:.1} of {} CPU-h · max {}/job · {} CPUs · {} GB",
+        "running {}/{} · queued {}/{} · today {:.1} of {} CPU-h · max {}/job · {} CPUs · {} GB{}",
         v.running,
         l.max_running,
         v.queued,
@@ -259,7 +259,8 @@ pub fn share_line(v: &ShareView) -> String {
         l.cpu_hours_day,
         human_secs(l.max_job_secs),
         l.max_cpus,
-        l.max_mem_gb
+        l.max_mem_gb,
+        v.disk_used_bytes.map(|u| format!(" · disk {:.1} of {} GB", u as f64 / (1u64 << 30) as f64, l.disk_gb)).unwrap_or_default()
     )
 }
 
@@ -551,6 +552,7 @@ mod tests {
             cpu_secs_today: 3 * 3600 + 360,
             expires_in_secs: Some(86_400),
             skew_secs: None,
+            disk_used_bytes: None,
             quotes,
             priority: None,
         }
@@ -651,6 +653,11 @@ mod tests {
             share_line(&view(vec![], 1, 2)),
             "running 1/1 · queued 2/10 · today 3.1 of 8 CPU-h · max 2h/job · 4 CPUs · 8 GB"
         );
+        // 0.46.11: the disk share, when the node reports it.
+        let mut with_disk = view(vec![], 1, 2);
+        with_disk.disk_used_bytes = Some(38 << 30);
+        with_disk.limits.disk_gb = 40;
+        assert!(share_line(&with_disk).ends_with(" · disk 38.0 of 40 GB"), "{}", share_line(&with_disk));
         assert_eq!(human_eta(360), "~6m");
         assert_eq!(human_eta(3900), "~1h05m");
     }

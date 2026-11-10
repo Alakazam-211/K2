@@ -2460,21 +2460,41 @@ const CACHE_WAIT: Duration = Duration::from_secs(20);
 /// This server's job caches on its nodes, newest node first: every node
 /// (or `node`), every workspace (or `workspace`). With `clear`, the
 /// matching caches no running job holds go first. Owner and Admin logins,
-/// or a local agent under "Allow managing compute nodes".
-fn cache_op(who: &Who, node: Option<&str>, workspace: Option<&str>, name: Option<&str>, clear: bool, mgr: Option<&Manager>) -> R<serde_json::Value> {
-    admin_or_manager(who, mgr)?;
+/// or a local agent under "Allow managing compute nodes"; any other agent
+/// or K2 shell tab with compute on reaches only its own workspace's caches
+/// (on the nodes granted to it).
+fn cache_op(who: &Who, node: Option<&str>, workspace: Option<&str>, name: Option<&str>, clear: bool, all: bool, mgr: Option<&Manager>) -> R<serde_json::Value> {
+    need_credential(who)?;
+    // Own-workspace scope for a passport with no wider standing.
+    let own = if mgr.is_some() || who.is_admin() { None } else { passport_gate(who)? };
+    if own.is_none() {
+        admin_or_manager(who, mgr)?;
+    }
     if let Some(n) = name.filter(|n| !pcache::valid_name(n)) {
         return Err(no(pcache::codes::CACHE_INVALID, 400, format!("{n:?} isn't a cache name (1–{} of a-z 0-9 . _ -)", pcache::NAME_MAX)));
     }
     let ws = workspace.map(|w| ws_by_token_or_worktree(w).ok_or_else(|| no_workspace(w))).transpose()?;
+    if let Some(o) = &own {
+        own_caches_only(&ws_handle(o), o, ws.as_ref().map(|w| w.id.as_str()), all)?;
+    }
+    // Which workspace's caches: the passport's own when scoped; else the
+    // named one; a clear naming none is the caller's own, never everyone's.
+    let want_ws: Option<String> = match (&own, &ws) {
+        (Some(o), _) => Some(o.clone()),
+        (None, Some(w)) => Some(w.id.clone()),
+        (None, None) if clear && !all => who.passport().map(|(p, _)| p.to_string()),
+        (None, None) => None,
+    };
     let nodes: Vec<store::NodeRow> = match node {
-        // A prefix reads (CE-11); clearing needs the full name.
-        Some(n) if !clear => vec![resolve_node_for(who, Some(n), who.passport().map(|(ws, _)| ws))?],
+        // A prefix reads (CE-11); clearing needs the full name (the owner's
+        // clears; an agent's reach only its own workspace's caches).
+        Some(n) if !clear || own.is_some() => vec![resolve_node_for(who, Some(n), who.passport().map(|(ws, _)| ws))?],
         Some(n) => vec![node_or_404(Some(n))?],
         None => {
+            let granted = own.as_deref().map(crate::compute_views::granted_node_ids);
             let db = k2_core::db::shared();
             let conn = db.lock();
-            store::list_nodes(&conn, false).into_iter().filter(|n| n.state == "active").collect()
+            store::list_nodes(&conn, false).into_iter().filter(|n| n.state == "active" && granted.as_ref().is_none_or(|g| g.contains(&n.id))).collect()
         }
     };
     // Which of this server's workspaces a node's `ws_key` is.
@@ -2511,7 +2531,7 @@ fn cache_op(who: &Who, node: Option<&str>, workspace: Option<&str>, name: Option
         }
         let ask = pcache::CacheGet {
             request_id: crypto::random_id().map_err(|e| no("internal", 500, e))?,
-            workspace_id: ws.as_ref().map(|w| w.id.clone()),
+            workspace_id: want_ws.clone(),
             clear,
             name: name.map(str::to_string),
         };
@@ -2541,7 +2561,7 @@ fn cache_op(who: &Who, node: Option<&str>, workspace: Option<&str>, name: Option
             &who.label(),
             "cache_clear",
             node.and_then(|_| nodes.first().map(|n| n.id.as_str())),
-            ws.as_ref().map(|w| w.id.as_str()),
+            want_ws.as_deref(),
             None,
             serde_json::json!({"name": name, "cleared": out.iter().map(|r| r.get("cleared").and_then(|c| c.as_array()).map(Vec::len).unwrap_or(0)).sum::<usize>()}),
         );
@@ -2552,19 +2572,34 @@ fn cache_op(who: &Who, node: Option<&str>, workspace: Option<&str>, name: Option
 /// `GET /cli/compute/cache?node=&workspace=&name=`.
 fn caches(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>) -> R<serde_json::Value> {
     let p = |k: &str| params.get(k).map(String::as_str).filter(|v| !v.is_empty());
-    cache_op(who, p("node"), p("workspace"), p("name"), false, mgr)
+    cache_op(who, p("node"), p("workspace"), p("name"), false, false, mgr)
+}
+
+/// An agent's `k2 compute cache` reaches its own workspace (`handle`,
+/// id `own`) only.
+fn own_caches_only(handle: &str, own: &str, named: Option<&str>, all: bool) -> R<()> {
+    if all || named.is_some_and(|n| n != own) {
+        return Err(no(
+            codes::OWNER_ONLY,
+            403,
+            format!("an agent sees and clears only its own workspace's job caches ({handle}); another workspace's are for the owner, from Settings or a terminal outside K2. Run it without --workspace or --all for your own."),
+        ));
+    }
+    Ok(())
 }
 
 /// `POST /cli/compute/cache/clear {node?, workspace?, name?, all?}`: a
 /// workspace, or `all` for every workspace of this server (never by
-/// accident: one of the two is required).
+/// accident: one of the two is required, except for a passport, whose
+/// default is its own workspace).
 fn cache_clear(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
     let v = json_body(body)?;
     let workspace = s(&v, "workspace").filter(|w| !w.is_empty());
-    if workspace.is_none() && b(&v, "all") != Some(true) {
+    let all = b(&v, "all") == Some(true);
+    if workspace.is_none() && !all && who.passport().is_none() {
         return Err(no(codes::BAD_REQUEST, 400, "name a workspace (--workspace WS), or pass --all for every workspace's caches"));
     }
-    cache_op(who, s(&v, "node").filter(|n| !n.is_empty()), workspace, s(&v, "name").filter(|n| !n.is_empty()), true, mgr)
+    cache_op(who, s(&v, "node").filter(|n| !n.is_empty()), workspace, s(&v, "name").filter(|n| !n.is_empty()), true, all, mgr)
 }
 
 // ── job tiers (prd-compute-job-tiers-v1) ─────────────────────────────
@@ -4734,5 +4769,45 @@ mod tests {
         // An unknown name for a person is a 404, not an empty list.
         let e = list(&Who::Owner, Some("no-such-ws")).expect_err("unknown");
         assert_eq!((e.code, e.status), ("workspace_not_found", 404));
+    }
+
+    /// The permission loop: `k2 compute cache` from an agent reaches its
+    /// own workspace with no switch, and another workspace's is refused
+    /// with words that don't send it to compute.manage.
+    #[test]
+    fn an_agent_reaches_its_own_workspaces_caches_only() {
+        let _home = crate::test_support::TempHome::new();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            for (id, h) in [("w-ca", "ca"), ("w-cb", "cb")] {
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, handle, agents_can_use_compute) VALUES (?1, ?2, ?3, ?2, 1)",
+                    rusqlite::params![id, h, format!("/tmp/{id}")],
+                )
+                .expect("project");
+            }
+        }
+        let q = |ws: Option<&str>| -> HashMap<String, String> { ws.map(|w| HashMap::from([("workspace".to_string(), w.to_string())])).unwrap_or_default() };
+        let agent = Who::Agent { project_id: "w-ca".into(), session_id: "s-ag".into() };
+        // Its own: named or not, list and clear, with no manage switch.
+        assert!(caches(&agent, &q(None), None).expect("own list")["nodes"].is_array());
+        assert!(caches(&agent, &q(Some("w-ca")), None).expect("own, named")["nodes"].is_array());
+        assert!(cache_clear(&agent, br#"{}"#, None).expect("own clear")["nodes"].is_array());
+        // Another workspace's, and --all: owner_only, naming the owner path.
+        for e in [caches(&agent, &q(Some("w-cb")), None).expect_err("other"), cache_clear(&agent, br#"{"workspace":"w-cb"}"#, None).expect_err("other clear"), cache_clear(&agent, br#"{"all":true}"#, None).expect_err("all")] {
+            assert_eq!((e.code, e.status), ("owner_only", 403), "{}", e.hint);
+            assert!(e.hint.contains("only its own workspace's job caches (ca)") && e.hint.contains("for the owner"), "{}", e.hint);
+            assert!(!e.hint.contains("compute.manage"), "{}", e.hint);
+        }
+        // Compute off for the workspace: compute_off, not a way in.
+        {
+            let db = k2_core::db::shared();
+            db.lock().execute("UPDATE projects SET agents_can_use_compute = 0 WHERE id = 'w-ca'", []).expect("off");
+        }
+        assert_eq!(caches(&agent, &q(None), None).expect_err("off").code, codes::COMPUTE_OFF);
+        // A person with no standing still can't list.
+        let member = Who::Login { username: "m".into(), role: Role::Member };
+        assert_eq!(caches(&member, &q(None), None).expect_err("member").code, "owner_only");
     }
 }

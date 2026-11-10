@@ -69,7 +69,7 @@ pub fn read_meta(ws_dir: &Path, name: &str) -> Option<Meta> {
     std::fs::read(meta_path(ws_dir, name)).ok().and_then(|b| serde_json::from_slice(&b).ok())
 }
 
-fn write_meta(ws_dir: &Path, name: &str, m: &Meta) -> Result<(), String> {
+pub(super) fn write_meta(ws_dir: &Path, name: &str, m: &Meta) -> Result<(), String> {
     let body = serde_json::to_vec(m).map_err(|e| e.to_string())?;
     crate::util::atomic_write(&meta_path(ws_dir, name), &body, 0o600)
 }
@@ -111,13 +111,13 @@ pub struct Held {
 
 /// One cache on disk, as a scan finds it.
 #[derive(Debug, Clone)]
-struct Found {
+pub(super) struct Found {
     slot: Slot,
     ws_key: String,
     ws_dir: PathBuf,
     name: String,
     dir: PathBuf,
-    meta: Meta,
+    pub(super) meta: Meta,
 }
 
 /// Every cache under one slot's `cache/job-caches/` (real folders only,
@@ -278,7 +278,7 @@ impl Node {
     }
 
     /// Evict one idle cache. False when a job holds it (now).
-    fn evict_job_cache(&self, f: &Found) -> bool {
+    pub(super) fn evict_job_cache(&self, f: &Found) -> bool {
         {
             let busy = self.job_caches_busy.lock().unwrap();
             if busy.is_busy(&f.dir) {
@@ -295,6 +295,22 @@ impl Node {
             self.delete_aside(f.slot, &aside);
         }
         true
+    }
+
+    /// `t`'s own caches no running job holds, with their sizes (one never
+    /// measured is measured now). Blocking.
+    pub(super) fn idle_job_caches(&self, t: &Tenant) -> Vec<(Found, u64)> {
+        let idle: Vec<Found> = {
+            let found = scan_slot(t);
+            let busy = self.job_caches_busy.lock().unwrap();
+            found.into_iter().filter(|f| !busy.is_busy(&f.dir)).collect()
+        };
+        idle.into_iter()
+            .map(|f| {
+                let bytes = if f.meta.bytes == 0 { super::run::disk_usage(&f.dir) } else { f.meta.bytes };
+                (f, bytes)
+            })
+            .collect()
     }
 
     /// Every cache on this node, every slot.

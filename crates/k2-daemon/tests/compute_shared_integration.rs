@@ -217,6 +217,7 @@ fn view(role: Role, running: u32, queued: u32) -> ShareView {
         cpu_secs_today: 3600,
         expires_in_secs: Some(7 * 86_400),
         skew_secs: None,
+        disk_used_bytes: None,
         quotes: vec![],
         priority: None,
     }

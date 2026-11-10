@@ -2387,6 +2387,7 @@ mod tests {
             cpu_secs_today: 0,
             expires_in_secs: None,
             skew_secs: None,
+            disk_used_bytes: None,
             quotes: quote
                 .map(|(now, eta)| vec![pshare::Quote { cpu_millis: 0, mem_bytes: 2 * GB, starts_now: now, eta_secs: eta, eta_p90_secs: None, blocked_by: None }])
                 .unwrap_or_default(),

@@ -504,15 +504,18 @@ impl Node {
     /// its disk budget (`tenant_disk_full`); clear the hold once it is.
     /// Then the `team` disk scan stops running jobs over budget (V74).
     /// Returns the holds set, by slot.
-    pub async fn tenant_wall_pass(&self) -> std::collections::BTreeMap<k2_node_proto::share::Slot, String> {
+    pub async fn tenant_wall_pass(self: &Arc<Self>) -> std::collections::BTreeMap<k2_node_proto::share::Slot, String> {
         let mut held = std::collections::BTreeMap::new();
         for t in self.tenants() {
             if t.is_owner() {
                 continue;
             }
+            // Measured (and over its share, its own cold data evicted)
+            // before anything is held or stopped.
+            let over = self.tenant_share_pass(&t, |gb| u64::from(gb) << 30).await;
             let why = match self.tenant_wall_check(&t).await {
                 Err((code, _)) => Some(code),
-                Ok(()) if self.tenant_over_disk(&t) => Some(codes::TENANT_DISK_FULL.to_string()),
+                Ok(()) if over => Some(codes::TENANT_DISK_FULL.to_string()),
                 Ok(()) => None,
             };
             if let Some(w) = &why {
@@ -1406,6 +1409,18 @@ impl Node {
         } else {
             collected
         };
+        // What the node cleared for this server's share while the job ran.
+        let evicted = if t.is_owner() { Default::default() } else { self.evicted_since(t.slot, self.now() - t0.elapsed().as_secs() as i64) };
+        let mut outputs = outputs;
+        if let Some(line) = evicted.line() {
+            if let Some(j) = journal.as_mut() {
+                let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {line}\n").as_bytes());
+            }
+            if let Some(o) = outputs.as_mut() {
+                o.notes.insert(0, line);
+            }
+            outputs = outputs.map(|o| o.capped());
+        }
         let detail = if preset_detail.is_some() {
             preset_detail
         } else {
@@ -1414,6 +1429,13 @@ impl Node {
             Some("mem_cap") => Some(mem_cap_detail_used(mem_limit, peak_shown)),
             Some(refusal::DISK_LOW) => {
                 let d = super::disk::disk_low_detail(self.disk_free_bytes(), self.local.lock().unwrap().policy.disk_floor_bytes);
+                if let Some(j) = journal.as_mut() {
+                    let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {d}\n").as_bytes());
+                }
+                Some(d)
+            }
+            Some(codes::TENANT_DISK_FULL) => {
+                let d = self.tenant_disk_full_text(&t, dirs.root.clone(), target.clone(), evicted).await;
                 if let Some(j) = journal.as_mut() {
                     let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {d}\n").as_bytes());
                 }
@@ -2573,6 +2595,9 @@ pub(super) mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         };
         assert_eq!((row.state, row.reason.as_deref()), (JobState::Failed, Some(codes::TENANT_DISK_FULL)));
+        // The failure says how big the share is, and what happened.
+        let detail = row.detail.as_deref().expect("a detail");
+        assert!(detail.contains("disk share on the node is 1.0 GB") && detail.contains("nothing was evicted"), "{detail}");
         for t in &tens[1..] {
             assert!(!t.ledger.lock().unwrap().get("j", 1).unwrap().unwrap().state.is_terminal(), "slot {} untouched", t.slot);
         }

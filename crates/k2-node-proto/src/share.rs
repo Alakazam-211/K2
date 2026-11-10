@@ -895,6 +895,12 @@ pub struct ShareView {
     /// at submit, with a notice. Absent for a server below protocol 5.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<bool>,
+    /// What this server's folder holds on the node now, against
+    /// `limits.disk_gb`. Measured every 60 s; absent for the node's owner
+    /// (no disk share) and from a node older than 0.46.11. An older server
+    /// ignores it (no `deny_unknown_fields` here).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_used_bytes: Option<u64>,
 }
 
 /// Can a job of this size start now, and if not, when (§10.2)?

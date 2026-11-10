@@ -18,6 +18,13 @@
 //!   job caches least recently used first); still under
 //!   the floor, it stops the newest running job (`failed / disk_low`).
 //!   Admission already refuses under the floor (`disk_low`).
+//! - **A server's own disk share** ([`Node::tenant_share_pass`], every 60 s
+//!   with the tenant wall pass): over its share, a server first loses its
+//!   own ended job dirs, then its own idle warm slots and job caches,
+//!   coldest first, and only as many as bring it back under. If even all
+//!   of them couldn't, none go: a job that is itself over the share gets
+//!   nothing from a cold rebuild later. Nothing a running job holds, and
+//!   nothing of another server's, is ever touched.
 //! - **Finish retries** (run.rs): a ledger finish that fails is retried
 //!   after the job's dir is stripped, so a job never stays `running`.
 
@@ -53,6 +60,114 @@ pub struct SlotUse {
 /// All warm target slots together may hold at most half the disk budget.
 pub fn warm_cap(policy: &crate::config::Policy) -> u64 {
     policy.disk_budget_bytes / 2
+}
+
+/// What the share pass removed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Evicted {
+    pub warm: u32,
+    pub caches: u32,
+    pub job_dirs: u32,
+    pub bytes: u64,
+}
+
+impl Evicted {
+    fn add(&mut self, o: &Evicted) {
+        self.warm += o.warm;
+        self.caches += o.caches;
+        self.job_dirs += o.job_dirs;
+        self.bytes = self.bytes.saturating_add(o.bytes);
+    }
+
+    /// `2 warm slots and 1 job cache, 14 GB`; `None` when nothing went.
+    fn what(&self) -> Option<String> {
+        let count = |n: u32, one: &str| (n > 0).then(|| format!("{n} {one}{}", if n == 1 { "" } else { "s" }));
+        let parts: Vec<String> = [count(self.warm, "warm slot"), count(self.caches, "job cache"), count(self.job_dirs, "ended job folder")].into_iter().flatten().collect();
+        if parts.is_empty() {
+            return None;
+        }
+        Some(format!("{}, {}", parts.join(" and "), gb(self.bytes)))
+    }
+
+    /// The one line for the job's log and `k2 compute get`.
+    pub fn line(&self) -> Option<String> {
+        self.what().map(|w| format!("evicted {w}, to fit this server's disk share on the node"))
+    }
+}
+
+/// `40 GB`, `0.3 GB`.
+fn gb(b: u64) -> String {
+    let g = b as f64 / GIB_F;
+    if g >= 10.0 {
+        format!("{g:.0} GB")
+    } else {
+        format!("{g:.1} GB")
+    }
+}
+const GIB_F: f64 = (1u64 << 30) as f64;
+
+/// The `tenant_disk_full` stop's detail, for the job's row and log: the
+/// share, what was in use, this job's part, what was evicted, and, when
+/// the job alone is bigger than the share, that no cleanup could fit it.
+pub fn tenant_disk_full_detail(share: u64, used: u64, job: u64, evicted: &Evicted) -> String {
+    let head = format!("this server's disk share on the node is {}; it held {} when the node stopped this job, {} of it this job's own files and build output", gb(share), gb(used), gb(job));
+    let gone = match evicted.what() {
+        Some(w) => format!("the node evicted {w} first"),
+        None => "nothing was evicted (nothing idle could have brought it under the share)".to_string(),
+    };
+    let why = if job > share {
+        "the job itself is over the share, so clearing caches can't make it fit: build less in one job (split it with --shards, or fewer test binaries), or ask the node's owner for a bigger share (k2 compute node servers <node> limits <server> disk_gb=<GB>)"
+    } else {
+        "the rest is other running jobs and data in use: wait for them, or ask the node's owner for a bigger share (k2 compute node servers <node> limits <server> disk_gb=<GB>)"
+    };
+    format!("{head}; {gone}; {why}")
+}
+
+/// A tenant's disk, as the 60 s pass last saw it.
+#[derive(Debug, Clone, Default)]
+pub struct TenantDisk {
+    pub used: u64,
+    /// `(node clock, what went)`, newest last, at most [`EVICTIONS_KEPT`].
+    evictions: Vec<(i64, Evicted)>,
+}
+const EVICTIONS_KEPT: usize = 64;
+
+/// A thing the share pass may remove.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cold {
+    pub bytes: u64,
+    pub used_at: i64,
+}
+
+/// Which of `cold` to remove (indices, coldest first) to bring `used`
+/// under `share`: as few as that takes, and none at all when even all of
+/// them wouldn't (the job or data in use is over the share by itself).
+pub fn coldest_to_evict(cold: &[Cold], used: u64, share: u64) -> Vec<usize> {
+    if used <= share {
+        return vec![];
+    }
+    let all: u64 = cold.iter().map(|c| c.bytes).sum();
+    if used.saturating_sub(all) > share {
+        return vec![];
+    }
+    let mut order: Vec<usize> = (0..cold.len()).collect();
+    order.sort_by_key(|i| cold[*i].used_at);
+    let mut left = used;
+    let mut out = Vec::new();
+    for i in order {
+        if left <= share {
+            break;
+        }
+        left = left.saturating_sub(cold[i].bytes);
+        out.push(i);
+    }
+    out
+}
+
+/// What the share pass removes.
+enum Victim {
+    Slot(Idle),
+    Cache(super::job_cache::Found),
 }
 
 /// One idle warm slot: its server's slot, project cache, project key,
@@ -222,16 +337,7 @@ impl Node {
     pub(crate) async fn trim_warm_slots(self: &Arc<Self>) -> Vec<(PathBuf, u64)> {
         let cap = warm_cap(&self.local.lock().unwrap().policy);
         let idle = self.idle_slots();
-        // Measure idle slots we have no size for (made before this run).
-        for s in &idle {
-            if self.slot_use.lock().unwrap().contains_key(&s.dir) {
-                continue;
-            }
-            let d = s.dir.clone();
-            let bytes = tokio::task::spawn_blocking(move || bytes_of(&d)).await.unwrap_or(0);
-            let used_at = std::fs::metadata(&s.dir).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|t| t.as_secs() as i64).unwrap_or(0);
-            self.slot_use.lock().unwrap().insert(s.dir.clone(), SlotUse { bytes, used_at });
-        }
+        self.measure_idle_slots(&idle).await;
         let uses = self.slot_use.lock().unwrap().clone();
         let mut total: u64 = uses.iter().filter(|(d, _)| d.exists()).map(|(_, u)| u.bytes).sum();
         let mut order: Vec<&Idle> = idle.iter().collect();
@@ -253,6 +359,19 @@ impl Node {
             }
         }
         out
+    }
+
+    /// Measure idle slots we have no size for (made before this run).
+    async fn measure_idle_slots(&self, idle: &[Idle]) {
+        for s in idle {
+            if self.slot_use.lock().unwrap().contains_key(&s.dir) {
+                continue;
+            }
+            let d = s.dir.clone();
+            let bytes = tokio::task::spawn_blocking(move || bytes_of(&d)).await.unwrap_or(0);
+            let used_at = std::fs::metadata(&s.dir).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|t| t.as_secs() as i64).unwrap_or(0);
+            self.slot_use.lock().unwrap().insert(s.dir.clone(), SlotUse { bytes, used_at });
+        }
     }
 
     /// Every warm slot no job holds right now, in every tenant's cache.
@@ -336,22 +455,146 @@ impl Node {
     /// Ended jobs' dirs, but for their journal (not yet cleaned by the
     /// janitor, not running). Returns the dirs touched.
     async fn strip_ended_job_dirs(&self) -> usize {
-        let running = self.running_by_tenant();
         let mut n = 0;
         for t in self.tenants() {
-            let rows = t.ledger.lock().unwrap().all().unwrap_or_default();
-            let mine = running.get(&t.slot).cloned().unwrap_or_default();
-            for r in rows {
-                if !r.state.is_terminal() || r.cleaned || mine.contains(&r.job_id) || !k2_node_proto::frames::valid_job_id(&r.job_id) {
-                    continue;
-                }
-                let dir = t.paths.job_dir(&r.job_id, r.generation);
-                if self.strip_job_dir(&t, &dir, r.plan.src.as_ref().map(|s| s.project_key.as_str()), PRESSURE_KEEP).await > 0 {
-                    n += 1;
-                }
+            n += self.strip_ended_job_dirs_of(&t).await;
+        }
+        n
+    }
+
+    /// [`Self::strip_ended_job_dirs`] for one tenant.
+    async fn strip_ended_job_dirs_of(&self, t: &Tenant) -> usize {
+        let mine = self.running_by_tenant().get(&t.slot).cloned().unwrap_or_default();
+        let rows = t.ledger.lock().unwrap().all().unwrap_or_default();
+        let mut n = 0;
+        for r in rows {
+            if !r.state.is_terminal() || r.cleaned || mine.contains(&r.job_id) || !k2_node_proto::frames::valid_job_id(&r.job_id) {
+                continue;
+            }
+            let dir = t.paths.job_dir(&r.job_id, r.generation);
+            if self.strip_job_dir(t, &dir, r.plan.src.as_ref().map(|s| s.project_key.as_str()), PRESSURE_KEEP).await > 0 {
+                n += 1;
             }
         }
         n
+    }
+
+    /// One tenant's disk against its share: measure it, and when it's over,
+    /// evict what's its own and idle (the module doc). Returns whether it
+    /// is still over. `budget` turns a share's GB into bytes (tests scale
+    /// it down).
+    pub(crate) async fn tenant_share_pass(self: &Arc<Self>, t: &Arc<Tenant>, budget: impl Fn(u32) -> u64) -> bool {
+        if t.is_owner() {
+            return false;
+        }
+        let Ok(entry) = crate::admin::jobs::tenant_entry(&self.layout().config, t.slot) else { return false };
+        let share = budget(entry.disk_gb);
+        let (mut used, mut capped) = self.tenant_walk(t).await;
+        let mut gone = Evicted::default();
+        if !capped && used > share {
+            let before = used;
+            let n = self.strip_ended_job_dirs_of(t).await as u32;
+            if n > 0 {
+                (used, capped) = self.tenant_walk(t).await;
+                gone.job_dirs = n;
+                gone.bytes = before.saturating_sub(used);
+            }
+        }
+        if !capped && used > share {
+            let (victims, cold) = self.idle_of(t).await;
+            let picks = coldest_to_evict(&cold, used, share);
+            for i in &picks {
+                let done = match &victims[*i] {
+                    Victim::Slot(s) => self.evict_slot(s).await,
+                    Victim::Cache(f) => {
+                        let (n, f) = (self.clone(), f.clone());
+                        tokio::task::spawn_blocking(move || n.evict_job_cache(&f)).await.unwrap_or(false)
+                    }
+                };
+                if done {
+                    match victims[*i] {
+                        Victim::Slot(_) => gone.warm += 1,
+                        Victim::Cache(_) => gone.caches += 1,
+                    }
+                    gone.bytes = gone.bytes.saturating_add(cold[*i].bytes);
+                }
+            }
+            if !picks.is_empty() {
+                (used, capped) = self.tenant_walk(t).await;
+            }
+        }
+        if let Some(line) = gone.line() {
+            crate::nlog!("slot {}: {line} ({} of {} used now)", t.slot, gb(used), gb(share));
+        }
+        let now = self.now();
+        let mut all = self.tenant_disk.lock().unwrap();
+        let d = all.entry(t.slot).or_default();
+        d.used = used;
+        if gone != Evicted::default() {
+            d.evictions.push((now, gone));
+            if d.evictions.len() > EVICTIONS_KEPT {
+                d.evictions.remove(0);
+            }
+        }
+        capped || used > share
+    }
+
+    /// Allocated bytes under `t`'s root, and whether the walk hit its caps.
+    async fn tenant_walk(&self, t: &Tenant) -> (u64, bool) {
+        let root = t.paths.root();
+        tokio::task::spawn_blocking(move || super::run::disk_usage_walk(&root)).await.unwrap_or((0, false))
+    }
+
+    /// `t`'s own idle warm slots and job caches, with their sizes and last
+    /// use (same index in both lists).
+    async fn idle_of(self: &Arc<Self>, t: &Arc<Tenant>) -> (Vec<Victim>, Vec<Cold>) {
+        let idle: Vec<Idle> = self.idle_slots().into_iter().filter(|s| s.slot == t.slot).collect();
+        self.measure_idle_slots(&idle).await;
+        let uses = self.slot_use.lock().unwrap().clone();
+        let mut cold = Vec::new();
+        let mut victims = Vec::new();
+        for s in idle {
+            let u = uses.get(&s.dir).copied().unwrap_or_default();
+            cold.push(Cold { bytes: u.bytes, used_at: u.used_at });
+            victims.push(Victim::Slot(s));
+        }
+        let (n, ten) = (self.clone(), t.clone());
+        for (f, bytes) in tokio::task::spawn_blocking(move || n.idle_job_caches(&ten)).await.unwrap_or_default() {
+            cold.push(Cold { bytes, used_at: f.meta.used_at });
+            victims.push(Victim::Cache(f));
+        }
+        (victims, cold)
+    }
+
+    /// What the last pass measured for this tenant.
+    pub(crate) fn tenant_disk_used(&self, slot: k2_node_proto::share::Slot) -> Option<u64> {
+        self.tenant_disk.lock().unwrap().get(&slot).map(|d| d.used)
+    }
+
+    /// Everything evicted for this tenant since `since` (node clock).
+    pub(crate) fn evicted_since(&self, slot: k2_node_proto::share::Slot, since: i64) -> Evicted {
+        let mut sum = Evicted::default();
+        if let Some(d) = self.tenant_disk.lock().unwrap().get(&slot) {
+            for (_, e) in d.evictions.iter().filter(|(at, _)| *at >= since) {
+                sum.add(e);
+            }
+        }
+        sum
+    }
+
+    /// The `tenant_disk_full` detail for a job that just stopped (its files
+    /// are still there). `target` is its build output, counted when it
+    /// lives outside the job's folder (a warm slot).
+    pub(crate) async fn tenant_disk_full_text(&self, t: &Tenant, root: PathBuf, target: PathBuf, evicted: Evicted) -> String {
+        let share = crate::admin::jobs::tenant_entry(&self.layout().config, t.slot).map(|e| u64::from(e.disk_gb) << 30).unwrap_or(0);
+        let (used, _) = self.tenant_walk(t).await;
+        let job = tokio::task::spawn_blocking(move || {
+            let outside = if target.starts_with(&root) { 0 } else { super::run::disk_usage(&target) };
+            super::run::disk_usage(&root).saturating_add(outside)
+        })
+        .await
+        .unwrap_or(0);
+        tenant_disk_full_detail(share, used, job, &evicted)
     }
 
     /// One guard pass (see the module doc). Returns the jobs it stopped,
@@ -811,6 +1054,100 @@ mod tests {
         assert!(n.tenant_over_disk_with(&tens[1], budget), "the V74 scan agrees");
         assert_eq!(n.disk_guard_pass_with(budget).await, vec![(2u8, "two".to_string())]);
         n.stop_all(JobState::Cancelled, "test_over");
+    }
+
+    /// A tenant over its share loses its coldest idle data first and only
+    /// what it takes; never a slot in use, never another tenant's.
+    #[tokio::test]
+    async fn a_tenant_over_its_share_loses_its_own_coldest_idle_data_first() {
+        use k2_node_proto::share::{Network, ServersFile, ShareLimits, Trust};
+        let free = Arc::new(AtomicU64::new(500 * GIB));
+        let (n, layout) = node("disk-tenant-share", "disk_floor_gb = 0\n", free).await;
+        let mut f = ServersFile::new(&"a".repeat(64), "o", ShareLimits::owner(2, 8, 16, 100, Network::On), 8, 1, "local:t");
+        for slot in [1u8, 2] {
+            let mut e = f.servers[0].clone();
+            e.slot = slot;
+            e.label = format!("s{slot}");
+            e.fp_prefix = format!("{:016x}", slot);
+            e.trust = Trust::Team;
+            e.set_limits(&ShareLimits::new_server(Trust::Team, false));
+            e.disk_gb = 1;
+            f.servers.push(e);
+        }
+        std::fs::write(layout.config.join(k2_node_proto::share::SERVERS_FILE), toml::to_string(&f).unwrap()).unwrap();
+        let mut tens = Vec::new();
+        for slot in [1u8, 2] {
+            layout.tenant(slot).ensure_state().unwrap();
+            crate::identity::write_pin(&layout.tenant(slot).pin(), &crate::identity::Pin::for_test("n")).unwrap();
+            tens.push(n.add_tenant(slot).await.unwrap());
+        }
+        const MIB: usize = 1 << 20;
+        // Both tenants hold the same shape; only slot 1 is passed.
+        for slot in [1u8, 2] {
+            let c = layout.tenant(slot).cache();
+            put(&c.join("pa/target-1/x"), 3 * MIB); // coldest idle
+            put(&c.join("pc/target-1/x"), MIB); // recent, idle: stays
+            put(&c.join("pd/target-1/x"), MIB); // coldest of all, in use
+        }
+        let t1 = &tens[0];
+        let c1 = layout.tenant(1).cache();
+        // A job cache a bit warmer than `pa`.
+        let ws = k2_node_proto::cache::ws_key(&"f".repeat(64), "w");
+        put(&t1.paths.job_cache(&ws, "old").join("x"), 3 * MIB);
+        super::super::job_cache::write_meta(&t1.paths.job_cache_ws(&ws), "old", &super::super::job_cache::Meta { uid: None, used_at: 15, bytes: 3 << 20 }).unwrap();
+        for (d, used_at) in [(c1.join("pa/target-1"), 10), (c1.join("pc/target-1"), 900), (c1.join("pd/target-1"), 1)] {
+            let bytes = if d.ends_with("pa/target-1") { 3 << 20 } else { 1 << 20 };
+            n.slot_use.lock().unwrap().insert(d, SlotUse { bytes, used_at });
+        }
+        // Another tenant's slot is the coldest on the node: still not ours.
+        n.slot_use.lock().unwrap().insert(layout.tenant(2).cache().join("pa/target-1"), SlotUse { bytes: 3 << 20, used_at: 0 });
+        n.slots.lock().unwrap().mark_busy("pd", 1);
+        // Share 4 MiB ("1 GB" = 4 MiB): 8 MiB held, the two coldest go.
+        let budget = |gb: u32| u64::from(gb) << 22;
+        assert!(!n.tenant_share_pass(t1, budget).await, "back under its share");
+        assert!(!c1.join("pa/target-1").exists(), "coldest warm slot went");
+        assert!(!t1.paths.job_cache(&ws, "old").exists(), "next coldest (a job cache) went");
+        assert!(c1.join("pc/target-1/x").exists(), "recent slot stays: under the share already");
+        assert!(c1.join("pd/target-1/x").exists(), "a slot in use is never touched");
+        let c2 = layout.tenant(2).cache();
+        assert!(c2.join("pa/target-1/x").exists() && c2.join("pc/target-1/x").exists(), "another tenant's data is never touched");
+        // The report line, and what `get` reads back for this job's window.
+        let ev = n.evicted_since(1, 0);
+        assert_eq!(ev, Evicted { warm: 1, caches: 1, job_dirs: 0, bytes: 6 << 20 });
+        assert_eq!(ev.line().unwrap(), "evicted 1 warm slot and 1 job cache, 0.0 GB, to fit this server's disk share on the node");
+        assert_eq!(n.evicted_since(1, n.now() + 10), Evicted::default(), "only since the job started");
+        assert!(n.tenant_disk_used(1).unwrap() <= 4 << 20, "the measure the offer carries");
+        assert_eq!(n.tenant_disk_used(2), None, "slot 2 hasn't been measured");
+        // A share nothing idle can reach: nothing goes.
+        let tiny = |_gb: u32| 1u64;
+        assert!(n.tenant_share_pass(t1, tiny).await, "still over");
+        assert!(c1.join("pc/target-1/x").exists(), "eviction that can't help doesn't happen");
+    }
+
+    #[test]
+    fn eviction_picks_coldest_first_and_only_what_it_takes() {
+        let c = |bytes: u64, used_at: i64| Cold { bytes, used_at };
+        let cold = [c(10, 30), c(10, 10), c(10, 20)];
+        assert_eq!(coldest_to_evict(&cold, 100, 100), Vec::<usize>::new(), "at the share: nothing");
+        assert_eq!(coldest_to_evict(&cold, 105, 100), vec![1], "just enough");
+        assert_eq!(coldest_to_evict(&cold, 115, 100), vec![1, 2], "coldest first");
+        assert_eq!(coldest_to_evict(&cold, 130, 100), vec![1, 2, 0]);
+        // Even all of it wouldn't fit: the job itself is over; keep the caches.
+        assert_eq!(coldest_to_evict(&cold, 131, 100), Vec::<usize>::new());
+    }
+
+    /// The failure says the share, what was used, what went, and when the
+    /// job alone is over it.
+    #[test]
+    fn the_tenant_disk_full_detail_says_what_happened() {
+        let d = tenant_disk_full_detail(40 << 30, 312 << 30, 300 << 30, &Evicted { warm: 2, caches: 1, job_dirs: 0, bytes: 12 << 30 });
+        assert!(d.contains("share on the node is 40 GB"), "{d}");
+        assert!(d.contains("held 312 GB") && d.contains("300 GB of it this job's"), "{d}");
+        assert!(d.contains("evicted 2 warm slots and 1 job cache, 12 GB first"), "{d}");
+        assert!(d.contains("the job itself is over the share"), "{d}");
+        let d = tenant_disk_full_detail(40 << 30, 41 << 30, 5 << 30, &Evicted::default());
+        assert!(d.contains("nothing was evicted") && d.contains("other running jobs"), "{d}");
+        assert!(!d.contains("the job itself is over"), "{d}");
     }
 
     /// The walk's caps are reported, not hidden (review B F1).

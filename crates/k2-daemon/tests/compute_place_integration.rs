@@ -254,6 +254,7 @@ fn shared_view() -> ShareView {
         cpu_secs_today: 0,
         expires_in_secs: None,
         skew_secs: None,
+        disk_used_bytes: None,
         quotes: vec![],
         priority: None,
     }

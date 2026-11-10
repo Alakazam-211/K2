@@ -419,6 +419,8 @@ pub struct Node {
     job_seq: std::sync::atomic::AtomicU64,
     /// Warm target slots' last measured size and use (module `disk`).
     slot_use: Mutex<HashMap<PathBuf, disk::SlotUse>>,
+    /// Each tenant's last measured disk use and recent evictions.
+    tenant_disk: Mutex<HashMap<Slot, disk::TenantDisk>>,
     /// The executor relays a secret-env stdin pipe (`Ready.stdin`; asked at
     /// start and on every wall probe, so an executor restart is noticed).
     pub exec_stdin: std::sync::atomic::AtomicBool,
@@ -590,6 +592,7 @@ impl Node {
             owner_name: Mutex::new(None),
             job_seq: Default::default(),
             slot_use: Mutex::new(HashMap::new()),
+            tenant_disk: Mutex::new(HashMap::new()),
             exec_stdin: std::sync::atomic::AtomicBool::new(exec_stdin),
             exec_job_uid: std::sync::atomic::AtomicBool::new(exec_job_uid),
             exec_gpus: Mutex::new(exec_gpus),

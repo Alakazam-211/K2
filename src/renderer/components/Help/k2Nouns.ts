@@ -150,6 +150,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         blurb: "Drive this workspace's phone device (the Mobile tab's): read the screen, tap, type, install.",
         example: 'k2 sim tree',
       },
+      {
+        noun: 'desktop',
+        blurb: "See and control this computer's screen from another K2 window (Owners and Admins; off until turned on).",
+        example: 'k2 desktop status',
+      },
       { noun: 'commit', blurb: 'AI-assisted commit (`--merge` to merge too).' },
     ],
   },

@@ -44,6 +44,9 @@ describe('Zen source ratchets', () => {
   it('T4.7: the only webview matcher for the Zen chord is lib/zen/zen-shortcut.ts', () => {
     const owners = walk(RENDERER, [])
       .filter((f) => readFileSync(f, 'utf8').includes("'KeyZ'"))
+      // The remote desktop key table maps every key code to the remote
+      // machine's keys (prd-remote-desktop-tab-v1 D7a); it matches no chord here.
+      .filter((f) => !f.endsWith('components/Desktop/desktop-keymap.ts'))
       .map(rel)
     expect(owners).toEqual(['lib/zen/zen-shortcut.ts'])
   })

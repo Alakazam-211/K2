@@ -133,6 +133,7 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/CustomThemeCreator.tsx',
   'components/Settings/DisableWorktreesDialog.tsx',
   'components/Settings/sections/AgentsSection.tsx',
+  'components/Settings/sections/RemoteDesktopSection.tsx',
   'components/Settings/sections/ApiTokensSection.tsx',
   'components/Settings/sections/api-keys-api.ts',
   // 0.46.5 App phone pairing: an App's phone-app config is about the

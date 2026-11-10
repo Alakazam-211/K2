@@ -165,7 +165,7 @@ describe('CloneToDialog uses the app\'s shared form controls', () => {
     // Button primitive: the themed field radius + ring, primary = accent.
     const primary = screen.getByTestId('clone-confirm-button')
     expect(primary.className).toContain('rounded-[var(--radius-field)]')
-    expect(primary.className).toContain('bg-[var(--color-accent)]')
+    expect(primary.className).toContain('bg-[var(--color-accent-fill)]')
     const cancel = screen.getByRole('button', { name: 'Cancel' })
     expect(cancel.className).toContain('rounded-[var(--radius-field)]')
     // DialogFrame: a themed Surface with the dialog elevation.

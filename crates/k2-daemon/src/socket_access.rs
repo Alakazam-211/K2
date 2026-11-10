@@ -175,9 +175,23 @@ mod incoming_tests {
         // required field, so a new stream route must give one), and each
         // route builds that from the check.
         let engine = std::fs::read_to_string(src.join("stream/viewer.rs")).expect("stream/viewer.rs");
+        assert_eq!(engine.matches("read.next()").count(), 1, "stream/viewer.rs: one read path, so none skips the check");
         let at = engine.find("msg = read.next() => {").expect("stream/viewer.rs: its read branch");
-        let next = &engine[at..at + 600.min(engine.len() - at)];
-        assert!(next.contains("(auth.frame)(&msg)"), "stream/viewer.rs: the route's frame check runs first in the read branch");
+        let check = engine[at..].find("(auth.frame)(&msg)").map(|i| at + i + "(auth.frame)(&msg)".len()).expect("stream/viewer.rs: the read branch asks the route's frame check");
+        // Everything from the branch's start up to the check, whitespace
+        // folded, must be exactly this: only telling a client frame from a
+        // control frame comes before it, so no later edit can act on `msg`
+        // (dispatch, parse, log its payload) ahead of the check.
+        let head: Vec<&str> = engine[at..check].split_whitespace().collect();
+        let want: Vec<&str> = "msg = read.next() => { \
+             let acts = matches!(msg, Some(Ok(Message::Text(_))) | Some(Ok(Message::Binary(_)))); \
+             if acts { \
+             if let Verdict::Close { code, reason } = (auth.frame)(&msg)"
+            .split_whitespace()
+            .collect();
+        assert_eq!(head, want, "stream/viewer.rs: the route's frame check must be the first thing the read branch does with a client frame");
+        let after = &engine[check..check + 200.min(engine.len() - check)];
+        assert!(after.contains("break 'serve;"), "stream/viewer.rs: a refused frame ends the socket");
         for f in ["sim_stream_ws.rs"] {
             let s = std::fs::read_to_string(src.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
             assert!(s.contains("crate::socket_access::IncomingCheck::new("), "{f} builds the check");

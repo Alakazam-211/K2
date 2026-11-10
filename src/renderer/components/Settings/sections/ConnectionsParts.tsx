@@ -2,9 +2,56 @@
 // agent list share, so a row, a section heading and a state message look the
 // same in both.
 
-import { cx } from '@/components/ui'
+import { cx, Tag, type TagTone } from '@/components/ui'
 
 export type HealthTone = 'ok' | 'warn' | 'error' | 'neutral'
+
+/** A health as a chip: green for up, red for down, amber for a problem,
+ *  quiet for anything in between. */
+export const HEALTH_TAG_TONE: Record<HealthTone, TagTone> = {
+  ok: 'ok',
+  warn: 'warn',
+  error: 'danger',
+  neutral: 'muted',
+}
+
+/** Which fact a server's status chip states. The chips always come in this
+ *  order, so every row reads the same way. */
+export type ServerStatusKind = 'health' | 'saved' | 'paired' | 'federation' | 'active'
+
+/** One fact on a server's second line: a `Tag` with a small icon. The words
+ *  always say the state; the colour only helps. */
+export function StatusChip({
+  kind,
+  tone,
+  icon,
+  title,
+  children,
+}: {
+  kind: ServerStatusKind
+  tone: TagTone
+  icon?: React.ReactNode
+  title?: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <Tag tone={tone} title={title} data-server-status={kind} className="gap-1">
+      {icon}
+      {children}
+    </Tag>
+  )
+}
+
+/** A server's address on its first line, beside its name: quieter, in the
+ *  monospace that addresses use elsewhere in Settings. */
+export function ServerAddress({ lock, children }: { lock?: React.ReactNode; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <span className="type-hint font-mono text-[var(--color-text-secondary)] inline-flex items-center gap-1 min-w-0 ml-1">
+      {lock}
+      <span className="truncate">{children}</span>
+    </span>
+  )
+}
 
 const DOT_TONE: Record<HealthTone, string> = {
   ok: 'bg-[var(--color-status-ok)]',
@@ -79,7 +126,7 @@ export function ConnectionRow({
         <div className="flex-1 min-w-0">
           <div className="type-name text-[var(--color-text-primary)] min-w-0 flex items-center gap-1.5">{title}</div>
           {meta && (
-            <div className="type-hint text-[var(--color-text-secondary)] mt-0.5 min-w-0 flex flex-wrap items-center gap-x-1.5">
+            <div className="type-hint text-[var(--color-text-secondary)] mt-1 min-w-0 flex flex-wrap items-center gap-x-1.5 gap-y-1">
               {meta}
             </div>
           )}

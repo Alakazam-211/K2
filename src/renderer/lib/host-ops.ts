@@ -241,16 +241,16 @@ export function summarizeCheck(hostLabel: string, body: unknown): CheckSummary {
  *  unknown (signed out / unreachable / federation field absent). */
 export type FederationState = 'loading' | 'on' | 'off' | 'unknown'
 
-/** The short badge label for a host's federation state. */
+/** The short chip label for a host's federation state. */
 export function federationBadgeText(s: FederationState): string {
   switch (s) {
     case 'loading':
-      return 'Federation: …'
+      return 'Federation …'
     case 'on':
-      return 'Federation: on'
+      return 'Federation on'
     case 'off':
-      return 'Federation: off'
+      return 'Federation off'
     case 'unknown':
-      return 'Federation: —'
+      return 'Federation —'
   }
 }

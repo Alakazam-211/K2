@@ -46,6 +46,7 @@ import { abandonRotation, fetchWhoamiRole, verifyHostCredentials } from '@/lib/a
 import { PasswordRotationStep } from '@/components/PasswordRotationStep'
 import { parseServerUrl, isValidUsername } from '@/lib/connect-validate'
 import { IconLock } from '@/components/icons/IconLock'
+import { BookmarkIcon, GlobeIcon, LinkIcon } from '@/components/icons/K2Icons'
 import { FederationOverview } from './FederationOverview'
 import { useAddServerFocus } from '@/stores/add-server-focus'
 import type { SettingEntry } from '../searchManifest'
@@ -105,10 +106,13 @@ import {
 import { useDialogEscape } from '../settings-esc'
 import {
   ConnectionRow,
+  HEALTH_TAG_TONE,
   HealthWord,
   MetaDot,
   SectionHeader,
+  ServerAddress,
   StateNote,
+  StatusChip,
   StatusDot,
   type HealthTone,
 } from './ConnectionsParts'
@@ -461,15 +465,24 @@ export function ConnectionsSection(): React.JSX.Element {
               {/* Local — always present, never editable. */}
               <ConnectionRow
                 mark={<StatusDot tone={localHealth.tone} />}
-                title={<span className="truncate">This computer</span>}
-                meta={
+                title={
                   <>
-                    <HealthWord tone={localHealth.tone}>{localHealth.word}</HealthWord>
-                    <MetaDot />
-                    <span>K2 server built into this app</span>
+                    <span className="truncate flex-shrink-0">This computer</span>
+                    <span className="type-hint text-[var(--color-text-secondary)] truncate ml-1">
+                      K2 server built into this app
+                    </span>
                   </>
                 }
-                actions={<span className="type-hint text-[var(--color-text-secondary)]">Active</span>}
+                meta={
+                  <>
+                    <StatusChip kind="health" tone={HEALTH_TAG_TONE[localHealth.tone]}>
+                      {localHealth.word}
+                    </StatusChip>
+                    <StatusChip kind="active" tone="accent">
+                      Active
+                    </StatusChip>
+                  </>
+                }
               />
               <div className="divide-y divide-[var(--color-border)]" data-settings-id="connections.list">
                 {rows.length === 0 ? (
@@ -869,7 +882,7 @@ function ActiveHostPeersPanel({
  *
  *  "Pair as federated peer" establishes mutual trust between the ACTIVE
  *  daemon (Local or whichever remote you're signed into) and this saved host —
- *  the missing step between "Federation: on" and the Federated Connections
+ *  the missing step between "Federation on" and the Federated Connections
  *  server picker. Hidden when this tile is the active host (can't pair self). */
 function HostTile({
   host,
@@ -1469,54 +1482,65 @@ function HostTile({
     <ConnectionRow
       data-server-row={label}
       mark={<StatusDot tone={health.tone} />}
+      // Line 1: the name and its address. Line 2: the status chips, always in
+      // the same order (health, Saved, Paired, Federation, Active), so every
+      // row lines up the same way whatever its address.
       title={
         <>
-          <span className="truncate">{host.label}</span>
+          <span className="truncate flex-shrink-0 max-w-[60%]">{label}</span>
           {voiceOnly && <VoiceChatOnlyChip />}
+          <ServerAddress lock={host.secure ? <IconLock className="w-2.5 h-2.5 flex-shrink-0" /> : undefined}>
+            {hostText}
+          </ServerAddress>
         </>
       }
       meta={
         <>
-          <HealthWord tone={health.tone}>{health.word}</HealthWord>
-          <MetaDot />
-          <span className="inline-flex items-center gap-1 min-w-0">
-            {host.secure && <IconLock className="w-2.5 h-2.5 flex-shrink-0" />}
-            <span className="truncate">{hostText}</span>
-          </span>
+          <StatusChip kind="health" tone={HEALTH_TAG_TONE[health.tone]}>
+            {health.word}
+          </StatusChip>
           {host.remember && (
-            <>
-              <MetaDot />
-              <span>saved</span>
-            </>
+            <StatusChip
+              kind="saved"
+              tone="neutral"
+              icon={<BookmarkIcon size={12} className="flex-shrink-0" />}
+              title="Its password is saved in this computer’s keychain"
+            >
+              Saved
+            </StatusChip>
           )}
-          {!signedOut && !isActive && peerPaired === 'yes' && (
-            <>
-              <MetaDot />
-              <span title={`${activePeerSideLabel} trusts this server`}>Paired</span>
-            </>
+          {!isActive && ((peerPaired === 'yes' && !signedOut) || (peerPaired === 'no' && signedIn)) && (
+            <StatusChip
+              kind="paired"
+              tone={peerPaired === 'yes' ? 'ok' : 'muted'}
+              icon={<LinkIcon size={12} className="flex-shrink-0" />}
+              title={
+                peerPaired === 'yes'
+                  ? `${activePeerSideLabel} trusts this server`
+                  : `${activePeerSideLabel} and this server don’t trust each other yet`
+              }
+            >
+              {peerPaired === 'yes' ? 'Paired' : 'Not paired'}
+            </StatusChip>
           )}
           {(federation === 'on' || federation === 'off') && (
-            <>
-              <MetaDot />
-              <span title="Whether this server can connect to agents on other servers">
-                {federationBadgeText(federation)}
-              </span>
-            </>
-          )}
-          {signedOut && reach !== 'offline' && (
-            <>
-              <MetaDot />
-              <span>Sign in to manage this server</span>
-            </>
+            <StatusChip
+              kind="federation"
+              tone={federation === 'on' ? 'ok' : 'muted'}
+              icon={<GlobeIcon size={12} className="flex-shrink-0" />}
+              title="Whether this server can connect to agents on other servers"
+            >
+              {federationBadgeText(federation)}
+            </StatusChip>
           )}
           {/* "Active" only — switching to a host happens from the server
               switcher, not here. The row is for managing the host in place. */}
           {isActive && (
-            <>
-              <MetaDot />
-              <span>Active</span>
-            </>
+            <StatusChip kind="active" tone="accent">
+              Active
+            </StatusChip>
           )}
+          {signedOut && reach !== 'offline' && <span className="ml-0.5">Sign in to manage this server</span>}
         </>
       }
       actions={

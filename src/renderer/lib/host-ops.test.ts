@@ -109,10 +109,10 @@ describe('summarizeCheck — update-check response → display', () => {
 
 describe('federationBadgeText', () => {
   it('maps each state to its label', () => {
-    expect(federationBadgeText('loading')).toBe('Federation: …')
-    expect(federationBadgeText('on')).toBe('Federation: on')
-    expect(federationBadgeText('off')).toBe('Federation: off')
-    expect(federationBadgeText('unknown')).toBe('Federation: —')
+    expect(federationBadgeText('loading')).toBe('Federation …')
+    expect(federationBadgeText('on')).toBe('Federation on')
+    expect(federationBadgeText('off')).toBe('Federation off')
+    expect(federationBadgeText('unknown')).toBe('Federation —')
   })
 })
 

@@ -13,8 +13,11 @@
 //     `smartphone` plus the bell's 2,2 → 22,22 slash),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
-//   Settings
-//     Lucide 1.58 `settings`, unedited (round caps and joins).
+//   Bookmark
+//     Lucide 1.58 `bookmark`, squared.
+//   Settings, Link, Globe
+//     Lucide 1.58 `settings`, `link`, `globe`, unedited (round caps and
+//     joins: they are curves).
 //   Gardens
 //     Not here: K2's own brush ensō, `ZenIcon` (components/Zen/ZenIcon.tsx).
 //
@@ -601,6 +604,41 @@ export function ChevronDownIcon(props: K2IconProps = {}): React.JSX.Element {
   return (
     <svg {...iconProps('chevron-down', props)}>
       <path d="M6 9l6 6 6-6" />
+    </svg>
+  )
+}
+
+// ── Connected Servers status chips ─────────────────────────────────────
+
+/** A saved password (a server's Saved chip): Lucide `bookmark`, squared (no
+ *  corner radius). */
+export function BookmarkIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('bookmark', props)}>
+      <path d="M19 21l-7-4-7 4V3h14Z" />
+    </svg>
+  )
+}
+
+/** Trust between two servers (a server's Paired chip): Lucide `link`. Its
+ *  links are arcs, so caps and joins stay round. */
+export function LinkIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('link', props, 'round')}>
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+  )
+}
+
+/** Federation (a server's Federation chip): Lucide `globe`; a true circle,
+ *  so caps stay round. */
+export function GlobeIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('globe', props, 'round')}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+      <path d="M2 12h20" />
     </svg>
   )
 }

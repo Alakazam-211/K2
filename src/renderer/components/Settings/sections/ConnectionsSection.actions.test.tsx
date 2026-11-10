@@ -89,7 +89,7 @@ describe('Connected Servers row actions', () => {
   it('federation off: Pair stays in the menu, disabled, and says why', async () => {
     net.federation = false
     show(base)
-    await waitFor(() => within(row()).getByText('Federation: off'))
+    await waitFor(() => within(row()).getByText('Federation off'))
     await waitFor(() => expect(within(row()).queryByText('Checking…')).toBeNull())
     await menuLabels()
     const pair = screen.getAllByRole('menuitem')[0]
@@ -110,6 +110,35 @@ describe('Connected Servers row actions', () => {
     await waitFor(() => within(row()).getByText('Offline'))
     within(row()).getByRole('button', { name: 'Try again' })
     expect(await menuLabels()).toEqual(['Pair', 'Restart', 'Check for updates', 'Sign out', 'Edit', 'Remove'])
+  })
+
+  it('puts the address on the name line and the status chips below, always in one order', async () => {
+    net.paired = true
+    show(base)
+    await waitFor(() => within(row()).getByText('Federation on'))
+    await waitFor(() => within(row()).getByText('Paired'))
+    const chips = Array.from(row().querySelectorAll<HTMLElement>('[data-server-status]'))
+    expect(chips.map((c) => c.dataset.serverStatus)).toEqual(['health', 'saved', 'paired', 'federation'])
+    expect(chips.map((c) => c.textContent)).toEqual(['Online', 'Saved', 'Paired', 'Federation on'])
+    expect(chips.map((c) => c.dataset.tone)).toEqual(['ok', 'neutral', 'ok', 'ok'])
+    // Every chip but health carries its icon.
+    expect(chips.slice(1).every((c) => c.querySelector('svg[data-k2-icon]'))).toBe(true)
+    // The address sits on the first line with the name, not among the chips.
+    const address = within(row()).getByText('z3.k2.dev')
+    expect(chips.some((c) => c.contains(address))).toBe(false)
+  })
+
+  it('says Not paired and Federation off in quiet chips', async () => {
+    net.federation = false
+    show({ ...base, remember: false })
+    await waitFor(() => within(row()).getByText('Federation off'))
+    await waitFor(() => within(row()).getByText('Not paired'))
+    const chips = Array.from(row().querySelectorAll<HTMLElement>('[data-server-status]'))
+    expect(chips.map((c) => [c.dataset.serverStatus, c.dataset.tone])).toEqual([
+      ['health', 'ok'],
+      ['paired', 'muted'],
+      ['federation', 'muted'],
+    ])
   })
 
   it('Remove asks first, names the server and says what happens', async () => {

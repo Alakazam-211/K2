@@ -30,6 +30,7 @@ describe('Agent tab wiring', () => {
       'AgentsManageAgentsToggle',
       'AgentsManageVaultToggle',
       'AgentHandoffAcceptFrom',
+      'AgentHandoffSendAllow',
       'AgentsRefreshChatToggle',
     ])
   })

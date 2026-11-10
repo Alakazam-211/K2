@@ -347,7 +347,9 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 53;
 /// v12 = 0.46.10: "A secret another agent sent you" (`vault.incoming.accept`).
 /// v13 = 0.46.11: "A person's secret, to another server" (`vault.send`) and
 /// "A server secret you need" (`vault.grant-server`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 13;
+/// v14 = 0.46.11: the opening line (cards are on by default; who turned on
+/// the agent's own switch, by its Settings name).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 14;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

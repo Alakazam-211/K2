@@ -78,6 +78,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 LOG = sys.argv[1]
 BODY = json.dumps({"error": {"code": "owner_only", "hint": "only the server's owner may do this"}}).encode()
+# These are the "permission cards OFF" goldens, and the server switch
+# defaults on from 0.46.11: the stub says off explicitly to the CLI's probe.
+PERMISSION_OFF = json.dumps({"enabled": False}).encode()
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -91,12 +94,14 @@ class H(BaseHTTPRequestHandler):
             for k, v in self.headers.items():
                 f.write("> %s: %s\n" % (k, v))
             f.write("> body: %s\n" % body)
-        self.send_response(403)
+        off = self.path.split("?", 1)[0] == "/cli/permission/enabled"
+        out = PERMISSION_OFF if off else BODY
+        self.send_response(200 if off else 403)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(BODY)))
+        self.send_header("Content-Length", str(len(out)))
         self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(BODY)
+        self.wfile.write(out)
     do_GET = handle_any
     do_POST = handle_any
     do_PUT = handle_any

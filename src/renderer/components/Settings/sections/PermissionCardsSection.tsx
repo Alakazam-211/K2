@@ -46,7 +46,7 @@ export const PERMISSION_CARDS_MANIFEST: SettingEntry[] = [
     label: 'Permission cards',
     beta: true,
     description:
-      'Let agents ask, with a card in their Thread, for a setting you would otherwise change in Settings. Owner only; off by default',
+      'Let agents ask, with a card in their Thread, for a setting you would otherwise change in Settings. Owner only; on by default',
     keywords: ['permission cards', 'permission', 'cards', 'ask', 'request', 'approve', 'allow', 'deny', 'beta', 'k2 permission'],
   },
   {

@@ -386,6 +386,9 @@ pub mod garden_data;
 // Garden access (prd-garden-access-v1 A1): caller → History actor, the G8
 // delete hook and the daily History sweep. The store is k2-core's.
 pub mod garden_access;
+// Permission cards on by default (0.46.11): the boot pass and the owner's
+// one notice.
+pub mod permission_default;
 pub mod gardens_manage;
 pub mod zen_agent_routes;
 pub mod zen_agents_order_routes;

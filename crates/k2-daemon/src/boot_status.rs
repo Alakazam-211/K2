@@ -1269,7 +1269,8 @@ pub fn features() -> Vec<&'static str> {
     // exist, so clients show + → Desktop (Beta) and the off card.
     out.push(crate::desktop::FEATURE);
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1, §10):
-    // listed only while the global switch is on (setting or env). Its flip
+    // listed only while the global switch is on (setting or env; the
+    // setting defaults on from 0.46.11, `permission_default`). Its flip
     // publishes a settings frame (`settings_routes::permission_cards_flipped`)
     // so connected clients re-read this list.
     if k2_core::permission::gate::server_on() {

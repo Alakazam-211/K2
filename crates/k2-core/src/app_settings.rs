@@ -546,10 +546,21 @@ pub struct AppSettings {
     /// (prd-agent-settings-cards-v1 §2.1): the global switch. Persisted
     /// mirror of `K2_PERMISSION_CARDS` (force-on);
     /// `permission::gate::server_on()` is true when EITHER is set.
-    /// Owner-only to change. Default MUST stay OFF while in Beta. P0: not
-    /// yet synced into the gate (lane B).
-    #[serde(default)]
+    /// Owner-only to change. **Default ON** from 0.46.11 (Rosson
+    /// 2026-11-10: owners grant each agent from its workspace settings
+    /// without hunting for this switch first). It only lets an agent whose
+    /// own "Let this agent ask for permission" is on ask; a person still
+    /// allows every card. An existing server is moved over once by
+    /// [`apply_permission_cards_default`].
+    #[serde(default = "default_true")]
     pub permission_cards: bool,
+    /// The 0.46.11 "permission cards on by default" pass ran for this
+    /// settings file, or a person set `permissionCards` themselves (wire
+    /// `permissionCardsDefaultApplied`). While true, nothing but a person
+    /// ever changes `permissionCards` again, so an owner's off sticks.
+    /// Owner-only to send.
+    #[serde(default)]
+    pub permission_cards_default_applied: bool,
     /// Garden access lists, Settings → Gardens (prd-garden-access-v1 G0):
     /// one list per Garden of the agents who may edit it, and each Garden's
     /// History. Wire `gardenAccess`. **Always true from 0.46.3** (Rosson
@@ -1269,7 +1280,8 @@ impl Default for AppSettings {
             voice_tunnel_preview: false,
             voice_rooms_count: default_voice_rooms_count(),
             compute_placement: default_compute_placement(),
-            permission_cards: false,
+            permission_cards: true,
+            permission_cards_default_applied: false,
             garden_access: true,
             apps: true,
             apps_process_engine: false,
@@ -1509,6 +1521,72 @@ pub fn migrate_legacy_apps_switch() -> Result<bool, String> {
     Ok(true)
 }
 
+/// The settings key that records the 0.46.11 permission-cards pass.
+pub const PERMISSION_CARDS_DEFAULT_KEY: &str = "permissionCardsDefaultApplied";
+
+/// What [`apply_permission_cards_default`] found and did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionCardsDefault {
+    /// No settings file (or one `load` can't read): on by the default.
+    /// Nothing written.
+    NoFile,
+    /// The pass ran before, or a person set the switch: nothing touched.
+    AlreadyApplied,
+    /// It was on already: marked, nothing else changes.
+    KeptOn,
+    /// It was off and the Access Audit shows a person turned it off:
+    /// marked, left off.
+    KeptOffByOwner,
+    /// Never set (a file from before 0.46.3), or stored off with no sign a
+    /// person turned it off (0.46.3 to 0.46.10 wrote `false` on every save,
+    /// so a stored false can't be told from "never touched"): turned on,
+    /// once. The daemon tells the owner.
+    TurnedOn,
+}
+
+/// The 0.46.11 one-time move to "permission cards on by default" for a
+/// server that already has a settings file (Rosson 2026-11-10). Called at
+/// daemon boot, before the setting is synced into the gate.
+///
+/// Every save from 0.46.3 to 0.46.10 wrote the whole struct, so a stored
+/// `permissionCards: false` can't say whether a person turned it off; a
+/// missing key is "never set" (a file from before 0.46.3).
+/// `owner_turned_off` is the tie-breaker: true when the Access Audit's last
+/// server-switch line says a person turned the switch off, and then it
+/// stays off. Anything else turns it on, once:
+/// [`PERMISSION_CARDS_DEFAULT_KEY`] is written in the same write, and while
+/// it is true this does nothing again, so a later off from the owner sticks
+/// for good. Every other key in the file is left exactly as it was.
+pub fn apply_permission_cards_default(owner_turned_off: &dyn Fn() -> bool) -> Result<PermissionCardsDefault, String> {
+    let _guard = settings_lock().lock();
+    let file = settings_file();
+    let raw = match fs::read_to_string(&file) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(PermissionCardsDefault::NoFile),
+        Err(e) => return Err(format!("read {file:?}: {e}")),
+    };
+    let Ok(serde_json::Value::Object(mut obj)) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Ok(PermissionCardsDefault::NoFile);
+    };
+    if obj.get(PERMISSION_CARDS_DEFAULT_KEY) == Some(&serde_json::Value::Bool(true)) {
+        return Ok(PermissionCardsDefault::AlreadyApplied);
+    }
+    let outcome = match obj.get("permissionCards").and_then(serde_json::Value::as_bool) {
+        Some(true) => PermissionCardsDefault::KeptOn,
+        Some(false) if owner_turned_off() => PermissionCardsDefault::KeptOffByOwner,
+        _ => PermissionCardsDefault::TurnedOn,
+    };
+    obj.insert(
+        "permissionCards".to_string(),
+        serde_json::Value::Bool(outcome != PermissionCardsDefault::KeptOffByOwner),
+    );
+    obj.insert(PERMISSION_CARDS_DEFAULT_KEY.to_string(), serde_json::Value::Bool(true));
+    let json = serde_json::to_string_pretty(&serde_json::Value::Object(obj))
+        .map_err(|e| format!("serialize settings: {e}"))?;
+    write_settings_file(&json)?;
+    Ok(outcome)
+}
+
 /// The refusal for `gardenAccess: false` (or anything but `true`).
 pub const GARDEN_ACCESS_ALWAYS_ON: &str =
     "gardenAccess can't be turned off: Garden access is how Gardens work from 0.46.3 (see `k2 study garden-changes`)";
@@ -1688,6 +1766,13 @@ pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
             .ok_or_else(|| format!("{} must be a string (got {v})", crate::connect_db::SETTING_KEY))?;
         let stored = if raw.trim().is_empty() { String::new() } else { crate::connect_db::normalize(raw)? };
         *v = serde_json::Value::String(stored);
+    }
+    // 0.46.11: a person who sets the permission-cards switch has chosen;
+    // the one-time default pass never touches it again.
+    if partial.get("permissionCards").is_some() {
+        if let Some(obj) = partial.as_object_mut() {
+            obj.insert(PERMISSION_CARDS_DEFAULT_KEY.to_string(), serde_json::Value::Bool(true));
+        }
     }
     let current = load();
     let mut current_val = serde_json::to_value(&current)
@@ -2721,6 +2806,91 @@ mod tests {
         update(serde_json::json!({"apps": false})).unwrap();
         assert!(!migrate_legacy_apps_switch().unwrap());
         assert!(!load().apps, "off sticks across boots");
+    }
+
+    // ── permission cards on by default (0.46.11) ────────────────────
+
+    fn no_off_on_record() -> bool {
+        false
+    }
+
+    fn owner_off_on_record() -> bool {
+        true
+    }
+
+    #[test]
+    fn a_fresh_server_has_permission_cards_on() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        assert!(!settings_file().exists());
+        assert!(load().permission_cards, "no settings file: permission cards are on");
+        assert!(AppSettings::default().permission_cards, "the default is on");
+        assert_eq!(apply_permission_cards_default(&no_off_on_record).unwrap(), PermissionCardsDefault::NoFile);
+        assert!(!settings_file().exists(), "the pass writes nothing for a fresh server");
+        // A file written by this version (any first save) holds it on.
+        update(serde_json::json!({"defaultAgent": "codex"})).unwrap();
+        assert_eq!(stored_json()["permissionCards"], true);
+        assert_eq!(apply_permission_cards_default(&no_off_on_record).unwrap(), PermissionCardsDefault::KeptOn);
+        assert!(load().permission_cards);
+    }
+
+    #[test]
+    fn an_unset_switch_on_an_existing_server_turns_on_once() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        ensure_dir();
+        // A file from before 0.46.3: no key at all.
+        fs::write(settings_file(), r#"{"defaultAgent": "codex", "apps": true}"#).unwrap();
+        assert_eq!(apply_permission_cards_default(&no_off_on_record).unwrap(), PermissionCardsDefault::TurnedOn);
+        let v = stored_json();
+        assert_eq!(v["permissionCards"], true, "{v}");
+        assert_eq!(v[PERMISSION_CARDS_DEFAULT_KEY], true, "{v}");
+        assert_eq!(v["defaultAgent"], "codex", "every other key is kept: {v}");
+        assert_eq!(v.as_object().unwrap().len(), 4, "nothing else is added: {v}");
+        assert_eq!(apply_permission_cards_default(&no_off_on_record).unwrap(), PermissionCardsDefault::AlreadyApplied);
+
+        // 0.46.3 to 0.46.10 wrote `false` on every save, with no sign a
+        // person chose it: on, once.
+        fs::write(settings_file(), r#"{"defaultAgent": "codex", "permissionCards": false}"#).unwrap();
+        assert!(!load().permission_cards, "the stored off reads as off before the pass");
+        assert_eq!(apply_permission_cards_default(&no_off_on_record).unwrap(), PermissionCardsDefault::TurnedOn);
+        assert!(load().permission_cards);
+        assert_eq!(apply_permission_cards_default(&no_off_on_record).unwrap(), PermissionCardsDefault::AlreadyApplied);
+        assert!(load().permission_cards);
+    }
+
+    #[test]
+    fn an_owners_off_survives_the_update_and_every_later_boot() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        ensure_dir();
+        // 0.46.10: stored off, and the Access Audit says a person turned it off.
+        fs::write(settings_file(), r#"{"defaultAgent": "codex", "permissionCards": false}"#).unwrap();
+        assert_eq!(
+            apply_permission_cards_default(&owner_off_on_record).unwrap(),
+            PermissionCardsDefault::KeptOffByOwner
+        );
+        assert!(!load().permission_cards, "the owner's off stays off");
+        assert_eq!(stored_json()[PERMISSION_CARDS_DEFAULT_KEY], true, "and the pass is done");
+        assert_eq!(apply_permission_cards_default(&no_off_on_record).unwrap(), PermissionCardsDefault::AlreadyApplied);
+        assert!(!load().permission_cards);
+
+        // After the pass turned it on, the owner turns it off: never re-flipped.
+        fs::write(settings_file(), r#"{"permissionCards": false}"#).unwrap();
+        assert_eq!(apply_permission_cards_default(&no_off_on_record).unwrap(), PermissionCardsDefault::TurnedOn);
+        update(serde_json::json!({"permissionCards": false})).unwrap();
+        for _ in 0..3 {
+            assert_eq!(apply_permission_cards_default(&no_off_on_record).unwrap(), PermissionCardsDefault::AlreadyApplied);
+            assert!(!load().permission_cards, "off sticks across boots");
+        }
+
+        // A fresh 0.46.11 server whose owner turned it off before any pass
+        // ran: the write itself marks the choice.
+        fs::remove_file(settings_file()).unwrap();
+        update(serde_json::json!({"permissionCards": false})).unwrap();
+        assert_eq!(stored_json()[PERMISSION_CARDS_DEFAULT_KEY], true);
+        assert_eq!(apply_permission_cards_default(&no_off_on_record).unwrap(), PermissionCardsDefault::AlreadyApplied);
+        assert!(!load().permission_cards);
     }
 
     #[test]

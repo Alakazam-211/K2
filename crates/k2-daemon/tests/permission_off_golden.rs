@@ -118,6 +118,14 @@ fn setup() -> Env {
     let home = dunce::canonicalize(&home).unwrap();
     let env = Env { prev_home: std::env::var_os("HOME"), home: home.clone(), _guard: guard };
     std::env::set_var("HOME", &home);
+    // These are the "permission cards OFF" goldens. The setting defaults on
+    // from 0.46.11, so this harness turns it off explicitly: stored off (an
+    // owner's choice, so no settings write here turns it back on) and the
+    // process switch off.
+    k2_core::app_settings::update(serde_json::json!({ "permissionCards": false })).expect("store permission cards off");
+    k2_core::permission::gate::set_server_switch(false);
+    assert!(!k2_core::app_settings::load().permission_cards, "the off-goldens run with the setting off");
+    assert!(!k2_core::permission::gate::server_on(), "the off-goldens run with the gate off");
     env
 }
 

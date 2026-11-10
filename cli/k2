@@ -87063,7 +87063,7 @@ _study_page_permissions() {
     cat <<'EOF'
 # Permission cards (Beta)
 
-Permission cards are on for you: this server's owner turned on "Permission cards (Beta)", and your own "Can ask for permission cards" switch is on. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
+Permission cards are on for you: "Permission cards (Beta)" is on for this server (on by default from K2 0.46.11), and a person turned on your own "Let this agent ask for permission" switch in your workspace's settings. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
 
 ## The closing line
 
@@ -97086,8 +97086,9 @@ for s in rows:
 # BEGIN_CLI_PERMISSION
 # ── `k2 permission` — permission cards (Beta) ────────────────────────
 # PRD prd-agent-settings-cards-v1 rev 3.1 §11. The family exists only while
-# the server's "Permission cards (Beta)" switch is on and, for an agent,
-# its own "Can ask for permission cards" switch too. Otherwise every
+# the server's "Permission cards (Beta)" switch is on (the default from
+# 0.46.11) and, for an agent, its own "Can ask for permission cards" switch
+# too (off until a person turns it on). Otherwise every
 # surface prints today's bytes: `k2 permission …` is an unknown command,
 # `k2 help` has no line for it, `k2 study permissions` is an unknown
 # topic. It is not in `k2 --schema` or the CLI explorer during Beta.
@@ -97167,8 +97168,9 @@ People (a terminal outside K2):
   k2 permission pending                            what waits on you
   k2 permission approve <id>
   k2 permission deny <id> [--reason "…"]
-  k2 permission beta on|off|status                 the server switch (owner)
-  k2 permission agent <workspace> on|off           one agent's switch (owner or admin)
+  k2 permission beta on|off|status                 the server switch (owner; on by default)
+  k2 permission agent <workspace> on|off           one agent's switch (owner or admin; off
+                                                   until someone turns it on)
 
 Rules: k2 study permissions
 EOF

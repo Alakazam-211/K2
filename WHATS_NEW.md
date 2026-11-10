@@ -5,6 +5,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.46.11
 
+### Permission cards are on by default
+- **Choose an agent in its own settings; no switch to find first.** Settings → Workspaces → <agent> → Permissions now starts with "Let this agent ask for permission": turn it on and that agent can ask you, on a card in its Thread, for a setting it can't change itself. Each agent's switch stays off until you turn it on, and nothing changes until you or an admin allow a card. A card from an agent that serves an App goes to the server's owner and admins only; the App's users never see it.
+- **On updating:** the server switch turns on once, unless you had turned it off yourself, and the owner gets one notice saying so. Turn it off for the whole server in Settings → Access → Permission Cards (or `k2 permission beta off`); it stays off.
+
 ### Send feedback to K2
 - **Tell us about K2 from the top bar.** The new button next to Help (and "Send Feedback…" in the K2 menu, so it works in Zen too) sends a bug, an idea or praise to Alakazam Labs, the people who make K2. It goes with your K2 and OS versions and nothing else from your computer, unless you tick "Include details about K2 on this computer": versions, settings that are on, recent errors and the end of K2's log, with passwords, keys and names taken out. You read every line first, can leave any part out, and what is sent is exactly what you read. "Remember this for my feedback on this server" only starts the box ticked.
 - **It waits instead of failing.** Your server keeps what you send and sends it when it can: offline, or while the feedback service isn't reachable yet, it shows as Queued with the reason, and nothing you wrote is lost. The Sent tab shows each one (Queued, Sending, Sent, Failed with Retry, Refused); owners and admins see everyone's on the server.

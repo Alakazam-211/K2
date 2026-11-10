@@ -1344,7 +1344,7 @@ pub const K2_PERMISSIONS_SKILL_DESCRIPTION: &str =
 /// (`cli/k2` `_study_page_permissions`); a test keeps the two identical.
 pub const K2_PERMISSIONS_SKILL_BODY: &str = r#"# Permission cards (Beta)
 
-Permission cards are on for you: this server's owner turned on "Permission cards (Beta)", and your own "Can ask for permission cards" switch is on. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
+Permission cards are on for you: "Permission cards (Beta)" is on for this server (on by default from K2 0.46.11), and a person turned on your own "Let this agent ask for permission" switch in your workspace's settings. When K2 refuses you something a person can allow, ask that person with one command. K2 shows them a card; they press Allow or Deny.
 
 ## The closing line
 

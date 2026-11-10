@@ -230,7 +230,7 @@ async fn the_gate_follows_both_switches_and_off_is_today() {
 
     let d = test_harness::start(OWNER).await;
     let (port, tunnel) = (d.port, d.tunnel_port);
-    assert!(!k2_core::permission::gate::server_on(), "the global switch defaults off");
+    assert!(!k2_core::permission::gate::server_on(), "the in-process gate starts off (no daemon boot sync here)");
 
     // One workspace, its agent on its own cell socket.
     let ws_path = home.join("ws-pgi-billing");

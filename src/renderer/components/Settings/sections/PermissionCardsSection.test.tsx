@@ -165,7 +165,7 @@ describe('Settings → Access → Permission Cards', () => {
     expect(settings).toContain('...PERMISSION_CARDS_MANIFEST,')
   })
 
-  it('off (the default): the owner sees the switch off and nothing from the permission family is called', async () => {
+  it('off (an owner turned it off): the owner sees the switch off and nothing from the permission family is called', async () => {
     render(<PermissionCardsSection />)
     const sw = await screen.findByRole('switch', { name: 'Permission cards' })
     await waitFor(() => expect((sw as HTMLButtonElement).disabled).toBe(false))

@@ -171,6 +171,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1): the global
     // switch that lets agents ask people for setting changes.
     "permissionCards",
+    // 0.46.11: the mark of the one-time "on by default" pass (an Admin
+    // clearing it would let the next boot turn an owner's off back on).
+    "permissionCardsDefaultApplied",
     // Garden access lists (prd-garden-access-v1 G0): always on from 0.46.3
     // (`app_settings::update` refuses false); still Owner-only to send.
     "gardenAccess",
@@ -1051,27 +1054,32 @@ mod tests {
         });
     }
 
-    /// Permission cards (Beta, prd-agent-settings-cards-v1 §2.1): the
-    /// global switch defaults OFF, and an Admin or a Member can't turn it on
-    /// (atomic 403). The Owner's write, which flips the process-wide gate,
-    /// is tested in its own process (tests/permission_gate_integration.rs):
-    /// flipping it here would race the tests in this binary that walk the
-    /// route tables and `/boot-status`.
+    /// Permission cards (prd-agent-settings-cards-v1 §2.1): the global
+    /// switch defaults ON from 0.46.11, and an Admin or a Member can't turn
+    /// it off, or clear the one-time pass's mark (atomic 403). The Owner's
+    /// write, which flips the process-wide gate, is tested in its own
+    /// process (tests/permission_gate_integration.rs): flipping it here
+    /// would race the tests in this binary that walk the route tables and
+    /// `/boot-status`.
     #[test]
-    fn permission_cards_switch_is_owner_only_and_defaults_off() {
+    fn permission_cards_switch_is_owner_only_and_defaults_on() {
         with_temp_home(|| {
-            assert!(!k2_core::app_settings::load().permission_cards, "the Beta switch defaults off");
+            assert!(k2_core::app_settings::load().permission_cards, "the switch defaults on (0.46.11)");
             let admin = session_actor("adminpc", connect_users::Role::Admin);
             let member = session_actor("memberpc", connect_users::Role::Member);
             for actor in [admin, member] {
-                let r = handle_settings_update(br#"{"permissionCards":true,"defaultAgent":"codex"}"#, actor);
-                assert_eq!(r.status, "403 Forbidden", "{actor:?}: {}", r.body);
-                assert!(r.body.contains("requires the Owner role"), "{actor:?}: {}", r.body);
+                for body in [
+                    &br#"{"permissionCards":false,"defaultAgent":"codex"}"#[..],
+                    &br#"{"permissionCardsDefaultApplied":false,"defaultAgent":"codex"}"#[..],
+                ] {
+                    let r = handle_settings_update(body, actor);
+                    assert_eq!(r.status, "403 Forbidden", "{actor:?}: {}", r.body);
+                    assert!(r.body.contains("requires the Owner role"), "{actor:?}: {}", r.body);
+                }
             }
             let s = k2_core::app_settings::load();
-            assert!(!s.permission_cards, "403 leaves it off");
+            assert!(s.permission_cards, "403 leaves it on");
             assert_eq!(s.default_agent, "claude", "nothing half-applied");
-            assert!(!k2_core::permission::gate::server_on(), "a refused write never opens the gate");
         });
     }
 

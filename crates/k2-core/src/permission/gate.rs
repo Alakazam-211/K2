@@ -2,7 +2,10 @@
 //!
 //! - **Global**, "Permission cards" (Beta): the owner-only server setting
 //!   `permissionCards` (`AppSettings::permission_cards`), or
-//!   `K2_PERMISSION_CARDS=1` in the daemon's environment. Default OFF.
+//!   `K2_PERMISSION_CARDS=1` in the daemon's environment. The setting
+//!   defaults ON from 0.46.11 (`k2_daemon::permission_default`); this
+//!   process switch starts off until the daemon's boot syncs it, so tests
+//!   that never boot a daemon see it off unless they turn it on.
 //! - **Per agent**, "Can ask for permission cards":
 //!   `projects.agents_can_request_permissions` (migration 0218). Default
 //!   OFF. Read here with a dedicated query; it is deliberately **not** a
@@ -43,7 +46,8 @@ fn env_forced_on() -> bool {
         .unwrap_or(false)
 }
 
-/// The global switch: env force-on OR the persisted setting. Default OFF.
+/// The global switch: env force-on OR the persisted setting (synced at
+/// boot; the setting defaults on from 0.46.11).
 pub fn server_on() -> bool {
     env_forced_on() || SERVER_SETTING.load(Ordering::Relaxed)
 }
@@ -119,7 +123,7 @@ mod tests {
         let _env = crate::test_env::lock();
         let _unset = crate::test_env::EnvVar::remove(super::super::ENV_FORCE_ON);
         set_server_switch(false);
-        assert!(!server_on(), "the global switch must default OFF");
+        assert!(!server_on(), "the process switch starts off until the boot sync");
         {
             let _on = crate::test_env::EnvVar::set(super::super::ENV_FORCE_ON, "1");
             assert!(server_on());

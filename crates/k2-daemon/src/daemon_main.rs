@@ -476,10 +476,14 @@ async fn async_main() {
     k2_core::voice_preview::set_enabled(k2_core::app_settings::load().voice_rooms_preview);
     k2_core::voice_rooms::set_tunnel_enabled(k2_core::app_settings::load().voice_tunnel_preview);
     k2_core::compute::set_placement_policy(crate::settings_routes::placement_policy_of(&k2_core::app_settings::load().compute_placement));
-    // Permission cards (Beta): the persisted global switch, so a daemon that
-    // boots with it on serves the family at once (K2_PERMISSION_CARDS=1
-    // still forces it on).
-    k2_core::permission::gate::set_server_switch(k2_core::app_settings::load().permission_cards);
+    // Permission cards: on by default from 0.46.11. An existing server's
+    // settings file gets the one-time pass first (on unless a person turned
+    // it off), then the persisted switch is synced, so a daemon that boots
+    // with it on serves the family at once (K2_PERMISSION_CARDS=1 still
+    // forces it on). The owner's notice waits for the database (below).
+    // Must run before migrate_legacy_apps_switch, whose save writes the
+    // whole struct.
+    let permission_cards_default = crate::permission_default::boot();
     // Garden access lists (prd-garden-access-v1; always on from 0.46.3,
     // Rosson 2026-10-23: no switch). On in this process from here; the
     // one-time upgrade pass runs after the database is up (below).
@@ -1584,6 +1588,11 @@ async fn async_main() {
     // lines) before any route answers, so nobody sees empty lists first.
     if crate::garden_access::boot() {
         log_debug!("[daemon] Garden access: the one-time upgrade pass ran");
+    }
+    // Permission cards (0.46.11): the owner's one notice, when the boot
+    // pass above turned the switch on.
+    if crate::permission_default::notify(permission_cards_default) {
+        log_debug!("[daemon] Permission cards: on by default; the owner was told");
     }
 
     // k2-ptyd S3 B1 (prd-k2-ptyd-v1 §7.9, P29): adopt the agent sessions

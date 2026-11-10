@@ -13,8 +13,7 @@
 //! - `POST /cli/skin/login` through an App's link (must-not-break: a BFF
 //!   logs its guests in from inside the wall).
 
-#[path = "support/app_fixture.rs"]
-mod app_fixture;
+use crate::support::app_fixture;
 
 use app_fixture::*;
 use k2_core::app_surface;

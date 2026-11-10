@@ -103,7 +103,7 @@ fn mint_passport() -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unauthenticated_stays_byte_identical_and_a_passport_hears_owner_admin_only() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     with_temp_home(|| {
         let _ = k2_core::db::init_for_tests();
         let d = futures_block(test_harness::start(OWNER_TOKEN));
@@ -149,7 +149,7 @@ async fn unauthenticated_stays_byte_identical_and_a_passport_hears_owner_admin_o
 /// never fetches anything (null until a check has run).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn update_latest_is_member_readable_and_never_fetches() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     with_temp_home(|| {
         // A URL nothing answers: a fetch here would fail the 200 below.
         std::env::set_var("K2_DAEMON_MANIFEST_URL", "http://127.0.0.1:9/never");

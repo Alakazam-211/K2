@@ -421,7 +421,7 @@ fn get_status(port: u16, path: &str) -> (u16, String) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_on_every_write_binding_is_405() {
-    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&LOCK);
     let prev = std::env::var_os("HOME");
     let home = std::env::temp_dir().join(format!("k2-contract-routes-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&home).expect("temp HOME");

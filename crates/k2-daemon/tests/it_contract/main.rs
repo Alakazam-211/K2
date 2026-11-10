@@ -17,6 +17,10 @@ fn runner_guard() {
     support::env::require_nextest();
 }
 
+mod api_gate_integration;
+mod app_api_integration;
+mod contract_routes;
 mod ensure_cli_route;
 mod refusal_registry;
+mod require_manage_refusal_integration;
 mod users_admins_only_integration;

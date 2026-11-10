@@ -1907,12 +1907,13 @@ pub const ROUTES: &[Route] = &[
     get("/cli/sew/recording", Member),
     post("/cli/sew/recording/disable", Admin),
     post("/cli/sew/recording/enable", Admin),
-    get("/cli/sew/recording/preflight", Member),
-    post("/cli/sew/recording/uninstall", Admin),
     // Sew 0.9.0: the org recording policies (read; set by the owner or an
-    // Admin in person, recording.required by the owner: handler).
+    // Admin in person, recording.required by the owner: handler). Sorted in
+    // with the rest: `lookup` is a binary search.
     get("/cli/sew/recording/policies", Admin),
     post("/cli/sew/recording/policy", Admin),
+    get("/cli/sew/recording/preflight", Member),
+    post("/cli/sew/recording/uninstall", Admin),
     // S32 (K27): the app URL behind Open Sew as owner (Manage Sew).
     post("/cli/sew/server/app-url", Admin),
     post("/cli/sew/server/backup", Admin),

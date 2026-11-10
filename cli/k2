@@ -920,6 +920,12 @@ if [ "${1:-}" = "ci" ]; then
             ;;
     esac
 fi
+# `k2 setup --help` (and `k2 setup help`) only print help.
+if [ "${1:-}" = "setup" ]; then
+    for _a in "${@:2}"; do
+        case "$_a" in -h|--help|help) _skip_conn_gate=1 ;; esac
+    done
+fi
 # `k2 sidecar` / `k2 sidecar --help` print help; `k2 sessions spawn` is
 # retired and only prints where it moved. Neither talks to the daemon.
 if [ "${1:-}" = "sidecar" ]; then
@@ -46001,6 +46007,7 @@ cmd_help() {
         thread)                   cmd_help_thread ;;
         browser)                  cmd_help_browser ;;
         whoami)                   cmd_help_whoami ;;
+        setup)                    _setup_usage ;;
         talk)                     cmd_help_talk ;;
         read)                     cmd_help_read ;;
         inbox)                    cmd_help_inbox ;;
@@ -50790,6 +50797,113 @@ if d:
     print()
     bad = ", ".join(d.get("failing") or [])
     print("Box setup (k2 app doctor): %s%s" % ("ready" if d.get("ready") else "not ready", (" — failing: " + bad) if bad else ""))
+'
+}
+
+# ── k2 setup (prd-setup-checklist-v1 C2) ────────────────────────────────
+# The setup checklist on this server: the same list the app shows, read
+# from `GET /cli/first-run/status` (each step's done state is the server's
+# real state). Per person: the owner token and the logins the owner linked
+# share one list. Exit 0 ok; 2 a usage mistake; 3 refused (an agent, an app
+# pass, a Voice & Chat only login); 1 anything else.
+_setup_usage() {
+    cat <<'EOF'
+k2 setup [--json]       your setup list on this server: [x] done, [ ] to do, [-] skipped
+k2 setup hide           hide the list in the app (k2 setup still prints it)
+k2 setup show           bring the list back, even after it finished
+k2 setup skip <step>    skip one step: llm_sign_in, first_agent, tunnel, phone, own_sign_in
+
+Each step is done by doing it: the list reads what is set up on this
+server, never a tick. It is yours: the owner and the logins the owner
+linked share one list, and every other login has its own. When every
+step is done or skipped the list finishes and the app stops showing it.
+Agents have no setup list (exit 3).
+EOF
+}
+
+cmd_setup() {
+    local sub="" as_json=0 row=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help|help) _setup_usage; return 0 ;;
+            --json) as_json=1; shift ;;
+            hide|show)
+                [ -z "$sub" ] || { _setup_usage >&2; exit 2; }
+                sub="$1"; shift ;;
+            skip)
+                [ -z "$sub" ] || { _setup_usage >&2; exit 2; }
+                sub=skip; shift
+                row="${1:-}"
+                [ -n "$row" ] || { echo "usage: k2 setup skip <step> (k2 setup lists them)" >&2; exit 2; }
+                shift ;;
+            *) echo "k2 setup: unknown argument: $1" >&2; _setup_usage >&2; exit 2 ;;
+        esac
+    done
+    local raw="" rc=0
+    case "$sub" in
+        "") raw=$(cli_request "/cli/first-run/status") || rc=$? ;;
+        hide|show) raw=$(cli_post_json "/cli/first-run/$sub" '{}') || rc=$? ;;
+        skip)
+            local body
+            body=$(K2_SETUP_ROW="$row" python3 -c 'import json, os; print(json.dumps({"row": os.environ["K2_SETUP_ROW"]}))')
+            raw=$(cli_post_json "/cli/first-run/skip" "$body") || rc=$? ;;
+    esac
+    if [ "$rc" -ne 0 ] || [ -z "$raw" ]; then
+        echo "Error: could not reach the K2 daemon (k2 setup)" >&2
+        exit 1
+    fi
+    printf '%s' "$raw" | K2_SETUP_JSON="$as_json" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: the daemon sent something k2 setup does not understand: " + raw[:200], file=sys.stderr)
+    sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err is not None or not isinstance(d, dict) or "rows" not in d:
+    if isinstance(err, dict):
+        code = err.get("code") or ""
+        hint = err.get("hint") or err.get("message") or code
+    else:
+        code, hint = "", str(err if err is not None else raw[:200])
+    print("Error: %s%s" % ((code + ": ") if code and code not in hint else "", hint), file=sys.stderr)
+    low = (code + " " + hint).lower()
+    if code == "usage" or code == "unknown_row":
+        sys.exit(2)
+    if any(w in low for w in ("person_only", "forbidden", "role_required", "token", "passport")):
+        sys.exit(3)
+    sys.exit(1)
+if os.environ.get("K2_SETUP_JSON") == "1":
+    print(json.dumps(d, indent=2))
+    sys.exit(0)
+LABELS = {
+    "llm_sign_in": "Sign in to Claude, Codex or Grok",
+    "first_agent": "Make your first agent",
+    "tunnel": "Turn on the tunnel",
+    "phone": "Connect your phone",
+    "own_sign_in": "Make your own sign-in",
+}
+NOTES = {
+    "needs_tunnel": "Away from home, your phone reaches this server through the tunnel, so that comes first.",
+}
+MARK = {"done": "[x]", "todo": "[ ]", "skipped": "[-]"}
+rows = d.get("rows") or []
+done = sum(1 for r in rows if r.get("state") == "done")
+print("Setup: %d of %d done" % (done, len(rows)))
+for r in rows:
+    rid = r.get("id") or "?"
+    line = "  %s %s" % (MARK.get(r.get("state"), "[?]"), LABELS.get(rid, rid))
+    note = NOTES.get(r.get("note") or "")
+    if note and r.get("state") != "done":
+        line += " (" + note + ")"
+    print(line)
+if d.get("finished"):
+    print("Finished: the app no longer shows this list (k2 setup show brings it back).")
+elif d.get("hidden"):
+    print("Hidden in the app (k2 setup show brings it back).")
+if not d.get("enabled"):
+    print("The app does not show setup lists on this server yet.")
 '
 }
 
@@ -98925,6 +99039,10 @@ case "${1:-help}" in
         ;;
     whoami)
         shift; cmd_whoami "$@"
+        ;;
+    setup)
+        # prd-setup-checklist-v1 C2: the setup checklist (k2 setup --help).
+        shift; cmd_setup "$@"
         ;;
     msg)
         # 0.45.6 sender check: `k2 msg who m_…`. 0.46.1: `who` is ALWAYS

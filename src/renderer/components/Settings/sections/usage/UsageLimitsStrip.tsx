@@ -52,7 +52,7 @@ export function UsageLimitsStrip({
     <div data-testid="usage-limits-strip">
       <SettingsGroup
         title="Plan limits"
-        hint="How much of each tool’s current limit its default login has used."
+        hint="How close each tool is to its plan’s limit, on its default login."
         card
         action={
           canLink ? (

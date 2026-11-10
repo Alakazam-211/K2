@@ -14,7 +14,7 @@ import { workspaceUsageLabel, type UsageNameProject } from '../workspaceUsageLab
 import { freshTurns, parseUsageTurnsPage, turnCursor, type UsageTurn } from '../usageTurnsPage'
 import { COST_LABEL, costSourceText, fmtCompact, fmtUsd, harnessLabel, turnsParams, type UsageFilters, type UsageRange } from './usage-page'
 import { Button } from '@/components/ui'
-import { SettingsGroup } from '../../controls/SettingControls'
+import { SettingsGroup, SettingsLoadState } from '../../controls/SettingControls'
 import { RetryButton, SeriesKey } from './UsageChart'
 
 export const ACTIVITY_PAGE = 50
@@ -57,6 +57,11 @@ export async function fetchNewerTurns(
   return out
 }
 
+/** An activity row: the text (capped, so on a wide page time and cost sit
+ *  beside it rather than across the page), time and cost, a spacer, and the
+ *  open mark at the far edge. Columns line up from row to row. */
+const ROW_GRID = 'w-full grid grid-cols-[minmax(0,36rem)_7rem_minmax(0,1fr)_auto] items-start gap-x-4 px-4 py-2.5'
+
 export function UsageActivity({
   scope,
   scopeKey,
@@ -82,7 +87,9 @@ export function UsageActivity({
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [moreError, setMoreError] = useState<string | null>(null)
+  // What failed after the list loaded (older rows or a live update), in
+  // plain words, and the server's reason.
+  const [moreError, setMoreError] = useState<{ what: string; reason: string } | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const [attempt, setAttempt] = useState(0)
   const rowsRef = useRef<UsageTurn[]>([])
@@ -135,7 +142,7 @@ export function UsageActivity({
       setRows((prev) => [...prev, ...freshTurns(page.rows, new Set(prev.map((r) => r.rowid)))])
       setCursor(page.has_more ? page.next_cursor : null)
     } catch (err) {
-      if (gen.current === mine) setMoreError(errorMessage(err))
+      if (gen.current === mine) setMoreError({ what: 'Older requests didn’t load. Try Load older again.', reason: errorMessage(err) })
     } finally {
       if (gen.current === mine) setLoadingMore(false)
     }
@@ -160,7 +167,7 @@ export function UsageActivity({
           }
           setNow(Date.now())
         } catch (err) {
-          if (gen.current === mine) setMoreError(`Live update failed: ${errorMessage(err)}`)
+          if (gen.current === mine) setMoreError({ what: 'New requests stopped updating. Reopen this page to catch up.', reason: errorMessage(err) })
         }
       })()
     })
@@ -174,25 +181,25 @@ export function UsageActivity({
         title="Activity"
         hint="Every request in this range, newest first. New ones appear as they happen."
         card
+        state={
+          loading ? (
+            <SettingsLoadState kind="loading" title="Loading requests…" testId="usage-activity-loading">
+              The newest requests in this range.
+            </SettingsLoadState>
+          ) : error ? (
+            <SettingsLoadState
+              kind="error"
+              title="The request log couldn’t load"
+              detail={error}
+              action={<RetryButton onClick={retry} />}
+              testId="usage-activity-error"
+            >
+              K2 couldn’t read this range’s requests. The totals above are still current; try again.
+            </SettingsLoadState>
+          ) : undefined
+        }
       >
-        {loading ? (
-          <p role="status" className="px-4 py-6 type-hint text-[var(--color-text-secondary)]">
-            Loading requests…
-          </p>
-        ) : error ? (
-          <div className="px-4 py-4 flex items-start justify-between gap-6" role="alert">
-            <div className="min-w-0">
-              <p className="type-row text-[var(--color-text-primary)] flex items-center gap-2">
-                <span aria-hidden="true" className="inline-block h-2 w-2 rounded-[var(--radius-status)] bg-[var(--color-status-error)]" />
-                The request log couldn’t load
-              </p>
-              <p className="type-hint text-[var(--color-text-secondary)] mt-0.5" data-testid="usage-activity-error">
-                {error}
-              </p>
-            </div>
-            <RetryButton onClick={retry} />
-          </div>
-        ) : rows.length === 0 ? (
+        {rows.length === 0 ? (
           <p className="px-4 py-6 type-hint text-[var(--color-text-secondary)]">No requests in this range.</p>
         ) : (
           <>
@@ -207,7 +214,7 @@ export function UsageActivity({
                 const open = canOpenChat(row)
                 const body = (
                   <>
-                    <span className="min-w-0 flex-1">
+                    <span className="min-w-0">
                       <span className="flex items-center gap-2 min-w-0">
                         <SeriesKey harness={row.harness} />
                         <span className="type-name text-[var(--color-text-primary)] truncate" title={row.outside ? undefined : row.workspace_path}>
@@ -223,7 +230,7 @@ export function UsageActivity({
                         {fmtCompact(row.cache_read_tokens)} · Written to cache {fmtCompact(row.cache_write_tokens)}
                       </span>
                     </span>
-                    <span className="flex-shrink-0 text-right">
+                    <span className="text-right">
                       <span className="block type-hint text-[var(--color-text-secondary)] tabular-nums" title={absolute}>
                         {when}
                       </span>
@@ -233,11 +240,14 @@ export function UsageActivity({
                         </span>
                       ) : null}
                     </span>
+                    <span aria-hidden="true" />
                     {open ? (
-                      <span aria-hidden="true" className="flex-shrink-0 self-center type-row text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)]">
+                      <span aria-hidden="true" className="self-center type-row text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)]">
                         ›
                       </span>
-                    ) : null}
+                    ) : (
+                      <span aria-hidden="true" />
+                    )}
                   </>
                 )
                 return (
@@ -249,12 +259,12 @@ export function UsageActivity({
                         data-testid={`usage-activity-open-${row.rowid}`}
                         aria-label={`Open the chat in ${label.name} from ${when}`}
                         onClick={() => onOpenChat(row)}
-                        className="group relative w-full flex items-start gap-4 px-4 py-2.5 text-left no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-wash-1)]"
+                        className={`group relative ${ROW_GRID} text-left no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-bg-hover)]`}
                       >
                         {body}
                       </button>
                     ) : (
-                      <div className="w-full flex items-start gap-4 px-4 py-2.5">{body}</div>
+                      <div className={ROW_GRID}>{body}</div>
                     )}
                   </li>
                 )
@@ -264,7 +274,9 @@ export function UsageActivity({
               {moreError ? (
                 <p className="type-hint text-[var(--color-text-primary)] flex items-center gap-2" role="alert" data-testid="usage-activity-more-error">
                   <span aria-hidden="true" className="inline-block h-2 w-2 rounded-[var(--radius-status)] bg-[var(--color-status-error)]" />
-                  {moreError}
+                  <span>
+                    {moreError.what} <span className="text-[var(--color-text-secondary)]">The server said: {moreError.reason.replace(/[.\s]+$/, '')}.</span>
+                  </span>
                 </p>
               ) : (
                 <span className="type-hint text-[var(--color-text-secondary)]">

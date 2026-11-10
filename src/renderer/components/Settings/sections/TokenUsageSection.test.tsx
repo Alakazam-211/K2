@@ -381,8 +381,10 @@ describe('who may see it', () => {
       return defaultAnswer(route, params)
     }
     render(<TokenUsageSection />)
-    expect((await screen.findByTestId('usage-tokens-error')).textContent).toBe('ledger busy')
-    expect(screen.getByText('Usage couldn’t load')).toBeTruthy()
+    // Plain words first, then the server's reason, quietly.
+    expect((await screen.findByTestId('usage-tokens-error')).textContent).toBe(
+      'Usage couldn’t loadK2 couldn’t read the usage records on this computer. Try again in a moment.The server said: ledger busy.Try again',
+    )
     // Try again asks once more.
     const before = calls('usage/tokens').length
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
@@ -397,8 +399,9 @@ describe('who may see it', () => {
       return defaultAnswer(route, params)
     }
     await renderPage()
-    expect((await screen.findByTestId('usage-chart-error')).textContent).toBe('codex rows unreadable. The totals and breakdown are still current.')
-    expect(screen.getByText('The chart couldn’t load')).toBeTruthy()
+    expect((await screen.findByTestId('usage-chart-error')).textContent).toBe(
+      'The chart couldn’t loadThe daily numbers didn’t arrive. The totals and breakdown are still current; try again.The server said: codex rows unreadable.Try again',
+    )
     expect(screen.getByTestId('usage-tiles')).toBeTruthy()
     expect(screen.getByTestId('usage-breakdown')).toBeTruthy()
   })
@@ -562,6 +565,34 @@ describe('live and activity', () => {
     expect(screen.queryByTestId('usage-activity-open-0')).toBeNull()
     expect(screen.queryByTestId('usage-activity-more')).toBeNull()
     expect(screen.getByText('All 4 requests')).toBeTruthy()
+  })
+
+  it('a failed Load older says what failed in plain words, then the server’s reason', async () => {
+    await renderPage()
+    const older = `${T - 3_600_000}:1`
+    turnsPages = [
+      (p) => {
+        if (p?.before === older) throw new DaemonHttpError('database is locked', 500, null)
+        return undefined
+      },
+    ]
+    fireEvent.click(screen.getByTestId('usage-activity-more'))
+    expect((await screen.findByTestId('usage-activity-more-error')).textContent).toBe(
+      'Older requests didn’t load. Try Load older again. The server said: database is locked.',
+    )
+    expect(screen.getByTestId('usage-activity-more')).toBeTruthy()
+  })
+
+  it('a log that fails to load says so in place of the list, with Try again', async () => {
+    h.answer = (route, params) => {
+      if (route === 'usage/turns') throw new DaemonHttpError('database is locked', 500, null)
+      return defaultAnswer(route, params)
+    }
+    render(<TokenUsageSection />)
+    expect((await screen.findByTestId('usage-activity-error')).textContent).toBe(
+      'The request log couldn’t loadK2 couldn’t read this range’s requests. The totals above are still current; try again.The server said: database is locked.Try again',
+    )
+    await screen.findByTestId('usage-tiles')
   })
 
   it('a row with a session in a known workspace links to its chat', async () => {

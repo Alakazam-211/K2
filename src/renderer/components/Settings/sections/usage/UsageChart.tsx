@@ -52,17 +52,12 @@ export function UsageChart({
   series,
   slots,
   measure,
-  error,
   loading,
-  onRetry,
 }: {
   series: ChartSeries[]
   slots: string[]
   measure: ChartMeasure
-  /** Shown inside the chart card; the rest of the page stays (B23). */
-  error: string | null
   loading: boolean
-  onRetry: () => void
 }): React.JSX.Element {
   const box = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
@@ -84,23 +79,6 @@ export function UsageChart({
   const last = slots[slots.length - 1] ?? ''
   const empty = geo.columns.every((c) => c.total === 0)
   const fmtTotal = (v: number): string => (measure === 'cost' ? fmtMeasure(v, measure) : fmtExact(v))
-
-  if (error) {
-    return (
-      <div className="px-4 py-6 flex items-start justify-between gap-6" data-testid="usage-chart" role="alert">
-        <div className="min-w-0">
-          <p className="type-row text-[var(--color-text-primary)] flex items-center gap-2">
-            <span aria-hidden="true" className="inline-block h-2 w-2 rounded-[var(--radius-status)] bg-[var(--color-status-error)]" />
-            The chart couldn’t load
-          </p>
-          <p className="type-hint text-[var(--color-text-secondary)] mt-0.5" data-testid="usage-chart-error">
-            {error}. The totals and breakdown are still current.
-          </p>
-        </div>
-        <RetryButton onClick={onRetry} />
-      </div>
-    )
-  }
 
   return (
     <div className="px-4 pt-4 pb-3" data-testid="usage-chart">

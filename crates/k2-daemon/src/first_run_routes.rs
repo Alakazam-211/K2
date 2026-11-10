@@ -230,8 +230,12 @@ mod tests {
             let r = action_for(SKIP_PATH, body).expect_err("usage");
             assert_eq!(r.status, "400 Bad Request");
         }
-        assert_eq!(action_for(SKIP_PATH, br#"{"row":"phone"}"#).expect("ok"), Some(Action::Skip("phone".into())));
-        assert_eq!(action_for(STATUS_PATH, b"").expect("ok"), None);
+        let ok = |path: &str, body: &[u8]| match action_for(path, body) {
+            Ok(a) => a,
+            Err(r) => panic!("{path}: {} {}", r.status, r.body),
+        };
+        assert_eq!(ok(SKIP_PATH, br#"{"row":"phone"}"#), Some(Action::Skip("phone".into())));
+        assert_eq!(ok(STATUS_PATH, b""), None);
     }
 
     /// End to end through the handler on a temp home: the owner token's

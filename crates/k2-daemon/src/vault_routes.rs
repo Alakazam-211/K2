@@ -241,9 +241,9 @@ pub const GRANT_OUT_OF_REACH: &str = "grant_out_of_reach";
 /// An agent granting itself a secret it can't see: a server secret no one
 /// shared with it, or a name that isn't anywhere it can look. One answer
 /// whether or not the server secret exists (V20): this never reads the
-/// vault. A secret in the agent's own workspace that isn't there gets the
-/// same words (asking for a server secret is the only grant to itself that
-/// means anything). `None`: any other refusal, unchanged.
+/// vault. A secret in the agent's own workspace that isn't there stays
+/// `not_found`, with how to ask for a server one. `None`: any other
+/// refusal, unchanged.
 fn grant_out_of_reach(c: &VaultCaller, body: &[u8], e: &VaultError) -> Option<CliResponse> {
     if e.code != "not_found" || e.hint != "no such secret" {
         return None;
@@ -262,8 +262,18 @@ fn grant_out_of_reach(c: &VaultCaller, body: &[u8], e: &VaultError) -> Option<Cl
         return None;
     }
     let how = b.delivery.as_deref().filter(|d| crate::permission::actions::vault_grant_server::HOWS.contains(d));
-    let label = crate::vault::workspace_label(own);
     let as_flag = how.map(|d| format!(" --as {d}")).unwrap_or_default();
+    if scope.kind == ScopeKind::Workspace {
+        // Its own workspace has no such secret (it may still be waiting in
+        // k2 vault incoming): still not_found, with the way to a server one.
+        let mut to_flag = format!(" --to ws:{to}");
+        to_flag.push_str(&as_flag);
+        let hint = format!(
+            "no secret named {name} in your workspace (one sent to you may still be waiting: k2 vault incoming). If a person keeps {name} on the server, ask for it: k2 vault grant {name} --scope server{to_flag}"
+        );
+        return Some(CliResponse { status: status_line(404), content_type: "application/json", body: json!({ "error": { "code": "not_found", "hint": hint } }).to_string() });
+    }
+    let label = crate::vault::workspace_label(own);
     let hint = if k2_core::permission::gate::enabled_for(own) {
         format!(
             "you can't see a server secret named {name}: it isn't shared with you, or there is no such secret (K2 doesn't say which). If {name} is in your own workspace, it's yours already: leave out --scope server. A person can share it with you on a card: run the line below. Then K2 says how to use it."

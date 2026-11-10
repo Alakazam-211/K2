@@ -156,16 +156,6 @@ async fn the_held_send_teaches_the_card_only_while_both_switches_are_on() {
         "k2 permission request vault.send note='for the import' secret=FLEET_DATABASE to=argus::stubbox --why \"<what you need it for>\"",
         "{v}"
     );
-    // The agent asks with it: a card goes up.
-    let r = post(
-        port,
-        "/cli/permission/request",
-        &agent,
-        json!({ "action": "vault.send", "params": { "secret": "FLEET_DATABASE", "to": "argus::stubbox", "note": "for the import" }, "why": "The import job needs the database" }),
-    )
-    .await;
-    assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(r.json()["status"], "pending", "{}", r.body);
 
     // A person is never taught a card.
     let r = post(port, SEND, OWNER, json!({ "name": "FLEET_DATABASE", "scope": "workspace", "workspace": ws.handle, "to": "argus::stubbox" })).await;

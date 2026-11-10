@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 
 use super::super::held::tests::{answer_as, ask, ask_ok, below_floor, card_of, id_of, last_turn, login, row, seed, view, Ws};
 use super::*;
-use crate::federation_vault::tests::{other_vault, send, sentinel, spawn_stub, Seen};
+use crate::federation_vault::tests::{other_vault, send, spawn_stub, Seen};
 use crate::vault::actor::{Channel, VaultCaller};
 
 /// This server with one paired, Trusted peer (`heldbox`, agent `bob` in
@@ -57,7 +57,7 @@ fn setup(tag: &str) -> Fx {
 
 /// The value every secret here holds; it must never surface.
 fn value_of(name: &str) -> String {
-    format!("{}-{name}", sentinel())
+    format!("k2test_VAULT_SEND_{name}_not_real")
 }
 
 /// A secret the owner gave this workspace (person-given).

@@ -3516,6 +3516,7 @@ mod tests {
     /// GET-serving rows whose path holds a [`MUTATING_WORDS`] word but
     /// whose GET is a read (verified handler by handler for 0.44.4).
     const GET_VERB_NAMED_READS: &[(&str, &str)] = &[
+        ("/cli/vault/send-allow", "GET lists the standing send grants (and a person's picker); adding and removing are POST with a body"),
         ("/cli/vault/run-helper", "returns the path of this daemon's own binary; nothing changes (the run itself is POST /cli/vault/run)"),
         ("/cli/agents/work/create", "410 Gone, no state"),
         ("/cli/folder-trust/status", "reads the scan and the stored decision; grants, cards and decisions are POST routes"),

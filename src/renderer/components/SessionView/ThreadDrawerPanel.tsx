@@ -312,6 +312,15 @@ function InputsList({ cwd, active }: { cwd: string; active: boolean }): JSX.Elem
     ) ?? cwd
   const { rows, loading, error, refresh } = useThreadInputs({ scope: useRoom().scope, projectPath, enabled: active })
   const nowSec = useNowSec(active)
+  const listRef = useRef<HTMLDivElement>(null)
+  const pinned = useRef(true)
+
+  // Newest at the bottom, as in Chatter: start there, and follow new runs
+  // while the reader is there.
+  useLayoutEffect(() => {
+    const el = listRef.current
+    if (el && pinned.current) el.scrollTop = el.scrollHeight
+  }, [rows.length])
 
   let body: ReactNode
   if (!projectPath.trim()) {
@@ -323,7 +332,7 @@ function InputsList({ cwd, active }: { cwd: string; active: boolean }): JSX.Elem
   } else if (rows.length === 0) {
     body = (
       <PanelNote testId="thread-drawer-empty">
-        No heartbeats have run yet. Each time a heartbeat wakes an agent in this workspace, it shows here, newest first.
+        No heartbeats have run yet. Each time a heartbeat wakes an agent in this workspace, it shows here, newest at the bottom.
       </PanelNote>
     )
   } else {
@@ -337,8 +346,17 @@ function InputsList({ cwd, active }: { cwd: string; active: boolean }): JSX.Elem
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable] flex flex-col">
-      <div className="flex-1">{body}</div>
+    <div className="flex-1 min-h-0 flex flex-col">
+      <div
+        ref={listRef}
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
+        onScroll={(e) => {
+          const el = e.currentTarget
+          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+        }}
+      >
+        {body}
+      </div>
       <p
         data-testid="thread-drawer-coming"
         className="flex-shrink-0 px-3 py-2.5 type-hint text-[var(--color-text-muted)] border-t border-[var(--color-border)]"

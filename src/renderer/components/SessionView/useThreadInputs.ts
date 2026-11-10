@@ -6,7 +6,7 @@ import {
   HEARTBEAT_FIRES_LIMIT,
   HEARTBEAT_FIRES_REFRESH_MS,
   heartbeatInputRows,
-  newestFirst,
+  oldestFirst,
   type HeartbeatFireRow,
   type ThreadInputRow,
 } from './threadPanels'
@@ -19,7 +19,7 @@ export interface ThreadInputs {
   refresh: () => void
 }
 
-/** The workspace's recent outside input, newest first. Today that's its
+/** The workspace's recent outside input, oldest first (newest at the bottom). Today that's its
  *  heartbeat fires (`/cli/heartbeat/fires-list`, the route Settings →
  *  Heartbeats reads). There's no stream for fires, so it reads on open and
  *  again every 15 s while open. */
@@ -45,7 +45,7 @@ export function useThreadInputs(opts: {
         }),
       )
       if (mine !== generation.current) return
-      setRows(newestFirst(heartbeatInputRows(fires)))
+      setRows(oldestFirst(heartbeatInputRows(fires)))
       setError(null)
     } catch (e) {
       if (mine !== generation.current) return

@@ -98,17 +98,17 @@ describe('heartbeat rows', () => {
     expect(firedAtSeconds('nope')).toBeNull()
   })
 
-  it('newest first, edits left out, with source, status and reason', () => {
+  it('oldest first (newest at the bottom), edits left out, with source, status and reason', () => {
     const rows = heartbeatInputRows([
       fire(1, '2026-11-09T08:00:00Z'),
       fire(2, '2026-11-09T10:00:00Z', { decision: 'skipped_busy', reason: 'agent busy' }),
       fire(3, '2026-11-09T11:00:00Z', { decision: 'changed' }),
       fire(4, '2026-11-09T09:00:00Z', { decision: 'error', agentName: null, scheduleName: null }),
     ])
-    expect(rows.map((r) => r.id)).toEqual(['heartbeat:2', 'heartbeat:4', 'heartbeat:1'])
-    expect(rows[0]).toMatchObject({ kind: 'heartbeat', source: 'k2 / daily-brief', status: 'Skipped', tone: 'muted', detail: 'agent busy' })
+    expect(rows.map((r) => r.id)).toEqual(['heartbeat:1', 'heartbeat:4', 'heartbeat:2'])
+    expect(rows[2]).toMatchObject({ kind: 'heartbeat', source: 'k2 / daily-brief', status: 'Skipped', tone: 'muted', detail: 'agent busy' })
     expect(rows[1]).toMatchObject({ source: 'Workspace', status: 'Failed', tone: 'error', detail: null })
-    expect(rows[2]).toMatchObject({ status: 'Ran', tone: 'ok' })
+    expect(rows[0]).toMatchObject({ status: 'Ran', tone: 'ok' })
   })
 })
 
@@ -376,7 +376,7 @@ describe('Chatter panel', () => {
 })
 
 describe('Heartbeats panel', () => {
-  it('reads the workspace’s fires (a worktree cwd by its workspace), newest first', async () => {
+  it('reads the workspace’s fires (a worktree cwd by its workspace), newest at the bottom', async () => {
     daemon.get.mockResolvedValue([
       { id: 1, agentName: 'sales', scheduleName: 'brief', firedAt: '2026-11-09T08:00:00Z', decision: 'fired' },
       { id: 2, agentName: 'sales', scheduleName: 'eod', firedAt: '2026-11-09T09:00:00Z', decision: 'error', reason: 'boom' },
@@ -385,11 +385,11 @@ describe('Heartbeats panel', () => {
     const rows = await screen.findAllByTestId('thread-drawer-row')
     expect(daemon.get).toHaveBeenCalledWith(expect.anything(), 'heartbeat/fires-list', { project: '/w/sales', limit: 50 })
     expect(rows.map((r) => r.textContent)).toEqual([
-      expect.stringContaining('sales / eod'),
       expect.stringContaining('sales / brief'),
+      expect.stringContaining('sales / eod'),
     ])
-    expect(rows[0].textContent).toContain('Failed · boom')
-    expect(rows[0].getAttribute('data-kind')).toBe('heartbeat')
+    expect(rows[1].textContent).toContain('Failed · boom')
+    expect(rows[1].getAttribute('data-kind')).toBe('heartbeat')
     expect(screen.getByTestId('thread-drawer-coming').textContent).toMatch(/Reminders and mail from your VIP senders/)
   })
 

@@ -144,7 +144,8 @@ export function firedAtSeconds(firedAt: string): number | null {
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : null
 }
 
-/** Heartbeat fires as input rows, newest first. A `changed` row is an edit
+/** Heartbeat fires as input rows, oldest first (newest at the bottom,
+ *  as in Chatter and the Thread). A `changed` row is an edit
  *  to a heartbeat, not a wake, so it stays in Settings' history only. */
 export function heartbeatInputRows(fires: readonly HeartbeatFireRow[]): ThreadInputRow[] {
   const rows: ThreadInputRow[] = []
@@ -166,12 +167,13 @@ export function heartbeatInputRows(fires: readonly HeartbeatFireRow[]): ThreadIn
       detail: reason || null,
     })
   }
-  return newestFirst(rows)
+  return oldestFirst(rows)
 }
 
-/** One list from every source, newest first (ties keep a stable order). */
-export function newestFirst(rows: readonly ThreadInputRow[]): ThreadInputRow[] {
-  return rows.slice().sort((a, b) => b.at - a.at || a.id.localeCompare(b.id))
+/** One list from every source, oldest first, so the newest sits at the
+ *  bottom (ties keep a stable order). */
+export function oldestFirst(rows: readonly ThreadInputRow[]): ThreadInputRow[] {
+  return rows.slice().sort((a, b) => a.at - b.at || a.id.localeCompare(b.id))
 }
 
 /** The full local time, for a row's tooltip. */

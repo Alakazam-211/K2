@@ -9,7 +9,6 @@
     "src/renderer/components/ChatHistory/ChatHistory.tsx": 18,
     "src/renderer/components/ChatHistory/ImportedThreads.tsx": 3,
     "src/renderer/components/ConnectionGate.tsx": 7,
-    "src/renderer/components/ContextMenu/ContextMenu.tsx": 3,
     "src/renderer/components/Design/NoteTray.tsx": 1,
     "src/renderer/components/DiffViewer/DiffViewer.tsx": 1,
     "src/renderer/components/Feedback/FeedbackItemView.tsx": 7,

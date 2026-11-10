@@ -278,6 +278,10 @@ Each signer policy decides whether it accepts `owner_attested` (§8).
   keeps passing. Its `check_plan` refuses a plan that sets it ("this
   signer checks v1 receipts only"). k2sign already refuses a receipt
   `v != 1` and a bundle `v != 1`.
+- **A v2 job builds private** (0.46.11): no warm slot, its own
+  `CARGO_HOME`, sccache dir and server, with or without secrets, so its
+  receipt says `warmth: private` (the signer requires it). The plan field
+  is the same `receipt_v`; nothing else changes on the wire.
 - **v2 = v1 + `run`.** `Receipt::check_version` enforces both directions:
   v1 has no `run`, and v2 has one. `run` (`ci::RunFacts`) has every key
   present:

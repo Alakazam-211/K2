@@ -634,6 +634,19 @@ async fn sync_by_bundle_runs_in_a_worktree_at_the_commit_in_a_warm_slot_next_tim
     assert_eq!(text(&logs_of(&fr, "s2"), LogStream::Out), "one\n");
     let src = states_of(&fr, "s2").into_iter().rev().find_map(|s| s.src).unwrap();
     assert_eq!(src.warmth.as_deref(), Some("warm"));
+    // A release build (receipt v2, no secrets) never takes the warm slot:
+    // its own target and CARGO_HOME, and its receipt says private.
+    let mut p = plan("s3", &["/bin/sh", "-c", "echo $CARGO_TARGET_DIR; echo $CARGO_HOME"]);
+    p.src = Some(Src { project_key: "pk1".into(), remote_url: None, commit: first.clone(), dirty: None, slots: 1 });
+    p.receipt_v = Some(k2_node_proto::frames::RECEIPT_V2);
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = run_to_receipt(&mut c, "s3").await;
+    let out = text(&logs_of(&fr, "s3"), LogStream::Out);
+    let lines: Vec<&str> = out.lines().collect();
+    assert!(!lines[0].starts_with(&n.layout.project_cache("pk1").display().to_string()), "not the warm slot: {out}");
+    assert!(lines[0].starts_with(&n.layout.job_dir("s3", 1).display().to_string()) && lines[1].starts_with(&n.layout.job_dir("s3", 1).display().to_string()), "job-private: {out}");
+    let src = states_of(&fr, "s3").into_iter().rev().find_map(|s| s.src).unwrap();
+    assert_eq!((src.slot, src.warmth.as_deref()), (None, Some("private")));
 }
 
 /// `--with` (protocol 6): sibling repos laid out as in the workspace, each

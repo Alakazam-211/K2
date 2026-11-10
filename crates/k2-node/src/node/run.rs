@@ -645,6 +645,13 @@ impl Node {
             let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {msg}\n").as_bytes());
         };
 
+        // A release build (receipt v2, prd-ci-on-compute-for-clients-v1 C6b)
+        // builds as a secret job does, with or without secrets: no warm slot,
+        // its own CARGO_HOME, sccache and server (`warmth: private`, which the
+        // signer requires of every release receipt; PRD §6: nothing another
+        // job of the slot left behind reaches it).
+        let private_build = secret_job || a.plan.receipt_v.is_some();
+
         // Sync.
         let mut src_ran: Option<SrcRan> = None;
         let mut lease: Option<Lease> = None;
@@ -653,11 +660,11 @@ impl Node {
         let mut main_checkout = dirs.src.clone();
         if let Some(src) = &a.plan.src {
             match self.sync_src(&t, &a, &dirs, &mut journal, &mut stop).await {
-                Ok((ran, main_dir)) if secret_job => {
+                Ok((ran, main_dir)) if private_build => {
                     // No warm slot: the build's outputs may hold the value.
                     main_checkout = main_dir.clone();
                     cwd = main_dir;
-                    sys(&mut journal, "target dir: job-private (a secret job never uses a warm slot)");
+                    sys(&mut journal, if secret_job { "target dir: job-private (a secret job never uses a warm slot)" } else { "target dir: job-private (a release build never uses a warm slot)" });
                     src_ran = Some(SrcRan { slot: None, warmth: Some("private".into()), ..ran });
                 }
                 Ok((ran, main_dir)) => {
@@ -721,8 +728,9 @@ impl Node {
         // workspace id and remote; never a name the submitter picks), or
         // the job's own dir when there's no code.
         let cache_dir = match &a.plan.src {
-            // A secret job's cargo home and sccache dir are its own.
-            Some(_) if secret_job => dirs.private_cache(),
+            // A secret job's (and a release build's) cargo home and sccache
+            // dir are its own.
+            Some(_) if private_build => dirs.private_cache(),
             Some(s) => t.paths.project_cache(&s.project_key),
             None => dirs.private_cache(),
         };
@@ -740,7 +748,7 @@ impl Node {
         }
         // A secret job's sccache server is its own (in its own tmp, killed
         // with its unit), never the slot's shared one.
-        let sccache_socket = if secret_job { dirs.tmp.join("sccache.sock") } else { t.paths.sccache_socket() };
+        let sccache_socket = if private_build { dirs.tmp.join("sccache.sock") } else { t.paths.sccache_socket() };
         // `--cache NAME` (protocol 6): the workspace's folder that outlives
         // the job. Never for a secret job (it keeps nothing between runs);
         // the server refuses that too. The hold goes back in `finish_job`.
@@ -794,7 +802,7 @@ impl Node {
             extra: &a.plan.env,
             tool_paths: &resolved.path_prepend,
             tool_env: &resolved.env,
-            sccache_socket: (secret_job || slot_tmp.is_dir()).then_some(sccache_socket.as_path()),
+            sccache_socket: (private_build || slot_tmp.is_dir()).then_some(sccache_socket.as_path()),
             src_dir: a.plan.src.is_some().then_some(main_checkout.as_path()),
             job_cache: job_cache_dir.as_deref(),
         }) {
@@ -986,7 +994,7 @@ impl Node {
         } else if unit_mode {
             let mut rw = vec![target.clone(), sccache.clone(), cargo_home.clone()];
             // The slot's shared tmp (its sccache socket) only for other jobs.
-            if slot_tmp.is_dir() && !secret_job {
+            if slot_tmp.is_dir() && !private_build {
                 rw.push(slot_tmp.clone());
             }
             // The job cache (under the slot's `cache/`, which the executor

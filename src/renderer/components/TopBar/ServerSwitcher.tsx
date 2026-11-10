@@ -33,7 +33,7 @@ import {
 } from '@/stores/connect-host'
 import { useSettingsStore } from '@/stores/settings'
 import { useAddServerFocusStore } from '@/stores/add-server-focus'
-import { useServerSwitcherStore } from '@/stores/server-switcher'
+import { closeServerSwitcherRestoringFocus, useServerSwitcherStore } from '@/stores/server-switcher'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 import { webFeatures } from '@/web/features'
@@ -221,8 +221,11 @@ export function serverChipClass({ open }: { open: boolean }): string {
  * switches the window; picking the room's own server promotes the room (Z7).
  *
  * `triggerHidden` (Home): no trigger and no room taken in the bar. The menu
- * still opens from ⌘L and Switch Server, under the spot the trigger has on
- * every other page; the negative margin cancels the bar's gap.
+ * still opens from ⌘L and Switch Server; while it is open the trigger shows
+ * in its usual spot, naming the current server, with the menu under it
+ * (Rosson 2026-11-09). It floats there (absolute, fading in) so nothing in
+ * the bar moves, and goes again when the menu closes. The negative margin
+ * cancels the bar's gap.
  */
 export default function ServerSwitcher({
   followRoom = false,
@@ -258,7 +261,7 @@ export default function ServerSwitcher({
     const releaseOutsideClick = retainServerSwitcherOutsideClick()
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
-        setOpen(false)
+        closeServerSwitcherRestoringFocus()
       }
     }
     document.addEventListener('keydown', onKey)
@@ -456,16 +459,17 @@ export default function ServerSwitcher({
         } as React.CSSProperties
       }
     >
-      {!triggerHidden && (
+      {(!triggerHidden || open) && (
         <button
           onClick={() => toggle()}
           data-testid="server-switcher-trigger"
+          data-home-reveal={triggerHidden ? '' : undefined}
           data-material="frost"
           data-frost-shape="pill"
           data-nav-picker=""
           data-follows-room={roomServer !== null ? 'true' : undefined}
           aria-expanded={open}
-          className={`${SERVER_SWITCHER_WIDTH_CLASS} ${serverChipClass({ open })} flex items-center justify-start gap-1.5 h-6 px-1.5 text-[11px] no-drag`}
+          className={`${SERVER_SWITCHER_WIDTH_CLASS} ${serverChipClass({ open })} ${triggerHidden ? 'absolute left-0 top-1/2 -translate-y-1/2 ' : ''}flex items-center justify-start gap-1.5 h-6 px-1.5 text-[11px] no-drag`}
           title={`${activeLabel} — ${ind.title} (⌘L)`}
           aria-label={`${shownServer} — ${ind.title}`}
           aria-keyshortcuts="Meta+L"

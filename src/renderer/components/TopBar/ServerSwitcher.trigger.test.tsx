@@ -244,6 +244,59 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
     expect(useServerSwitcherStore.getState().open).toBe(false)
   })
 
+  it('triggerHidden: while ⌘L has the menu open, the trigger shows the current server in its spot, then hides on close', () => {
+    act(() => useConnectHostStore.setState({ activeHost: host('z3thon', 'z3thon.k2.dev'), hosts: [], pickHost }))
+    const { container } = render(<ServerSwitcher triggerHidden />)
+    const root = container.querySelector('[data-server-switcher]')
+    if (!(root instanceof HTMLElement)) throw new Error('root is gone')
+    expect(screen.queryByTestId('server-switcher-trigger')).toBe(null)
+
+    act(() => useServerSwitcherStore.getState().setOpen(true))
+    const t = screen.getByTestId('server-switcher-trigger')
+    expect(screen.getByTestId('server-switcher-label').textContent).toBe('z3thon.k2.dev')
+    expect(t.getAttribute('aria-expanded')).toBe('true')
+    // Floats in its usual spot (the zero-width slot after the page tabs) so
+    // the bar does not reflow, and fades in via [data-home-reveal].
+    const cls = t.className.split(/\s+/)
+    expect(cls).toEqual(expect.arrayContaining(['absolute', 'left-0', 'top-1/2', '-translate-y-1/2', 'bg-[var(--color-bg-elevated)]']))
+    expect(t.hasAttribute('data-home-reveal')).toBe(true)
+    expect(root.style.width).toBe('0px')
+    expect(root.style.marginRight).toBe('-14px')
+    // The menu hangs under it as on every other page.
+    expect(screen.getByRole('listbox', { name: 'Servers' }).parentElement?.className).toContain('top-7')
+
+    act(() => useServerSwitcherStore.getState().setOpen(false))
+    expect(screen.queryByTestId('server-switcher-trigger')).toBe(null)
+  })
+
+  it('other pages: the trigger is in the flow and never carries the Home reveal', () => {
+    const t = renderOn(host('rosson', 'rosson.k2.dev'))
+    fireEvent.click(t)
+    const shown = screen.getByTestId('server-switcher-trigger')
+    expect(shown.hasAttribute('data-home-reveal')).toBe(false)
+    expect(shown.className.split(/\s+/)).not.toContain('absolute')
+  })
+
+  it('⌘L moves focus into the search field and Esc puts it back where it was', () => {
+    act(() => useConnectHostStore.setState({ activeHost: 'local', hosts: [], pickHost }))
+    render(
+      <>
+        <button data-testid="before">before</button>
+        <ServerSwitcher triggerHidden />
+      </>,
+    )
+    const before = screen.getByTestId('before')
+    before.focus()
+    act(() => useServerSwitcherStore.getState().setOpen(true))
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Search servers' }))
+    act(() => {
+      fireEvent.keyDown(document, { key: 'Escape' })
+    })
+    expect(useServerSwitcherStore.getState().open).toBe(false)
+    expect(screen.queryByTestId('server-switcher-trigger')).toBe(null)
+    expect(document.activeElement).toBe(before)
+  })
+
   it('the dropdown still opens below the trigger at its own 260px width, not the trigger width', () => {
     const t = renderOn(host('long', LONG), [host('long', LONG), host('z3thon', 'z3thon.k2.dev')])
     fireEvent.click(t)

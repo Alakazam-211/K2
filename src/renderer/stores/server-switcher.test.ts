@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { focusVisibleBrowserAddress } from '../components/BrowserPane/focusBrowserAddress'
-import { applyCmdL, useServerSwitcherStore } from './server-switcher'
+import { applyCmdL, closeServerSwitcherRestoringFocus, useServerSwitcherStore } from './server-switcher'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -19,7 +19,7 @@ function sliceFn(src: string, startNeedle: string, until: string | null): string
 
 describe('useServerSwitcherStore', () => {
   afterEach(() => {
-    useServerSwitcherStore.setState({ open: false })
+    useServerSwitcherStore.setState({ open: false, returnFocus: null })
     vi.restoreAllMocks()
     document.body.replaceChildren()
   })
@@ -29,6 +29,33 @@ describe('useServerSwitcherStore', () => {
     useServerSwitcherStore.getState().toggle()
     expect(useServerSwitcherStore.getState().open).toBe(true)
     useServerSwitcherStore.getState().toggle()
+    expect(useServerSwitcherStore.getState().open).toBe(false)
+  })
+
+  it('opening remembers the focused element; Esc close puts focus back there', () => {
+    const before = document.createElement('button')
+    document.body.appendChild(before)
+    before.focus()
+    useServerSwitcherStore.getState().setOpen(true)
+    expect(useServerSwitcherStore.getState().returnFocus).toBe(before)
+    // A second open in the same turn keeps the first element.
+    const other = document.createElement('input')
+    document.body.appendChild(other)
+    other.focus()
+    useServerSwitcherStore.getState().setOpen(true)
+    expect(useServerSwitcherStore.getState().returnFocus).toBe(before)
+    closeServerSwitcherRestoringFocus()
+    expect(useServerSwitcherStore.getState()).toMatchObject({ open: false, returnFocus: null })
+    expect(document.activeElement).toBe(before)
+  })
+
+  it('Esc close skips an element that has left the page', () => {
+    const gone = document.createElement('button')
+    document.body.appendChild(gone)
+    gone.focus()
+    useServerSwitcherStore.getState().toggle()
+    gone.remove()
+    expect(() => closeServerSwitcherRestoringFocus()).not.toThrow()
     expect(useServerSwitcherStore.getState().open).toBe(false)
   })
 
@@ -42,7 +69,7 @@ describe('useServerSwitcherStore', () => {
 
 describe('Cmd+L wiring', () => {
   afterEach(() => {
-    useServerSwitcherStore.setState({ open: false })
+    useServerSwitcherStore.setState({ open: false, returnFocus: null })
     vi.restoreAllMocks()
     document.body.replaceChildren()
   })

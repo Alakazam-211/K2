@@ -1376,6 +1376,15 @@ html[data-style="terminal"] [data-limit-track] {
   }
 }
 
+/* Top bar on Home: the server trigger shows only while ⌘L's menu is open.
+   It floats in its usual spot, so it fades in rather than moving the bar. */
+[data-home-reveal] {
+  animation: context-menu-fade-in var(--motion-duration-fast) var(--motion-ease-standard) backwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-home-reveal] { animation: none; }
+}
+
 /* xterm overrides */
 .xterm {
   padding: 0;

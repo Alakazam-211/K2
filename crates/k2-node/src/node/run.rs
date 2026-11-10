@@ -2564,7 +2564,9 @@ pub(super) mod tests {
                         LocalRequest::Job { job: JobOp::Release { .. } } => {
                             let done = serde_json::to_vec(&LocalResponse::Job(JobAnswer::Done { detail: serde_json::json!({}) })).unwrap();
                             crate::admin::server::write_frame(&mut s, &done)?;
-                            let fd = stdin.take().ok_or("released before a start")?;
+                            // A release before the start: the node's own
+                            // housekeeping at open, not this job's.
+                            let Some(fd) = stdin.take() else { continue };
                             let mut got = Vec::new();
                             std::io::Read::read_to_end(&mut std::fs::File::from(fd), &mut got).map_err(|e| e.to_string())?;
                             return Ok(got);

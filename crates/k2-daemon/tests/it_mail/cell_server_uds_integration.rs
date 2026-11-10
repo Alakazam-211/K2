@@ -11,7 +11,6 @@
 //! revoked session 403s.
 // The suite runs over the per-cell Unix socket (cell_server::serve_cell); on
 // Windows cells reach the same gate over the TCP arm (cell_uds is a stub there).
-#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex as StdMutex;
@@ -28,8 +27,8 @@ use k2_daemon::session_token::{self, HookPrincipal};
 /// process-wide singletons; serialize every test that mutates them.
 static ENV_LOCK: StdMutex<()> = StdMutex::new(());
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+fn lock() -> k2_core::test_env::SerialGuard {
+    k2_core::test_env::serial(&ENV_LOCK)
 }
 
 /// A SHORT `$HOME` under `/tmp` — a Unix socket path is capped at `SUN_LEN`

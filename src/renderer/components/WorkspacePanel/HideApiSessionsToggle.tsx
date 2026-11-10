@@ -4,6 +4,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { useRoom } from '@/components/Room/RoomContext'
 import { Toggle } from '@/components/ui'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow } from '@/components/Settings/controls/SettingControls'
 
 /** Per-workspace hide-sessions: do not auto-surface API tabs. */
 export function HideApiSessionsToggle({
@@ -50,19 +51,27 @@ export function HideApiSessionsToggle({
   }, [room, busy, enabled, project.id, project.path])
 
   return (
-    <div className="flex items-start gap-3">
-      <Toggle size="sm"
-        checked={enabled}
-        onChange={() => void toggle()}
-        disabled={busy}
-        title={
-          enabled
-            ? 'API sessions stay off the tab strip. Open them from Chat history → API.'
-            : 'API sessions appear as tabs. Closing a tab minimizes it (does not kill the session).'
-        }
-        className="mt-0.5"
-      />
-      <div className="text-[11px] font-medium text-[var(--color-text-primary)]">Hide sessions</div>
-    </div>
+    <SettingSwitchRow
+      control={
+        <Toggle
+          checked={enabled}
+          onChange={() => void toggle()}
+          disabled={busy}
+          aria-label="Hide sessions"
+          title={
+            enabled
+              ? 'API sessions stay off the tab strip. Open them from Chat history → API.'
+              : 'API sessions appear as tabs. Closing a tab minimizes it (does not kill the session).'
+          }
+        />
+      }
+    >
+      <div className={SETTING_ROW_LABEL}>Hide sessions</div>
+      <div className={SETTING_ROW_HINT}>
+        {enabled
+          ? 'API sessions stay off the tab strip. Open them from Chat history → API.'
+          : 'API sessions appear as tabs. Closing a tab minimizes it (does not kill the session).'}
+      </div>
+    </SettingSwitchRow>
   )
 }

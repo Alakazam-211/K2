@@ -18,7 +18,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
-import { SettingsGroup } from '../controls/SettingControls'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow, SettingsGroup } from '../controls/SettingControls'
 import { Toggle } from '@/components/ui'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -307,9 +307,9 @@ export function AgentPermissionCardsRow({ project }: { project: { id: string; na
 
   const checked = on === true
   return (
-    <div className="py-2 border-t border-[var(--color-border)]">
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      control={
+        <Toggle
           checked={checked}
           onChange={() => void toggle()}
           aria-label="Can ask for permission cards"
@@ -322,48 +322,44 @@ export function AgentPermissionCardsRow({ project }: { project: { id: string; na
                 ? 'This agent may ask you for setting changes with a card in its Thread'
                 : 'This agent asks the usual way, in its own words'
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
-            Can ask for permission cards{' '}
-            <span className="type-hint text-[var(--color-text-muted)]">Beta</span>
-          </div>
-          <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
-            When this agent needs a setting changed (like compute nodes or hosted mail), it can post
-            a card in its Thread saying what and why. You or an admin allow or deny it there; nothing
-            changes until someone allows it, and every answer is logged in Access Audit. Off: it asks
-            the usual way, in its own words.
-          </div>
-          {loadError ? (
-            <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agent-permission-cards-load-error">
-              Couldn&rsquo;t read this switch: {loadError}
-            </div>
-          ) : null}
-          {error ? (
-            <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agent-permission-cards-error">
-              {error}
-            </div>
-          ) : null}
-          {ctx.pending.length > 0 ? (
-            <div className="type-hint text-[var(--color-text-secondary)] mt-1" data-testid="agent-permission-cards-waiting">
-              {ctx.pending.length === 1
-                ? `1 request from this agent is waiting on you: ${ctx.pending[0].setting}.`
-                : `${ctx.pending.length} requests from this agent are waiting on you.`}{' '}
-              <button
-                type="button"
-                className="underline cursor-pointer no-drag text-[var(--color-text-primary)]"
-                onClick={() => {
-                  openPermissionCard(ctx.pending[0].agent)
-                }}
-              >
-                Open
-              </button>
-            </div>
-          ) : null}
-        </div>
+      }
+    >
+      <div className={SETTING_ROW_LABEL}>
+        Can ask for permission cards{' '}
+        <span className="type-hint text-[var(--color-text-secondary)]">Beta</span>
       </div>
-    </div>
+      <div className={SETTING_ROW_HINT}>
+        When this agent needs a setting changed, it can post a card in its Thread saying what and
+        why. Nothing changes until you or an admin allow it.
+      </div>
+      {loadError ? (
+        <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agent-permission-cards-load-error">
+          Couldn&rsquo;t read this switch: {loadError}
+        </div>
+      ) : null}
+      {error ? (
+        <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agent-permission-cards-error">
+          {error}
+        </div>
+      ) : null}
+      {ctx.pending.length > 0 ? (
+        <div className={SETTING_ROW_HINT} data-testid="agent-permission-cards-waiting">
+          {ctx.pending.length === 1
+            ? `1 request from this agent is waiting on you: ${ctx.pending[0].setting}.`
+            : `${ctx.pending.length} requests from this agent are waiting on you.`}{' '}
+          <button
+            type="button"
+            className="underline cursor-pointer no-drag text-[var(--color-text-primary)]"
+            onClick={() => {
+              openPermissionCard(ctx.pending[0].agent)
+            }}
+          >
+            Open
+          </button>
+        </div>
+      ) : null}
+    </SettingSwitchRow>
   )
 }
 

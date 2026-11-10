@@ -4,6 +4,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { useSettingsStore } from '@/stores/settings'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { Toggle } from '@/components/ui'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow } from '../controls/SettingControls'
 
 /** Per-agent switch label (Rosson 2026-10-16). */
 export const AGENT_SWITCH_LABEL = 'Let agents on other servers message this agent'
@@ -66,9 +67,11 @@ export function RemoteInstructToggle({
   }
 
   return (
-    <div className={compact ? 'px-3 py-1.5' : 'border border-[var(--color-border)] p-3'}>
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <Toggle
+          size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
           aria-label={AGENT_SWITCH_LABEL}
@@ -79,20 +82,18 @@ export function RemoteInstructToggle({
               ? 'Agents on connected servers can message this agent'
               : "Agents on connected servers can't message this agent"
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">{AGENT_SWITCH_LABEL}</div>
-          <div className={compact ? 'hidden' : 'type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed'}>
-            {enabled ? AGENT_SWITCH_ON_TEXT : AGENT_SWITCH_OFF_TEXT}
-          </div>
-          {!enabled && globalAllow && !readOnly && (
-            <div className="type-hint text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
-              {AGENT_SWITCH_OVERRIDE_TEXT}
-            </div>
-          )}
-        </div>
+      }
+    >
+      <div className={SETTING_ROW_LABEL}>{AGENT_SWITCH_LABEL}</div>
+      <div className={compact ? 'hidden' : SETTING_ROW_HINT}>
+        {enabled ? AGENT_SWITCH_ON_TEXT : AGENT_SWITCH_OFF_TEXT}
       </div>
-    </div>
+      {!enabled && globalAllow && !readOnly && (
+        <div className="type-hint text-[var(--color-status-warn-text)] mt-1 leading-relaxed">
+          {AGENT_SWITCH_OVERRIDE_TEXT}
+        </div>
+      )}
+    </SettingSwitchRow>
   )
 }

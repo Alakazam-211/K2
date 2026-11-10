@@ -16,18 +16,18 @@ import { PROJECTS_MANIFEST } from './ProjectsSection'
 const src = readFileSync(join(__dirname, 'ProjectsSection.tsx'), 'utf8')
 
 describe('Agent tab wiring', () => {
-  it('the row sits last in the Agents group, under the other agent switches', () => {
-    const gardens = src.indexOf('<AgentsManageGardensToggle project={project} />')
+  it('the row sits in the Agents and secrets group of the Permissions tab', () => {
+    const group = src.indexOf('<SettingsGroup title="Agents and secrets" card>')
     const row = src.indexOf('<AgentPermissionCardsRow project={project} />')
-    expect(gardens).toBeGreaterThan(-1)
-    expect(row).toBeGreaterThan(gardens)
-    const groupEnd = src.indexOf('</SettingsGroup>', gardens)
+    expect(group).toBeGreaterThan(-1)
+    expect(row).toBeGreaterThan(group)
+    const groupEnd = src.indexOf('</SettingsGroup>', group)
     expect(row).toBeLessThan(groupEnd)
   })
 
-  it('the Agent and Connections tabs are wrapped in PermissionAsksProvider', () => {
-    expect(src).toContain("{settingsTab === 'agent' && (\n          <PermissionAsksProvider project={project}>")
-    expect(src).toContain("{settingsTab === 'connections' && (\n          <PermissionAsksProvider project={project}>")
+  it('the Permissions and Connections tabs are wrapped in PermissionAsksProvider', () => {
+    expect(src).toContain("{settingsTab === 'permissions' && (\n              <PermissionAsksProvider project={project}>")
+    expect(src).toContain("{settingsTab === 'connections' && (\n              <PermissionAsksProvider project={project}>")
     expect(src.match(/<\/PermissionAsksProvider>/g)?.length).toBe(2)
   })
 

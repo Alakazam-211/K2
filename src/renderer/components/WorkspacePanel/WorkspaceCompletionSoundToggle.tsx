@@ -7,6 +7,7 @@ import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { useRoom } from '@/components/Room/RoomContext'
 import { BellIcon, BellOffIcon } from '@/components/common/BellIcons'
 import { Toggle } from '@/components/ui'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow } from '@/components/Settings/controls/SettingControls'
 import { floatProps } from '@/components/SessionView/threadFloats'
 
 type SoundProject = { id: string; path: string; completionSoundEnabled?: number }
@@ -57,35 +58,28 @@ export function WorkspaceCompletionSoundToggle({
   }, [busy, enabled, project.id, project.path])
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
-    <div className="flex items-start gap-3">
-      <Toggle size="sm"
-        checked={enabled}
-        onChange={() => void toggle()}
-        disabled={busy}
-        data-settings-id="projects.completion-sound"
-        title={
-          enabled
-            ? 'Chime when an agent in this workspace finishes unwatched'
-            : 'Muted — this workspace will not chime'
-        }
-        className="mt-0.5"
-      />
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium text-[var(--color-text-primary)]">
-          Completion sound
-        </div>
-        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-          Chime when an agent in this workspace finishes unwatched.
-        </div>
-        {!globalOn && (
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            Turned off globally in Settings → General.
-          </div>
-        )}
-      </div>
-    </div>
-    </div>
+    <SettingSwitchRow
+      control={
+        <Toggle
+          checked={enabled}
+          onChange={() => void toggle()}
+          disabled={busy}
+          aria-label="Completion sound"
+          data-settings-id="projects.completion-sound"
+          title={
+            enabled
+              ? 'Chime when an agent in this workspace finishes unwatched'
+              : 'Muted — this workspace will not chime'
+          }
+        />
+      }
+    >
+      <div className={SETTING_ROW_LABEL}>Completion sound</div>
+      <div className={SETTING_ROW_HINT}>Chime when an agent in this workspace finishes unwatched.</div>
+      {!globalOn && (
+        <div className={SETTING_ROW_HINT}>Turned off globally in Settings → General.</div>
+      )}
+    </SettingSwitchRow>
   )
 }
 

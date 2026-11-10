@@ -30,6 +30,9 @@ import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useTunnelUrls } from '@/hooks/useTunnelUrls'
 import { pickIconImage } from '@/lib/pick-remote-image'
 import IconCropDialog from '@/components/Settings/IconCropDialog'
+import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
+import { AVATAR_ROUND, SETTING_FIELD_WIDTH, SETTING_ROW_HINT, SettingRow } from '@/components/Settings/controls/SettingControls'
+import { Button, Input, cx } from '@/components/ui'
 import { GROUP_AVATAR_COLORS } from '@/components/Projects/ProjectGroupAvatar'
 import { normalizeHexColor } from '@/components/Projects/projects-api'
 
@@ -90,10 +93,13 @@ export function AgentPictureControls({
   scope,
   project,
   compact = false,
+  card = false,
 }: {
   scope: ServerScope
   project: ProjectWithWorkspaces
   compact?: boolean
+  /** A row of a Settings card: label left, picture and actions right. */
+  card?: boolean
 }): React.JSX.Element {
   const [iconLoading, setIconLoading] = useState(false)
   const [cropImage, setCropImage] = useState<string | null>(null)
@@ -171,6 +177,38 @@ export function AgentPictureControls({
           onCancel={() => setCropImage(null)}
         />
       )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/svg+xml,image/x-icon"
+        className="hidden"
+        onChange={handleFileSelected}
+      />
+      {card ? (
+        <SettingRow label="Picture" hint="Shown in the nav, the Agent tab and on Home.">
+          <span className={AVATAR_ROUND}>
+            <ProjectAvatar
+              projectPath={project.path}
+              projectName={project.name}
+              projectColor={project.color}
+              projectId={project.id}
+              iconUrl={project.iconUrl}
+              size={32}
+            />
+          </span>
+          <Button variant="quiet" onClick={handleDetectIcon} disabled={iconLoading}>
+            {iconLoading ? 'Working…' : 'Detect'}
+          </Button>
+          <Button variant="quiet" onClick={handleUploadClick} disabled={iconLoading}>
+            Upload
+          </Button>
+          {project.iconUrl && (
+            <Button variant="quiet" onClick={handleClearIcon} disabled={iconLoading}>
+              Remove
+            </Button>
+          )}
+        </SettingRow>
+      ) : (
       <div className={compact ? 'flex items-center gap-3' : 'flex items-center gap-4 py-2'}>
         <AgentPictureTile project={project} size={compact ? 40 : 48} />
         <div className="flex items-center gap-1.5 flex-wrap min-w-0">
@@ -180,13 +218,6 @@ export function AgentPictureControls({
           <button onClick={handleUploadClick} disabled={iconLoading} className={BUTTON}>
             Upload
           </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/svg+xml,image/x-icon"
-            className="hidden"
-            onChange={handleFileSelected}
-          />
           {project.iconUrl && (
             <button onClick={handleClearIcon} disabled={iconLoading} className={BUTTON_DANGER}>
               Remove
@@ -194,6 +225,7 @@ export function AgentPictureControls({
           )}
         </div>
       </div>
+      )}
     </>
   )
 }
@@ -205,9 +237,12 @@ export function AgentPictureControls({
 export function AgentColorPicker({
   project,
   compact = false,
+  card = false,
 }: {
   project: ProjectWithWorkspaces
   compact?: boolean
+  /** A row of a Settings card: 24px swatches, the shared field. */
+  card?: boolean
 }): React.JSX.Element {
   const [customHex, setCustomHex] = useState('')
   const [hexError, setHexError] = useState(false)
@@ -219,6 +254,62 @@ export function AgentColorPicker({
 
   const apply = (color: string): void => {
     void useProjectsStore.getState().setProjectColor(project.id, color)
+  }
+
+  const commitHex = (): void => {
+    if (!customHex.trim()) return
+    const normalized = normalizeHexColor(customHex)
+    if (normalized === null) {
+      setHexError(true)
+      return
+    }
+    setHexError(false)
+    setCustomHex('')
+    apply(normalized)
+  }
+
+  if (card) {
+    return (
+      <SettingRow
+        label="Color"
+        below={hexError ? <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">Enter a hex color or an rgb() value.</p> : undefined}
+      >
+        <div className="flex items-center gap-1.5">
+          {GROUP_AVATAR_COLORS.map((color) => (
+            <button
+              key={color}
+              type="button"
+              title={color}
+              aria-label={`Color ${color}`}
+              aria-pressed={project.color === color}
+              onClick={() => apply(color)}
+              data-k2-chamfer="chip"
+              className="no-drag cursor-pointer w-6 h-6 flex-shrink-0 flex items-center justify-center rounded-[var(--radius-pill)]"
+              style={{ backgroundColor: color }}
+            >
+              {project.color === color && (
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--color-on-accent)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 8.5l3.2 3.2L13 5" />
+                </svg>
+              )}
+            </button>
+          ))}
+        </div>
+        <Input
+          value={customHex}
+          onChange={(e) => { setCustomHex(e.target.value); setHexError(false) }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitHex()
+            else if (e.key === 'Escape') { e.stopPropagation(); setCustomHex(''); setHexError(false) }
+          }}
+          onBlur={commitHex}
+          placeholder={project.color || '#rrggbb'}
+          spellCheck={false}
+          aria-label="Custom color (hex or rgb)"
+          className={cx('w-24 type-control', hexError && '!border-[var(--color-status-error-soft)]')}
+        />
+      </SettingRow>
+    )
   }
 
   const swatches = (
@@ -320,6 +411,7 @@ export function AgentDisplayNameField({
   projectPath,
   helpText,
   trailing,
+  card = false,
 }: {
   scope: ServerScope
   projectPath: string
@@ -328,6 +420,8 @@ export function AgentDisplayNameField({
    *  meant for siblings like a Manage Persona button so the row
    *  reads input | save | persona on one line. */
   trailing?: React.ReactNode
+  /** A row of a Settings card: label left; Save shows while there is an edit. */
+  card?: boolean
 }): React.JSX.Element {
   const [ready, setReady] = useState(false)
   const [draft, setDraft] = useState('')
@@ -397,6 +491,37 @@ export function AgentDisplayNameField({
     } finally {
       setBusy(false)
     }
+  }
+
+  if (card) {
+    return (
+      <SettingRow
+        label="Name"
+        hint={!error ? helpText : undefined}
+        below={error ? <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">{error}</p> : undefined}
+      >
+        {dirty ? (
+          <Button variant="accent" onClick={handleSave} disabled={!ready || busy}>
+            {busy ? 'Saving…' : 'Save'}
+          </Button>
+        ) : flash ? (
+          <span className={cx(SETTING_ROW_HINT, '!mt-0')} data-testid="agent-name-saved">Saved</span>
+        ) : null}
+        <Input
+          value={draft}
+          onChange={(e) => { setDraft(e.target.value); setError(null) }}
+          disabled={!ready || busy}
+          placeholder="agent"
+          aria-label="Agent Name"
+          spellCheck={false}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          onKeyDown={(e) => { if (e.key === 'Enter' && dirty && !busy) void handleSave() }}
+          className={cx(SETTING_FIELD_WIDTH, 'type-control disabled:opacity-60')}
+        />
+      </SettingRow>
+    )
   }
 
   return (
@@ -479,12 +604,15 @@ export function AgentHandleField({
   projectPath,
   projectHandle,
   compact = false,
+  card = false,
 }: {
   scope: ServerScope
   projectPath: string
   projectHandle?: string
   /** Drawer: a short button label ("Change") so it fits the drawer. */
   compact?: boolean
+  /** A row of a Settings card: label left; the button shows while there is an edit. */
+  card?: boolean
 }): React.JSX.Element {
   const [handle, setHandle] = useState(projectHandle ?? '')
   const [draft, setDraft] = useState(projectHandle ?? '')
@@ -545,6 +673,48 @@ export function AgentHandleField({
     } finally {
       setBusy(false)
     }
+  }
+
+  if (card) {
+    return (
+      <SettingRow
+        label="Handle"
+        hint={
+          handle && tunnelHost ? (
+            <span className="break-all">{handle}::{tunnelHost}</span>
+          ) : handle ? (
+            <>
+              Get a subdomain so this agent can talk to other people&apos;s agents on K2.{' '}
+              <button
+                type="button"
+                className="text-[var(--color-accent)] hover:underline bg-transparent border-none p-0 cursor-pointer no-drag"
+                onClick={() => useSettingsStore.getState().openSettings('k2-connect')}
+              >
+                Open K2 Connect
+              </button>
+            </>
+          ) : undefined
+        }
+        below={error ? <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">{error}</p> : undefined}
+      >
+        {dirty && (
+          <Button variant="accent" onClick={() => { void onChange() }} disabled={busy}>
+            {busy ? 'Saving…' : 'Change handle…'}
+          </Button>
+        )}
+        <Input
+          value={draft}
+          onChange={(e) => { setDraft(e.target.value); setError(null) }}
+          disabled={busy}
+          aria-label="Handle"
+          spellCheck={false}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          className={cx(SETTING_FIELD_WIDTH, 'type-control disabled:opacity-60')}
+        />
+      </SettingRow>
+    )
   }
 
   return (

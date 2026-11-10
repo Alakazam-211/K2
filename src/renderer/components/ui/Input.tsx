@@ -17,6 +17,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         'placeholder:text-[var(--color-text-muted)]',
         'text-[11px] px-2 py-1 outline-none',
         'rounded-[var(--radius-field)] [box-shadow:var(--ring-field)]',
+        '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
         'focus:border-[var(--color-accent)]',
         className
       )}

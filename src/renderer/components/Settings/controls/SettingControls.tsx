@@ -4,7 +4,7 @@
 // sentence goes below type-hint.
 //
 //   type-title    page title, stat value      --type-xl     500
-//   type-heading  sentence-case subheading    --type-lg     500
+//   type-heading  sentence-case subheading    --type-lg     600
 //   type-section  uppercase section label     --type-xs     600
 //   type-row      row label, row value, body  --type-md     400
 //   type-name     name of a thing in a list   --type-md     500
@@ -17,18 +17,42 @@
 
 import React from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Surface } from '@/components/ui/Surface'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+
+/** Set inside a card group, so a row paints the card's padding and leaves its
+ *  divider to the card. */
+const SettingsCardContext = createContext(false)
+
+/** Width of a control column: text fields and dropdowns share it. Switches
+ *  and buttons keep their own width on the same right edge. */
+export const SETTING_FIELD_WIDTH = 'w-60'
+
+/** Rounds an avatar in Glass (Terminal's `--radius-field` is 0, so the cut
+ *  stays). Wrap the avatar, so other surfaces keep theirs. */
+export const AVATAR_ROUND = 'inline-flex flex-shrink-0 overflow-hidden rounded-[var(--radius-field)]'
+
+/** Row label and hint, one role each, so a label reads the same in every row. */
+export const SETTING_ROW_LABEL = 'type-row text-[var(--color-text-primary)]'
+export const SETTING_ROW_HINT = 'type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed'
 
 export function SettingRow({
   label,
+  hint,
+  below,
   children,
   settingId,
   columns = false,
   testId,
+  field = false,
 }: {
   label: React.ReactNode
+  /** Under the label, in the hint role. */
+  hint?: React.ReactNode
+  /** Full-width content under the row: results, warnings, a second step. */
+  below?: React.ReactNode
   children: React.ReactNode
   /**
    * Optional stable identifier used by the Settings search palette to
@@ -40,7 +64,10 @@ export function SettingRow({
    *  instead of label left / control right. */
   columns?: boolean
   testId?: string
+  /** A text field or dropdown: the control takes the shared field width. */
+  field?: boolean
 }): React.JSX.Element {
+  const inCard = useContext(SettingsCardContext)
   if (columns) {
     return (
       <div
@@ -50,6 +77,20 @@ export function SettingRow({
       >
         <span className="w-28 flex-shrink-0 type-row text-[var(--color-text-secondary)]">{label}</span>
         <div className="flex-1 min-w-0 flex items-center">{children}</div>
+      </div>
+    )
+  }
+  if (inCard || hint !== undefined || below !== undefined) {
+    return (
+      <div className={inCard ? 'px-4 py-3' : 'py-2 border-b border-[var(--color-border)]'} data-settings-id={settingId} data-testid={testId}>
+        <div className={`flex justify-between gap-6 ${hint ? 'items-start' : 'items-center'}`}>
+          <div className="flex-1 min-w-0">
+            <div className={SETTING_ROW_LABEL}>{label}</div>
+            {hint && <div className={SETTING_ROW_HINT}>{hint}</div>}
+          </div>
+          <div className={field ? `${SETTING_FIELD_WIDTH} flex-shrink-0` : 'flex items-center gap-2 flex-shrink-0'}>{children}</div>
+        </div>
+        {below && <div className="mt-2">{below}</div>}
       </div>
     )
   }
@@ -65,18 +106,87 @@ export function SettingRow({
   )
 }
 
+/** A row whose left side is free-form (label, hint, notes) and whose control
+ *  is a switch or small cluster on the right. `compact` is the narrow room
+ *  drawer: the control leads and the row keeps its tighter padding. */
+export function SettingSwitchRow({
+  control,
+  children,
+  compact = false,
+  testId,
+  settingId,
+}: {
+  control: React.ReactNode
+  children: React.ReactNode
+  compact?: boolean
+  testId?: string
+  settingId?: string
+}): React.JSX.Element {
+  if (compact) {
+    return (
+      <div className="px-3 py-1.5" data-testid={testId} data-settings-id={settingId}>
+        <div className="flex items-start gap-3">
+          {control}
+          <div className="flex-1 min-w-0">{children}</div>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="px-4 py-3" data-testid={testId} data-settings-id={settingId}>
+      <div className="flex items-start justify-between gap-6">
+        <div className="flex-1 min-w-0">{children}</div>
+        <div className="flex items-center gap-2 flex-shrink-0">{control}</div>
+      </div>
+    </div>
+  )
+}
+
 export function SettingsGroup({
   title,
   badge,
-  children
+  hint,
+  action,
+  card = false,
+  children,
+  settingId,
+  testId,
 }: {
   title: string
   /** Optional inline badge rendered next to the title — used for
    *  `beta` / status tags. Stays opt-in so existing callers
    *  (Workspace, Worktrees, Chat Migrations) render unchanged. */
   badge?: React.ReactNode
+  /** One line under the title (card groups). */
+  hint?: React.ReactNode
+  /** The group's one action, on the title's right (card groups). */
+  action?: React.ReactNode
+  /** Rows in one card: chamfered in Terminal, a tile in Glass, hairlines
+   *  between rows. The default keeps the section label and left rail. */
+  card?: boolean
   children: React.ReactNode
+  settingId?: string
+  testId?: string
 }): React.JSX.Element {
+  if (card) {
+    return (
+      <section data-settings-id={settingId} data-testid={testId}>
+        <div className="mb-2">
+          <div className="flex items-center justify-between gap-4 min-h-[1.5rem]">
+            <h3 className="type-heading text-[var(--color-text-primary)] flex items-center gap-2">
+              <span>{title}</span>
+              {badge}
+            </h3>
+            {action}
+          </div>
+          {hint && <p className={SETTING_ROW_HINT}>{hint}</p>}
+        </div>
+        <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
+          <SettingsCardContext.Provider value={true}>{children}</SettingsCardContext.Provider>
+        </Surface>
+      </section>
+    )
+  }
   return (
     <div className="space-y-2">
       <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-2">

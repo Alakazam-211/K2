@@ -43,7 +43,7 @@ import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { CodeEditor } from '@/components/FileViewerPane/CodeEditor'
 import { CustomThemeCreator } from '../CustomThemeCreator'
-import { SettingsGroup, SettingDropdown } from '../controls/SettingControls'
+import { AVATAR_ROUND, SETTING_FIELD_WIDTH, SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingDropdown, SettingRow, SettingSwitchRow, SettingsGroup } from '../controls/SettingControls'
 import { showContextMenu } from '@/lib/context-menu'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import type { SettingEntry } from '../searchManifest'
@@ -67,7 +67,7 @@ import { workspaceGrantSlug } from './api-keys-api'
 import { setSqlDbAgentAccess, setWorkspaceDbUpgrade } from './data-api'
 import { primaryScope } from '@/kessel/server-scope'
 import { RemoteInstructToggle } from '../shared/RemoteInstructToggle'
-import { Checkbox, Toggle } from '@/components/ui'
+import { Button, Callout, Input, OverflowMenu, Surface, Toggle } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 import { computeErrorMessage, setWorkspaceComputeManage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
 import { metaChordLabel } from '@/lib/shortcut-label'
@@ -77,6 +77,13 @@ import { AgentAppsAccess } from './AgentAppsAccess'
 import { AgentPermissionCardsRow, AskedChip, PermissionAsksProvider } from './PermissionCardsSection'
 import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { WorkspaceSettingsPage } from './WorkspaceSettingsPage'
+import {
+  WORKSPACE_SETTINGS_TABS,
+  advancedSectionFor,
+  parseWorkspaceSettingsTab,
+  rememberOpenedProject,
+  type WorkspaceSettingsTab,
+} from './workspace-tabs'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -121,7 +128,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Manage K2 projects', description: 'Lets this workspace\'s agent create, rename and delete K2 projects and add or remove their members (k2 project); on by default. Off: it can still read projects and post in its project chat', keywords: ['agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Manage Gardens and data sources', description: 'Lets this workspace\'s agent approve data sources, bind secrets it may already use, pause, pin, enable triggers and edit Gardens and widgets with no confirm (k2 sources, k2 zen); every act is logged. Off: it proposes and you approve', keywords: ['agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
   { id: 'projects.mail-agent-send', section: 'projects', label: 'Let this agent send email', description: 'Per-workspace agent send mode (off, approval, on) for hosted and linked inboxes; same as k2 mail sending', keywords: ['mail_agent_send', 'agent send', 'sending', 'send', 'email', 'mail', 'gmail', 'linked', 'gated', 'approval', 'outbound'] },
-  { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this server', description: 'Lets this workspace’s agents run k2 hostmail enable/disable and domain list/add/check. Uninstall, domain remove, OAuth and access stay with the owner', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
+  { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this server', description: 'Lets this workspace’s agents run k2 hostmail enable/disable and domain list/add/check. Uninstall, domain remove and OAuth stay with the owner', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
 ]
 
 export function ProjectsSection(): React.JSX.Element {
@@ -136,14 +143,13 @@ export function ProjectsSection(): React.JSX.Element {
   const renameFocusGroup = useFocusGroupsStore((s) => s.renameFocusGroup)
   const assignProjectToGroup = useFocusGroupsStore((s) => s.assignProjectToGroup)
 
+  // One page at a time: the list, one workspace, or the settings for every
+  // workspace. A deep link (`initialProjectId`) opens a workspace directly.
   const initialProjectId = useSettingsStore((s) => s.initialProjectId)
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
-    initialProjectId ?? (projects.length > 0 ? projects[0].id : null)
-  )
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProjectId ?? null)
 
-  // "Workspace settings" (0.46.5, moved from General → Workspaces): the
-  // entry at the very top of the list opens the page for every workspace
-  // instead of one workspace. `projectsPage` is the one-shot a deep link
+  // "Workspace settings" (0.46.5, moved from General → Workspaces): the page
+  // for every workspace. `projectsPage` is the one-shot a deep link
   // (`agent-skills`) or a search result sets.
   const projectsPage = useSettingsStore((s) => s.projectsPage)
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState<boolean>(
@@ -152,11 +158,19 @@ export function ProjectsSection(): React.JSX.Element {
   useEffect(() => {
     if (!projectsPage) return
     setShowWorkspaceSettings(projectsPage === 'workspace-settings')
+    if (projectsPage === 'list') setSelectedProjectId(null)
     useSettingsStore.setState({ projectsPage: null })
   }, [projectsPage])
   const selectProject = useCallback((id: string) => {
     setShowWorkspaceSettings(false)
     setSelectedProjectId(id)
+    rememberOpenedProject(id)
+  }, [])
+  const backToList = useCallback(() => {
+    setShowWorkspaceSettings(false)
+    setSelectedProjectId(null)
+    // Clear the deep link so the same workspace can be deep-linked again.
+    useSettingsStore.setState({ initialProjectId: null, initialWorkspaceTab: null })
   }, [])
 
   // When initialProjectId changes (e.g. right-click a different project), update selection
@@ -166,13 +180,25 @@ export function ProjectsSection(): React.JSX.Element {
     }
   }, [initialProjectId, selectProject])
 
-  // Projects often load after mount — seed the first row so the detail
-  // panel isn't blank on a cold open of Settings → Projects.
+  // The tab stays while you move between workspaces.
+  const lastTabRef = useRef<WorkspaceSettingsTab>('agent')
+
+  // Nothing to list yet: is that "still loading", "really none", or "the list
+  // couldn't be read"? The store only logs a failed read.
+  const [listState, setListState] = useState<'loading' | 'ready' | { error: string }>('loading')
+  const checkList = useCallback(async () => {
+    setListState('loading')
+    try {
+      await daemonCliGet(primaryScope(), 'projects/list')
+      setListState('ready')
+    } catch (err) {
+      setListState({ error: err instanceof Error ? err.message : String(err) })
+    }
+  }, [])
   useEffect(() => {
-    if (selectedProjectId) return
-    if (projects.length === 0) return
-    setSelectedProjectId(projects[0].id)
-  }, [projects, selectedProjectId])
+    if (projects.length === 0) void checkList()
+    else setListState('ready')
+  }, [projects.length, checkList])
 
   const [newGroupName, setNewGroupName] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
@@ -192,6 +218,26 @@ export function ProjectsSection(): React.JSX.Element {
   const [renamingGroupName, setRenamingGroupName] = useState('')
   const renameGroupInputRef = useRef<HTMLInputElement>(null)
 
+  // Both ways to delete a group (its menu, right-click) ask first. Workspaces
+  // aren't touched: the column is ON DELETE SET NULL, so they become ungrouped.
+  const confirmDeleteGroup = useCallback(async (group: { id: string; name: string }) => {
+    const count = useProjectsStore.getState().projects.filter((p) => p.focusGroupId === group.id).length
+    const ok = await useConfirmDialogStore.getState().confirm({
+      title: `Delete the focus group \u201c${group.name}\u201d?`,
+      message:
+        count === 0
+          ? 'It has no workspaces in it.'
+          : count === 1
+            ? 'Its 1 workspace isn\u2019t removed. It moves to Ungrouped.'
+            : `Its ${count} workspaces aren\u2019t removed. They move to Ungrouped.`,
+      confirmLabel: 'Delete group',
+      destructive: true,
+    })
+    if (!ok) return
+    await deleteFocusGroup(group.id)
+    await fetchProjects()
+  }, [deleteFocusGroup, fetchProjects])
+
   const handleGroupContextMenu = useCallback(async (e: React.MouseEvent, groupId: string) => {
     e.preventDefault()
     e.stopPropagation()
@@ -208,10 +254,9 @@ export function ProjectsSection(): React.JSX.Element {
       setRenamingGroupName(group.name)
       requestAnimationFrame(() => renameGroupInputRef.current?.focus())
     } else if (clickedId === 'delete') {
-      await deleteFocusGroup(groupId)
-      await fetchProjects()
+      await confirmDeleteGroup(group)
     }
-  }, [focusGroups, deleteFocusGroup, fetchProjects])
+  }, [focusGroups, confirmDeleteGroup])
 
   const handleGroupRenameConfirm = useCallback(async () => {
     if (renamingGroupId && renamingGroupName.trim()) {
@@ -501,399 +546,428 @@ export function ProjectsSection(): React.JSX.Element {
     }
   }, [focusGroupsEnabled, focusGroups, assignProjectToGroup, setManuallyActive])
 
+  const togglePinned = async (p: typeof projects[number]): Promise<void> => {
+    const newPinned = p.pinned ? 0 : 1
+    await daemonCliPost(primaryScope(), 'projects/update', { id: p.id, pinned: newPinned })
+    emitProjectsChanged()
+    const store = useProjectsStore.getState()
+    useProjectsStore.setState({
+      projects: store.projects.map((proj) => (proj.id === p.id ? { ...proj, pinned: newPinned } : proj)),
+    })
+  }
+
   // Workspace row renderer (called as function, NOT as <Component/>, to avoid unmount/remount flicker)
   const renderProjectRow = (p: typeof projects[number], zone: string, containerSelector: string) => {
-    const isSelected = !showWorkspaceSettings && selectedProjectId === p.id
     const isDragged = reorderDragId === p.id
     const kbIdx = allVisibleProjects.findIndex((vp) => vp.id === p.id)
     const isKeyboardHighlighted = kbIdx >= 0 && kbIdx === keyboardIndex
     return (
       <div
         data-settings-project-id={p.id}
+        role="button"
+        tabIndex={0}
+        aria-label={`Open ${p.name}`}
         onClick={() => selectProject(p.id)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            selectProject(p.id)
+          }
+        }}
         onContextMenu={(e) => handleProjectContextMenu(e, p)}
         onMouseDown={(e) => { if (e.button === 0) handleReorderMouseDown(e, p.id, zone, containerSelector) }}
-        className={`flex items-center gap-2 px-2 py-1.5 transition-colors no-drag cursor-pointer group select-none ${
-          isSelected
-            ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-            : isKeyboardHighlighted
-              ? 'bg-white/[0.06] text-[var(--color-text-primary)]'
-              : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
-        } ${isDragged ? 'opacity-30' : ''} cursor-grab active:cursor-grabbing`}
+        className={`flex items-center gap-3 px-4 py-2.5 transition-colors no-drag cursor-pointer group select-none outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)] active:cursor-grabbing ${
+          isKeyboardHighlighted ? 'bg-[var(--color-wash-1)]' : 'hover:bg-[var(--color-wash-1)]'
+        } ${isDragged ? 'opacity-30' : ''}`}
       >
-        <ProjectAvatar
-          projectPath={p.path}
-          projectName={p.name}
-          projectColor={p.color}
-          projectId={p.id}
-          iconUrl={p.iconUrl}
-          size={20}
-        />
-        <span className="type-row truncate flex-1">{p.name}</span>
+        <span className={AVATAR_ROUND}>
+          <ProjectAvatar
+            projectPath={p.path}
+            projectName={p.name}
+            projectColor={p.color}
+            projectId={p.id}
+            iconUrl={p.iconUrl}
+            size={24}
+          />
+        </span>
+        <span className="type-name text-[var(--color-text-primary)] truncate min-w-0 flex-shrink-0 max-w-[45%]">{p.name}</span>
+        <span className="type-hint text-[var(--color-text-secondary)] truncate min-w-0 flex-1" title={p.path}>{p.path}</span>
         <button
-          onClick={async (e) => {
+          type="button"
+          onClick={(e) => {
             e.stopPropagation()
-            const newPinned = p.pinned ? 0 : 1
-            await daemonCliPost(primaryScope(), 'projects/update', { id: p.id, pinned: newPinned })
-            emitProjectsChanged()
-            const store = useProjectsStore.getState()
-            useProjectsStore.setState({
-              projects: store.projects.map((proj) =>
-                proj.id === p.id ? { ...proj, pinned: newPinned } : proj
-              )
-            })
+            void togglePinned(p)
           }}
-          className={`flex-shrink-0 p-0.5 transition-colors ${
+          onMouseDown={(e) => e.stopPropagation()}
+          className={`w-6 h-6 flex-shrink-0 flex items-center justify-center transition-colors no-drag cursor-pointer outline-none focus-visible:outline-2 focus-visible:outline-[var(--color-accent)] ${
             p.pinned
               ? 'text-[var(--color-accent)]'
-              : 'text-transparent group-hover:text-[var(--color-text-muted)] hover:!text-[var(--color-accent)]'
+              : 'text-transparent group-hover:text-[var(--color-text-secondary)] group-focus-within:text-[var(--color-text-secondary)] focus-visible:text-[var(--color-text-secondary)] hover:!text-[var(--color-accent)]'
           }`}
           title={p.pinned ? 'Unpin' : 'Pin to top'}
+          aria-label={p.pinned ? `Unpin ${p.name}` : `Pin ${p.name} to top`}
+          aria-pressed={Boolean(p.pinned)}
         >
-          <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
             <path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707l-.71-.71-3.18 3.18a3.5 3.5 0 0 1-.4.3L11 11.106V14.5a.5.5 0 0 1-.854.354L7.5 12.207 4.854 14.854a.5.5 0 0 1-.708-.708L6.793 11.5 4.146 8.854A.5.5 0 0 1 4.5 8h3.394a3.5 3.5 0 0 0 .3-.4l3.18-3.18-.71-.71a.5.5 0 0 1 .354-.854z" />
           </svg>
         </button>
+        <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-secondary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
       </div>
     )
   }
 
+  const addWorkspace = async (): Promise<void> => {
+    // Host-aware: local → native OS dialog; remote → in-app
+    // RemoteFolderPicker over the host's fs. Single chokepoint
+    // (pick-workspace-folder) so every "add workspace" entry point
+    // stays host-aware. The chosen path flows through addProject.
+    const folderPath = await pickWorkspaceFolder()
+    if (folderPath) {
+      await useProjectsStore.getState().addProject(folderPath)
+      await fetchProjects()
+    }
+  }
+
+  /** One zone of rows in a card, with the drop line between rows. */
+  const renderZone = (rows: typeof projects, zone: string, selector: string): React.JSX.Element => (
+    <Surface chamfer material="tile">
+      <div data-reorder-zone={zone} className="divide-y divide-[var(--color-border)]">
+        {rows.map((p, idx) => (
+          <div key={p.id}>
+            {reorderZone === zone && reorderDropIndex === idx && <div className="h-[2px] bg-[var(--color-accent)]" />}
+            {renderProjectRow(p, zone, selector)}
+          </div>
+        ))}
+        {reorderZone === zone && reorderDropIndex === rows.length && <div className="h-[2px] bg-[var(--color-accent)]" />}
+      </div>
+    </Surface>
+  )
+
+  if (showWorkspaceSettings) {
+    return (
+      <div className="h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]">
+        <div className="w-full max-w-[52rem]">
+          <BackToWorkspaces onBack={backToList} />
+          <WorkspaceSettingsPage />
+        </div>
+      </div>
+    )
+  }
+
+  if (selectedProject) {
+    return (
+      <div className="h-full min-h-0 overflow-hidden p-6 relative flex flex-col">
+        <ProjectDetail
+          project={selectedProject}
+          projects={projects}
+          focusGroups={focusGroups}
+          focusGroupsEnabled={focusGroupsEnabled}
+          assignProjectToGroup={assignProjectToGroup}
+          fetchProjects={fetchProjects}
+          onBack={backToList}
+          onSwitchProject={selectProject}
+          lastTabRef={lastTabRef}
+        />
+      </div>
+    )
+  }
+
+  const listError = typeof listState === 'object' ? listState.error : null
+  const nothingYet = projects.length === 0
+  const searching = searchQuery.trim().length > 0
+  const noMatches = !nothingYet && allVisibleProjects.length === 0
+
   return (
-    <div className="flex h-full min-h-0">
-      {/* ── Left panel: focus group toggle + organized workspace list ── */}
-      <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col">
-        {/* Workspace settings: the page for every workspace, at the very top
-            above the Focus Groups toggle (Rosson 2026-10-27). */}
-        <div className="px-1 py-1 border-b border-[var(--color-border)]">
-          <button
-            type="button"
-            data-testid="workspace-settings-entry"
-            aria-current={showWorkspaceSettings ? 'page' : undefined}
-            onClick={() => setShowWorkspaceSettings(true)}
-            className={`w-full flex items-center gap-2 px-2 py-1.5 transition-colors no-drag cursor-pointer select-none text-left ${
-              showWorkspaceSettings
-                ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
-            }`}
-          >
-            <svg
-              className="w-[14px] h-[14px] flex-shrink-0 mx-[3px]"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.75}
-              aria-hidden="true"
+    <div className="h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]" data-settings-id="projects.list">
+      <div className="w-full max-w-[52rem] space-y-6 pb-6">
+        <header className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="type-title text-[var(--color-text-primary)]">Workspaces / Agents</h2>
+            <p className="type-hint text-[var(--color-text-secondary)] mt-1">
+              Pick a workspace to change how its agent is set up.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Button
+              variant="quiet"
+              data-testid="workspace-settings-entry"
+              onClick={() => setShowWorkspaceSettings(true)}
             >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            <span className="type-row truncate flex-1">Workspace settings</span>
-            <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-        </div>
+              Workspace settings
+            </Button>
+            {/* The empty state has its own; one primary action per screen. */}
+            {!(nothingYet && listState === 'ready') && (
+              <Button variant="accent" data-settings-id="projects.add" onClick={() => void addWorkspace()}>
+                New workspace
+              </Button>
+            )}
+          </div>
+        </header>
 
-        {/* Focus groups toggle */}
-        <div className="px-3 pt-3 pb-2 border-b border-[var(--color-border)] flex items-center justify-between">
-          <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-            Focus Groups
-          </span>
-          <Toggle
-            size="sm"
-            checked={focusGroupsEnabled}
-            aria-label="Focus Groups"
-            onChange={() => setFocusGroupsEnabled(!focusGroupsEnabled)}
-          />
-        </div>
-
-        {/* Alphabetize buttons */}
-        <div className="px-3 py-1.5 flex gap-1.5 border-b border-[var(--color-border)]">
-          <button
-            onClick={async () => {
-              if (focusGroupsEnabled) {
-                const sorted = [...focusGroups].sort((a, b) => a.name.localeCompare(b.name))
-                await reorderFocusGroups(sorted.map((g) => g.id))
-              }
-            }}
-            className="flex-1 px-1.5 py-1 type-control whitespace-nowrap text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-white/[0.03] hover:bg-white/[0.06] transition-colors no-drag cursor-pointer"
-            title="Sort focus groups A-Z"
-          >
-            A→Z Groups
-          </button>
-          <button
-            onClick={async () => {
-              const sorted = [...projects].sort((a, b) => a.name.localeCompare(b.name))
-              await reorderProjects(sorted.map((p) => p.id))
-            }}
-            className="flex-1 px-1.5 py-1 type-control whitespace-nowrap text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-white/[0.03] hover:bg-white/[0.06] transition-colors no-drag cursor-pointer"
-            title="Sort workspaces A-Z within groups"
-          >
-            A→Z Workspaces
-          </button>
-        </div>
-
-        {/* Search bar */}
-        <div className="px-2 py-1.5">
-          <input
-            ref={searchInputRef}
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={handleSearchKeyDown}
-            placeholder="Search workspaces..."
-            className="w-full px-2 py-1.5 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag"
-          />
-        </div>
-
-        {/* Workspace list — pinned at top, then groups or flat */}
-        {/* 0.39.0: retired the dedicated Agents section — agent-mode
-            workspaces flow through Pinned / focus groups / ungrouped
-            like any other workspace. Single Pinned section below. */}
-        <div className="flex-1 overflow-y-auto px-1 py-1">
-          {/* ── Pinned workspaces ── */}
-          {pinnedProjects.length > 0 && (
-            <div className="mb-1 pb-1 border-b border-[var(--color-border)]">
-              <div className="px-2 pt-1 pb-1">
-                <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-                  Pinned
-                </span>
-              </div>
-              <div data-reorder-zone="pinned">
-                {pinnedProjects.map((p, idx) => (
-                  <div key={p.id}>
-                    {reorderZone === 'pinned' && reorderDropIndex === idx && (
-                      <div className="h-[2px] bg-[var(--color-accent)] mx-2" />
-                    )}
-                    {renderProjectRow(p, 'pinned', "[data-reorder-zone='pinned']")}
-                  </div>
-                ))}
-                {reorderZone === 'pinned' && reorderDropIndex === pinnedProjects.length && (
-                  <div className="h-[2px] bg-[var(--color-accent)] mx-2" />
-                )}
-              </div>
-            </div>
-          )}
-
-          {focusGroupsEnabled ? (
-            <>
-              {/* Focus group folders */}
-              <div data-focus-group-reorder-container>
-              {focusGroups.map((group, groupIdx) => {
-                const groupProjects = projects.filter((p) => p.focusGroupId === group.id && !p.pinned && matchesSearch(p))
-                const isCollapsed = collapsedGroups.has(group.id)
-                const isDragOver = dragOverGroupId === group.id
-                const zoneId = `group:${group.id}`
-                const isGroupDragged = groupDragId === group.id
-                const showGroupDropBefore = groupDropIndex === groupIdx
-                const showGroupDropAfter = groupDropIndex === focusGroups.length && groupIdx === focusGroups.length - 1
-
-                // Hide empty focus groups when searching
-                if (searchQuery.trim() && groupProjects.length === 0) return null
-
-                return (
-                  <div key={group.id} className={`mb-0.5 ${isGroupDragged ? 'opacity-30' : ''}`} data-focus-group-reorder-id={group.id}>
-                    {showGroupDropBefore && <div className="h-[2px] bg-[var(--color-accent)] mx-2 mb-0.5" />}
-                    {/* Group folder header */}
-                    <div
-                      data-focus-group-id={group.id}
-                      className={`flex items-center gap-1.5 px-2 py-1 cursor-pointer no-drag select-none transition-all duration-150 ${
-                        isDragOver
-                          ? 'bg-[var(--color-accent)]/15 ring-1 ring-inset ring-[var(--color-accent)] scale-[1.02]'
-                          : 'hover:bg-white/[0.03]'
-                      }`}
-                      onClick={() => { if (renamingGroupId !== group.id) toggleGroupCollapse(group.id) }}
-                      onMouseDown={(e) => handleGroupReorderMouseDown(e, group.id)}
-                      onContextMenu={(e) => handleGroupContextMenu(e, group.id)}
-                    >
-                      {group.color && (
-                        <span className="w-1 h-3 flex-shrink-0" style={{ backgroundColor: isDragOver ? 'var(--color-accent)' : group.color }} />
-                      )}
-                      <svg
-                        className={`w-2.5 h-2.5 text-[var(--color-text-muted)] transition-transform flex-shrink-0 ${
-                          isCollapsed ? '' : 'rotate-90'
-                        }`}
-                        fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-                      >
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                      </svg>
-                      {renamingGroupId === group.id ? (
-                        <input
-                          ref={renameGroupInputRef}
-                          type="text"
-                          value={renamingGroupName}
-                          onChange={(e) => setRenamingGroupName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleGroupRenameConfirm()
-                            else if (e.key === 'Escape') { setRenamingGroupId(null); setRenamingGroupName('') }
-                          }}
-                          onBlur={handleGroupRenameConfirm}
-                          onClick={(e) => e.stopPropagation()}
-                          className="type-control text-[var(--color-text-primary)] flex-1 bg-transparent border-b border-[var(--color-accent)] outline-none px-0 py-0"
-                        />
-                      ) : (
-                        <span className="type-hint text-[var(--color-text-secondary)] flex-1 truncate">
-                          {group.name}
-                        </span>
-                      )}
-                      {isDragOver ? (
-                        <span className="type-hint text-[var(--color-accent)] flex-shrink-0 ">
-                          Drop here
-                        </span>
-                      ) : (
-                        <span className="type-hint text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
-                          {groupProjects.length}
-                        </span>
-                      )}
-                    </div>
-
-                    {!isCollapsed && (
-                      <div className="ml-3" data-reorder-zone={zoneId}>
-                        {groupProjects.map((p, idx) => (
-                          <div key={p.id}>
-                            {reorderZone === zoneId && reorderDropIndex === idx && (
-                              <div className="h-[2px] bg-[var(--color-accent)] mx-2" />
-                            )}
-                            {renderProjectRow(p, zoneId, `[data-reorder-zone='${zoneId}']`)}
-                          </div>
-                        ))}
-                        {reorderZone === zoneId && reorderDropIndex === groupProjects.length && (
-                          <div className="h-[2px] bg-[var(--color-accent)] mx-2" />
-                        )}
-                        {groupProjects.length === 0 && (
-                          <div
-                            className={`px-2 py-2 text-center type-hint text-[var(--color-text-muted)] italic transition-colors ${
-                              isDragOver ? 'bg-[var(--color-accent)]/5' : ''
-                            }`}
-                          >
-                            Drop workspaces here
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {showGroupDropAfter && <div className="h-[2px] bg-[var(--color-accent)] mx-2 mt-0.5" />}
-                  </div>
-                )
-              })}
-              </div>
-
-              {/* Ungrouped workspaces */}
-              {ungroupedProjects.length > 0 && (
-                <div className="mt-1">
-                  <div
-                    data-focus-group-id="__ungrouped__"
-                    className={`flex items-center gap-1.5 px-2 py-1 type-hint select-none transition-all duration-150 ${
-                      dragOverGroupId === '__ungrouped__'
-                        ? 'text-[var(--color-accent)] bg-[var(--color-accent)]/15 ring-1 ring-inset ring-[var(--color-accent)] scale-[1.02]'
-                        : 'text-[var(--color-text-muted)]'
-                    }`}
-                  >
-                    Ungrouped
-                  </div>
-                  <div className="ml-1" data-reorder-zone="ungrouped">
-                    {ungroupedProjects.map((p, idx) => (
-                      <div key={p.id}>
-                        {reorderZone === 'ungrouped' && reorderDropIndex === idx && (
-                          <div className="h-[2px] bg-[var(--color-accent)] mx-2" />
-                        )}
-                        {renderProjectRow(p, 'ungrouped', "[data-reorder-zone='ungrouped']")}
-                      </div>
-                    ))}
-                    {reorderZone === 'ungrouped' && reorderDropIndex === ungroupedProjects.length && (
-                      <div className="h-[2px] bg-[var(--color-accent)] mx-2" />
-                    )}
+        {nothingYet ? (
+          <Surface chamfer material="tile">
+            {listError ? (
+              <div className="px-4 py-5 flex items-center justify-between gap-4" data-testid="workspaces-load-error">
+                <div className="min-w-0">
+                  <div className="type-row text-[var(--color-text-primary)]">Couldn&rsquo;t load your workspaces</div>
+                  <div className={SETTING_ROW_HINT} title={listError}>
+                    K2 couldn&rsquo;t read the workspace list from this server, so nothing is shown here. Try again in a moment. If it keeps failing, restart K2.
                   </div>
                 </div>
-              )}
+                <Button variant="quiet" onClick={() => { void fetchProjects(); void checkList() }}>Try again</Button>
+              </div>
+            ) : listState === 'loading' ? (
+              <div className="px-4 py-5 type-row text-[var(--color-text-secondary)]" data-testid="workspaces-loading">
+                Loading your workspaces…
+              </div>
+            ) : (
+              <div className="px-4 py-5 flex items-center justify-between gap-4" data-testid="workspaces-empty">
+                <div className="min-w-0">
+                  <div className="type-row text-[var(--color-text-primary)]">No workspaces yet</div>
+                  <div className={SETTING_ROW_HINT}>Add a folder to give it an agent you can set up here.</div>
+                </div>
+                <Button variant="accent" data-settings-id="projects.add" onClick={() => void addWorkspace()}>New workspace</Button>
+              </div>
+            )}
+          </Surface>
+        ) : (
+          <>
+            {/* Find it first. */}
+            <div className="flex items-center gap-3">
+              <Input
+                ref={searchInputRef}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                placeholder="Search workspaces"
+                aria-label="Search workspaces"
+                className="flex-1 min-w-0 type-control"
+              />
+              <div className="flex items-center gap-2 flex-shrink-0" data-settings-id="projects.focus-groups">
+                <span className="type-row text-[var(--color-text-secondary)]">Focus Groups</span>
+                <Toggle
+                  checked={focusGroupsEnabled}
+                  aria-label="Focus Groups"
+                  onChange={() => setFocusGroupsEnabled(!focusGroupsEnabled)}
+                />
+              </div>
+              <OverflowMenu
+                label="Sort workspaces"
+                items={[
+                  {
+                    id: 'sort-groups',
+                    label: 'Sort focus groups A–Z',
+                    disabled: !focusGroupsEnabled,
+                    hint: focusGroupsEnabled ? undefined : 'Turn on Focus Groups first.',
+                    onSelect: async () => {
+                      const sorted = [...focusGroups].sort((a, b) => a.name.localeCompare(b.name))
+                      await reorderFocusGroups(sorted.map((g) => g.id))
+                    },
+                  },
+                  {
+                    id: 'sort-workspaces',
+                    label: 'Sort workspaces A–Z',
+                    onSelect: async () => {
+                      const sorted = [...projects].sort((a, b) => a.name.localeCompare(b.name))
+                      await reorderProjects(sorted.map((p) => p.id))
+                    },
+                  },
+                ]}
+              />
+            </div>
 
-              {/* Add new group */}
-              <div className="mt-2 px-1">
-                <div className="flex items-center gap-1">
-                  <input
-                    type="text"
+            {noMatches && (
+              <Surface chamfer material="tile">
+                <div className="px-4 py-5 flex items-center justify-between gap-4" data-testid="workspaces-no-match">
+                  <div className="type-row text-[var(--color-text-primary)]">
+                    No workspaces match &ldquo;{searchQuery.trim()}&rdquo;
+                  </div>
+                  <Button variant="quiet" onClick={() => setSearchQuery('')}>Clear search</Button>
+                </div>
+              </Surface>
+            )}
+
+            {/* Pinned first, then each focus group, then the rest. */}
+            {pinnedProjects.length > 0 && (
+              <section>
+                <ListHeading>Pinned</ListHeading>
+                {renderZone(pinnedProjects, 'pinned', "[data-reorder-zone='pinned']")}
+              </section>
+            )}
+
+            {focusGroupsEnabled ? (
+              <>
+                <div data-focus-group-reorder-container className="space-y-5">
+                  {focusGroups.map((group, groupIdx) => {
+                    const groupProjects = projects.filter((p) => p.focusGroupId === group.id && !p.pinned && matchesSearch(p))
+                    const isCollapsed = collapsedGroups.has(group.id)
+                    const isDragOver = dragOverGroupId === group.id
+                    const zoneId = `group:${group.id}`
+                    const isGroupDragged = groupDragId === group.id
+                    const showGroupDropBefore = groupDropIndex === groupIdx
+                    const showGroupDropAfter = groupDropIndex === focusGroups.length && groupIdx === focusGroups.length - 1
+
+                    // Hide empty focus groups when searching
+                    if (searching && groupProjects.length === 0) return null
+
+                    return (
+                      <section key={group.id} className={isGroupDragged ? 'opacity-30' : ''} data-focus-group-reorder-id={group.id}>
+                        {showGroupDropBefore && <div className="h-[2px] bg-[var(--color-accent)] mb-1" />}
+                        <div
+                          data-focus-group-id={group.id}
+                          className={`flex items-center gap-2 h-7 mb-1 cursor-pointer no-drag select-none transition-colors ${
+                            isDragOver ? 'bg-[var(--color-accent)]/15 ring-1 ring-inset ring-[var(--color-accent)]' : ''
+                          }`}
+                          onClick={() => { if (renamingGroupId !== group.id) toggleGroupCollapse(group.id) }}
+                          onMouseDown={(e) => handleGroupReorderMouseDown(e, group.id)}
+                          onContextMenu={(e) => handleGroupContextMenu(e, group.id)}
+                        >
+                          <svg
+                            className={`w-3 h-3 text-[var(--color-text-secondary)] transition-transform flex-shrink-0 ${isCollapsed ? '' : 'rotate-90'}`}
+                            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                          </svg>
+                          {group.color && (
+                            <span className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)]" style={{ backgroundColor: group.color }} aria-hidden="true" />
+                          )}
+                          {renamingGroupId === group.id ? (
+                            <Input
+                              ref={renameGroupInputRef}
+                              value={renamingGroupName}
+                              aria-label="Group name"
+                              onChange={(e) => setRenamingGroupName(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleGroupRenameConfirm()
+                                else if (e.key === 'Escape') { setRenamingGroupId(null); setRenamingGroupName('') }
+                              }}
+                              onBlur={handleGroupRenameConfirm}
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex-1 type-control"
+                            />
+                          ) : (
+                            <span className="type-heading text-[var(--color-text-primary)] flex-1 truncate">{group.name}</span>
+                          )}
+                          {isDragOver ? (
+                            <span className="type-hint text-[var(--color-accent)] flex-shrink-0">Drop here</span>
+                          ) : (
+                            <span className="type-hint text-[var(--color-text-secondary)] tabular-nums flex-shrink-0">
+                              {groupProjects.length}
+                            </span>
+                          )}
+                          <div onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+                            <OverflowMenu
+                              label={`More actions for ${group.name}`}
+                              items={[
+                                {
+                                  id: 'rename',
+                                  label: 'Rename',
+                                  onSelect: () => {
+                                    setRenamingGroupId(group.id)
+                                    setRenamingGroupName(group.name)
+                                    requestAnimationFrame(() => renameGroupInputRef.current?.focus())
+                                  },
+                                },
+                                {
+                                  id: 'delete',
+                                  label: 'Delete group',
+                                  danger: true,
+                                  group: true,
+                                  hint: 'Its workspaces move to Ungrouped.',
+                                  onSelect: () => {
+                                    void confirmDeleteGroup(group)
+                                  },
+                                },
+                              ]}
+                            />
+                          </div>
+                        </div>
+                        {!isCollapsed && (
+                          groupProjects.length > 0 ? (
+                            renderZone(groupProjects, zoneId, `[data-reorder-zone='${zoneId}']`)
+                          ) : (
+                            <Surface chamfer material="tile">
+                              <div className="px-4 py-3 type-hint text-[var(--color-text-secondary)]">Drop workspaces here</div>
+                            </Surface>
+                          )
+                        )}
+                        {showGroupDropAfter && <div className="h-[2px] bg-[var(--color-accent)] mt-1" />}
+                      </section>
+                    )
+                  })}
+                </div>
+
+                {ungroupedProjects.length > 0 && (
+                  <section>
+                    <ListHeading
+                      dataFocusGroupId="__ungrouped__"
+                      highlight={dragOverGroupId === '__ungrouped__'}
+                    >
+                      Ungrouped
+                    </ListHeading>
+                    {renderZone(ungroupedProjects, 'ungrouped', "[data-reorder-zone='ungrouped']")}
+                  </section>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <Input
                     value={newGroupName}
                     onChange={(e) => setNewGroupName(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') handleCreateGroup() }}
-                    placeholder="+ New group"
-                    className="flex-1 px-2 py-1 type-control bg-transparent border border-transparent text-[var(--color-text-muted)] outline-none focus:border-[var(--color-border)] focus:text-[var(--color-text-primary)] no-drag"
+                    placeholder="New focus group name"
+                    aria-label="New focus group name"
+                    className={`${SETTING_FIELD_WIDTH} type-control`}
                   />
+                  <Button variant="quiet" disabled={!newGroupName.trim()} onClick={() => void handleCreateGroup()}>
+                    Add group
+                  </Button>
                 </div>
-              </div>
-            </>
-          ) : (
-            /* Simple flat list when focus groups disabled */
-            <div className="space-y-0.5">
-              <div className="px-2 pt-1 pb-1">
-                <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-                  Workspaces
-                </span>
-              </div>
-              <div data-reorder-zone="flat">
-                {projects.filter((p) => !p.pinned).map((p, idx) => (
-                  <div key={p.id}>
-                    {reorderZone === 'flat' && reorderDropIndex === idx && (
-                      <div className="h-[2px] bg-[var(--color-accent)] mx-2" />
-                    )}
-                    {renderProjectRow(p, 'flat', "[data-reorder-zone='flat']")}
-                  </div>
-                ))}
-              </div>
-              {projects.length === 0 && (
-                <div className="px-2 py-6 text-center">
-                  <span className="type-row text-[var(--color-text-muted)]">No workspaces</span>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* + New Workspace button */}
-        <div className="px-2 py-2 border-t border-[var(--color-border)]">
-          <button
-            className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 type-control text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-white/[0.04] hover:bg-white/[0.08] transition-colors no-drag cursor-pointer"
-            onClick={async () => {
-              // Host-aware: local → native OS dialog; remote → in-app
-              // RemoteFolderPicker over the host's fs. Single chokepoint
-              // (pick-workspace-folder) so every "add workspace" entry point
-              // stays host-aware. The chosen path flows through addProject.
-              const folderPath = await pickWorkspaceFolder()
-              if (folderPath) {
-                await useProjectsStore.getState().addProject(folderPath)
-                await fetchProjects()
-              }
-            }}
-          >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            New workspace
-          </button>
-        </div>
-      </div>
-
-      {/* ── Right panel: selected workspace settings ──
-          overflow-hidden (not y-auto) so only ProjectDetail's tab panel
-          scrolls — avoids a nested scrollbar that overpaints content. */}
-      <div className="flex-1 overflow-hidden p-6 min-h-0 relative flex flex-col">
-        {showWorkspaceSettings ? (
-          <WorkspaceSettingsPage />
-        ) : selectedProject ? (
-          <ProjectDetail
-            project={selectedProject}
-            focusGroups={focusGroups}
-            focusGroupsEnabled={focusGroupsEnabled}
-            assignProjectToGroup={assignProjectToGroup}
-            fetchProjects={fetchProjects}
-          />
-        ) : (
-          <div className="flex items-center justify-center h-full">
-            <span className="type-row text-[var(--color-text-muted)]">
-              Select a workspace to view its settings
-            </span>
-          </div>
+              </>
+            ) : (
+              projects.some((p) => !p.pinned && matchesSearch(p)) && (
+                <section>
+                  <ListHeading>Workspaces</ListHeading>
+                  {renderZone(projects.filter((p) => !p.pinned && matchesSearch(p)), 'flat', "[data-reorder-zone='flat']")}
+                </section>
+              )
+            )}
+          </>
         )}
       </div>
+    </div>
+  )
+}
 
+function ListHeading({
+  children,
+  dataFocusGroupId,
+  highlight = false,
+}: {
+  children: React.ReactNode
+  dataFocusGroupId?: string
+  highlight?: boolean
+}): React.JSX.Element {
+  return (
+    <div
+      data-focus-group-id={dataFocusGroupId}
+      className={`flex items-center h-7 mb-1 type-heading transition-colors ${
+        highlight ? 'text-[var(--color-accent)] bg-[var(--color-accent)]/15 ring-1 ring-inset ring-[var(--color-accent)]' : 'text-[var(--color-text-primary)]'
+      }`}
+    >
+      {children}
+    </div>
+  )
+}
+
+function BackToWorkspaces({ onBack }: { onBack: () => void }): React.JSX.Element {
+  return (
+    <div className="mb-3">
+      <Button variant="quiet" onClick={onBack} data-testid="workspaces-back">
+        &larr; All workspaces
+      </Button>
     </div>
   )
 }
@@ -963,12 +1037,9 @@ function WorktreeFoldersOnDisk({
 
   if (loading) {
     return (
-      <div className="space-y-2">
-        <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-          Worktree Folders on Disk
-        </h3>
-        <p className="type-hint text-[var(--color-text-muted)]">Loading...</p>
-      </div>
+      <SettingsGroup title="Worktree folders on disk" card>
+        <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">Loading…</p>
+      </SettingsGroup>
     )
   }
 
@@ -977,103 +1048,55 @@ function WorktreeFoldersOnDisk({
   if (nonBare.length === 0) return <></>
 
   return (
-    <div className="space-y-2">
-      <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
-        Worktree Folders on Disk
-        <span className="type-badge tabular-nums px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{nonBare.length}</span>
-      </h3>
-      <div className="border border-[var(--color-border)]">
-        {nonBare.map((wt, i) => {
-          const isActive = wt.isMain
-            ? mainWorkspaceExists
-            : activeWorktreePaths.has(wt.path)
-          const isClosed = !isActive
+    <SettingsGroup
+      title="Worktree folders on disk"
+      card
+      badge={<span className="type-badge tabular-nums text-[var(--color-text-secondary)]">{nonBare.length}</span>}
+    >
+      {nonBare.map((wt) => {
+        const isActive = wt.isMain
+          ? mainWorkspaceExists
+          : activeWorktreePaths.has(wt.path)
 
-          return (
-            <div
-              key={wt.path}
-              className={`flex items-center gap-2 px-3 py-1.5 ${
-                i < nonBare.length - 1 ? 'border-b border-[var(--color-border)]' : ''
-              }`}
-            >
-              <svg
-                className="w-3 h-3 flex-shrink-0 text-[var(--color-text-muted)]"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                {wt.isMain ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z" />
-                )}
-              </svg>
-              <div className="flex-1 min-w-0">
-                <span className="type-row text-[var(--color-text-primary)] truncate block">
-                  {wt.branch}
-                </span>
-                <span className="type-hint text-[var(--color-text-muted)] truncate block" title={wt.path}>
-                  {wt.path.length > 50 ? '...' + wt.path.slice(-47) : wt.path}
-                </span>
-              </div>
-              {isActive ? (
-                <span className="type-hint text-[var(--color-status-ok-soft)] flex-shrink-0">(active)</span>
-              ) : (
-                <button
-                  onClick={() => handleReopen(wt)}
-                  disabled={reopening === wt.path}
-                  className="px-2 py-0.5 type-control text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-                >
-                  {reopening === wt.path ? 'Reopening...' : 'Reopen'}
-                </button>
-              )}
+        return (
+          <div key={wt.path} className="flex items-center gap-3 px-4 py-2.5">
+            <div className="flex-1 min-w-0">
+              <span className="type-row text-[var(--color-text-primary)] truncate block">{wt.branch}</span>
+              <span className="type-hint text-[var(--color-text-secondary)] truncate block" title={wt.path}>
+                {wt.path.length > 50 ? '...' + wt.path.slice(-47) : wt.path}
+              </span>
             </div>
-          )
-        })}
-      </div>
-    </div>
+            {isActive ? (
+              <span className="type-hint text-[var(--color-status-ok-soft)] flex-shrink-0">(active)</span>
+            ) : (
+              <Button variant="quiet" className="flex-shrink-0" onClick={() => handleReopen(wt)} disabled={reopening === wt.path}>
+                {reopening === wt.path ? 'Reopening...' : 'Reopen'}
+              </Button>
+            )}
+          </div>
+        )
+      })}
+    </SettingsGroup>
   )
-}
-
-// Per-workspace detail tabs (replaces the long two-column stack).
-type WorkspaceSettingsTab =
-  | 'agent'
-  | 'context'
-  | 'connections'
-  | 'skills'
-  | 'schedule'
-  | 'worktrees'
-  | 'import'
-  | 'api'
-
-const WORKSPACE_SETTINGS_TABS: WorkspaceSettingsTab[] = [
-  'agent',
-  'context',
-  'connections',
-  'skills',
-  'schedule',
-  'worktrees',
-  'import',
-  'api',
-]
-
-function parseWorkspaceSettingsTab(value: string | null): WorkspaceSettingsTab | null {
-  if (value && (WORKSPACE_SETTINGS_TABS as string[]).includes(value)) {
-    return value as WorkspaceSettingsTab
-  }
-  return null
 }
 
 // ── Workspace Detail (right panel content) ─────────────────────────────
 function ProjectDetail({
   project,
+  projects,
   focusGroups,
   focusGroupsEnabled,
   assignProjectToGroup,
-  fetchProjects
+  fetchProjects,
+  onBack,
+  onSwitchProject,
+  lastTabRef,
 }: {
   project: ReturnType<typeof useProjectsStore.getState>['projects'][number]
+  projects: ReturnType<typeof useProjectsStore.getState>['projects']
+  onBack: () => void
+  onSwitchProject: (id: string) => void
+  lastTabRef: React.MutableRefObject<WorkspaceSettingsTab>
   focusGroups: ReturnType<typeof useFocusGroupsStore.getState>['focusGroups']
   focusGroupsEnabled: boolean
   assignProjectToGroup: (projectId: string, groupId: string | null) => Promise<void>
@@ -1117,12 +1140,22 @@ function ProjectDetail({
   // flash Agent, and so a remount still sees the requested tab.
   const initialWorkspaceTab = useSettingsStore((s) => s.initialWorkspaceTab)
   const [settingsTab, setSettingsTab] = useState<WorkspaceSettingsTab>(
-    () => parseWorkspaceSettingsTab(useSettingsStore.getState().initialWorkspaceTab) ?? 'agent',
+    () => parseWorkspaceSettingsTab(useSettingsStore.getState().initialWorkspaceTab) ?? lastTabRef.current,
   )
   useEffect(() => {
     const parsed = parseWorkspaceSettingsTab(initialWorkspaceTab)
     if (parsed) setSettingsTab(parsed)
+    // A link to the old Worktrees / Import / API tab: land on that section.
+    const section = advancedSectionFor(initialWorkspaceTab)
+    if (section) {
+      requestAnimationFrame(() => {
+        document.querySelector(`[data-settings-id="${section}"]`)?.scrollIntoView({ block: 'start' })
+      })
+    }
   }, [initialWorkspaceTab])
+  useEffect(() => {
+    lastTabRef.current = settingsTab
+  }, [settingsTab, lastTabRef])
   const selectSettingsTab = (tab: WorkspaceSettingsTab): void => {
     useSettingsStore.setState({ initialWorkspaceTab: null })
     setSettingsTab(tab)
@@ -1304,47 +1337,63 @@ function ProjectDetail({
   const agentMode = project.agentMode || 'off'
   const isManagerMode = agentMode === 'manager' || agentMode === 'coordinator' || agentMode === 'pod'
 
-  const workspaceTabs: Array<{ id: WorkspaceSettingsTab; label: string }> = [
-    { id: 'agent', label: 'Agent' },
-    // Context always visible — holds PROJECT.md; Agent Settings nested inside.
-    { id: 'context', label: 'Context' },
-    { id: 'connections', label: 'Connections' },
-    { id: 'skills', label: 'Skills' },
-    { id: 'schedule', label: 'Heartbeats' },
-    { id: 'worktrees', label: 'Worktrees' },
-    { id: 'import', label: 'Import' },
-    { id: 'api', label: 'API' },
-  ]
-  const visibleTabs = workspaceTabs
-  // Header + tab strip always span the full settings column.
-  // Tab body width is per-tab: wide for stack/lists, constrained for forms.
-  const fullWidthTabContent =
-    settingsTab === 'context' ||
-    settingsTab === 'schedule' ||
-    settingsTab === 'worktrees'
+  const tabLabel: Record<WorkspaceSettingsTab, string> = {
+    agent: 'Agent',
+    permissions: 'Permissions',
+    context: 'Context',
+    connections: 'Connections',
+    skills: 'Skills',
+    schedule: 'Heartbeats',
+    advanced: 'Advanced',
+  }
+  // Header + tab strip span the settings column. Forms keep the shared
+  // reading width; Context and Heartbeats fill the height.
+  const fillsHeight = settingsTab === 'context' || settingsTab === 'schedule'
+
+  const openWorkspace = (): void => {
+    const defaultWs = project.workspaces?.[0]
+    if (defaultWs) {
+      useProjectsStore.getState().setActiveWorkspace(project.id, defaultWs.id)
+    }
+    useSettingsStore.getState().closeSettings()
+  }
 
   return (
-    <>
     <div className="flex flex-col h-full min-h-0 w-full">
-      {/* ── Sticky header + tabs (full width of the settings content column) ── */}
-      <div className="flex-shrink-0 space-y-4 pb-3 pr-1 w-full">
-        <div className="flex items-start justify-between gap-3 w-full">
-          <div className="min-w-0">
-            <h2 className="type-title text-[var(--color-text-primary)]">{project.name}</h2>
-            <p className="type-hint text-[var(--color-text-muted)] mt-1 break-all">{project.path}</p>
+      <div className={`flex-shrink-0 w-full space-y-4 ${fillsHeight ? '' : 'max-w-[52rem]'}`}>
+        <div className="flex items-center justify-between gap-3">
+          <Button variant="quiet" onClick={onBack} data-testid="workspaces-back">
+            &larr; All workspaces
+          </Button>
+          <div className="flex items-center gap-2">
+            <SettingDropdown
+              value={project.id}
+              ariaLabel="Switch workspace"
+              triggerLabel="Switch workspace"
+              options={projects.map((p) => ({ value: p.id, label: p.name }))}
+              onChange={(id) => onSwitchProject(id)}
+            />
+            <Button variant="quiet" onClick={openWorkspace}>
+              Open workspace
+            </Button>
           </div>
-          <button
-            onClick={() => {
-              const defaultWs = project.workspaces?.[0]
-              if (defaultWs) {
-                useProjectsStore.getState().setActiveWorkspace(project.id, defaultWs.id)
-              }
-              useSettingsStore.getState().closeSettings()
-            }}
-            className="flex-shrink-0 px-3 py-1.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
-          >
-            Open workspace
-          </button>
+        </div>
+
+        <div className="flex items-center gap-3 min-w-0">
+          <span className={AVATAR_ROUND}>
+            <ProjectAvatar
+              projectPath={project.path}
+              projectName={project.name}
+              projectColor={project.color}
+              projectId={project.id}
+              iconUrl={project.iconUrl}
+              size={36}
+            />
+          </span>
+          <div className="min-w-0">
+            <h2 className="type-title text-[var(--color-text-primary)] truncate">{project.name}</h2>
+            <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 truncate" title={project.path}>{project.path}</p>
+          </div>
         </div>
 
         <div
@@ -1352,153 +1401,213 @@ function ProjectDetail({
           aria-label="Workspace settings"
           className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] w-full"
         >
-          {visibleTabs.map((tab) => {
-            const active = settingsTab === tab.id
+          {WORKSPACE_SETTINGS_TABS.map((id) => {
+            const active = settingsTab === id
             return (
               <button
-                key={tab.id}
+                key={id}
                 role="tab"
                 type="button"
                 aria-selected={active}
-                onClick={() => selectSettingsTab(tab.id)}
-                className={`px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px ${
+                onClick={() => selectSettingsTab(id)}
+                className={`px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)] ${
                   active
                     ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                    : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+                    : 'border-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
                 }`}
               >
-                {tab.label}
+                {tabLabel[id]}
               </button>
             )
           })}
         </div>
       </div>
 
-      {/* ── Tab panels ──
-          Context + Heartbeats use height-filling left/right splits.
-          Other tabs scroll normally; narrow tabs keep max-w-3xl. */}
       <div
         className={
-          settingsTab === 'context' || settingsTab === 'schedule'
-            ? 'flex-1 min-h-0 overflow-hidden flex flex-col w-full pt-3 pr-3 pb-3'
-            : `flex-1 overflow-y-auto min-h-0 pt-4 space-y-6 pb-8 pr-3 [scrollbar-gutter:stable] ${
-                fullWidthTabContent ? 'w-full max-w-none' : 'w-full max-w-3xl'
-              }`
+          fillsHeight
+            ? 'flex-1 min-h-0 overflow-hidden flex flex-col w-full pt-3 pb-3'
+            : 'flex-1 overflow-y-auto min-h-0 pt-5 pb-8 w-full [scrollbar-gutter:stable]'
         }
       >
-        {settingsTab === 'agent' && (
-          <PermissionAsksProvider project={project}>
-            <SettingsGroup title="Identity">
-              {/* Picture, color, name and handle: the shared identity
-                  controls (`components/AgentIdentity`), the same ones the
-                  room's Agent drawer tab shows. */}
-              <AgentPictureControls scope={primaryScope()} project={project} />
-              <AgentColorPicker project={project} />
-
-              {/* Agent display name — restored on the Agent tab Identity group
-                  (below icon + color). Was only reachable via manager/custom
-                  persona helpers after the settings-tab redesign; users lost
-                  the obvious place to rename the agent. Saves via
-                  setAgentDisplayName → AGENT.md display_name frontmatter. */}
-              <div className="py-2 border-t border-[var(--color-border)]">
-                <AgentDisplayNameField
-                  scope={primaryScope()}
-                  projectPath={project.path}
-                  helpText="The name K2 shows for this agent. Doesn't change the handle or address."
-                />
-                <AgentHandleField scope={primaryScope()} projectPath={project.path} projectHandle={project.handle} />
-              </div>
-
-              {/* Focus Group */}
-              {focusGroupsEnabled && (
-                <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)]">
-                  <span className="type-row text-[var(--color-text-secondary)]">Focus group</span>
-                  <SettingDropdown
-                    value={project.focusGroupId ?? ''}
-                    options={[
-                      { value: '', label: 'No group' },
-                      ...focusGroups.map((g) => ({ value: g.id, label: g.name })),
-                    ]}
-                    onChange={async (v) => {
-                      await assignProjectToGroup(project.id, v || null)
-                      await fetchProjects()
-                    }}
+        {!fillsHeight && (
+          <div className="w-full max-w-[52rem] space-y-6">
+            {settingsTab === 'agent' && (
+              <>
+                <SettingsGroup title="Identity" card>
+                  {/* The shared identity controls (`components/AgentIdentity`),
+                      the same ones the room's Agent drawer tab shows. */}
+                  <AgentPictureControls scope={primaryScope()} project={project} card />
+                  <AgentDisplayNameField
+                    scope={primaryScope()}
+                    projectPath={project.path}
+                    helpText="The name K2 shows for this agent. Doesn't change the handle or address."
+                    card
                   />
+                  <AgentHandleField scope={primaryScope()} projectPath={project.path} projectHandle={project.handle} card />
+                  <AgentColorPicker project={project} card />
+                </SettingsGroup>
+
+                <SettingsGroup title="Model" card>
+                  <DefaultAgentSelector projectId={project.id} currentDefaultAgent={project.defaultAgent} />
+                  <DefaultModelControls project={project} />
+                </SettingsGroup>
+
+                <SettingsGroup title="LLM tokens" card>
+                  <WorkspaceLlmTokens scope={primaryScope()} projectId={project.id} />
+                </SettingsGroup>
+
+                <SettingsGroup title="Notifications" card>
+                  <WorkspaceCompletionSoundToggle project={project} />
+                  <WorkspacePhonePushToggle project={project} />
+                </SettingsGroup>
+
+                <WorkspaceTabsSettings project={project} scope={primaryScope()} />
+
+                <SettingsGroup title="Workspace" card>
+                  {focusGroupsEnabled && (
+                    <SettingRow label="Focus group" field>
+                      <SettingDropdown
+                        fullWidth
+                        value={project.focusGroupId ?? ''}
+                        options={[
+                          { value: '', label: 'No group' },
+                          ...focusGroups.map((g) => ({ value: g.id, label: g.name })),
+                        ]}
+                        onChange={async (v) => {
+                          await assignProjectToGroup(project.id, v || null)
+                          await fetchProjects()
+                        }}
+                      />
+                    </SettingRow>
+                  )}
+                  <FolderTrustRow scope={primaryScope()} projectPath={project.path} />
+                </SettingsGroup>
+
+                <SettingsGroup title="Remove" card>
+                  <SettingRow
+                    label="Remove workspace"
+                    hint="Asks what to do with its files and Apps first."
+                  >
+                    {/* 0.46.7: the same dialog as the sidebar's Remove (mode,
+                        then a workspace's Apps and what they'd lose), never
+                        a silent failure. */}
+                    <Button
+                      variant="quiet"
+                      onClick={() =>
+                        useRemoveWorkspaceDialogStore.getState().open({
+                          projectId: project.id,
+                          projectName: project.name,
+                          projectPath: project.path,
+                        })
+                      }
+                    >
+                      Remove workspace
+                    </Button>
+                  </SettingRow>
+                </SettingsGroup>
+              </>
+            )}
+
+            {settingsTab === 'permissions' && (
+              <PermissionAsksProvider project={project}>
+                <SettingsGroup title="Agents and secrets" card>
+                  <AgentsManageAgentsToggle project={project} />
+                  <AgentsManageVaultToggle project={project} />
+                  <AgentHandoffAcceptFrom project={project} />
+                  <AgentPermissionCardsRow project={project} />
+                  <AgentsRefreshChatToggle project={project} />
+                </SettingsGroup>
+                <SettingsGroup title="Compute" card>
+                  <AgentsUseComputeToggle project={project} />
+                  <AgentsOperateComputeToggle project={project} />
+                  <AgentsManageComputeToggle project={project} />
+                </SettingsGroup>
+                <SettingsGroup title="Database" card>
+                  <DbAgentCreateToggle project={project} />
+                  <AgentsManagePostgresToggle project={project} />
+                </SettingsGroup>
+                <SettingsGroup title="Projects and Gardens" card>
+                  <AgentsManageProjectsToggle project={project} />
+                  <AgentsManageGardensToggle project={project} />
+                </SettingsGroup>
+                <SettingsGroup title="Email sending" card>
+                  <MailAgentSendControl project={project} />
+                  {/* Agent email notices (N10): hides itself for a Member and on a
+                      server without them. */}
+                  <AgentEmailNoticesRow scope={primaryScope()} projectId={project.id} />
+                </SettingsGroup>
+                <SettingsGroup title="Hosted mail" card>
+                  <MailManageToggle project={project} />
+                </SettingsGroup>
+                <SettingsGroup title="Apps" card>
+                  <div className="px-4 pt-3 empty:hidden"><AskedChip row="projects.agents-can-manage-skin" /></div>
+                  <AgentAppsAccess project={project} />
+                </SettingsGroup>
+                <SettingsGroup title="Agents on other servers" card>
+                  <RemoteInstructToggle project={project} fetchProjects={fetchProjects} />
+                </SettingsGroup>
+                <SettingsGroup title="DNS" card>
+                  <DnsManageToggle project={project} fetchProjects={fetchProjects} />
+                </SettingsGroup>
+              </PermissionAsksProvider>
+            )}
+
+            {settingsTab === 'connections' && (
+              <PermissionAsksProvider project={project}>
+                <SettingsGroup title="Connection rules" card settingId="projects.relations">
+                  <AgentsCreateConnectionsToggle project={project} fetchProjects={fetchProjects} />
+                </SettingsGroup>
+                <ConnectedWorkspacesPanel projectId={project.id} />
+              </PermissionAsksProvider>
+            )}
+
+            {settingsTab === 'skills' && (
+              <ProjectSkillsPanel projectPath={project.path} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
+            )}
+
+            {settingsTab === 'advanced' && (
+              <>
+                <SettingsGroup title="Worktrees" card settingId="projects.worktrees">
+                  {project.workspaces.map((ws) => (
+                    <div key={ws.id} className="flex items-center gap-3 px-4 py-2.5">
+                      <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-secondary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      <span className="type-row text-[var(--color-text-primary)] flex-1 truncate">{ws.name}</span>
+                      {ws.branch && (
+                        <span className="type-hint text-[var(--color-text-secondary)] truncate max-w-[12rem]">{ws.branch}</span>
+                      )}
+                      <span className="type-hint text-[var(--color-text-secondary)]">{ws.type}</span>
+                    </div>
+                  ))}
+                  {project.workspaces.length === 0 && (
+                    <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">No registered worktrees for this workspace.</p>
+                  )}
+                </SettingsGroup>
+                <WorktreeFoldersOnDisk project={project} fetchProjects={fetchProjects} />
+
+                <div data-settings-id="projects.cursor-migrate">
+                  <SettingsGroup title="Chat migrations" card>
+                    <CursorMigrationPanel projectPath={project.path} />
+                  </SettingsGroup>
                 </div>
-              )}
 
-              <DefaultAgentSelector projectId={project.id} currentDefaultAgent={project.defaultAgent} />
-              <DefaultModelControls project={project} />
-              <WorkspaceCompletionSoundToggle project={project} />
-              <FolderTrustRow scope={primaryScope()} projectPath={project.path} />
-              <WorkspacePhonePushToggle project={project} />
-            </SettingsGroup>
-
-            <WorkspaceTabsSettings project={project} scope={primaryScope()} />
-
-            <SettingsGroup title="LLM tokens">
-              <WorkspaceLlmTokens scope={primaryScope()} projectId={project.id} />
-            </SettingsGroup>
-
-            <SettingsGroup title="Agents on other servers">
-              <RemoteInstructToggle project={project} fetchProjects={fetchProjects} />
-            </SettingsGroup>
-            <SettingsGroup title="DNS">
-              <DnsManageToggle project={project} fetchProjects={fetchProjects} />
-            </SettingsGroup>
-            <SettingsGroup title="Email sending">
-              <MailAgentSendControl project={project} />
-              {/* Agent email notices (N10): hides itself for a Member and on a
-                  server without them. */}
-              <AgentEmailNoticesRow scope={primaryScope()} projectId={project.id} />
-            </SettingsGroup>
-            <SettingsGroup title="Hosted mail">
-              <MailManageToggle project={project} />
-            </SettingsGroup>
-            <SettingsGroup title="Database">
-              <DbAgentCreateToggle project={project} />
-            </SettingsGroup>
-            <SettingsGroup title="Apps">
-              <AskedChip row="projects.agents-can-manage-skin" />
-              <AgentAppsAccess project={project} />
-            </SettingsGroup>
-            <SettingsGroup title="Agents">
-              <AgentsManageAgentsToggle project={project} />
-              <AgentsManageVaultToggle project={project} />
-              <AgentHandoffAcceptFrom project={project} />
-              <AgentsUseComputeToggle project={project} />
-              <AgentsOperateComputeToggle project={project} />
-              <AgentsManageComputeToggle project={project} />
-              <AgentsManagePostgresToggle project={project} />
-              <AgentsManageProjectsToggle project={project} />
-              <AgentsManageGardensToggle project={project} />
-              <AgentPermissionCardsRow project={project} />
-              <AgentsRefreshChatToggle project={project} />
-            </SettingsGroup>
-
-            <div className="pt-2 border-t border-[var(--color-border)]">
-              <button
-                // 0.46.7: the same dialog as the sidebar's Remove (mode,
-                // then a workspace's Apps and what they'd lose), never a
-                // silent failure.
-                onClick={() =>
-                  useRemoveWorkspaceDialogStore.getState().open({
-                    projectId: project.id,
-                    projectName: project.name,
-                    projectPath: project.path,
-                  })
-                }
-                className="px-3 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] no-drag cursor-pointer"
-              >
-                Remove workspace
-              </button>
-            </div>
-          </PermissionAsksProvider>
+                <SettingsGroup title="API" card>
+                  <PrimaryRoom>
+                    <HideApiSessionsToggle project={project} />
+                  </PrimaryRoom>
+                  <WorkspaceHostSessionCapPanel projectPath={project.path} />
+                </SettingsGroup>
+                <WorkspaceApiKeysPanel workspaceSlug={workspaceGrantSlug(project)} />
+              </>
+            )}
+          </div>
         )}
 
         {settingsTab === 'context' && (
           /* Full tab body: left stack + Canonical Agent | right FileViewer */
-          <div className="h-full min-h-0 w-full">
+          <div className="h-full min-h-0 w-full" data-settings-id="projects.context-stack">
             <ContextStackEditor
               projectPath={project.path}
               onEdit={openContextEdit}
@@ -1513,25 +1622,8 @@ function ProjectDetail({
           </div>
         )}
 
-        {settingsTab === 'connections' && (
-          <PermissionAsksProvider project={project}>
-            <SettingsGroup title="Connections">
-              <AgentsCreateConnectionsToggle project={project} fetchProjects={fetchProjects} />
-            </SettingsGroup>
-            <SettingsGroup title="Connected Workspaces">
-              <ConnectedWorkspacesPanel projectId={project.id} />
-            </SettingsGroup>
-          </PermissionAsksProvider>
-        )}
-
-        {settingsTab === 'skills' && (
-          <SettingsGroup title="Skills">
-            <ProjectSkillsPanel projectPath={project.path} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
-          </SettingsGroup>
-        )}
-
         {settingsTab === 'schedule' && (
-          <div className="flex flex-col h-full min-h-0">
+          <div className="flex flex-col h-full min-h-0" data-settings-id="projects.heartbeat">
             {/* Left: heartbeats roster · Right: run history — independent scroll */}
             <div className="flex-1 min-h-0 flex flex-row border border-[var(--color-border)]">
               <div className="flex-1 min-w-0 min-h-0 flex flex-col border-r border-[var(--color-border)]">
@@ -1547,7 +1639,7 @@ function ProjectDetail({
                     />
                   </PrimaryRoom>
                 </div>
-                <div className="flex-shrink-0 border-t border-[var(--color-border)] px-3 py-2">
+                <div className="flex-shrink-0 border-t border-[var(--color-border)]">
                   <ShowHeartbeatSessionsToggle projectPath={project.path} />
                 </div>
               </div>
@@ -1561,56 +1653,8 @@ function ProjectDetail({
             </div>
           </div>
         )}
-
-        {settingsTab === 'worktrees' && (
-          <SettingsGroup title="Worktrees">
-            <div className={project.workspaces.length > 0 ? '' : 'hidden'}>
-              <div className="border border-[var(--color-border)]">
-                {project.workspaces.map((ws, i) => (
-                  <div
-                    key={ws.id}
-                    className={`flex items-center gap-2 px-3 py-1.5 ${
-                      i < project.workspaces.length - 1 ? 'border-b border-[var(--color-border)]' : ''
-                    }`}
-                  >
-                    <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                    <span className="type-row text-[var(--color-text-primary)] flex-1 truncate">{ws.name}</span>
-                    {ws.branch && (
-                      <span className="type-hint text-[var(--color-text-muted)] truncate max-w-[120px]">{ws.branch}</span>
-                    )}
-                    <span className="type-hint text-[var(--color-text-muted)]">{ws.type}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            {project.workspaces.length === 0 && (
-              <p className="type-hint text-[var(--color-text-muted)] py-1">No registered worktrees for this workspace.</p>
-            )}
-            <WorktreeFoldersOnDisk project={project} fetchProjects={fetchProjects} />
-          </SettingsGroup>
-        )}
-
-        {settingsTab === 'import' && (
-          <SettingsGroup title="Chat Migrations">
-            <CursorMigrationPanel projectPath={project.path} />
-          </SettingsGroup>
-        )}
-        {settingsTab === 'api' && (
-          <div className="space-y-6">
-            <SettingsGroup title="Sessions">
-              <PrimaryRoom>
-                <HideApiSessionsToggle project={project} />
-              </PrimaryRoom>
-            </SettingsGroup>
-            <WorkspaceHostSessionCapPanel projectPath={project.path} />
-            <WorkspaceApiKeysPanel workspaceSlug={workspaceGrantSlug(project)} />
-          </div>
-        )}
       </div>
     </div>
-    </>
   )
 }
 
@@ -1669,57 +1713,42 @@ function WorkspaceHostSessionCapPanel({ projectPath }: { projectPath: string }):
   }
 
   return (
-    <div className="space-y-3 max-w-3xl" data-settings-id="projects.host-session-cell-cap">
-      <div>
-        <h3 className="type-heading text-[var(--color-text-primary)]">
-          Concurrent API sessions
-        </h3>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1">
-          How many API sessions can run at once in this workspace, from 1 to 512. Default{' '}
-          <strong className="font-medium text-[var(--color-text-secondary)]">15</strong>, unless this server sets a different default.
-        </p>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="number"
-          min={1}
-          max={512}
-          placeholder="Default (15)"
-          value={draft}
-          disabled={busy || raw === undefined}
-          onChange={(e) => setDraft(e.target.value)}
-          className="w-28 px-2 py-1 type-control border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)]"
-        />
-        <button
-          type="button"
-          disabled={busy || raw === undefined || !draft.trim()}
-          onClick={() => void save(draft.trim())}
-          className="px-2 py-1 type-control border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
-        >
-          Save
-        </button>
-        <button
-          type="button"
-          disabled={busy || raw === undefined || raw === null}
-          onClick={() => void save('default')}
-          className="px-2 py-1 type-control border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
-        >
-          Use default
-        </button>
-      </div>
-      <p className="type-hint text-[var(--color-text-muted)]">
-        Current:{' '}
-        {raw === undefined
-          ? '…'
-          : raw === null
-            ? 'server default'
-            : `${raw} at once`}
-        {' · '}
-        CLI: <code className="type-hint">k2 workspace api-host-session-cap get|set</code>
-      </p>
-      {error && <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>}
-      {hint && !error && <p className="type-hint text-[var(--color-status-ok-soft)]">{hint}</p>}
-    </div>
+    <SettingRow
+      settingId="projects.host-session-cell-cap"
+      label="Concurrent API sessions"
+      hint={
+        <>
+          How many API sessions can run at once in this workspace, from 1 to 512. Default 15, unless this
+          server sets its own. Now:{' '}
+          {raw === undefined ? '…' : raw === null ? 'server default' : `${raw} at once`}.
+        </>
+      }
+      below={
+        error ? (
+          <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>
+        ) : hint ? (
+          <p className="type-hint text-[var(--color-status-ok-soft)]">{hint}</p>
+        ) : undefined
+      }
+    >
+      <Input
+        type="number"
+        min={1}
+        max={512}
+        placeholder="Default (15)"
+        value={draft}
+        disabled={busy || raw === undefined}
+        onChange={(e) => setDraft(e.target.value)}
+        aria-label="Concurrent API sessions"
+        className="w-28 type-control"
+      />
+      <Button variant="quiet" disabled={busy || raw === undefined || !draft.trim()} onClick={() => void save(draft.trim())}>
+        Save
+      </Button>
+      <Button variant="quiet" disabled={busy || raw === undefined || raw === null} onClick={() => void save('default')}>
+        Use default
+      </Button>
+    </SettingRow>
   )
 }
 
@@ -1773,27 +1802,25 @@ function ShowHeartbeatSessionsToggle({ projectPath }: { projectPath: string }): 
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      control={
+        <Toggle
           checked={enabled}
           onChange={toggle}
           disabled={busy}
           title={enabled ? 'Heartbeats open background tabs' : 'Heartbeats run in the background'}
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             Show heartbeat sessions in tabs
           </div>
-          <div className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className="type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
             {enabled
               ? 'Each heartbeat opens a background tab in this window until you close it, so you can follow the agent\'s work.'
               : 'Heartbeats run in the background (recommended). See them any time in the sidebar Heartbeats panel.'}
           </div>
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -1803,12 +1830,8 @@ function ShowHeartbeatSessionsToggle({ projectPath }: { projectPath: string }): 
 // description) and in the room's Agent drawer tab (`compact`: the label
 // and the switch only, so they fit a narrow drawer). One component each,
 // one writer each; the drawer never forks its own form.
-function permissionRowClass(compact: boolean): string {
-  return compact ? 'px-3 py-1.5' : 'border border-[var(--color-border)] p-3'
-}
-
 function permissionDescClass(compact: boolean): string {
-  return compact ? 'hidden' : 'type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed'
+  return compact ? 'hidden' : SETTING_ROW_HINT
 }
 
 // ── DNS K1 Per-workspace DNS-manage opt-in ─────────────────────────
@@ -1856,35 +1879,35 @@ export function DnsManageToggle({
   }
 
   return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <Toggle
+          size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
           disabled={busy || readOnly}
           data-settings-id="projects.dns-manage-enabled"
           title={enabled ? 'Agents may manage DNS for this workspace' : 'Agents cannot manage DNS for this workspace'}
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             Allow agents to manage DNS for this workspace
             <AskedChip row="projects.dns-manage-enabled" />
           </div>
           <div className={permissionDescClass(compact)}>
             {enabled
-              ? 'Agents in this workspace may create, update, and delete DNS records.'
-              : 'Off (recommended): agents in this workspace can\'t change DNS. Turn on for this workspace only.'}
+              ? 'Agents in this workspace may create, update and delete DNS records.'
+              : 'Off (recommended): agents in this workspace can\'t change DNS.'}
           </div>
           {!enabled && globalAllow && !readOnly && (
-            <div className="type-hint text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
+            <div className="type-hint text-[var(--color-status-warn-text)] mt-1 leading-relaxed">
               Currently allowed anyway: the global &ldquo;Allow agents to manage DNS
               records&rdquo; (Settings → Tunnel) is on for every workspace.
             </div>
           )}
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -1938,9 +1961,11 @@ export function AgentsManageAgentsToggle({
   }
 
   return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <Toggle
+          size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
           disabled={busy || readOnly}
@@ -1950,20 +1975,17 @@ export function AgentsManageAgentsToggle({
               ? 'This workspace\'s main agent may open and stop sidecars'
               : 'This workspace\'s agent cannot open or stop sidecars'
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             Allow hiring and managing agents
             <AskedChip row="projects.agents-can-manage-agents" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Lets this workspace&rsquo;s main agent open and stop sidecars (k2 sidecar). Later it also
-            covers hiring and retiring agents. Sidecars themselves never can. You (the owner) always can.
+            Lets this workspace&rsquo;s main agent open and stop sidecars. Sidecars themselves can&rsquo;t.
           </div>
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -2016,9 +2038,11 @@ export function AgentsManageVaultToggle({
   }
 
   return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <Toggle
+          size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
           disabled={busy || readOnly}
@@ -2028,21 +2052,17 @@ export function AgentsManageVaultToggle({
               ? 'This workspace\'s main agent may manage server-wide secrets'
               : 'This workspace\'s agent cannot manage server-wide secrets'
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             Allow managing server-wide secrets
             <AskedChip row="projects.agents-can-manage-vault" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Lets this workspace&rsquo;s main agent share server secrets with other workspaces and look
-            after them (k2 vault). It can&rsquo;t share them with itself or loosen a secret it uses.
-            Seeing a secret&rsquo;s value always needs you. You (the owner) always can.
+            Lets its main agent share server secrets with other workspaces, never with itself. Seeing a value still needs you.
           </div>
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -2108,9 +2128,11 @@ export function AgentsUseComputeToggle({
   }
 
   return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <Toggle
+          size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
           aria-label="Allow compute nodes"
@@ -2121,18 +2143,15 @@ export function AgentsUseComputeToggle({
               ? 'This workspace\'s agents may run jobs on your compute machines'
               : 'This workspace\'s agents cannot use compute machines'
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             Allow compute nodes
             <AskedChip row="projects.agents-can-use-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Allow this agent to use compute nodes: run builds and tests on the machines you&rsquo;ve
-            switched on in Settings &rarr; Compute (k2 compute run), and on ones you add later. Defaults
-            per machine: 2 h per job, 1 at a time, 10 queued; change them with k2 compute grant. Off
-            removes its access to every machine; running jobs finish.
+            Allow this agent to use compute nodes: run builds and tests on the machines you&rsquo;ve switched on, and on ones you add later.
           </div>
           {result ? (
             <div className="type-hint text-[var(--color-text-secondary)] mt-1" data-testid="agents-compute-result">
@@ -2144,9 +2163,7 @@ export function AgentsUseComputeToggle({
               {error}
             </div>
           ) : null}
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -2224,9 +2241,11 @@ export function AgentsOperateComputeToggle({
   }
 
   return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <Toggle
+          size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
           aria-label="Allow this agent to operate compute nodes"
@@ -2239,29 +2258,23 @@ export function AgentsOperateComputeToggle({
                 ? 'This workspace\'s agent may operate your compute machines; root actions still wait for you'
                 : 'This workspace\'s agent cannot operate compute machines'
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             Allow this agent to operate compute nodes{' '}
-            <span className="type-hint text-[var(--color-text-muted)]">Beta</span>
+            <span className="type-hint text-[var(--color-text-secondary)]">Beta</span>
             <AskedChip row="projects.agents-can-operate-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Lets this agent look after your compute machines without asking each time: pause, drain
-            and resume them, tighten their limits, update them to a newer signed build or roll one
-            back, and restart their services. It can also propose anything that needs root (power,
-            packages, scripts, loosening limits); each of those still waits for your approval. Off:
-            it can&rsquo;t operate your compute machines or propose changes to them.
+            Pause, drain, resume, update and restart your compute machines without asking. Root actions wait for your approval.
           </div>
           {error ? (
             <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-operate-error">
               {error}
             </div>
           ) : null}
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -2339,9 +2352,11 @@ export function AgentsManageComputeToggle({
   }
 
   return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <Toggle
+          size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
           aria-label="Allow managing compute nodes"
@@ -2356,29 +2371,23 @@ export function AgentsManageComputeToggle({
                   ? 'This workspace\'s agent manages your compute machines (logged)'
                   : 'This workspace\'s agent cannot manage your compute machines'
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             Allow managing compute nodes{' '}
-            <span className="type-hint text-[var(--color-text-muted)]">Beta</span>
+            <span className="type-hint text-[var(--color-text-secondary)]">Beta</span>
             <AskedChip row="projects.agents-can-manage-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Lets this agent add and confirm compute machines, rename, pause, drain, resume, retire
-            and route them, and grant or revoke them for any workspace, without asking you (k2
-            compute node, k2 compute grant). Every act is logged in Access Audit, and adding or
-            confirming a machine sends you an inbox note. Turning compute on or off and removing a
-            machine stay yours. Only you (the owner) can switch this.
+            Add, rename, pause, retire and route compute machines, and grant them to any workspace, without asking. Turning compute on or off and removing a machine stay yours.
           </div>
           {error ? (
             <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-manage-error">
               {error}
             </div>
           ) : null}
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -2458,9 +2467,11 @@ export function AgentsManagePostgresToggle({
   }
 
   return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <Toggle
+          size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
           aria-label="Allow this agent to manage Postgres versions"
@@ -2475,25 +2486,21 @@ export function AgentsManagePostgresToggle({
                   ? 'This workspace\'s agent manages its databases\' Postgres versions (logged)'
                   : 'This workspace\'s agent cannot change Postgres versions'
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             Allow this agent to manage Postgres versions
           </div>
           <div className={permissionDescClass(compact)}>
-            Move this agent&apos;s databases to a newer Postgres, create on a chosen version, and roll
-            back. Live moves (copy while it serves, then a short switch) follow once they are
-            proven; for now they are yours. Deleting the old copy stays with you.
+            Create databases on a chosen Postgres version, move them to a newer one, and roll back. Deleting the old copy stays with you.
           </div>
           {error ? (
             <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agents-db-upgrade-error">
               {error}
             </div>
           ) : null}
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -2551,9 +2558,11 @@ export function AgentsManageProjectsToggle({
   }
 
   return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <Toggle
+          size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
           aria-label="Manage K2 projects"
@@ -2564,22 +2573,17 @@ export function AgentsManageProjectsToggle({
               ? 'This workspace\'s agent may create and change K2 projects and their members'
               : 'This workspace\'s agent can read projects and post in its project chat, but not change them'
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             Manage K2 projects
             <AskedChip row="projects.agents-can-manage-projects" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Lets this workspace&rsquo;s agent create, rename and delete K2 projects and add or remove
-            their members (k2 project). On by default. Off: it can still read projects and post in
-            its project chat. Every project created or deleted and every member change is logged.
-            You (the owner) always can.
+            Lets this agent create, rename and delete K2 projects and change their members. Off: it can still read them and post in its project chat.
           </div>
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -2637,29 +2641,24 @@ export function AgentsRefreshChatToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      control={
+        <Toggle
           checked={enabled}
           onChange={toggle}
           aria-label="Can refresh its own pinned chat"
           disabled={busy}
           data-settings-id="projects.agents-can-refresh-chat"
           title={enabled ? 'This agent starts a new pinned chat itself' : 'This agent asks before it starts a new pinned chat'}
-          className="mt-0.5"
         />
-        <div className="min-w-0">
-          <div className="type-row text-[var(--color-text-secondary)]">Can refresh its own pinned chat</div>
-          <p className="type-hint text-[var(--color-text-muted)] mt-1">
-            Lets this agent start a new pinned chat with the same agent when its chat goes stale, with a note for itself
-            (<code>k2 agent refresh</code>). The new chat gets only a summary and that note, and what it&apos;s doing at that moment
-            stops. The old chat stays in Chat history, and the Thread, messages and heartbeats on the pinned chat carry on in the
-            new chat. Off, it asks you on a card when permission cards are on.
-          </p>
-          {error && <p className="type-hint text-red-400 mt-1">{error}</p>}
-        </div>
-      </div>
-    </div>
+      }
+    >
+      <div className={SETTING_ROW_LABEL}>Can refresh its own pinned chat</div>
+      <div className={SETTING_ROW_HINT}>
+            Lets this agent start a fresh pinned chat when its chat goes stale. What it&apos;s doing then stops; the old chat stays in Chat history.
+          </div>
+      {error && <p className="type-hint text-[var(--color-status-error-soft)] mt-1">{error}</p>}
+    </SettingSwitchRow>
   )
 }
 
@@ -2704,9 +2703,9 @@ export function AgentsManageGardensToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      control={
+        <Toggle
           checked={enabled}
           onChange={toggle}
           aria-label={label}
@@ -2721,35 +2720,23 @@ export function AgentsManageGardensToggle({
                 ? 'This workspace\'s agent approves data sources and edits Gardens itself (logged)'
                 : 'This workspace\'s agent proposes data sources and Garden changes; you approve'
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             {label}
             <AskedChip row="projects.agents-can-manage-gardens" />
           </div>
           {accessOn ? (
-            <div className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed" data-garden-access-copy="">
-              Lets this workspace&rsquo;s agent approve data sources (its own and others&rsquo;), pause and
-              pin them and turn on triggers without asking you (k2 sources). It binds only a secret it can
-              already use: its own workspace&rsquo;s, or a server-wide one if &ldquo;Allow managing
-              server-wide secrets&rdquo; is on too, and only to that source&rsquo;s site. Every act is logged
-              in Access Audit. Off: it proposes and you approve. Who may edit a Garden is that Garden&rsquo;s
-              list in Settings &rarr; Gardens.
+            <div className={SETTING_ROW_HINT} data-garden-access-copy="">
+              Approves and pauses data sources and turns on triggers without asking you. Every act is logged in Access Audit.
             </div>
           ) : (
-          <div className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            Lets this workspace&rsquo;s agent approve data sources (its own and others&rsquo;), pause and
-            pin them, turn on triggers and edit your Gardens and widgets without asking you (k2 sources,
-            k2 zen). It binds only a secret it can already use: its own workspace&rsquo;s, or a
-            server-wide one if &ldquo;Allow managing server-wide secrets&rdquo; is on too, and only to that
-            source&rsquo;s site. Every act is logged in Access Audit. Off: it proposes and you approve.
-            Locked Gardens stay yours.
-          </div>
+            <div className={SETTING_ROW_HINT}>
+              Approves and pauses data sources, turns on triggers and edits your Gardens without asking you. Every act is logged in Access Audit. Locked Gardens stay yours.
+            </div>
           )}
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -2800,9 +2787,11 @@ export function MailManageToggle({
   }
 
   return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <Toggle
+          size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
           disabled={busy || readOnly}
@@ -2812,21 +2801,17 @@ export function MailManageToggle({
               ? 'This agent may manage hosted mail on this server'
               : 'This agent cannot manage hosted mail'
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             Allow agents to manage hosted mail on this server
             <AskedChip row="projects.mail-manage-enabled" />
           </div>
           <div className={permissionDescClass(compact)}>
-            {enabled
-              ? 'This agent may run k2 hostmail enable/disable and domain list/add/check on this server. You (the owner) can always manage hosted mail. Uninstall, domain remove, OAuth, and access stay owner-managed.'
-              : 'Off (recommended): hosted-mail enable/disable and domain mutations stay owner-managed. Turn on to let this workspace\'s agent drive k2 hostmail enable/disable and domain list/add/check. Uninstall, domain remove, OAuth, and access stay owner. You (the owner) can always manage hosted mail.'}
+            Lets this agent run hosted mail on this server: turn it on or off and set up domains and delivery. Uninstalling, removing a domain and OAuth stay with you.
           </div>
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -2875,9 +2860,11 @@ export function DbAgentCreateToggle({
   }
 
   return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <Toggle
+          size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
           disabled={busy || readOnly}
@@ -2887,19 +2874,17 @@ export function DbAgentCreateToggle({
               ? 'This agent may run k2 db create'
               : 'This agent cannot run k2 db create'
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             Allow this agent to create databases
             <AskedChip row="projects.db-agent-create" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Lets this agent create new databases (<span className="font-mono">k2 db create</span>). It can always use databases this workspace owns or has been granted.
+            Lets this agent create new databases. It can always use ones this workspace owns or has been granted.
           </div>
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -2945,9 +2930,11 @@ export function AgentsCreateConnectionsToggle({
   }
 
   return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <Toggle
+          size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
           disabled={busy || readOnly}
@@ -2957,28 +2944,26 @@ export function AgentsCreateConnectionsToggle({
               ? 'Agents may add/remove connections for this workspace'
               : 'Agents cannot add/remove connections for this workspace'
           }
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
             Allow agents to create connections for this workspace
             <AskedChip row="projects.agents-can-create-connections" />
           </div>
           <div className={permissionDescClass(compact)}>
             {enabled
-              ? "Agents in this workspace may add and remove connections to other workspaces. You (the owner) can always manage connections."
-              : "Off (recommended): agents in this workspace cannot add or remove connections. Turn on to grant connection management for this workspace only. You (the owner) can always manage connections."}
+              ? 'Agents in this workspace may add and remove connections to other workspaces.'
+              : 'Off (recommended): agents in this workspace can\'t add or remove connections.'}
           </div>
           {!enabled && globalAllow && !readOnly && (
-            <div className="type-hint text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
+            <div className="type-hint text-[var(--color-status-warn-text)] mt-1 leading-relaxed">
               Currently allowed anyway: the global &ldquo;Allow agents to create
               connections&rdquo; (Settings → Tunnel) is on for every
               workspace.
             </div>
           )}
-        </div>
-      </div>
-    </div>
+    </SettingSwitchRow>
   )
 }
 
@@ -3116,53 +3101,47 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
   }
 
   return (
-    <div className="py-2 border-t border-[var(--color-border)]">
-      <div className="flex items-center justify-between">
-        <div>
-          <span className="type-row text-[var(--color-text-secondary)]">Default agent</span>
-          <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
-            {metaChordLabel('Shift+Meta+T') ? `The agent ${metaChordLabel('Shift+Meta+T')} launches` : 'The default agent'} for this workspace. Edit with AI uses Default AI Agent in Providers / Models.
-          </p>
-        </div>
-        <SettingDropdown
-          value={value}
-          options={[
-            { value: '', label: `Inherit global (${globalPreset?.label ?? globalDefaultAgent})` },
-            ...enabledPresets.map((p) => ({ value: p.id, label: p.label })),
-          ]}
-          onChange={handleChange}
-          placeholder={selected || undefined}
-        />
-      </div>
-      {offerMove && (
-        <div className="flex items-center justify-between gap-2 mt-2" data-testid="default-agent-move-pinned">
-          <span className="type-hint text-[var(--color-text-secondary)]">
-            Also move the pinned chat to {harnessLabel(offerMove)}? New chats use it already; the pinned chat (heartbeats, Threads, messages) keeps its current agent until moved.
-          </span>
-          <div className="flex gap-1 flex-shrink-0">
-            <button
-              type="button"
-              disabled={moving}
-              onClick={() => { void handleMove(offerMove) }}
-              className="px-2 py-0.5 type-control rounded-[var(--radius-field)] bg-[var(--color-accent)] text-[var(--color-on-accent)] disabled:opacity-50 cursor-pointer no-drag"
-            >
-              {moving ? 'Moving…' : 'Move'}
-            </button>
-            <button
-              type="button"
-              disabled={moving}
-              onClick={() => setOfferMove(null)}
-              className="px-2 py-0.5 type-control rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] cursor-pointer no-drag"
-            >
-              Not now
-            </button>
+    <SettingRow
+      label="Default agent"
+      hint={`${metaChordLabel('Shift+Meta+T') ? `The agent ${metaChordLabel('Shift+Meta+T')} launches` : 'The default agent'} for this workspace. Edit with AI uses Default AI Agent in Providers / Models.`}
+      field
+      below={
+        offerMove || moveNote ? (
+          <div className="space-y-2">
+            {offerMove && (
+              <div className="flex items-center justify-between gap-4" data-testid="default-agent-move-pinned">
+                <span className="type-hint text-[var(--color-text-secondary)] leading-relaxed">
+                  Also move the pinned chat to {harnessLabel(offerMove)}? New chats use it already; the pinned chat (heartbeats, Threads, messages) keeps its current agent until moved.
+                </span>
+                <div className="flex gap-2 flex-shrink-0">
+                  <Button variant="accent" disabled={moving} onClick={() => { void handleMove(offerMove) }}>
+                    {moving ? 'Moving…' : 'Move'}
+                  </Button>
+                  <Button variant="quiet" disabled={moving} onClick={() => setOfferMove(null)}>
+                    Not now
+                  </Button>
+                </div>
+              </div>
+            )}
+            {moveNote && (
+              <p className="type-hint text-[var(--color-text-secondary)]" data-testid="default-agent-move-note">{moveNote}</p>
+            )}
           </div>
-        </div>
-      )}
-      {moveNote && (
-        <p className="type-hint text-[var(--color-text-muted)] mt-1" data-testid="default-agent-move-note">{moveNote}</p>
-      )}
-    </div>
+        ) : undefined
+      }
+    >
+      <SettingDropdown
+        fullWidth
+        value={value}
+        ariaLabel="Default agent"
+        options={[
+          { value: '', label: `Inherit global (${globalPreset?.label ?? globalDefaultAgent})` },
+          ...enabledPresets.map((p) => ({ value: p.id, label: p.label })),
+        ]}
+        onChange={handleChange}
+        placeholder={selected || undefined}
+      />
+    </SettingRow>
   )
 }
 
@@ -3189,6 +3168,9 @@ function modelSuggestionsForAgent(command: string): string[] {
       return []
   }
 }
+
+/** Dropdown value that opens the custom ID field; never stored. */
+const CUSTOM_MODEL = '__custom__'
 
 function DefaultModelControls({
   project,
@@ -3237,19 +3219,21 @@ function DefaultModelControls({
     }
   }
 
-  const handleChip = (id: string): void => {
-    const next = model === id ? '' : id
-    setModel(next)
-    setCustom('')
-    if (!next) setForce(false)
-    void persist(next, next ? force : false)
-  }
+  const suggested = suggestions.includes(model)
+  const [customOpen, setCustomOpen] = useState(false)
+  const showCustomField = customOpen || (model.trim() !== '' && !suggested)
 
-  const handleClear = (): void => {
-    setModel('')
+  const choose = (value: string): void => {
+    if (value === CUSTOM_MODEL) {
+      setCustomOpen(true)
+      setCustom(suggested ? '' : model)
+      return
+    }
+    setCustomOpen(false)
     setCustom('')
-    setForce(false)
-    void persist('', false)
+    setModel(value)
+    if (!value) setForce(false)
+    void persist(value, value ? force : false)
   }
 
   const handleCustomSubmit = (): void => {
@@ -3257,6 +3241,7 @@ function DefaultModelControls({
     if (!next) return
     setModel(next)
     setCustom('')
+    setCustomOpen(false)
     void persist(next, force)
   }
 
@@ -3267,75 +3252,67 @@ function DefaultModelControls({
   }
 
   const empty = !model.trim()
+  const options = [
+    { value: '', label: "Agent's default" },
+    ...suggestions.map((id) => ({ value: id, label: id })),
+    ...(!empty && !suggested ? [{ value: model, label: model }] : []),
+    { value: CUSTOM_MODEL, label: 'Custom ID…' },
+  ]
 
   return (
-    <div className="py-2 border-t border-[var(--color-border)]" data-settings-id="projects.default-model">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <span className="type-row text-[var(--color-text-secondary)]">Default model</span>
-          <p className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-            The model new sessions in this workspace use. A running chat can&apos;t switch models. An API call that sets its own model overrides this.
-          </p>
-        </div>
-        {model ? (
-          <button
-            type="button"
-            onClick={handleClear}
-            className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer flex-shrink-0"
-          >
-            Clear
-          </button>
-        ) : null}
-      </div>
-      <div className="flex flex-wrap items-center gap-1 mt-2">
-        {suggestions.map((id) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => handleChip(id)}
-            className={`px-2 py-0.5 type-control no-drag cursor-pointer border ${
-              model === id
-                ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)] border-[var(--color-accent)]'
-                : 'text-[var(--color-text-secondary)] border-[var(--color-border)] hover:text-[var(--color-text-primary)]'
-            }`}
-          >
-            {id}
-          </button>
-        ))}
-        <input
-          type="text"
-          value={suggestions.includes(model) ? custom : (custom || model)}
-          onChange={(e) => {
-            setCustom(e.target.value)
-            if (!suggestions.includes(e.target.value)) setModel(e.target.value)
-          }}
-          onBlur={() => {
-            if (custom.trim() && custom.trim() !== (project.defaultModel ?? '')) {
-              handleCustomSubmit()
-            }
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') handleCustomSubmit()
-          }}
-          placeholder="Custom ID"
-          className="px-2 py-0.5 type-hint w-28 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] no-drag"
-        />
-      </div>
-      <label
-        className={`flex items-center gap-2 mt-2 type-hint no-drag ${
-          empty ? 'text-[var(--color-text-muted)] opacity-60' : 'text-[var(--color-text-secondary)] cursor-pointer'
-        }`}
-        data-settings-id="projects.force-model-on-resume"
+    <>
+      <SettingRow
+        label="Default model"
+        settingId="projects.default-model"
+        hint="The model new sessions in this workspace use. A running chat can't switch models. An API call that sets its own model overrides this."
+        field
+        below={
+          showCustomField ? (
+            <div className="flex items-center justify-end gap-2">
+              <span className="type-hint text-[var(--color-text-secondary)]">Custom model ID</span>
+              <Input
+                value={customOpen ? custom : custom || model}
+                onChange={(e) => {
+                  setCustom(e.target.value)
+                  if (!suggestions.includes(e.target.value)) setModel(e.target.value)
+                }}
+                onBlur={() => {
+                  if (custom.trim() && custom.trim() !== (project.defaultModel ?? '')) {
+                    handleCustomSubmit()
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleCustomSubmit()
+                }}
+                placeholder="Custom ID"
+                aria-label="Custom model ID"
+                className={`${SETTING_FIELD_WIDTH} type-control`}
+              />
+            </div>
+          ) : undefined
+        }
       >
-        <Checkbox
+        <SettingDropdown
+          fullWidth
+          value={customOpen ? CUSTOM_MODEL : model}
+          ariaLabel="Default model"
+          options={options}
+          onChange={choose}
+        />
+      </SettingRow>
+      <SettingRow
+        label="Force this model when resuming a session"
+        hint={empty ? 'Choose a default model first.' : 'Also uses the default model when a chat resumes.'}
+        settingId="projects.force-model-on-resume"
+      >
+        <Toggle
           checked={force && !empty}
           disabled={empty}
-          onChange={(e) => handleForce(e.target.checked)}
-          className="no-drag"
+          aria-label="Force this model when resuming a session"
+          onChange={handleForce}
         />
-        Force this model when resuming a session
-      </label>
-    </div>
+      </SettingRow>
+    </>
   )
 }
 
@@ -3745,7 +3722,7 @@ function K2SOAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { pr
   useEffect(() => {
     const ensure = async () => {
       try {
-        const agents = await invoke<(K2soAgentInfo & { agentType?: string })[]>('k2so_agents_list', { projectPath })
+        const agents = asArray<K2soAgentInfo & { agentType?: string }>(await invoke('k2so_agents_list', { projectPath }))
         // Stage A dual-read: `k2` and legacy `k2so` are the same builtin type.
         const existing = agents.find((a: any) => isBuiltinAgentType(a.agentType))
         if (existing) {
@@ -3947,31 +3924,27 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
   }, [projects])
 
   return (
-    <div className="space-y-5">
-      {/* ── Add connection (0.46.1: one picker for both kinds) ────── */}
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <div>
-            <h3 className="type-heading text-[var(--color-text-primary)]">Connections</h3>
-            <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
-              Agents this agent can message: on this server and on paired servers.
-            </p>
-          </div>
-          <button
+    <>
+      <SettingsGroup
+        title="On this server"
+        card
+        hint="Agents this agent can message: on this server and on paired servers."
+        action={
+          <Button
             ref={addButtonRef}
-            type="button"
+            variant="accent"
+            title="Add connection"
+            aria-expanded={showAdd}
             onClick={() => {
               setShowAdd(!showAdd)
               setLocalError(null)
               setRemoteError(null)
             }}
-            title="Add connection"
-            aria-expanded={showAdd}
-            className="w-6 h-6 flex items-center justify-center type-control leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
           >
-            +
-          </button>
-        </div>
+            + Add connection
+          </Button>
+        }
+      >
         {showAdd && (
           <AddConnectionPicker
             projectId={projectId}
@@ -3983,117 +3956,81 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
             anchorRef={addButtonRef}
           />
         )}
-      </div>
-
-      {/* ── Local Connections ─────────────────────────────────────── */}
-      <div>
-        <div className="mb-2">
-          <h4 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">On this server</h4>
-        </div>
-
         {loading ? (
-          <div className="type-hint text-[var(--color-text-muted)]">Loading…</div>
+          <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">Loading…</p>
         ) : relations.length === 0 ? (
-          <div className="type-hint text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
-            No local connections yet.
-          </div>
+          <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">No connections on this server yet.</p>
         ) : (
-          <div className="border border-[var(--color-border)]">
-            {relations.map((rel) => {
-              const target = projectsById.get(rel.targetProjectId)
-              return (
-                <div
-                  key={rel.id}
-                  className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
-                >
-                  <span
-                    className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]"
-                    style={{ backgroundColor: target?.color || 'var(--color-neutral)' }}
-                  />
-                  <span className="type-row text-[var(--color-text-primary)] flex-1 truncate">
-                    {target?.name || 'Unknown workspace'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void handleRemoveLocal(rel.id)}
-                    className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer flex-shrink-0"
-                    title="Remove connection"
-                  >
-                    <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
-                      <line x1="1" y1="1" x2="7" y2="7" />
-                      <line x1="7" y1="1" x2="1" y2="7" />
-                    </svg>
-                  </button>
-                </div>
-              )
-            })}
-          </div>
+          relations.map((rel) => {
+            const target = projectsById.get(rel.targetProjectId)
+            return (
+              <div key={rel.id} className="flex items-center gap-3 px-4 py-2.5">
+                <span
+                  className="w-2.5 h-2.5 flex-shrink-0 rounded-[var(--radius-badge)]"
+                  style={{ backgroundColor: target?.color || 'var(--color-neutral)' }}
+                  aria-hidden="true"
+                />
+                <span className="type-row text-[var(--color-text-primary)] flex-1 truncate">
+                  {target?.name || 'Unknown workspace'}
+                </span>
+                <Button variant="quiet" title="Remove connection" onClick={() => void handleRemoveLocal(rel.id)}>
+                  Remove
+                </Button>
+              </div>
+            )
+          })
         )}
         {localError && (
-          <div className="mt-1 px-3 py-2 type-hint text-[var(--color-status-error-soft)] border border-[var(--color-border)]">
-            {localError}
+          <div className="px-4 py-3">
+            <Callout tone="error">{localError}</Callout>
           </div>
         )}
+      </SettingsGroup>
 
-        {!loading && incoming.length > 0 && (
-          <>
-            <h4 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider mt-3">
-              Connected to this workspace
-            </h4>
-            <div className="border border-[var(--color-border)]">
-              {incoming.map((rel) => {
-                const source = projectsById.get(rel.sourceProjectId)
-                return (
-                  <div
-                    key={rel.id}
-                    className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
-                  >
-                    <span
-                      className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]"
-                      style={{ backgroundColor: source?.color || 'var(--color-neutral)' }}
-                    />
-                    <span className="type-row text-[var(--color-text-primary)] flex-1 truncate">
-                      {source?.name || 'Unknown workspace'}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-          </>
-        )}
-      </div>
+      {!loading && incoming.length > 0 && (
+        <SettingsGroup title="Connected to this workspace" card>
+          {incoming.map((rel) => {
+            const source = projectsById.get(rel.sourceProjectId)
+            return (
+              <div key={rel.id} className="flex items-center gap-3 px-4 py-2.5">
+                <span
+                  className="w-2.5 h-2.5 flex-shrink-0 rounded-[var(--radius-badge)]"
+                  style={{ backgroundColor: source?.color || 'var(--color-neutral)' }}
+                  aria-hidden="true"
+                />
+                <span className="type-row text-[var(--color-text-primary)] flex-1 truncate">
+                  {source?.name || 'Unknown workspace'}
+                </span>
+              </div>
+            )
+          })}
+        </SettingsGroup>
+      )}
 
-      {/* ── Federated Connections ────────────────────────────────── */}
-      <div>
-        <div className="mb-2">
-          <h4 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">On paired servers</h4>
-        </div>
-
-        {loading ? null : remoteConns.length === 0 ? (
-          <div className="type-hint text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
-            No connections on paired servers yet.
-          </div>
+      <SettingsGroup title="On paired servers" card>
+        {loading ? (
+          <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">Loading…</p>
+        ) : remoteConns.length === 0 ? (
+          <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">No connections on paired servers yet.</p>
         ) : (
-          <div className="border border-[var(--color-border)]">
-            {remoteConns.map((rc) => (
-              <FederatedConnectionRow
-                key={rc.address}
-                entry={rc}
-                canReAdd={canReAddGoneConnection(viewerRole)}
-                busy={reAdding === rc.address}
-                onRemove={() => void handleRemoveRemote(rc.address)}
-                onReAdd={() => void handleReAddGone(rc.address)}
-              />
-            ))}
-          </div>
+          remoteConns.map((rc) => (
+            <FederatedConnectionRow
+              key={rc.address}
+              entry={rc}
+              canReAdd={canReAddGoneConnection(viewerRole)}
+              busy={reAdding === rc.address}
+              onRemove={() => void handleRemoveRemote(rc.address)}
+              onReAdd={() => void handleReAddGone(rc.address)}
+            />
+          ))
         )}
         {remoteError && (
-          <div className="mt-1 px-3 py-2 type-hint text-[var(--color-status-error-soft)] border border-[var(--color-border)]">
-            {remoteError}
+          <div className="px-4 py-3">
+            <Callout tone="error">{remoteError}</Callout>
           </div>
         )}
-      </div>
-    </div>
+      </SettingsGroup>
+    </>
   )
 }
 
@@ -4118,7 +4055,7 @@ function ProjectAgentsPanel({ projectPath, onOpenEditor }: { projectPath: string
   const fetchAgents = useCallback(async () => {
     try {
       const result = await invoke<K2soAgentInfo[]>('k2so_agents_list', { projectPath })
-      setAgents(result)
+      setAgents(asArray<K2soAgentInfo>(result))
     } catch {
       setAgents([])
     }
@@ -4228,6 +4165,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [agents, setAgents] = useState<K2soAgentInfo[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
   const [newName, setNewName] = useState('')
   const [newSeed, setNewSeed] = useState('')
@@ -4241,9 +4179,12 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
     // Custom).
     try {
       const result = await invoke<SkillSummary[]>('k2so_skills_list', { projectPath })
-      setSkills(result)
-    } catch {
+      setSkills(asArray<SkillSummary>(result))
+      setLoadError(false)
+    } catch (err) {
+      console.error('[skills] list failed:', err)
       setSkills([])
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -4252,7 +4193,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
   const fetchAgents = useCallback(async () => {
     try {
       const result = await invoke<K2soAgentInfo[]>('k2so_agents_list', { projectPath })
-      setAgents(result)
+      setAgents(asArray<K2soAgentInfo>(result))
     } catch {
       setAgents([])
     }
@@ -4315,68 +4256,49 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
   const skillRows = skills.filter((s) => !manager || s.name !== manager.name)
 
   const SkillListItem = ({ skill }: { skill: SkillSummary }): React.JSX.Element => (
-    <div className="px-3 py-2 border-b border-[var(--color-border)] last:border-b-0">
-      <div className="flex items-center justify-between">
-        <div className="flex-1 min-w-0 mr-3">
-          <div className="flex items-center">
-            <span className="type-name text-[var(--color-text-primary)] flex-shrink-0">{skill.name}</span>
-          </div>
-          {skill.title && skill.title !== skill.name && (
-            <p className="type-hint text-[var(--color-text-muted)] truncate mt-0.5">{skill.title}</p>
-          )}
-        </div>
-        <div className="flex items-center gap-1 flex-shrink-0">
-          <button
-            onClick={() => onOpenEditor(skill.name)}
-            className="px-2 py-0.5 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer"
-            title="Edit .k2/skills/{skill.name}/SKILL.md"
-          >
-            Edit
-          </button>
-          <button
-            onClick={() => handleDelete(skill.name)}
-            className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer"
-            title="Remove skill (recoverable via recycle bin)"
-          >
-            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <line x1="1" y1="1" x2="7" y2="7" />
-              <line x1="7" y1="1" x2="1" y2="7" />
-            </svg>
-          </button>
-        </div>
+    <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+      <div className="flex-1 min-w-0">
+        <div className="type-name text-[var(--color-text-primary)] truncate">{skill.name}</div>
+        {skill.title && skill.title !== skill.name && (
+          <p className="type-hint text-[var(--color-text-secondary)] truncate mt-0.5">{skill.title}</p>
+        )}
+      </div>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <Button variant="quiet" onClick={() => onOpenEditor(skill.name)} title={`Edit .k2/skills/${skill.name}/SKILL.md`}>
+          Edit
+        </Button>
+        <Button variant="quiet" onClick={() => handleDelete(skill.name)} title="Remove skill (recoverable via recycle bin)">
+          Remove
+        </Button>
       </div>
     </div>
   )
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <span className="flex items-center gap-1.5">
-          {skillRows.length > 0 && (
-            <span className="type-badge tabular-nums px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{skillRows.length}</span>
-          )}
-        </span>
-        <button
-          onClick={() => setShowCreate(!showCreate)}
-          className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
-        >
-          {showCreate ? 'Cancel' : '+ New Skill'}
-        </button>
-      </div>
-
+    <SettingsGroup
+      title="Skills"
+      card
+      settingId="projects.agents"
+      badge={skillRows.length > 0 ? <span className="type-badge tabular-nums text-[var(--color-text-secondary)]">{skillRows.length}</span> : undefined}
+      action={
+        <Button variant="quiet" onClick={() => setShowCreate(!showCreate)}>
+          {showCreate ? 'Cancel' : '+ New skill'}
+        </Button>
+      }
+    >
       {/* Create form — A19 "any skill can seed any other": the
           optional seed dropdown lets the user start a new skill from
           an existing one's SKILL.md body. Defaults to blank scaffold
           when no seed is picked. */}
       {showCreate && (
-        <div className="border border-[var(--color-border)] p-3 space-y-2 mb-2">
-          <input
+        <div className="px-4 py-3 space-y-2">
+          <Input
             ref={nameInputRef}
-            type="text"
             placeholder="Skill name (e.g. backend-eng)"
+            aria-label="Skill name"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            className="w-full bg-[var(--color-bg-elevated)] border border-[var(--color-border)] type-control text-[var(--color-text-primary)] px-2 py-1.5 outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-text-muted)]"
+            className="w-full type-control"
             onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
           />
           {skills.length > 0 && (
@@ -4391,37 +4313,34 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
               ]}
             />
           )}
-          <button
-            onClick={handleCreate}
-            disabled={creating || !newName.trim()}
-            className="px-3 py-1 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer disabled:opacity-50"
-          >
-            {creating ? 'Creating...' : 'Create Skill'}
-          </button>
+          <Button variant="accent" onClick={handleCreate} disabled={creating || !newName.trim()}>
+            {creating ? 'Creating...' : 'Create skill'}
+          </Button>
         </div>
       )}
 
       {/* Skill list. Counts dropped from per-row display — the
           inbox/active/done numbers came from the legacy multi-agent
           work surface and don't map onto the post-Phase-2.5b skills
-          primitive (a skill is a doc profile, not a work queue). The
-          Workspace Manager subsection (inside Agent Settings) still
-          shows the workspace inbox count, which is the relevant unit
-          of work. */}
+          primitive (a skill is a doc profile, not a work queue). */}
       {loading ? (
-        <p className="type-hint text-[var(--color-text-muted)]">Loading skills...</p>
+        <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]" data-testid="skills-loading">Loading skills…</p>
+      ) : loadError ? (
+        <div className="px-4 py-3 flex items-center justify-between gap-4" data-testid="skills-load-error">
+          <div className="min-w-0">
+            <div className="type-row text-[var(--color-text-primary)]">Couldn&rsquo;t load this workspace&rsquo;s skills</div>
+            <div className={SETTING_ROW_HINT}>K2 couldn&rsquo;t read the skills folder. Try again in a moment.</div>
+          </div>
+          <Button variant="quiet" onClick={() => { setLoading(true); void fetchSkills() }}>Try again</Button>
+        </div>
       ) : skillRows.length === 0 && !showCreate ? (
-        <p className="type-hint text-[var(--color-text-muted)]">
+        <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">
           No skills yet. Create one to give your agent a specialized capability profile.
         </p>
       ) : (
-        <div className="border border-[var(--color-border)]">
-          {skillRows.map((skill) => (
-            <SkillListItem key={skill.name} skill={skill} />
-          ))}
-        </div>
+        skillRows.map((skill) => <SkillListItem key={skill.name} skill={skill} />)
       )}
-    </div>
+    </SettingsGroup>
   )
 }
 
@@ -4500,97 +4419,67 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
     await fetchIdeSessions()
   }, [unmigratedSessions, projectPath, fetchIdeSessions])
 
-  if (loading) return null
-  if (sessions.length === 0) return null
+  if (loading) return <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">Looking for Cursor conversations…</p>
+  if (sessions.length === 0) return <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">No Cursor IDE conversations found for this workspace.</p>
 
   return (
-    <div className="space-y-2">
-      <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
-        Cursor IDE Conversations
-        <span className="type-badge tabular-nums px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{sessions.length}</span>
-      </h3>
+    <div className="px-4 py-3 space-y-3">
+      <div>
+        <div className={SETTING_ROW_LABEL}>
+          Cursor IDE conversations{' '}
+          <span className="type-badge tabular-nums text-[var(--color-text-secondary)]">{sessions.length}</span>
+        </div>
+        <div className={SETTING_ROW_HINT}>
+          Migrate conversations from the Cursor IDE to CLI format so they can be resumed in K2 terminals.
+        </div>
+      </div>
 
-      <p className="type-hint text-[var(--color-text-muted)]">
-        Migrate conversations from the Cursor IDE to CLI format so they can be resumed in K2 terminals.
-      </p>
-
-      {/* Session list */}
-      <div className="border border-[var(--color-border)] max-h-[250px] overflow-y-auto">
-        {sessions.map((session, i) => {
+      <div className="max-h-[250px] overflow-y-auto divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
+        {sessions.map((session) => {
           const isMigrated = session.alreadyMigrated || justMigratedIds.has(session.composerId)
           const isCurrentlyMigrating = migratingIds.has(session.composerId)
           const date = new Date(session.lastUpdatedAt || session.createdAt)
           const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 
           return (
-            <div
-              key={session.composerId}
-              className={`flex items-center gap-2 px-3 py-1.5 type-row ${
-                i < sessions.length - 1 ? 'border-b border-[var(--color-border)]' : ''
-              }`}
-            >
+            <div key={session.composerId} className="flex items-center gap-2 py-1.5 type-row">
               <AgentIcon agent="Cursor Agent" size={12} />
-              <span className={`flex-1 truncate ${isMigrated ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-primary)]'}`}>
+              <span className={`flex-1 truncate ${isMigrated ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-primary)]'}`}>
                 {session.name || 'Untitled'}
               </span>
-              <span className="type-hint text-[var(--color-text-muted)] flex-shrink-0">
-                {dateStr}
-              </span>
+              <span className="type-hint text-[var(--color-text-secondary)] flex-shrink-0">{dateStr}</span>
               {isCurrentlyMigrating ? (
-                <span className="type-hint text-[var(--color-accent)] flex-shrink-0 animate-pulse">
-                  migrating...
-                </span>
+                <span className="type-hint text-[var(--color-accent)] flex-shrink-0 animate-pulse">migrating...</span>
               ) : isMigrated ? (
-                <span className="type-hint text-[var(--color-status-ok-soft)] flex-shrink-0">
-                  migrated
-                </span>
+                <span className="type-hint text-[var(--color-status-ok-soft)] flex-shrink-0">migrated</span>
               ) : !session.migratable ? (
-                <span className="type-hint text-[var(--color-text-muted)] flex-shrink-0 opacity-50">
-                  chat only
-                </span>
+                <span className="type-hint text-[var(--color-text-secondary)] flex-shrink-0">chat only</span>
               ) : (
-                <span className="type-hint text-[var(--color-text-muted)] flex-shrink-0">
-                  pending
-                </span>
+                <span className="type-hint text-[var(--color-text-secondary)] flex-shrink-0">pending</span>
               )}
             </div>
           )
         })}
       </div>
 
-      {/* Error */}
-      {error && (
-        <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>
-      )}
+      {error && <Callout tone="error">{error}</Callout>}
 
-      {/* Status + button */}
-      <div className="flex items-center justify-between">
-        <span className="type-hint text-[var(--color-text-muted)]">
+      <div className="flex items-center justify-between gap-3">
+        <span className="type-hint text-[var(--color-text-secondary)]">
           {migratedSessions.length > 0 && (
             <span className="text-[var(--color-status-ok-soft)]">{migratedSessions.length} migrated</span>
           )}
           {migratedSessions.length > 0 && unmigratedSessions.length > 0 && ' · '}
-          {unmigratedSessions.length > 0 && (
-            <span>{unmigratedSessions.length} pending</span>
-          )}
-          {nonMigratableSessions.length > 0 && (
-            <span> · {nonMigratableSessions.length} chat-only</span>
-          )}
+          {unmigratedSessions.length > 0 && <span>{unmigratedSessions.length} pending</span>}
+          {nonMigratableSessions.length > 0 && <span> · {nonMigratableSessions.length} chat-only</span>}
           {migratedSessions.length > 0 && unmigratedSessions.length === 0 && nonMigratableSessions.length === 0 && (
             <span> — all conversations available in Chat History</span>
           )}
         </span>
-
         {unmigratedSessions.length > 0 && (
-          <button
-            onClick={handleMigrateAll}
-            disabled={migrating}
-            className="px-3 py-1.5 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 no-drag"
-          >
-            {migrating
-              ? `Migrating ${migratingIds.size}...`
-              : `Migrate ${unmigratedSessions.length}`}
-          </button>
+          <Button variant="accent" onClick={handleMigrateAll} disabled={migrating}>
+            {migrating ? `Migrating ${migratingIds.size}...` : `Migrate ${unmigratedSessions.length}`}
+          </Button>
         )}
       </div>
     </div>
@@ -4658,43 +4547,39 @@ function MailAgentSendControl({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3" data-settings-id="projects.mail-agent-send">
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
-            Let this agent send email
-            <AskedChip row="projects.mail-agent-send" />
-          </div>
-          <div className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            Covers hosted K2 mailboxes and linked inboxes (Gmail, Outlook, IMAP). The inbox
-            level (send) picks which inbox; this picks whether the agent may send at all.
-            Approval queues hosted mailboxes only: a linked inbox needs On. Same as{' '}
-            <span className="font-mono">k2 mail sending &lt;workspace&gt; on</span>.
-            {inherited && mode !== null ? ' Using the server default.' : ''}
-          </div>
-          <div
-            className="type-hint text-[var(--color-status-warn)] mt-1 leading-relaxed"
-            data-testid="mail-agent-send-on-warning"
-          >
-            With sending on, an agent that reads a malicious email can be talked into sending any mail it can read, with its attachments, and any workspace file that doesn&apos;t look like a secret, to any address: up to 20 messages an hour and 100 a day per mailbox, at 25 MiB each. Nobody is asked or told at send time; the outbox records it afterwards. The secret check catches mistakes, not intent. The DMARC check only slows forged senders, and an attacker&apos;s own domain passes it. Use approval for any agent that reads mail from outside.
-          </div>
-          {error && (
-            <div className="type-hint text-[var(--color-status-error-soft)] mt-1">{error}</div>
-          )}
-        </div>
-        <SettingDropdown
-          ariaLabel="Agent email sending"
-          value={mode ?? ''}
-          placeholder="…"
-          disabled={busy || mode === null}
-          onChange={(v) => void change(v)}
-          options={[
-            { value: 'off', label: 'Off' },
-            { value: 'approval', label: 'Approval' },
-            { value: 'on', label: 'On' },
-          ]}
-        />
-      </div>
+    <div data-settings-id="projects.mail-agent-send">
+    <SettingRow
+      label={<>Let this agent send email<AskedChip row="projects.mail-agent-send" /></>}
+      hint={
+        <>
+          Covers hosted K2 mailboxes and linked inboxes. Approval queues hosted mailboxes only; a linked inbox needs On.
+          {inherited && mode !== null ? ' Using the server default.' : ''}
+        </>
+      }
+      field
+      below={
+        <>
+          <Callout tone="warn" data-testid="mail-agent-send-on-warning" className="type-hint leading-relaxed">
+            With sending on, an agent that reads a malicious email can be talked into sending any mail it can read, with its attachments, and any workspace file that doesn&apos;t look like a secret, to any address. Nobody is asked at send time. Use approval for any agent that reads mail from outside.
+          </Callout>
+          {error && <div className="type-hint text-[var(--color-status-error-soft)] mt-2">{error}</div>}
+        </>
+      }
+    >
+      <SettingDropdown
+        fullWidth
+        ariaLabel="Agent email sending"
+        value={mode ?? ''}
+        placeholder="…"
+        disabled={busy || mode === null}
+        onChange={(v) => void change(v)}
+        options={[
+          { value: 'off', label: 'Off' },
+          { value: 'approval', label: 'Approval' },
+          { value: 'on', label: 'On' },
+        ]}
+      />
+    </SettingRow>
     </div>
   )
 }

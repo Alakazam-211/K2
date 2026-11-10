@@ -20,7 +20,7 @@
 
 import React, { useEffect, useState } from 'react'
 import { Checkbox, Toggle } from '@/components/ui'
-import { APP_USERS_SWITCH_COVERS } from '@/components/SessionView/permissionCardView'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL } from '../controls/SettingControls'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { emit } from '@tauri-apps/api/event'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
@@ -61,7 +61,9 @@ function Switch({
   testId,
   settingsId,
   onFlip,
+  compact,
 }: {
+  compact: boolean
   on: boolean
   label: string
   disabled: boolean
@@ -71,7 +73,8 @@ function Switch({
   onFlip: () => void
 }): React.JSX.Element {
   return (
-    <Toggle size="sm"
+    <Toggle
+      size={compact ? 'sm' : 'md'}
       checked={on}
       onChange={onFlip}
       aria-label={label}
@@ -79,7 +82,6 @@ function Switch({
       title={title}
       data-testid={testId}
       data-settings-id={settingsId}
-      className="mt-0.5"
     />
   )
 }
@@ -166,15 +168,17 @@ export function AgentAppsAccess({
   }
 
   const lock = readOnly ? null : role === 'owner' ? null : role === 'admin' ? 'admin' : role === null ? 'pending' : 'member'
-  const desc = compact ? 'hidden' : 'type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed'
+  const desc = compact ? 'hidden' : SETTING_ROW_HINT
+  const rowFlex = compact ? 'flex items-start gap-3' : 'flex flex-row-reverse items-start justify-between gap-6'
 
   return (
     <div
-      className={compact ? 'px-3 py-1.5 space-y-2' : 'border border-[var(--color-border)] p-3 space-y-3'}
+      className={compact ? 'px-3 py-1.5 space-y-2' : 'px-4 py-3 space-y-3'}
       data-testid="agent-apps-access"
     >
-      <div className="flex items-start gap-3">
+      <div className={rowFlex}>
         <Switch
+          compact={compact}
           on={build}
           label="Build and run Apps"
           disabled={!may(build, !build)}
@@ -184,19 +188,19 @@ export function AgentAppsAccess({
           onFlip={flipBuild}
         />
         <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">
+          <div className={SETTING_ROW_LABEL}>
             Build and run Apps{' '}
-            <span className="type-hint text-[var(--color-text-muted)]">Apps (beta)</span>
+            <span className="type-hint text-[var(--color-text-secondary)]">Apps (beta)</span>
           </div>
           <div className={desc}>
-            Builds, installs, deploys, runs and uninstalls its own Apps inside default limits (512 MiB each, up to 3 Apps),
-            moves its own services and labels in, and edits their roles and App passes. Off: every change waits for you.
+            Builds, installs, runs and removes its own Apps within default limits. Off: every change waits for you.
           </div>
         </div>
       </div>
 
-      <div className="flex items-start gap-3 pl-6" data-testid="apps-switch-full-row">
+      <div className={compact ? 'flex items-start gap-3 pl-6' : rowFlex} data-testid="apps-switch-full-row">
         <Switch
+          compact={compact}
           on={full}
           label="Manage its Apps end to end"
           disabled={!build || !may(full, !full)}
@@ -209,18 +213,18 @@ export function AgentAppsAccess({
           onFlip={flipFull}
         />
         <div className="flex-1 min-w-0">
-          <div className={`type-name ${build ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-muted)]'}`}>
+          <div className={build ? SETTING_ROW_LABEL : 'type-row text-[var(--color-text-muted)]'}>
             Manage its Apps end to end
           </div>
           <div className={desc}>
-            Raises its own Apps&rsquo; budgets and quotas, allows outbound (egress) hosts and box services, mints App keys,
-            resumes an App it suspended and sends push, with no approval. Never adds a core; never its Apps&rsquo; users.
+            Raises its own Apps&rsquo; budgets and quotas and allows outbound hosts and box services, with no approval.
           </div>
         </div>
       </div>
 
-      <div className="flex items-start gap-3" data-testid="apps-switch-users-row">
+      <div className={rowFlex} data-testid="apps-switch-users-row">
         <Switch
+          compact={compact}
           on={users}
           label="Let this agent manage its Apps’ users"
           disabled={readOnly || busy !== null || !canSetUsers(role, users, !users)}
@@ -230,10 +234,9 @@ export function AgentAppsAccess({
           onFlip={flipUsers}
         />
         <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">Let this agent manage its Apps&rsquo; users</div>
+          <div className={SETTING_ROW_LABEL}>Let this agent manage its Apps&rsquo; users</div>
           <div className={desc}>
-            {APP_USERS_SWITCH_COVERS} Off: adding a test guest, the guests-rooms grant or a key that manages users is a card
-            for you; the rest is refused until you turn it on.
+            Adds and removes users and test guests on its own Apps, with their passwords, roles and rooms. Never a box login.
           </div>
         </div>
       </div>
@@ -243,7 +246,7 @@ export function AgentAppsAccess({
       </p>
 
       <div className="space-y-1.5" role="group" aria-label="App cores">
-        <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)]">What its Apps may use</div>
+        <div className="type-section uppercase tracking-wider text-[var(--color-text-secondary)]">What its Apps may use</div>
         {APP_CORES.map((c) => {
           const on = cores.includes(c.id)
           const disabled = !may(on, !on)
@@ -268,7 +271,7 @@ export function AgentAppsAccess({
                     {c.later}
                   </span>
                 ) : null}
-                {!compact ? <span className="block type-hint text-[var(--color-text-muted)]">{c.detail}</span> : null}
+                {!compact ? <span className="block type-hint text-[var(--color-text-secondary)]">{c.detail}</span> : null}
               </span>
             </label>
           )

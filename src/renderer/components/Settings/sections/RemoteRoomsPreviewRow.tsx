@@ -1,3 +1,4 @@
+import { SettingRow } from '../controls/SettingControls'
 import React from 'react'
 import { Toggle } from '@/components/ui'
 import { useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
@@ -16,22 +17,16 @@ export function RemoteRoomsPreviewRow(): React.JSX.Element {
   const enabled = useRemoteRoomsPreviewStore((s) => s.enabled)
   const setEnabled = useRemoteRoomsPreviewStore((s) => s.setEnabled)
   return (
-    <div
-      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
-      data-settings-id="general.remote-rooms-preview"
+    <SettingRow
+      settingId="general.remote-rooms-preview"
+      label={REMOTE_ROOMS_LABEL}
+      hint="Clicking an agent on Home that lives on another server opens it right here. Off: it switches this window to that server."
     >
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="type-row text-[var(--color-text-secondary)]">{REMOTE_ROOMS_LABEL}</span>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
-          Clicking an agent on Home that lives on another server opens it right
-          here. Off: it switches this window to that server.
-        </p>
-      </div>
       <Toggle
         checked={enabled}
         onChange={(next) => setEnabled(next)}
         aria-label={REMOTE_ROOMS_LABEL}
       />
-    </div>
+    </SettingRow>
   )
 }

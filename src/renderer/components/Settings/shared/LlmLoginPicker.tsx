@@ -24,7 +24,7 @@ import { floatMaterial } from '@/components/ui/float-material'
 import { floatProps } from '@/components/SessionView/threadFloats'
 import { useEffect, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
-import { SettingDropdown } from '../controls/SettingControls'
+import { SETTING_FIELD_WIDTH, SettingDropdown } from '../controls/SettingControls'
 import {
   CLAUDE_CHAT_PIN_NOTE,
   CLAUDE_PIN_NOTE,
@@ -198,16 +198,19 @@ function WorkspaceTokenRow({
 }): React.JSX.Element {
   const { value, choose, error, note } = usePick(scope, doc, tool, 'workspace', projectId)
   return (
-    <div className="py-1.5" data-testid={`llm-pin-workspace-${tool.tool}`}>
-      <div className="flex items-center justify-between gap-3">
-        <span className="type-row text-[var(--color-text-secondary)]">{tool.display}</span>
-        <SettingDropdown
-          value={value}
-          options={tokenOptions(tool, value)}
-          onChange={(v) => choose(v)}
-          triggerLabel={TOKEN_LABEL}
-          ariaLabel={`${tool.display} token: ${inUseName(tool, value, null)}`}
-        />
+    <div className="px-4 py-2.5" data-testid={`llm-pin-workspace-${tool.tool}`}>
+      <div className="flex items-center justify-between gap-6">
+        <span className="type-row text-[var(--color-text-primary)]">{tool.display}</span>
+        <div className={`${SETTING_FIELD_WIDTH} flex-shrink-0`}>
+          <SettingDropdown
+            fullWidth
+            value={value}
+            options={tokenOptions(tool, value)}
+            onChange={(v) => choose(v)}
+            triggerLabel={TOKEN_LABEL}
+            ariaLabel={`${tool.display} token: ${inUseName(tool, value, null)}`}
+          />
+        </div>
       </div>
       <Notes tool={tool} value={value} note={note} error={error} />
     </div>
@@ -219,13 +222,13 @@ export function WorkspaceLlmTokens({ scope, projectId }: { scope: ServerScope; p
   const doc = useDoc(scope)
   const tools = (doc?.tools ?? []).filter((t) => t.supported)
   return (
-    <div data-settings-id="projects.llm-logins" data-testid="workspace-llm-tokens">
-      <p className="type-hint text-[var(--color-text-muted)] mb-1 leading-relaxed">
+    <div data-settings-id="projects.llm-logins" data-testid="workspace-llm-tokens" className="divide-y divide-[var(--color-border)]">
+      <p className="px-4 py-3 type-hint text-[var(--color-text-secondary)] leading-relaxed">
         Server default uses this server&apos;s default token (Settings → Language Models → Subs / Tokens). Pick a subscription or API token to
         use this token for this workspace&apos;s agents and sidecars instead. Resumed chats keep the token they
         started on.
       </p>
-      {!doc && <p className="type-hint text-[var(--color-text-muted)]">Loading tokens…</p>}
+      {!doc && <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">Loading tokens…</p>}
       {doc && tools.map((t) => <WorkspaceTokenRow key={t.tool} scope={scope} doc={doc} tool={t} projectId={projectId} />)}
     </div>
   )

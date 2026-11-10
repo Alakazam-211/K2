@@ -40,6 +40,8 @@ import { primaryScope as settingsPrimaryScope } from '@/kessel/server-scope'
 import type { FeatureKey } from '@/lib/server-capabilities'
 import type { ReportedFeatureKey } from '@/lib/reported-features'
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
+import { lastOpenedProject } from './sections/workspace-tabs'
+import { useProjectsStore } from '@/stores/projects'
 import { PROJECT_GROUPS_MANIFEST } from '@/components/Projects/project-settings'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
 import { EmailNotificationsSection, EMAIL_NOTIFICATIONS_MANIFEST } from './sections/EmailNotificationsSection'
@@ -452,6 +454,12 @@ export default function Settings(): React.JSX.Element {
     const page = searchPickPage(entry)
     if (page.generalSubTab) useSettingsStore.setState({ generalSubTab: page.generalSubTab })
     if (page.projectsPage) useSettingsStore.setState({ projectsPage: page.projectsPage })
+    if (page.workspaceTab) {
+      // A setting inside one workspace: open the one you were last in (else
+      // the first) on the tab that holds it.
+      const projectId = lastOpenedProject() ?? useProjectsStore.getState().projects[0]?.id ?? null
+      useSettingsStore.setState({ initialProjectId: projectId, initialWorkspaceTab: page.workspaceTab })
+    }
     // Local Data / External Data results land on Settings → Gardens (with
     // their Garden when they know it) on a client with Gardens.
     const { section, landing } = gardensLandingFor(entry.section, entry.garden, zenGardensShown)
@@ -460,17 +468,21 @@ export default function Settings(): React.JSX.Element {
     // Defer so the section mounts, renders, and gets a chance to lay out
     // before we query for the row. Two rAFs is usually enough even for
     // heavier sections (Projects, Code Editor).
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const el = document.querySelector<HTMLElement>(`[data-settings-id="${cssEscape(entry.id)}"]`)
-        if (!el) return
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        el.classList.add('settings-search-pulse')
-        window.setTimeout(() => {
-          el.classList.remove('settings-search-pulse')
-        }, 1500)
-      })
-    })
+    // Keeps looking for a moment: opening a workspace tab takes a render or two.
+    let tries = 0
+    const reveal = (): void => {
+      const el = document.querySelector<HTMLElement>(`[data-settings-id="${cssEscape(entry.id)}"]`)
+      if (!el) {
+        if (++tries < 30) requestAnimationFrame(reveal)
+        return
+      }
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.classList.add('settings-search-pulse')
+      window.setTimeout(() => {
+        el.classList.remove('settings-search-pulse')
+      }, 1500)
+    }
+    requestAnimationFrame(() => requestAnimationFrame(reveal))
   }, [setSection, zenGardensShown])
 
   return (

@@ -8,7 +8,7 @@ import { useCallback, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
 import { useProjectsStore } from '@/stores/projects'
 import { isDesignModeEnabled } from '@/components/Design/design-mode-setting'
-import { SettingsGroup } from '@/components/Settings/controls/SettingControls'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow, SettingsGroup } from '@/components/Settings/controls/SettingControls'
 import {
   isMobileTabShown,
   mobileTabSetting,
@@ -73,29 +73,25 @@ export function PinnedTabSettingRow({
   }, [busy, unavailable, scope, project, kind, enabled])
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
-      <div className="flex items-start gap-3">
-        <Toggle size="sm"
+    <SettingSwitchRow
+      control={
+        <Toggle
           checked={enabled}
           onChange={() => void toggle()}
           aria-label={copy.label}
           disabled={busy || unavailable}
           data-settings-id={`projects.${kind}-tab`}
-          className="mt-0.5"
         />
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">{copy.label}</div>
-          <div className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-            {unavailable ? copy.noPhone : copy.on}
-          </div>
-          {error ? (
-            <div role="alert" className="type-hint text-[var(--color-danger,#c33)] mt-1">
-              {error}
-            </div>
-          ) : null}
+      }
+    >
+      <div className={SETTING_ROW_LABEL}>{copy.label}</div>
+      <div className={SETTING_ROW_HINT}>{unavailable ? copy.noPhone : copy.on}</div>
+      {error ? (
+        <div role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1">
+          {error}
         </div>
-      </div>
-    </div>
+      ) : null}
+    </SettingSwitchRow>
   )
 }
 
@@ -109,7 +105,7 @@ export function WorkspaceTabsSettings({
 }): React.JSX.Element {
   return (
     <div data-settings-id={TABS_SETTINGS_ID}>
-      <SettingsGroup title="Tabs">
+      <SettingsGroup title="Tabs" card>
         <PinnedTabSettingRow kind="design" project={project} scope={scope} />
         <PinnedTabSettingRow kind="mobile" project={project} scope={scope} />
       </SettingsGroup>

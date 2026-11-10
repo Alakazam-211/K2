@@ -13,13 +13,10 @@ import { useSettingsStore } from '@/stores/settings'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { handoffApi, requestVaultTab, type AcceptFromEntry } from './handoff-api'
-import { SettingDropdown } from '../controls/SettingControls'
+import { SETTING_ROW_LABEL, SettingDropdown } from '../controls/SettingControls'
+import { Button, Input } from '@/components/ui'
 
-const btn =
-  'px-2 py-0.5 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
-const muted = 'text-[var(--color-text-muted)]'
-const input =
-  'px-2 py-0.5 type-hint bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] min-w-0'
+const muted = 'text-[var(--color-text-secondary)]'
 
 /** A typed sender: `agent::host`, `agent@host`, `team:<id>` or `ws:<id>`. */
 export function typedSenderOk(s: string): boolean {
@@ -102,12 +99,12 @@ export function AgentHandoffAcceptFrom({
 
   return (
     <div
-      className={compact ? 'py-1.5' : 'border border-[var(--color-border)] p-3 space-y-2'}
+      className={compact ? 'py-1.5' : 'px-4 py-3 space-y-2'}
       data-testid="handoff-accept-from"
       data-settings-id="projects.handoff-accept-from"
     >
       <div className="flex items-center gap-2">
-        <div className="type-name text-[var(--color-text-primary)]">Secrets from other agents</div>
+        <div className={SETTING_ROW_LABEL}>Secrets from other agents</div>
         {pending !== null && pending > 0 && (
           <button
             type="button"
@@ -123,8 +120,7 @@ export function AgentHandoffAcceptFrom({
         )}
       </div>
       <div className={`type-hint ${muted}`}>
-        Secrets from these senders go straight into this agent&rsquo;s vault. Anything else waits for you (Settings →
-        Vault → Incoming). A secret a person gave, or one that would replace a secret this agent has, always waits.
+        Secrets from these senders go straight into this agent&rsquo;s vault. Everything else waits for you in Vault → Incoming.
       </div>
       {entries !== null && entries.length === 0 && (
         <div className={`type-hint ${muted}`} data-testid="handoff-accept-empty">
@@ -138,15 +134,14 @@ export function AgentHandoffAcceptFrom({
               <span className="text-[var(--color-text-primary)]">{nameOf(e.sender)}</span>
               <span className={`type-hint ${muted}`}>added by {e.addedBy}</span>
               {!readOnly && (
-                <button
-                  type="button"
-                  className={btn}
+                <Button
+                  variant="quiet"
                   disabled={busy}
                   aria-label={`Stop accepting from ${e.sender}`}
                   onClick={() => void edit(e.sender, 'remove')}
                 >
                   Remove
-                </button>
+                </Button>
               )}
             </li>
           ))}
@@ -166,30 +161,29 @@ export function AgentHandoffAcceptFrom({
             options={others.map((p) => ({ value: `ws:${p.id}`, label: p.handle || p.name }))}
             onChange={setPick}
           />
-          <button type="button" className={btn} disabled={busy || !pick} data-testid="handoff-accept-pick-add" onClick={() => void edit(pick, 'add')}>
+          <Button variant="quiet" disabled={busy || !pick} data-testid="handoff-accept-pick-add" onClick={() => void edit(pick, 'add')}>
             Add
-          </button>
-          <input
-            className={input}
+          </Button>
+          <Input
+            className="min-w-0 type-control"
             aria-label="Add a federated agent or a team"
             data-testid="handoff-accept-typed"
             placeholder="agent::host or team:<id>"
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
           />
-          <button
-            type="button"
-            className={btn}
+          <Button
+            variant="quiet"
             disabled={busy || !typedSenderOk(typed)}
             data-testid="handoff-accept-typed-add"
             onClick={() => void edit(typed.trim(), 'add')}
           >
             Add
-          </button>
+          </Button>
         </div>
       )}
       {error && (
-        <div className="type-hint text-[var(--color-danger,#e5484d)]" role="alert">
+        <div className="type-hint text-[var(--color-status-error-soft)]" role="alert">
           {error}
         </div>
       )}

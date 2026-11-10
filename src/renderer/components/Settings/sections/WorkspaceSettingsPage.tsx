@@ -1,8 +1,8 @@
 import React from 'react'
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Toggle, Slider } from '@/components/ui'
+import { Button, Input, Toggle, Slider } from '@/components/ui'
 import { useSettingsStore, normalizeWorkspaceSwitchFocus } from '@/stores/settings'
-import { SettingDropdown } from '../controls/SettingControls'
+import { SETTING_ROW_HINT, SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import { previewCompletionSound } from '@/lib/completion-sound'
 import { COMPLETION_SOUNDS, normalizeCompletionSound } from '@/lib/completion-sound-options'
 import { webFeatures } from '@/web/features'
@@ -56,29 +56,22 @@ export const WORKSPACE_SETTINGS_MANIFEST: SettingEntry[] = [
 export function WorkspaceSettingsPage(): React.JSX.Element {
   return (
     <div
-      className="flex flex-col h-full min-h-0 w-full"
+      className="w-full space-y-6 pb-8"
       data-testid="workspace-settings-page"
       data-settings-id="projects.workspace-settings"
     >
-      <div className="flex-shrink-0 pb-3 pr-1 w-full border-b border-[var(--color-border)]">
+      <div>
         <h2 className="type-title text-[var(--color-text-primary)]">Workspace settings</h2>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1">
+        <p className={SETTING_ROW_HINT}>
           How every workspace behaves: the sidebar Active bar,
           the sound when an agent finishes out of view, what gets focus when
           you switch, and the view new agents open in.
         </p>
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto pt-4 pb-8 pr-1 [scrollbar-gutter:stable]">
-        <div className="space-y-6 w-full">
-          <div className="space-y-4 max-w-xl">
-            <WorkspaceBehaviorRows />
-          </div>
-          {/* Full column for the Canonical Agent Flow diagram + guide */}
-          <div className="border-t border-[var(--color-border)] pt-5 w-full">
-            <AgentSkillsSection />
-          </div>
-        </div>
-      </div>
+      <SettingsGroup title="Every workspace" card>
+        <WorkspaceBehaviorRows />
+      </SettingsGroup>
+      <AgentSkillsSection />
     </div>
   )
 }
@@ -124,41 +117,28 @@ function ActiveWindowHoursRow(): React.JSX.Element {
   }, [draft, activeWindowHours, setActiveWindowHours])
 
   return (
-    <div
-      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
-      data-settings-id="general.active-window-hours"
+    <SettingRow
+      settingId="general.active-window-hours"
+      label="Keep workspaces Active for"
+      hint="How long a workspace stays in the sidebar's Active section after you last interacted with it. Minimum 1 hour."
     >
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="type-row text-[var(--color-text-secondary)]">
-          Keep workspaces Active for
-        </span>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
-          How long a workspace stays in the sidebar&apos;s Active section after
-          you last interacted with it. Minimum 1 hour.
-        </p>
-      </div>
-      <div className="flex items-center gap-2 flex-shrink-0">
-        <input
-          type="number"
-          min={1}
-          step={1}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.currentTarget.blur()
-            }
-          }}
-          // colorScheme:dark renders the native up/down stepper carrots light
-          // (visible) instead of the default dark-on-dark black — matches the
-          // K2 Connect section's number stepper.
-          style={{ colorScheme: 'dark' }}
-          className="w-16 px-2 py-1 type-row bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
-        />
-        <span className="type-hint text-[var(--color-text-muted)]">hours</span>
-      </div>
-    </div>
+      <Input
+        type="number"
+        min={1}
+        step={1}
+        value={draft}
+        aria-label="Keep workspaces Active for, in hours"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.currentTarget.blur()
+          }
+        }}
+        className="w-16 text-center type-control"
+      />
+      <span className="type-hint text-[var(--color-text-secondary)]">hours</span>
+    </SettingRow>
   )
 }
 
@@ -183,70 +163,44 @@ function CompletionSoundRow(): React.JSX.Element {
   const setCompletionSoundVolume = useSettingsStore((s) => s.setCompletionSoundVolume)
 
   return (
-    <div className="border-b border-[var(--color-border)]">
-      <div
-        className="flex items-center justify-between py-2"
-        data-settings-id="general.completion-sound"
+    <>
+      <SettingRow
+        settingId="general.completion-sound"
+        label="Play a sound when an agent finishes unwatched"
+        hint="A soft chime when an agent finishes while you're looking elsewhere. Agents you're watching never chime."
       >
-        <div className="flex-1 min-w-0 mr-3">
-          <span className="type-row text-[var(--color-text-secondary)]">
-            Play a sound when an agent finishes unwatched
-          </span>
-          <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
-            A soft chime when an agent finishes while you&apos;re looking
-            elsewhere. Agents you&apos;re watching never chime.
-          </p>
-        </div>
         <Toggle
           checked={enabled}
           onChange={(next) => void setCompletionSoundEnabled(next)}
           aria-label="Play a sound when an agent finishes unwatched"
         />
-      </div>
-      <div className="pl-3 pb-2 space-y-1">
-        <div
-          className="flex items-center justify-between py-1"
-          data-settings-id="general.completion-sound-choice"
-        >
-          <span className="type-hint text-[var(--color-text-muted)]">Sound</span>
-          <div className="flex items-center gap-2">
-            <SettingDropdown
-              value={sound}
-              ariaLabel="Completion sound"
-              options={COMPLETION_SOUNDS.map((s) => ({ value: s.id, label: s.label }))}
-              onChange={(v) => void setCompletionSound(normalizeCompletionSound(v))}
-            />
-            <button
-              type="button"
-              onClick={() => previewCompletionSound(sound, volume)}
-              className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
-            >
-              Preview
-            </button>
-          </div>
-        </div>
-        <div
-          className="flex items-center justify-between py-1"
-          data-settings-id="general.completion-sound-volume"
-        >
-          <span className="type-hint text-[var(--color-text-muted)]">Volume</span>
-          <div className="flex items-center gap-3">
-            <Slider
-              min={0}
-              max={100}
-              step={1}
-              value={volume}
-              aria-label="Completion sound volume"
-              onChange={(e) => setCompletionSoundVolume(parseInt(e.target.value, 10))}
-              className="w-40"
-            />
-            <span className="w-9 text-right type-hint tabular-nums text-[var(--color-text-secondary)]">
-              {volume}%
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
+      </SettingRow>
+      <SettingRow settingId="general.completion-sound-choice" label="Sound">
+        <SettingDropdown
+          value={sound}
+          ariaLabel="Completion sound"
+          options={COMPLETION_SOUNDS.map((s) => ({ value: s.id, label: s.label }))}
+          onChange={(v) => void setCompletionSound(normalizeCompletionSound(v))}
+        />
+        <Button variant="quiet" onClick={() => previewCompletionSound(sound, volume)}>
+          Preview
+        </Button>
+      </SettingRow>
+      <SettingRow settingId="general.completion-sound-volume" label="Volume">
+        <Slider
+          min={0}
+          max={100}
+          step={1}
+          value={volume}
+          aria-label="Completion sound volume"
+          onChange={(e) => setCompletionSoundVolume(parseInt(e.target.value, 10))}
+          className="w-40"
+        />
+        <span className="w-9 text-right type-hint tabular-nums text-[var(--color-text-secondary)]">
+          {volume}%
+        </span>
+      </SettingRow>
+    </>
   )
 }
 
@@ -262,20 +216,11 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
   const setWorkspaceSwitchFocus = useSettingsStore((s) => s.setWorkspaceSwitchFocus)
 
   return (
-    <div
-      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
-      data-settings-id="general.workspace-switch-focus"
+    <SettingRow
+      settingId="general.workspace-switch-focus"
+      label="When moving between workspaces, auto-select"
+      hint="Switching workspaces, opening Home, and ⌘1–⌘9 focus the terminal or the agent message box (the Thread's when it is open) so you can type immediately."
     >
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="type-row text-[var(--color-text-secondary)]">
-          When moving between workspaces, auto-select
-        </span>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
-          Switching workspaces, opening Home, and ⌘1–⌘9 focus the terminal
-          or the agent message box (the Thread's when it is open) so you can
-          type immediately.
-        </p>
-      </div>
       <SettingDropdown
         value={value}
         options={[
@@ -285,7 +230,7 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
         ]}
         onChange={(v) => setWorkspaceSwitchFocus(normalizeWorkspaceSwitchFocus(v))}
       />
-    </div>
+    </SettingRow>
   )
 }
 
@@ -298,14 +243,11 @@ function ThreadTextWidthRow(): React.JSX.Element {
   const setThreadTextWidth = useSettingsStore((s) => s.setThreadTextWidth)
 
   return (
-    <div className="py-2 border-b border-[var(--color-border)]" data-settings-id="general.thread-text-width">
-      <div className="flex items-center justify-between">
-        <div className="flex-1 min-w-0 mr-3">
-          <span className="type-row text-[var(--color-text-secondary)]">Thread text width</span>
-          <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
-            How wide messages get in Thread view, centered in the pane. On this computer only.
-          </p>
-        </div>
+    <div data-settings-id="general.thread-text-width" className="divide-y divide-[var(--color-border)]">
+      <SettingRow
+        label="Thread text width"
+        hint="How wide messages get in Thread view, centered in the pane. On this computer only."
+      >
         {isThreadTextWidthDefault(pref) ? null : (
           <Button
             variant="quiet"
@@ -315,35 +257,28 @@ function ThreadTextWidthRow(): React.JSX.Element {
             Reset
           </Button>
         )}
-      </div>
-      <div className="pl-3 pt-1 space-y-1">
-        <div className="flex items-center justify-between py-1">
-          <span className="type-hint text-[var(--color-text-muted)]">Full width</span>
-          <Toggle
-            checked={!pref.limited}
-            aria-label="Full width"
-            onChange={(full) => setThreadTextWidth({ limited: !full, px: pref.px })}
-          />
-        </div>
-        <div className="flex items-center justify-between py-1">
-          <span className="type-hint text-[var(--color-text-muted)]">Width</span>
-          <div className="flex items-center gap-3">
-            <Slider
-              min={THREAD_TEXT_WIDTH_MIN_PX}
-              max={THREAD_TEXT_WIDTH_MAX_PX}
-              step={THREAD_TEXT_WIDTH_STEP_PX}
-              value={pref.px}
-              disabled={!pref.limited}
-              aria-label="Thread text width"
-              onChange={(e) => setThreadTextWidth({ limited: pref.limited, px: parseInt(e.target.value, 10) })}
-              className="w-40 disabled:opacity-50"
-            />
-            <span className="w-11 text-right type-hint tabular-nums text-[var(--color-text-secondary)]">
-              {pref.px}px
-            </span>
-          </div>
-        </div>
-      </div>
+        <span className="type-hint text-[var(--color-text-secondary)]">Full width</span>
+        <Toggle
+          checked={!pref.limited}
+          aria-label="Full width"
+          onChange={(full) => setThreadTextWidth({ limited: !full, px: pref.px })}
+        />
+      </SettingRow>
+      <SettingRow label="Width">
+        <Slider
+          min={THREAD_TEXT_WIDTH_MIN_PX}
+          max={THREAD_TEXT_WIDTH_MAX_PX}
+          step={THREAD_TEXT_WIDTH_STEP_PX}
+          value={pref.px}
+          disabled={!pref.limited}
+          aria-label="Thread text width"
+          onChange={(e) => setThreadTextWidth({ limited: pref.limited, px: parseInt(e.target.value, 10) })}
+          className="w-40 disabled:opacity-50"
+        />
+        <span className="w-11 text-right type-hint tabular-nums text-[var(--color-text-secondary)]">
+          {pref.px}px
+        </span>
+      </SettingRow>
     </div>
   )
 }
@@ -377,17 +312,11 @@ function NewAgentViewRow(): React.JSX.Element {
   const isSplit = pref.view === 'split'
 
   return (
-    <div data-settings-id="general.new-agent-view">
-      <div className="flex items-center justify-between py-2">
-        <div className="flex-1 min-w-0 mr-3">
-          <span className="type-row text-[var(--color-text-secondary)]">
-            New agents open in
-          </span>
-          <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
-            The view an agent opens in the first time you see it here. Agents
-            you have already set a view for keep it.
-          </p>
-        </div>
+    <div data-settings-id="general.new-agent-view" className="divide-y divide-[var(--color-border)]">
+      <SettingRow
+        label="New agents open in"
+        hint="The view an agent opens in the first time you see it here. Agents you have already set a view for keep it."
+      >
         <SettingDropdown
           value={pref.view}
           ariaLabel="New agents open in"
@@ -396,11 +325,10 @@ function NewAgentViewRow(): React.JSX.Element {
             setNewAgentView({ view: parseSessionViewTab(v), split: pref.split })
           }
         />
-      </div>
+      </SettingRow>
       {isSplit ? (
-        <div className="pl-3 pb-2 space-y-1" data-testid="new-agent-view-split">
-          <div className="flex items-center justify-between py-1">
-            <span className="type-hint text-[var(--color-text-muted)]">Left side</span>
+        <div data-testid="new-agent-view-split" className="divide-y divide-[var(--color-border)]">
+          <SettingRow label="Left side">
             <SettingDropdown
               value={pref.split.left}
               ariaLabel="Split view left side"
@@ -414,9 +342,8 @@ function NewAgentViewRow(): React.JSX.Element {
                 setNewAgentView({ view: 'split', split: { left, right: pref.split.right } })
               }}
             />
-          </div>
-          <div className="flex items-center justify-between py-1">
-            <span className="type-hint text-[var(--color-text-muted)]">Right side</span>
+          </SettingRow>
+          <SettingRow label="Right side">
             <SettingDropdown
               value={pref.split.right}
               ariaLabel="Split view right side"
@@ -430,7 +357,7 @@ function NewAgentViewRow(): React.JSX.Element {
                 setNewAgentView({ view: 'split', split: { left: pref.split.left, right } })
               }}
             />
-          </div>
+          </SettingRow>
         </div>
       ) : null}
     </div>

@@ -23,12 +23,13 @@ describe('Email sending control (per-workspace agent-send)', () => {
   it('has manifest id, the group the hint names, daemon read + write, never fetchProjects', () => {
     expect(src).toContain("id: 'projects.mail-agent-send'")
     expect(src).toContain('data-settings-id="projects.mail-agent-send"')
-    expect(src).toContain('<SettingsGroup title="Email sending">')
-    const dnsGroup = src.indexOf('<SettingsGroup title="DNS">')
-    const sendGroup = src.indexOf('<SettingsGroup title="Email sending">')
-    const hostedGroup = src.indexOf('<SettingsGroup title="Hosted mail">')
-    expect(sendGroup).toBeGreaterThan(dnsGroup)
+    expect(src).toContain('<SettingsGroup title="Email sending" card>')
+    const dnsGroup = src.indexOf('<SettingsGroup title="DNS" card>')
+    const sendGroup = src.indexOf('<SettingsGroup title="Email sending" card>')
+    const hostedGroup = src.indexOf('<SettingsGroup title="Hosted mail" card>')
+    expect(sendGroup).toBeGreaterThan(0)
     expect(hostedGroup).toBeGreaterThan(sendGroup)
+    expect(dnsGroup).toBeGreaterThan(hostedGroup)
 
     const start = src.indexOf('function MailAgentSendControl')
     expect(start).toBeGreaterThan(0)

@@ -14,7 +14,8 @@
 // `thread-push-v1`.
 
 import { useCallback, useState } from 'react'
-import { Toggle } from '@/components/ui'
+import { Button, Toggle } from '@/components/ui'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow } from '@/components/Settings/controls/SettingControls'
 import { useSettingsStore } from '@/stores/settings'
 import { useRoom } from '@/components/Room/RoomContext'
 import { SmartphoneIcon, SmartphoneOffIcon } from '@/components/icons/K2Icons'
@@ -51,53 +52,19 @@ export function WorkspacePhonePushToggle({ project }: { project: { id: string; n
   const row = prefs?.workspaces.find((w) => w.projectId === project.id) ?? null
 
   return (
-    <div className="border border-[var(--color-border)] p-3" data-testid="workspace-phone-push">
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">Phone notifications</div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-            Notify your phone when this agent posts in a Thread. Only affects you.
-          </div>
-          {row && (
-            <div data-testid="workspace-phone-push-source" className="text-[10px] text-[var(--color-text-secondary)] mt-1">
-              {sourceLabel(row, prefs?.principal ?? '')}
-            </div>
-          )}
-          {prefs && !prefs.server.enabled && (
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
-              Your pushes from this server are off in{' '}
-              <button
-                type="button"
-                className="underline cursor-pointer no-drag"
-                onClick={() => useSettingsStore.getState().setSection('notifications')}
-              >
-                Settings → Notifications
-              </button>
-              .
-            </div>
-          )}
-          {error && (
-            <div role="alert" className="text-[10px] text-[var(--color-status-error)] mt-1">
-              Could not load your notifications: {error}
-            </div>
-          )}
-          {saveError && (
-            <div role="alert" className="text-[10px] text-[var(--color-status-error)] mt-1">
-              {saveError}
-            </div>
-          )}
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
+    <SettingSwitchRow
+      testId="workspace-phone-push"
+      control={
+        <>
           {row?.source === 'user' && (
-            <button
-              type="button"
+            <Button
+              variant="quiet"
               onClick={() => void write(null)}
               disabled={busy}
               aria-label="Reset phone notifications to the workspace default"
-              className="text-[10px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50"
             >
               Reset
-            </button>
+            </Button>
           )}
           <Toggle
             aria-label="Phone notifications from this workspace"
@@ -105,9 +72,42 @@ export function WorkspacePhonePushToggle({ project }: { project: { id: string; n
             disabled={busy || !row}
             onChange={(next) => void write(next)}
           />
-        </div>
+        </>
+      }
+    >
+      <div className={SETTING_ROW_LABEL}>Phone notifications</div>
+      <div className={SETTING_ROW_HINT}>
+        Notify your phone when this agent posts in a Thread. Only affects you.
       </div>
-    </div>
+      {row && (
+        <div data-testid="workspace-phone-push-source" className={SETTING_ROW_HINT}>
+          {sourceLabel(row, prefs?.principal ?? '')}
+        </div>
+      )}
+      {prefs && !prefs.server.enabled && (
+        <div className={SETTING_ROW_HINT}>
+          Your pushes from this server are off in{' '}
+          <button
+            type="button"
+            className="underline cursor-pointer no-drag"
+            onClick={() => useSettingsStore.getState().setSection('notifications')}
+          >
+            Settings → Notifications
+          </button>
+          .
+        </div>
+      )}
+      {error && (
+        <div role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1">
+          Could not load your notifications: {error}
+        </div>
+      )}
+      {saveError && (
+        <div role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1">
+          {saveError}
+        </div>
+      )}
+    </SettingSwitchRow>
   )
 }
 

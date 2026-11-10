@@ -6,6 +6,7 @@
 
 import type { RemoteConnectionEntry } from '@/lib/federation'
 import { remoteConnectionGoneNote } from '@/lib/federation-gone'
+import { Button } from '@/components/ui'
 
 export function FederatedConnectionRow({
   entry,
@@ -27,50 +28,42 @@ export function FederatedConnectionRow({
     <div
       data-federated-connection={entry.address}
       data-gone={gone ? 'true' : undefined}
-      className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
+      className="flex items-center gap-3 px-4 py-2.5"
     >
       <span
-        className={`w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)] ${gone ? 'bg-[var(--color-neutral)]' : 'bg-[var(--color-accent)]'}`}
+        className={`w-2.5 h-2.5 flex-shrink-0 rounded-[var(--radius-badge)] ${gone ? 'bg-[var(--color-neutral)]' : 'bg-[var(--color-accent)]'}`}
       />
       <span className={`flex-1 min-w-0 ${gone ? 'opacity-60' : ''}`}>
         <span
-          className={`block type-row truncate ${gone ? 'text-[var(--color-text-muted)] line-through' : 'text-[var(--color-text-primary)]'}`}
+          className={`block type-row truncate ${gone ? 'text-[var(--color-text-secondary)] line-through' : 'text-[var(--color-text-primary)]'}`}
           title={entry.address}
         >
           {entry.address}
         </span>
         {gone && (
-          <span className="block type-hint text-[var(--color-text-muted)] leading-relaxed">
+          <span className="block type-hint text-[var(--color-text-secondary)] leading-relaxed">
             {remoteConnectionGoneNote(entry.host)}
             {!canReAdd && ' Only an owner or admin can re-add it.'}
           </span>
         )}
       </span>
-      <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
+      <span className="type-section text-[var(--color-text-secondary)] uppercase tracking-wider">
         {gone ? 'gone' : 'paired'}
       </span>
       {gone && canReAdd && (
-        <button
-          type="button"
+        <Button
+          variant="quiet"
           onClick={onReAdd}
           disabled={busy}
-          className="px-1.5 py-0.5 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer disabled:opacity-50 flex-shrink-0"
+          className="flex-shrink-0"
           title="Connect to the workspace that has this name on that server now"
         >
           {busy ? 'Re-adding…' : 'Re-add'}
-        </button>
+        </Button>
       )}
-      <button
-        type="button"
-        onClick={onRemove}
-        className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer flex-shrink-0"
-        title="Remove connection"
-      >
-        <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <line x1="1" y1="1" x2="7" y2="7" />
-          <line x1="7" y1="1" x2="1" y2="7" />
-        </svg>
-      </button>
+      <Button variant="quiet" onClick={onRemove} className="flex-shrink-0" title="Remove connection">
+        Remove
+      </Button>
     </div>
   )
 }

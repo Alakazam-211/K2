@@ -29,7 +29,7 @@
    top of components/Settings/controls/SettingControls.tsx. The var(--tw-*)
    fallbacks let a leading-* or a state-only font-* still win, in any order. */
 @utility type-title { font-size: var(--type-xl); font-weight: var(--tw-font-weight, 500); line-height: var(--tw-leading, 1.3); }
-@utility type-heading { font-size: var(--type-lg); font-weight: var(--tw-font-weight, 500); line-height: var(--tw-leading, 1.35); }
+@utility type-heading { font-size: var(--type-lg); font-weight: var(--tw-font-weight, 600); line-height: var(--tw-leading, 1.35); }
 @utility type-section { font-size: var(--type-xs); font-weight: var(--tw-font-weight, 600); line-height: var(--tw-leading, 1.4); }
 @utility type-row { font-size: var(--type-md); font-weight: var(--tw-font-weight, 400); line-height: var(--tw-leading, 1.4); }
 @utility type-name { font-size: var(--type-md); font-weight: var(--tw-font-weight, 500); line-height: var(--tw-leading, 1.4); }

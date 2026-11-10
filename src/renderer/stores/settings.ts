@@ -173,7 +173,7 @@ export interface TerminalSettings {
 export type GeneralSubTab = 'general' | 'server'
 
 /** A page of Settings → Workspaces / Agents that is not one workspace. */
-export type ProjectsPage = 'workspace-settings'
+export type ProjectsPage = 'workspace-settings' | 'list'
 
 interface SettingsState {
   settingsOpen: boolean

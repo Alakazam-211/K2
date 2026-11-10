@@ -85,27 +85,23 @@ async function pick(scope: HTMLElement, trigger: string, option: string): Promis
 }
 
 describe('Workspaces / Agents: the Workspace settings entry', () => {
-  it('is at the very top of the list, above the Focus Groups toggle', () => {
+  it('is in the list header, ahead of Focus Groups and the workspaces', () => {
+    useProjectsStore.setState({
+      projects: [{ id: 'p1', name: 'ops', path: '/w/ops', workspaces: [], pinned: 0 }],
+    } as never)
     render(<ProjectsSection />)
     const e = entry()
     expect(e.textContent).toContain('Workspace settings')
     const focusLabel = screen.getByText('Focus Groups')
     expect(before(e, focusLabel)).toBe(true)
-    // Nothing interactive sits above it in the left panel.
-    const panel = e.closest('.w-60')
-    if (!panel) throw new Error('left panel not found')
-    const firstButton = panel.querySelector('button')
-    expect(firstButton).toBe(e)
     // Not open until picked.
     expect(screen.queryByTestId('workspace-settings-page')).toBeNull()
-    expect(e.getAttribute('aria-current')).toBeNull()
   })
 
   it('opens a page with every moved row and the Canonical Agent Flow guide', () => {
     render(<ProjectsSection />)
     fireEvent.click(entry())
     const page = screen.getByTestId('workspace-settings-page')
-    expect(entry().getAttribute('aria-current')).toBe('page')
     expect(within(page).getByRole('heading', { name: 'Workspace settings' })).toBeTruthy()
     const ids = Array.from(page.querySelectorAll('[data-settings-id]')).map((el) => el.getAttribute('data-settings-id'))
     for (const id of MOVED_ROW_IDS) expect(ids).toContain(id)
@@ -139,18 +135,21 @@ describe('Workspaces / Agents: the Workspace settings entry', () => {
     expect(useSettingsStore.getState().completionSoundEnabled).toBe(false)
   })
 
-  it('picking a workspace leaves the page; the entry brings it back', () => {
+  it('the page and a workspace are one page at a time; back returns to the list', () => {
     useProjectsStore.setState({
       projects: [{ id: 'p1', name: 'ops', path: '/w/ops', workspaces: [], pinned: 0 }],
     } as never)
     render(<ProjectsSection />)
     fireEvent.click(entry())
     expect(screen.getByTestId('workspace-settings-page')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('workspaces-back'))
+    expect(screen.queryByTestId('workspace-settings-page')).toBeNull()
     const row = document.querySelector<HTMLElement>('[data-settings-project-id="p1"]')
     if (!row) throw new Error('workspace row not rendered')
     fireEvent.click(row)
-    expect(screen.queryByTestId('workspace-settings-page')).toBeNull()
-    expect(entry().getAttribute('aria-current')).toBeNull()
+    expect(document.querySelector('[data-settings-project-id="p1"]')).toBeNull()
+    expect(screen.getByRole('tablist', { name: 'Workspace settings' })).toBeTruthy()
+    fireEvent.click(screen.getByTestId('workspaces-back'))
     fireEvent.click(entry())
     expect(screen.getByTestId('workspace-settings-page')).toBeTruthy()
   })

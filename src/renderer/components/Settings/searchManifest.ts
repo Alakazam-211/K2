@@ -10,6 +10,8 @@ import type { GeneralSubTab, ProjectsPage, SettingsSection } from '@/stores/sett
  * `data-settings-id={id}` so the palette can scrollIntoView + briefly
  * highlight it after jumping to the section.
  */
+import { workspaceTabForSetting, type WorkspaceSettingsTab } from './sections/workspace-tabs'
+
 export interface SettingEntry {
   /**
    * Stable, globally unique identifier. Convention:
@@ -102,9 +104,11 @@ export function searchManifest(entries: SettingEntry[], query: string): SettingE
  *  by their group; the Workspace settings rows (and the Canonical Agent Flow
  *  guide) open that page of Workspaces / Agents (moved from General →
  *  Workspaces in 0.46.5). */
-export function searchPickPage(entry: Pick<SettingEntry, 'section' | 'group'>): {
+export function searchPickPage(entry: Pick<SettingEntry, 'section' | 'group'> & { id?: string }): {
   generalSubTab?: GeneralSubTab
   projectsPage?: ProjectsPage
+  /** A tab of one workspace (Workspaces / Agents): open a workspace on it. */
+  workspaceTab?: WorkspaceSettingsTab
 } {
   if (entry.section === 'general' && entry.group) {
     const subByGroup: Record<string, GeneralSubTab> = {
@@ -116,6 +120,10 @@ export function searchPickPage(entry: Pick<SettingEntry, 'section' | 'group'>): 
   }
   if (entry.section === 'projects' && entry.group === 'Workspace settings') {
     return { projectsPage: 'workspace-settings' }
+  }
+  if (entry.section === 'projects' && entry.id?.startsWith('projects.')) {
+    const tab = workspaceTabForSetting(entry.id)
+    return tab === 'list' ? { projectsPage: 'list' } : { workspaceTab: tab }
   }
   return {}
 }

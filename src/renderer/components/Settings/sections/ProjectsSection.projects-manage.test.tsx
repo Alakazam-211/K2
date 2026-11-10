@@ -47,8 +47,7 @@ describe('Agent tab: Manage K2 projects', () => {
     render(<Harness />)
     const sw = screen.getByRole('switch', { name: NAME })
     expect(sw.getAttribute('aria-checked')).toBe('true')
-    expect(screen.getByText(/On by default/)).toBeTruthy()
-    expect(screen.getByText(/it can still read projects and post in\s+its project chat/)).toBeTruthy()
+    expect(screen.getByText(/Off: it can still read them and post in its project chat/)).toBeTruthy()
   })
 
   it('off: one projects_manage write through agent-access/set; the store follows', async () => {

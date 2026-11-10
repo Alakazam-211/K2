@@ -13,6 +13,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorText } from '@/lib/daemon-error'
 import type { ServerScope } from '@/kessel/server-scope'
+import { Button } from '@/components/ui'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow } from '@/components/Settings/controls/SettingControls'
 
 export type FolderTrustState = 'clean' | 'trusted' | 'always' | 'denied' | 'pending' | 'undecided' | 'changed'
 
@@ -194,57 +196,56 @@ export function FolderTrustRow({ scope, projectPath }: { scope: ServerScope; pro
   )
 
   const canReset = status !== null && ['trusted', 'always', 'denied', 'changed'].includes(status.state)
-  const buttonClass = 'type-control px-2 py-1 border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-50'
 
   return (
-    <div className="border border-[var(--color-border)] p-3" data-settings-id="projects.folder-trust">
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">Folder trust</div>
-          <div className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed" data-testid="folder-trust-line">
-            {status ? folderTrustLine(status) : error ? '' : 'Checking…'}
-          </div>
-          {status && status.findings.length > 0 && status.state !== 'clean' ? (
-            <ul className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed">
-              {status.findings.slice(0, 5).map((f) => (
-                <li key={`${f.file}:${f.what}`}>
-                  <code>{f.file}</code>: {f.detail}
-                </li>
-              ))}
-              {status.findings.length > 5 || status.more > 0 ? (
-                <li>and {Math.max(0, status.findings.length - 5) + status.more} more</li>
-              ) : null}
-            </ul>
-          ) : null}
-          {status && status.state === 'denied' && status.trusted_by.length > 0 ? (
-            <div className="type-hint text-[var(--color-text-muted)] mt-1">Still trusted elsewhere: {status.trusted_by.join('; ')}</div>
-          ) : null}
-          {waiting ? (
-            <div className="flex flex-wrap gap-1.5 mt-2" data-testid="folder-trust-choices">
-              {FOLDER_TRUST_CHOICES.map((c) => (
-                <button key={c.decision} type="button" onClick={() => void decide(c.decision)} disabled={busy} className={buttonClass}>
-                  {c.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          {notice ? (
-            <div className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed" data-testid="folder-trust-notice">
-              {notice}
-            </div>
-          ) : null}
-          {error ? (
-            <div role="alert" className="type-hint text-[var(--color-danger,#c33)] mt-1">
-              {error}
-            </div>
-          ) : null}
-        </div>
-        {canReset ? (
-          <button type="button" onClick={() => void reset()} disabled={busy} className={buttonClass}>
+    <SettingSwitchRow
+      settingId="projects.folder-trust"
+      control={
+        canReset ? (
+          <Button variant="quiet" onClick={() => void reset()} disabled={busy}>
             Reset
-          </button>
-        ) : null}
+          </Button>
+        ) : null
+      }
+    >
+      <div className={SETTING_ROW_LABEL}>Folder trust</div>
+      <div className={SETTING_ROW_HINT} data-testid="folder-trust-line">
+        {status ? folderTrustLine(status) : error ? '' : 'Checking…'}
       </div>
-    </div>
+      {status && status.findings.length > 0 && status.state !== 'clean' ? (
+        <ul className={SETTING_ROW_HINT}>
+          {status.findings.slice(0, 5).map((f) => (
+            <li key={`${f.file}:${f.what}`}>
+              <code>{f.file}</code>: {f.detail}
+            </li>
+          ))}
+          {status.findings.length > 5 || status.more > 0 ? (
+            <li>and {Math.max(0, status.findings.length - 5) + status.more} more</li>
+          ) : null}
+        </ul>
+      ) : null}
+      {status && status.state === 'denied' && status.trusted_by.length > 0 ? (
+        <div className={SETTING_ROW_HINT}>Still trusted elsewhere: {status.trusted_by.join('; ')}</div>
+      ) : null}
+      {waiting ? (
+        <div className="flex flex-wrap gap-1.5 mt-2" data-testid="folder-trust-choices">
+          {FOLDER_TRUST_CHOICES.map((c) => (
+            <Button key={c.decision} variant="quiet" onClick={() => void decide(c.decision)} disabled={busy}>
+              {c.label}
+            </Button>
+          ))}
+        </div>
+      ) : null}
+      {notice ? (
+        <div className={SETTING_ROW_HINT} data-testid="folder-trust-notice">
+          {notice}
+        </div>
+      ) : null}
+      {error ? (
+        <div role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1">
+          {error}
+        </div>
+      ) : null}
+    </SettingSwitchRow>
   )
 }

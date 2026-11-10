@@ -28,7 +28,7 @@ describe('Agent-tab "Allow hiring and managing agents" toggle', () => {
   it('has a manifest id, the Agents group, and posts agent-access/set agents_manage', () => {
     expect(src).toContain("id: 'projects.agents-can-manage-agents'")
     expect(src).toContain('data-settings-id="projects.agents-can-manage-agents"')
-    expect(src).toContain('<SettingsGroup title="Agents">')
+    expect(src).toContain('<SettingsGroup title="Agents and secrets" card>')
     expect(src).toContain('<AgentsManageAgentsToggle project={project} />')
     expect(src).toContain('Allow hiring and managing agents')
     const toggle = componentBody('AgentsManageAgentsToggle')

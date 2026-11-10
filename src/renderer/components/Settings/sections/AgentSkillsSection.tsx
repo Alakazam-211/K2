@@ -1,6 +1,7 @@
 import React from 'react'
 import type { SettingEntry } from '../searchManifest'
 import { AgentContextDiagram } from './AgentContextDiagram'
+import { Surface } from '@/components/ui'
 
 // Renamed from "Agent Skills" → "Canonical Agent Flow" (canonical-agents
 // PRD §11). The section is no longer a four-tier "skills shipped to tiers of
@@ -59,7 +60,7 @@ export function AgentSkillsSection(): React.JSX.Element {
   return (
     <div className="w-full" data-settings-id="agent-skills.canonical-flow">
       <h2 className="type-title text-[var(--color-text-primary)] mb-1">Canonical Agent Flow</h2>
-      <div className="type-hint text-[var(--color-text-muted)] mb-4 space-y-2 leading-relaxed max-w-3xl">
+      <div className="type-hint text-[var(--color-text-secondary)] mb-4 space-y-2 leading-relaxed">
         <p>
           Different AI tools look for project notes in different files. Always-on context is a{' '}
           <span className="text-[var(--color-text-secondary)]">context management stack</span>:
@@ -91,8 +92,8 @@ export function AgentSkillsSection(): React.JSX.Element {
       <AgentContextDiagram />
 
       {/* The two opt-in routes (PRD §11). */}
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/30 px-3 py-2.5 mb-4 type-hint leading-relaxed text-[var(--color-text-secondary)]">
-        <div className="font-medium text-[var(--color-text-primary)] mb-1">Two opt-in routes to canonical</div>
+      <Surface chamfer material="tile" className="px-4 py-3 mb-4 type-hint leading-relaxed text-[var(--color-text-secondary)]">
+        <div className="type-name text-[var(--color-text-primary)] mb-1">Two opt-in routes to canonical</div>
         <p className="mb-1.5">
           <span className="text-[var(--color-text-primary)]">Skill route (recommended for existing projects).</span>{' '}
           Run the <span className="text-[var(--color-text-primary)]">K2 Canonical Agent</span> with an AI
@@ -110,27 +111,23 @@ export function AgentSkillsSection(): React.JSX.Element {
           <span className="text-[var(--color-status-warn-amber-soft)]">can overwrite existing harness content</span> — for an existing
           project, prefer the skill route above.
         </p>
-      </div>
+      </Surface>
 
       {/* The three opt-in skills as first-class entries (flat list). */}
-      <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5">
-        Opt-in skills under <span className="font-mono">.k2/skills/</span>
-      </div>
-      <div className="border border-[var(--color-border)] mb-4">
-        {OPT_IN_SKILLS.map((skill, i) => (
-          <div
-            key={skill.dir}
-            className={`px-3 py-2.5 ${i < OPT_IN_SKILLS.length - 1 ? 'border-b border-[var(--color-border)]' : ''}`}
-          >
-            <div className="flex items-center gap-2">
-              <span className="w-1 h-4 bg-[var(--color-accent)] rounded-[var(--radius-pill)] flex-shrink-0" />
-              <span className="type-name text-[var(--color-text-primary)]">{skill.label}</span>
-              <span className="type-hint font-mono text-[var(--color-text-muted)]">.k2/skills/{skill.dir}/</span>
+      <h3 className="type-heading text-[var(--color-text-primary)] mb-2">
+        Opt-in skills in <span className="font-mono">.k2/skills/</span>
+      </h3>
+      <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)] mb-4">
+        {OPT_IN_SKILLS.map((skill) => (
+          <div key={skill.dir} className="px-4 py-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="type-row text-[var(--color-text-primary)]">{skill.label}</span>
+              <span className="type-hint font-mono text-[var(--color-text-secondary)]">.k2/skills/{skill.dir}/</span>
             </div>
-            <p className="type-hint text-[var(--color-text-muted)] leading-snug mt-1 pl-3">{skill.blurb}</p>
+            <p className="type-hint text-[var(--color-text-secondary)] leading-snug mt-0.5">{skill.blurb}</p>
           </div>
         ))}
-      </div>
+      </Surface>
     </div>
   )
 }

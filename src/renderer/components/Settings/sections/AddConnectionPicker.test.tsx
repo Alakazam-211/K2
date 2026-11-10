@@ -425,7 +425,7 @@ describe('Connections panel: the + picker closes like a popover', () => {
     if (route === 'auth/whoami') return { role: 'owner' }
     throw new DaemonHttpError('not found', 404, null)
   }
-  const plus = (): HTMLButtonElement => screen.getByRole('button', { name: '+' }) as HTMLButtonElement
+  const plus = (): HTMLButtonElement => screen.getByRole('button', { name: '+ Add connection' }) as HTMLButtonElement
   const picker = (): HTMLElement | null => screen.queryByRole('dialog', { name: 'Add connection' })
   /** A press as the browser sends it: pointerdown, mousedown, then click. */
   const press = (el: Element): void => {

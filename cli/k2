@@ -89022,8 +89022,7 @@ if os.environ.get("ZL_JSON") == "true":
 if "removed" in d:
     print(("Forgot %s for %s: K2 asks next time." if d["removed"] else "%s was not kept for %s.") % (d["site"], d["garden"]))
 elif "sites" in d:
-    print("
-".join(d["sites"]) if d["sites"] else "No sites: K2 asks the first time for each one.")
+    print("\n".join(d["sites"]) if d["sites"] else "No sites: K2 asks the first time for each one.")
 else:
     g = d.get("gardens") or {}
     if not g:

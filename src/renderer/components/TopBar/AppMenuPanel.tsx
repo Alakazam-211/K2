@@ -25,6 +25,7 @@ const MENU_SECTIONS: { title: string; items: MenuEntry[] }[] = [
       { kind: 'item', id: 'new-window', label: 'New Window' },
       { kind: 'item', id: 'settings', label: 'Settings…' },
       { kind: 'item', id: 'check-for-updates', label: 'Check for Updates…' },
+      { kind: 'item', id: 'send-feedback', label: 'Send Feedback…' },
       { kind: 'sep' },
       { kind: 'item', id: 'quit', label: 'Quit' },
     ],

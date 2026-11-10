@@ -97,6 +97,8 @@ import { toKesselColors } from './lib/style-resolve'
 import { getPalette } from './styles.generated'
 import { primaryScope } from '@/kessel/server-scope'
 import { SETTINGS_OVERLAY_Z } from '@/lib/overlay-layers'
+import { SendFeedbackHost } from './components/SendFeedback/SendFeedbackButton'
+import { openSendFeedback } from '@/stores/send-feedback'
 // TODO(0.39.x): rename src/renderer/kessel/ to a non-Kessel name.
 // Only daemon-ws.ts + config-context.tsx + config.ts remain after the
 // Kessel renderer deletion; these are shared terminal infrastructure
@@ -763,6 +765,11 @@ function AppRoot(): React.JSX.Element {
         useSettingsStore.setState({ pendingUpdateCheck: true })
         openSettings('general')
       }).then(track)
+      // Send feedback to K2 (PF4): the macOS app menu reaches every window;
+      // only the one in front opens its dialog.
+      listen('menu:send-feedback', () => {
+        if (document.hasFocus()) openSendFeedback()
+      }).then(track)
       // Room-scoped menu items act on the focused room only (MS18); with
       // no focused room they do nothing (MS17).
       listen('menu:new-document', () => {
@@ -1134,6 +1141,9 @@ function AppRoot(): React.JSX.Element {
       {!settingsOpen && <WikiPage />}
       <ContextMenu />
       <ConfirmDialog />
+      {/* Send feedback to K2: one dialog per window, opened by the top-bar
+          button or a menu (prd-k2-product-feedback-v1 PF3–PF5). */}
+      <SendFeedbackHost />
       {/* button-only while Settings is open so General → "Read what's new"
           still works; full modal elsewhere. */}
       <WhatsNewModal mode={settingsOpen ? 'button-only' : undefined} />

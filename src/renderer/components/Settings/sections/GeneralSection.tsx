@@ -88,6 +88,7 @@ import {
 } from '../controls/SettingControls'
 import { HealthWord, StatusDot, type HealthTone } from './ConnectionsParts'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
+import { SendFeedbackRows } from './SendFeedbackRows'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', group: 'General', label: 'K2 app', description: 'The K2 version on this computer: check for, download and install updates', keywords: ['update', 'version', 'check', 'release', 'download', 'install', 'app version'] },
@@ -289,6 +290,12 @@ function GeneralTab({ isRemote }: { isRemote: boolean }): React.JSX.Element {
       <SettingsGroup title="You" card>
         <OwnerTimezoneRow />
         <YourAccountRow />
+      </SettingsGroup>
+
+      {/* Send feedback to K2 (prd-k2-product-feedback-v1, 0.46.11): this
+          person's remembered choice; the owner's and admins' switches. */}
+      <SettingsGroup title="Send feedback" card>
+        <SendFeedbackRows />
       </SettingsGroup>
 
       <SettingsGroup title="Saved settings" card>

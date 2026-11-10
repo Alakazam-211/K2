@@ -3,6 +3,7 @@ import TimerButton from '@/components/Timer/TimerButton'
 import UsageButton from '@/components/Timer/UsageButton'
 import KeepAwakeButton from '@/components/Timer/KeepAwakeButton'
 import HelpButton from '@/components/Help/HelpButton'
+import SendFeedbackButton from '@/components/SendFeedback/SendFeedbackButton'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import VoiceButton from '@/components/Voice/VoiceButton'
 import { zenAvailable } from '@/lib/zen/zen-platform'
@@ -20,7 +21,7 @@ export function hasTopBarPageToggles(children: ReactNode): boolean {
 /**
  * Right-cluster body shared with TopBar: presence (with its own pipe, only
  * while the roster shows), usage, pipe, timer,
- * keep awake, Help, then a pipe only when that page has
+ * keep awake, Help, Send feedback to K2, then a pipe only when that page has
  * its own toggles, then (where Zen exists) a pipe and the Zen toggle as the
  * LAST item: right of the drawer toggles on Agents and Home
  * (prd-zen-gardens-v1 G5, G63). The Admin profile button sits right of
@@ -57,6 +58,8 @@ export default function TopBarUtilities({
       <TimerButton />
       <KeepAwakeButton />
       <HelpButton />
+      {/* prd-k2-product-feedback-v1 PF3: right of Help. */}
+      <SendFeedbackButton />
       {pageToggles ? <TopBarPipe /> : null}
       {children}
       {zenAvailable() || isWebClient() ? <TopBarPipe /> : null}

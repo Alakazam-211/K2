@@ -24,6 +24,7 @@ vi.mock('@/components/Timer/TimerButton', () => ({ default: () => <span data-stu
 vi.mock('@/components/Timer/UsageButton', () => ({ default: () => <span data-stub="usage" /> }))
 vi.mock('@/components/Timer/KeepAwakeButton', () => ({ default: () => <span data-stub="keep-awake" /> }))
 vi.mock('@/components/Help/HelpButton', () => ({ default: () => <span data-stub="help" /> }))
+vi.mock('@/components/SendFeedback/SendFeedbackButton', () => ({ default: () => <span data-stub="send-feedback" /> }))
 vi.mock('@/components/Presence/PresenceRoster', () => ({ default: () => <span data-stub="presence" /> }))
 // Rosson 2026-10-16: the Admin profile button sits right of the Zen toggle
 // (`AdminProfileButton.test.tsx` checks it).
@@ -83,6 +84,7 @@ describe('the Zen toggle in the top bar (G5, TG3.4)', () => {
       'timer',
       'keep-awake',
       'help',
+      'send-feedback',
       'pipe',
       'left',
       'right',
@@ -97,7 +99,7 @@ describe('the Zen toggle in the top bar (G5, TG3.4)', () => {
 
   it('a page without drawer toggles (Settings, Feedback): after Help, with its own pipe', () => {
     render(<TopBarUtilities />)
-    expect(clusterItems().slice(-4)).toEqual(['help', 'pipe', 'zen', 'admin-profile'])
+    expect(clusterItems().slice(-5)).toEqual(['help', 'send-feedback', 'pipe', 'zen', 'admin-profile'])
   })
 
   it('a click turns this window’s Zen on over the current page; Shift starts safe mode', () => {

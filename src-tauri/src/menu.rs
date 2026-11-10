@@ -51,6 +51,9 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
             &PredefinedMenuItem::separator(handle)?,
             &MenuItem::with_id(handle, "settings", "Settings...", true, Some("CmdOrCtrl+,"))?,
             &MenuItem::with_id(handle, "check-for-updates", "Check for Updates...", true, None::<&str>)?,
+            // Send feedback to K2 (prd-k2-product-feedback-v1 PF4): Zen has no
+            // top bar, so the dialog is reachable from here too.
+            &MenuItem::with_id(handle, "send-feedback", "Send Feedback...", true, None::<&str>)?,
             &PredefinedMenuItem::separator(handle)?,
             &PredefinedMenuItem::services(handle, None)?,
             &PredefinedMenuItem::separator(handle)?,
@@ -204,6 +207,9 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         }
         "check-for-updates" => {
             let _ = app.emit("menu:check-for-updates", ());
+        }
+        "send-feedback" => {
+            let _ = app.emit("menu:send-feedback", ());
         }
         "app-zoom-in" | "app-zoom-out" | "app-zoom-reset" => {
             // Zoom via menu items (keyboard zoom handled in App.tsx)

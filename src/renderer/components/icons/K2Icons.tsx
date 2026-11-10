@@ -5,11 +5,11 @@
 //
 //   Home, Agents, Projects, Tickets, Wiki, Server, Admin, Run, Drawer,
 //   Clock, Mug, Help, Pin, PinOff, Palette, Board, Smartphone, SmartphoneOff,
-//   Pencil, Trash, ArrowUp
+//   Pencil, Trash, ArrowUp, Feedback
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `library`,
 //     `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`,
 //     `circle-help`, `pin`, `pin-off`, `palette`, `presentation`,
-//     `smartphone`, `pencil`, `trash-2`, `arrow-up`; SmartphoneOff is
+//     `smartphone`, `pencil`, `trash-2`, `arrow-up`, `message-square`; SmartphoneOff is
 //     `smartphone` plus the bell's 2,2 → 22,22 slash),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
@@ -272,6 +272,16 @@ export function HelpIcon(props: K2IconProps = {}): React.JSX.Element {
       <circle cx="12" cy="12" r="10" />
       <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
       <path d="M12 17h.01" />
+    </svg>
+  )
+}
+
+/** Send feedback to K2: Lucide `message-square`, squared (no corner radius,
+ *  a straight tail). */
+export function FeedbackIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('feedback', props)}>
+      <path d="M3 3h18v14H7l-4 4Z" />
     </svg>
   )
 }

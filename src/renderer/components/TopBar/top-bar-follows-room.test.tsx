@@ -66,6 +66,7 @@ vi.mock('@/lib/remote-session', () => ({ reviveRemoteSession: vi.fn() }))
 // Static or window-only elements: not what this file checks.
 vi.mock('@/components/Timer/TimerButton', () => ({ default: () => <span data-testid="timer-stub" /> }))
 vi.mock('@/components/Help/HelpButton', () => ({ default: () => null }))
+vi.mock('@/components/SendFeedback/SendFeedbackButton', () => ({ default: () => null }))
 
 import {
   primaryScope,

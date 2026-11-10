@@ -71,6 +71,7 @@ vi.mock('@/components/Timer/TimerButton', () => ({ default: () => <span data-stu
 vi.mock('@/components/Timer/UsageButton', () => ({ default: () => <span data-stub="usage" /> }))
 vi.mock('@/components/Timer/KeepAwakeButton', () => ({ default: () => <span data-stub="keep-awake" /> }))
 vi.mock('@/components/Help/HelpButton', () => ({ default: () => <span data-stub="help" /> }))
+vi.mock('@/components/SendFeedback/SendFeedbackButton', () => ({ default: () => <span data-stub="send-feedback" /> }))
 vi.mock('@/components/Presence/PresenceRoster', () => ({ default: () => <span data-stub="presence" /> }))
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (_scope: unknown, route: string, params?: Record<string, unknown>) => {

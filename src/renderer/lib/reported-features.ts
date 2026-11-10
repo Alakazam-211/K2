@@ -164,6 +164,10 @@ export const REPORTED_FEATURES = {
    *  rows carry `shares`. Settings → Users and Access offers the role only
    *  for a server with it. */
   'voice-chat-role-v1': 'voice-chat-role-v1',
+  /** prd-k2-product-feedback-v1 (0.46.11): Send feedback to K2:
+   *  `/cli/product-feedback/*` and `product_feedback_status`. Without it the
+   *  dialog only offers Copy as text and Alakazam's address. */
+  'product-feedback-v1': 'product-feedback-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

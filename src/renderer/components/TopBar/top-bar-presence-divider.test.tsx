@@ -17,6 +17,7 @@ vi.mock('@/components/Timer/TimerButton', () => ({ default: () => <span data-stu
 vi.mock('@/components/Timer/UsageButton', () => ({ default: () => <span data-stub="usage" /> }))
 vi.mock('@/components/Timer/KeepAwakeButton', () => ({ default: () => <span data-stub="keep-awake" /> }))
 vi.mock('@/components/Help/HelpButton', () => ({ default: () => <span data-stub="help" /> }))
+vi.mock('@/components/SendFeedback/SendFeedbackButton', () => ({ default: () => <span data-stub="send-feedback" /> }))
 vi.mock('./AdminProfileButton', () => ({ default: () => <span data-stub="admin-profile" /> }))
 
 import { cleanup, render } from '@testing-library/react'
@@ -122,8 +123,10 @@ describe('the presence divider in the top bar', () => {
       expect(document.querySelector('[data-mode-toggle]')).toBe(null)
       const items = clusterItems()
       expectNoAdjacentPipes(items)
-      const afterHelp = items.slice(items.indexOf('help') + 1)
-      // Help, then one pipe before the next group (drawers, or Zen/profile).
+      // Send feedback to K2 sits right of Help (prd-k2-product-feedback-v1 PF3).
+      expect(items[items.indexOf('help') + 1]).toBe('send-feedback')
+      const afterHelp = items.slice(items.indexOf('send-feedback') + 1)
+      // Help and Send feedback, then one pipe before the next group (drawers, or Zen/profile).
       if (afterHelp.length > 0) expect(afterHelp[0]).toBe('pipe')
       if (drawers) expect(afterHelp.slice(0, 2)).toEqual(['pipe', 'drawer'])
       expect(items[items.length - 1]).not.toBe('pipe')

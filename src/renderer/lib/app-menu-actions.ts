@@ -8,11 +8,13 @@ import { emit } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { dispatchZenMenuToggle, dispatchZenShortcutsMenu } from '@/lib/zen/zen-shortcut'
+import { openSendFeedback } from '@/stores/send-feedback'
 
 /** Action IDs that map 1:1 to Tauri menu item ids / event stems. */
 export const APP_MENU_ACTION_IDS = [
   'settings',
   'check-for-updates',
+  'send-feedback',
   'new-document',
   'new-tab',
   'launch-agent',
@@ -65,6 +67,7 @@ export function isAppMenuActionId(id: string): id is AppMenuActionId {
 export function appMenuActionHasHandler(id: AppMenuActionId): boolean {
   if (EVENT_ACTIONS.has(id)) return true
   return (
+    id === 'send-feedback' ||
     id === 'zen-toggle' ||
     id === 'zen-shortcuts' ||
     id === 'new-window' ||
@@ -81,6 +84,12 @@ export async function handleAppMenuAction(id: AppMenuActionId): Promise<void> {
     return
   }
 
+  // Send feedback to K2 (prd-k2-product-feedback-v1 PF4): THIS window's
+  // dialog, on its own server (an event would open it in every window).
+  if (id === 'send-feedback') {
+    openSendFeedback()
+    return
+  }
   // prd-zen-mode-v1 Z63: the same `menu:zen-toggle` name as the macOS menu,
   // delivered to THIS window only (Zen on/off is per Home and shared, so a
   // broadcast would flip it once per window).

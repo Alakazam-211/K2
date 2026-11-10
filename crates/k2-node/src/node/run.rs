@@ -622,7 +622,11 @@ impl Node {
         // C2: how it shares its uid, as `launch` decided it.
         let uid_share = self.jobs.lock().unwrap().get(&(t.slot, job.clone())).map(|j| j.uid).unwrap_or_default();
         let journal_path = t.paths.journal(&job, gen);
-        let mut journal = match dirs.create_for(unit_mode).and_then(|_| JournalWriter::create(&journal_path, a.plan.limits.log_cap_bytes)) {
+        // H3: a secret job with a uid of its own gets its dirs made closed
+        // (no slot-group ACL inherited from `jobs/`, at any depth); the
+        // executor hands the tree to that uid before the unit starts.
+        let made = if secret_job && unit_mode && uid_share == UidShare::Own { dirs.create_secret(true) } else { dirs.create_for(unit_mode) };
+        let mut journal = match made.and_then(|_| JournalWriter::create(&journal_path, a.plan.limits.log_cap_bytes)) {
             Ok(j) => j,
             Err(e) => {
                 self.finish_job(&t, &a, None, JobState::Failed, Some("job_dir_failed"), Some(&e), None, None, None, None, None).await;

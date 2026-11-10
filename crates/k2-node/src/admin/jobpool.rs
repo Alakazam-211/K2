@@ -280,14 +280,43 @@ fn refuse(c: &str, m: impl Into<String>) -> AdminRefusal {
 /// link) and close it to everyone but that uid and the node user
 /// (`node_user`, a name or a numeric uid), who writes, reads and finally
 /// deletes it. `setfacl` is the acl package's.
+///
+/// **Every entry, at every depth** (11-07 review H3): each dir made under
+/// the slot's `jobs/` inherited `g:k2t-<slot>` and its default, so a file
+/// the job writes deep in `target/` would be the slot group's to read the
+/// moment it leaves the closed root (an artifact, a moved cache). So the
+/// inherited defaults go everywhere, the slot group and others get nothing
+/// on any entry (the group's mode bits included: `g::---`), and every dir
+/// gets the closed default, so what the job makes later is closed too.
+/// `-P`: links are never followed (a link itself has no ACL).
 pub fn close_job_tree(setfacl: &Path, root: &Path, uid: u32, gid: u32, node_user: &str) -> Result<(), AdminRefusal> {
     crate::wall::reclaim(root, uid, gid).map_err(|e| refuse(code::FAILED, e))?;
-    // The default ACL too: the root inherited `d:g:k2t-<slot>:rwx` from
-    // the slot's `jobs/`, which would hand the slot's group every file
-    // the job makes at its top (root e2e, 2026-11-07).
     let n = node_user;
-    let acl = format!("u::rwx,g::---,o::---,u:{n}:rwx,m::rwx,d:u::rwx,d:g::---,d:o::---,d:u:{n}:rwx,d:m::rwx");
-    super::exec::run_fixed(&setfacl.display().to_string(), &["-P", "--set", &acl, &root.display().to_string()]).map_err(|e| refuse(code::FAILED, e))
+    let prog = setfacl.display().to_string();
+    let r = root.display().to_string();
+    let run = |args: &[&str]| super::exec::run_fixed(&prog, args).map_err(|e| refuse(code::FAILED, e));
+    // Inherited defaults off every dir (a file has none; setfacl skips it
+    // below the top).
+    run(&["-R", "-P", "-k", &r])?;
+    // The access ACL of every entry: the job's uid and the node user only
+    // (`X`: execute on dirs and on what was already executable).
+    let access = format!("u::rwX,g::---,o::---,u:{n}:rwX,m::rwX");
+    run(&["-R", "-P", "--set", &access, &r])?;
+    // The closed default on every dir.
+    let default = format!("d:u::rwx,d:g::---,d:o::---,d:u:{n}:rwx,d:m::rwx");
+    run(&["-R", "-P", "-m", &default, &r])
+}
+
+/// Node side (11-07 review H3, "create closed"): a secret job's root is made
+/// by the node user under the slot's `jobs/`, whose default ACL hands the
+/// slot group every dir made below it. Strip what the root inherited (its
+/// named entries and its default) before anything else is made in it, so
+/// nothing the node puts there (the checkout, `target/`) names the slot
+/// group. The root stays the node user's alone until the executor hands it
+/// to the per-job uid ([`close_job_tree`]).
+pub fn make_closed(setfacl: &Path, root: &Path) -> Result<(), String> {
+    let r = root.display().to_string();
+    super::exec::run_fixed(&setfacl.display().to_string(), &["-P", "-b", "-k", &r])
 }
 
 /// Refusal code: no per-job uid can be given now (every pool user busy or

@@ -333,9 +333,27 @@ impl JobDirs {
         Ok(())
     }
 
-    /// A secret job's dirs (protocol 9, a per-job uid): as [`Self::create_for`].
+    /// A secret job's dirs (protocol 9, a per-job uid; 11-07 review H3):
+    /// made closed. The root is the node user's alone (0700, its inherited
+    /// slot-group ACL and default stripped before anything is made in it),
+    /// so no dir below it names the slot's group; the executor then hands
+    /// the whole tree to the job's own uid. Without the wall (`shared`
+    /// false) it is [`Self::create_for`]. No acl tools under the wall: an
+    /// error (never an open tree).
     pub fn create_secret(&self, shared: bool) -> Result<(), String> {
-        self.create_for(shared)
+        if !shared {
+            return self.create_for(false);
+        }
+        crate::util::mkdir_mode(&self.root, 0o700)?;
+        #[cfg(target_os = "linux")]
+        {
+            let setfacl = crate::admin::jobs::find_program_in_sbin("setfacl").ok_or("setfacl not found (the acl package): a secret job's dirs can't be made closed")?;
+            crate::admin::jobpool::make_closed(&setfacl, &self.root)?;
+        }
+        for d in [&self.home, &self.tmp, &self.var_tmp] {
+            crate::util::mkdir_mode(d, 0o700)?;
+        }
+        Ok(())
     }
 
     /// A job without code keeps its caches here (deleted with the job).

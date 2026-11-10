@@ -254,6 +254,8 @@ pub mod federation;
 // Feedback F1 (prd-agent-feedback-notifications) — durable agent→human
 // asks (`k2 feedback ask`) + per-item comment threads.
 pub mod feedback;
+// The setup checklist (prd-setup-checklist-v1): rows, hide/skip/finish.
+pub mod first_run;
 // Ticket HTML brief (prd-ticket-html-brief-v1): clean + store the
 // agent's HTML brief next to its ticket (`feedback_briefs`, 0126).
 pub mod feedback_brief;

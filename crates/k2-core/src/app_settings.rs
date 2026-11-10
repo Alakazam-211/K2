@@ -519,6 +519,13 @@ pub struct AppSettings {
     /// only: it doesn't turn on for customers until held edits survive a restart.
     #[serde(default)]
     pub board_file_preview: bool,
+    /// The setup checklist (prd-setup-checklist-v1): whether the app shows
+    /// it. Owner only, off by default until K2 Design has polished it. The
+    /// daemon only stores it and reports it as `enabled` on
+    /// `GET /cli/first-run/status`; `k2 setup` prints the list either way.
+    /// Wire name `setupChecklist`.
+    #[serde(default)]
+    pub setup_checklist: bool,
     /// Video in voice rooms: camera tiles, screen share and the camera
     /// picker in the desktop app's call panel. The daemon only stores and
     /// returns it; the desktop app reads it. On by default since Sew 0.8.2's
@@ -1276,6 +1283,7 @@ impl Default for AppSettings {
             ci_preview: false,
             voice_rooms_preview: false,
             board_file_preview: false,
+            setup_checklist: false,
             video_rooms_preview: true,
             voice_tunnel_preview: false,
             voice_rooms_count: default_voice_rooms_count(),

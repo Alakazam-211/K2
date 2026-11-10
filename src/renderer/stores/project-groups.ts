@@ -40,6 +40,7 @@ import { onAppHello, onProjectGroupsChanged } from '@/stores/session-events'
 import {
   fetchProjectGroups,
   fetchProjectGroupShow,
+  type ProjectDefaultView,
   type ProjectGroup,
   type ProjectGroupShow,
 } from '@/components/Projects/projects-api'
@@ -54,7 +55,7 @@ import {
   clampChatPanelWidth,
 } from '@/components/Projects/project-chat'
 import { primaryScope } from '@/kessel/server-scope'
-import { pickTileView, type ProjectDefaultView, type TileView, type TileViewEntry } from '@/components/Projects/tile-view'
+import { pickTileView, type TileView, type TileViewEntry } from '@/components/Projects/tile-view'
 
 // ── P6 (§6.4) — per-client chat-drawer collapse state ─────────────────────
 // A plain client preference (not host-keyed, not canonical): whether the

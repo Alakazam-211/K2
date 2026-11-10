@@ -154,6 +154,11 @@ describe('projectDefaultView', () => {
   it('treats a daemon before 0282 (absent) and unknown words as thread', () => {
     expect(projectDefaultView({})).toBe('thread')
     expect(projectDefaultView({ defaultView: 'split' as never })).toBe('thread')
+    // Heartbeats is a personal tile switch only, never a project default.
+    expect(projectDefaultView({ defaultView: 'heartbeats' as never })).toBe('thread')
+    expect(projectDefaultView({ defaultView: 'Terminal' as never })).toBe('thread')
+    expect(projectDefaultView({ defaultView: null as never })).toBe('thread')
+    expect(projectDefaultView({ defaultView: 3 as never })).toBe('thread')
   })
 })
 

@@ -51,13 +51,8 @@ import {
   wakeCanonicalMemberSession,
   type MemberSessionPhase,
 } from './wake-member-session'
-import {
-  projectDefaultView,
-  resolveTileView,
-  tileViewKey,
-  type TileView,
-} from './tile-view'
-import type { ProjectGroupMemberInfo } from './projects-api'
+import { resolveTileView, tileViewKey, type TileView } from './tile-view'
+import { projectDefaultView, type ProjectDefaultView, type ProjectGroupMemberInfo } from './projects-api'
 
 const AgentAvatar = lazy(() =>
   import('@/components/Thread/ThreadSenderAvatars').then((m) => ({ default: m.AgentAvatar })),
@@ -88,11 +83,11 @@ async function resolveMemberSession(scope: ServerScope, workspaceId: string): Pr
 export function useTileView(
   groupId: string,
   workspaceId: string,
-  rawDefault: unknown,
+  defaultView: ProjectDefaultView | undefined,
 ): [TileView, (next: TileView) => void] {
   const hostKey = useConnectHostStore((s) => activeHostKey(s.activeHost))
   const key = tileViewKey(hostKey, groupId, workspaceId)
-  const projectDefault = projectDefaultView(rawDefault)
+  const projectDefault = projectDefaultView({ defaultView })
   const entry = useProjectGroupsStore((s) => s.tileViews[key])
   const { view, stale } = resolveTileView(entry, projectDefault)
   useEffect(() => {

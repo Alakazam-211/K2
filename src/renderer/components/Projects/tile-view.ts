@@ -8,8 +8,7 @@
 // never read the Agents page's view memory (`useSessionViewTab`), so a saved
 // Split can't reach them.
 
-/** What a project can open its tiles in. */
-export type ProjectDefaultView = 'terminal' | 'thread' | 'chatter'
+import type { ProjectDefaultView } from './projects-api'
 
 /** What a tile can show: a default view, or Heartbeats (Rosson, 2026-11-10:
  *  a fourth picker option, the agent's recently fired heartbeats). Heartbeats
@@ -19,19 +18,6 @@ export type TileView = ProjectDefaultView | 'heartbeats'
 
 /** The picker's segments, in order. */
 export const TILE_VIEWS: readonly TileView[] = ['terminal', 'thread', 'chatter', 'heartbeats']
-
-/** A project with no `defaultView` (a daemon from before it) opens in Thread. */
-export const TILE_DEFAULT_VIEW: ProjectDefaultView = 'thread'
-
-export function isProjectDefaultView(raw: unknown): raw is ProjectDefaultView {
-  return raw === 'terminal' || raw === 'thread' || raw === 'chatter'
-}
-
-/** The project's default, read defensively: absent or anything it doesn't
- *  know (Heartbeats included) is Thread. */
-export function projectDefaultView(raw: unknown): ProjectDefaultView {
-  return isProjectDefaultView(raw) ? raw : TILE_DEFAULT_VIEW
-}
 
 /** One personal switch: the view, and the default it was made against. */
 export interface TileViewEntry {

@@ -2,36 +2,8 @@
 // prd-projects-threads-v1 §3.2: an agent tile's view, from the project
 // default, with a personal switch that the default resets.
 import { beforeEach, describe, expect, it } from 'vitest'
-import {
-  TILE_DEFAULT_VIEW,
-  TILE_VIEWS,
-  pickTileView,
-  projectDefaultView,
-  resolveTileView,
-  tileViewKey,
-} from './tile-view'
+import { TILE_VIEWS, pickTileView, resolveTileView, tileViewKey } from './tile-view'
 import { useProjectGroupsStore } from '@/stores/project-groups'
-
-describe('projectDefaultView', () => {
-  it('reads the three project views as they are', () => {
-    expect(projectDefaultView('terminal')).toBe('terminal')
-    expect(projectDefaultView('thread')).toBe('thread')
-    expect(projectDefaultView('chatter')).toBe('chatter')
-  })
-
-  it('falls back to Thread when the field is missing (a daemon from before it)', () => {
-    expect(TILE_DEFAULT_VIEW).toBe('thread')
-    expect(projectDefaultView(undefined)).toBe('thread')
-    expect(projectDefaultView(null)).toBe('thread')
-  })
-
-  it("ignores a value it doesn't know: Split, Heartbeats (personal only), junk", () => {
-    expect(projectDefaultView('split')).toBe('thread')
-    expect(projectDefaultView('heartbeats')).toBe('thread')
-    expect(projectDefaultView('Terminal')).toBe('thread')
-    expect(projectDefaultView(3)).toBe('thread')
-  })
-})
 
 describe('the tile views', () => {
   it('are Terminal, Thread, Chatter and Heartbeats, never Split', () => {

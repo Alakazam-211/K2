@@ -127,6 +127,7 @@ import {
 } from './project-tabs'
 import {
   saveDashboardLayout,
+  type ProjectDefaultView,
   type ProjectGroupDashboard,
   type ProjectGroupMemberInfo,
   type ProjectGroupShow,
@@ -279,7 +280,7 @@ function AgentTileFrame({
   onHeaderMouseDown,
 }: {
   groupId: string
-  defaultView: unknown
+  defaultView: ProjectDefaultView | undefined
   workspaceId: string
   member: ProjectGroupMemberInfo | null
   dashboardId: string

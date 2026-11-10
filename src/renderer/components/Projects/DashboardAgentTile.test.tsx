@@ -66,7 +66,7 @@ import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { ThreadDrawerSelector } from '@/components/SessionView/ThreadDrawerSelector'
 import { DashboardAgentTile, tileSessionViewTab, useTileView, type TermPhase } from './DashboardAgentTile'
-import type { ProjectGroupMemberInfo } from './projects-api'
+import type { ProjectDefaultView, ProjectGroupMemberInfo } from './projects-api'
 
 const room = testRoom({
   tabs: {},
@@ -84,7 +84,7 @@ const LIVE: TermPhase = { kind: 'live', sessionId: 's1' }
 const DORMANT: TermPhase = { kind: 'dormant' }
 
 /** The tile as ProjectDashboard draws it: the picker over the body. */
-function Tile({ defaultView, phase = LIVE }: { defaultView?: unknown; phase?: TermPhase }) {
+function Tile({ defaultView, phase = LIVE }: { defaultView?: ProjectDefaultView; phase?: TermPhase }) {
   const [view, setView] = useTileView('g1', 'ws-sales', defaultView)
   return (
     <div data-tile-view={view} data-testid="tile">

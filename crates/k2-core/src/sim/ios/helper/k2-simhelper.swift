@@ -20,6 +20,14 @@
 //                    [u64 BE capture ns][u64 BE emit ns] + JPEG bytes   (protocol 2)
 //                    capture = the IOSurface callback the frame answers, emit = the
 //                    encode finished; both ns of uptime, the clock `hello.clock_ns` reads
+//         (the `frames` op). Protocol 4 (the `layers` op): kind 'F' = one unit, the
+//         40-byte header of k2-simvideo's link.rs then an Annex B H.264 access unit
+//         (SPS + PPS in front of every IDR) or a JPEG. Its first byte is the codec
+//         (1-3); a protocol 3 frame's is a width's high byte (0), which is how the
+//         daemon tells them apart on one pipe across a switch.
+//         protocol 4 requests: {"op":"layers","layers":[{id,codec,max_width,fps,
+//         bitrate,quality,on}]} (the whole list; one encode per layer),
+//         {"op":"keyframe","layer":n,"since_ns":t}, {"op":"rate","layer":n,"fps":f,"bitrate":b}
 // stderr: diagnostics only.
 //
 // It drives the Simulator through CoreSimulator + SimulatorKit + the private
@@ -42,8 +50,14 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 import ObjectiveC
+import VideoToolbox
+import CoreMedia
+import CoreVideo
 
-let HELPER_VERSION = 3
+/// 4: H.264 units from VideoToolbox (`layers`, `keyframe`, `rate`); `frames`
+/// still sends protocol 3's JPEG frames.
+let HELPER_VERSION = 4
+let HELPER_ACCEPTS = [3, 4]
 
 // MARK: - Output
 
@@ -56,11 +70,15 @@ enum Out {
         guard let i = a.firstIndex(of: "--frames-fd"), i + 1 < a.count, let fd = Int32(a[i + 1]), fd > 2 else { return nil }
         return FileHandle(fileDescriptor: fd, closeOnDealloc: false)
     }()
-    static func send(_ kind: UInt8, _ payload: Data) {
+    static func framed(_ kind: UInt8, _ payload: Data) -> Data {
         var len = UInt32(payload.count + 1).bigEndian
         var d = Data(bytes: &len, count: 4)
         d.append(kind)
         d.append(payload)
+        return d
+    }
+    static func send(_ kind: UInt8, _ payload: Data) {
+        let d = framed(kind, payload)
         if kind == UInt8(ascii: "F"), let fh = frames {
             frameLock.lock(); defer { frameLock.unlock() }
             try? fh.write(contentsOf: d)   // the daemon gone: its stdin closing ends us
@@ -68,6 +86,17 @@ enum Out {
         }
         lock.lock(); defer { lock.unlock() }
         FileHandle.standardOutput.write(d)
+    }
+    /// The lock 'F' messages are written under.
+    static var unitLock: NSLock { frames != nil ? frameLock : lock }
+    /// One protocol 4 unit: `make` runs under the frames lock (it takes the
+    /// layer's next seq), so a layer's units leave in seq order, one write each.
+    static func unit(_ make: () -> Data?) {
+        let lk = unitLock
+        lk.lock(); defer { lk.unlock() }
+        guard let payload = make() else { return }
+        let d = framed(UInt8(ascii: "F"), payload)
+        if let fh = frames { try? fh.write(contentsOf: d) } else { FileHandle.standardOutput.write(d) }
     }
     static func json(_ obj: [String: Any]) {
         guard let d = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]) else {
@@ -234,6 +263,7 @@ final class Frames {
 
     func configure(on: Bool, fps: Double, scale: Double, quality: Double) {
         q.sync {
+            if on { for id in Array(self.layers.keys) { self.teardown(id) } }   // protocol 3 takes the pipe back
             self.streaming = on
             self.fps = max(1, min(60, fps))
             self.scale = max(0.1, min(1, scale))
@@ -247,9 +277,11 @@ final class Frames {
     private var lastArrivalNs: UInt64 = 0
 
     private func frameArrived() {
-        guard streaming else { return }
+        guard streaming || !layers.isEmpty else { return }
         lastArrivalNs = nowNs()
         lastArrival = Double(lastArrivalNs) / 1e9
+        for l in layers.values { tick(l) }
+        guard streaming else { return }
         if lastArrival >= nextDue {
             emit()
         } else {
@@ -301,6 +333,438 @@ final class Frames {
         payload.append(Data(bytes: &emt, count: 8))
         payload.append(jpeg.data)
         Out.send(UInt8(ascii: "F"), payload)
+    }
+
+    // MARK: Protocol 4: layers (all on q)
+
+    private var layers: [UInt8: Layer] = [:]
+
+    /// The whole layer list (`layers`): a layer missing from it or with
+    /// `on: false` is torn down; a new one starts with a key unit of the
+    /// screen as it is; a changed one is retuned in place (a new size makes
+    /// the next unit a source start).
+    func setLayers(_ specs: [LayerSpec]) {
+        q.sync {
+            self.streaming = false   // protocol 4 takes the pipe
+            let want = Dictionary(uniqueKeysWithValues: specs.filter { $0.on }.map { ($0.id, $0) })
+            for (id, l) in self.layers where want[id]?.codec != l.codec { self.teardown(id) }
+            for spec in specs where spec.on {
+                if let l = self.layers[spec.id] {
+                    l.fps = spec.fps
+                    if l.maxWidth != spec.maxWidth { l.maxWidth = spec.maxWidth; l.wantKey = true; l.keySince = 0 }
+                    l.lq.async { l.retune(spec) }
+                    self.tick(l)
+                } else {
+                    let l = Layer(spec)
+                    self.layers[spec.id] = l
+                    Out.log("layer \(spec.id): \(spec.codec) max_width \(spec.maxWidth) at \(Int(spec.fps)) fps, \(spec.bitrate) b/s")
+                    self.tick(l)
+                }
+            }
+        }
+    }
+
+    /// A keyframe on the first frame read at or after `since` (the request
+    /// can't name a frame VideoToolbox already holds: the key is set on the
+    /// very frame it is encoded with). A still screen gets one too.
+    func keyframe(layer id: UInt8, since: UInt64) -> Bool {
+        q.sync {
+            guard let l = self.layers[id] else { return false }
+            l.wantKey = true
+            l.keySince = since
+            self.tick(l)
+            return true
+        }
+    }
+
+    /// New rate targets, no keyframe.
+    func rate(layer id: UInt8, fps: Double, bitrate: Int) -> Bool {
+        q.sync {
+            guard let l = self.layers[id] else { return false }
+            l.fps = fps
+            l.lq.async { l.setRates(fps: fps, bitrate: bitrate) }
+            return true
+        }
+    }
+
+    private func teardown(_ id: UInt8) {
+        guard let l = layers.removeValue(forKey: id) else { return }
+        Out.unitLock.lock(); l.live = false; Out.unitLock.unlock()   // no unit of it leaves after this
+        l.lq.async { l.close() }
+        Out.log("layer \(id): off")
+    }
+
+    /// A layer's frame is due on its own schedule (the same rule as `emit`'s).
+    private func tick(_ l: Layer) {
+        guard layers[l.id] === l, !l.busy else { return }   // busy: the encode's end ticks again
+        let dirty = lastArrival > l.lastCapture
+        let keyReady = l.wantKey && nowNs() >= l.keySince
+        guard dirty || keyReady else {
+            if l.wantKey { trail(l, until: Double(l.keySince) / 1e9) }   // a keyframe asked for later on a still screen
+            return
+        }
+        if now() >= l.nextDue { capture(l) } else { trail(l, until: l.nextDue) }
+    }
+
+    private func trail(_ l: Layer, until: Double) {
+        guard !l.trailing else { return }
+        l.trailing = true
+        q.asyncAfter(deadline: .now() + max(0.001, until - now())) { [weak self] in
+            l.trailing = false
+            self?.tick(l)
+        }
+    }
+
+    private func capture(_ l: Layer) {
+        guard let s = surface() else { return }
+        let t = now()
+        if t >= l.nextDue {
+            l.nextDue += 1.0 / l.fps
+            if l.nextDue <= t { l.nextDue = t + 1.0 / l.fps }
+        }
+        l.lastCapture = t
+        let captured = lastArrivalNs != 0 ? lastArrivalNs : nowNs()
+        let key = l.wantKey && nowNs() >= l.keySince
+        if key { l.wantKey = false }
+        l.busy = true
+        l.lq.async { [weak self] in
+            let ok = l.encode(s, captured: captured, key: key) {
+                // A forced key or source start the encoder dropped: ask again.
+                self?.q.async { l.wantKey = true; l.keySince = 0; self?.tick(l) }
+            }
+            self?.q.async {
+                l.busy = false
+                if !ok && key { l.wantKey = true; l.keySince = 0 }
+                self?.tick(l)
+            }
+        }
+    }
+}
+
+/// One layer the daemon asked for (protocol 4's `LayerSpec`).
+struct LayerSpec {
+    let id: UInt8, codec: String, maxWidth: Int, fps: Double, bitrate: Int, quality: Double, on: Bool
+
+    static func parse(_ r: [String: Any], codecs: [String]) throws -> LayerSpec {
+        guard let id = (r["id"] as? NSNumber)?.intValue, (0...255).contains(id) else { throw HelperError(code: "bad_request", message: "a layer needs an id 0-255") }
+        guard let codec = r["codec"] as? String else { throw HelperError(code: "bad_request", message: "layer \(id) needs a codec") }
+        let on = (r["on"] as? Bool) ?? true
+        if on && !codecs.contains(codec) {
+            throw HelperError(code: "bad_request", message: "layer \(id): codec \(codec) isn't available here (codecs: \(codecs.joined(separator: ", ")))")
+        }
+        guard let fps = (r["fps"] as? NSNumber)?.doubleValue else { throw HelperError(code: "bad_request", message: "layer \(id) needs fps") }
+        let bitrate = (r["bitrate"] as? NSNumber)?.intValue ?? 0
+        let quality = (r["quality"] as? NSNumber).map { max(0.05, min(1, $0.doubleValue / 100)) } ?? 0.7
+        return LayerSpec(id: UInt8(id), codec: codec, maxWidth: max(0, (r["max_width"] as? NSNumber)?.intValue ?? 0),
+                         fps: max(1, min(60, fps)), bitrate: bitrate > 0 ? bitrate : 6_000_000, quality: quality, on: on)
+    }
+}
+
+/// One layer: its schedule (on `Frames.q`), its encoder (on its own queue,
+/// so the IOSurface callback queue never waits on VideoToolbox) and its
+/// output (under the frames lock).
+final class Layer {
+    let id: UInt8, codec: String
+    let lq: DispatchQueue
+    // Schedule: only on Frames.q.
+    var fps: Double
+    var maxWidth: Int
+    var nextDue = 0.0, lastCapture = -1.0
+    var trailing = false, busy = false
+    var wantKey = true, keySince: UInt64 = 0
+    // Output: only under Out.unitLock.
+    var live = true
+    static var seqs: [UInt8: UInt64] = [:]   // per layer id, never back (a restarted layer goes on)
+    // Encoder: only on lq.
+    private var spec: LayerSpec
+    private var session: VTCompressionSession?
+    private var transfer: VTPixelTransferSession?
+    private var size = (0, 0)
+    private var fresh = true   // the next unit is a source start
+    private var lastPts: Int64 = -1
+
+    init(_ spec: LayerSpec) {
+        id = spec.id; codec = spec.codec; fps = spec.fps; maxWidth = spec.maxWidth; self.spec = spec
+        lq = DispatchQueue(label: "k2.layer.\(spec.id)", qos: .userInteractive)
+    }
+
+    /// The coded size for a native surface: no wider than max_width or the
+    /// surface, even, aspect kept.
+    static func fit(_ nw: Int, _ nh: Int, maxWidth: Int) -> (Int, Int) {
+        let w = max(2, (maxWidth > 0 ? min(maxWidth, nw) : nw) & ~1)
+        let h = max(2, Int((Double(nh) * Double(w) / Double(max(1, nw))).rounded()) & ~1)
+        return (w, h)
+    }
+
+    func retune(_ s: LayerSpec) {
+        let rates = s.fps != spec.fps || s.bitrate != spec.bitrate
+        spec = s
+        if rates { setRates(fps: s.fps, bitrate: s.bitrate) }
+    }
+
+    func setRates(fps: Double, bitrate: Int) {
+        spec = LayerSpec(id: spec.id, codec: spec.codec, maxWidth: spec.maxWidth, fps: fps, bitrate: bitrate > 0 ? bitrate : spec.bitrate, quality: spec.quality, on: spec.on)
+        if let s = session { H264.rates(s, fps: spec.fps, bitrate: spec.bitrate) }
+    }
+
+    func close() {
+        if let s = session { VTCompressionSessionInvalidate(s) }
+        if let t = transfer { VTPixelTransferSessionInvalidate(t) }
+        session = nil; transfer = nil
+    }
+
+    /// Encodes the surface as it is now. false: nothing was sent or queued.
+    /// `rearm` runs when VideoToolbox drops a frame that had to be a key.
+    func encode(_ s: IOSurface, captured: UInt64, key: Bool, rearm: @escaping () -> Void) -> Bool {
+        codec == "jpeg" ? jpeg(s, captured: captured) : h264(s, captured: captured, key: key, rearm: rearm)
+    }
+
+    private func jpeg(_ s: IOSurface, captured: UInt64) -> Bool {
+        let nw = IOSurfaceGetWidth(s)
+        let (w, _) = Layer.fit(nw, IOSurfaceGetHeight(s), maxWidth: spec.maxWidth)
+        guard let img = Image.cgImage(s),
+              let j = Image.encode(img, scale: Double(w) / Double(max(1, nw)), type: UTType.jpeg, quality: spec.quality, crop: nil) else { return false }
+        let start = fresh || (j.width, j.height) != size
+        fresh = false; size = (j.width, j.height)
+        send(codec: 3, key: true, start: start, width: j.width, height: j.height, captured: captured, emitted: nowNs(), data: j.data)
+        return true
+    }
+
+    private func h264(_ s: IOSurface, captured: UInt64, key: Bool, rearm: @escaping () -> Void) -> Bool {
+        let want = Layer.fit(IOSurfaceGetWidth(s), IOSurfaceGetHeight(s), maxWidth: spec.maxWidth)
+        if session == nil || want != size {
+            if let old = session {
+                // The old size's last units go first, then the new size starts.
+                VTCompressionSessionCompleteFrames(old, untilPresentationTimeStamp: .invalid)
+                VTCompressionSessionInvalidate(old)
+                session = nil
+            }
+            guard let o = H264.open(width: want.0, height: want.1, fps: spec.fps, bitrate: spec.bitrate) else { return false }
+            session = o; size = want; fresh = true; lastPts = -1
+        }
+        guard let session else { return false }
+        if transfer == nil {
+            var t: VTPixelTransferSession?
+            guard VTPixelTransferSessionCreate(allocator: nil, pixelTransferSessionOut: &t) == noErr, let t else {
+                Out.log("layer \(id): no pixel transfer session"); return false
+            }
+            VTSessionSetProperty(t, key: kVTPixelTransferPropertyKey_DestinationYCbCrMatrix, value: kCVImageBufferYCbCrMatrix_ITU_R_709_2)
+            VTSessionSetProperty(t, key: kVTPixelTransferPropertyKey_DestinationColorPrimaries, value: kCVImageBufferColorPrimaries_ITU_R_709_2)
+            VTSessionSetProperty(t, key: kVTPixelTransferPropertyKey_DestinationTransferFunction, value: kCVImageBufferTransferFunction_ITU_R_709_2)
+            transfer = t
+        }
+        // The framebuffer itself, no copy; then GPU scale + BGRA → NV12.
+        var srcOut: Unmanaged<CVPixelBuffer>?
+        guard CVPixelBufferCreateWithIOSurface(nil, s, nil, &srcOut) == kCVReturnSuccess, let src = srcOut?.takeRetainedValue() else {
+            Out.log("layer \(id): CVPixelBufferCreateWithIOSurface failed"); return false
+        }
+        guard let pool = VTCompressionSessionGetPixelBufferPool(session) else { Out.log("layer \(id): no pixel buffer pool"); return false }
+        var dstOut: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &dstOut) == kCVReturnSuccess, let dst = dstOut else { return false }
+        let tst = VTPixelTransferSessionTransferImage(transfer!, from: src, to: dst)
+        guard tst == noErr else { Out.log("layer \(id): pixel transfer failed (OSStatus \(tst))"); return false }
+        CVBufferSetAttachment(dst, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
+        CVBufferSetAttachment(dst, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
+        CVBufferSetAttachment(dst, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
+        let start = fresh
+        fresh = false
+        let force = key || start
+        let pts = max(Int64(captured / 1000), lastPts + 1)
+        lastPts = pts
+        let props: CFDictionary? = force ? [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue!] as CFDictionary : nil
+        let st = VTCompressionSessionEncodeFrame(session, imageBuffer: dst, presentationTimeStamp: CMTime(value: pts, timescale: 1_000_000),
+                                                 duration: .invalid, frameProperties: props, infoFlagsOut: nil) { [weak self] status, flags, sb in
+            // VideoToolbox's thread: never touches the encoder state.
+            let emitted = nowNs()
+            guard let self else { return }
+            guard status == noErr, !flags.contains(.frameDropped), let sb, let au = H264.annexB(sb), !(start && !au.key) else {
+                if status != noErr { Out.log("layer \(self.id): encode failed (OSStatus \(status))") }
+                if force {
+                    if start { self.lq.async { self.fresh = true } }
+                    rearm()
+                }
+                return
+            }
+            self.send(codec: 1, key: au.key, start: start, width: au.width, height: au.height, captured: captured, emitted: emitted, data: au.data)
+        }
+        if st != noErr {
+            Out.log("layer \(id): VTCompressionSessionEncodeFrame failed (OSStatus \(st))")
+            if start { fresh = true }
+            return false
+        }
+        return true
+    }
+
+    private func send(codec: UInt8, key: Bool, start: Bool, width: Int, height: Int, captured: UInt64, emitted: UInt64, data: Data) {
+        Out.unit {
+            guard self.live else { return nil }
+            let seq = (Layer.seqs[self.id] ?? 0) + 1
+            Layer.seqs[self.id] = seq
+            var d = unitHeader(codec: codec, key: key || start, start: start, layer: self.id, width: width, height: height,
+                               seq: seq, captured: captured, emitted: emitted)
+            d.append(data)
+            return d
+        }
+    }
+}
+
+/// link.rs's 40-byte unit header, big-endian (its golden test pins the bytes).
+func unitHeader(codec: UInt8, key: Bool, start: Bool, layer: UInt8, width: Int, height: Int, seq: UInt64, captured: UInt64, emitted: UInt64) -> Data {
+    var d = Data(capacity: 40)
+    func be<T: FixedWidthInteger>(_ v: T) { withUnsafeBytes(of: v.bigEndian) { d.append(contentsOf: $0) } }
+    d.append(codec)
+    d.append((key ? 1 : 0) | (start ? 2 : 0))
+    d.append(layer)
+    d.append(0)
+    be(UInt32(0))   // source: 0 for a simulator
+    be(UInt32(width)); be(UInt32(height))
+    be(seq); be(captured); be(emitted)
+    return d
+}
+
+// MARK: - H.264 (VideoToolbox; the settings are kessel-video's)
+
+enum H264 {
+    private static let lock = NSLock()
+    private static var checked = "unknown"
+    /// The encoder the last session opened on: "hardware", "software" or
+    /// "unknown" (nothing said which; never a guess).
+    static var encoder: String { lock.lock(); defer { lock.unlock() }; return checked }
+    static private(set) var available = false
+
+    /// At start: can an H.264 session open here, and on what? (`codecs`, `encoder`.)
+    static func probe(width: Int, height: Int) {
+        if let s = open(width: width, height: height, fps: 60, bitrate: 6_000_000) {
+            available = true
+            VTCompressionSessionInvalidate(s)
+        }
+    }
+
+    /// Hardware or software, from what VideoToolbox says: the session's own
+    /// "using hardware" answer, else its EncoderID's entry in the encoder list.
+    static func check(_ s: VTCompressionSession) -> (kind: String, id: String) {
+        let id = copy(s, kVTCompressionPropertyKey_EncoderID) as? String
+        if let b = copy(s, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder) as? Bool {
+            return (b ? "hardware" : "software", id ?? "?")
+        }
+        guard let id else { return ("unknown", "?") }
+        var list: CFArray?
+        guard VTCopyVideoEncoderList(nil, &list) == noErr, let entries = list as? [[String: Any]] else { return ("unknown", id) }
+        for e in entries where e[kVTVideoEncoderList_EncoderID as String] as? String == id {
+            return ((e[kVTVideoEncoderList_IsHardwareAccelerated as String] as? Bool) == true ? "hardware" : "software", id)
+        }
+        return ("unknown", id)
+    }
+
+    /// A session property (a copy we own), or nil when the session won't say.
+    static func copy(_ s: VTCompressionSession, _ k: CFString) -> CFTypeRef? {
+        var v: CFTypeRef?
+        let st = withUnsafeMutablePointer(to: &v) { VTSessionCopyProperty(s, key: k, allocator: nil, valueOut: UnsafeMutableRawPointer($0)) }
+        return st == noErr ? v : nil
+    }
+
+    @discardableResult
+    static func set(_ s: VTCompressionSession, _ k: CFString, _ v: CFTypeRef) -> Bool { VTSessionSetProperty(s, key: k, value: v) == noErr }
+
+    /// Opens a real-time session: hardware required first (with low-latency
+    /// rate control, then without), then hardware allowed. A required-hardware
+    /// session that can't be confirmed as hardware is dropped.
+    static func open(width: Int, height: Int, fps: Double, bitrate: Int) -> VTCompressionSession? {
+        let attrs: [CFString: Any] = [
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            kCVPixelBufferWidthKey: width, kCVPixelBufferHeightKey: height,
+            kCVPixelBufferIOSurfacePropertiesKey: [CFString: Any](),
+        ]
+        for (require, lowLatency) in [(true, true), (true, false), (false, true), (false, false)] {
+            let ask = "\(require ? "require" : "enable") hardware\(lowLatency ? " + low latency" : "")"
+            let hardware = require ? kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder
+                                   : kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder
+            var spec: [CFString: Any] = [hardware: true]
+            if lowLatency { spec[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
+            var out: VTCompressionSession?
+            let st = VTCompressionSessionCreate(allocator: nil, width: Int32(width), height: Int32(height), codecType: kCMVideoCodecType_H264,
+                                                encoderSpecification: spec as CFDictionary, imageBufferAttributes: attrs as CFDictionary,
+                                                compressedDataAllocator: nil, outputCallback: nil, refcon: nil, compressionSessionOut: &out)
+            guard st == noErr, let s = out else { Out.log("h264 \(width)x\(height): \(ask): no session (OSStatus \(st))"); continue }
+            let (kind, id) = check(s)
+            if require && kind != "hardware" {
+                Out.log("h264 \(width)x\(height): \(ask): encoder \(id) is \(kind), not confirmed hardware: dropped")
+                VTCompressionSessionInvalidate(s); continue
+            }
+            set(s, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue)
+            set(s, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
+            var profile = "ConstrainedHigh"
+            if !set(s, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_ConstrainedHigh_AutoLevel) {
+                profile = "High"
+                if !set(s, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel) {
+                    Out.log("h264 \(width)x\(height): \(ask): no Constrained High or High profile: dropped")
+                    VTCompressionSessionInvalidate(s); continue
+                }
+            }
+            // Keyframes only on demand; this is a 10-minute safety net.
+            set(s, kVTCompressionPropertyKey_MaxKeyFrameInterval, NSNumber(value: 36_000))
+            set(s, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, NSNumber(value: 600.0))
+            set(s, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, kCFBooleanTrue)
+            rates(s, fps: fps, bitrate: bitrate)
+            VTCompressionSessionPrepareToEncodeFrames(s)
+            lock.lock(); checked = kind; lock.unlock()
+            Out.log("h264 \(width)x\(height): \(ask): \(kind) (encoder \(id), profile \(profile))")
+            return s
+        }
+        return nil
+    }
+
+    /// Target bits a second, a 1 s ceiling at 1.5x, the expected rate.
+    static func rates(_ s: VTCompressionSession, fps: Double, bitrate: Int) {
+        set(s, kVTCompressionPropertyKey_AverageBitRate, NSNumber(value: bitrate))
+        set(s, kVTCompressionPropertyKey_DataRateLimits, [NSNumber(value: Int(Double(bitrate) / 8 * 1.5)), NSNumber(value: 1.0)] as CFArray)
+        set(s, kVTCompressionPropertyKey_ExpectedFrameRate, NSNumber(value: fps))
+    }
+
+    /// AVCC sample → one Annex B access unit, SPS + PPS (from the format
+    /// description) in front of a keyframe. Key = no NotSync attachment.
+    static func annexB(_ sb: CMSampleBuffer) -> (data: Data, key: Bool, width: Int, height: Int)? {
+        var key = true
+        if let atts = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]],
+           let a = atts.first, (a[kCMSampleAttachmentKey_NotSync] as? Bool) == true { key = false }
+        guard let desc = CMSampleBufferGetFormatDescription(sb) else { return nil }
+        let dims = CMVideoFormatDescriptionGetDimensions(desc)
+        var count = 0
+        var nalLen: Int32 = 0
+        guard CMVideoFormatDescriptionGetH264ParameterSetAtIndex(desc, parameterSetIndex: 0, parameterSetPointerOut: nil, parameterSetSizeOut: nil,
+                                                                 parameterSetCountOut: &count, nalUnitHeaderLengthOut: &nalLen) == noErr, nalLen > 0 else { return nil }
+        let startCode: [UInt8] = [0, 0, 0, 1]
+        var out = Data()
+        if key {
+            for i in 0..<count {
+                var p: UnsafePointer<UInt8>?
+                var n = 0
+                guard CMVideoFormatDescriptionGetH264ParameterSetAtIndex(desc, parameterSetIndex: i, parameterSetPointerOut: &p, parameterSetSizeOut: &n,
+                                                                         parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr, let p else { return nil }
+                out.append(contentsOf: startCode)
+                out.append(p, count: n)
+            }
+        }
+        guard let bb = CMSampleBufferGetDataBuffer(sb) else { return nil }
+        let len = CMBlockBufferGetDataLength(bb)
+        var avcc = [UInt8](repeating: 0, count: len)
+        guard CMBlockBufferCopyDataBytes(bb, atOffset: 0, dataLength: len, destination: &avcc) == noErr else { return nil }
+        let L = Int(nalLen)
+        var i = 0
+        while i + L <= len {
+            var n = 0
+            for j in 0..<L { n = n << 8 | Int(avcc[i + j]) }
+            i += L
+            guard n > 0, i + n <= len else { return nil }
+            let type = avcc[i] & 0x1f
+            // Parameter sets are written once, above, from the format.
+            if !(key && (type == 7 || type == 8)) {
+                out.append(contentsOf: startCode)
+                out.append(contentsOf: avcc[i..<(i + n)])
+            }
+            i += n
+        }
+        return (out, key, Int(dims.width), Int(dims.height))
     }
 }
 
@@ -744,6 +1208,12 @@ func frameArg(_ r: [String: Any]) throws -> [Double] {
     guard let f = r["frame"] as? [NSNumber], f.count == 4 else { throw HelperError(code: "bad_request", message: "missing frame [x,y,w,h]") }
     return f.map { $0.doubleValue }
 }
+func layerId(_ r: [String: Any]) throws -> UInt8 {
+    guard let n = (r["layer"] as? NSNumber)?.intValue, (0...255).contains(n) else { throw HelperError(code: "bad_request", message: "missing layer 0-255") }
+    return UInt8(n)
+}
+/// What `layers` can encode, best first.
+func codecs() -> [String] { H264.available ? ["h264", "jpeg"] : ["jpeg"] }
 func str(_ r: [String: Any], _ k: String) throws -> String {
     guard let s = r[k] as? String else { throw HelperError(code: "bad_request", message: "missing string \(k)") }
     return s
@@ -770,6 +1240,7 @@ func handle(_ r: [String: Any]) throws -> [String: Any] {
                 "runtime": (device.value(forKey: "runtime") as? NSObject)?.value(forKey: "name") as? String ?? "",
                 "screen": ["width": screen.widthPt, "height": screen.heightPt, "scale": screen.scale],
                 "developer_dir": devDir, "xcode": xcode,
+                "accepts": HELPER_ACCEPTS, "codecs": codecs(), "encoder": H264.encoder,
                 // The frame times' clock (ns of uptime): the daemon maps it onto its own.
                 "clock_ns": nowNs()]
     case "focus":
@@ -808,6 +1279,23 @@ func handle(_ r: [String: Any]) throws -> [String: Any] {
                                    scale: (r["scale"] as? NSNumber)?.doubleValue ?? (1.0 / screen.scale),
                                    quality: (r["quality"] as? NSNumber)?.doubleValue ?? 0.7)
         return [:]
+    case "layers":
+        guard let list = r["layers"] as? [[String: Any]] else { throw HelperError(code: "bad_request", message: "layers needs a list") }
+        let specs = try list.map { try LayerSpec.parse($0, codecs: codecs()) }
+        guard Set(specs.map { $0.id }).count == specs.count else { throw HelperError(code: "bad_request", message: "two layers with one id") }
+        try needFrames().setLayers(specs)
+        return [:]
+    case "keyframe":
+        let layer = try layerId(r)
+        let since = (r["since_ns"] as? NSNumber)?.uint64Value ?? 0
+        guard try needFrames().keyframe(layer: layer, since: since) else { throw HelperError(code: "bad_request", message: "no layer \(layer) is on") }
+        return [:]
+    case "rate":
+        let layer = try layerId(r)
+        guard try needFrames().rate(layer: layer, fps: max(1, min(60, try num(r, "fps"))), bitrate: Int(try num(r, "bitrate"))) else {
+            throw HelperError(code: "bad_request", message: "no layer \(layer) is on")
+        }
+        return [:]
     case "image":
         // A still to a file: PNG, optionally cropped to a rect in points.
         let path = try str(r, "path")
@@ -832,7 +1320,12 @@ func handle(_ r: [String: Any]) throws -> [String: Any] {
     }
 }
 
-Out.json(["event": "ready", "version": HELPER_VERSION, "xcode": xcode])
+// Can H.264 open here, and on what? A session at the screen's own size, closed again.
+let probeSize = Layer.fit(Int((screen.widthPt * screen.scale).rounded()), Int((screen.heightPt * screen.scale).rounded()), maxWidth: 0)
+H264.probe(width: probeSize.0 > 2 ? probeSize.0 : 1280, height: probeSize.1 > 2 ? probeSize.1 : 720)
+Out.log("codecs \(codecs().joined(separator: ",")), encoder \(H264.encoder)")
+Out.json(["event": "ready", "version": HELPER_VERSION, "accepts": HELPER_ACCEPTS, "codecs": codecs(), "encoder": H264.encoder,
+          "clock_ns": nowNs(), "xcode": xcode])
 while let line = readLine(strippingNewline: true) {
     guard !line.isEmpty else { continue }
     guard let data = line.data(using: .utf8),

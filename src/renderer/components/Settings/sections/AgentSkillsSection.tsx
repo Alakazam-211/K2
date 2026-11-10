@@ -35,19 +35,19 @@ const OPT_IN_SKILLS: { dir: string; label: string; blurb: string }[] = [
     dir: 'workspace-manager',
     label: 'Workspace Manager',
     blurb:
-      'Role knowledge for the manager — standing orders, the k2 CLI verb surface, delegation/review. The agent weaves it into ROLE.md organically. Enable + run it from a manager workspace’s Agent section.',
+      'What a manager agent needs to know: standing orders, the k2 commands, and how to hand off and review work. The agent folds it into its role (ROLE.md). Turn it on from a manager workspace.',
   },
   {
     dir: 'k2-agent',
     label: 'K2 Agent',
     blurb:
-      'Role knowledge for the planner agent — PRDs, milestones, technical plans. Woven into ROLE.md organically. Enable + run it from a K2-Agent workspace’s Agent section.',
+      'What a planning agent needs to know: PRDs, milestones and technical plans. The agent folds it into its role (ROLE.md). Turn it on from a K2 Agent workspace.',
   },
   {
     dir: 'k2-canonical-agent',
     label: 'K2 Canonical Agent',
     blurb:
-      'Unifies the workspace’s AI-harness files safely: diagnose per-harness state, merge existing harness content into ROLE.md/PROJECT.md, regenerate the canonical .k2/AGENTS.md, then mirror it out — backed up and byte-reversible. Available to every workspace.',
+      'Brings a workspace’s tool files together safely: it checks each one, merges what’s in them into ROLE.md and PROJECT.md, builds .k2/AGENTS.md and links the tool files to it. Backed up first and fully undoable. Available to every workspace.',
   },
 ]
 
@@ -58,33 +58,25 @@ export function AgentSkillsSection(): React.JSX.Element {
   // section and can't switch workspaces, so showing one workspace's harness
   // state here just confused users. Removed per that feedback.
   return (
-    <div className="w-full" data-settings-id="agent-skills.canonical-flow">
-      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Canonical Agent Flow</h2>
-      <div className="type-hint text-[var(--color-text-secondary)] mb-4 space-y-2 leading-relaxed">
+    <section className="w-full" data-settings-id="agent-skills.canonical-flow">
+      {/* A group on the Workspace settings page, so a group heading, not a
+          page title. */}
+      <h3 className="type-heading text-[var(--color-text-primary)] mb-1">Canonical Agent Flow</h3>
+      <div className="type-hint text-[var(--color-text-secondary)] mb-4 space-y-2 leading-relaxed max-w-[75ch]">
         <p>
-          Different AI tools look for project notes in different files. Always-on context is a{' '}
-          <span className="text-[var(--color-text-secondary)]">context management stack</span>:
-          pinned{' '}
-          <span className="font-mono text-[var(--color-text-secondary)]">AGENT.md</span> (persona) +{' '}
-          <span className="font-mono text-[var(--color-text-secondary)]">PROJECT.md</span> (project) +
-          optional ordered layers (wiki index, docs, packs), composed into one entrypoint.
+          Each AI tool reads its instructions from a different file. K2 keeps one set for each
+          workspace: the agent&rsquo;s role (<code>AGENT.md</code>), the project notes
+          (<code>PROJECT.md</code>) and any extra layers you add, such as the wiki index.
         </p>
         <p>
-          K2 builds{' '}
-          <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENTS.md</span> from
-          that stack — the shared entrypoint that Pi, Hermes, Codex, and most other tools already read.
+          K2 joins them into one file, <code>.k2/AGENTS.md</code>, which most tools read directly.
+          Tools that look elsewhere (<code>CLAUDE.md</code>, <code>GEMINI.md</code>,{' '}
+          <code>.cursor/rules</code>) get a link to it that you can&rsquo;t edit by mistake, so every
+          tool reads the same instructions.
         </p>
         <p>
-          Tool-specific files (
-          <span className="font-mono">CLAUDE.md</span>, <span className="font-mono">GEMINI.md</span>,{' '}
-          <span className="font-mono">.cursor/rules</span>
-          ) are read-only symlink mirrors of that file. Claude Code only reads{' '}
-          <span className="font-mono">CLAUDE.md</span>, so that mirror is its bridge.
-        </p>
-        <p className="text-[var(--color-text-secondary)]">
-          Manage always-on context via the per-workspace stack editor (Settings → Workspaces → a
-          workspace → Context) or{' '}
-          <span className="font-mono">k2 agent context</span>. Write once. Every harness sees the same picture.
+          Change them on a workspace&rsquo;s Context tab, or with <code>k2 agent context</code>. You
+          write them once.
         </p>
       </div>
 
@@ -93,29 +85,26 @@ export function AgentSkillsSection(): React.JSX.Element {
 
       {/* The two opt-in routes (PRD §11). */}
       <Surface chamfer material="tile" className="px-4 py-3 mb-4 type-hint leading-relaxed text-[var(--color-text-secondary)]">
-        <div className="type-name text-[var(--color-text-primary)] mb-1">Two opt-in routes to canonical</div>
-        <p className="mb-1.5">
-          <span className="text-[var(--color-text-primary)]">Skill route (recommended for existing projects).</span>{' '}
-          Run the <span className="text-[var(--color-text-primary)]">K2 Canonical Agent</span> with an AI
-          assistant from a workspace’s Agent section. It reads your current harness files, merges their
-          content into <span className="font-mono">AGENT.md</span>/<span className="font-mono">PROJECT.md</span>{' '}
-          safely, regenerates <span className="font-mono">.k2/AGENTS.md</span>, then mirrors it out — backed
-          up first, byte-reversible. Nothing is overwritten.
+        <div className="type-name text-[var(--color-text-primary)] mb-1">Two ways to set it up</div>
+        <p className="mb-1.5 max-w-[75ch]">
+          <span className="text-[var(--color-text-primary)]">With the K2 Canonical Agent (best for an existing project).</span>{' '}
+          Run it from a workspace&rsquo;s Context tab. It reads the files your tools already have, merges
+          them into <code>AGENT.md</code> and <code>PROJECT.md</code>, builds <code>.k2/AGENTS.md</code> and
+          links the tool files to it. It backs everything up first and can undo every change, so
+          nothing is lost.
         </p>
-        <p>
-          <span className="text-[var(--color-text-primary)]">Checkbox route (best for new projects).</span>{' '}
-          Tick the <span className="text-[var(--color-text-primary)]">Canonical Agent</span> checkbox on the
-          workspace itself for ongoing{' '}
-          <span className="text-[var(--color-text-primary)]">programmatic symlinks</span> pointing back at the
-          generated <span className="font-mono">.k2/AGENTS.md</span>. Hands-off, but it{' '}
-          <span className="text-[var(--color-status-warn-amber-soft)]">can overwrite existing harness content</span> — for an existing
-          project, prefer the skill route above.
+        <p className="max-w-[75ch]">
+          <span className="text-[var(--color-text-primary)]">With the Canonical Agent checkbox (best for a new project).</span>{' '}
+          Tick it on the workspace and K2 keeps the tool files linked to <code>.k2/AGENTS.md</code> for
+          you. It&rsquo;s hands-off, but it{' '}
+          <span className="text-[var(--color-status-warn-amber-soft)]">can overwrite what&rsquo;s already in those files</span>, so
+          for an existing project use the agent instead.
         </p>
       </Surface>
 
       {/* The three opt-in skills as first-class entries (flat list). */}
       <h3 className="type-heading text-[var(--color-text-primary)] mb-2">
-        Opt-in skills in <span className="font-mono">.k2/skills/</span>
+        Skills you can turn on
       </h3>
       <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)] mb-4">
         {OPT_IN_SKILLS.map((skill) => (
@@ -124,10 +113,10 @@ export function AgentSkillsSection(): React.JSX.Element {
               <span className="type-row text-[var(--color-text-primary)]">{skill.label}</span>
               <span className="type-hint font-mono text-[var(--color-text-secondary)]">.k2/skills/{skill.dir}/</span>
             </div>
-            <p className="type-hint text-[var(--color-text-secondary)] leading-snug mt-0.5">{skill.blurb}</p>
+            <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed mt-0.5 max-w-[75ch]">{skill.blurb}</p>
           </div>
         ))}
       </Surface>
-    </div>
+    </section>
   )
 }

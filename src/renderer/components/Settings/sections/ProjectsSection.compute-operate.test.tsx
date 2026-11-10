@@ -22,7 +22,7 @@ import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 
 const m = vi.mocked(api)
 const role = vi.mocked(presence.fetchViewerRole)
-const NAME = 'Allow this agent to operate compute nodes'
+const NAME = 'Let this agent operate compute nodes'
 
 function project(on: number): ProjectWithWorkspaces {
   return { id: 'p-it', name: 'it', path: '/w/it', agentsCanOperateCompute: on, workspaces: [] } as unknown as ProjectWithWorkspaces
@@ -63,12 +63,14 @@ describe('Agent tab: Allow this agent to operate compute nodes', () => {
     render(<Harness />)
     const sw = await enabledSwitch()
     expect(sw.getAttribute('aria-checked')).toBe('false')
-    expect(screen.getByText(/Root actions wait for your approval/)).toBeTruthy()
+    expect(screen.getByText(/Root actions still wait for you/)).toBeTruthy()
     fireEvent.click(sw)
     await waitFor(() => expect(m.setWorkspaceComputeOperate).toHaveBeenCalledWith('/w/it', true))
     expect(m.setWorkspaceComputeOperate).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(screen.getByRole('switch', { name: NAME }).getAttribute('aria-checked')).toBe('true'))
     expect(useProjectsStore.getState().projects[0].agentsCanOperateCompute).toBe(1)
+    // The row says it was saved, quietly, beside the switch.
+    expect((await screen.findByRole('status')).textContent).toBe('Saved')
   })
 
   it('off: one write with false (an admin login may flip it)', async () => {
@@ -89,6 +91,7 @@ describe('Agent tab: Allow this agent to operate compute nodes', () => {
     await screen.findByText('only the owner or an admin login may change agent access (forbidden)')
     expect(useProjectsStore.getState().projects[0].agentsCanOperateCompute).toBe(0)
     expect(screen.getByRole('switch', { name: NAME }).getAttribute('aria-checked')).toBe('false')
+    expect(screen.queryByText('Saved')).toBeNull()
     spy.mockRestore()
   })
 

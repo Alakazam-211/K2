@@ -321,7 +321,7 @@ describe('Agent tab: Can ask for permission cards', () => {
       </PermissionAsksProvider>
     )
   }
-  const NAME = 'Can ask for permission cards'
+  const NAME = 'Let this agent ask for permission'
 
   it('hidden while the server switch is off; nothing from the family is called', async () => {
     render(<Tab />)

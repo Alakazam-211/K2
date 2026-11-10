@@ -17,6 +17,7 @@ vi.mock('@/components/Presence/PresenceKickButton', () => ({ fetchViewerRole: vi
 import { ProjectsSection } from './ProjectsSection'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 
 type Answers = { skills: () => unknown; agents: () => unknown }
 
@@ -86,5 +87,32 @@ describe('Skills tab', () => {
     fireEvent.click(retry)
     await waitFor(() => expect(screen.getByText('backend-eng')).toBeTruthy())
     expect(screen.queryByTestId('skills-load-error')).toBeNull()
+  })
+
+  it('the empty state says what a skill is and how to add one', async () => {
+    answer({ skills: () => [], agents: () => [] })
+    openSkills()
+    const empty = await screen.findByTestId('skills-empty')
+    expect(empty.textContent).toContain('No skills yet')
+    expect(empty.textContent).toContain('Use New skill to write one.')
+  })
+
+  it('Remove asks first, as a destructive confirm, and a failed remove says so', async () => {
+    const realConfirm = useConfirmDialogStore.getState().confirm
+    const confirm = vi.fn(async () => true)
+    useConfirmDialogStore.setState({ confirm } as never)
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      answer({ skills: () => [{ name: 'backend-eng', title: null, lastModified: 2 }], agents: () => [] })
+      openSkills()
+      fireEvent.click(await screen.findByRole('button', { name: 'Remove' }))
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
+      expect((confirm.mock.calls[0] as unknown[])[0]).toMatchObject({ destructive: true, confirmLabel: 'Remove skill' })
+      // No daemon in the test, so the write fails: the row says so.
+      expect((await screen.findByText(/Couldn\u2019t remove \u201cbackend-eng\u201d/)).textContent).toContain('try again')
+    } finally {
+      useConfirmDialogStore.setState({ confirm: realConfirm } as never)
+      spy.mockRestore()
+    }
   })
 })

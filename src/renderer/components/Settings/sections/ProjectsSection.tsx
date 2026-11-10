@@ -43,7 +43,7 @@ import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { CodeEditor } from '@/components/FileViewerPane/CodeEditor'
 import { CustomThemeCreator } from '../CustomThemeCreator'
-import { AVATAR_ROUND, SETTING_FIELD_WIDTH, SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingDropdown, SettingRow, SettingSwitchRow, SettingsGroup } from '../controls/SettingControls'
+import { AVATAR_ROUND, SETTING_FIELD_WIDTH, SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveError, SaveNote, SettingDropdown, SettingRow, SettingSwitchRow, SettingsGroup, useSaveStatus } from '../controls/SettingControls'
 import { RemindersList } from '@/components/HeartbeatsPanel/RemindersList'
 import { MailWatchPanel } from './MailWatchPanel'
 import { showContextMenu } from '@/lib/context-menu'
@@ -69,7 +69,7 @@ import { workspaceGrantSlug } from './api-keys-api'
 import { setSqlDbAgentAccess, setWorkspaceDbUpgrade } from './data-api'
 import { primaryScope } from '@/kessel/server-scope'
 import { RemoteInstructToggle } from '../shared/RemoteInstructToggle'
-import { Button, Callout, Input, OverflowMenu, Surface, Toggle } from '@/components/ui'
+import { Button, Callout, Input, OverflowMenu, Spinner, Surface, Toggle } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 import { computeErrorMessage, setWorkspaceComputeManage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
 import { metaChordLabel } from '@/lib/shortcut-label'
@@ -102,36 +102,36 @@ function emitProjectsChanged(): void {
 }
 
 export const PROJECTS_MANIFEST: SettingEntry[] = [
-  { id: 'projects.list', section: 'projects', label: 'Workspaces', description: 'All registered projects + focus groups', keywords: ['workspaces', 'projects', 'focus groups'] },
-  { id: 'projects.add', section: 'projects', label: 'Add Workspace', description: 'Register a new project directory', keywords: ['add', 'new', 'workspace', 'project', 'folder'] },
-  { id: 'projects.focus-groups', section: 'projects', label: 'Focus Groups', description: 'Organize workspaces into tabbed folders', keywords: ['focus', 'groups', 'tabs'] },
-  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context stack', description: 'Toggle ROLE.md / PROJECT.md / layers that compose into AGENTS.md', keywords: ['context', 'stack', 'agents.md', 'project.md', 'persona', 'wiki', 'role.md'] },
-  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context (AGENTS.md stack)', description: 'Pinned + optional markdown layers composed into .k2/AGENTS.md', keywords: ['context', 'stack', 'stack', 'agents.md', 'layers', 'wiki', 'always-on'] },
-  { id: 'projects.heartbeat', section: 'projects', label: 'Heartbeat Schedule', description: 'Scheduled / hourly / off per-project heartbeat mode', keywords: ['heartbeat', 'schedule', 'cron', 'hourly', 'scheduled'] },
-  { id: 'projects.agents', section: 'projects', label: 'Project Agents', description: 'Custom agent personas + wake-up files per workspace', keywords: ['agent', 'persona', 'wakeup', 'create'] },
-  { id: 'projects.worktrees', section: 'projects', label: 'Worktree Folders', description: 'Enable/disable per-agent git worktrees', keywords: ['worktree', 'git', 'branch'] },
-  { id: 'projects.relations', section: 'projects', label: 'Connections', description: 'Local and federated connections for this workspace', keywords: ['relations', 'connected', 'connections', 'cross-workspace', 'links', 'federation'] },
-  { id: 'projects.cursor-migrate', section: 'projects', label: 'Cursor Session Migration', description: 'Port Cursor IDE sessions into K2', keywords: ['cursor', 'migrate', 'session', 'import'] },
+  { id: 'projects.list', section: 'projects', label: 'Workspaces', description: 'Every workspace on this server, its focus group and its settings', keywords: ['workspaces', 'projects', 'focus groups'] },
+  { id: 'projects.add', section: 'projects', label: 'New workspace', description: 'Add a folder as a workspace with its own agent', keywords: ['add', 'new', 'workspace', 'project', 'folder'] },
+  { id: 'projects.focus-groups', section: 'projects', label: 'Focus Groups', description: 'Sort workspaces into named groups in the sidebar', keywords: ['focus', 'groups', 'tabs'] },
+  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context', description: 'What this agent always reads: its role, the project notes and any layers you add', keywords: ['context', 'stack', 'agents.md', 'project.md', 'persona', 'wiki', 'role.md'] },
+  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context (AGENTS.md)', description: 'The files K2 joins into the one set of instructions every AI tool reads', keywords: ['context', 'stack', 'stack', 'agents.md', 'layers', 'wiki', 'always-on'] },
+  { id: 'projects.heartbeat', section: 'projects', label: 'Heartbeats', description: 'When this agent wakes up on its own, and what it did', keywords: ['heartbeat', 'schedule', 'cron', 'hourly', 'scheduled'] },
+  { id: 'projects.agents', section: 'projects', label: 'Project Agents', description: 'Agent personas and wake-up notes for this workspace', keywords: ['agent', 'persona', 'wakeup', 'create'] },
+  { id: 'projects.worktrees', section: 'projects', label: 'Worktrees', description: 'The git worktrees this workspace has open, and ones on disk you can reopen', keywords: ['worktree', 'git', 'branch'] },
+  { id: 'projects.relations', section: 'projects', label: 'Connections', description: 'The workspaces and servers this agent can reach', keywords: ['relations', 'connected', 'connections', 'cross-workspace', 'links', 'federation'] },
+  { id: 'projects.cursor-migrate', section: 'projects', label: 'Chat migrations', description: 'Bring Cursor chats into K2', keywords: ['cursor', 'migrate', 'session', 'import'] },
   { id: 'projects.default-model', section: 'projects', label: 'Default model', description: 'The model new sessions in this workspace use', keywords: ['default model', 'opus', 'sonnet', 'workspace model'] },
   { id: 'projects.llm-logins', section: 'projects', label: 'LLM tokens', description: 'Use a specific Claude / Codex / Grok / Gemini subscription or API token for this workspace\'s agents instead of the server default', keywords: ['token', 'tokens', 'subscription', 'api token', 'api key', 'server default', 'login', 'account', 'pin'] },
   { id: 'projects.tabs', section: 'projects', label: 'Tabs: Show the Design tab, Show the Mobile tab', description: 'Keep the Design and Mobile tabs pinned next to Chat and Inbox for this workspace. You can always open them from the + menu', keywords: ['tabs', 'pinned', 'design', 'mobile', 'phone', 'simulator', 'design mode', 'remove', 'bring back', 'show'] },
   { id: 'projects.force-model-on-resume', section: 'projects', label: 'Force model on resume', description: 'Also use the default model when a session resumes', keywords: ['resume', 'model', 'force'] },
-  { id: 'projects.db-agent-create', section: 'projects', label: 'Allow this agent to create databases', description: 'Lets this agent create new databases (k2 db create). It can always use the ones it has', keywords: ['db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
-  { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Build and run Apps', description: 'Apps (beta) for this agent: Build and run Apps, Manage its Apps end to end (budgets, quotas, egress hosts, box services, keys), Let this agent manage its Apps\' users (App users, test guests, passwords, rooms), and what its Apps may use (Database, Files and rooms, Thread, Mail, Chat / Voice Hosting). The owner turns them on; an admin only off. Loosening the wall always asks you', keywords: ['agents_can_manage_skin', 'agents_can_manage_apps_full', 'app_cores', 'cores', 'apps', 'app', 'build', 'run', 'manage', 'end to end', 'database', 'files', 'rooms', 'thread', 'mail', 'sew', 'passport', 'agent', 'guests', 'roles', 'k2 app access'] },
+  { id: 'projects.db-agent-create', section: 'projects', label: 'Let this agent create databases', description: 'It can make new databases; it can always use the ones this workspace owns or was granted', keywords: ['allow this agent to create databases', 'db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
+  { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Build and run Apps', description: 'Apps (beta) for this agent: build and run its Apps, manage them end to end, manage their users, and what its Apps may use. The owner turns them on; an admin only off. Loosening the wall always asks you', keywords: ['agents_can_manage_skin', 'agents_can_manage_apps_full', 'app_cores', 'cores', 'apps', 'app', 'build', 'run', 'manage', 'end to end', 'database', 'files', 'rooms', 'thread', 'mail', 'sew', 'passport', 'agent', 'guests', 'roles', 'k2 app access'] },
   { id: 'projects.agents-can-manage-app-users', section: 'projects', label: 'Let this agent manage its Apps\u2019 users', description: 'Its own Apps only: add and remove App users and test guests, passwords, email, names, unlock, roles and its own room, invites, the guests-rooms grant in its own room, App keys that manage users. Users it makes are tied to it. Never a box login. The owner turns it on and off', keywords: ['agents_can_manage_app_users', 'app_users', 'app users', 'test guests', 'users', 'guests', 'passwords', 'invites', 'guests-rooms', 'k2 app access --users'] },
-  { id: 'projects.agents-can-manage-agents', section: 'projects', label: 'Allow hiring and managing agents', description: 'Lets this workspace\'s main agent open and stop sidecars (k2 sidecar); later also hire and retire agents', keywords: ['agents_can_manage_agents', 'sidecar', 'hire', 'agent', 'passport', 'manage agents'] },
+  { id: 'projects.agents-can-manage-agents', section: 'projects', label: 'Let this agent hire and manage agents', description: 'It can open and stop sidecars, its helper agents', keywords: ['allow hiring and managing agents', 'agents_can_manage_agents', 'sidecar', 'hire', 'agent', 'passport', 'manage agents'] },
   { id: 'projects.handoff-accept-from', section: 'projects', label: 'Secrets from other agents', description: 'Agents whose secrets go straight into this agent\'s vault; everything else waits for you', keywords: ['handoff', 'accept from', 'vault', 'secret', 'send secret', 'agent to agent'] },
-  { id: 'projects.agents-can-manage-vault', section: 'projects', label: 'Allow managing server-wide secrets', description: 'Lets this workspace\'s main agent share server secrets with other workspaces and look after them (k2 vault); never with itself, and never loosen a secret it uses', keywords: ['vault_manage', 'vault', 'secret', 'secrets', 'passport', 'agent', 'it agent'] },
-  { id: 'projects.agents-can-use-compute', section: 'projects', label: 'Allow compute nodes', description: 'Lets this workspace\'s agents run builds and tests on the machines switched on in Settings → Compute (k2 compute run); on grants every machine, and ones added later', keywords: ['agents_can_use_compute', 'compute', 'compute nodes', 'node', 'machines', 'build', 'tests', 'k2 compute', 'passport', 'agent'] },
-  { id: 'projects.agents-can-manage-compute', section: 'projects', label: 'Allow managing compute nodes', description: 'Lets this workspace\'s agent add and confirm compute machines, rename, pause, drain, resume, retire and route them, and grant or revoke them for any workspace (k2 compute node, k2 compute grant); every act is logged and adding or confirming a machine sends you an inbox note. Turning the preview on or off and removing a machine stay yours. Only the owner can switch it', keywords: ['agents_can_manage_compute', 'compute_manage', 'manage', 'compute', 'compute nodes', 'node', 'machines', 'enroll', 'confirm', 'grant', 'revoke', 'retire', 'k2 compute', 'passport', 'agent'] },
-  { id: 'projects.agents-can-upgrade-postgres', section: 'projects', label: 'Allow this agent to manage Postgres versions', description: 'Move this agent\'s databases (and its Apps\' databases) to a newer Postgres, create on a chosen version, and roll back (k2 db upgrade, k2 db create --major); live moves (k2 db upgrade --live) come to agents once proven; every act is logged. Deleting the old copy stays with you. The owner turns it on; the owner or an Admin may turn it off', keywords: ['agents_can_upgrade_postgres', 'db_upgrade', 'postgres', 'postgresql', 'pg', 'pg 17', 'version', 'major', 'upgrade', 'database', 'rollback', 'k2 db upgrade', 'live', 'dual-run', 'agent'] },
-  { id: 'projects.agents-can-request-permissions', section: 'projects', label: 'Can ask for permission cards', description: 'Beta: lets this agent ask you or an admin for a setting change with a card in its Thread (k2 permission request); nothing changes until someone allows it. Shown while Permission cards is on for the server (Settings → Access → Permission Cards). The owner or an admin switches it', keywords: ['agents_can_request_permissions', 'permission_cards', 'permission cards', 'permission', 'card', 'ask', 'request', 'approve', 'beta', 'k2 permission', 'agent'] },
-  { id: 'projects.agents-can-refresh-chat', section: 'projects', label: 'Can refresh its own pinned chat', description: 'Lets this agent start a new pinned chat with the same agent when its chat goes stale, with a note for itself (k2 agent refresh). The old chat stays in Chat history and the Thread carries on. Off: it asks you on a card. The owner or an admin switches it', keywords: ['agents_can_refresh_chat', 'chat_refresh', 'refresh', 'pinned chat', 'new chat', 'k2 agent refresh', 'chat.refresh', 'stale'] },
-  { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Allow this agent to operate compute nodes', description: 'Lets this workspace\'s agent pause, drain, resume, narrow, update and restart services on your compute machines without asking each time; root actions still wait for you (k2 compute operate)', keywords: ['agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
-  { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Manage K2 projects', description: 'Lets this workspace\'s agent create, rename and delete K2 projects and add or remove their members (k2 project); on by default. Off: it can still read projects and post in its project chat', keywords: ['agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
-  { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Manage Gardens and data sources', description: 'Lets this workspace\'s agent approve data sources, bind secrets it may already use, pause, pin, enable triggers and edit Gardens and widgets with no confirm (k2 sources, k2 zen); every act is logged. Off: it proposes and you approve', keywords: ['agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
-  { id: 'projects.mail-agent-send', section: 'projects', label: 'Let this agent send email', description: 'Per-workspace agent send mode (off, approval, on) for hosted and linked inboxes; same as k2 mail sending', keywords: ['mail_agent_send', 'agent send', 'sending', 'send', 'email', 'mail', 'gmail', 'linked', 'gated', 'approval', 'outbound'] },
-  { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this server', description: 'Lets this workspace’s agents run k2 hostmail enable/disable and domain list/add/check. Uninstall, domain remove and OAuth stay with the owner', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
+  { id: 'projects.agents-can-manage-vault', section: 'projects', label: 'Let this agent manage server-wide secrets', description: 'It can share this server\'s secrets with other workspaces, never with itself', keywords: ['allow managing server-wide secrets', 'vault_manage', 'vault', 'secret', 'secrets', 'passport', 'agent', 'it agent'] },
+  { id: 'projects.agents-can-use-compute', section: 'projects', label: 'Let this agent use compute nodes', description: 'It can run builds and tests on the machines switched on in Settings → Compute, and on ones added later', keywords: ['allow compute nodes', 'agents_can_use_compute', 'compute', 'compute nodes', 'node', 'machines', 'build', 'tests', 'k2 compute', 'passport', 'agent'] },
+  { id: 'projects.agents-can-manage-compute', section: 'projects', label: 'Let this agent manage compute nodes', description: 'It can add, rename, pause, retire and route compute machines and grant them to any workspace, without asking. Turning compute on or off and removing a machine stay with you. Only the owner can switch it', keywords: ['allow managing compute nodes', 'agents_can_manage_compute', 'compute_manage', 'manage', 'compute', 'compute nodes', 'node', 'machines', 'enroll', 'confirm', 'grant', 'revoke', 'retire', 'k2 compute', 'passport', 'agent'] },
+  { id: 'projects.agents-can-upgrade-postgres', section: 'projects', label: 'Let this agent manage Postgres versions', description: 'It can create databases on a chosen Postgres version, move them to a newer one and roll back. Deleting the old copy stays with you', keywords: ['allow this agent to manage postgres versions', 'agents_can_upgrade_postgres', 'db_upgrade', 'postgres', 'postgresql', 'pg', 'pg 17', 'version', 'major', 'upgrade', 'database', 'rollback', 'k2 db upgrade', 'live', 'dual-run', 'agent'] },
+  { id: 'projects.agents-can-request-permissions', section: 'projects', label: 'Let this agent ask for permission', description: 'Beta: it can post a card in its Thread asking you or an admin to change a setting; nothing changes until someone allows it', keywords: ['can ask for permission cards', 'agents_can_request_permissions', 'permission_cards', 'permission cards', 'permission', 'card', 'ask', 'request', 'approve', 'beta', 'k2 permission', 'agent'] },
+  { id: 'projects.agents-can-refresh-chat', section: 'projects', label: 'Let this agent refresh its pinned chat', description: 'It can start a fresh pinned chat when its chat goes stale; the old chat stays in Chat history. Off: it asks you first', keywords: ['can refresh its own pinned chat', 'agents_can_refresh_chat', 'chat_refresh', 'refresh', 'pinned chat', 'new chat', 'k2 agent refresh', 'chat.refresh', 'stale'] },
+  { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Let this agent operate compute nodes', description: 'It can pause, drain, resume, update and restart your compute machines without asking; root actions still wait for you', keywords: ['allow this agent to operate compute nodes', 'agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
+  { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Let this agent manage K2 projects', description: 'It can create, rename and delete K2 projects and change their members. Off: it can still read them and post in its project chat', keywords: ['manage k2 projects', 'agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
+  { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Let this agent manage Gardens and data sources', description: 'It can approve and pause data sources, turn on triggers and edit Gardens without asking; every act is logged', keywords: ['manage gardens and data sources', 'agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
+  { id: 'projects.mail-agent-send', section: 'projects', label: 'Let this agent send email', description: 'Whether this agent can send email: never, after you approve each one, or on its own', keywords: ['mail_agent_send', 'agent send', 'sending', 'send', 'email', 'mail', 'gmail', 'linked', 'gated', 'approval', 'outbound'] },
+  { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Let this agent manage hosted mail', description: 'It can turn hosted mail on or off for this server and set up domains and delivery', keywords: ['allow agents to manage hosted mail on this server', 'mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
 ]
 
 /** Settings pane width (px) from which the workspace list and the selected
@@ -531,7 +531,8 @@ export function ProjectsSection(): React.JSX.Element {
   const twoColumn = paneWidth >= WORKSPACES_TWO_COLUMN_MIN_PX && projects.length > 0
 
   // Side by side, a workspace is always shown: the one picked, else the one
-  // last viewed, else the first in the list (search doesn't move it).
+  // last viewed, else the first in the list. A search that hides it moves the
+  // selection to the first match (below).
   let shownProject: typeof projects[number] | null = null
   if (!showWorkspaceSettings) {
     shownProject = selectedProject
@@ -544,6 +545,17 @@ export function ProjectsSection(): React.JSX.Element {
   useEffect(() => {
     if (shownProjectId) rememberOpenedProject(shownProjectId)
   }, [shownProjectId])
+
+  // Side by side, the right pane follows the search: when the shown workspace
+  // no longer matches, the first match is selected; one that still matches
+  // stays. No match leaves it be (the list says nothing matched).
+  const searchHidesShown =
+    twoColumn && !showWorkspaceSettings && searchQuery.trim().length > 0 && allVisibleProjects.length > 0 &&
+    !allVisibleProjects.some((p) => p.id === shownProjectId)
+  const firstMatchId = allVisibleProjects[0]?.id ?? null
+  useEffect(() => {
+    if (searchHidesShown && firstMatchId) selectProject(firstMatchId)
+  }, [searchHidesShown, firstMatchId, selectProject])
 
   // Keep the selected row in view as the selection moves.
   useEffect(() => {
@@ -1014,7 +1026,8 @@ export function ProjectsSection(): React.JSX.Element {
           <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-5 [scrollbar-gutter:stable]">
             {listGroups}
           </div>
-          <div className="flex-shrink-0 px-4 py-3 border-t border-[var(--color-border)]">
+          {/* Solid, above the list, so rows and their "…" scroll under it. */}
+          <div className="relative z-[1] flex-shrink-0 px-4 py-3 border-t border-[var(--color-border)] bg-[var(--color-bg)]" data-workspaces-footer="">
             <Button variant="quiet" className="w-full justify-center" data-settings-id="projects.add" onClick={() => void addWorkspace()}>
               New workspace
             </Button>
@@ -1099,8 +1112,10 @@ export function ProjectsSection(): React.JSX.Element {
               Workspace settings
             </Button>
             {/* The empty state has its own; one primary action per screen. */}
+            {/* Accent only once the list is here: while it loads or fails,
+                the wait or Try again is the next step. */}
             {!(nothingYet && listState === 'ready') && (
-              <Button variant="accent" data-settings-id="projects.add" onClick={() => void addWorkspace()}>
+              <Button variant={nothingYet ? 'default' : 'accent'} data-settings-id="projects.add" onClick={() => void addWorkspace()}>
                 New workspace
               </Button>
             )}
@@ -1120,7 +1135,8 @@ export function ProjectsSection(): React.JSX.Element {
                 <Button variant="quiet" className="flex-shrink-0" onClick={() => { void fetchProjects(); void checkList() }}>Try again</Button>
               </div>
             ) : listState === 'loading' ? (
-              <div className="px-4 py-5 type-row text-[var(--color-text-secondary)]" data-testid="workspaces-loading">
+              <div className="px-4 py-5 flex items-center gap-2 type-row text-[var(--color-text-secondary)]" data-testid="workspaces-loading" role="status">
+                <Spinner />
                 Loading your workspaces…
               </div>
             ) : (
@@ -1176,6 +1192,26 @@ function BackToWorkspaces({ onBack }: { onBack: () => void }): React.JSX.Element
       <Button variant="quiet" onClick={onBack} data-testid="workspaces-back">
         &larr; All workspaces
       </Button>
+    </div>
+  )
+}
+
+/** A card row while something loads: the spinner and what is loading. */
+function LoadingRow({ label, testId }: { label: string; testId?: string }): React.JSX.Element {
+  return (
+    <div className="px-4 py-3 flex items-center gap-2 type-row text-[var(--color-text-secondary)]" role="status" data-testid={testId}>
+      <Spinner />
+      {label}&hellip;
+    </div>
+  )
+}
+
+/** A card row for an empty list: what would show here, and how to add one. */
+function EmptyRow({ title, hint, testId }: { title: string; hint: string; testId?: string }): React.JSX.Element {
+  return (
+    <div className="px-4 py-3" data-testid={testId}>
+      <div className="type-row text-[var(--color-text-primary)]">{title}</div>
+      <div className={SETTING_ROW_HINT}>{hint}</div>
     </div>
   )
 }
@@ -1246,7 +1282,7 @@ function WorktreeFoldersOnDisk({
   if (loading) {
     return (
       <SettingsGroup title="Worktree folders on disk" card>
-        <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">Loading…</p>
+        <LoadingRow label="Looking for worktrees on disk" />
       </SettingsGroup>
     )
   }
@@ -1791,10 +1827,9 @@ function ProjectDetail({
               <>
                 <SettingsGroup title="Worktrees" card settingId="projects.worktrees">
                   {project.workspaces.map((ws) => (
-                    <div key={ws.id} className="flex items-center gap-3 px-4 py-2.5">
-                      <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-secondary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                      </svg>
+                    // No leading icon: the name starts on the card's text edge,
+                    // like every row above and below it.
+                    <div key={ws.id} className="flex items-center gap-3 px-4 py-2.5" data-worktree-row="">
                       <span className="type-row text-[var(--color-text-primary)] flex-1 truncate">{ws.name}</span>
                       {ws.branch && (
                         <span className="type-hint text-[var(--color-text-secondary)] truncate max-w-[12rem]">{ws.branch}</span>
@@ -1803,7 +1838,11 @@ function ProjectDetail({
                     </div>
                   ))}
                   {project.workspaces.length === 0 && (
-                    <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">No registered worktrees for this workspace.</p>
+                    <EmptyRow
+                      testId="worktrees-empty"
+                      title="No worktrees yet"
+                      hint="A worktree is a copy of this repo on its own branch, so an agent can work without touching yours. To start one, right-click this workspace in the sidebar and pick New Worktree."
+                    />
                   )}
                 </SettingsGroup>
                 <WorktreeFoldersOnDisk project={project} fetchProjects={fetchProjects} />
@@ -2077,6 +2116,7 @@ export function DnsManageToggle({
   fetchProjects: () => Promise<void>
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const enabled = (project.dnsManageEnabled ?? 0) === 1
   // The app-level master (K2 Connect → "Allow agents to manage DNS records")
   // OR-overrides this per-workspace flag server-side
@@ -2095,8 +2135,10 @@ export function DnsManageToggle({
         enable: next ? '1' : '0',
       })
       await fetchProjects()
+      save.saved()
     } catch (err) {
       console.error('[dns-manage] write failed', err)
+      save.failed(err)
     } finally {
       setBusy(false)
     }
@@ -2106,6 +2148,8 @@ export function DnsManageToggle({
     <SettingSwitchRow
       compact={compact}
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           size={compact ? 'sm' : 'md'}
           checked={enabled}
@@ -2114,16 +2158,15 @@ export function DnsManageToggle({
           data-settings-id="projects.dns-manage-enabled"
           title={enabled ? 'Agents may manage DNS for this workspace' : 'Agents cannot manage DNS for this workspace'}
         />
+        </>
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Allow agents to manage DNS for this workspace
+            Let this agent manage DNS
             <AskedChip row="projects.dns-manage-enabled" />
           </div>
           <div className={permissionDescClass(compact)}>
-            {enabled
-              ? 'Agents in this workspace may create, update and delete DNS records.'
-              : 'Off (recommended): agents in this workspace can\'t change DNS.'}
+            It can create, change and delete DNS records for this workspace. Leave it off unless the agent needs it.
           </div>
           {!enabled && globalAllow && !readOnly && (
             <div className="type-hint text-[var(--color-status-warn-text)] mt-1 leading-relaxed">
@@ -2131,6 +2174,7 @@ export function DnsManageToggle({
               records&rdquo; (Settings → Tunnel) is on for every workspace.
             </div>
           )}
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }
@@ -2152,6 +2196,7 @@ export function AgentsManageAgentsToggle({
   readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const enabled = (project.agentsCanManageAgents ?? 0) === 1
 
   const toggle = async (): Promise<void> => {
@@ -2171,6 +2216,7 @@ export function AgentsManageAgentsToggle({
         value: next,
       })
       noteOptimisticProjectsMutationSuccess()
+      save.saved()
       emitProjectsChanged()
     } catch (err) {
       useProjectsStore.setState((s) => ({
@@ -2179,6 +2225,7 @@ export function AgentsManageAgentsToggle({
         ),
       }))
       console.error('[agent-access] write failed', err)
+      save.failed(err)
     } finally {
       setBusy(false)
     }
@@ -2188,6 +2235,8 @@ export function AgentsManageAgentsToggle({
     <SettingSwitchRow
       compact={compact}
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           size={compact ? 'sm' : 'md'}
           checked={enabled}
@@ -2200,15 +2249,17 @@ export function AgentsManageAgentsToggle({
               : 'This workspace\'s agent cannot open or stop sidecars'
           }
         />
+        </>
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Allow hiring and managing agents
+            Let this agent hire and manage agents
             <AskedChip row="projects.agents-can-manage-agents" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Lets this workspace&rsquo;s main agent open and stop sidecars. Sidecars themselves can&rsquo;t.
+            It can open and stop sidecars, its helper agents. Sidecars can&rsquo;t do this themselves.
           </div>
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }
@@ -2229,6 +2280,7 @@ export function AgentsManageVaultToggle({
   readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const enabled = (project.agentsCanManageVault ?? 0) === 1
 
   const toggle = async (): Promise<void> => {
@@ -2248,6 +2300,7 @@ export function AgentsManageVaultToggle({
         value: next,
       })
       noteOptimisticProjectsMutationSuccess()
+      save.saved()
       emitProjectsChanged()
     } catch (err) {
       useProjectsStore.setState((s) => ({
@@ -2256,6 +2309,7 @@ export function AgentsManageVaultToggle({
         ),
       }))
       console.error('[agent-access] vault_manage write failed', err)
+      save.failed(err)
     } finally {
       setBusy(false)
     }
@@ -2265,6 +2319,8 @@ export function AgentsManageVaultToggle({
     <SettingSwitchRow
       compact={compact}
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           size={compact ? 'sm' : 'md'}
           checked={enabled}
@@ -2277,15 +2333,17 @@ export function AgentsManageVaultToggle({
               : 'This workspace\'s agent cannot manage server-wide secrets'
           }
         />
+        </>
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Allow managing server-wide secrets
+            Let this agent manage server-wide secrets
             <AskedChip row="projects.agents-can-manage-vault" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Lets its main agent share server secrets with other workspaces, never with itself. Seeing a value still needs you.
+            It can share this server&rsquo;s secrets with other workspaces, never with itself. Seeing a secret&rsquo;s value still needs you.
           </div>
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }
@@ -2309,6 +2367,7 @@ export function AgentsUseComputeToggle({
   readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const [result, setResult] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const enabled = (project.agentsCanUseCompute ?? 0) === 1
@@ -2327,6 +2386,7 @@ export function AgentsUseComputeToggle({
     try {
       const out = await setWorkspaceComputeSwitch(project.path, next)
       noteOptimisticProjectsMutationSuccess()
+      save.saved()
       emitProjectsChanged()
       if (next) {
         const machines = [...(out.granted ?? []), ...(out.kept ?? [])]
@@ -2346,6 +2406,7 @@ export function AgentsUseComputeToggle({
       }))
       setError(computeErrorMessage(err))
       console.error('[agent-access] compute write failed', err)
+      save.reset()
     } finally {
       setBusy(false)
     }
@@ -2355,11 +2416,13 @@ export function AgentsUseComputeToggle({
     <SettingSwitchRow
       compact={compact}
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
-          aria-label="Allow compute nodes"
+          aria-label="Let this agent use compute nodes"
           disabled={busy || readOnly}
           data-settings-id="projects.agents-can-use-compute"
           title={
@@ -2368,14 +2431,15 @@ export function AgentsUseComputeToggle({
               : 'This workspace\'s agents cannot use compute machines'
           }
         />
+        </>
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Allow compute nodes
+            Let this agent use compute nodes
             <AskedChip row="projects.agents-can-use-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Allow this agent to use compute nodes: run builds and tests on the machines you&rsquo;ve switched on, and on ones you add later.
+            It can run builds and tests on the machines you&rsquo;ve switched on in Settings &rarr; Compute, and on ones you add later.
           </div>
           {result ? (
             <div className="type-hint text-[var(--color-text-secondary)] mt-1" data-testid="agents-compute-result">
@@ -2419,6 +2483,7 @@ export function AgentsOperateComputeToggle({
   readOnly?: boolean
 }): React.JSX.Element | null {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const [error, setError] = useState<string | null>(null)
   const [role, setRole] = useState<OperateComputeRole | null>(null)
   const enabled = (project.agentsCanOperateCompute ?? 0) === 1
@@ -2450,6 +2515,7 @@ export function AgentsOperateComputeToggle({
     try {
       await setWorkspaceComputeOperate(project.path, next)
       noteOptimisticProjectsMutationSuccess()
+      save.saved()
       emitProjectsChanged()
     } catch (err) {
       useProjectsStore.setState((s) => ({
@@ -2459,6 +2525,7 @@ export function AgentsOperateComputeToggle({
       }))
       setError(computeErrorMessage(err))
       console.error('[agent-access] compute_operate write failed', err)
+      save.reset()
     } finally {
       setBusy(false)
     }
@@ -2468,11 +2535,13 @@ export function AgentsOperateComputeToggle({
     <SettingSwitchRow
       compact={compact}
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
-          aria-label="Allow this agent to operate compute nodes"
+          aria-label="Let this agent operate compute nodes"
           disabled={busy || !canFlip || readOnly}
           data-settings-id="projects.agents-can-operate-compute"
           title={
@@ -2483,15 +2552,16 @@ export function AgentsOperateComputeToggle({
                 : 'This workspace\'s agent cannot operate compute machines'
           }
         />
+        </>
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Allow this agent to operate compute nodes{' '}
+            Let this agent operate compute nodes{' '}
             <span className="type-hint text-[var(--color-text-secondary)]">Beta</span>
             <AskedChip row="projects.agents-can-operate-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Pause, drain, resume, update and restart your compute machines without asking. Root actions wait for your approval.
+            It can pause, drain, resume, update and restart your compute machines without asking. Root actions still wait for you.
           </div>
           {error ? (
             <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-operate-error">
@@ -2530,6 +2600,7 @@ export function AgentsManageComputeToggle({
   readOnly?: boolean
 }): React.JSX.Element | null {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const [error, setError] = useState<string | null>(null)
   const [role, setRole] = useState<OperateComputeRole | null>(null)
   const enabled = (project.agentsCanManageCompute ?? 0) === 1
@@ -2561,6 +2632,7 @@ export function AgentsManageComputeToggle({
     try {
       await setWorkspaceComputeManage(project.path, next)
       noteOptimisticProjectsMutationSuccess()
+      save.saved()
       emitProjectsChanged()
     } catch (err) {
       useProjectsStore.setState((s) => ({
@@ -2570,6 +2642,7 @@ export function AgentsManageComputeToggle({
       }))
       setError(computeErrorMessage(err))
       console.error('[agent-access] compute_manage write failed', err)
+      save.reset()
     } finally {
       setBusy(false)
     }
@@ -2579,11 +2652,13 @@ export function AgentsManageComputeToggle({
     <SettingSwitchRow
       compact={compact}
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
-          aria-label="Allow managing compute nodes"
+          aria-label="Let this agent manage compute nodes"
           disabled={busy || !canFlip || readOnly}
           data-settings-id="projects.agents-can-manage-compute"
           title={
@@ -2596,15 +2671,16 @@ export function AgentsManageComputeToggle({
                   : 'This workspace\'s agent cannot manage your compute machines'
           }
         />
+        </>
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Allow managing compute nodes{' '}
+            Let this agent manage compute nodes{' '}
             <span className="type-hint text-[var(--color-text-secondary)]">Beta</span>
             <AskedChip row="projects.agents-can-manage-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Add, rename, pause, retire and route compute machines, and grant them to any workspace, without asking. Turning compute on or off and removing a machine stay yours.
+            It can add, rename, pause, retire and route compute machines, and grant them to any workspace, without asking. Turning compute on or off and removing a machine stay with you.
           </div>
           {error ? (
             <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-manage-error">
@@ -2645,6 +2721,7 @@ export function AgentsManagePostgresToggle({
   readOnly?: boolean
 }): React.JSX.Element | null {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const [error, setError] = useState<string | null>(null)
   const [role, setRole] = useState<OperateComputeRole | null>(null)
   const enabled = (project.agentsCanUpgradePostgres ?? 0) === 1
@@ -2676,6 +2753,7 @@ export function AgentsManagePostgresToggle({
     try {
       await setWorkspaceDbUpgrade(project.path, next)
       noteOptimisticProjectsMutationSuccess()
+      save.saved()
       emitProjectsChanged()
     } catch (err) {
       useProjectsStore.setState((s) => ({
@@ -2685,6 +2763,7 @@ export function AgentsManagePostgresToggle({
       }))
       setError(computeErrorMessage(err))
       console.error('[agent-access] db_upgrade write failed', err)
+      save.reset()
     } finally {
       setBusy(false)
     }
@@ -2694,11 +2773,13 @@ export function AgentsManagePostgresToggle({
     <SettingSwitchRow
       compact={compact}
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
-          aria-label="Allow this agent to manage Postgres versions"
+          aria-label="Let this agent manage Postgres versions"
           disabled={busy || !canFlip || readOnly}
           data-settings-id="projects.agents-can-upgrade-postgres"
           title={
@@ -2711,13 +2792,14 @@ export function AgentsManagePostgresToggle({
                   : 'This workspace\'s agent cannot change Postgres versions'
           }
         />
+        </>
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Allow this agent to manage Postgres versions
+            Let this agent manage Postgres versions
           </div>
           <div className={permissionDescClass(compact)}>
-            Create databases on a chosen Postgres version, move them to a newer one, and roll back. Deleting the old copy stays with you.
+            It can create databases on a chosen Postgres version, move them to a newer one, and roll back. Deleting the old copy stays with you.
           </div>
           {error ? (
             <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agents-db-upgrade-error">
@@ -2748,6 +2830,7 @@ export function AgentsManageProjectsToggle({
   readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   // Absent (an older daemon) reads as on: that is the column default.
   const enabled = (project.agentsCanManageProjects ?? 1) === 1
 
@@ -2768,6 +2851,7 @@ export function AgentsManageProjectsToggle({
         value: next,
       })
       noteOptimisticProjectsMutationSuccess()
+      save.saved()
       emitProjectsChanged()
     } catch (err) {
       useProjectsStore.setState((s) => ({
@@ -2776,6 +2860,7 @@ export function AgentsManageProjectsToggle({
         ),
       }))
       console.error('[agent-access] projects_manage write failed', err)
+      save.failed(err)
     } finally {
       setBusy(false)
     }
@@ -2785,11 +2870,13 @@ export function AgentsManageProjectsToggle({
     <SettingSwitchRow
       compact={compact}
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           size={compact ? 'sm' : 'md'}
           checked={enabled}
           onChange={toggle}
-          aria-label="Manage K2 projects"
+          aria-label="Let this agent manage K2 projects"
           disabled={busy || readOnly}
           data-settings-id="projects.agents-can-manage-projects"
           title={
@@ -2798,15 +2885,17 @@ export function AgentsManageProjectsToggle({
               : 'This workspace\'s agent can read projects and post in its project chat, but not change them'
           }
         />
+        </>
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Manage K2 projects
+            Let this agent manage K2 projects
             <AskedChip row="projects.agents-can-manage-projects" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Lets this agent create, rename and delete K2 projects and change their members. Off: it can still read them and post in its project chat.
+            It can create, rename and delete K2 projects and change their members. Off: it can still read them and post in its project chat.
           </div>
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }
@@ -2833,6 +2922,7 @@ export function AgentsRefreshChatToggle({
   project: ProjectWithWorkspaces
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const [error, setError] = useState<string | null>(null)
   const enabled = (project.agentsCanRefreshChat ?? 0) === 1
 
@@ -2852,6 +2942,7 @@ export function AgentsRefreshChatToggle({
         value: next,
       })
       noteOptimisticProjectsMutationSuccess()
+      save.saved()
       emitProjectsChanged()
     } catch (err) {
       useProjectsStore.setState((s) => ({
@@ -2859,6 +2950,7 @@ export function AgentsRefreshChatToggle({
       }))
       setError(err instanceof Error ? err.message : String(err))
       console.error('[agent-access] chat_refresh write failed', err)
+      save.reset()
     } finally {
       setBusy(false)
     }
@@ -2867,19 +2959,22 @@ export function AgentsRefreshChatToggle({
   return (
     <SettingSwitchRow
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           checked={enabled}
           onChange={toggle}
-          aria-label="Can refresh its own pinned chat"
+          aria-label="Let this agent refresh its pinned chat"
           disabled={busy}
           data-settings-id="projects.agents-can-refresh-chat"
           title={enabled ? 'This agent starts a new pinned chat itself' : 'This agent asks before it starts a new pinned chat'}
         />
+        </>
       }
     >
-      <div className={SETTING_ROW_LABEL}>Can refresh its own pinned chat</div>
+      <div className={SETTING_ROW_LABEL}>Let this agent refresh its pinned chat</div>
       <div className={SETTING_ROW_HINT}>
-            Lets this agent start a fresh pinned chat when its chat goes stale. What it&apos;s doing then stops; the old chat stays in Chat history.
+            It can start a fresh pinned chat when its chat goes stale. What it&apos;s doing then stops; the old chat stays in Chat history. Off: it asks you first.
           </div>
       {error && <p className="type-hint text-[var(--color-status-error-soft)] mt-1">{error}</p>}
     </SettingSwitchRow>
@@ -2892,9 +2987,10 @@ export function AgentsManageGardensToggle({
   project: ProjectWithWorkspaces
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const enabled = (project.agentsCanManageGardens ?? 0) === 1
   const accessOn = useGardenAccessSwitchStore((s) => s.on) === true && !primaryScope().isRemote
-  const label = accessOn ? 'Manage data sources' : 'Manage Gardens and data sources'
+  const label = accessOn ? 'Let this agent manage data sources' : 'Let this agent manage Gardens and data sources'
 
   const toggle = async (): Promise<void> => {
     if (busy) return
@@ -2913,6 +3009,7 @@ export function AgentsManageGardensToggle({
         value: next,
       })
       noteOptimisticProjectsMutationSuccess()
+      save.saved()
       emitProjectsChanged()
     } catch (err) {
       useProjectsStore.setState((s) => ({
@@ -2921,6 +3018,7 @@ export function AgentsManageGardensToggle({
         ),
       }))
       console.error('[agent-access] gardens_manage write failed', err)
+      save.failed(err)
     } finally {
       setBusy(false)
     }
@@ -2929,6 +3027,8 @@ export function AgentsManageGardensToggle({
   return (
     <SettingSwitchRow
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           checked={enabled}
           onChange={toggle}
@@ -2945,6 +3045,7 @@ export function AgentsManageGardensToggle({
                 : 'This workspace\'s agent proposes data sources and Garden changes; you approve'
           }
         />
+        </>
       }
     >
           <div className={SETTING_ROW_LABEL}>
@@ -2953,13 +3054,14 @@ export function AgentsManageGardensToggle({
           </div>
           {accessOn ? (
             <div className={SETTING_ROW_HINT} data-garden-access-copy="">
-              Approves and pauses data sources and turns on triggers without asking you. Every act is logged in Access Audit.
+              It can approve and pause data sources and turn on triggers without asking you. Every act is logged in Access Audit.
             </div>
           ) : (
             <div className={SETTING_ROW_HINT}>
-              Approves and pauses data sources, turns on triggers and edits your Gardens without asking you. Every act is logged in Access Audit. Locked Gardens stay yours.
+              It can approve and pause data sources, turn on triggers and edit your Gardens without asking you. Every act is logged in Access Audit. Locked Gardens stay yours.
             </div>
           )}
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }
@@ -2979,6 +3081,7 @@ export function MailManageToggle({
   readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const enabled = (project.mailManageEnabled ?? 0) === 1
 
   const toggle = async (): Promise<void> => {
@@ -2997,6 +3100,7 @@ export function MailManageToggle({
         enable: next ? 1 : 0,
       })
       noteOptimisticProjectsMutationSuccess()
+      save.saved()
       emitProjectsChanged()
     } catch (err) {
       useProjectsStore.setState((s) => ({
@@ -3005,6 +3109,7 @@ export function MailManageToggle({
         ),
       }))
       console.error('[mail-manage] write failed', err)
+      save.failed(err)
     } finally {
       setBusy(false)
     }
@@ -3014,6 +3119,8 @@ export function MailManageToggle({
     <SettingSwitchRow
       compact={compact}
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           size={compact ? 'sm' : 'md'}
           checked={enabled}
@@ -3026,15 +3133,17 @@ export function MailManageToggle({
               : 'This agent cannot manage hosted mail'
           }
         />
+        </>
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Allow agents to manage hosted mail on this server
+            Let this agent manage hosted mail
             <AskedChip row="projects.mail-manage-enabled" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Lets this agent run hosted mail on this server: turn it on or off and set up domains and delivery. Uninstalling, removing a domain and OAuth stay with you.
+            It can turn hosted mail on or off for this server and set up domains and delivery. Uninstalling, removing a domain and account sign-in setup stay with you.
           </div>
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }
@@ -3055,6 +3164,7 @@ export function DbAgentCreateToggle({
   readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const enabled = (project.dbAgentAccess ?? 'off') === 'write'
 
   const toggle = async (): Promise<void> => {
@@ -3070,6 +3180,7 @@ export function DbAgentCreateToggle({
     try {
       await setSqlDbAgentAccess(project.path, next)
       noteOptimisticProjectsMutationSuccess()
+      save.saved()
       emitProjectsChanged()
     } catch (err) {
       useProjectsStore.setState((s) => ({
@@ -3078,6 +3189,7 @@ export function DbAgentCreateToggle({
         ),
       }))
       console.error('[db-agent-create] write failed', err)
+      save.failed(err)
     } finally {
       setBusy(false)
     }
@@ -3087,6 +3199,8 @@ export function DbAgentCreateToggle({
     <SettingSwitchRow
       compact={compact}
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           size={compact ? 'sm' : 'md'}
           checked={enabled}
@@ -3099,15 +3213,17 @@ export function DbAgentCreateToggle({
               : 'This agent cannot run k2 db create'
           }
         />
+        </>
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Allow this agent to create databases
+            Let this agent create databases
             <AskedChip row="projects.db-agent-create" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Lets this agent create new databases. It can always use ones this workspace owns or has been granted.
+            It can make new databases. It can always use the ones this workspace owns or was granted.
           </div>
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }
@@ -3133,6 +3249,7 @@ export function AgentsCreateConnectionsToggle({
   fetchProjects: () => Promise<void>
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const enabled = (project.agentsCanCreateConnections ?? 0) === 1
   const globalAllow = useSettingsStore((s) => s.agentsCanCreateConnections)
 
@@ -3146,8 +3263,10 @@ export function AgentsCreateConnectionsToggle({
         enable: next ? '1' : '0',
       })
       await fetchProjects()
+      save.saved()
     } catch (err) {
       console.error('[agents-create-connections] write failed', err)
+      save.failed(err)
     } finally {
       setBusy(false)
     }
@@ -3157,6 +3276,8 @@ export function AgentsCreateConnectionsToggle({
     <SettingSwitchRow
       compact={compact}
       control={
+        <>
+          <SaveNote state={save.state} />
         <Toggle
           size={compact ? 'sm' : 'md'}
           checked={enabled}
@@ -3169,16 +3290,15 @@ export function AgentsCreateConnectionsToggle({
               : 'Agents cannot add/remove connections for this workspace'
           }
         />
+        </>
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Allow agents to create connections for this workspace
+            Let this agent add connections
             <AskedChip row="projects.agents-can-create-connections" />
           </div>
           <div className={permissionDescClass(compact)}>
-            {enabled
-              ? 'Agents in this workspace may add and remove connections to other workspaces.'
-              : 'Off (recommended): agents in this workspace can\'t add or remove connections.'}
+            It can add and remove this workspace&rsquo;s connections to other workspaces. Leave it off unless the agent needs it.
           </div>
           {!enabled && globalAllow && !readOnly && (
             <div className="type-hint text-[var(--color-status-warn-text)] mt-1 leading-relaxed">
@@ -3187,6 +3307,7 @@ export function AgentsCreateConnectionsToggle({
               workspace.
             </div>
           )}
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }
@@ -3359,7 +3480,7 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
         value={value}
         ariaLabel="Default agent"
         options={[
-          { value: '', label: `Inherit global (${globalPreset?.label ?? globalDefaultAgent})` },
+          { value: '', label: `Server default (${globalPreset?.label ?? globalDefaultAgent})` },
           ...enabledPresets.map((p) => ({ value: p.id, label: p.label })),
         ]}
         onChange={handleChange}
@@ -4072,7 +4193,14 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
   )
 
   const handleRemoveLocal = useCallback(
-    async (id: string) => {
+    async (id: string, name: string) => {
+      const ok = await useConfirmDialogStore.getState().confirm({
+        title: `Remove the connection to \u201c${name}\u201d?`,
+        message: 'This agent stops being able to message it. You can add it again any time.',
+        confirmLabel: 'Remove connection',
+        destructive: true,
+      })
+      if (!ok) return
       setLocalError(null)
       try {
         await daemonCliPost(primaryScope(), 'relations/delete', { id })
@@ -4105,6 +4233,13 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
         )
         return
       }
+      const ok = await useConfirmDialogStore.getState().confirm({
+        title: `Remove the connection to \u201c${address}\u201d?`,
+        message: 'This agent stops being able to message that agent on its server. You can add it again any time.',
+        confirmLabel: 'Remove connection',
+        destructive: true,
+      })
+      if (!ok) return
       setRemoteError(null)
       try {
         await removeRemoteConnection(sourcePath, address)
@@ -4181,9 +4316,13 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
           />
         )}
         {loading ? (
-          <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">Loading…</p>
+          <LoadingRow label="Loading connections" />
         ) : relations.length === 0 ? (
-          <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">No connections on this server yet.</p>
+          <EmptyRow
+            testId="connections-local-empty"
+            title="No connections on this server yet"
+            hint="Workspaces you connect show here, and this agent can message their agents. Use Add connection to pick one."
+          />
         ) : (
           relations.map((rel) => {
             const target = projectsById.get(rel.targetProjectId)
@@ -4197,7 +4336,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
                 <span className="type-row text-[var(--color-text-primary)] flex-1 truncate">
                   {target?.name || 'Unknown workspace'}
                 </span>
-                <Button variant="quiet" title="Remove connection" onClick={() => void handleRemoveLocal(rel.id)}>
+                <Button variant="quiet" title="Remove connection" onClick={() => void handleRemoveLocal(rel.id, target?.name || 'this workspace')}>
                   Remove
                 </Button>
               </div>
@@ -4233,9 +4372,13 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
 
       <SettingsGroup title="On paired servers" card>
         {loading ? (
-          <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">Loading…</p>
+          <LoadingRow label="Loading connections" />
         ) : remoteConns.length === 0 ? (
-          <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">No connections on paired servers yet.</p>
+          <EmptyRow
+            testId="connections-remote-empty"
+            title="No connections on paired servers yet"
+            hint="Agents on servers you&rsquo;ve paired with show here once you connect them. Use Add connection above and pick one from another server."
+          />
         ) : (
           remoteConns.map((rc) => (
             <FederatedConnectionRow
@@ -4455,20 +4598,23 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
     }
   }, [projectPath, newName, newSeed, fetchSkills, fetchAgents])
 
+  const [removeError, setRemoveError] = useState<string | null>(null)
   const handleDelete = useCallback(async (name: string) => {
     const confirmed = await useConfirmDialogStore.getState().confirm({
-      title: `Remove Skill "${name}"?`,
-      message: 'The skill folder (.k2/skills/' + name + '/) will be moved to the recycle bin. You can restore it within ~30 days if you change your mind.',
-      confirmLabel: 'Remove',
+      title: `Remove the skill \u201c${name}\u201d?`,
+      message: 'Its folder goes to the recycle bin, so you can restore it for about 30 days.',
+      confirmLabel: 'Remove skill',
       destructive: true,
     })
     if (!confirmed) return
+    setRemoveError(null)
     try {
       await daemonCliPost(primaryScope(), 'skills/remove', { project_path: projectPath, name })
       await fetchSkills()
       await fetchAgents()
     } catch (e) {
       console.error('[skills] Remove failed:', e)
+      setRemoveError(`Couldn\u2019t remove \u201c${name}\u201d: ${e instanceof Error ? e.message : String(e)}. It\u2019s still here; try again.`)
     }
   }, [projectPath, fetchSkills, fetchAgents])
 
@@ -4548,7 +4694,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
           work surface and don't map onto the post-Phase-2.5b skills
           primitive (a skill is a doc profile, not a work queue). */}
       {loading ? (
-        <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]" data-testid="skills-loading">Loading skills…</p>
+        <LoadingRow label="Loading skills" testId="skills-loading" />
       ) : loadError ? (
         <div className="px-4 py-3 flex items-center justify-between gap-4" data-testid="skills-load-error">
           <div className="min-w-0">
@@ -4558,11 +4704,18 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
           <Button variant="quiet" className="flex-shrink-0" onClick={() => { setLoading(true); void fetchSkills() }}>Try again</Button>
         </div>
       ) : skillRows.length === 0 && !showCreate ? (
-        <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">
-          No skills yet. Create one to give your agent a specialized capability profile.
-        </p>
+        <EmptyRow
+          testId="skills-empty"
+          title="No skills yet"
+          hint="A skill is a set of instructions this agent loads when a task calls for it. Use New skill to write one."
+        />
       ) : (
         skillRows.map((skill) => <SkillListItem key={skill.name} skill={skill} />)
+      )}
+      {removeError && (
+        <div className="px-4 py-3">
+          <Callout tone="error">{removeError}</Callout>
+        </div>
       )}
     </SettingsGroup>
   )
@@ -4728,6 +4881,7 @@ function MailAgentSendControl({
   const [inherited, setInherited] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const save = useSaveStatus()
 
   useEffect(() => {
     let cancelled = false
@@ -4761,7 +4915,9 @@ function MailAgentSendControl({
         workspace: project.path,
         agentSend: next,
       })
+      save.saved()
     } catch (err) {
+      save.reset()
       setMode(before)
       setInherited(beforeInherited)
       setError(err instanceof Error ? err.message : String(err))
@@ -4773,10 +4929,10 @@ function MailAgentSendControl({
   return (
     <div data-settings-id="projects.mail-agent-send">
     <SettingRow
-      label={<>Let this agent send email<AskedChip row="projects.mail-agent-send" /></>}
+      label={<span className="inline-flex items-center gap-2">Let this agent send email<AskedChip row="projects.mail-agent-send" /><SaveNote state={save.state} /></span>}
       hint={
         <>
-          Covers hosted K2 mailboxes and linked inboxes. Approval queues hosted mailboxes only; a linked inbox needs On.
+          For its K2 mailboxes and linked inboxes. Approval holds each email until you send it (K2 mailboxes only; a linked inbox needs On).
           {inherited && mode !== null ? ' Using the server default.' : ''}
         </>
       }
@@ -4784,9 +4940,9 @@ function MailAgentSendControl({
       below={
         <>
           <Callout tone="warn" data-testid="mail-agent-send-on-warning" className="type-hint leading-relaxed">
-            With sending on, an agent that reads a malicious email can be talked into sending any mail it can read, with its attachments, and any workspace file that doesn&apos;t look like a secret, to any address: up to 20 messages an hour and 100 a day per mailbox, at 25 MiB each. Nobody is asked or told at send time; the outbox records it afterwards. The secret check catches mistakes, not intent. The DMARC check only slows forged senders, and an attacker&apos;s own domain passes it. Use approval for any agent that reads mail from outside.
+            With sending on, a stranger&apos;s email can trick this agent into sending your mail and files to anyone, and no one is asked first. Choose Approval for any agent that reads mail from outside.
           </Callout>
-          {error && <div className="type-hint text-[var(--color-status-error-soft)] mt-2">{error}</div>}
+          {error && <div role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-2">{error}</div>}
         </>
       }
     >

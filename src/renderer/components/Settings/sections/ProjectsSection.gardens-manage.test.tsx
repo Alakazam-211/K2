@@ -22,7 +22,7 @@ import { AgentsManageGardensToggle } from './ProjectsSection'
 import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 
 const post = vi.mocked(cli.daemonCliPost)
-const NAME = 'Manage Gardens and data sources'
+const NAME = 'Let this agent manage Gardens and data sources'
 
 function project(on: number | undefined): ProjectWithWorkspaces {
   return { id: 'p-gm', name: 'gm', path: '/w/gm', agentsCanManageGardens: on, workspaces: [] } as unknown as ProjectWithWorkspaces

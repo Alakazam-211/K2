@@ -26,7 +26,7 @@ import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 
 const m = vi.mocked(api)
 const role = vi.mocked(presence.fetchViewerRole)
-const NAME = 'Allow this agent to manage Postgres versions'
+const NAME = 'Let this agent manage Postgres versions'
 
 function project(on: number): ProjectWithWorkspaces {
   return { id: 'p-pg', name: 'ops', path: '/w/ops', agentsCanUpgradePostgres: on, workspaces: [] } as unknown as ProjectWithWorkspaces

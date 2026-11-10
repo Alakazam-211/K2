@@ -138,6 +138,29 @@ describe('side by side', () => {
     }
   })
 
+  it('empty lists on Connections and Advanced say what would show there and how to add one', async () => {
+    render(<ProjectsSection />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Connections' }))
+    expect((await screen.findByTestId('connections-local-empty')).textContent).toContain('Use Add connection')
+    expect((await screen.findByTestId('connections-remote-empty')).textContent).toContain('Use Add connection')
+    fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }))
+    expect(screen.getByTestId('worktrees-empty').textContent).toContain('New Worktree')
+    const keys = await screen.findByTestId('workspace-api-keys-empty')
+    expect(keys.textContent).toContain('Create one in Settings')
+    expect(within(keys).getByRole('button', { name: 'Create a key' })).toBeTruthy()
+  })
+
+  it('Advanced worktree rows start on the card\'s text edge (no leading icon)', () => {
+    useProjectsStore.setState({
+      projects: [workspace('c', 'cortana', { pinned: 1, workspaces: [{ id: 'w1', name: 'main', branch: 'main', type: 'branch' }] })],
+    } as never)
+    render(<ProjectsSection />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }))
+    const rowEl = document.querySelector<HTMLElement>('[data-worktree-row]')
+    expect(rowEl?.className).toContain('px-4')
+    expect(rowEl?.querySelector('svg')).toBeNull()
+  })
+
   it('keeps the tab while moving between workspaces', () => {
     render(<ProjectsSection />)
     fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
@@ -180,14 +203,31 @@ describe('side by side', () => {
     expect(shownName()).toBe('cortana')
   })
 
-  it('search filters the list without moving the selection', () => {
+  it('a search that hides the shown workspace selects the first match; one that still matches stays', () => {
     render(<ProjectsSection />)
-    fireEvent.click(row('a'))
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Search workspaces' }), { target: { value: 'del' } })
-    expect(document.querySelector('[data-settings-project-id="a"]')).toBeNull()
-    expect(shownName()).toBe('atlas')
-    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Search workspaces' }), { key: 'ArrowDown' })
+    fireEvent.click(row('b'))
+    const search = screen.getByRole('searchbox', { name: 'Search workspaces' })
+    // "a" still matches beacon: it stays.
+    fireEvent.change(search, { target: { value: 'a' } })
+    expect(shownName()).toBe('beacon')
+    expect(selectedRowIds()).toEqual(['b'])
+    // "del" hides it: the first match is selected, list and pane agree.
+    fireEvent.change(search, { target: { value: 'del' } })
+    expect(document.querySelector('[data-settings-project-id="b"]')).toBeNull()
     expect(shownName()).toBe('delta')
+    expect(selectedRowIds()).toEqual(['d'])
+    // Nothing matches: the pane keeps the last one, the list says so.
+    fireEvent.change(search, { target: { value: 'zzz' } })
+    expect(shownName()).toBe('delta')
+    expect(screen.getByTestId('workspaces-no-match')).toBeTruthy()
+  })
+
+  it('the New workspace footer is solid, so the list scrolls under it', () => {
+    render(<ProjectsSection />)
+    const footer = document.querySelector<HTMLElement>('[data-workspaces-footer]')
+    expect(footer?.className).toContain('bg-[var(--color-bg)]')
+    expect(footer?.className).toContain('border-t')
+    expect(within(footer!).getByRole('button', { name: 'New workspace' })).toBeTruthy()
   })
 
   it('Workspace settings is selectable in the list and shows on the right', () => {
@@ -324,5 +364,14 @@ describe('narrow panes fall back to one page at a time', () => {
     expect(document.querySelector('[data-workspaces-layout="single"]')).toBeTruthy()
     expect(screen.queryByRole('complementary', { name: 'Workspaces' })).toBeNull()
     expect(screen.getByRole('heading', { name: 'Workspaces / Agents' })).toBeTruthy()
+  })
+
+  it('while the list loads, a spinner shows and New workspace is not the loud button', () => {
+    useProjectsStore.setState({ projects: [] } as never)
+    render(<ProjectsSection />)
+    const loading = screen.getByTestId('workspaces-loading')
+    expect(loading.querySelector('[data-k2-spinner]')).toBeTruthy()
+    const add = screen.getByRole('button', { name: 'New workspace' })
+    expect(add.className).not.toContain('accent-fill')
   })
 })

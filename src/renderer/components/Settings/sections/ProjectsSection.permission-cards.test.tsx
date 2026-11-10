@@ -38,7 +38,7 @@ describe('Agent tab wiring', () => {
     expect(ids[pg + 1]).toBe('projects.agents-can-request-permissions')
     const entry = PROJECTS_MANIFEST[pg + 1]
     expect(entry.section).toBe('projects')
-    expect(entry.label).toBe('Can ask for permission cards')
+    expect(entry.label).toBe('Let this agent ask for permission')
     expect(entry.keywords).toContain('permission_cards')
   })
 

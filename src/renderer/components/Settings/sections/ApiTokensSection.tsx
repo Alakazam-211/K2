@@ -7,6 +7,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import type { SettingEntry } from '../searchManifest'
 import {
   capsSummary,
@@ -34,11 +35,11 @@ import {
   type HireForm,
 } from './api-keys-api'
 import { primaryScope } from '@/kessel/server-scope'
-import { Checkbox, Tag } from '@/components/ui'
+import { Button, Checkbox, Spinner, Tag } from '@/components/ui'
 import { currentShortcutOs } from '@/lib/shortcut-label'
 import { isAirgap } from '@/lib/airgap'
 import { useDialogEscape } from '../settings-esc'
-import { SettingDropdown } from '../controls/SettingControls'
+import { SettingDropdown, SettingsGroup } from '../controls/SettingControls'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
 
@@ -1023,13 +1024,13 @@ export function WorkspaceApiKeysPanel({
   const act = useCallback(
     async (id: string, action: 'disable' | 'enable' | 'revoke') => {
       if (action === 'revoke') {
-        if (
-          !window.confirm(
-            'Permanently revoke this API key? It cannot be re-enabled — mint a new secret under Settings → API Keys.',
-          )
-        ) {
-          return
-        }
+        const ok = await useConfirmDialogStore.getState().confirm({
+          title: 'Revoke this API key?',
+          message: 'Anything using it stops working at once. A revoked key can’t be turned back on; you’d create a new one in Settings → API Keys.',
+          confirmLabel: 'Revoke key',
+          destructive: true,
+        })
+        if (!ok) return
       }
       setBusyId(id)
       try {
@@ -1045,88 +1046,71 @@ export function WorkspaceApiKeysPanel({
   )
 
   return (
-    <div className="space-y-4 max-w-3xl">
-      <div>
-        <h3 className="type-heading text-[var(--color-text-primary)]">API access</h3>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1">
-          Tokens that can call <code className="type-hint">/v1/w/{workspaceSlug}/…</code> on this
-          server (grant includes this workspace or <code className="type-hint">*</code>).
+    <SettingsGroup
+      title="API keys"
+      card
+      testId="workspace-api-keys"
+      hint="Keys that let other apps call this workspace through the K2 API. A key reaches it when it’s given this workspace or every workspace."
+      action={<Button variant="quiet" onClick={openGlobal}>Manage all keys</Button>}
+    >
+      {error && (
+        <p role="alert" className="px-4 py-3 type-hint text-[var(--color-status-error-soft)]">
+          Couldn&rsquo;t load or change the keys: {error.replace(/[.\s]+$/, '')}. Try again, or open Settings &rarr; API Keys.
         </p>
-      </div>
-      <button
-        type="button"
-        onClick={openGlobal}
-        className="type-hint text-[var(--color-accent)] cursor-pointer"
-      >
-        Manage all tokens →
-      </button>
-      {error && <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>}
-      {loading ? (
-        <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
-      ) : keys.length === 0 ? (
-        <p className="type-hint text-[var(--color-text-muted)]">
-          No API keys grant this workspace. Mint one under Settings → API Keys (or{' '}
-          <code className="type-hint">k2 api-key create --workspaces &apos;{workspaceSlug}&apos;</code>
-          ).
-        </p>
-      ) : (
-        <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-          {keys.map((k) => {
-            const state = keyState(k)
-            const busy = busyId === k.id
-            return (
-              <div key={k.id} className="p-3 flex flex-col sm:flex-row sm:justify-between gap-2">
-                <div className="min-w-0 space-y-0.5">
-                  <div className="flex items-center gap-2">
-                    <span className="type-name text-[var(--color-text-primary)]">
-                      {k.label || '(no label)'}
-                    </span>
-                    {stateBadge(state)}
-                  </div>
-                  <p className="type-hint font-mono text-[var(--color-text-muted)] break-all">
-                    {k.id}
-                  </p>
-                  <p className="type-hint text-[var(--color-text-secondary)]">
-                    {formatGrant(k.allowedWorkspaces)} · {capsSummary(k.capabilities)}
-                  </p>
-                </div>
-                <div className="flex gap-1.5 flex-shrink-0">
-                  {state === 'active' && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void act(k.id, 'disable')}
-                      className="px-2 py-1 type-control border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
-                    >
-                      Disable
-                    </button>
-                  )}
-                  {state === 'disabled' && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void act(k.id, 'enable')}
-                      className="px-2 py-1 type-control border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
-                    >
-                      Enable
-                    </button>
-                  )}
-                  {state !== 'revoked' && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void act(k.id, 'revoke')}
-                      className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-status-error-soft)] cursor-pointer disabled:opacity-50"
-                    >
-                      Revoke
-                    </button>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
       )}
-    </div>
+      {loading ? (
+        <div className="px-4 py-3 flex items-center gap-2 type-hint text-[var(--color-text-secondary)]" data-testid="workspace-api-keys-loading">
+          <Spinner />
+          Loading keys&hellip;
+        </div>
+      ) : keys.length === 0 ? (
+        <div className="px-4 py-3 flex items-start justify-between gap-6" data-testid="workspace-api-keys-empty">
+          <div className="flex-1 min-w-0">
+            <div className="type-row text-[var(--color-text-primary)]">No keys reach this workspace yet</div>
+            <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed max-w-[75ch]">
+              A key you give this workspace shows here. Create one in Settings &rarr; API Keys, or run{' '}
+              <code>k2 api-key create --workspaces &apos;{workspaceSlug}&apos;</code>.
+            </p>
+          </div>
+          <Button variant="quiet" className="flex-shrink-0" onClick={openGlobal}>Create a key</Button>
+        </div>
+      ) : (
+        keys.map((k) => {
+          const state = keyState(k)
+          const busy = busyId === k.id
+          return (
+            <div key={k.id} className="px-4 py-3 flex items-start justify-between gap-6">
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <span className="type-name text-[var(--color-text-primary)]">{k.label || 'Unnamed key'}</span>
+                  {stateBadge(state)}
+                </div>
+                <p className="type-hint font-mono text-[var(--color-text-secondary)] break-all">{k.id}</p>
+                <p className="type-hint text-[var(--color-text-secondary)]">
+                  {formatGrant(k.allowedWorkspaces)} · {capsSummary(k.capabilities)}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {state === 'active' && (
+                  <Button variant="quiet" disabled={busy} onClick={() => void act(k.id, 'disable')}>
+                    Turn off
+                  </Button>
+                )}
+                {state === 'disabled' && (
+                  <Button variant="quiet" disabled={busy} onClick={() => void act(k.id, 'enable')}>
+                    Turn on
+                  </Button>
+                )}
+                {state !== 'revoked' && (
+                  <Button variant="danger-muted" disabled={busy} onClick={() => void act(k.id, 'revoke')}>
+                    Revoke
+                  </Button>
+                )}
+              </div>
+            </div>
+          )
+        })
+      )}
+    </SettingsGroup>
   )
 }

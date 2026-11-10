@@ -4,7 +4,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { useSettingsStore } from '@/stores/settings'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { Toggle } from '@/components/ui'
-import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow } from '../controls/SettingControls'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveError, SaveNote, SettingSwitchRow, useSaveStatus } from '../controls/SettingControls'
 
 /** Per-agent switch label (Rosson 2026-10-16). */
 export const AGENT_SWITCH_LABEL = 'Let agents on other servers message this agent'
@@ -43,6 +43,7 @@ export function RemoteInstructToggle({
   fetchProjects: () => Promise<void>
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const enabled = (project.allowRemoteInstruct ?? 0) === 1
   // With the master ON, the agent is listed and reachable even while this
   // toggle shows OFF. Surface that so an OFF toggle never reads as a deny
@@ -59,8 +60,10 @@ export function RemoteInstructToggle({
         enable: next ? '1' : '0',
       })
       await fetchProjects()
+      save.saved()
     } catch (err) {
       console.error('[remote-instruct] write failed', err)
+      save.failed(err)
     } finally {
       setBusy(false)
     }
@@ -70,6 +73,8 @@ export function RemoteInstructToggle({
     <SettingSwitchRow
       compact={compact}
       control={
+        <>
+        <SaveNote state={save.state} />
         <Toggle
           size={compact ? 'sm' : 'md'}
           checked={enabled}
@@ -83,6 +88,7 @@ export function RemoteInstructToggle({
               : "Agents on connected servers can't message this agent"
           }
         />
+        </>
       }
     >
       <div className={SETTING_ROW_LABEL}>{AGENT_SWITCH_LABEL}</div>
@@ -94,6 +100,7 @@ export function RemoteInstructToggle({
           {AGENT_SWITCH_OVERRIDE_TEXT}
         </div>
       )}
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }

@@ -109,6 +109,18 @@ describe('Workspaces / Agents: the Workspace settings entry', () => {
     expect(screen.queryByText('Select a workspace to view its settings')).toBeNull()
   })
 
+  it('ends both slider tracks on the same line, and the flow guide is a group heading', () => {
+    render(<ProjectsSection />)
+    fireEvent.click(entry())
+    const page = screen.getByTestId('workspace-settings-page')
+    const values = Array.from(page.querySelectorAll<HTMLElement>('[data-slider-value]'))
+    expect(values).toHaveLength(2)
+    expect(values[0].className).toBe(values[1].className)
+    const guide = within(page).getByRole('heading', { name: 'Canonical Agent Flow' })
+    expect(guide.tagName).toBe('H3')
+    expect(guide.className).toContain('type-heading')
+  })
+
   it('edits a local setting there: New agents open in', async () => {
     render(<ProjectsSection />)
     fireEvent.click(entry())

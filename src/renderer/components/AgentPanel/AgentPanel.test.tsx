@@ -175,8 +175,8 @@ describe('Agent tab: a local agent (the window’s room)', () => {
       expect([id, sw(id).disabled]).toEqual([id, false])
     }
     // Compact rows: the long Settings descriptions are hidden in the drawer.
-    expect(screen.getByText('Allow hiring and managing agents')).toBeTruthy()
-    const desc = screen.getByText(/Lets this workspace’s main agent open and stop sidecars/)
+    expect(screen.getByText('Let this agent hire and manage agents')).toBeTruthy()
+    const desc = screen.getByText(/It can open and stop sidecars, its helper agents/)
     expect(desc.className).toContain('hidden')
   })
 

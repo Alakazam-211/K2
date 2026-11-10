@@ -18,7 +18,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
-import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow, SettingsGroup } from '../controls/SettingControls'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveNote, SettingSwitchRow, SettingsGroup, useSaveStatus } from '../controls/SettingControls'
 import { Toggle, Tag } from '@/components/ui'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -259,6 +259,7 @@ export function AgentPermissionCardsRow({ project }: { project: { id: string; na
   const [on, setOn] = useState<boolean | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const save = useSaveStatus()
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -296,7 +297,9 @@ export function AgentPermissionCardsRow({ project }: { project: { id: string; na
     setOn(next)
     try {
       setOn(await setAgentPermissionCards(project.id, next))
+      save.saved()
     } catch (err) {
+      save.reset()
       setOn(before)
       setError(permissionErrorMessage(err))
       console.error('[agent-access] permission_cards write failed', err)
@@ -309,10 +312,12 @@ export function AgentPermissionCardsRow({ project }: { project: { id: string; na
   return (
     <SettingSwitchRow
       control={
+        <>
+        <SaveNote state={save.state} />
         <Toggle
           checked={checked}
           onChange={() => void toggle()}
-          aria-label="Can ask for permission cards"
+          aria-label="Let this agent ask for permission"
           disabled={busy || !canFlip || on === null}
           data-settings-id="projects.agents-can-request-permissions"
           title={
@@ -323,15 +328,16 @@ export function AgentPermissionCardsRow({ project }: { project: { id: string; na
                 : 'This agent asks the usual way, in its own words'
           }
         />
+        </>
       }
     >
       <div className={SETTING_ROW_LABEL}>
-        Can ask for permission cards{' '}
+        Let this agent ask for permission{' '}
         <span className="type-hint text-[var(--color-text-secondary)]">Beta</span>
       </div>
       <div className={SETTING_ROW_HINT}>
-        When this agent needs a setting changed, it can post a card in its Thread saying what and
-        why. Nothing changes until you or an admin allow it.
+        It can post a card in its Thread when it needs a setting changed, saying what and why.
+        Nothing changes until you or an admin allow it.
       </div>
       {loadError ? (
         <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agent-permission-cards-load-error">

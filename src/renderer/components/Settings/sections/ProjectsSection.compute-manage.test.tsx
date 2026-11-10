@@ -26,7 +26,7 @@ import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 
 const m = vi.mocked(api)
 const role = vi.mocked(presence.fetchViewerRole)
-const NAME = 'Allow managing compute nodes'
+const NAME = 'Let this agent manage compute nodes'
 
 function project(on: number): ProjectWithWorkspaces {
   return { id: 'p-cm', name: 'ops', path: '/w/ops', agentsCanManageCompute: on, workspaces: [] } as unknown as ProjectWithWorkspaces
@@ -67,7 +67,7 @@ describe('Agent tab: Allow managing compute nodes', () => {
     render(<Harness />)
     const sw = await enabledSwitch()
     expect(sw.getAttribute('aria-checked')).toBe('false')
-    expect(screen.getByText(/removing a\s+machine stay yours/)).toBeTruthy()
+    expect(screen.getByText(/removing a\s+machine stay with you/)).toBeTruthy()
     fireEvent.click(sw)
     await waitFor(() => expect(m.setWorkspaceComputeManage).toHaveBeenCalledWith('/w/ops', true))
     expect(m.setWorkspaceComputeManage).toHaveBeenCalledTimes(1)

@@ -32,6 +32,10 @@ import { RemoteRoomsPreviewRow } from './RemoteRoomsPreviewRow'
 // tests that name a row keep working; their section is now `projects` and
 // their group `Workspace settings`, which is how search lands here.
 
+/** A slider's value, after the track. One width for every slider on the page,
+ *  so the tracks end on the same line. */
+const SLIDER_VALUE = 'w-12 text-right type-hint tabular-nums text-[var(--color-text-secondary)]'
+
 /** Search group for every row on this page (Settings.tsx opens the page for it). */
 export const WORKSPACE_SETTINGS_GROUP = 'Workspace settings'
 
@@ -196,7 +200,7 @@ function CompletionSoundRow(): React.JSX.Element {
           onChange={(e) => setCompletionSoundVolume(parseInt(e.target.value, 10))}
           className="w-40"
         />
-        <span className="w-9 text-right type-hint tabular-nums text-[var(--color-text-secondary)]">
+        <span className={SLIDER_VALUE} data-slider-value="">
           {volume}%
         </span>
       </SettingRow>
@@ -275,7 +279,7 @@ function ThreadTextWidthRow(): React.JSX.Element {
           onChange={(e) => setThreadTextWidth({ limited: pref.limited, px: parseInt(e.target.value, 10) })}
           className="w-40 disabled:opacity-50"
         />
-        <span className="w-11 text-right type-hint tabular-nums text-[var(--color-text-secondary)]">
+        <span className={SLIDER_VALUE} data-slider-value="">
           {pref.px}px
         </span>
       </SettingRow>

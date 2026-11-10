@@ -13,7 +13,7 @@ describe('Hosted mail manage toggle', () => {
     expect(src).toContain("id: 'projects.mail-manage-enabled'")
     expect(src).toContain('data-settings-id="projects.mail-manage-enabled"')
     expect(src).toContain('<SettingsGroup title="Hosted mail" card>')
-    expect(src).toContain('Allow agents to manage hosted mail on this server')
+    expect(src).toContain('Let this agent manage hosted mail')
     const dnsGroup = src.indexOf('<SettingsGroup title="DNS" card>')
     const mailGroup = src.indexOf('<SettingsGroup title="Hosted mail" card>')
     const dbGroup = src.indexOf('<SettingsGroup title="Database" card>')

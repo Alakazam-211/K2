@@ -30,7 +30,7 @@ describe('Agent-tab "Allow hiring and managing agents" toggle', () => {
     expect(src).toContain('data-settings-id="projects.agents-can-manage-agents"')
     expect(src).toContain('<SettingsGroup title="Agents and secrets" card>')
     expect(src).toContain('<AgentsManageAgentsToggle project={project} />')
-    expect(src).toContain('Allow hiring and managing agents')
+    expect(src).toContain('Let this agent hire and manage agents')
     const toggle = componentBody('AgentsManageAgentsToggle')
     expect(toggle).toContain("daemonCliPost(primaryScope(), 'agent-access/set'")
     expect(toggle).toContain("toggle: 'agents_manage'")
@@ -54,7 +54,7 @@ describe('Agent-tab "Allow managing server-wide secrets" toggle', () => {
     expect(src.indexOf('<AgentsManageVaultToggle project={project} />')).toBeGreaterThan(
       src.indexOf('<AgentsManageAgentsToggle project={project} />'),
     )
-    expect(src).toContain('Allow managing server-wide secrets')
+    expect(src).toContain('Let this agent manage server-wide secrets')
     const toggle = componentBody('AgentsManageVaultToggle')
     expect(toggle).toContain("daemonCliPost(primaryScope(), 'agent-access/set'")
     expect(toggle).toContain("toggle: 'vault_manage'")
@@ -85,7 +85,7 @@ describe('Agent-tab "Allow compute nodes" toggle', () => {
     expect(toggle).toContain('setWorkspaceComputeSwitch(project.path, next)')
     expect(toggle).toContain('agentsCanUseCompute: next ? 1 : 0')
     expect(toggle).toContain('noteOptimisticProjectsMutationSuccess()')
-    expect(toggle).toContain('Allow this agent to use compute nodes')
+    expect(toggle).toContain('Let this agent use compute nodes')
     expect(toggle).not.toContain('fetchProjects(')
     expect(toggle).not.toContain('workspace/set')
   })

@@ -13,7 +13,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { handoffApi, requestVaultTab, type AcceptFromEntry } from './handoff-api'
-import { SETTING_ROW_LABEL, SettingDropdown } from '../controls/SettingControls'
+import { SETTING_FIELD_WIDTH, SETTING_ROW_LABEL, SettingDropdown, SettingRow } from '../controls/SettingControls'
 import { Button, Input } from '@/components/ui'
 
 const muted = 'text-[var(--color-text-secondary)]'
@@ -97,34 +97,27 @@ export function AgentHandoffAcceptFrom({
 
   if (!supported) return null
 
-  return (
-    <div
-      className={compact ? 'py-1.5' : 'px-4 py-3 space-y-2'}
-      data-testid="handoff-accept-from"
-      data-settings-id="projects.handoff-accept-from"
+  const pendingLink = pending !== null && pending > 0 && (
+    <Button
+      variant="quiet"
+      data-testid="handoff-pending-review"
+      onClick={() => {
+        requestVaultTab('incoming')
+        useSettingsStore.getState().setSection('vault')
+      }}
     >
-      <div className="flex items-center gap-2">
-        <div className={SETTING_ROW_LABEL}>Secrets from other agents</div>
-        {pending !== null && pending > 0 && (
-          <button
-            type="button"
-            className={`type-hint underline ${muted} hover:text-[var(--color-text-primary)] cursor-pointer no-drag`}
-            data-testid="handoff-pending-review"
-            onClick={() => {
-              requestVaultTab('incoming')
-              useSettingsStore.getState().setSection('vault')
-            }}
-          >
-            Pending: {pending} · Review
-          </button>
-        )}
-      </div>
-      <div className={`type-hint ${muted}`}>
-        Secrets from these senders go straight into this agent&rsquo;s vault. Everything else waits for you in Vault → Incoming.
-      </div>
+      Review {pending} waiting
+    </Button>
+  )
+
+  // The row reads like the others: label and hint on the left, the waiting
+  // count on the right. Who's on the list, and the two ways to add someone,
+  // sit on the line below.
+  const below = (
+    <div className="space-y-2">
       {entries !== null && entries.length === 0 && (
         <div className={`type-hint ${muted}`} data-testid="handoff-accept-empty">
-          No one yet: every secret sent to this agent waits for you.
+          No one yet, so every secret sent to this agent waits for you.
         </div>
       )}
       {entries !== null && entries.length > 0 && (
@@ -148,45 +141,75 @@ export function AgentHandoffAcceptFrom({
         </ul>
       )}
       {!readOnly && (
-        <div className="flex flex-wrap items-center gap-2">
-          <SettingDropdown
-            compact
-            menuAlign="left"
-            className="min-w-0 max-w-[220px]"
-            ariaLabel="Add an agent on this server"
-            triggerData={{ 'data-testid': 'handoff-accept-pick' }}
-            placeholder="An agent on this server…"
-            disabled={others.length === 0}
-            value={pick}
-            options={others.map((p) => ({ value: `ws:${p.id}`, label: p.handle || p.name }))}
-            onChange={setPick}
-          />
-          <Button variant="quiet" disabled={busy || !pick} data-testid="handoff-accept-pick-add" onClick={() => void edit(pick, 'add')}>
-            Add
-          </Button>
-          <Input
-            className="min-w-0 type-control"
-            aria-label="Add a federated agent or a team"
-            data-testid="handoff-accept-typed"
-            placeholder="agent::host or team:<id>"
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-          />
-          <Button
-            variant="quiet"
-            disabled={busy || !typedSenderOk(typed)}
-            data-testid="handoff-accept-typed-add"
-            onClick={() => void edit(typed.trim(), 'add')}
-          >
-            Add
-          </Button>
-        </div>
+        <>
+          <div className="flex items-center gap-2">
+            <div className={`${SETTING_FIELD_WIDTH} min-w-0`}>
+            <SettingDropdown
+              menuAlign="left"
+              fullWidth
+              ariaLabel="Add an agent on this server"
+              triggerData={{ 'data-testid': 'handoff-accept-pick' }}
+              placeholder={others.length === 0 ? 'No other agents on this server' : 'Pick an agent on this server'}
+              disabled={others.length === 0}
+              value={pick}
+              options={others.map((p) => ({ value: `ws:${p.id}`, label: p.handle || p.name }))}
+              onChange={setPick}
+            />
+            </div>
+            <Button variant="quiet" disabled={busy || !pick} data-testid="handoff-accept-pick-add" onClick={() => void edit(pick, 'add')}>
+              Add
+            </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              className={`${SETTING_FIELD_WIDTH} min-w-0 type-control`}
+              aria-label="Add an agent on another server, or a team"
+              data-testid="handoff-accept-typed"
+              placeholder="Agent address, like name::server"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+            />
+            <Button
+              variant="quiet"
+              disabled={busy || !typedSenderOk(typed)}
+              data-testid="handoff-accept-typed-add"
+              onClick={() => void edit(typed.trim(), 'add')}
+            >
+              Add
+            </Button>
+          </div>
+          <div className={`type-hint ${muted}`}>
+            For an agent on another server, type its address. For a team, type team: and the team&rsquo;s ID.
+          </div>
+        </>
       )}
       {error && (
         <div className="type-hint text-[var(--color-status-error-soft)]" role="alert">
           {error}
         </div>
       )}
+    </div>
+  )
+
+  const hint = 'Secrets these agents send go straight into this agent\u2019s vault. Anything else waits for you in Vault \u2192 Incoming.'
+
+  if (compact) {
+    return (
+      <div className="py-1.5 space-y-2" data-testid="handoff-accept-from" data-settings-id="projects.handoff-accept-from">
+        <div className="flex items-center gap-2">
+          <div className={SETTING_ROW_LABEL}>Secrets from other agents</div>
+          {pendingLink}
+        </div>
+        {below}
+      </div>
+    )
+  }
+
+  return (
+    <div data-testid="handoff-accept-from">
+      <SettingRow settingId="projects.handoff-accept-from" label="Secrets from other agents" hint={hint} below={below}>
+        {pendingLink || null}
+      </SettingRow>
     </div>
   )
 }

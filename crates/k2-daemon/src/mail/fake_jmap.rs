@@ -147,6 +147,16 @@ fn route(method: &str, path: &str, body: &[u8], state: &Mutex<FakeState>) -> (u1
                 "Identity/get" => serde_json::json!({ "list": [] }),
                 "Identity/set" => serde_json::json!({ "created": { "k2": { "id": "ident-1" } } }),
                 "Mailbox/query" => serde_json::json!({ "ids": ["mb-drafts"] }),
+                // The folder list (the mail reader's folders).
+                "Mailbox/get" => serde_json::json!({ "list": [
+                    { "id": "mb-inbox", "name": "Inbox", "role": "inbox" },
+                    { "id": "mb-receipts", "name": "Receipts", "role": null },
+                    { "id": "mb-sent", "name": "Sent", "role": "sent" },
+                    { "id": "mb-drafts", "name": "Drafts", "role": "drafts" },
+                    { "id": "mb-junk", "name": "Junk", "role": "junk" },
+                    { "id": "mb-trash", "name": "Trash", "role": "trash" },
+                    { "id": "mb-archive", "name": "Archive", "role": "archive" },
+                ] }),
                 "Email/query" => {
                     let account = args["accountId"].as_str().unwrap_or("");
                     let ids = st.inbox.get(account).cloned().unwrap_or_default();

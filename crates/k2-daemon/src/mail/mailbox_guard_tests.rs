@@ -16,14 +16,14 @@ use crate::mail::fake_jmap::FakeJmap;
 use crate::mail::messages::encode_message_id;
 use crate::test_harness;
 
-const OWNER: &str = "owner-token-oa0-mailbox-guard";
+pub(crate) const OWNER: &str = "owner-token-oa0-mailbox-guard";
 
-struct Resp {
-    status: u16,
-    body: String,
+pub(crate) struct Resp {
+    pub(crate) status: u16,
+    pub(crate) body: String,
 }
 
-fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Resp {
+pub(crate) fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Resp {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to test daemon");
     stream.set_read_timeout(Some(Duration::from_secs(30))).expect("read timeout");
     let req = match body {
@@ -58,11 +58,11 @@ fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Re
     Resp { status, body }
 }
 
-fn json(r: &Resp) -> serde_json::Value {
+pub(crate) fn json(r: &Resp) -> serde_json::Value {
     serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("body is not JSON ({e}): {:?}", r.body))
 }
 
-fn enc(s: &str) -> String {
+pub(crate) fn enc(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
@@ -74,7 +74,7 @@ fn enc(s: &str) -> String {
 }
 
 /// An email the fake engine serves (`account` lists it in `Email/query`).
-fn seed_email(fake: &FakeJmap, account: &str, id: &str, subject: &str) {
+pub(crate) fn seed_email(fake: &FakeJmap, account: &str, id: &str, subject: &str) {
     let mut st = fake.state.lock().unwrap();
     st.emails.insert(
         id.to_string(),
@@ -100,32 +100,32 @@ fn seed_email(fake: &FakeJmap, account: &str, id: &str, subject: &str) {
     st.inbox.entry(account.to_string()).or_default().push(id.to_string());
 }
 
-struct Fx {
+pub(crate) struct Fx {
     _home: k2_core::test_env::TempHome,
     _key: k2_core::test_env::EnvVar,
     _mail: crate::mail::MailServerTestGuard,
     _row: crate::mail::MailServerRowCleanup,
-    d: test_harness::TestDaemon,
-    fake: FakeJmap,
-    ws_id: String,
-    ws_path: String,
-    domain: String,
-    agent_addr: String,
-    person_addr: String,
-    linked_addr: String,
-    ghost_addr: String,
-    agent_tok: String,
-    person_tok: String,
-    linked_tok: String,
-    ghost_tok: String,
-    member: String,
-    admin: String,
-    owner_login: String,
-    pat: String,
+    pub(crate) d: test_harness::TestDaemon,
+    pub(crate) fake: FakeJmap,
+    pub(crate) ws_id: String,
+    pub(crate) ws_path: String,
+    pub(crate) domain: String,
+    pub(crate) agent_addr: String,
+    pub(crate) person_addr: String,
+    pub(crate) linked_addr: String,
+    pub(crate) ghost_addr: String,
+    pub(crate) agent_tok: String,
+    pub(crate) person_tok: String,
+    pub(crate) linked_tok: String,
+    pub(crate) ghost_tok: String,
+    pub(crate) member: String,
+    pub(crate) admin: String,
+    pub(crate) owner_login: String,
+    pub(crate) pat: String,
 }
 
 impl Fx {
-    async fn start() -> Fx {
+    pub(crate) async fn start() -> Fx {
         let home = k2_core::test_env::TempHome::new();
         let key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
         let mail = crate::mail::mail_server_test_lock();
@@ -217,11 +217,11 @@ impl Fx {
         }
     }
 
-    fn get(&self, token: &str, route: &str, query: &[(&str, &str)]) -> Resp {
+    pub(crate) fn get(&self, token: &str, route: &str, query: &[(&str, &str)]) -> Resp {
         self.get_on(self.d.port, token, route, query)
     }
 
-    fn get_on(&self, port: u16, token: &str, route: &str, query: &[(&str, &str)]) -> Resp {
+    pub(crate) fn get_on(&self, port: u16, token: &str, route: &str, query: &[(&str, &str)]) -> Resp {
         let mut q = format!("token={}", enc(token));
         for (k, v) in query {
             q.push_str(&format!("&{k}={}", enc(v)));
@@ -229,16 +229,16 @@ impl Fx {
         http(port, "GET", &format!("/cli/mail/{route}?{q}"), None)
     }
 
-    fn post(&self, token: &str, route: &str, body: serde_json::Value) -> Resp {
+    pub(crate) fn post(&self, token: &str, route: &str, body: serde_json::Value) -> Resp {
         http(self.d.port, "POST", &format!("/cli/mail/{route}?token={}", enc(token)), Some(&body.to_string()))
     }
 
-    fn read(&self, token: &str, msg: &str) -> Resp {
+    pub(crate) fn read(&self, token: &str, msg: &str) -> Resp {
         self.get(token, "read", &[("project", &self.ws_path), ("id", msg)])
     }
 
     /// Every `mail_reader_audit` row, oldest first, as JSON.
-    fn audit(&self) -> Vec<serde_json::Value> {
+    pub(crate) fn audit(&self) -> Vec<serde_json::Value> {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let mut stmt = conn
@@ -268,7 +268,7 @@ impl Fx {
         rows.map(|r| r.expect("access log row")).collect()
     }
 
-    fn rows_for(&self, actor: &str, address: &str, action: &str) -> Vec<serde_json::Value> {
+    pub(crate) fn rows_for(&self, actor: &str, address: &str, action: &str) -> Vec<serde_json::Value> {
         self.audit()
             .into_iter()
             .filter(|r| r["actor"] == actor && r["address"] == address && r["action"] == action)
@@ -276,17 +276,17 @@ impl Fx {
     }
 
     /// `Email/set` updates the fake engine saw for `account` (mark read).
-    fn seen_updates(&self, account: &str) -> usize {
+    pub(crate) fn seen_updates(&self, account: &str) -> usize {
         self.fake.state.lock().unwrap().updates.iter().filter(|(a, _, _)| a == account).count()
     }
 
-    fn email_gets(&self) -> usize {
+    pub(crate) fn email_gets(&self) -> usize {
         self.fake.state.lock().unwrap().gets.len()
     }
 
     /// The same text with the person's and the ghost's names folded to one
     /// placeholder, so a masked answer compares equal to the unknown one.
-    fn fold(&self, s: &str) -> String {
+    pub(crate) fn fold(&self, s: &str) -> String {
         s.replace(&self.person_tok, "<ID>")
             .replace(&self.ghost_tok, "<ID>")
             .replace(&self.linked_tok, "<ID>")
@@ -298,7 +298,7 @@ impl Fx {
     }
 }
 
-fn block<R>(f: impl FnOnce() -> R) -> R {
+pub(crate) fn block<R>(f: impl FnOnce() -> R) -> R {
     tokio::task::block_in_place(f)
 }
 

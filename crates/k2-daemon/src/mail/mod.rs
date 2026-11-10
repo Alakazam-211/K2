@@ -196,6 +196,9 @@ mod fake_jmap;
 // OA0 (0.46.11): people's mailboxes through a named workspace, end to end.
 #[cfg(test)]
 mod mailbox_guard_tests;
+// The mail reader, end to end (OA1–OA9).
+#[cfg(test)]
+mod reader_tests;
 pub mod send;
 pub mod submit;
 pub mod sieve_user;

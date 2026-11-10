@@ -254,6 +254,17 @@ pub(crate) fn env_for(app: &str, direct: bool) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Approved services the running container has no forward for (it
+/// started before they were asked for). Empty when it isn't running.
+pub(crate) fn missing_forwards(app: &str) -> Vec<String> {
+    let Some(fw) = live_of(app) else { return Vec::new() };
+    let rows = db(|c| bs::list(c, app)).unwrap_or_default();
+    rows.into_iter()
+        .filter(|r| r.status == bs::STATUS_ALLOWED && !fw.iter().any(|f| f.app_port == r.app_port && f.host_port == r.host_port))
+        .map(|r| r.name)
+        .collect()
+}
+
 /// The approved host ports the App's nft rule admits.
 pub(crate) fn allowed_ports(app: &str) -> Vec<u16> {
     let h = k2_core::db::shared();
@@ -412,7 +423,19 @@ fn request(who: &Who, body: &[u8]) -> R<J> {
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     let name = s(&v, "name").ok_or_else(|| no(dcodes::BAD_REQUEST, 400, "name the service (like sew-api)"))?;
-    let want = resolve(name, port_field(&v, "hostPort")?, port_field(&v, "appPort")?, s(&v, "proto"))?;
+    let host_port = port_field(&v, "hostPort")?;
+    // A container App asking for Postgres: say why no door exists for it
+    // (0.46.11 field report), not only "never a box service".
+    if let Some(p) = host_port.filter(|p| k2_root_proto::pg_major::in_band(*p)) {
+        if super::reach::in_container(&app) {
+            return Err(no(
+                codes::BOX_SERVICE_REFUSED,
+                403,
+                format!("port {p} can never be a box service: it is Postgres (5432-5449). And {}", super::reach::container_no_db(&app.app_id)),
+            ));
+        }
+    }
+    let want = resolve(name, host_port, port_field(&v, "appPort")?, s(&v, "proto"))?;
     ask(who, &app, &[want], s(&v, "reason"), bs::SOURCE_REQUEST, None)
 }
 

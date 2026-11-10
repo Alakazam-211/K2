@@ -292,6 +292,13 @@ fn defer_app(ops: &dyn WaveOps, app: &AppRow, code: &'static str, detail: String
     Turn::Deferred(code, detail)
 }
 
+/// Re-host one App now, as `k2 app rehost <app>` without `--yes` or
+/// `--pause` (a change that only a start delivers, `reach`).
+#[cfg_attr(test, allow(dead_code))] // unit tests record the kick instead
+pub(crate) fn rehost_now(app: &AppRow) -> Turn {
+    turn(&LiveOps, app, Some(Forced::default()))
+}
+
 /// Is the App due (and not held), and why.
 fn due(ops: &dyn WaveOps, app: &AppRow) -> Option<&'static str> {
     if app.live_seed.is_none() || app.state != store::STATE_RUNNING || ops.runs_unwalled(app) {

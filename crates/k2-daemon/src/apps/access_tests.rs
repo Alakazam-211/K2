@@ -227,7 +227,9 @@ fn agent_switch_matrix_off_build_full() {
         ("/cli/app/config", true, json!({"app": "jobs", "path": "open"}), Held, Held, Held),
         ("/cli/app/config", true, json!({"app": "jobs", "portAdd": "5000/udp"}), Held, Held, Held),
         ("/cli/app/config", true, json!({"app": "jobs", "isolation": "container"}), Held, Held, Held),
-        ("/cli/app/config", true, json!({"app": "jobs", "dbRaw": "on"}), Held, Held, Held),
+        // (On a process App: a container App's dbRaw is refused up front,
+        // it has no database door yet; reach_tests.)
+        ("/cli/app/config", true, json!({"app": "plain", "dbRaw": "on"}), Held, Held, Held),
         // Purge: never an agent (held as a manage request without switch 1;
         // the replay is refused).
         ("/cli/app/uninstall", true, json!({"app": "plain", "purge": true}), Held, Refused, Refused),
@@ -672,7 +674,7 @@ fn switch_1_inside_the_default_limits_switch_2_inside_admission() {
     assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
     assert!(v["held"]["request"].to_string().contains("Build and run Apps"), "the reason names the switch: {v}");
     // Loosening: the person, on switch 1.
-    let (st, v) = call("/cli/app/config", &a, json!({"app": "jobs", "dbRaw": "on"}));
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "dbRaw": "on"}));
     assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
 
     // The owner approves the held 3 GiB: it fits the box, so it applies.

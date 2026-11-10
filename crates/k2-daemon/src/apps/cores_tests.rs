@@ -290,7 +290,7 @@ fn db_private_needs_the_database_core() {
     let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "dbPrivate": "on"}));
     assert_eq!(st, 200, "switch 1 + Database: {v}");
     assert!(v["applied"].to_string().contains("private database on"), "{v}");
-    let (st, v) = call("/cli/app/config", &a, json!({"app": "jobs", "dbRaw": "on"}));
+    let (st, v) = call("/cli/app/config", &a, json!({"app": "plain", "dbRaw": "on"}));
     assert!(is_held(st, &v), "dbRaw loosens the wall: {st} {v}");
     // Turning it off narrows, ticked or not.
     set_cores(&f.ws_a, &[]);

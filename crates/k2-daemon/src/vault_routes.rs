@@ -1888,6 +1888,21 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
     if let Some(reach) = grant_reach(vault, &g.consumer, delivery) {
         out["reach"] = reach.into();
     }
+    // 0.46.11 field report: a secret granted to an App reaches it at its
+    // next start. Say so (and to its agent), re-host an idle App whose
+    // DATABASE_URL it is, and re-send its nft rule when that URL names
+    // another database.
+    if g.consumer.kind == ConsumerKind::PublishedService && matches!(delivery, Delivery::Env | Delivery::File) {
+        let env = (delivery == Delivery::Env).then(|| {
+            g.env_name.clone().or_else(|| vault.meta(&sel, &c.actor).ok().map(|m| k2_vault::delivery::default_env_name(&m.name))).unwrap_or_default()
+        });
+        if let Some(app) = crate::apps::reach::after_service_grant(&g.consumer.id, env.as_deref()) {
+            if let Some(n) = app["note"].as_str() {
+                out["reach"] = n.into();
+            }
+            out["app"] = app;
+        }
+    }
     // A compute grant to a node another K2 server owns (review B-L3).
     if let Some(w) = crate::compute_secrets::grant_warning(&g.consumer) {
         out["warning"] = w.into();

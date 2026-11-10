@@ -9223,6 +9223,10 @@ The box (Linux):
                                        v2, Podman 5+, pasta, crun/youki, the k2app
                                        user and its ids, linger, delegation,
                                        io.cost, reserved ports, nft, helper.
+  k2 app doctor <app-id> [--json]      Is everything approved in the running App?
+                                       Box services and database ports approved
+                                       but not yet applied, and a container's
+                                       missing database door. Exit 1 when one is.
   k2 app doctor --store [<folder>] [--voice|--no-voice] [--json]
                                        Is this Tauri App's repo ready for App
                                        Store and Play review? Privacy manifest,
@@ -9364,6 +9368,32 @@ print("    %s" % b.get("distroPodman", ""))
 '
 }
 
+# k2 app doctor <app> (0.46.11): is everything approved in the running App
+# (box services, its database ports, a container's missing database door)?
+# Exit 0 all applied, 1 something approved isn't in the running App.
+_app_reach_doctor() {
+    local app="$1" json_out="$2"
+    _compute_call GET /cli/app/box-service "app=$(urlencode "$app")"
+    if [ "$json_out" = 1 ]; then
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); r=v.get("reach") or {}; r["app"]=v.get("app"); r["wall"]=v.get("wall"); print(json.dumps(r))'
+    else
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+r = v.get("reach") or {}
+state = "running" if r.get("running") else "not running"
+print("%s (%s, %s): %s" % (v.get("app"), v.get("wall"), state, "everything approved is applied" if r.get("ok") else "NOT ALL APPLIED"))
+rule = r.get("rule")
+if rule:
+    db = rule.get("dbPorts")
+    print("  rule      gateway %s, box ports %s, Postgres %s" % (rule.get("gwPort"), ", ".join(str(p) for p in rule.get("boxPorts") or []) or "none",
+          "the whole band" if db is None else (", ".join(str(p) for p in db) or "none")))
+for f in r.get("findings") or []:
+    print("  %-26s %s" % (f.get("id"), f.get("detail")))'
+    fi
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if (json.load(sys.stdin).get("reach") or {}).get("ok", True) else 1)' || exit 1
+}
+
 # ── k2 app doctor --store (0.46.9, the Tauri App SDK) ──────────────
 _app_store_doctor_usage() {
     cat <<'EOF'
@@ -9452,8 +9482,12 @@ cmd_app_doctor() {
         _app_store_doctor "${folder:-.}" "$voice" "$json_out"
         return $?
     fi
-    if [ -n "$voice" ] || [ -n "$folder" ]; then
-        echo "k2 app doctor: a folder, --voice and --no-voice go with --store (k2 app doctor --store --help)" >&2; exit 2
+    if [ -n "$voice" ]; then
+        echo "k2 app doctor: --voice and --no-voice go with --store (k2 app doctor --store --help)" >&2; exit 2
+    fi
+    if [ -n "$folder" ]; then
+        _app_reach_doctor "$folder" "$json_out"
+        return $?
     fi
     _compute_call GET /cli/app/box ""
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else printf '%s' "$_CP_BODY" | _app_box_print; fi
@@ -37300,6 +37334,11 @@ o = json.loads(sys.argv[1]); o.update(json.loads(sys.argv[2])); print(urllib.par
 import json, sys
 g = json.load(sys.stdin).get("grant") or {}
 print("shared %s with %s%s" % (sys.argv[1], sys.argv[2], (" until " + g["expiresAt"]) if g.get("expiresAt") else ""))' "$name" "$to"
+            # What it means for whoever got it (an App: when it arrives).
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+r = json.load(sys.stdin).get("reach")
+if r: print("note: %s" % r)'
             # A compute: grant to a node another K2 server owns.
             printf '%s' "$_SC_BODY" | python3 -c '
 import json, sys
@@ -85311,6 +85350,8 @@ elif verb == "create":
     cap = d.get("cap") or {}
     if cap:
         print("cap %s/%s used" % (cap.get("used"), cap.get("cap") if cap.get("cap") else "unlimited"))
+    for a in d.get("apps") or []:
+        print("app:      %s" % a.get("note"))
 elif verb == "dsn":
     print(d.get("ref") or d.get("dsn") or "")
 elif verb == "list":
@@ -85333,12 +85374,18 @@ elif verb == "restore":
     print("restored %s" % d.get("restored"))
 elif verb == "drop":
     print("dropped %s" % d.get("dropped"))
+    for a in d.get("apps") or []:
+        print("app:      %s" % a.get("note"))
 elif verb == "grant":
     print("granted %s on %s to %s" % (d.get("level"), d.get("name"), d.get("projectId")))
     if d.get("canManage"):
         print("can_manage: true")
+    for a in d.get("apps") or []:
+        print("app:      %s" % a.get("note"))
 elif verb == "revoke":
     print("revoked %s from %s" % (d.get("name"), d.get("projectId")))
+    for a in d.get("apps") or []:
+        print("app:      %s" % a.get("note"))
 elif verb == "bind":
     print("bind role: %s" % d.get("bindRole"))
 elif verb == "doctor":

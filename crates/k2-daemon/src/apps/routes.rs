@@ -1732,6 +1732,17 @@ fn parse_secs(x: &str) -> Option<i64> {
 /// The process exception (path `open` + isolation `process`) is its own
 /// owner-only switch with its own setup (devices, the `k2appx` unit):
 /// config never enters it or leaves it, now or on approve.
+/// 0.46.11 field report: `--db-raw on` for an App that will run in a
+/// container is refused up front (approving it would change nothing: a
+/// container has no database door yet, `reach`), in the call and again
+/// when a held one is approved.
+fn db_door_guard(app: &AppRow, ops: &[Op], after: &appcfg::State) -> R<()> {
+    if ops.iter().any(|o| matches!(o, Op::DbRaw(true))) && super::reach::container_isolation(&after.isolation) {
+        return Err(no(super::reach::codes::DB_DOOR_MISSING, 409, super::reach::container_no_db(&app.app_id)));
+    }
+    Ok(())
+}
+
 fn exception_guard(app: &AppRow, after: &appcfg::State) -> R<()> {
     let enters = after.path == "open" && after.isolation == "process";
     if app.is_process_exception() && !enters {
@@ -1794,6 +1805,7 @@ pub(crate) fn apply_config_ops(app_id: &str, ops: &[Op], by: &str) -> R<J> {
     }
     // Re-checked here too: a held request approved later meets today's App.
     exception_guard(&app, &state)?;
+    db_door_guard(&app, ops, &state)?;
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1847,6 +1859,7 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
         appcfg::apply(op, &mut after);
     }
     exception_guard(&app, &after)?;
+    db_door_guard(&app, &ops, &after)?;
     // A port another App holds, or memory the box doesn't have, is refused
     // now (naming who holds it), whether the change would apply or wait.
     check_box_fit(&app, &ops, &state)?;

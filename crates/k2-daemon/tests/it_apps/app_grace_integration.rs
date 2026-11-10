@@ -580,17 +580,18 @@ async fn s13_config_applies_narrowing_now_and_holds_widening() {
     let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "isolation": "process"})).await;
     assert_eq!((r.status, r.code()), (409, "engine_unavailable".to_string()), "{}", r.body);
     assert!(r.body.contains("k2 app exception"), "{}", r.body);
-    // The per-event list waits even for the owner token.
+    // dbRaw (on the per-event list) is refused up front for a container
+    // App, the owner token included: it has no database door yet (0.46.11).
     let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "dbRaw": "on"})).await;
-    assert_eq!(r.status, 202, "{}", r.body);
-    let raw_req = r.json()["held"]["request"]["id"].as_str().unwrap().to_string();
+    assert_eq!((r.status, r.code()), (409, "app_db_door_missing".to_string()), "{}", r.body);
+    assert!(r.body.contains("guarded container Apps can't reach box Postgres yet"), "{}", r.body);
     // An owner-only widening: the agent proposes, the owner applies.
     let r = post(d.port, "/cli/app/config", &agent, json!({"app": "cfg-app", "dbPrivate": "on"})).await;
     assert_eq!(r.status, 202, "{}", r.body);
     let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "dbPrivate": "on"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     // Approving applies the held ops.
-    for req in [&held, &raw_req] {
+    for req in [&held] {
         let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": req, "confirmToken": confirm("app-approve", req)})).await;
         assert_eq!(r.json()["status"], "approved", "{}", r.body);
     }
@@ -602,7 +603,7 @@ async fn s13_config_applies_narrowing_now_and_holds_widening() {
         (k2_core::app_grace::config::load(&conn, "cfg-app").unwrap(), allowed)
     };
     assert_eq!(allowed, vec!["api.stripe.com:443"], "the approved host is on the enforced list");
-    assert!(cfg.db.raw && cfg.db.private, "{cfg:?}");
+    assert!(!cfg.db.raw && cfg.db.private, "{cfg:?}");
     assert!(cfg.ports.is_empty(), "the held port request was never approved");
     // Disk ceilings: an agent tightens at once; its raise waits for the
     // owner; the owner raises at once.

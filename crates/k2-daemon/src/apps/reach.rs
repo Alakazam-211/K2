@@ -140,11 +140,15 @@ fn minus(a: &[u16], b: &[u16]) -> Vec<u16> {
     a.iter().filter(|p| !b.contains(p)).copied().collect()
 }
 
-/// The running App's gap (`None`: K2 sent it no rule, it isn't running).
-/// A rule sent without `--db` on the per-App table admits the whole band,
-/// so it lacks no database port.
+/// The running App's gap (`None`: it isn't running, or K2 sent it no
+/// rule; a stopped App's next start sends a fresh one). A rule sent
+/// without `--db` on the per-App table admits the whole band, so it lacks
+/// no database port.
 pub fn gap(app: &str) -> Option<(Applied, Gap)> {
     let a = applied_of(app)?;
+    if !app_row(app).is_some_and(|r| r.state == store::STATE_RUNNING) {
+        return None;
+    }
     let (b, d) = wanted(app, per_app_db());
     let mut g = Gap { box_ports: minus(&b, &a.box_ports), closed: minus(&a.box_ports, &b), ..Gap::default() };
     if let (Some(w), Some(have)) = (&d, &a.db_ports) {
@@ -154,24 +158,212 @@ pub fn gap(app: &str) -> Option<(Applied, Gap)> {
     Some((a, g))
 }
 
-// Red before the fix: today's behaviour at each point the fix lands.
-
-/// A database change says nothing and re-sends nothing today.
-pub(crate) fn after_db_change(_v: &mut J) {}
-
-/// A secret granted to an App says nothing about when it arrives today.
-pub(crate) fn after_service_grant(_service_id: &str, _env_name: Option<&str>) -> Option<J> {
-    None
+/// One running App whose rule K2 re-sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refreshed {
+    pub app: String,
+    pub opened: Vec<u16>,
+    pub closed: Vec<u16>,
+    pub result: Result<(), String>,
 }
 
-/// Nothing checks the running App today.
+/// Re-send the rule of every running App whose ports moved (a database
+/// grant or revoke, a database made or dropped, a `DATABASE_URL` that
+/// names another one). Live: `apps nft app` replaces only that App's line.
+pub(crate) fn refresh_running() -> Vec<Refreshed> {
+    let mut apps: Vec<String> = table().lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
+    apps.sort();
+    apps.into_iter().filter_map(|a| refresh_one(&a)).collect()
+}
+
+/// [`refresh_running`] for one App; `None` when nothing moved.
+pub(crate) fn refresh_one(app: &str) -> Option<Refreshed> {
+    let (a, g) = gap(app)?;
+    if g.is_empty() {
+        return None;
+    }
+    let result = super::guarded::install_gateway_rule(app, a.gw);
+    Some(Refreshed { app: app.to_string(), opened: g.opened(), closed: g.closed, result })
+}
+
+fn ports(p: &[u16]) -> String {
+    p.iter().map(u16::to_string).collect::<Vec<_>>().join(", ")
+}
+
+fn app_row(app: &str) -> Option<AppRow> {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    store::get_app(&conn, app).ok().flatten()
+}
+
+fn tell_agent(app: &AppRow, text: &str) {
+    if !app.owner_workspace.is_empty() {
+        super::alerts::notify(&app.owner_workspace, &format!("[k2 apps] {text}"));
+    }
+}
+
+/// After a database change (`k2 db grant|revoke|create|drop`): re-send
+/// the running Apps' rules and say what it meant for each in the answer
+/// (`apps`). A container App is told it has no door; a rule that didn't
+/// load says to re-host. Both reach the App's agent too.
+pub(crate) fn after_db_change(v: &mut J) {
+    let notes: Vec<J> = refresh_running().iter().map(note_for).collect();
+    if !notes.is_empty() {
+        v["apps"] = json!(notes);
+    }
+}
+
+fn note_for(r: &Refreshed) -> J {
+    let a = r.app.as_str();
+    let row = app_row(a);
+    let container = row.as_ref().is_some_and(in_container);
+    let text = match (&r.result, container, r.opened.is_empty()) {
+        (Err(e), _, _) => format!("App {a}: its door to this box's Postgres didn't reload ({e}). {}", rehost_line(a)),
+        (Ok(()), true, false) => format!("App {a}: {}", container_no_db(a)),
+        (Ok(()), false, false) => format!("App {a}: its door to Postgres port(s) {} opened now (no re-host needed)", ports(&r.opened)),
+        (Ok(()), _, true) => format!("App {a}: Postgres port(s) {} shut now", ports(&r.closed)),
+    };
+    if let (Some(row), true) = (&row, r.result.is_err() || (container && !r.opened.is_empty())) {
+        tell_agent(row, &text);
+    }
+    json!({ "app": a, "opened": r.opened, "closed": r.closed, "applied": r.result.is_ok(), "note": text })
+}
+
+// ── a secret granted to an App ───────────────────────────────────────
+
+/// Is the App idle enough to re-host without asking (no deploy running,
+/// no open connection)?
+fn idle(app: &AppRow) -> bool {
+    !super::supervisor::is_busy(&app.app_id) && !super::handover::busy(&app.app_id) && super::supervisor::active_connections(&app.app_id) == 0
+}
+
+/// Start a re-host of `app` in the background; tell its agent if it
+/// doesn't finish.
+fn kick_rehost(app: &AppRow, what: &str) {
+    #[cfg(test)]
+    {
+        let _ = what;
+        test_seams::kicked(&app.app_id);
+    }
+    #[cfg(not(test))]
+    {
+        let row = app.clone();
+        let granted = what.to_string();
+        let spawned = crate::rt::spawn("app-rehost-grant", move || {
+            let why = match super::rehost::rehost_now(&row) {
+                super::rehost::Turn::Done(_) | super::rehost::Turn::NotDue => return,
+                super::rehost::Turn::Failed(_, why) => why,
+                super::rehost::Turn::Deferred(code, detail) => format!("{code}: {detail}"),
+            };
+            tell_agent(&row, &format!("App {}: {granted} was granted to it, and K2's re-host didn't finish ({why}). {}", row.app_id, rehost_line(&row.app_id)));
+        });
+        if let Err(e) = spawned {
+            tell_agent(app, &format!("App {}: {what} was granted to it ({e}). {}", app.app_id, rehost_line(&app.app_id)));
+        }
+    }
+}
+
+/// A secret granted to a published service: when the service is an App,
+/// what that means for it (`reach` in the grant's answer, and a note to
+/// the App's agent). `env_name`: the variable it arrives as (`None` for a
+/// file). `None` for a service that isn't an App.
+pub(crate) fn after_service_grant(service_id: &str, env_name: Option<&str>) -> Option<J> {
+    let app = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::get_app_by_service(&conn, service_id).ok().flatten()?
+    };
+    let a = app.app_id.clone();
+    let what = env_name.unwrap_or("a secret file").to_string();
+    let db_url = env_name == Some(crate::vault::publish_env::DATABASE_URL);
+    // The rule first: the URL may name another database's cluster.
+    let rule = refresh_one(&a);
+    if db_url && in_container(&app) {
+        let t = format!("App {a}: {}", container_no_db(&a));
+        tell_agent(&app, &t);
+        return Some(json!({ "app": a, "rehost": "no_door", "note": t }));
+    }
+    if app.live_seed.is_none() || app.state != store::STATE_RUNNING {
+        return Some(json!({ "app": a, "rehost": "not_running", "note": format!("App {a} gets {what} when it next starts") }));
+    }
+    let line = rehost_line(&a);
+    if let Some(Refreshed { result: Err(e), .. }) = &rule {
+        let t = format!("App {a}: its door to this box's Postgres didn't reload ({e}). {line}");
+        tell_agent(&app, &t);
+        return Some(json!({ "app": a, "rehost": "needed", "note": t }));
+    }
+    if db_url && idle(&app) {
+        kick_rehost(&app, &what);
+        return Some(json!({
+            "app": a,
+            "rehost": "started",
+            "note": format!("{line}. {a} was idle, so K2 is re-hosting it now (k2 app rehost status {a})"),
+        }));
+    }
+    let t = format!("App {a}: {what} was granted to it; the running App keeps what it started with. {line}");
+    tell_agent(&app, &t);
+    Some(json!({ "app": a, "rehost": "needed", "note": format!("{line} ({a} is running and keeps what it started with)") }))
+}
+
+// ── doctor ───────────────────────────────────────────────────────────
+
+/// Does a container App mean to use Postgres (a `DATABASE_URL` naming a
+/// K2 database, or `requires.postgres`)?
+fn wants_postgres(app: &AppRow) -> bool {
+    if super::pg_choice::requires_of(app).is_some() {
+        return true;
+    }
+    matches!(super::pg_choice::db_of(app), super::pg_choice::DbOf::Known(r) if r.source == super::pg_choice::Source::Ref)
+}
+
+/// `k2 app doctor <app>`: is everything approved in the running App?
 pub(crate) fn doctor_json(app: &AppRow) -> J {
-    let a = applied_of(&app.app_id);
+    let a = app.app_id.as_str();
+    let line = rehost_line(a);
+    let mut findings: Vec<J> = Vec::new();
+    let services = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::deploy::box_service::list(&conn, a).unwrap_or_default()
+    };
+    let applied = gap(a);
+    if let Some((_, g)) = &applied {
+        if !g.box_ports.is_empty() {
+            let names: Vec<String> = services.iter().filter(|s| g.box_ports.contains(&s.host_port)).map(|s| s.name.clone()).collect();
+            findings.push(json!({
+                "id": "box_service_not_applied",
+                "detail": format!(
+                    "box service approved but not yet applied to the running App: {} (host port {}). {line}",
+                    names.join(", "),
+                    ports(&g.box_ports)
+                ),
+            }));
+        }
+        if !g.db_ports.is_empty() {
+            findings.push(json!({
+                "id": "database_not_applied",
+                "detail": format!("database approved but not yet applied to the running App: Postgres port(s) {}. {line}", ports(&g.db_ports)),
+            }));
+        }
+    }
+    let unforwarded = super::box_service_routes::missing_forwards(a);
+    if !unforwarded.is_empty() {
+        findings.push(json!({
+            "id": "box_service_not_forwarded",
+            "detail": format!(
+                "box service approved but not yet applied to the running App: {} has no forward in its running container. {line}",
+                unforwarded.join(", ")
+            ),
+        }));
+    }
+    if in_container(app) && wants_postgres(app) {
+        findings.push(json!({ "id": "database_door_missing", "detail": container_no_db(a) }));
+    }
     json!({
-        "ok": true,
-        "running": a.is_some(),
-        "rule": a.as_ref().map(|r| json!({ "gwPort": r.gw, "boxPorts": r.box_ports, "dbPorts": r.db_ports })),
-        "findings": [],
+        "ok": findings.is_empty(),
+        "running": applied.is_some(),
+        "rule": applied.as_ref().map(|(r, _)| json!({ "gwPort": r.gw, "boxPorts": r.box_ports, "dbPorts": r.db_ports })),
+        "findings": findings,
     })
 }
 

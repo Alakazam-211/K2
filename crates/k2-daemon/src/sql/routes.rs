@@ -403,10 +403,18 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
                     "refusing to return a superuser DSN",
                 );
             }
-            ok_json(without_passwords(v, b.test))
+            ok_json(with_app_reach(without_passwords(v, b.test)))
         }
         Err(e) => ops_err(e),
     }
+}
+
+/// 0.46.11 field report: a database change re-sends the running Apps'
+/// nft rules whose database ports moved, and says what it meant for each
+/// (`apps`): opened now, shut now, or why it can't reach it.
+pub(crate) fn with_app_reach(mut v: serde_json::Value) -> serde_json::Value {
+    crate::apps::reach::after_db_change(&mut v);
+    v
 }
 
 /// `k2 db create` answers (0.46.10): the DSNs without their passwords, so
@@ -790,7 +798,7 @@ pub fn handle_drop(body: &[u8]) -> CliResponse {
             return test_db_forbidden();
         }
         match ops::drop_test_database(ops(), &project_id) {
-            Ok(v) => ok_json(v),
+            Ok(v) => ok_json(with_app_reach(v)),
             Err(e) => ops_err(e),
         }
     } else {
@@ -798,7 +806,7 @@ pub fn handle_drop(body: &[u8]) -> CliResponse {
             return resp;
         }
         match ops::drop_database_db(ops(), &project_id, b.db()) {
-            Ok(v) => ok_json(v),
+            Ok(v) => ok_json(with_app_reach(v)),
             Err(e) => ops_err(e),
         }
     }
@@ -1541,7 +1549,7 @@ pub fn handle_grant(body: &[u8]) -> CliResponse {
                     "refusing to return a superuser DSN",
                 );
             }
-            ok_json(v)
+            ok_json(with_app_reach(v))
         }
         Err(e) => ops_err(e),
     }
@@ -1584,7 +1592,7 @@ pub fn handle_revoke(body: &[u8]) -> CliResponse {
         Err(resp) => return resp,
     };
     match ops::revoke_access(ops(), caller_project_id().as_deref(), &b.db, &grantee) {
-        Ok(v) => ok_json(v),
+        Ok(v) => ok_json(with_app_reach(v)),
         Err(e) => ops_err(e),
     }
 }

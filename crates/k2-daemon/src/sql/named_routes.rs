@@ -210,7 +210,7 @@ pub fn handle(ops: &dyn SystemOps, who: Who, is_post: bool, body: &[u8], params:
                 b.major,
                 spec,
             ) {
-                Ok(v) => CliResponse::ok_json(crate::sql::routes::without_passwords_pub(v).to_string()),
+                Ok(v) => CliResponse::ok_json(crate::sql::routes::with_app_reach(crate::sql::routes::without_passwords_pub(v)).to_string()),
                 Err(e) => err(e.status(), e.code(), e.hint()),
             }
         }

@@ -30,9 +30,11 @@ artifacts = ["k2/out/*"]
 env = ["BUILD_COMMIT", "BUILD_TREE"]
 isolation = ["job_uid", "exclusive", "tenant_uid"]
 walls = ["job_user"]
-# Both nodes must make these byte for byte. The .AppImage is a squashfs
-# with build times inside: add it here once two builds match (k2 ci
-# evidence prints what matched).
+# Both nodes must make these byte for byte. The .AppImage is rebuilt with
+# the commit's time too, but it carries the build machine's own libraries,
+# so it matches only when both nodes run the same distro release and
+# packages: add it here once your seat's nodes do (k2 ci evidence prints
+# what matched).
 dual = ["k2/out/k2-ci-check", "k2/out/k2-ci-check.deb"]
 independent = ["host"]
 

@@ -81,6 +81,57 @@ repack_deb() {
     rm -rf "$w"
 }
 
+# The AppImage is a runtime (an ELF) with a squashfs after it. The squashfs
+# keeps each file's build-time mtime, and the runtime's .digest_md5 section
+# is the MD5 of the whole image, so both differ between builds. Rebuild
+# the squashfs from the same files with the commit's time, root as owner
+# and no xattrs (mksquashfs sorts each folder), splice it back onto the
+# runtime, and zero .digest_md5 (an AppImage with no digest is valid; Tauri's
+# updater and the runtime never read it, and the signer's .sig covers the
+# whole file). Needs python3 and
+# mksquashfs 4.4+: on PATH, else the one inside Tauri's cached appimage
+# plugin. The AppImage also carries the build machine's own libraries, so
+# two builds match only on the same distro release and packages.
+normalise_appimage() {
+    local img="$1" w mks plugin
+    w="$(mktemp -d)"
+    mks="$(command -v mksquashfs || true)"
+    if [ -z "$mks" ]; then
+        plugin="$(ls "$HOME"/.cache/tauri/*plugin-appimage*.AppImage 2>/dev/null | head -1)"
+        [ -n "$plugin" ] || { echo "build-linux.sh: no mksquashfs (and no Tauri appimage plugin to take one from)" >&2; exit 1; }
+        (cd "$w" && "$plugin" --appimage-extract >/dev/null && mv squashfs-root plugin)
+        mks="$(find "$w/plugin" -type f -name mksquashfs | head -1)"
+        [ -x "$mks" ] || { echo "build-linux.sh: Tauri's appimage plugin holds no mksquashfs" >&2; exit 1; }
+    fi
+    command -v python3 >/dev/null || { echo "build-linux.sh: python3 is needed to rebuild the AppImage" >&2; exit 1; }
+    local off
+    off="$(python3 -c 'import struct,sys; b=open(sys.argv[1],"rb").read(64); o,=struct.unpack_from("<Q",b,0x28); e,n=struct.unpack_from("<HH",b,0x3A); print(o+e*n)' "$img")"
+    head -c "$off" "$img" > "$w/image"
+    (cd "$w" && "$img" --appimage-extract >/dev/null)
+    "$mks" "$w/squashfs-root" "$w/fs" -noappend -quiet -no-progress -all-root -no-xattrs \
+        -comp zstd -b 131072 -mkfs-time "$SOURCE_DATE_EPOCH" -all-time "$SOURCE_DATE_EPOCH" >/dev/null
+    cat "$w/fs" >> "$w/image"
+    python3 - "$w/image" <<'PY'
+import struct, sys
+p = sys.argv[1]
+b = bytearray(open(p, "rb").read())
+shoff, = struct.unpack_from("<Q", b, 0x28)
+entsize, num, strndx = struct.unpack_from("<HHH", b, 0x3A)
+secs = []
+for i in range(num):
+    name, _t, _f, _a, off, size = struct.unpack_from("<IIQQQQ", b, shoff + i * entsize)
+    secs.append((name, off, size))
+stroff = secs[strndx][1]
+named = {bytes(b[stroff + n:b.index(0, stroff + n)]).decode(): (off, size) for n, off, size in secs}
+off, size = named[".digest_md5"]
+b[off:off + size] = bytes(size)
+open(p, "wb").write(b)
+PY
+    chmod 0755 "$w/image"
+    mv "$w/image" "$img"
+    rm -rf "$w"
+}
+
 out="$root/k2/out"
 rm -rf "$out"
 mkdir -p "$out"
@@ -92,5 +143,6 @@ imgs=("$target"/release/bundle/appimage/*.AppImage)
 cp "${debs[0]}" "$out/$bin.deb"
 repack_deb "$out/$bin.deb"
 cp "${imgs[0]}" "$out/$bin.AppImage"
+normalise_appimage "$out/$bin.AppImage"
 echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
 (cd "$out" && sha256sum -- *)

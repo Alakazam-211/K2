@@ -105,7 +105,7 @@ import {
   type ProjectSettingsCaps,
 } from './project-settings'
 import { moveDashboardId, orderedDashboards } from './project-tabs'
-import { SETTING_ROW_HINT, SettingDropdown, SettingRow } from '@/components/Settings/controls/SettingControls'
+import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { Button, Callout, Input, Segmented, Toggle, cx } from '@/components/ui'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { primaryScope } from '@/kessel/server-scope'
@@ -126,16 +126,19 @@ function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.El
 function Row({
   label,
   settingId,
+  testId,
   children,
 }: {
   label: string
   settingId?: string
+  testId?: string
   children: React.ReactNode
 }): React.JSX.Element {
   return (
     <div
       className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2 border-b border-[var(--color-border)] last:border-b-0"
       data-settings-id={settingId}
+      data-testid={testId}
     >
       <span className="w-24 flex-shrink-0 text-xs text-[var(--color-text-secondary)]">{label}</span>
       <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">{children}</div>
@@ -829,27 +832,11 @@ function DefaultViewRow({
       })
   }
 
-  const below = error ? (
-    <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
-      {error}
-    </p>
-  ) : lockReason ? (
-    <p className={SETTING_ROW_HINT} data-testid="project-default-view-locked">
-      {lockReason}
-    </p>
-  ) : undefined
-
+  // The page's own row (grey label column, value column), like Show in
+  // Pinned: the control, then the muted note and "Saving…" beside it; a
+  // lock reason or an error takes its own line under them.
   return (
-    <SettingRow
-      label="Agents open in"
-      hint="Each agent in this project opens in this view. Anyone can switch one agent for themselves."
-      settingId="project-groups.default-view"
-      testId="project-default-view-row"
-      below={below}
-    >
-      <span className="type-hint text-[var(--color-text-muted)]" aria-live="polite">
-        {saving ? 'Saving…' : ''}
-      </span>
+    <Row label="Agents open in" settingId="project-groups.default-view" testId="project-default-view-row">
       <Segmented
         aria-label="Agents open in"
         value={value}
@@ -858,7 +845,22 @@ function DefaultViewRow({
         disabled={lockReason !== null}
         onChange={change}
       />
-    </SettingRow>
+      <span className="text-[10px] text-[var(--color-text-muted)]">
+        Each agent opens in this view; anyone can switch one for themselves.
+      </span>
+      <span className="text-[10px] text-[var(--color-text-muted)] empty:hidden" aria-live="polite">
+        {saving ? 'Saving…' : ''}
+      </span>
+      {error ? (
+        <p role="alert" className="basis-full text-[10px] text-[var(--color-status-error-soft)]">
+          {error}
+        </p>
+      ) : lockReason ? (
+        <p className="basis-full text-[10px] text-[var(--color-text-muted)]" data-testid="project-default-view-locked">
+          {lockReason}
+        </p>
+      ) : null}
+    </Row>
   )
 }
 

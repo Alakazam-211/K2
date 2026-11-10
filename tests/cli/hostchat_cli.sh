@@ -635,7 +635,7 @@ assert_eq "accept-binary refusals sent nothing to /cli/sew" "$(nreq)" "$before"
 echo "== recording (0.46.11 K-a) =="
 run owner hostchat recording --help
 assert_eq "recording --help exit 0" "$rc" "0"
-assert_contains "recording help: 8 GiB" "$out" "at least 8 GiB of RAM"
+assert_contains "recording help: 8 GiB" "$out" "8 GiB of RAM"
 assert_contains "recording help: disable keeps recordings" "$out" "every recording is kept"
 assert_contains "recording help: uninstall never deletes" "$out" "Never deletes recordings"
 assert_contains "recording help: an agent asks on a card" "$out" "k2 permission request sew.recording-enable"

@@ -73634,24 +73634,34 @@ Voice (sew-media, TURN over TLS on 5349, WebRTC DTLS-SRTP):
                                             where Sew's voice is already gone still has K2's voice
                                             records (TURN DNS, label, key) cleaned up
 
-Recording (Sew's recorder and transcriber; needs Sew 0.9.0, app_recording):
-  k2 hostchat recording status [--json]     installed, enabled, version, org policies, Sew's flags
-  k2 hostchat recording preflight [--json]  what enable checks first; each failed check names its fix
+Recording (Sew, this box's chat and voice service: its recorder and transcriber; Sew 0.9.0+):
+  k2 hostchat recording status [--json]     installed, on or off, versions, Sew's recording settings
+                                            and whether this Sew can record (its app_recording flag)
+  k2 hostchat recording preflight [--json]  what enable checks, changing nothing; each failed check
+                                            names its fix
   k2 hostchat recording enable [--recorder-tarball FILE] [--transcriber-tarball FILE]
                                [--model-file FILE] [--no-wait] [--json]
                                             install the recorder, the transcriber and the speech
                                             model (when not installed yet), then turn recording on
-                                            (Sew's org policy recording.enabled). An Owner or Admin,
-                                            in person: Touch ID, the vault password or your login.
-                                            An agent can't: it asks on a card
-                                            (k2 permission request sew.recording-enable --why "...").
-                                            Needs at least 8 GiB of RAM, voice installed
-                                            (k2 hostchat media install), room for every Sew unit in
-                                            memory (on a shared box 40% stays with K2's database) and
-                                            free disk on /var/lib above the disk guard's reserve.
-                                            The files come from Sew's release (or the FILE flags on a
-                                            box without internet), each checked against K2's sha256
-                                            pin; a file that doesn't match stops everything.
+                                            (Sew's own switch, recording.enabled). An Owner or Admin
+                                            does it in person, with Touch ID on a Mac or the vault
+                                            password. An agent never runs enable: it asks on a card
+                                            (k2 permission request sew.recording-enable --why "...");
+                                            the Owner or Admin who allows it there installs it, and
+                                            the agent has nothing to run afterwards.
+                                            Stops, changing nothing, unless: the box has at least
+                                            8 GiB of RAM; voice is installed (k2 hostchat media
+                                            install first); every Sew service fits in RAM with 40%
+                                            kept for K2's own database; and /var/lib has the disk
+                                            guard's reserve (10 GiB by default) free beyond the model
+                                            and room for recordings. Run preflight to see which.
+                                            K2 downloads the files from Sew's release and checks each
+                                            against the sha256 built into K2; a file that doesn't
+                                            match stops everything. On a box without internet the
+                                            error names each file and its sha256: download them
+                                            elsewhere and pass the FILE flags.
+                                            --no-wait returns while it installs (status shows how
+                                            far it got).
   k2 hostchat recording disable [--json]    turn recording off (live recordings stop). The recorder
                                             stays installed and every recording is kept.
   k2 hostchat recording uninstall [--yes] [--json]
@@ -73659,7 +73669,8 @@ Recording (Sew's recorder and transcriber; needs Sew 0.9.0, app_recording):
                                             Never deletes recordings: they stay in Sew. Asks on a
                                             terminal; with no terminal, --yes is required.
   Turning recording on doesn't record anyone: Apps and rooms choose who may record, and each
-  person consents for themselves. Refused with sew_feature_missing on a Sew older than 0.9.0.
+  person consents for themselves. On a Sew older than 0.9.0 every change is refused with
+  sew_feature_missing (exit 3).
 
 Meet (the reserved meet.<box>.k2.dev label):
   k2 hostchat meet bind <app-id> [--json]   point meet.<box>.k2.dev at an installed App (K2 Connect
@@ -74587,24 +74598,34 @@ _hostchat_recording_usage() {
     cat <<'EOF'
 k2 hostchat recording — Sew's call recorder on this box (Chat / Voice Hosting)
 
-Recording (Sew's recorder and transcriber; needs Sew 0.9.0, app_recording):
-  k2 hostchat recording status [--json]     installed, enabled, version, org policies, Sew's flags
-  k2 hostchat recording preflight [--json]  what enable checks first; each failed check names its fix
+Recording (Sew, this box's chat and voice service: its recorder and transcriber; Sew 0.9.0+):
+  k2 hostchat recording status [--json]     installed, on or off, versions, Sew's recording settings
+                                            and whether this Sew can record (its app_recording flag)
+  k2 hostchat recording preflight [--json]  what enable checks, changing nothing; each failed check
+                                            names its fix
   k2 hostchat recording enable [--recorder-tarball FILE] [--transcriber-tarball FILE]
                                [--model-file FILE] [--no-wait] [--json]
                                             install the recorder, the transcriber and the speech
                                             model (when not installed yet), then turn recording on
-                                            (Sew's org policy recording.enabled). An Owner or Admin,
-                                            in person: Touch ID, the vault password or your login.
-                                            An agent can't: it asks on a card
-                                            (k2 permission request sew.recording-enable --why "...").
-                                            Needs at least 8 GiB of RAM, voice installed
-                                            (k2 hostchat media install), room for every Sew unit in
-                                            memory (on a shared box 40% stays with K2's database) and
-                                            free disk on /var/lib above the disk guard's reserve.
-                                            The files come from Sew's release (or the FILE flags on a
-                                            box without internet), each checked against K2's sha256
-                                            pin; a file that doesn't match stops everything.
+                                            (Sew's own switch, recording.enabled). An Owner or Admin
+                                            does it in person, with Touch ID on a Mac or the vault
+                                            password. An agent never runs enable: it asks on a card
+                                            (k2 permission request sew.recording-enable --why "...");
+                                            the Owner or Admin who allows it there installs it, and
+                                            the agent has nothing to run afterwards.
+                                            Stops, changing nothing, unless: the box has at least
+                                            8 GiB of RAM; voice is installed (k2 hostchat media
+                                            install first); every Sew service fits in RAM with 40%
+                                            kept for K2's own database; and /var/lib has the disk
+                                            guard's reserve (10 GiB by default) free beyond the model
+                                            and room for recordings. Run preflight to see which.
+                                            K2 downloads the files from Sew's release and checks each
+                                            against the sha256 built into K2; a file that doesn't
+                                            match stops everything. On a box without internet the
+                                            error names each file and its sha256: download them
+                                            elsewhere and pass the FILE flags.
+                                            --no-wait returns while it installs (status shows how
+                                            far it got).
   k2 hostchat recording disable [--json]    turn recording off (live recordings stop). The recorder
                                             stays installed and every recording is kept.
   k2 hostchat recording uninstall [--yes] [--json]
@@ -74612,7 +74633,8 @@ Recording (Sew's recorder and transcriber; needs Sew 0.9.0, app_recording):
                                             Never deletes recordings: they stay in Sew. Asks on a
                                             terminal; with no terminal, --yes is required.
   Turning recording on doesn't record anyone: Apps and rooms choose who may record, and each
-  person consents for themselves. Refused with sew_feature_missing on a Sew older than 0.9.0.
+  person consents for themselves. On a Sew older than 0.9.0 every change is refused with
+  sew_feature_missing (exit 3).
 EOF
 }
 

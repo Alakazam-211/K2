@@ -543,9 +543,12 @@ pub fn install_gateway_rule(app: &str, gw: u16) -> std::result::Result<(), Strin
         return Err("the root helper is older than protocol 6".into());
     }
     // 0.46.11 (protocol 15, prd-named-pg-clusters-v1 §9a): the App's own
-    // database ports ride every install, for the per-App table.
-    let db = crate::sql::sysops::pgnamed_ok(&st).then(|| super::pg_choice::door_ports(app));
-    crate::root_helper::call_text(&gateway_rule_argv(app, gw, &super::box_service_routes::allowed_ports(app), db.as_deref()), None).map(|_| ())
+    // database ports ride every install, for the per-App table. What was
+    // sent is kept (`reach`), so a database change re-sends it live.
+    let (box_ports, db) = super::reach::wanted(app, crate::sql::sysops::pgnamed_ok(&st));
+    super::reach::send(&gateway_rule_argv(app, gw, &box_ports, db.as_deref()))?;
+    super::reach::record(app, super::reach::Applied { gw, box_ports, db_ports: db });
+    Ok(())
 }
 
 /// `apps nft app <id> <gw> [<box port>…] [--db <port>…]`.
@@ -560,6 +563,7 @@ pub fn gateway_rule_argv(app: &str, gw: u16, box_ports: &[u16], db_ports: Option
 }
 
 pub fn remove_gateway_rule(app: &str) {
+    super::reach::forget(app);
     let st = crate::root_helper::state();
     if st.usable(k2_root_proto::version::APPS_MIN_PROTOCOL) {
         let _ = crate::root_helper::call_text(&["apps".into(), "nft".into(), "app-remove".into(), app.into()], None);

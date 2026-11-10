@@ -374,6 +374,8 @@ fn show(who: &Who, params: &HashMap<String, String>) -> R<J> {
         "note": note,
         "services": rows.iter().map(|r| service_json(r, wall, live.as_ref())).collect::<Vec<_>>(),
         "running": live.is_some(),
+        // `k2 app doctor <app>`: is everything approved in the running App?
+        "reach": super::reach::doctor_json(&app),
         "pending": pending.iter().filter(|r| r.kind == bs::KIND_BOX_SERVICE).map(super::approvals::request_json).collect::<Vec<_>>(),
         "presets": presets,
         "refused": "below 1024 (ssh, mail, DNS…), 38600-38999 (every App's gateway and proxy), 5432-5449 (Postgres), 2019 (Caddy admin), 38472 (box router), this daemon's ports",

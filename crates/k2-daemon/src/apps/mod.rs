@@ -86,6 +86,9 @@ pub mod engine_heal;
 pub mod engine_stage;
 /// Re-host every App on a K2 update (update continuity S2).
 pub mod rehost;
+/// An App's reach after a widening: live nft refresh, the container
+/// database-door gap, re-host notes and `k2 app doctor <app>`.
+pub mod reach;
 /// Loud failures: ERROR lines and owner notices (R34, R44).
 pub mod runtime_notes;
 pub mod exception;

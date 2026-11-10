@@ -732,15 +732,11 @@ async fn the_same_port_comes_back_after_a_restart_and_a_taken_one_moves() {
 // ── never forwarded, never logged ───────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_placeholder_anywhere_but_its_header_is_refused_before_anything_leaves() {
-    use base64::Engine as _;
+async fn a_placeholder_in_a_query_or_path_is_refused_before_anything_leaves() {
     let fx = Fx::new().await;
     let up = Upstream::ok();
     let (_, ph) = fx.secret_on(&up, "K", S1);
-    let b64 = base64::engine::general_purpose::STANDARD.encode(format!("user:{ph}"));
     let cases = [
-        post(fx.port, &fx.url(&ph, "chat"), &format!(r#"{{"key":"{ph}"}}"#)),
-        post(fx.port, &fx.url(&ph, "chat"), &format!(r#"{{"auth":"{b64}"}}"#)),
         get(fx.port, &format!("{}?token={ph}", fx.url(&ph, "x"))),
         get(fx.port, &fx.url(&ph, &format!("users/{ph}"))),
     ];
@@ -750,6 +746,36 @@ async fn a_placeholder_anywhere_but_its_header_is_refused_before_anything_leaves
         assert!(!r.body.contains(&ph), "the refusal doesn't echo it: {}", r.body);
     }
     assert_eq!(up.conns(), 0, "not one byte went out");
+}
+
+/// Rosson's rule: an agent's conversation can hold its own placeholder, and
+/// every later LLM call resends it, so a body holding one must not break the
+/// session. It goes through byte for byte (never substituted), and the log
+/// says so without the placeholder.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_placeholder_in_a_body_goes_through_unchanged() {
+    use base64::Engine as _;
+    let _env = k2_core::test_env::lock();
+    LOG.lock().clear();
+    let fx = Fx::new().await;
+    let up = Upstream::ok();
+    let (_, ph) = fx.secret_on(&up, "K", S1);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(format!("user:{ph}"));
+    let bodies = [format!(r#"{{"messages":[{{"content":"my key is {ph}"}}]}}"#), format!(r#"{{"auth":"{b64}"}}"#)];
+    for b in &bodies {
+        let r = raw(fx.port, post(fx.port, &fx.url(&ph, "chat"), b)).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+    let seen = up.seen();
+    assert_eq!(seen.len(), 2);
+    for (got, sent) in seen.iter().zip(bodies.iter()) {
+        assert_eq!(got.body, sent.as_bytes(), "byte for byte");
+        assert!(!String::from_utf8_lossy(&got.body).contains(VALUE), "the placeholder isn't the secret: never substituted");
+    }
+    assert_eq!(seen[0].header("authorization"), [format!("Bearer {VALUE}")], "the key still goes where it belongs");
+    let logs = LOG.lock().clone();
+    assert_eq!(logs.iter().filter(|l| l.contains("placeholder_in_body")).count(), 2, "each pass is logged: {logs:?}");
+    assert!(logs.iter().all(|l| !l.contains(&ph) && !l.contains(VALUE)), "{logs:?}");
 }
 
 /// Everything K2 itself writes or answers about a call: no value, no
@@ -804,7 +830,7 @@ fn the_listener_has_no_log_line_that_could_carry_a_request() {
             }
         }
     }
-    assert_eq!(lines, 5, "a new log line needs a look: update this count after checking it");
+    assert_eq!(lines, 6, "a new log line needs a look: update this count after checking it");
 }
 
 // ── spawn and the route ─────────────────────────────────────────────

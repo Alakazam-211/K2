@@ -13,10 +13,13 @@
 //!   A revoked grant stops a live placeholder at the next call.
 //! - The destination comes only from the secret's one site, never from the
 //!   request. Nothing the caller sends can move it.
-//! - The placeholder is never forwarded: headers holding it are dropped,
-//!   and anywhere else in the request (body, query, path) is a 400. The
-//!   whole request body is read before the first byte goes out, so that
-//!   check can't come after part of it left.
+//! - The placeholder is never forwarded as a credential: headers holding it
+//!   are dropped, and a query or path holding it is a 400. A request *body*
+//!   may hold it: an agent's conversation can contain its own placeholder,
+//!   and every later LLM call resends it, so a refusal would break the
+//!   session. The body goes through unchanged (the placeholder isn't the
+//!   secret, so it isn't substituted) and the pass is logged, without it.
+//!   The whole request body is read before the first byte goes out.
 //! - The secret goes only where its sealed injection says, with the same
 //!   code as `k2 vault fetch`, through the same egress gate (vetting, IP
 //!   pinning, no redirects but same-origin, re-vetted).
@@ -378,6 +381,14 @@ fn log_refusal(code: &'static str) {
     k2_core::log_debug!("[vault-proxy] refused: {code}");
 }
 
+/// A request K2 passed that a person reading the log may want to know about.
+/// Takes a `&'static str` for the same reason.
+fn log_passed(code: &'static str) {
+    #[cfg(test)]
+    tests::LOG.lock().push(format!("[vault-proxy] passed: {code}"));
+    k2_core::log_debug!("[vault-proxy] passed: {code}");
+}
+
 fn full(b: impl Into<Bytes>) -> ProxyBody {
     Full::new(b.into()).map_err(|n: std::convert::Infallible| match n {}).boxed()
 }
@@ -533,8 +544,9 @@ where
     if scan.hits(rest.as_bytes()) {
         return Err(misplaced("path"));
     }
+    // Not refused, and not substituted: see the module doc.
     if scan.hits(&raw_body) {
-        return Err(misplaced("body"));
+        log_passed("placeholder_in_body");
     }
 
     // The destination is the secret's site. Nothing from the request but

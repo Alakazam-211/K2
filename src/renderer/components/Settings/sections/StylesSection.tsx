@@ -46,7 +46,8 @@ export const STYLES_MANIFEST: SettingEntry[] = [
 ]
 
 /** Retired looks stay compiled but never reach the picker. */
-const PICKER_STYLES = STYLES.filter((s) => !s.hidden)
+// Terminal first, then Glass (Rosson, 2026-11-09).
+const PICKER_STYLES = STYLES.filter((s) => !s.hidden).sort((a, b) => Number(b.id === 'terminal') - Number(a.id === 'terminal'))
 
 const AUTO_SIDES: { side: StyleScheme; label: string }[] = [
   { side: 'light', label: 'When my system is light' },

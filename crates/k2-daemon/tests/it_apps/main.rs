@@ -20,6 +20,11 @@ fn runner_guard() {
 
 mod agent_app_users_integration;
 mod agent_unread_tickets_integration;
+mod app_account_deletion_integration;
+mod app_activity_ear_integration;
+mod app_agent_config_write_integration;
+mod app_agent_identity_integration;
+mod app_auth_door_integration;
 mod app_caps_cards_activity_integration;
 mod app_caps_no_widening_integration;
 mod app_chat_key_integration;
@@ -29,21 +34,34 @@ mod app_front_websocket_integration;
 mod app_governed_spaces_integration;
 mod app_grace_integration;
 mod app_handover_integration;
+mod app_heartbeats_integration;
 mod app_mobile_access_integration;
 mod app_move_polish_integration;
 mod app_pairing_integration;
 mod app_project_chat_integration;
 mod app_selfmove_integration;
 mod app_sew_routes_reachable_integration;
+mod app_transfers_integration;
 mod app_user_profile_integration;
 mod app_users_end_to_end_integration;
 mod app_users_switch_integration;
 mod apps_custom_domain_external_integration;
+mod apps_door_integration;
 mod apps_gateway_body_integration;
+mod apps_gateway_link_integration;
 mod apps_held_notes_integration;
+mod apps_runtime_integration;
 mod apps_sew_template_integration;
 mod apps_static_integration;
 mod connections_resolve_integration;
 mod fs_untitled_integration;
+#[cfg(unix)]
+mod handoff_keeps_app_connections;
+#[cfg(unix)]
+mod handoff_keeps_app_front_ports;
+mod publish_skin_gateway;
 mod publish_stop_start_integration;
 mod sew_for_apps_integration;
+#[cfg(unix)]
+mod site_visibility_integration;
+mod skin_integration;

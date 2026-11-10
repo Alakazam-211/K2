@@ -6,8 +6,7 @@
 //! tampered Seed is refused; passports are scoped to their workspace's
 //! folders and need "Allow this agent to manage Apps" to build.
 
-#[path = "support/app_fixture.rs"]
-mod app_fixture;
+use crate::support::app_fixture;
 
 use app_fixture::*;
 use serde_json::json;

@@ -14,8 +14,7 @@
 //! - `GET /cli/app/link` / `POST /cli/app/link/rotate` (`k2 app link`) with
 //!   passport scoping and the manage-Apps switch.
 
-#[path = "support/app_fixture.rs"]
-mod app_fixture;
+use crate::support::app_fixture;
 
 use std::io::{Read, Write};
 use std::net::TcpStream;

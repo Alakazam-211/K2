@@ -14,8 +14,7 @@
 //! - Origins, Content-Type, the per-visitor attempt bucket, a suspended
 //!   App, and one audit row per door request (never the body).
 
-#[path = "support/app_fixture.rs"]
-mod app_fixture;
+use crate::support::app_fixture;
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, TcpStream};

@@ -11,8 +11,7 @@
 //! - suspend: every pass revoked in one step; a connection still open gets
 //!   `401` on its very next request; deploys frozen; only the owner resumes.
 
-#[path = "support/app_fixture.rs"]
-mod app_fixture;
+use crate::support::app_fixture;
 
 use std::io::{Read, Write};
 use std::net::TcpStream;

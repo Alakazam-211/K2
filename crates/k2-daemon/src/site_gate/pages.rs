@@ -11,17 +11,31 @@ pub struct Page<'a> {
     /// Complete `\r\n` header lines of this answer (cookies, `Location`, …).
     pub extra: String,
     pub html: String,
+    /// The `Referrer-Policy` of this answer: [`NO_REFERRER`] except on the
+    /// PIN form ([`FORM_REFERRER`]).
+    pub referrer: &'static str,
 }
+
+/// Every K2 answer sends no `Referer` anywhere: a one-time link's code is in
+/// the URL of the page it lands on.
+pub const NO_REFERRER: &str = "no-referrer";
+/// The PIN page's policy. Under `no-referrer` a browser POSTs the form with
+/// `Origin: null`, which the PIN handler (rightly) refuses, so the PIN could
+/// never be entered. `same-origin` keeps the real `Origin` on the form's
+/// same-origin POST and still sends no `Referer` to any other origin; the
+/// `303` after a right PIN is `no-referrer` again, so the site itself gets none.
+pub const FORM_REFERRER: &str = "same-origin";
 
 impl Page<'_> {
     pub fn bytes(&self) -> Vec<u8> {
         let dev = if self.dev { "X-K2-Mode: dev\r\n" } else { "" };
         let mut out = format!(
             "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\n\
-             X-Robots-Tag: noindex\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\n\
+             X-Robots-Tag: noindex\r\nReferrer-Policy: {referrer}\r\nX-Content-Type-Options: nosniff\r\n\
              Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'\r\n\
              {dev}{extra}Content-Length: {len}\r\n{frame}Connection: close\r\n\r\n",
             status = self.status,
+            referrer = self.referrer,
             extra = self.extra,
             len = self.html.len(),
             frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
@@ -65,7 +79,7 @@ pub fn private_page(label: &str, dev: bool, head: bool) -> Vec<u8> {
     let body = format!(
         "<h1>This site is private.</h1><p>Open it from K2: Published → Open, or <code>k2 publish open {l}</code>.</p>"
     );
-    Page { status: "401 Unauthorized", dev, head, extra: String::new(), html: doc("Private site", dev, &body) }.bytes()
+    Page { referrer: NO_REFERRER, status: "401 Unauthorized", dev, head, extra: String::new(), html: doc("Private site", dev, &body) }.bytes()
 }
 
 /// A one-time link that was used, expired, or is another site's.
@@ -74,7 +88,7 @@ pub fn link_dead_page(label: &str, dev: bool, head: bool) -> Vec<u8> {
     let body = format!(
         "<h1>This link has expired or was already used.</h1><p>A link works once, for a minute. Get a new one from K2: Published → Open, or <code>k2 publish open {l}</code>. If someone shared it with you, ask them.</p>"
     );
-    Page { status: "401 Unauthorized", dev, head, extra: String::new(), html: doc("Private site", dev, &body) }.bytes()
+    Page { referrer: NO_REFERRER, status: "401 Unauthorized", dev, head, extra: String::new(), html: doc("Private site", dev, &body) }.bytes()
 }
 
 /// PV-8: the PIN page. `next` is where a right PIN goes (already checked).
@@ -84,7 +98,7 @@ pub fn pin_page(next: &str, error: Option<&str>, dev: bool, head: bool) -> Vec<u
         "<h1>This site needs a PIN.</h1>{err}<form method=\"post\" action=\"/_k2/site/pin\"><input type=\"hidden\" name=\"next\" value=\"{}\"><input name=\"pin\" type=\"password\" autocomplete=\"off\" autofocus aria-label=\"PIN\" required><button type=\"submit\">Continue</button></form>",
         esc(next)
     );
-    Page { status: "401 Unauthorized", dev, head, extra: String::new(), html: doc("PIN", dev, &body) }.bytes()
+    Page { referrer: FORM_REFERRER, status: "401 Unauthorized", dev, head, extra: String::new(), html: doc("PIN", dev, &body) }.bytes()
 }
 
 /// PV-8: too many wrong tries.
@@ -92,6 +106,7 @@ pub fn pin_locked_page(retry_after: i64, dev: bool) -> Vec<u8> {
     let mins = (retry_after + 59) / 60;
     let body = format!("<h1>Too many wrong PINs.</h1><p>Try again in about {mins} minute{}.</p>", if mins == 1 { "" } else { "s" });
     Page {
+        referrer: NO_REFERRER,
         status: "429 Too Many Requests",
         dev,
         head: false,
@@ -108,13 +123,14 @@ pub fn dev_notice_page(label: &str, next: &str, head: bool) -> Vec<u8> {
         esc(label),
         esc(&urlencode(next))
     );
-    Page { status: "200 OK", dev: true, head, extra: String::new(), html: doc("Notice", true, &body) }.bytes()
+    Page { referrer: NO_REFERRER, status: "200 OK", dev: true, head, extra: String::new(), html: doc("Notice", true, &body) }.bytes()
 }
 
 /// DM-6: the dev server is on its way. The page reloads itself.
 pub fn starting_page(head: bool) -> Vec<u8> {
     let body = "<h1>Starting the dev server…</h1><p>This page reloads when it's ready.</p>";
     Page {
+        referrer: NO_REFERRER,
         status: "503 Service Unavailable",
         dev: true,
         head,
@@ -127,7 +143,7 @@ pub fn starting_page(head: bool) -> Vec<u8> {
 /// A dev server that couldn't start. Why stays in the log and `k2 publish ps`.
 pub fn dev_failed_page(head: bool) -> Vec<u8> {
     let body = "<h1>The dev server didn't start.</h1><p>Ask the site's owner to check <code>k2 publish logs</code> on the server.</p>";
-    Page { status: "502 Bad Gateway", dev: true, head, extra: String::new(), html: doc("Starting", true, body) }.bytes()
+    Page { referrer: NO_REFERRER, status: "502 Bad Gateway", dev: true, head, extra: String::new(), html: doc("Starting", true, body) }.bytes()
 }
 
 /// A redirect that sets (or doesn't set) K2's session cookie.
@@ -136,18 +152,20 @@ pub fn redirect(location: &str, cookie: Option<(&str, &str, i64)>, dev: bool) ->
     if let Some((name, value, max_age)) = cookie {
         extra.push_str(&format!("Set-Cookie: {name}={value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={max_age}\r\n"));
     }
-    Page { status: "303 See Other", dev, head: false, extra, html: String::new() }.bytes()
+    Page { referrer: NO_REFERRER, status: "303 See Other", dev, head: false, extra, html: String::new() }.bytes()
 }
 
 /// Send a `POST` to K2's page again on a new connection (it arrived on one
-/// that already passed the gate, with a body K2 doesn't read there).
+/// that already passed the gate, with a body K2 doesn't read there). A
+/// browser takes the redirect's `Referrer-Policy` for the re-sent POST, so it
+/// is the form's: `no-referrer` here would turn its `Origin` into `null`.
 pub fn reconnect(path: &str, dev: bool) -> Vec<u8> {
-    Page { status: "307 Temporary Redirect", dev, head: false, extra: format!("Location: {path}\r\n"), html: String::new() }.bytes()
+    Page { referrer: FORM_REFERRER, status: "307 Temporary Redirect", dev, head: false, extra: format!("Location: {path}\r\n"), html: String::new() }.bytes()
 }
 
 /// K2's refusal of a request (a plain line, no form).
 pub fn plain(status: &str, text: &str, dev: bool, head: bool) -> Vec<u8> {
-    Page { status, dev, head, extra: String::new(), html: doc("K2", dev, &format!("<p>{}</p>", esc(text))) }.bytes()
+    Page { referrer: NO_REFERRER, status, dev, head, extra: String::new(), html: doc("K2", dev, &format!("<p>{}</p>", esc(text))) }.bytes()
 }
 
 /// Percent-encode for a query value (only what is safe stays).

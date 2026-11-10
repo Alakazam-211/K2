@@ -23,6 +23,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Chat / Voice Hosting
 - **K2 installs and upgrades to Sew 0.9.0,** which lets Apps record calls: an App can turn recording on and say who may start it, and each person in a call still says yes for themselves. Everything starts off, and nothing changes until someone turns it on. Sew 0.9.0 also updates its WebRTC parts. Upgrade with `k2 hostchat upgrade`: it upgrades Sew, then its voice engine, then the recorder where one is installed. Going back to an older Sew needs `k2 hostchat rollback --accept-data-loss`, because 0.9.0 changes Sew's data. Sew tested upgrades from 0.8.3, 0.8.2, 0.8.1 and 0.7.4; a server already on Sew 0.8.3 upgrades like any other. `k2 hostchat recording enable` installs Sew's speech model (base-q8_0) with its licence files, and refuses a model file that isn't exactly the one Sew published.
+### Fixes
+- **A site's PIN page takes the PIN again.** The page told the browser to send no referrer, so the browser sent the form without the site's address and K2 refused every PIN with a 403. The PIN page now keeps the address on its own form (and still sends nothing to any other site), and a form from another site is still refused.
 
 ## 0.46.10 — K2 is MIT; Voice & Chat only logins
 

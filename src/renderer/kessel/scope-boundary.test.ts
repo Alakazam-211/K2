@@ -262,8 +262,6 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'lib/start-clone-to.ts',
   // 0.45.4: the landing-tab pref is keyed by the window's server + login.
   'lib/ticket-open-pref.ts',
-  // Home M3 / Q4: the assistant acts only on rooms on the window's server.
-  'lib/workspace-ops-router.ts',
   'stores/active-agents.ts',
   // 0.46.4 Settings → App Approvals badge: the window's server's held App
   // requests (its push on that server's events bus; a server switch reloads).

@@ -35,7 +35,6 @@ import { TerminalArea } from '@/components/Terminal/TerminalArea'
 import { useTerminalShortcuts } from '@/hooks/useTerminalShortcuts'
 import { useWorkspaceIndexShortcuts } from '@/hooks/useWorkspaceIndexShortcuts'
 import { menuNewTab } from '@/lib/menu-new-tab'
-import { routeWorkspaceOp } from '@/lib/workspace-ops-router'
 import type { Room } from '@/stores/room'
 import {
   __resetWindowRoomForTests,
@@ -49,8 +48,6 @@ import { useHomesStore } from '@/stores/homes'
 import { useProjectsStore } from '@/stores/projects'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { projectsStoreOf, testRoom } from '@/test-utils/room'
-import { fakeScope } from '@/test-utils/fake-scope'
-import { primaryScope } from '@/kessel/server-scope'
 
 /** A tabs store double that records every room operation it receives. */
 function recordingTabs(name: string, log: string[]) {
@@ -67,9 +64,7 @@ function recordingTabs(name: string, log: string[]) {
   }
   return {
     getState: () => state,
-    room: {
-      applyWorkspaceOp: (op: { kind: string }) => void log.push(`${name}:op:${op.kind}`),
-    },
+    room: {},
   }
 }
 
@@ -158,7 +153,7 @@ describe('window-level input acts on the focused room only (MS17, MS18, MS52 h)'
     expect(log).toEqual(['B:addTab:/b', 'A:addTab:/a', 'A:removeTab:A-t1'])
   })
 
-  it('menu:new-tab, Cmd+[ and the assistant ops go to the focused room only', () => {
+  it('menu:new-tab and Cmd+[ go to the focused room only', () => {
     const log: string[] = []
     const { a, b } = twoRooms(log)
     const view = render(
@@ -173,8 +168,7 @@ describe('window-level input acts on the focused room only (MS17, MS18, MS52 h)'
     const target = focusedRoom()
     if (!target) throw new Error('no focused room')
     target.tabs.getState().goBack()
-    routeWorkspaceOp({ kind: 'new-tab', payload: { cwd: '/x' } })
-    expect(log).toEqual(['A:addTab:/a', 'A:goBack', 'A:op:new-tab'])
+    expect(log).toEqual(['A:addTab:/a', 'A:goBack'])
   })
 
   it('with no focused room, window-level input does nothing (MS17)', () => {
@@ -184,7 +178,6 @@ describe('window-level input acts on the focused room only (MS17, MS18, MS52 h)'
     roomHidden(a)
     expect(focusedRoom()).toBe(null)
     menuNewTab()
-    routeWorkspaceOp({ kind: 'close-tab', payload: { tabId: 'x' } })
     expect(log).toEqual([])
   })
 
@@ -198,20 +191,6 @@ describe('window-level input acts on the focused room only (MS17, MS18, MS52 h)'
     expect(focusedRoom()).toBe(a)
     view.unmount()
     expect(focusedRoom()).toBe(null)
-  })
-
-  it("the assistant refuses a focused room on another server (Q4)", () => {
-    const log: string[] = []
-    const remote = testRoom({
-      key: 'b.test|p1:w1',
-      tabs: recordingTabs('B', log),
-      scope: fakeScope('b.test'),
-      isPrimary: false,
-    })
-    roomShown(remote)
-    expect(remote.scope.hostKey).not.toBe(primaryScope().hostKey)
-    routeWorkspaceOp({ kind: 'new-tab', payload: { cwd: '/x' } })
-    expect(log).toEqual([])
   })
 })
 

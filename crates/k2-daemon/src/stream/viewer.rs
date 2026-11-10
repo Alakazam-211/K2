@@ -419,7 +419,9 @@ fn hello_text(mut fields: Map<String, Value>, n: &Negotiated) -> Message {
 /// let offer = Offer::from_params(&params);
 /// let hello = deskd.hello();                     // protocol-4 HelloFields
 /// let source = Source {
-///     key: SourceKey::Desktop { desktop: "console".into(), display },
+///     // One capture per desktop (v1): `display` is the one deskd shows now;
+///     // a switch (the controller's) moves every viewer of this hub.
+///     key: SourceKey::Desktop { desktop: "console".into() },
 ///     kind: SourceKind::Desktop,
 ///     open: Box::new(move || {                   // on a blocking thread
 ///         let sizes: SizesFn = Box::new(move |id| deskd.display_size(id));

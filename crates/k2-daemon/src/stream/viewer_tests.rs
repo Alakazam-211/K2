@@ -227,7 +227,7 @@ fn produce(mut w: std::io::PipeWriter, rx: std::sync::mpsc::Receiver<Request>, c
 /// apart.
 fn desktop_source(name: &str, gives: Vec<Codec>, ctl: Arc<Ctl>) -> Source<String> {
     Source {
-        key: SourceKey::Desktop { desktop: format!("test-{name}"), display: 1 },
+        key: SourceKey::Desktop { desktop: format!("test-{name}") },
         kind: SourceKind::Desktop,
         open: Box::new(move || {
             let (rx, tx) = std::io::pipe().map_err(|e| e.to_string())?;

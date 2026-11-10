@@ -35,9 +35,12 @@ use crate::sim::lane::{FrameStamps, LaneError};
 pub enum SourceKey {
     /// A sim session (its row id).
     Sim(i64),
-    /// One display of a remote desktop (`desktop` = the desktop id,
-    /// `console` in v1; `display` = deskd's display id).
-    Desktop { desktop: String, display: u32 },
+    /// A remote desktop (`desktop` = the desktop id, `console` in v1). One
+    /// capture per desktop (v1, K2 11-10): every viewer sees the display
+    /// deskd captures, which is a property of the source, not of the key
+    /// (`LinkSource::display`). A switch is the controller's and moves every
+    /// viewer. Per-viewer displays are a later option.
+    Desktop { desktop: String },
 }
 
 impl SourceKey {
@@ -53,7 +56,7 @@ impl fmt::Display for SourceKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SourceKey::Sim(id) => write!(f, "s{id}"),
-            SourceKey::Desktop { desktop, display } => write!(f, "desktop {desktop}/{display}"),
+            SourceKey::Desktop { desktop } => write!(f, "desktop {desktop}"),
         }
     }
 }
@@ -189,10 +192,10 @@ mod tests {
     #[test]
     fn source_keys_name_their_kind() {
         assert_eq!(SourceKey::Sim(3).kind(), SourceKind::Sim);
-        let d = SourceKey::Desktop { desktop: "console".into(), display: 1 };
+        let d = SourceKey::Desktop { desktop: "console".into() };
         assert_eq!(d.kind(), SourceKind::Desktop);
         assert_eq!(SourceKey::Sim(3).to_string(), "s3");
-        assert_eq!(d.to_string(), "desktop console/1");
-        assert_ne!(d, SourceKey::Desktop { desktop: "console".into(), display: 2 }, "one hub per display");
+        assert_eq!(d.to_string(), "desktop console");
+        assert_ne!(d, SourceKey::Desktop { desktop: "other".into() }, "one hub per desktop, whatever it displays");
     }
 }

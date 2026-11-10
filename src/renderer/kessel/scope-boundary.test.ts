@@ -304,6 +304,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'stores/keep-awake.ts',
   // 0.45.1: a server switch drops the window's token list and reloads it
   // from the new server (Settings → LLMs is per server).
+  // Setup checklist: the window's own server's list for this person.
+  'stores/first-run.ts',
   'stores/llm-accounts.ts',
   'stores/presence.ts',
   'stores/presets.ts',

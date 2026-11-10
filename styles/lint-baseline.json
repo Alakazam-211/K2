@@ -185,7 +185,7 @@
     "src/renderer/components/Thread/ThreadMessageMenu.tsx": 1,
     "src/renderer/components/Thread/ThreadZenKit.tsx": 6,
     "src/renderer/components/Thread/threadSenders.tsx": 1,
-    "src/renderer/components/Timer/KeepAwakeButton.tsx": 2,
+    "src/renderer/components/Timer/KeepAwakeButton.tsx": 1,
     "src/renderer/components/Timer/MemoDialog.tsx": 1,
     "src/renderer/components/Timer/UsageButton.tsx": 1,
     "src/renderer/components/Toast/Toast.tsx": 2,

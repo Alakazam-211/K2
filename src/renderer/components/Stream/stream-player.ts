@@ -11,7 +11,8 @@
 // context (else: the main-thread path) and which codecs its `VideoDecoder`
 // takes (`ready` → `decode`: H.264, VP8, JPEG; the pane offers only those).
 // A worker that errors falls back to the main-thread path on the same
-// socket (`lost`). The manual switch `localStorage['k2.stream.player'] =
+// socket (`lost`; `stream-playback.ts` makes that switch, and
+// `stream-main-player.ts` is the main-thread path). The manual switch `localStorage['k2.stream.player'] =
 // 'main'` forces the main thread (the Mobile tab's older
 // `k2.mobile.streamPlayer` still does too).
 //
@@ -37,7 +38,8 @@ export interface WorkerLike {
   terminate(): void
 }
 
-interface PlayerEnv {
+/** What `canUseWorkerPlayer` reads (the globals; tests pass their own). */
+export interface PlayerEnv {
   Worker?: unknown
   HTMLCanvasElement?: { prototype?: { transferControlToOffscreen?: unknown } }
   createImageBitmap?: unknown

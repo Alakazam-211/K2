@@ -1,7 +1,8 @@
 // The player's main-thread canvas sink (E9): where the worker player can't
 // run (no OffscreenCanvas, a worker that failed, the `k2.stream.player`
-// switch) the pane draws on its own <canvas> with these. The worker does the
-// same in `stream-player.worker.ts`.
+// switch) `MainThreadPlayer` (`stream-main-player.ts`) draws on the pane's
+// own <canvas> with these. The worker does the same in
+// `stream-player.worker.ts`.
 
 import type { PixelRgb } from './stream-player.worker'
 import type { VideoFrameLike } from './stream-video'

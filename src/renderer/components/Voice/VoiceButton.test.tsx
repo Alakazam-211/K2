@@ -388,11 +388,17 @@ describe('VoiceButton', () => {
     expect(mute.textContent).toBe('')
     expect(mute.querySelector('svg')!.getAttribute('data-k2-icon')).toBe('mic')
     expect(screen.getByTestId('voice-deafen').getAttribute('aria-label')).toBe('Deafen')
+    // Deafen is the headphones; the rooms' own button is the phone, never headphones.
+    expect(screen.getByTestId('voice-deafen').querySelector('svg')!.getAttribute('data-k2-icon')).toBe('headphones')
+    expect(screen.getByTestId('voice-icon').getAttribute('data-k2-icon')).toBe('phone')
     expect(screen.getByTestId('voice-leave').getAttribute('aria-label')).toBe('Leave call')
     expect(screen.getByTestId('voice-leave').querySelector('svg')!.getAttribute('data-k2-icon')).toBe('phone-off')
 
     fireEvent.click(screen.getByTestId('voice-mute'))
     expect(screen.getByTestId('voice-icon').getAttribute('data-muted')).toBe('true')
+    // Muted: the dot turns the error colour; no slash (a slashed phone is Leave call).
+    expect(screen.getByTestId('voice-icon').querySelector('[data-testid="voice-icon-muted"]')).toBeTruthy()
+    expect(screen.getByTestId('voice-icon').querySelectorAll('path')).toHaveLength(1)
     expect(screen.getByTestId('voice-mute').getAttribute('aria-label')).toBe('Unmute')
     expect(screen.getByTestId('voice-mute').getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByTestId('voice-mute').querySelector('svg')!.getAttribute('data-k2-icon')).toBe('mic-off')

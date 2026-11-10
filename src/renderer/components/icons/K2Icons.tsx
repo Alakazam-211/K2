@@ -13,6 +13,8 @@
 //     `smartphone` plus the bell's 2,2 → 22,22 slash),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
+//   VoiceRooms, PhoneOff
+//     Lucide 1.58 `phone`, `phone-off`, unedited (round: the handset is curves).
 //   Bookmark
 //     Lucide 1.58 `bookmark`, squared.
 //   Settings, Link, Globe
@@ -501,22 +503,29 @@ export function MoonIcon(props: K2IconProps = {}): React.JSX.Element {
   )
 }
 
-/** Voice rooms (prd-k2-voice-rooms-v1 §4.1): Lucide `headset`, squared (the
- *  band's arc stays round; the ear cups lose their corner radius). `muted`
- *  adds the bell's 2,2 → 22,22 slash (§4.2 "mic slash when muted"); `live`
- *  adds a small accent dot top right (someone's in a room, or in a call). */
-export function HeadsetIcon({
+/** Voice rooms (prd-k2-voice-rooms-v1 §4.1): Lucide `phone`, the handset
+ *  kept round as `phone-off` is (Rosson 2026-11-10: the rooms are calls, and
+ *  headphones are Deafen's). `live` adds a small accent dot top right
+ *  (someone's in a room, or in a call); `muted` turns that dot the error
+ *  colour. Never a slash: a slashed phone is Leave call, right beside it. */
+export function VoiceRoomsIcon({
   muted = false,
   live = false,
   ...props
 }: K2IconProps & { muted?: boolean; live?: boolean }): React.JSX.Element {
   return (
-    <svg {...iconProps('headset', props)} data-testid="voice-icon" data-muted={muted ? 'true' : 'false'} data-live={live ? 'true' : 'false'}>
-      <path d="M3 21v-9a9 9 0 0 1 18 0v9" />
-      <path d="M3 14h5v7H3Z" />
-      <path d="M16 14h5v7h-5Z" />
-      {muted ? <path data-testid="voice-icon-slash" d="M2 2l20 20" /> : null}
-      {live ? <circle data-testid="voice-icon-dot" cx="20" cy="4" r="2.5" fill="var(--color-accent)" stroke="none" /> : null}
+    <svg {...iconProps('phone', props, 'round')} data-testid="voice-icon" data-muted={muted ? 'true' : 'false'} data-live={live ? 'true' : 'false'}>
+      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92Z" />
+      {live || muted ? (
+        <circle
+          data-testid={muted ? 'voice-icon-muted' : 'voice-icon-dot'}
+          cx="20"
+          cy="4"
+          r="2.5"
+          fill={muted ? 'var(--color-status-error)' : 'var(--color-accent)'}
+          stroke="none"
+        />
+      ) : null}
     </svg>
   )
 }
@@ -546,8 +555,10 @@ export function MicIcon(props: K2IconProps = {}): React.JSX.Element {
   )
 }
 
-/** The call's Deafen: the headset's squared ear cups (HeadsetIcon), with the
- *  2,2 → 22,22 slash when deafened. */
+/** The call's Deafen: Lucide `headphones`, squared (the band's arc stays
+ *  round; the ear cups lose their corner radius), with the 2,2 → 22,22 slash
+ *  when deafened, as other call apps draw it. Only Deafen uses it: the voice
+ *  rooms' own button is the phone (VoiceRoomsIcon). */
 export function HeadphonesIcon({ off = false, ...props }: K2IconProps & { off?: boolean }): React.JSX.Element {
   return (
     <svg {...iconProps(off ? 'headphone-off' : 'headphones', props)}>

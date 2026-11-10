@@ -14,7 +14,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import TopBarPipe from '@/components/TopBar/TopBarPipe'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
-import { HeadsetIcon, TOP_BAR_ICON_ACTIVE_CLASS, TOP_BAR_ICON_REST_CLASS } from '@/components/icons/K2Icons'
+import { VoiceRoomsIcon, TOP_BAR_ICON_ACTIVE_CLASS, TOP_BAR_ICON_REST_CLASS } from '@/components/icons/K2Icons'
 import { anyVoiceServer } from '@/lib/voice/voice-servers'
 import { retainVoice, useVoice, voice } from '@/stores/voice'
 import { useSettingsStore } from '@/stores/settings'
@@ -110,7 +110,7 @@ export default function VoiceButton({ withPipe = false }: { withPipe?: boolean }
             voice.setPopoverOpen(!open)
           }}
         >
-          <HeadsetIcon muted={look.look === 'in-call' && look.muted} live={look.look === 'occupied' || look.look === 'in-call'} />
+          <VoiceRoomsIcon muted={look.look === 'in-call' && look.muted} live={look.look === 'occupied' || look.look === 'in-call'} />
         </button>
         {open
           ? menu.portal(

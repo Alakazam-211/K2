@@ -44,6 +44,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { PROJECT_GROUPS_MANIFEST } from '@/components/Projects/project-settings'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
 import { EmailNotificationsSection, EMAIL_NOTIFICATIONS_MANIFEST } from './sections/EmailNotificationsSection'
+import { MailReaderLogSection, MAIL_READER_LOG_MANIFEST } from './sections/MailReaderLogSection'
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
 import { DataSection, DATA_MANIFEST } from './sections/DataSection'
 import { ComputeSection, COMPUTE_MANIFEST } from './sections/ComputeSection'
@@ -296,6 +297,8 @@ export function settingsNav({
         { id: 'email-hosting', label: 'Email Hosting' },
         // Email Notifications part 2, N8: senders, pauses, agent notices, suppressions.
         { id: 'email-notifications', label: 'Email Notifications' },
+        // OA2 (prd-ocmail-admin-in-k2-v1): the mailbox access log (Mail page + agent tabs).
+        { id: 'email-reader-log', label: 'Email Reader Log' },
         // Sew, run on this box (Rosson 2026-10-15): the S32 K27 page (`k2 hostchat` headless).
         { id: 'sew', label: 'Chat / Voice' },
         // prd-k2-voice-rooms-v1 §3.3: only with the preview on (voiceRoomsShown).
@@ -388,6 +391,7 @@ export default function Settings(): React.JSX.Element {
       ...LOCAL_GROKBOTS_MANIFEST,
       ...EMAIL_HOSTING_MANIFEST,
       ...EMAIL_NOTIFICATIONS_MANIFEST,
+      ...MAIL_READER_LOG_MANIFEST,
       ...SEW_MANIFEST,
       ...(voiceRoomsShown() ? VOICE_ROOMS_MANIFEST : []),
       ...EMAIL_LINK_MANIFEST,
@@ -799,6 +803,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'email-notifications' && (
           <SectionErrorBoundary>
             <EmailNotificationsSection scope={settingsPrimaryScope()} />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'email-reader-log' && (
+          <SectionErrorBoundary>
+            <MailReaderLogSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'sew' && (

@@ -141,6 +141,8 @@ export type SettingsSection =
   | 'email-hosting'
   /** Settings → Cores → Email Notifications (part 2, N8). */
   | 'email-notifications'
+  /** Settings → Cores → Email Reader Log (prd-ocmail-admin-in-k2-v1 OA2). */
+  | 'email-reader-log'
   | 'email-link'
   | 'data'
   /** Settings → Cores → Apps (route id skin-access; per-app roles and users). */

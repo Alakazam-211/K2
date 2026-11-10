@@ -4,7 +4,9 @@
 // it, click it or read it. It draws the compact SecretCard that K2's
 // Conversation widget draws, live, and the person's Save goes through the
 // window's own answer path with no widget origin, exactly like K2's
-// Thread. Save or Close closes it; the widget only hears that it closed.
+// Thread. Save or Close (also the ×, Esc and a press outside: ZenSheet)
+// closes it; Close answers and dismisses nothing (the card stays on the
+// Thread). The widget only hears that it closed.
 
 import { useEffect, useState } from 'react'
 import { SecretCard } from '@/components/SessionView/SecretCard'
@@ -13,6 +15,7 @@ import { THREAD_CARD_TOKENS } from '@/components/Thread/ThreadZenKit'
 import { onZenThreadChange, zenThreadItemTarget } from '@/lib/zen/zen-data'
 import type { ZenSecretAsk } from '@/lib/zen/secret-sheet'
 import { zenButtonStyle } from './ZenOverlay'
+import { ZEN_SHEET_TITLE_STYLE, ZenSheet } from './ZenSheet'
 
 export interface ZenSecretSheetProps {
   ask: ZenSecretAsk
@@ -39,65 +42,41 @@ export function ZenSecretSheet({
   useEffect(() => onChange(ask.address, () => setT(target(ask.address, ask.cardId))), [ask.address, ask.cardId, target, onChange])
   const secret = t?.item.doc.kind === 'secret' ? (t.item.doc.secret ?? null) : null
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Secret request"
-      data-testid="zen-secret-sheet"
-      className="absolute inset-0 z-20 flex items-center justify-center"
-      style={{ padding: 12, background: 'rgba(0, 0, 0, 0.4)' }}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation()
-          onDone()
-        }
-      }}
+    <ZenSheet
+      label="Secret request"
+      testId="zen-secret-sheet"
+      onCancel={onDone}
+      maxWidth={380}
+      scroll
+      panelStyle={THREAD_CARD_TOKENS}
     >
-      <div
-        className="w-full"
-        style={{
-          maxWidth: 380,
-          maxHeight: '100%',
-          overflow: 'auto',
-          padding: 12,
-          fontSize: 12,
-          color: 'var(--zen-text)',
-          background: 'var(--zen-surface-raised)',
-          border: '1px solid var(--zen-border)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-          ...THREAD_CARD_TOKENS,
-        }}
-      >
-        <p style={{ color: 'var(--zen-text-muted)', fontSize: 11 }}>
-          K2 shows this outside the widget. The widget never sees what you type here.
-        </p>
-        {secret ? (
-          <SecretCard
-            compact
-            secret={secret}
-            agent={t?.item.doc.from ?? ''}
-            server={t?.scope.label}
-            onSubmit={async (payload) => {
-              await answer(payload)
-              onDone()
-            }}
-            onDismiss={() => {
-              void dismiss()
-                .catch((err: unknown) => console.warn('[zen] dismissing the secret card failed:', err))
-                .finally(onDone)
-            }}
-          />
-        ) : (
-          <p data-testid="zen-secret-sheet-gone">This card isn’t on screen any more.</p>
-        )}
-        <div className="flex" style={{ gap: 6 }}>
-          <button type="button" className="cursor-pointer" style={zenButtonStyle(false)} data-testid="zen-secret-sheet-close" onClick={onDone}>
-            Close
-          </button>
-        </div>
+      <p style={{ color: 'var(--zen-text-muted)', fontSize: 11, ...ZEN_SHEET_TITLE_STYLE }}>
+        K2 shows this outside the widget. The widget never sees what you type here.
+      </p>
+      {secret ? (
+        <SecretCard
+          compact
+          secret={secret}
+          agent={t?.item.doc.from ?? ''}
+          server={t?.scope.label}
+          onSubmit={async (payload) => {
+            await answer(payload)
+            onDone()
+          }}
+          onDismiss={() => {
+            void dismiss()
+              .catch((err: unknown) => console.warn('[zen] dismissing the secret card failed:', err))
+              .finally(onDone)
+          }}
+        />
+      ) : (
+        <p data-testid="zen-secret-sheet-gone">This card isn’t on screen any more.</p>
+      )}
+      <div className="flex" style={{ gap: 6 }}>
+        <button type="button" className="cursor-pointer" style={zenButtonStyle(false)} data-testid="zen-secret-sheet-close" onClick={onDone}>
+          Close
+        </button>
       </div>
-    </div>
+    </ZenSheet>
   )
 }

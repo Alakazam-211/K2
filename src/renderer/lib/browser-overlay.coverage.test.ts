@@ -79,12 +79,7 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Zen/widgets/ZenOverlay.tsx': 'Zen is shown: Browser tabs are hidden',
   'components/Zen/widgets/ZenGardenEmptyWidget.tsx': 'Zen is shown: Browser tabs are hidden',
   'components/Zen/widgets/ZenConversationWidget.tsx': 'Zen is shown: Browser tabs are hidden (the header\'s agent pick drop-down sits inside its own tile)',
-  'components/Zen/widgets/ZenGuestRoomsSheet.tsx': 'Zen is shown: Browser tabs are hidden (a Garden widget\'s guests.setRooms confirm)',
-  'components/Zen/widgets/ZenPermissionSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s sheet for a permission card a Garden widget shows)',
-  'components/Zen/widgets/ZenSecretSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s sheet for a secret card a Garden widget shows)',
-  'components/Zen/widgets/ZenDownloadSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s card before a Garden widget\'s k2.download saves a file)',
-  'components/Zen/widgets/ZenLinkSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s card the first time a Garden widget opens a site with k2.open)',
-  'components/Zen/widgets/ZenWorkSheet.tsx': 'Zen is shown: Browser tabs are hidden (K2\'s Workbench sheet before a Garden widget starts, lands or retires a worktree agent)',
+  'components/Zen/widgets/ZenSheet.tsx': 'Zen is shown: Browser tabs are hidden; on a Board file it stays in its pane (K2\'s sheets over a Garden widget\'s card: k2.open, k2.download, Workbench, guests.setRooms, permission and secret cards)',
   'components/PromptStash/PromptStash.tsx': 'the stash drawer is laid out in the compose bar\'s own column, in flow above the bar (its listbox never floats over another pane)',
 }
 

@@ -4,12 +4,14 @@
 // it or read it, and every word is K2's; the facts (commits, files, branch)
 // are the daemon's, read when the person pressed the widget's button.
 //
-// Cancel (also Esc) answers the widget `{cancelled: true}` (Start:
-// `declined`); the main button runs the change through the daemon.
+// Cancel (also the ×, Esc and a press outside: ZenSheet) answers the widget
+// `{cancelled: true}` (Start: `declined`) and changes nothing; the main
+// button runs the change through the daemon.
 
 import { useEffect, useRef } from 'react'
 import type { ZenWorkChange } from '@/lib/zen/zen-custom-work'
 import { zenButtonStyle } from './ZenOverlay'
+import { ZEN_SHEET_TITLE_STYLE, ZenSheet } from './ZenSheet'
 
 const muted: React.CSSProperties = { color: 'var(--zen-text-muted)' }
 const mono: React.CSSProperties = { fontFamily: 'var(--zen-font-mono, ui-monospace, monospace)', fontSize: 11 }
@@ -48,104 +50,80 @@ export function ZenWorkSheet({ change, widget, onDone }: ZenWorkSheetProps): Rea
   const files = list(change.files)
   const uncommitted = typeof change.uncommitted === 'number' ? change.uncommitted : 0
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={words.title}
-      data-testid="zen-work-sheet"
-      data-kind={change.kind}
-      className="absolute inset-0 z-20 flex items-center justify-center"
-      style={{ padding: 12, background: 'rgba(0, 0, 0, 0.4)' }}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation()
-          onDone(false)
-        }
-      }}
+    <ZenSheet
+      label={words.title}
+      testId="zen-work-sheet"
+      dialogAttrs={{ 'data-kind': change.kind }}
+      onCancel={() => onDone(false)}
+      maxWidth={420}
+      scroll
     >
-      <div
-        className="w-full"
-        style={{
-          maxWidth: 420,
-          maxHeight: '100%',
-          overflow: 'auto',
-          padding: 12,
-          fontSize: 12,
-          color: 'var(--zen-text)',
-          background: 'var(--zen-surface-raised)',
-          border: '1px solid var(--zen-border)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-        }}
-      >
-        <p style={{ fontWeight: 500 }} data-testid="zen-work-title">
-          {words.title}
+      <p style={{ fontWeight: 500, ...ZEN_SHEET_TITLE_STYLE }} data-testid="zen-work-title">
+        {words.title}
+      </p>
+      <p style={{ ...muted, fontSize: 11 }}>Asked by the widget {widget}. Only your press here does it.</p>
+      {change.kind === 'land' && (
+        <>
+          <p style={muted}>
+            Branch <span style={mono}>{str(change.branch)}</span> → <span style={mono}>{str(change.base)}</span> (at{' '}
+            <span style={mono}>{str(change.onto)}</span>), cherry-picked; a conflict lands nothing and tells the agent.
+          </p>
+          <ul data-testid="zen-work-commits" style={{ margin: 0, paddingLeft: 16 }}>
+            {commits.slice(0, 12).map((c) => (
+              <li key={str(c.sha)}>
+                <span style={mono}>{str(c.short)}</span> {str(c.subject)}
+              </li>
+            ))}
+            {commits.length > 12 && <li style={muted}>and {commits.length - 12} more</li>}
+          </ul>
+          <p style={muted} data-testid="zen-work-files">
+            {files.length} file(s): {files.slice(0, 8).map((f) => str(f.file)).join(', ')}
+            {files.length > 8 ? ', …' : ''}
+          </p>
+          {uncommitted > 0 && <p style={muted}>{uncommitted} uncommitted file(s) stay in the agent’s worktree.</p>}
+        </>
+      )}
+      {change.kind === 'settle' && (
+        <p style={muted} data-testid="zen-work-settle">
+          K2 stops the agent and removes its worktree {str(change.worktree) && <span style={mono}>{str(change.worktree)}</span>}
+          {change.discard === true
+            ? `: its ${str(change.unlanded) || '0'} commit(s) that aren’t landed are thrown away, and uncommitted files go to the Trash.`
+            : ' and deletes its branch (every commit is landed).'}{' '}
+          Its Thread stays.
         </p>
-        <p style={{ ...muted, fontSize: 11 }}>Asked by the widget {widget}. Only your press here does it.</p>
-        {change.kind === 'land' && (
-          <>
-            <p style={muted}>
-              Branch <span style={mono}>{str(change.branch)}</span> → <span style={mono}>{str(change.base)}</span> (at{' '}
-              <span style={mono}>{str(change.onto)}</span>), cherry-picked; a conflict lands nothing and tells the agent.
-            </p>
-            <ul data-testid="zen-work-commits" style={{ margin: 0, paddingLeft: 16 }}>
-              {commits.slice(0, 12).map((c) => (
-                <li key={str(c.sha)}>
-                  <span style={mono}>{str(c.short)}</span> {str(c.subject)}
-                </li>
-              ))}
-              {commits.length > 12 && <li style={muted}>and {commits.length - 12} more</li>}
-            </ul>
-            <p style={muted} data-testid="zen-work-files">
-              {files.length} file(s): {files.slice(0, 8).map((f) => str(f.file)).join(', ')}
-              {files.length > 8 ? ', …' : ''}
-            </p>
-            {uncommitted > 0 && <p style={muted}>{uncommitted} uncommitted file(s) stay in the agent’s worktree.</p>}
-          </>
-        )}
-        {change.kind === 'settle' && (
-          <p style={muted} data-testid="zen-work-settle">
-            K2 stops the agent and removes its worktree {str(change.worktree) && <span style={mono}>{str(change.worktree)}</span>}
-            {change.discard === true
-              ? `: its ${str(change.unlanded) || '0'} commit(s) that aren’t landed are thrown away, and uncommitted files go to the Trash.`
-              : ' and deletes its branch (every commit is landed).'}{' '}
-            Its Thread stays.
+      )}
+      {change.kind === 'end' && (
+        <p style={muted} data-testid="zen-work-end">
+          K2 ends the agent’s process now, even mid-turn. Its tab, transcript and Thread stay, so it can start again
+          {str(change.worktree) ? (
+            <>
+              {' '}
+              in its worktree <span style={mono}>{str(change.worktree)}</span>
+            </>
+          ) : null}
+          .
+        </p>
+      )}
+      {change.kind === 'start' && (
+        <>
+          <p style={muted}>
+            A new worktree <span style={mono}>{str(change.worktree)}</span> on branch <span style={mono}>{str(change.branch)}</span> from{' '}
+            <span style={mono}>{str(change.base)}</span>
+            {str(change.harness) ? `, with ${str(change.harness)}` : ''}.
           </p>
-        )}
-        {change.kind === 'end' && (
-          <p style={muted} data-testid="zen-work-end">
-            K2 ends the agent’s process now, even mid-turn. Its tab, transcript and Thread stay, so it can start again
-            {str(change.worktree) ? (
-              <>
-                {' '}
-                in its worktree <span style={mono}>{str(change.worktree)}</span>
-              </>
-            ) : null}
-            .
+          <p data-testid="zen-work-brief" style={{ ...muted, whiteSpace: 'pre-wrap', maxHeight: 120, overflow: 'auto' }}>
+            {str(change.brief)}
           </p>
-        )}
-        {change.kind === 'start' && (
-          <>
-            <p style={muted}>
-              A new worktree <span style={mono}>{str(change.worktree)}</span> on branch <span style={mono}>{str(change.branch)}</span> from{' '}
-              <span style={mono}>{str(change.base)}</span>
-              {str(change.harness) ? `, with ${str(change.harness)}` : ''}.
-            </p>
-            <p data-testid="zen-work-brief" style={{ ...muted, whiteSpace: 'pre-wrap', maxHeight: 120, overflow: 'auto' }}>
-              {str(change.brief)}
-            </p>
-          </>
-        )}
-        <div className="flex flex-wrap" style={{ gap: 6 }}>
-          <button ref={cancel} type="button" className="cursor-pointer" style={zenButtonStyle(false)} data-testid="zen-work-cancel" onClick={() => onDone(false)}>
-            Cancel
-          </button>
-          <button type="button" className="cursor-pointer" style={zenButtonStyle(true)} data-testid="zen-work-go" onClick={() => onDone(true)}>
-            {words.go}
-          </button>
-        </div>
+        </>
+      )}
+      <div className="flex flex-wrap" style={{ gap: 6 }}>
+        <button ref={cancel} type="button" className="cursor-pointer" style={zenButtonStyle(false)} data-testid="zen-work-cancel" onClick={() => onDone(false)}>
+          Cancel
+        </button>
+        <button type="button" className="cursor-pointer" style={zenButtonStyle(true)} data-testid="zen-work-go" onClick={() => onDone(true)}>
+          {words.go}
+        </button>
       </div>
-    </div>
+    </ZenSheet>
   )
 }

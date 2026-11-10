@@ -1,0 +1,20 @@
+[package]
+name = "k2-deskd-proto"
+# Its own version line, like k2-ptyd: it changes only when the wire does.
+# The daemon checks PROTOCOL_VERSION in deskd's hello, not this.
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "The wire between k2-daemon and k2-deskd (K2 Screen): framing, hello, requests, events, the frame header, fd passing and the key map. No platform code, so the daemon links it without AppKit or X11."
+
+# Deliberately tiny: the daemon links this. Platform code (AppKit,
+# CoreGraphics, x11rb, zbus) lives in k2-deskd, which the daemon never
+# links (one cargo call builds both: a shared package would unify features
+# and pull AppKit into the daemon).
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

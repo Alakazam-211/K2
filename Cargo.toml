@@ -51,6 +51,10 @@ members = [
     # runs as the `_k2sign` role user beside k2sign; checks evidence
     # bundles v2 and signs minisign/Tauri updater files.
     "crates/k2-signer",
+    # The remote desktop helper "K2 Screen" (prd-remote-desktop-tab-v1
+    # D3/D4) and its wire, which the daemon links (no platform code).
+    "crates/k2-deskd-proto",
+    "crates/k2-deskd",
 ]
 # Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep
 # their own manifests and lints: never workspace members. Vendored repos

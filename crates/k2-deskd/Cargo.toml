@@ -1,0 +1,69 @@
+[package]
+name = "k2-deskd"
+# Its own line (k2-deskd-proto's VERSION is what deskd reports); the
+# daemon gates on the protocol number in hello, not on this.
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "K2 Screen: the remote desktop helper. The one K2 process that holds Screen Recording and Accessibility on macOS; injects input and shows the in-use banner. Talks only to k2-daemon (prd-remote-desktop-tab-v1 §3.2)."
+
+[features]
+# Linux only: the Xvfb integration tests (tests/xvfb.rs). They need a
+# running X server in DISPLAY; scripts/test/deskd-checks.sh starts one.
+xvfb-tests = []
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "k2-deskd"
+path = "src/main.rs"
+
+# Kessel Steward ruling R27 (2026-11-10): x11rb and zbus here, Linux only,
+# pure-Rust X connection (no dl-libxcb / allow-unsafe-code), zbus on the
+# blocking API; AppKit through objc2 on macOS; system frameworks by raw FFI.
+[dependencies]
+k2-deskd-proto = { path = "../k2-deskd-proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSDate",
+    "NSGeometry",
+    "NSObjCRuntime",
+    "NSRunLoop",
+    "NSString",
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    # CGFloat methods (colours, fonts); objc2-core-foundation is in the lock.
+    "objc2-core-foundation",
+    "NSApplication",
+    "NSButton",
+    "NSButtonCell",
+    "NSCell",
+    "NSColor",
+    "NSControl",
+    "NSEvent",
+    "NSFont",
+    "NSGraphics",
+    "NSPanel",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSText",
+    "NSTextField",
+    "NSView",
+    "NSWindow",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", default-features = false, features = ["xtest", "xinput", "screensaver"] }
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }

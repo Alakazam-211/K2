@@ -1,0 +1,37 @@
+# cargo-deny policy for k2-deskd (K2 Screen) and, through it, k2-deskd-proto:
+#   cargo deny --manifest-path crates/k2-deskd/Cargo.toml --all-features \
+#       check --config crates/k2-deskd/deny.toml licenses bans advisories
+# (scripts/test/deskd-checks.sh deny). Kessel Steward ruling R27: x11rb,
+# zbus and objc2 only, all already in Cargo.lock; no new crate, no new licence.
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+exclude-dev = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+
+# Pure-Rust X connection only (Steward R27): no libxcb bindings.
+[[bans.features]]
+crate = "x11rb"
+deny = ["allow-unsafe-code", "dl-libxcb"]
+
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained: notice only, via zbus 5; clears with zbus 6" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained: notice only, via zbus 5; clears with zbus 6" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained: notice only, via zbus 5; clears with zbus 6" },
+]

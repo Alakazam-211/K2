@@ -1784,11 +1784,13 @@ function ProjectDetail({
             {settingsTab === 'permissions' && (
               <PermissionAsksProvider project={project}>
                 <SettingsGroup title="Agents and secrets" card>
+                  {/* First (Rosson 2026-11-10): the switch that lets this
+                      agent ask for every other one on a card. */}
+                  <AgentPermissionCardsRow project={project} />
                   <AgentsManageAgentsToggle project={project} />
                   <AgentsManageVaultToggle project={project} />
                   <AgentHandoffAcceptFrom project={project} />
                   <AgentHandoffSendAllow project={project} />
-                  <AgentPermissionCardsRow project={project} />
                   <AgentsRefreshChatToggle project={project} />
                 </SettingsGroup>
                 <SettingsGroup title="Compute" card>

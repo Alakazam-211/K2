@@ -16,13 +16,22 @@ import { PROJECTS_MANIFEST } from './ProjectsSection'
 const src = readFileSync(join(__dirname, 'ProjectsSection.tsx'), 'utf8')
 
 describe('Agent tab wiring', () => {
-  it('the row sits in the Agents and secrets group of the Permissions tab', () => {
+  it('the row is the first row of the Agents and secrets group of the Permissions tab', () => {
     const group = src.indexOf('<SettingsGroup title="Agents and secrets" card>')
     const row = src.indexOf('<AgentPermissionCardsRow project={project} />')
     expect(group).toBeGreaterThan(-1)
     expect(row).toBeGreaterThan(group)
     const groupEnd = src.indexOf('</SettingsGroup>', group)
     expect(row).toBeLessThan(groupEnd)
+    // Rosson 2026-11-10: first in the list, before every other agent row.
+    const rows = [...src.slice(group, groupEnd).matchAll(/<(Agent\w+) project=\{project\} \/>/g)].map((m) => m[1])
+    expect(rows).toEqual([
+      'AgentPermissionCardsRow',
+      'AgentsManageAgentsToggle',
+      'AgentsManageVaultToggle',
+      'AgentHandoffAcceptFrom',
+      'AgentsRefreshChatToggle',
+    ])
   })
 
   it('the Permissions and Connections tabs are wrapped in PermissionAsksProvider', () => {

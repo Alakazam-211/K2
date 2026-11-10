@@ -24,6 +24,36 @@ export function identityCompact(width: number, height: number): boolean {
   return (height > 0 && height < IDENTITY_COMPACT_BELOW_H) || (width > 0 && width < IDENTITY_COMPACT_BELOW_W)
 }
 
+/** The agent's picture, round, lifted over what is under it (and edged in
+ *  Terminal), from the room's server. The header draws it at 36px; an empty
+ *  Thread draws it larger over its message box (ThreadEmptyStart). */
+export function ThreadViewPicture({
+  name,
+  addr,
+  size,
+  testId = 'thread-view-picture',
+}: {
+  name: string
+  addr: string
+  size: number
+  testId?: string
+}): JSX.Element {
+  const room = useRoom()
+  return (
+    <span
+      data-testid={testId}
+      data-k2-float-picture=""
+      data-k2-chamfer="control"
+      className="flex-shrink-0 block"
+      style={{ width: size, height: size, overflow: 'hidden', borderRadius: 'var(--radius-pill)' }}
+    >
+      <Suspense fallback={null}>
+        <AgentAvatar addr={addr} label={name} host={room.scope.isPrimary ? null : room.scope.hostKey} size={size} />
+      </Suspense>
+    </span>
+  )
+}
+
 export function ThreadViewIdentity({ name, addr }: { name: string; addr: string }): JSX.Element {
   const room = useRoom()
   const rootRef = useRef<HTMLDivElement>(null)
@@ -50,19 +80,7 @@ export function ThreadViewIdentity({ name, addr }: { name: string; addr: string 
   const size = compact ? IDENTITY_PICTURE_COMPACT_PX : IDENTITY_PICTURE_PX
   const server = room.scope.isPrimary ? null : room.scope.label
 
-  const picture = (
-    <span
-      data-testid="thread-view-picture"
-      data-k2-float-picture=""
-      data-k2-chamfer="control"
-      className="flex-shrink-0 block"
-      style={{ width: size, height: size, overflow: 'hidden', borderRadius: 'var(--radius-pill)' }}
-    >
-      <Suspense fallback={null}>
-        <AgentAvatar addr={addr} label={name} host={room.scope.isPrimary ? null : room.scope.hostKey} size={size} />
-      </Suspense>
-    </span>
-  )
+  const picture = <ThreadViewPicture name={name} addr={addr} size={size} />
   const nameLine = (
     <span
       data-testid="thread-view-name"
@@ -80,6 +98,7 @@ export function ThreadViewIdentity({ name, addr }: { name: string; addr: string 
     <div
       ref={rootRef}
       data-testid="thread-view-identity"
+      data-thread-view-identity=""
       data-compact={compact ? '' : undefined}
       title={compact && server ? server : undefined}
       className={`min-w-0 max-w-full flex items-center justify-center text-center ${compact ? 'flex-row' : 'flex-col'}`}

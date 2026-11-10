@@ -5857,6 +5857,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               active
               composeBar={composeThread()}
               agentName={sessionChrome.displayName || sessionChrome.overlayAddr}
+              centreEmpty
               onStop={stopThreadTurn}
             />
           )
@@ -5885,6 +5886,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               active={showThreadOverlay}
               composeBar={composeThread()}
               agentName={sessionChrome.displayName || sessionChrome.overlayAddr}
+              centreEmpty
               onStop={stopThreadTurn}
               textCapPx={threadTextCap}
             />

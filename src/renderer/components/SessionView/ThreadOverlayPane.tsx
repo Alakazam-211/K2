@@ -197,7 +197,17 @@ interface ThreadOverlayPaneProps {
   /** Thread view's text limit (px): the column caps and centres, the list
    *  and its scrollbar stay full width. Omitted or null: full width. */
   textCapPx?: number | null
+  /** Told whether the Thread is still loading, loaded and empty, or has
+   *  messages (sends in progress count), before paint. */
+  onFill?: (fill: ThreadFill) => void
+  /** Draw the empty line over an empty list. Off while the column draws
+   *  its own start (ThreadEmptyStart). */
+  emptyLine?: boolean
 }
+
+/** What a Thread holds, for the column's empty start: `loading` until the
+ *  first read answers (or while it shows an error), then `empty` or `some`. */
+export type ThreadFill = 'loading' | 'empty' | 'some'
 
 /** Overlay log only — Message-the-agent compose stays on TerminalPane. */
 export const ThreadOverlayPane = memo(function ThreadOverlayPane({
@@ -209,6 +219,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   onTurn,
   bottomInset = 0,
   textCapPx = null,
+  onFill,
+  emptyLine = true,
 }: ThreadOverlayPaneProps): JSX.Element {
   const room = useRoom()
   const roomScope = room.scope
@@ -259,6 +271,13 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     return outbox.length > 0 ? [...shown, ...outbox] : shown
   }, [items, outbox])
   const keys = useMemo(() => visible.map((it) => it.id), [visible])
+  // A send shows at once (the outbox), so the first message counts before
+  // the daemon confirms it. Layout effect: the column places its message box
+  // before the first paint, so the empty start never flashes.
+  const fill: ThreadFill = visible.length > 0 ? 'some' : loaded && !error ? 'empty' : 'loading'
+  useLayoutEffect(() => {
+    onFill?.(fill)
+  }, [onFill, fill])
   // Rows get stable callbacks (the memoized rows compare them by identity):
   // the latest hook functions through refs.
   const answerRef = useRef(answer)
@@ -514,7 +533,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
           win.onScroll()
         }}
       >
-        {loaded && !error && visible.length === 0 && (
+        {emptyLine && fill === 'empty' && (
           // Absolute over the list so it centers without adding scroll
           // height; pointer-events-none keeps Earlier messages clickable.
           <div

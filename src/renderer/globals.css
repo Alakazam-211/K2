@@ -2083,6 +2083,41 @@ html:is([data-style="glass"], [data-style="glass-classic"]) button[data-k2-float
 [data-k2-float-picture] { position: relative; z-index: 2; filter: var(--k2-float-picture-lift); }
 html[data-style="terminal"] [data-k2-float-picture] { border: 1px solid var(--color-border); }
 
+/* An empty Thread's start (ThreadOverlayColumn, ThreadEmptyStart): the
+   agent's picture and name over a lifted message box, centred. The header's
+   own picture and name step aside meanwhile (its other objects stay), and
+   come back as the box drifts down on the first message. Hiding is instant;
+   coming back fades. The drift is the Style's slow motion; the first message
+   fades in behind the box as it lands, so the box never slides over it. */
+[data-thread-view-identity] { transition: opacity var(--motion-duration-slow) var(--motion-ease-out-soft); }
+[data-thread-floats-host]:has([data-thread-centred]) [data-thread-floats] [data-thread-view-identity] {
+  opacity: 0;
+  visibility: hidden;
+  transition: none;
+}
+[data-thread-empty-start] { opacity: 0; visibility: hidden; transform: scale(0.97); }
+[data-thread-empty-start][data-shown] { opacity: 1; visibility: visible; transform: none; }
+[data-thread-drift] > [data-thread-empty-start] {
+  transition:
+    opacity var(--motion-duration-medium) var(--motion-ease-standard),
+    transform var(--motion-duration-medium) var(--motion-ease-standard),
+    visibility 0s linear var(--motion-duration-medium);
+}
+[data-thread-centred] > [data-thread-compose-slot] > .thread-footer-fade { opacity: 0; }
+[data-thread-drift] > [data-thread-compose-slot] { transition: transform var(--motion-duration-slow) var(--motion-ease-out-soft); }
+[data-thread-drift] > [data-thread-compose-slot] > .thread-footer-fade,
+[data-thread-drift] [data-testid="thread-overlay-column"] {
+  animation: thread-drift-in calc(var(--motion-duration-slow) * 0.6) var(--motion-ease-out-soft) calc(var(--motion-duration-slow) * 0.4) backwards;
+}
+@keyframes thread-drift-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  [data-thread-view-identity],
+  [data-thread-drift] > [data-thread-empty-start],
+  [data-thread-drift] > [data-thread-compose-slot] { transition: none; }
+  [data-thread-drift] > [data-thread-compose-slot] > .thread-footer-fade,
+  [data-thread-drift] [data-testid="thread-overlay-column"] { animation: none; }
+}
+
 [data-k2-float="note"] { height: auto; min-height: var(--k2-float-h); padding: 4px 10px; text-align: center; }
 [data-thread-floats] > button[data-k2-float="note"] { display: flex; width: max-content; max-width: calc(100% - 24px); margin: 6px auto 0; position: relative; z-index: 1; }
 .thread-float-note {

@@ -189,8 +189,9 @@ CACHES (0.46.6)
   Caches stay on the node, count toward its disk limits and are evicted
   when idle and the disk runs low (oldest first), so keep nothing there
   you can't rebuild. Never with --secret. Needs k2-node 0.46.6.
-  k2 compute cache [--node N] lists them; owner/admin clear them with
-  k2 compute cache clear --workspace <ws> [--name NAME].
+  k2 compute cache [--node N] lists them; an agent sees and clears its
+  own workspace's (k2 compute cache clear [--name NAME]); owner/admin clear
+  any with k2 compute cache clear --workspace <ws> [--name NAME].
 
 TIERS (queue lines, like an airport; 0.46.6)
   Which line?

@@ -66,6 +66,7 @@ export default function Layout({
             <Surface
               role2="surface" material="tile"
               bordered={false}
+              data-nav-tile=""
               className="relative flex-shrink-0 overflow-y-auto border-r border-[var(--color-border)]"
               style={{ width: sidebarWidth }}
             >

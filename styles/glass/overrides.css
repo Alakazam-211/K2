@@ -144,9 +144,6 @@
   padding: 2px 8px;
   gap: 4px;
 }
-/* Drawers are tiles of their own: no line between them and the room. */
-[data-style="glass"] [data-drawer-side]:not([data-zen-root] *) { border-color: transparent; }
-
 /* The selected page tab is the phone's Home | Agents thumb: a blue pill. */
 [data-style="glass"] [data-page-tab]:not([data-zen-root] *) { border-radius: var(--radius-pill); }
 [data-style="glass"] [data-page-tab][data-selected]:not([data-zen-root] *) {
@@ -268,3 +265,128 @@
 [data-style="glass"][data-palette="veil"] .k2-segment:not([data-zen-root] *) { color: #666666; }
 [data-style="glass"][data-palette="veil"] .k2-segment[aria-checked="true"]:not([data-zen-root] *) { color: #000000; }
 [data-style="glass"][data-palette="veil"] .k2-segment[aria-checked="true"]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-accent); }
+
+/* ── Drawers and the nav ─────────────────────────────────────────────────
+   A drawer is one tile. The sliding box itself carries the fill, rim and
+   rounded corners, so it stays a whole tile at every width while it slides
+   and its contents are simply cut by the rounded edge. The panel inside is
+   bare. */
+[data-style="glass"] [data-drawer-side]:not([data-zen-root] *) {
+  background: var(--tile-fill);
+  border: 1px solid var(--tile-edge);
+  border-radius: var(--radius-box);
+  box-shadow: var(--tile-sheen), var(--tile-shadow);
+}
+[data-style="glass"] [data-drawer-side="left"]:not([data-zen-root] *) { --k2-drawer-hide-end: calc(-1 * var(--gap-pane)); }
+[data-style="glass"] [data-drawer-side="right"]:not([data-zen-root] *) { --k2-drawer-hide-start: calc(-1 * var(--gap-pane)); }
+/* At width 0 only the rim is left, a stray line for a frame or two, and the
+   page gap would jump. Fade the ends of the slide and take the gap with it. */
+[data-style="glass"] [data-drawer-side][data-drawer-anim="opening"]:not([data-zen-root] *) { animation: k2-drawer-tile-in 250ms cubic-bezier(0.2, 0, 0, 1) both; }
+[data-style="glass"] [data-drawer-side][data-drawer-anim="closing"]:not([data-zen-root] *) { animation: k2-drawer-tile-out 250ms cubic-bezier(0.2, 0, 0, 1) both; }
+[data-style="glass"] [data-drawer-panel][data-drawer-panel]:not([data-zen-root] *) {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+/* Focus windows: the same open canvas between a drawer and the room. */
+[data-style="glass"] [data-focus-content]:not([data-zen-root] *) { gap: var(--gap-pane); }
+
+/* The tab strip has no rule under it: its tabs are small pills. */
+[data-style="glass"] [data-drawer-tab-strip]:not([data-zen-root] *) {
+  border-bottom-width: 0;
+  padding: 4px 6px;
+  gap: 2px;
+}
+[data-style="glass"] [data-drawer-tab]:not([data-zen-root] *) {
+  border: 0;
+  border-radius: var(--radius-pill);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--type-md);
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-standard), color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+[data-style="glass"] [data-drawer-tab]:hover:not([data-selected]):not([data-zen-root] *) { background: var(--color-wash-1); }
+[data-style="glass"] [data-drawer-tab][data-selected]:not([data-zen-root] *) {
+  background: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+}
+[data-style="glass"] [data-drawer-tab]:focus-visible:not([data-zen-root] *) { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+/* The » / « toggles: a small round control, no cell line beside it. */
+[data-style="glass"] [data-drawer-tabbar-toggle]:not([data-zen-root] *) {
+  border-width: 0;
+  border-radius: var(--radius-pill);
+}
+[data-style="glass"] [data-drawer-tab-strip] [data-drawer-tabbar-toggle]:not([data-zen-root] *) { width: 28px; }
+
+/* Hairlines inside a drawer or the nav stop short of its edges, like the
+   phone's list separators, so none runs the width of the tile. */
+[data-style="glass"] :is([data-drawer-panel], [data-nav-tile], [data-home-picker-menu], [data-focus-group-menu]) :is(:is([class~="border-b"], [class~="border-t"], [class~="border-y"]):is([class~="border-[var(--color-border)]"], [class~="border-white/[0.06]"]):not([data-nav-footer]), [class~="divide-y"] > *):not([data-zen-root] *) {
+  border-image: linear-gradient(to right, transparent 12px, var(--color-border) 12px, var(--color-border) calc(100% - 12px), transparent calc(100% - 12px)) 1;
+}
+/* The nav's bottom band floats its controls; no rule above them. */
+[data-style="glass"] [data-nav-footer]:not([data-zen-root] *) { border-top-color: transparent; border-image: none; }
+
+/* A resize handle shows on hover as a short pill on the edge, not a line down
+   the whole column. */
+[data-style="glass"] [data-resize-edge]:not([data-zen-root] *),
+[data-style="glass"] [data-resize-edge]:hover:not([data-zen-root] *) { background: transparent; }
+[data-style="glass"] [data-resize-edge]:not([data-zen-root] *)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 36px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
+}
+[data-style="glass"] [data-resize-edge]:hover:not([data-zen-root] *)::after { opacity: 1; }
+
+/* The nav's controls: the same small Frost objects as the top bar. */
+[data-style="glass"] [data-nav-control]:not([data-zen-root] *) {
+  height: 30px;
+  padding: 0 12px;
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-standard), color var(--motion-duration-fast) var(--motion-ease-standard), scale 180ms var(--motion-ease-out-soft);
+}
+[data-style="glass"] [data-nav-control][data-frost-shape="round"]:not([data-zen-root] *) {
+  width: 30px;
+  padding: 0;
+}
+[data-style="glass"] [data-nav-rail-actions]:not([data-zen-root] *) { gap: 6px; }
+[data-style="glass"] [data-nav-control]:hover:not(:disabled):not([data-zen-root] *) {
+  background: var(--k2-float-fill-hover);
+  color: var(--color-text-primary);
+}
+[data-style="glass"] [data-nav-control]:active:not(:disabled):not([data-zen-root] *) { scale: var(--motion-press-scale); }
+[data-style="glass"] [data-nav-control]:focus-visible:not([data-zen-root] *),
+[data-style="glass"] [data-nav-picker]:focus-visible:not([data-zen-root] *) { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+
+/* The Home, focus-group and server pickers: a pill the height of the top-bar
+   capsules, sentence-case name, round count. */
+[data-style="glass"] button[data-nav-picker]:not([data-zen-root] *) {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+}
+[data-style="glass"]:not([data-frost="tile"]) button[data-nav-picker][data-nav-picker][data-material="frost"]:not([data-zen-root] *) { background: var(--material-tint); }
+[data-style="glass"] button[data-nav-picker][data-nav-picker]:hover:not(:disabled):not([data-zen-root] *) { background: var(--k2-float-fill-hover); }
+[data-style="glass"] button[data-nav-picker][data-nav-picker][aria-expanded="true"]:not([data-zen-root] *) { background: var(--k2-float-fill-lit); }
+[data-style="glass"] [data-nav-picker] [data-picker-name]:not([data-zen-root] *) {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--type-md);
+  font-weight: 500;
+}
+[data-style="glass"] [data-nav-picker] [data-picker-count]:not([data-zen-root] *) {
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  padding: 1px 7px;
+}
+/* The Home menu: the same raised tile as every menu, a little off its pill,
+   and no empty colour-dot column. */
+[data-style="glass"] :is([data-home-picker-menu], [data-focus-group-menu])[data-placement="down"]:not([data-zen-root] *) { margin-top: 4px; }
+[data-style="glass"] :is([data-home-picker-menu], [data-focus-group-menu])[data-placement="up"]:not([data-zen-root] *) { margin-bottom: 4px; }
+[data-style="glass"] [data-picker-spacer]:not([data-zen-root] *) { display: none; }

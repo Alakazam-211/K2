@@ -68,6 +68,9 @@ export default function HomePicker(): React.JSX.Element {
     <div ref={menu.anchorRef} className="relative no-drag">
       <button
         type="button"
+        data-material="frost"
+        data-frost-shape="pill"
+        data-nav-picker=""
         onClick={() => setOpen((o) => !o)}
         className="w-full flex items-center gap-2 px-2 py-1.5 text-left bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer"
         title="Pick a Home"
@@ -109,7 +112,7 @@ export default function HomePicker(): React.JSX.Element {
                         setOpen(false)
                       }}
                     >
-                      <span className="w-2 flex-shrink-0" />
+                      <span className="w-2 flex-shrink-0" data-picker-spacer="" />
                       <PickerOptionLabel name={h.name} count={h.rows.length} />
                       {idx < HOME_SWITCH_LIMIT && (
                         <ShortcutIndexBadge index={idx} combo={homeSwitchCombo(idx + 1)} />

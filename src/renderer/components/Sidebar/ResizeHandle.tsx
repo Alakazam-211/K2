@@ -47,6 +47,7 @@ export default function ResizeHandle(): React.JSX.Element {
 
   return (
     <div
+      data-resize-edge=""
       className="no-drag absolute top-0 right-0 bottom-0 w-1 cursor-col-resize hover:bg-[var(--color-accent)] transition-colors duration-150 z-10"
       onMouseDown={handleMouseDown}
       onDoubleClick={handleDoubleClick}

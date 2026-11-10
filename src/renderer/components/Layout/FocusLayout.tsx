@@ -81,7 +81,7 @@ export default function FocusLayout({
       </Surface>
 
       {/* Content area with optional left/right panels */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden" data-focus-content="">
         {/* Left auxiliary panel */}
         {leftPanel && (
           <AnimatedDrawer open={leftPanelOpen} side="left">

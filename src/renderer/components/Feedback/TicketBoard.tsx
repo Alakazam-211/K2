@@ -359,6 +359,7 @@ export function TicketBoard({
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize the ticket list"
+            data-resize-edge=""
             className="absolute top-0 bottom-0 z-10 cursor-col-resize hover:bg-[var(--color-accent)]/40 transition-colors"
             style={{ right: -4, width: 7 }}
             onMouseDown={startResize}

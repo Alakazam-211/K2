@@ -246,6 +246,7 @@ export default function IconRail(): React.JSX.Element {
 
   return (
     <div
+      data-material="tile"
       className="flex flex-col items-center h-full bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] py-2 flex-shrink-0"
       style={{ width: RAIL_WIDTH }}
     >
@@ -269,6 +270,9 @@ export default function IconRail(): React.JSX.Element {
 
       {/* Search / Focus Group button */}
       <button
+        data-material="frost"
+        data-frost-shape="round"
+        data-nav-control=""
         className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors mb-1"
         onClick={() => useCommandPaletteStore.getState().toggle()}
         title="Search Workspaces (⌘K)"
@@ -311,8 +315,11 @@ export default function IconRail(): React.JSX.Element {
       )}
 
       {/* Add workspace, then open the full nav. The rail is one icon wide. */}
-      <div className="flex flex-col items-center mt-1 flex-shrink-0">
+      <div className="flex flex-col items-center mt-1 flex-shrink-0" data-nav-rail-actions="">
         <button
+          data-material="frost"
+          data-frost-shape="round"
+          data-nav-control=""
           className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors"
           onClick={handleAddProject}
           title="Add Workspace"

@@ -494,10 +494,13 @@ export default function HomeSidebar(): React.JSX.Element {
 
       {/* Add Agent + collapse the nav — the Add Workspace bar. (Zen Mode is
           the window's top-bar toggle, prd-zen-gardens-v1 G5/G6.) */}
-      <div ref={barRef} className="relative p-3 border-t border-[var(--color-border)] flex flex-col gap-2">
+      <div ref={barRef} className="relative p-3 border-t border-[var(--color-border)] flex flex-col gap-2" data-nav-footer="">
         {pickerOpen && <AddAgentPicker home={home} />}
         <div className="flex gap-2">
           <button
+            data-material="frost"
+            data-frost-shape="pill"
+            data-nav-control=""
             className="no-drag flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] transition-colors text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08]"
             onClick={() => setPickerOpen(!pickerOpen)}
             aria-expanded={pickerOpen}

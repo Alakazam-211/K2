@@ -1129,8 +1129,11 @@ export default function Sidebar(): React.JSX.Element {
       )}
 
       {/* Add Workspace + collapse the nav */}
-      <div className="p-3 border-t border-[var(--color-border)] flex gap-2">
+      <div className="p-3 border-t border-[var(--color-border)] flex gap-2" data-nav-footer="">
         <button
+          data-material="frost"
+          data-frost-shape="pill"
+          data-nav-control=""
           className={`no-drag flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] transition-colors ${
             !focusGroupsEnabled && projects.length >= 15
               ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'

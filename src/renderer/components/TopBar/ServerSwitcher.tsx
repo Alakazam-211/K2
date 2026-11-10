@@ -447,6 +447,7 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
       <button
         onClick={() => toggle()}
         data-testid="server-switcher-trigger"
+        data-nav-picker=""
         data-follows-room={roomServer !== null ? 'true' : undefined}
         aria-expanded={open}
         className={`${SERVER_SWITCHER_WIDTH_CLASS} ${serverChipClass({ open })} flex items-center justify-start gap-1.5 h-6 px-1.5 text-[11px] no-drag`}

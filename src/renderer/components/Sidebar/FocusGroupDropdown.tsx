@@ -97,6 +97,9 @@ export default function FocusGroupDropdown({
       <button
         type="button"
         data-focus-group-trigger=""
+        data-material="frost"
+        data-frost-shape="pill"
+        data-nav-picker=""
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         onClick={() => setIsOpen(!isOpen)}

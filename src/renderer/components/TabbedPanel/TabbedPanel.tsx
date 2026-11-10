@@ -80,6 +80,7 @@ function PanelResizeHandle({
 
   return (
     <div
+      data-resize-edge=""
       className={`absolute top-0 bottom-0 w-1 cursor-col-resize hover:bg-[var(--color-accent)] transition-colors duration-150 z-10 no-drag ${
         side === 'left' ? 'left-0' : 'right-0'
       }`}
@@ -142,6 +143,7 @@ export default function TabbedPanel({
     <Surface
       role2="surface" material="tile"
       bordered={false}
+      data-drawer-panel=""
       className="relative flex flex-col h-full min-h-0 overflow-hidden"
       style={{ width }}
     >
@@ -163,6 +165,8 @@ export default function TabbedPanel({
         {tabs.map((tab) => (
           <button
             key={tab}
+            data-drawer-tab=""
+            data-selected={activeTab === tab ? '' : undefined}
             className={`no-drag flex-1 h-full px-3 text-[11px] font-medium tracking-wide uppercase transition-colors flex items-center justify-center ${
               activeTab === tab
                 ? 'text-[var(--color-text-primary)] border-b border-[var(--color-accent)]'

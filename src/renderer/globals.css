@@ -1668,6 +1668,17 @@ html[data-style="glass"] [data-scrim]:not([data-zen-root] *) {
   backdrop-filter: none !important;
 }
 
+/* A Glass drawer's slide (styles/glass/overrides.css): the tile fades at
+   the ends, where it is only a sliver of rim, and the page gap goes with it. */
+@keyframes k2-drawer-tile-in {
+  from { opacity: 0; margin-inline: var(--k2-drawer-hide-start, 0) var(--k2-drawer-hide-end, 0); }
+  20% { opacity: 1; }
+}
+@keyframes k2-drawer-tile-out {
+  80% { opacity: 1; }
+  to { opacity: 0; margin-inline: var(--k2-drawer-hide-start, 0) var(--k2-drawer-hide-end, 0); }
+}
+
 /* Glass: menus grow from their anchor in 180ms (G4). Uses the individual
    `scale` so a menu positioned with a transform stays put. !important because
    the context menu carries its own inline fade. */
@@ -1684,6 +1695,7 @@ html[data-style="glass"] [data-material="frost"]:not([data-frost-shape], [data-f
 html[data-style="glass"] [data-material="frost"][class~="right-0"]:not([data-zen-root] *) { --k2-menu-origin: top right; }
 @media (prefers-reduced-motion: reduce) {
   html[data-style="glass"] [data-material="frost"]:not([data-zen-root] *) { animation: none !important; }
+  html[data-style="glass"] [data-nav-control]:active:not(:disabled):not([data-zen-root] *) { scale: 1; }
 }
 
 /* Glass: segmented motion off under reduced motion (the slide lives in the

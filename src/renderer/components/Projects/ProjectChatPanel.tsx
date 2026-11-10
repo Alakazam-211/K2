@@ -429,6 +429,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
 
   return (
     <div
+      data-drawer-panel=""
       className="relative flex-shrink-0 flex flex-col min-h-0 h-full border-l border-[var(--color-border)] bg-[var(--color-bg-surface)]"
       style={{ width }}
     >
@@ -436,6 +437,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
           idiom); the fixed overlay keeps the drag's mousemove stream
           away from the dashboard's iframes/terminals. */}
       <div
+        data-resize-edge=""
         className="absolute top-0 bottom-0 z-10 cursor-col-resize hover:bg-[var(--color-accent)]/40 transition-colors"
         style={{ left: -(RESIZE_HIT_PX / 2) - 1, width: RESIZE_HIT_PX }}
         onMouseDown={startResize}

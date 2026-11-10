@@ -292,6 +292,10 @@ export interface RevealTarget {
   element: HTMLElement
   enabled: () => boolean
   toggle: () => void
+  /** The pane focus must be in for the chord to pick this target first.
+   *  Absent: the session header's parent (Thread view). An agent tile's
+   *  view picker names its tile. */
+  pane?: () => HTMLElement | null
 }
 
 const targets = new Set<RevealTarget>()
@@ -304,6 +308,7 @@ export function registerRevealTarget(target: RevealTarget): () => void {
 }
 
 function targetPane(t: RevealTarget): HTMLElement | null {
+  if (t.pane) return t.pane()
   return t.element.closest('[data-session-header]')?.parentElement ?? null
 }
 

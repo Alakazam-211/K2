@@ -30,10 +30,11 @@ export const THREAD_FLOATS_GRID =
 export type ThreadFloatShape = 'round' | 'pill' | 'name' | 'note' | 'capsule'
 
 /** Where a pane's floating objects are drawn: over the Thread on its own
- *  (Thread view), over the Chatter on its own (Chatter view), or over split
+ *  (Thread view), over the Chatter on its own (Chatter view), over split
  *  view's Thread column (else its Chatter column), under the bar that holds
- *  the rest (splitChrome.tsx). */
-export type ThreadFloatsPlace = 'thread' | 'chatter' | 'split'
+ *  the rest (splitChrome.tsx), or over an agent tile's Thread or Chatter on
+ *  the Projects page (`tile`, `tileChatter`). */
+export type ThreadFloatsPlace = 'thread' | 'chatter' | 'split' | 'tile' | 'tileChatter'
 
 /** Each floating object, by name. */
 export type ThreadFloatId =
@@ -72,10 +73,27 @@ export const CHATTER_VIEW_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFlo
   'refresh',
 ])
 
+/** An agent tile on the Projects page, in Thread view (prd-projects-threads-v1
+ *  §3.3): the tile's bar already holds the name, picture and view picker, so
+ *  only search and the bell float over the Thread. Restart, Token and the
+ *  session history stay on the Agents page. */
+export const TILE_THREAD_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>(['bell', 'search'])
+
+/** An agent tile in Chatter view: search only (the bell rings for the
+ *  agent's turns with you, not for chatter). */
+export const TILE_CHATTER_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>(['search'])
+
+const PLACE_FLOATS: Record<Exclude<ThreadFloatsPlace, 'thread'>, ReadonlySet<ThreadFloatId>> = {
+  chatter: CHATTER_VIEW_FLOATS,
+  split: SPLIT_VIEW_THREAD_FLOATS,
+  tile: TILE_THREAD_FLOATS,
+  tileChatter: TILE_CHATTER_FLOATS,
+}
+
 /** Whether `id` is drawn in `place`: Thread view shows them all. */
 export function threadFloatShown(id: ThreadFloatId, place: ThreadFloatsPlace): boolean {
   if (place === 'thread') return true
-  return (place === 'chatter' ? CHATTER_VIEW_FLOATS : SPLIT_VIEW_THREAD_FLOATS).has(id)
+  return PLACE_FLOATS[place].has(id)
 }
 
 /** A floating object: chamfered in Terminal, Frost in Glass. Off, it changes

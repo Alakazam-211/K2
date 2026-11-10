@@ -935,6 +935,9 @@
   padding: calc((var(--k2-float-h) - 25px) / 2);
 }
 [data-style="glass"]:not([data-palette="veil"]) [data-k2-float="capsule"] > [data-page-tab][data-selected]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-on-accent); }
+/* An agent tile's view picker (Projects): the page tabs' capsule in the
+   tile's 32px bar, with the same focus ink on the accent circle. */
+[data-style="glass"]:not([data-palette="veil"]) [data-tab-mode="switch"] > [data-page-tab][data-selected]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-on-accent); }
 
 /* Light glass inverts the selected pill: a dark wash, normal ink. */
 [data-style="glass"][data-palette="veil"] [data-page-tab][data-selected]:not([data-zen-root] *) {

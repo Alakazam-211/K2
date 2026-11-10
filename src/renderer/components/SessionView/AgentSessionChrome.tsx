@@ -474,6 +474,7 @@ export function PinnedSessionBody({
   setThreadPanel,
   projectPath,
   splitFloats,
+  viewSwitch,
   children,
 }: {
   viewTab: SessionViewTab
@@ -494,6 +495,9 @@ export function PinnedSessionBody({
   projectPath?: string
   /** Split view: what the Thread column's floats show (`useSplitColumnFloats`). */
   splitFloats?: SplitColumnFloatsSource
+  /** An agent tile (Projects): views switch the whole tile (`viewSwitch` on
+   *  the chrome). */
+  viewSwitch?: boolean
   children: ReactNode
 }): JSX.Element {
   return (
@@ -511,6 +515,7 @@ export function PinnedSessionBody({
         threadPanel: setThreadPanel ? (threadPanel ?? null) : undefined,
         setThreadPanel,
         projectPath,
+        viewSwitch,
       }}
     >
       <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">

@@ -28,6 +28,9 @@ export interface SessionViewChromeValue {
   setThreadPanel?: (next: ThreadPanelKind | null) => void
   /** The workspace's path: the Heartbeats panel reads its fires by it. */
   projectPath?: string
+  /** An agent tile (Projects): the whole tile switches views, and Ctrl+`
+   *  switches it, so the chord never reaches the PTY in any view. */
+  viewSwitch?: boolean
 }
 
 export const SessionViewChromeContext = createContext<SessionViewChromeValue | null>(null)

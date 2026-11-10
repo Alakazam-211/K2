@@ -639,6 +639,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // Read by the key handler, which doesn't re-bind on a view change.
   const showThreadOnlyRef = useRef(showThreadOnly)
   showThreadOnlyRef.current = showThreadOnly
+  // An agent tile (Projects) switches views on Ctrl+` in every view,
+  // Terminal included, so the chord stays off its PTY too.
+  const chordOffPtyRef = useRef(false)
+  chordOffPtyRef.current = showThreadOnly || sessionChrome?.viewSwitch === true
   // A sidecar's header shows the toggle before this pane knows of a PTY.
   // Reported in the effect below (phase is declared later in this body).
   const reportTerminalLive = sessionChrome?.reportTerminalLive
@@ -3593,9 +3597,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // sendInput call.
       if (composingRef.current) return
       // Thread view's reveal chord (rebindable) is the shortcut listener's
-      // on window; it must not also reach the PTY. Terminal view keeps it.
+      // on window; it must not also reach the PTY. Terminal view keeps it,
+      // except in an agent tile, where it switches the tile's view.
       if (
-        showThreadOnlyRef.current &&
+        chordOffPtyRef.current &&
         keyEventMatchesCombo(
           e,
           effectiveKeybinding(useSettingsStore.getState().keybindings, 'toggleThreadTerminal', isMacPlatform()),

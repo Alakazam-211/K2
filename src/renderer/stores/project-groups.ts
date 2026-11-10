@@ -54,6 +54,7 @@ import {
   clampChatPanelWidth,
 } from '@/components/Projects/project-chat'
 import { primaryScope } from '@/kessel/server-scope'
+import { pickTileView, type ProjectDefaultView, type TileView, type TileViewEntry } from '@/components/Projects/tile-view'
 
 // ── P6 (§6.4) — per-client chat-drawer collapse state ─────────────────────
 // A plain client preference (not host-keyed, not canonical): whether the
@@ -156,6 +157,15 @@ interface ProjectGroupsState {
    *  published by ProjectDashboard so the member drawer/rail rows can
    *  badge them. Session-only; {} while no dashboard is mounted. */
   dashPaneNumbers: Record<string, number>
+  /** prd-projects-threads-v1 §3.2: personal agent-tile view switches, keyed
+   *  by `tileViewKey`. In memory only (ends on restart), never shared, and
+   *  dropped once the project default moves (`resolveTileView`). */
+  tileViews: Record<string, TileViewEntry>
+  /** Store a pick against the current project default (no entry for the
+   *  default itself). */
+  setTileView: (key: string, view: TileView, projectDefault: ProjectDefaultView) => void
+  /** Drop a stale entry (its default moved). No-op when absent. */
+  dropTileView: (key: string) => void
   fetchGroups: () => Promise<void>
   /** Optimistic edit (0.46.1): patch one row of `groups` in place (rename
    *  / pin / PoC from Settings) — the daemon's answer or a rollback patch
@@ -201,6 +211,29 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   navCollapsed: readNavCollapsed(),
   lastFocusedPaneByDashboard: {},
   dashPaneNumbers: {},
+  tileViews: {},
+  setTileView: (key, view, projectDefault) => {
+    set((s) => {
+      const entry = pickTileView(view, projectDefault)
+      const prev = s.tileViews[key]
+      if (entry === null) {
+        if (!prev) return {}
+        const next = { ...s.tileViews }
+        delete next[key]
+        return { tileViews: next }
+      }
+      if (prev && prev.view === entry.view && prev.against === entry.against) return {}
+      return { tileViews: { ...s.tileViews, [key]: entry } }
+    })
+  },
+  dropTileView: (key) => {
+    set((s) => {
+      if (!(key in s.tileViews)) return {}
+      const next = { ...s.tileViews }
+      delete next[key]
+      return { tileViews: next }
+    })
+  },
   fetchGroups: async () => {
     // Capture the host so a slow response from the PREVIOUS host can
     // never land after a switch (projects-store idiom).

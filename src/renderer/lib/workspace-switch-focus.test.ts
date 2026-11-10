@@ -408,6 +408,41 @@ describe('tryFocusPreferredInputInDashboardPane', () => {
     expect(document.activeElement).not.toBe(kessel)
   })
 
+  it('an agent tile in Thread view focuses its Thread box, whatever the pref', () => {
+    const { threadCompose, kessel } = mountDashPane('ws-a', { compose: true, threadCompose: true })
+    const pane = document.querySelector('[data-dash-pane-ws="ws-a"]') as HTMLElement
+    const tile = document.createElement('div')
+    tile.setAttribute('data-tile-view', 'thread')
+    while (pane.firstChild) tile.appendChild(pane.firstChild)
+    pane.appendChild(tile)
+    workspaceSwitchFocus = 'terminal'
+    kessel.focus()
+
+    expect(tryFocusPreferredInputInDashboardPane('ws-a')).toBe(true)
+    expect(document.activeElement).toBe(threadCompose)
+  })
+
+  it('an agent tile in Chatter or Heartbeats view takes no input (just the flash)', () => {
+    const { kessel, compose } = mountDashPane('ws-a', { compose: true })
+    const pane = document.querySelector('[data-dash-pane-ws="ws-a"]') as HTMLElement
+    for (const view of ['chatter', 'heartbeats']) {
+      pane.setAttribute('data-tile-view', view)
+      workspaceSwitchFocus = 'composer'
+      kessel.blur()
+      expect(tryFocusPreferredInputInDashboardPane('ws-a')).toBe(false)
+      expect(document.activeElement).not.toBe(compose)
+      expect(document.activeElement).not.toBe(kessel)
+    }
+  })
+
+  it('an agent tile in Terminal view goes on as before', () => {
+    const { terminal } = mountDashPane('ws-a', { compose: true })
+    ;(document.querySelector('[data-dash-pane-ws="ws-a"]') as HTMLElement).setAttribute('data-tile-view', 'terminal')
+    workspaceSwitchFocus = 'terminal'
+    expect(tryFocusPreferredInputInDashboardPane('ws-a')).toBe(true)
+    expect(document.activeElement).toBe(terminal)
+  })
+
   it('unknown pane id is a no-op', () => {
     const { compose } = mountDashPane('ws-a', { compose: true })
     workspaceSwitchFocus = 'composer'

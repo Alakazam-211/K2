@@ -2082,6 +2082,36 @@ html:is([data-style="glass"], [data-style="glass-classic"]) button[data-k2-float
 [data-k2-float="capsule"] { padding: 0 1px; gap: 2px; }
 [data-k2-float="capsule"] > [data-page-tab] { width: 24px; padding: 0; }
 [data-k2-float="capsule"] > [data-page-tab]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+/* The same capsule in an agent tile's bar (`switch` mode, Projects): the
+   view picker. Its cells are the float's 24px; Terminal boxes them in a
+   hairline so the four read as one control. Glass draws the page tabs'
+   capsule (styles/glass/overrides.css). */
+[data-page-tabs][data-tab-mode="switch"] > [data-page-tab] { width: 24px; padding: 0; }
+[data-page-tabs][data-tab-mode="switch"] > [data-page-tab]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+html:not([data-style="glass"]) [data-page-tabs][data-tab-mode="switch"] { gap: 0; border: 1px solid var(--color-border); }
+html:not([data-style="glass"]) [data-page-tabs][data-tab-mode="switch"] > [data-page-tab] + [data-page-tab] { border-left: 1px solid var(--color-border); }
+/* A narrow agent tile (Projects): the bar wraps and the picker takes its own
+   row, centred and tighter, so all four views stay reachable; the ⌘N badge
+   steps aside. The asleep bar puts Wake under its line. */
+[data-tile-view] { container: agent-tile / inline-size; }
+@container agent-tile (max-width: 200px) {
+  [data-tile-bar] { flex-wrap: wrap; height: auto; row-gap: 4px; padding-block: 4px; }
+  [data-tile-bar] > :is([data-tile-shortcut], [data-tile-spacer]) { display: none; }
+  [data-tile-bar] > [data-tile-title] { flex: 1 1 0; }
+  [data-tile-bar] > [data-tile-picker] { order: 1; flex-basis: 100%; justify-content: center; }
+  html[data-style="glass"] [data-tile-bar] [data-page-tabs][data-tab-mode="switch"] { gap: 2px; }
+}
+/* Narrower still, the four views sit two by two. */
+@container agent-tile (max-width: 128px) {
+  html [data-tile-bar] [data-page-tabs][data-tab-mode="switch"] { display: grid; grid-template-columns: repeat(2, 24px); }
+  html[data-style="glass"] [data-tile-bar] [data-page-tabs][data-tab-mode="switch"] { border-radius: 14px; }
+  html:not([data-style="glass"]) [data-tile-bar] [data-tab-mode="switch"] > [data-page-tab]:nth-child(3) { border-left: 0; }
+  html:not([data-style="glass"]) [data-tile-bar] [data-tab-mode="switch"] > [data-page-tab]:nth-child(n+3) { border-top: 1px solid var(--color-border); }
+}
+@container agent-tile (max-width: 280px) {
+  [data-tile-wake] { flex-wrap: wrap; justify-content: center; padding-block: 6px; padding-inline: 8px; }
+  [data-tile-wake] > span { flex-basis: 100%; text-align: center; }
+}
 
 /* The name's object: the picture overlaps its top edge. */
 [data-k2-float="name"] { flex-shrink: 1; height: auto; padding: 11px 14px 6px; margin-top: -8px; max-width: 100%; }

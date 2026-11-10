@@ -2,7 +2,10 @@
 // GRID: a VS-Code-style split tree over the canonical layout blob.
 //
 // Pane kinds (§6.2):
-//   1. `terminal` — the member workspace's CANONICAL session, rendered
+//   1. `terminal` (on the wire; the UI calls it an agent tile,
+//      prd-projects-threads-v1) — the member workspace's CANONICAL
+//      session in Terminal, Thread, Chatter or Heartbeats view, picked in
+//      the tile's bar (DashboardAgentTile.tsx), rendered
 //      through the kessel attach idiom (`attachAgentName={workspaceId}`
 //      keys TerminalPane's idempotent /cli/sessions/v2/spawn to the
 //      existing daemon PTY — AgentChatPane's mechanism). Live/dormant
@@ -55,7 +58,6 @@
 
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { tryFocusPreferredInputInDashboardPane } from '@/lib/workspace-switch-focus'
 import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
@@ -64,12 +66,19 @@ import { activateProject } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore, noteViewerInteractionBlocked } from '@/stores/window-mode'
+import { activateOnLiveSessionAttach, resolveAllMemberSessions } from './wake-member-session'
 import {
-  activateOnLiveSessionAttach,
-  resolveAllMemberSessions,
-  wakeCanonicalMemberSession,
-  type MemberSessionPhase,
-} from './wake-member-session'
+  DashboardAgentTile,
+  PHASE_CHECKING,
+  PHASE_DORMANT,
+  PaneBody,
+  TilePicture,
+  useAgentTileAddr,
+  useTileView,
+  type TermPhase,
+} from './DashboardAgentTile'
+import type { TileView } from './tile-view'
+import { ThreadDrawerSelector } from '@/components/SessionView/ThreadDrawerSelector'
 import {
   FileViewerPane,
   getFileCategory,
@@ -141,10 +150,21 @@ function PaneChrome({
   focused,
   onClose,
   onHeaderMouseDown,
+  lead,
+  picker,
+  tileView,
   children,
 }: {
   title: string
   hint?: string
+  /** Before the title: an agent tile's 16px picture. */
+  lead?: React.ReactNode
+  /** An agent tile's view picker, right of the title (prd-projects-threads-v1
+   *  §3.1). Its segments are buttons, so pressing one never starts a drag. */
+  picker?: React.ReactNode
+  /** An agent tile's view: `data-tile-view` on the tile, read by focus
+   *  (⌘1–9, Esc) and Ctrl+`. */
+  tileView?: TileView
   /** ⌘N badge — reading-order pane number (first 9 panes only). */
   shortcutNum?: number
   readOnly: boolean
@@ -157,18 +177,22 @@ function PaneChrome({
     <Surface
       role2="surface" material="tile"
       bordered={false}
+      data-tile-view={tileView}
       className={`flex flex-col h-full min-w-0 min-h-0 border transition-colors ${
         focused ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'
       }`}
     >
+      {/* The tile's bar, 32px: it holds the picker's 24px cells. */}
       <div
-        className={`flex items-center gap-2 px-2 py-1 border-b border-[var(--color-border)] flex-shrink-0 select-none ${
+        data-tile-bar=""
+        className={`flex items-center gap-2 h-8 pl-2 pr-1.5 border-b border-[var(--color-border)] flex-shrink-0 select-none ${
           readOnly ? '' : 'cursor-grab'
         }`}
         onMouseDown={readOnly ? undefined : onHeaderMouseDown}
         title={readOnly ? undefined : 'Drag to move'}
       >
-        <span className="text-[10px] font-semibold text-[var(--color-text-secondary)] truncate">
+        {lead}
+        <span className="min-w-0 text-[11px] font-semibold text-[var(--color-text-secondary)] truncate" data-tile-title="">
           {title}
         </span>
         {hint && (
@@ -176,12 +200,19 @@ function PaneChrome({
             {hint}
           </span>
         )}
-        <span className="flex-1" />
+        <span className="flex-1" data-tile-spacer="" />
+        {picker ? (
+          // The capsule's own padding is not a button: keep it off the drag.
+          <span className="flex-shrink-0 flex cursor-default" data-tile-picker="" onMouseDown={(e) => e.stopPropagation()}>
+            {picker}
+          </span>
+        ) : null}
         {/* ⌘N pane-switch badge (the ActiveBar shortcutNum look),
             immediately left of the close button. */}
         {shortcutNum !== undefined && (
           <span
             className="text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0"
+            data-tile-shortcut=""
             title={`⌘${shortcutNum} focuses this pane`}
           >
             <span className="key-symbol">⌘</span>
@@ -195,6 +226,7 @@ function PaneChrome({
             onMouseDown={(e) => e.stopPropagation()}
             className="flex items-center justify-center w-4 h-4 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors cursor-pointer"
             title="Close pane"
+            aria-label="Close pane"
           >
             <svg width="8" height="8" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
               <line x1="2" y1="2" x2="10" y2="10" />
@@ -206,29 +238,6 @@ function PaneChrome({
       <div className="flex-1 min-h-0 min-w-0">{children}</div>
     </Surface>
   )
-}
-
-// ── Terminal pane (canonical session — the feedback TerminalTab idiom) ────
-
-type TermPhase =
-  | { kind: 'checking' }
-  | MemberSessionPhase
-  | { kind: 'waking' }
-
-/** Stable placeholder while parent batch resolve runs (avoid new object each render). */
-const PHASE_CHECKING: TermPhase = { kind: 'checking' }
-const PHASE_DORMANT: TermPhase = { kind: 'dormant' }
-
-/** One lookup-by-agent (retry path after batch). */
-async function resolveMemberSession(workspaceId: string): Promise<TermPhase> {
-  const map = await resolveAllMemberSessions([workspaceId], async (agent) => {
-    const lookup = await daemonCliGet<{ sessionAlive: boolean; sessionId: string | null }>(primaryScope(),
-      'sessions/lookup-by-agent',
-      { agent },
-    )
-    return { sessionAlive: lookup.sessionAlive, sessionId: lookup.sessionId }
-  })
-  return map[workspaceId] ?? PHASE_DORMANT
 }
 
 /** Terminal workspace ids currently in the layout tree (deduped). */
@@ -250,156 +259,61 @@ const lookupByAgentForDashboard: (
   return { sessionAlive: lookup.sessionAlive, sessionId: lookup.sessionId }
 }
 
-function DashboardTerminalPane({
+// ── Agent tile (prd-projects-threads-v1 §3) ──────────────────────────────
+
+/** An agent tile: the bar with the agent's picture and the view picker,
+ *  over the view it picks (DashboardAgentTile). Viewers can switch views
+ *  too: it changes nothing on the server. */
+function AgentTileFrame({
+  groupId,
+  defaultView,
   workspaceId,
   member,
   dashboardId,
-  /** Parent-batched liveness (Promise.all). When still checking, parent
-   *  has not committed the batch yet — show a brief placeholder. */
   initialPhase,
+  title,
+  shortcutNum,
+  readOnly,
+  focused,
+  onClose,
+  onHeaderMouseDown,
 }: {
+  groupId: string
+  defaultView: unknown
   workspaceId: string
-  /** null when the workspace is no longer a project member / was
-   *  unregistered — the pane degrades to a placeholder, never breaks. */
   member: ProjectGroupMemberInfo | null
   dashboardId: string
   initialPhase: TermPhase
+  title: string
+  shortcutNum?: number
+  readOnly: boolean
+  focused: boolean
+  onClose: () => void
+  onHeaderMouseDown: (e: React.MouseEvent) => void
 }): React.JSX.Element {
-  const projectPath = member?.path ?? null
-  const [phase, setPhase] = useState<TermPhase>(initialPhase)
-
-  // Track parent batch updates (e.g. layout gained a new pane → re-batch).
-  // Compare by kind+sessionId so stable PHASE_CHECKING / same live id
-  // does not thrash local wake/error state.
-  useEffect(() => {
-    setPhase((prev) => {
-      if (prev.kind === 'waking') return prev // local wake in flight
-      if (
-        prev.kind === initialPhase.kind &&
-        (prev.kind !== 'live' ||
-          initialPhase.kind !== 'live' ||
-          prev.sessionId === initialPhase.sessionId)
-      ) {
-        return prev
-      }
-      return initialPhase
-    })
-  }, [initialPhase])
-
-  // Live attach (wake success or passive attach of an already-alive PTY):
-  // client is watching ⇒ Active. activateProject is deduped / no-op when
-  // already active for this member id.
-  useEffect(() => {
-    if (phase.kind !== 'live') return
-    activateOnLiveSessionAttach(workspaceId, activateProject)
-  }, [phase.kind, workspaceId])
-
-  // Wake a dormant canonical session — activate (PRD §4.3.1) then the
-  // daemon-owned find-or-spawn AgentChatPane and the feedback tab ride
-  // (ensure-pinned-chat), then attach under the same key.
-  // Without activate, active_reaper reaps the chat PTY after ~15s.
-  const wake = useCallback(async (): Promise<void> => {
-    if (!projectPath) return
-    setPhase({ kind: 'waking' })
-    try {
-      await wakeCanonicalMemberSession(workspaceId, projectPath, {
-        activateProject,
-        ensurePinnedChat: (project) =>
-          daemonCliPost(primaryScope(), 'workspace/ensure-pinned-chat', { project }),
-      })
-      setPhase({ kind: 'live' })
-    } catch (e) {
-      setPhase({ kind: 'error', message: e instanceof Error ? e.message : String(e) })
-    }
-  }, [projectPath, workspaceId])
-
-  const retry = useCallback(async (): Promise<void> => {
-    setPhase({ kind: 'checking' })
-    const p = await resolveMemberSession(workspaceId)
-    setPhase(p)
-  }, [workspaceId])
-
-  if (!member || !projectPath) {
-    return (
-      <PaneBody>
-        <p className="text-[11px] text-[var(--color-text-muted)] max-w-[36ch]">
-          This workspace is no longer available — it left the project or was
-          removed from the server.
-        </p>
-      </PaneBody>
-    )
-  }
-
-  if (phase.kind === 'checking') return <PaneBody>Checking session…</PaneBody>
-  if (phase.kind === 'waking') return <PaneBody>Waking session…</PaneBody>
-  if (phase.kind === 'error') {
-    return (
-      <PaneBody>
-        <p className="text-[11px] text-[var(--color-status-error-soft)] max-w-[36ch]">{phase.message}</p>
-        <PaneActionButton onClick={() => void retry()}>Retry</PaneActionButton>
-      </PaneBody>
-    )
-  }
-  if (phase.kind === 'dormant') {
-    return (
-      <PaneBody>
-        <p className="text-xs font-semibold text-[var(--color-text-primary)]">Session is dormant</p>
-        <p className="text-[11px] text-[var(--color-text-muted)] max-w-[36ch]">
-          This agent&apos;s canonical session isn&apos;t running right now.
-        </p>
-        <PaneActionButton accent onClick={() => void wake()}>
-          Wake session
-        </PaneActionButton>
-      </PaneBody>
-    )
-  }
-
-  // live — attach in place: attachAgentName keys the idempotent
-  // v2/spawn to the EXISTING daemon PTY (reused:true) — never a
-  // duplicate. Parent batched lookups so N live panes mount in one
-  // commit → concurrent attach (not one-by-one).
+  const [view, setView] = useTileView(groupId, workspaceId, defaultView)
+  const addr = useAgentTileAddr(workspaceId, member)
   return (
-    <PrimaryRoom>
-      <TerminalPane
-        terminalId={`proj-dash:${dashboardId}:${workspaceId}`}
-        cwd={projectPath}
-        attachAgentName={workspaceId}
-        sessionId={phase.sessionId}
-        syncSizeOnShow
-      />
-    </PrimaryRoom>
-  )
-}
-
-function PaneBody({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return (
-    <div className="h-full flex flex-col items-center justify-center gap-2 px-4 text-center text-[11px] text-[var(--color-text-muted)]">
-      {children}
-    </div>
-  )
-}
-
-function PaneActionButton({
-  onClick,
-  accent,
-  children,
-}: {
-  onClick: () => void
-  accent?: boolean
-  children: React.ReactNode
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`px-3 py-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
-        accent
-          ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25'
-          : 'bg-white/[0.06] text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)]'
-      }`}
+    <PaneChrome
+      title={title}
+      shortcutNum={shortcutNum}
+      readOnly={readOnly}
+      focused={focused}
+      onClose={onClose}
+      onHeaderMouseDown={onHeaderMouseDown}
+      lead={<TilePicture name={title} addr={addr} />}
+      picker={<ThreadDrawerSelector mode="switch" view={view} onView={setView} />}
+      tileView={view}
     >
-      {children}
-    </button>
+      <DashboardAgentTile
+        workspaceId={workspaceId}
+        member={member}
+        dashboardId={dashboardId}
+        initialPhase={initialPhase}
+        view={view}
+        addr={addr}
+      />
+    </PaneChrome>
   )
 }
 
@@ -1046,17 +960,11 @@ export default function ProjectDashboard({
                   isTerminalPane(pane) ? () => notePaneFocus(pane.workspaceId) : undefined
                 }
               >
-                <PaneChrome
-                  title={title}
-                  hint={hint}
-                  shortcutNum={paneNumbers.get(g.paneId)}
-                  readOnly={readOnly}
-                  focused={focusPaneId === g.paneId}
-                  onClose={() => applyRoot(removePane(rootRef.current, g.paneId), true)}
-                  onHeaderMouseDown={(e) => startPaneDrag(e, g.paneId)}
-                >
-                  {isTerminalPane(pane) ? (
-                    <DashboardTerminalPane
+                {isTerminalPane(pane) ? (
+                  <PrimaryRoom>
+                    <AgentTileFrame
+                      groupId={show.id}
+                      defaultView={show.defaultView}
                       workspaceId={pane.workspaceId}
                       member={member}
                       dashboardId={dashboard.id}
@@ -1065,19 +973,37 @@ export default function ProjectDashboard({
                           ? (sessionByWs[pane.workspaceId] ?? PHASE_DORMANT)
                           : PHASE_CHECKING
                       }
+                      title={title}
+                      shortcutNum={paneNumbers.get(g.paneId)}
+                      readOnly={readOnly}
+                      focused={focusPaneId === g.paneId}
+                      onClose={() => applyRoot(removePane(rootRef.current, g.paneId), true)}
+                      onHeaderMouseDown={(e) => startPaneDrag(e, g.paneId)}
                     />
-                  ) : isHtmlDocPane(pane) ? (
-                    <HtmlDocPane filePath={pane.filePath} workspaceId={pane.workspaceId} />
-                  ) : (
-                    /* §6.3 forward-compat: inert placeholder; the
-                       pane object round-trips untouched on save. */
-                    <PaneBody>
-                      <p className="text-[11px] text-[var(--color-text-muted)] max-w-[36ch]">
-                        This pane was made by a newer K2 and renders after an update.
-                      </p>
-                    </PaneBody>
-                  )}
-                </PaneChrome>
+                  </PrimaryRoom>
+                ) : (
+                  <PaneChrome
+                    title={title}
+                    hint={hint}
+                    shortcutNum={paneNumbers.get(g.paneId)}
+                    readOnly={readOnly}
+                    focused={focusPaneId === g.paneId}
+                    onClose={() => applyRoot(removePane(rootRef.current, g.paneId), true)}
+                    onHeaderMouseDown={(e) => startPaneDrag(e, g.paneId)}
+                  >
+                    {isHtmlDocPane(pane) ? (
+                      <HtmlDocPane filePath={pane.filePath} workspaceId={pane.workspaceId} />
+                    ) : (
+                      /* §6.3 forward-compat: inert placeholder; the
+                         pane object round-trips untouched on save. */
+                      <PaneBody>
+                        <p className="text-[11px] text-[var(--color-text-muted)] max-w-[36ch]">
+                          This pane was made by a newer K2 and renders after an update.
+                        </p>
+                      </PaneBody>
+                    )}
+                  </PaneChrome>
+                )}
               </div>
             )
           })}

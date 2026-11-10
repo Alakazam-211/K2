@@ -299,7 +299,10 @@ const TONE_CLASS: Record<ThreadInputTone, string> = {
   muted: 'text-[var(--color-text-muted)]',
 }
 
-function InputsList({ cwd, active }: { cwd: string; active: boolean }): JSX.Element {
+/** The workspace's heartbeat fires (and other outside input), newest at the
+ *  bottom, read again every 15 s while `active`. Thread view's Heartbeats
+ *  drawer, and an agent tile's Heartbeats view (Projects) full-tile. */
+export function InputsList({ cwd, active }: { cwd: string; active: boolean }): JSX.Element {
   // A tab's cwd can be one of the workspace's worktrees: read by the
   // workspace's own path.
   const projectPath =

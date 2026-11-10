@@ -1,5 +1,6 @@
-// One tab of a capsule: the top bar's page tabs (PageTabs.tsx) and Thread
-// view's drawer selector (SessionView/ThreadDrawerSelector.tsx). Glass draws
+// One tab of a capsule: the top bar's page tabs (PageTabs.tsx), Thread
+// view's drawer selector and an agent tile's view picker
+// (SessionView/ThreadDrawerSelector.tsx). Glass draws
 // the capsule and its 24px circles from `data-page-tabs` / `data-page-tab`
 // (styles/glass/overrides.css).
 
@@ -24,6 +25,7 @@ export function PageTab({
   title,
   ariaLabel,
   children,
+  role,
   ...button
 }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClick' | 'title' | 'children' | 'className' | 'style'> & {
   ref?: Ref<HTMLButtonElement>
@@ -61,7 +63,10 @@ export function PageTab({
       }}
       title={title}
       aria-label={ariaLabel}
-      aria-pressed={selected}
+      role={role}
+      // A radio (a view switch, ThreadDrawerSelector's `switch` mode) says
+      // its state with `aria-checked`, passed through; never both.
+      aria-pressed={role === 'radio' ? undefined : selected}
     >
       {children}
       {text !== null && (

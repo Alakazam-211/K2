@@ -20,6 +20,7 @@ import { renderInRoom, testRoom } from '@/test-utils/room'
 import { primaryScope } from '@/kessel/server-scope'
 import { ThreadDrawerSelector } from './ThreadDrawerSelector'
 import type { ThreadPanelKind } from './threadPanels'
+import type { TileView } from '@/components/Projects/tile-view'
 import { registerRevealTarget, revealTargetsForTests } from './threadReveal'
 
 const room = testRoom({ tabs: {}, scope: primaryScope() })
@@ -294,5 +295,110 @@ describe('the terminal segment', () => {
     expect(revealTargetsForTests().size).toBe(1)
     unmount()
     expect(revealTargetsForTests().size).toBe(0)
+  })
+})
+
+// ── `switch` mode: an agent tile's view picker (prd-projects-threads-v1 §3.1)
+
+describe('ThreadDrawerSelector in switch mode', () => {
+  function Picker({ start = 'thread', onPick }: { start?: TileView; onPick?: (v: TileView) => void }) {
+    const [view, setView] = useState<TileView>(start)
+    return (
+      <div data-tile-view={view} data-testid="tile">
+        <ThreadDrawerSelector
+          mode="switch"
+          view={view}
+          onView={(v) => {
+            onPick?.(v)
+            setView(v)
+          }}
+        />
+        <input data-testid="outside-tile-input" />
+      </div>
+    )
+  }
+  const radios = (): HTMLButtonElement[] => Array.from(screen.getByRole('radiogroup', { name: 'View' }).querySelectorAll('button'))
+  const checked = (): string[] =>
+    radios()
+      .filter((b) => b.getAttribute('aria-checked') === 'true')
+      .map((b) => b.getAttribute('data-thread-drawer-segment') ?? '')
+
+  it('is a radio group of Terminal, Thread, Chatter and Heartbeats, in a bar (no float, no Split)', () => {
+    renderInRoom(room, <Picker />)
+    const group = screen.getByRole('radiogroup', { name: 'View' })
+    expect(group.getAttribute('data-tab-mode')).toBe('switch')
+    expect(group.hasAttribute('data-page-tabs')).toBe(true)
+    expect(group.getAttribute('data-material')).toBe('frost')
+    expect(group.getAttribute('data-frost-shape')).toBe('pill')
+    expect(group.hasAttribute('data-k2-float')).toBe(false)
+    expect(radios().map((b) => b.getAttribute('data-thread-drawer-segment'))).toEqual(['terminal', 'thread', 'chatter', 'heartbeats'])
+    expect(radios().map((b) => b.getAttribute('aria-label'))).toEqual(['Terminal', 'Thread', 'Chatter', 'Heartbeats'])
+    expect(radios().map((b) => b.title)).toEqual([
+      'Terminal',
+      'Thread',
+      'Chatter: messages between agents',
+      'Heartbeats: recent heartbeats and other outside input',
+    ])
+    for (const b of radios()) {
+      expect(b.getAttribute('role')).toBe('radio')
+      // A radio says its state with aria-checked, never aria-pressed.
+      expect(b.hasAttribute('aria-pressed')).toBe(false)
+      expect(b.disabled).toBe(false)
+    }
+    expect(document.body.textContent?.toLowerCase()).not.toContain('split')
+    expect(document.querySelector('[data-thread-drawer-segment="split"]')).toBeNull()
+  })
+
+  it('always has exactly one selected; pressing it does nothing, another switches', () => {
+    const picks: TileView[] = []
+    renderInRoom(room, <Picker onPick={(v) => picks.push(v)} />)
+    expect(checked()).toEqual(['thread'])
+    fireEvent.click(seg('tile-view-thread'))
+    expect(picks).toEqual([])
+    expect(checked()).toEqual(['thread'])
+    fireEvent.click(seg('tile-view-terminal'))
+    expect(checked()).toEqual(['terminal'])
+    fireEvent.click(seg('tile-view-heartbeats'))
+    expect(checked()).toEqual(['heartbeats'])
+    fireEvent.click(seg('tile-view-chatter'))
+    expect(checked()).toEqual(['chatter'])
+    expect(picks).toEqual(['terminal', 'heartbeats', 'chatter'])
+  })
+
+  it('has one Tab stop, the selected view; arrows move focus only', () => {
+    const picks: TileView[] = []
+    renderInRoom(room, <Picker start="chatter" onPick={(v) => picks.push(v)} />)
+    expect(radios().filter((b) => b.tabIndex === 0).map((b) => b.getAttribute('data-thread-drawer-segment'))).toEqual(['chatter'])
+    seg('tile-view-chatter').focus()
+    fireEvent.keyDown(seg('tile-view-chatter'), { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(seg('tile-view-heartbeats'))
+    fireEvent.keyDown(seg('tile-view-heartbeats'), { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(seg('tile-view-terminal'))
+    fireEvent.keyDown(seg('tile-view-terminal'), { key: 'ArrowLeft' })
+    expect(document.activeElement).toBe(seg('tile-view-heartbeats'))
+    expect(picks).toEqual([])
+    expect(checked()).toEqual(['chatter'])
+  })
+
+  it('Ctrl+` switches the focused tile between Terminal and the last other view', () => {
+    renderInRoom(room, <Picker start="heartbeats" />)
+    for (const b of radios()) b.getClientRects = (() => [{}]) as unknown as typeof b.getClientRects
+    const target = Array.from(revealTargetsForTests())[0]
+    expect(target).toBeDefined()
+    // Focus outside the tile: the tile never takes the chord.
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    expect(target.enabled()).toBe(false)
+    seg('tile-view-heartbeats').focus()
+    expect(target.enabled()).toBe(true)
+    act(() => target.toggle())
+    expect(checked()).toEqual(['terminal'])
+    act(() => target.toggle())
+    expect(checked()).toEqual(['heartbeats'])
+  })
+
+  it('leaves drawers mode as it was (toolbar of aria-pressed toggles)', () => {
+    renderInRoom(room, <Selector />)
+    expect(screen.queryByRole('radiogroup')).toBeNull()
+    expect(screen.getByRole('toolbar', { name: 'Side panels' })).toBeTruthy()
   })
 })

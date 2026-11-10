@@ -23,6 +23,7 @@ import {
   useThreadFloatsClearOfTerminal,
 } from './threadFloats'
 import type { SessionViewTab } from './sessionViewTab'
+import { threadFloatShown as threadFloatShownForTile } from './threadFloats'
 
 afterEach(cleanup)
 
@@ -209,5 +210,15 @@ describe('useThreadFloatsClearOfTerminal', () => {
       </div>,
     )
     expect(screen.getByTestId('no-host').style.getPropertyValue(THREAD_FLOAT_LEFT_VAR)).toBe('')
+  })
+})
+
+describe("an agent tile's floats (prd-projects-threads-v1 §3.3)", () => {
+  const ALL = ['view', 'drawers', 'bell', 'search', 'identity', 'token', 'history', 'refresh'] as const
+  it('Thread view: search and the bell only', () => {
+    expect(ALL.filter((id) => threadFloatShownForTile(id, 'tile'))).toEqual(['bell', 'search'])
+  })
+  it('Chatter view: search only', () => {
+    expect(ALL.filter((id) => threadFloatShownForTile(id, 'tileChatter'))).toEqual(['search'])
   })
 })

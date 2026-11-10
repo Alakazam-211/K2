@@ -187,6 +187,18 @@ function dashPaneRoot(workspaceId: string): HTMLElement | null {
 export function tryFocusPreferredInputInDashboardPane(workspaceId: string): boolean {
   const pane = dashPaneRoot(workspaceId)
   if (!pane || isEffectivelyHidden(pane)) return false
+  // prd-projects-threads-v1 §3.3: an agent tile in Thread view takes the
+  // keys in its Thread's message box; in Chatter view there is no input
+  // (the pane just flashes), nor in Heartbeats. Terminal view goes on as
+  // below.
+  const tileView = (pane.hasAttribute('data-tile-view') ? pane : pane.querySelector('[data-tile-view]'))?.getAttribute('data-tile-view')
+  if (tileView === 'chatter' || tileView === 'heartbeats') return false
+  if (tileView === 'thread') {
+    const textarea = firstVisibleTextarea(pane, THREAD_COMPOSE_TEXTAREA)
+    if (!textarea) return false
+    textarea.focus()
+    return true
+  }
   // Explicit pane gestures (⌘N, Esc-to-pane): `off` lands on the terminal.
 
   if (preferredWorkspaceSwitchFocus() === 'composer') {

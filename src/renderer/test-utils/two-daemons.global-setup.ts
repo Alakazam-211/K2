@@ -3,7 +3,7 @@
 // Spawns this checkout's own `target/debug/k2-daemon` twice, each under a
 // fresh temp HOME (the daemon's singleton lock is per HOME), with an empty
 // agent shim dir and the watchdog off, exactly like
-// `crates/k2-daemon/tests/daemon_port_stability_integration.rs`. Waits for
+// `crates/k2-daemon/tests/it_sessions/daemon_port_stability_integration.rs`. Waits for
 // `daemon.port`, `daemon.token` and `/boot-status` phase ready, seeds the
 // Connect user `anna` (Member) on B with the owner token, and hands the
 // ports and owner tokens to the tests through `process.env` (workers start

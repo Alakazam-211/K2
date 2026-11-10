@@ -30,7 +30,7 @@ case "$cmd" in
   contract)
     rc=0
     cargo run -p k2-core --bin contract-gen -- --check || rc=1
-    cargo test -p k2-daemon --test contract_routes "$@" || rc=1
+    cargo test -p k2-daemon --test it_contract "$@" -- contract_routes:: || rc=1
     exit $rc ;;
   landing)
     rc=0

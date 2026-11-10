@@ -624,7 +624,7 @@ edited by hand; `cargo test -p k2-core --lib contract::` and the vitest twin
 answer is the **guest projection** (UWA6): closed shapes, and no field named in
 the catalog's `bannedFields` (`path`, `sessionId`, `conversation_id`,
 `hostKey`, `token`, …). The catalog test checks every `http` binding against
-`ROUTES` (`crates/k2-daemon/tests/contract_routes.rs`).
+`ROUTES` (`crates/k2-daemon/tests/it_contract/contract_routes.rs`).
 
 ### Names
 

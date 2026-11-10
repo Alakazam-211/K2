@@ -335,7 +335,7 @@ mod tests {
     //! chat_history + DB + harness, so the unit-test surface here is
     //! intentionally narrow: missing-agent graceful handling +
     //! Case-3 cwd/command shape. Heavier integration coverage lives in
-    //! the daemon-side `tests/agents_routes_integration.rs`.
+    //! the daemon-side `tests/it_sessions/agents_routes_integration.rs`.
     use super::*;
     use std::fs;
     use uuid::Uuid;

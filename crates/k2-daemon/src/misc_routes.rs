@@ -3155,7 +3155,7 @@ mod api_key_route_tests {
         assert_eq!(v["ok"], serde_json::json!(true));
         assert_eq!(v["principal"], serde_json::json!("owner"));
         // F3: ping echoes the capability object (gate-state coverage lives in
-        // api_enabled_combos_and_capability_shape + api_gate_integration.rs).
+        // api_enabled_combos_and_capability_shape + it_contract/api_gate_integration.rs).
         assert!(v["api"]["enabled"].is_boolean(), "body={}", resp.body);
         assert!(
             matches!(v["api"]["sandboxes"].as_str(), Some("microvm") | Some("none")),

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # The compute job tiers gates (prd-compute-job-tiers-v1), one step per run,
 # meant for a compute node: `k2 compute run <node> --sha <sha> --needs
-# rust@1.99.1,cmake@3 -- bash scripts/test/compute-tiers-gates.sh <step>` (rust@ = the
+# rust@1.99.1,cmake@3,cargo-nextest -- bash scripts/test/compute-tiers-gates.sh <step>` (rust@ = the
 # rust-toolchain.toml channel: rust@stable would override the pin on the node).
+# daemon-int runs grouped k2-daemon test modules under cargo-nextest; its
+# extra args are nextest test name filters within compute_integration.
 #
 # Steps: check | proto | node | core | daemon-unit | daemon-int | js | contract | typecheck | drill
 #
@@ -38,9 +40,9 @@ case "$step" in
     cargo test -p k2-daemon --lib -- compute routes::route_policy permission::
     ;;
   daemon-int)
-    cargo test -p k2-daemon --test compute_integration -- "$@"
-    cargo test -p k2-daemon --test compute_shared_integration
-    cargo test -p k2-daemon --test ticket_brief_integration
+    cargo nextest run --profile ci -p k2-daemon --test it_compute -E 'test(/^compute_integration::/)' "$@"
+    cargo nextest run --profile ci -p k2-daemon --test it_compute -E 'test(/^compute_shared_integration::/)'
+    cargo nextest run --profile ci -p k2-daemon --test it_chat -E 'test(/^ticket_brief_integration::/)'
     cargo test -p k2-daemon --test permission_off_golden
     ;;
   js)

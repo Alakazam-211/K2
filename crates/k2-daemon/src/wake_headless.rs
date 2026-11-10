@@ -199,7 +199,7 @@ fn spawn_wake_headless_with(
     //      same JSONL whether run interactively or under `--print`.
     //
     // Test-only override (first arm). Integration tests in
-    // `crates/k2-daemon/tests/heartbeat_fire_v2_integration.rs`
+    // `crates/k2-daemon/tests/it_sessions/heartbeat_fire_v2_integration.rs`
     // set this env var to a benign command (e.g. `cat`) so the
     // test can exercise the v2 spawn + post-spawn DB writes
     // without requiring `claude` on PATH or burning API calls.

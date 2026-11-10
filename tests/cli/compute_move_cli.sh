@@ -4,7 +4,7 @@
 # hermetic env hands the CLI a dead port, so anything that did reach the
 # network would fail loudly (exit 3), not pass. The daemon side (release,
 # --to, refusals, the sweeper) is in crates/k2-daemon/tests/
-# compute_place_integration.rs; a live run is in compute_cli_smoke.sh.
+# it_compute/compute_place_integration.rs; a live run is in compute_cli_smoke.sh.
 
 set -euo pipefail
 

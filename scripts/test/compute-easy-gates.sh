@@ -8,7 +8,8 @@
 #   check     RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --exclude k2,
 #             contract-gen --check
 #   smoke     build k2-ptyd, k2-daemon and k2-node; the compute CLI smoke
-#   int       the compute route tests and the permission-cards-off golden
+#   int       the compute route tests (modules of it_compute, under cargo-nextest)
+#             and the permission-cards-off golden
 #   nextest   build k2-ptyd; cargo nextest, profile ci, k2-core and k2-daemon
 #
 # Every K2_* variable is dropped so nothing reaches a real ~/.k2; SHELL is
@@ -34,7 +35,8 @@ case "$step" in
     ;;
   int)
     cargo build -p k2-ptyd --bins
-    cargo test -p k2-daemon --test compute_place_integration --test compute_shared_integration --test compute_integration --test permission_off_golden
+    cargo nextest run --profile ci -p k2-daemon --test it_compute -E 'test(/^(compute_place_integration|compute_shared_integration|compute_integration)::/)'
+    cargo test -p k2-daemon --test permission_off_golden
     ;;
   nextest)
     cargo build -p k2-ptyd --bins

@@ -15,5 +15,6 @@ cargo build -p k2-daemon
 tests/cli/hostchat_headless_smoke.sh
 tests/cli/hostchat_s32_cli.sh
 tests/cli/hostchat_cli.sh
-cargo test -p k2-daemon --test grant_hook_integration --test chat_pass_mint_integration
+cargo test -p k2-daemon --test grant_hook_integration
+cargo test -p k2-daemon --test it_chat -- chat_pass_mint_integration::
 echo "sew S32 suite: all passed"

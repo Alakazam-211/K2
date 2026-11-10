@@ -27,7 +27,7 @@ claim or finish a file.** Resolve collisions in favor of whoever claimed first.
 - `crates/k2-daemon/src/boot_status.rs` — `instance_id()` impl (kept, DONE)
   + unit test `instance_id_is_16_lowercase_hex_and_stable_within_process`
   (rode into A's commit 343b68e; passing).
-- `crates/k2-daemon/tests/api_gate_integration.rs` — extended
+- `crates/k2-daemon/tests/it_contract/api_gate_integration.rs` — extended
   `boot_status_reports_api_capability_in_all_gate_combinations` to assert
   `instanceId` presence/shape/stability (UNCOMMITTED in working tree —
   B's orchestrator said no commits; passing). Sweep it into your next commit.

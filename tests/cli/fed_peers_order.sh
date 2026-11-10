@@ -2,7 +2,7 @@
 # `k2 fed peers` lists paired servers A to Z (0.46.1): case-insensitive by
 # the name shown (label, else subdomain), then host, the same order as
 # Settings and the Connections picker. A 0.46.1+ daemon already sends this
-# order (crates/k2-daemon/tests/federation_peer_rosters_integration.rs pins
+# order (crates/k2-daemon/tests/it_misc/federation_peer_rosters_integration.rs pins
 # that end to end); here a stub daemon answers in PAIRING order, like an
 # older server, and the CLI must still print A to Z.
 # Hermetic: temp HOME, a stub daemon on loopback, no real ~/.k2. Loud.

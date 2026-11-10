@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   painter: 'dom',
   threadProps: [] as Array<Record<string, unknown>>,
   threadMounts: 0,
+  composeProps: [] as Array<Record<string, unknown>>,
   sockets: [] as Array<{ sent: string[]; onmessage: ((e: { data: string }) => void) | null }>,
   painters: { mounts: 0, disposes: 0, fatal: null as ((reason: string) => void) | null },
 }))
@@ -107,7 +108,10 @@ vi.mock('@/lib/handle-remote-drop', () => ({
   executeRemoteDrop: vi.fn(async () => undefined),
 }))
 vi.mock('@/components/Terminal/TerminalComposeBar', () => ({
-  TerminalComposeBar: () => null,
+  TerminalComposeBar: (props: Record<string, unknown>) => {
+    h.composeProps.push(props)
+    return null
+  },
 }))
 
 // Stores — selector-hook and/or getState() shapes, matching how
@@ -255,6 +259,7 @@ beforeEach(() => {
   h.painter = 'dom'
   h.threadProps = []
   h.threadMounts = 0
+  h.composeProps = []
   h.sockets = []
   h.painters = { mounts: 0, disposes: 0, fatal: null }
   StubResizeObserver.all = []
@@ -483,5 +488,38 @@ describe('Revealing the terminal from Thread view', () => {
     await goReady()
     press()
     expect(sends('input').length).toBeGreaterThan(0)
+  })
+})
+
+describe('the compose draft belongs to the pane, not the PTY', () => {
+  // A refresh respawns the PTY under a new sessionId and remounts the pane;
+  // the bars key their draft by the pane's v2 agent name so it survives.
+  function composePane(value: SessionViewChromeValue, attachAgentName?: string): React.JSX.Element {
+    return (
+      <TabVisibilityContext.Provider value={true}>
+        <SessionViewChromeContext.Provider value={value}>
+          <TerminalPane terminalId="pg-test" cwd="/tmp/ws" attachAgentName={attachAgentName} showComposeBar />
+        </SessionViewChromeContext.Provider>
+      </TabVisibilityContext.Provider>
+    )
+  }
+
+  it("the Thread's bar gets the attach agent name as its draft id", async () => {
+    renderInRoom(room, composePane(chrome({ viewTab: 'thread' }), 'sales/reviewer'))
+    await goReady()
+    const bar = h.threadProps.at(-1)?.composeBar as React.ReactElement<Record<string, unknown>> | undefined
+    if (!bar) throw new Error('Thread got no compose bar')
+    expect(bar.props.sendDestination).toBe('thread')
+    expect(bar.props.sessionId).toBe('s1')
+    expect(bar.props.draftId).toBe('sales/reviewer')
+  })
+
+  it("the terminal's bar on a plain tab uses the tab's v2 key", async () => {
+    renderInRoom(room, composePane(chrome({ viewTab: 'terminal' })))
+    await goReady()
+    const bar = h.composeProps.at(-1)
+    if (!bar) throw new Error('terminal got no compose bar')
+    expect(bar.sendDestination).toBe('pty')
+    expect(bar.draftId).toBe('tab-pg-test')
   })
 })

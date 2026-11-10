@@ -5414,6 +5414,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
 
   const sessionIdForCompose =
     'sessionId' in phase && phase.sessionId ? phase.sessionId : ''
+  // The draft belongs to the pane's agent (the v2 key a refresh resumes),
+  // not to the PTY: a refresh respawns under a new sessionId.
+  const composeDraftId = attachAgentName ?? `tab-${terminalId}`
   const composePty = (): React.ReactNode => {
     if (!showComposeBar || !shouldShowTerminalComposeBar(phase)) return null
     return (
@@ -5421,6 +5424,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         sessionId={sessionIdForCompose}
         workspacePath={cwd}
         onInjectInput={sendInput}
+        draftId={composeDraftId}
         sendDestination="pty"
       />
     )
@@ -5432,6 +5436,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         sessionId={sessionIdForCompose}
         workspacePath={cwd}
         onInjectInput={sendInput}
+        draftId={composeDraftId}
         sendDestination="thread"
       />
     )
@@ -5911,6 +5916,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           workspacePath={cwd}
           onInjectInput={sendInput}
           sendDestination="pty"
+          draftId={composeDraftId}
         />
       )}
     </div>

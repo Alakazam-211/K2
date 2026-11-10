@@ -144,6 +144,13 @@ interface TerminalComposeBarProps {
    * the PTY, one under Thread). Otherwise the session-view tab picks.
    */
   sendDestination?: 'pty' | 'thread'
+  /**
+   * Stable owner for the draft, its Thread files and its caret: the pane's
+   * v2 agent name. A refresh respawns the PTY under a new `sessionId`, so a
+   * draft keyed by `sessionId` alone was lost on every refresh. Without it
+   * the bar keys by `sessionId` (a bar with no agent behind it).
+   */
+  draftId?: string
 }
 
 /** Insert `chunk` into draft at caret (or append). Adds a separating space when needed. */
@@ -167,6 +174,7 @@ export function TerminalComposeBar({
   workspacePath = '',
   onInjectInput,
   sendDestination,
+  draftId,
 }: TerminalComposeBarProps): React.JSX.Element | null {
   // 1c (D4) renderer-hide: the owner and every login (Admin or Member) get
   // the composer whatever the "Let agents on other servers message this
@@ -210,13 +218,17 @@ export function TerminalComposeBar({
   // it. Per-user/per-device by nature (localStorage is the desktop app's own
   // storage); the draft never touches the daemon.
   // Home M1: prefixed with the server's host key (`<hostKey>|…`).
+  // Keyed by the pane's agent (`draftId`) when the host passes one, so the
+  // text survives a refresh (new PTY, new `sessionId`, remounted bar).
+  const draftOwner = draftId ? `agent:${draftId}` : sessionId
   const draftKey = scopedKey(
     scope,
-    sendOnThread ? `k2:composer:draft:${sessionId}:thread` : `k2:composer:draft:${sessionId}`,
+    sendOnThread ? `k2:composer:draft:${draftOwner}:thread` : `k2:composer:draft:${draftOwner}`,
   )
   const [draft, setDraft] = useState<string>(() => {
+    if (!draftOwner) return ''
     try {
-      return localStorage.getItem(scopedKey(scope, `k2:composer:draft:${sessionId}`)) ?? ''
+      return localStorage.getItem(draftKey) ?? ''
     } catch {
       return ''
     }
@@ -262,7 +274,7 @@ export function TerminalComposeBar({
   // they survive a tab switch and a refused send. Without the feature the
   // old path text goes into the draft.
   const threadFilesOn = sendOnThread && threadComposeAttachOn(scope)
-  const threadFilesKey = `${scopedKey(scope, `k2:composer:draft:${sessionId}:thread`)}:files`
+  const threadFilesKey = `${scopedKey(scope, `k2:composer:draft:${draftOwner}:thread`)}:files`
   const [threadFiles, setThreadFiles] = useState<ThreadComposeFile[]>(() => readThreadComposeFiles(threadFilesKey))
   const threadFilesLoadedKey = useRef(threadFilesKey)
   useEffect(() => {
@@ -276,10 +288,11 @@ export function TerminalComposeBar({
   }, [threadFiles, threadFilesKey])
   const pendingFiles = threadFilesOn ? threadFiles : []
 
-  // Reload the saved draft when the pane's session changes — this component can
-  // be reused with a new sessionId on a workspace/tab switch without remounting.
+  // Reload the saved draft when the pane's draft owner changes — this component
+  // can be reused for another agent on a workspace/tab switch without
+  // remounting. The PTY's `sessionId` arriving after a refresh is no change.
   useEffect(() => {
-    if (!sessionId) {
+    if (!draftOwner) {
       setDraft('')
       setHistoryIndex(-1)
       historyDraftRef.current = ''
@@ -300,22 +313,22 @@ export function TerminalComposeBar({
     setSlashMenuOpen(false)
     setSlashMenuFromTypeahead(false)
     setSlashHighlight(0)
-  }, [draftKey, sessionId])
+  }, [draftKey, draftOwner])
 
   // Persist on every change (localStorage writes are cheap + synchronous — this
   // is the crash-durable store). An empty draft clears the key.
   useEffect(() => {
-    if (!sessionId) return
+    if (!draftOwner) return
     try {
       if (draft) localStorage.setItem(draftKey, draft)
       else {
         localStorage.removeItem(draftKey)
-        clearComposeCaret(sessionId)
+        clearComposeCaret(draftOwner)
       }
     } catch {
       /* storage disabled/full — draft just won't persist */
     }
-  }, [draft, draftKey, sessionId])
+  }, [draft, draftKey, draftOwner])
 
   // Auto-grow with real draft text only. Empty boxes stay one line —
   // the long placeholder used to wrap (especially before width settled
@@ -347,16 +360,16 @@ export function TerminalComposeBar({
 
   const persistCaret = useCallback(() => {
     const el = textareaRef.current
-    if (!el || !sessionId) return
-    writeComposeCaret(sessionId, el.selectionStart, el.selectionEnd, el.value.length)
-  }, [sessionId])
+    if (!el || !draftOwner) return
+    writeComposeCaret(draftOwner, el.selectionStart, el.selectionEnd, el.value.length)
+  }, [draftOwner])
 
   const restoreCaret = useCallback(() => {
     const el = textareaRef.current
     if (!el) return
-    const { start, end } = readComposeCaret(sessionId, el.value.length)
+    const { start, end } = readComposeCaret(draftOwner, el.value.length)
     el.setSelectionRange(start, end)
-  }, [sessionId])
+  }, [draftOwner])
 
   // Workspace-switch "Message agent" pref: take the caret when this bar
   // mounts (or its session changes) so we win the race against the
@@ -906,13 +919,13 @@ export function TerminalComposeBar({
           if (!ta) return
           ta.focus()
           ta.setSelectionRange(nextDraft.length, nextDraft.length)
-          writeComposeCaret(sessionId, nextDraft.length, nextDraft.length, nextDraft.length)
+          writeComposeCaret(draftOwner, nextDraft.length, nextDraft.length, nextDraft.length)
           autoGrow()
         })
       }
       closeSlashMenu()
     },
-    [autoGrow, closeSlashMenu, draft, sessionId, slashCommand],
+    [autoGrow, closeSlashMenu, draft, draftOwner, slashCommand],
   )
 
   const handleKeyDown = useCallback(
@@ -1264,7 +1277,7 @@ export function TerminalComposeBar({
       onChange={(e) => {
         const value = e.target.value
         writeComposeCaret(
-          sessionId,
+          draftOwner,
           e.target.selectionStart,
           e.target.selectionEnd,
           value.length,
@@ -1287,7 +1300,7 @@ export function TerminalComposeBar({
               spaceCommit.remainder.length,
             )
             writeComposeCaret(
-              sessionId,
+              draftOwner,
               spaceCommit.remainder.length,
               spaceCommit.remainder.length,
               spaceCommit.remainder.length,

@@ -1485,7 +1485,11 @@ export function K2ConnectSection({
           settingId="k2-connect.urls"
           testId="tunnel-addresses"
         >
-          <TunnelUrlsPanel canManage={canManagePublishedSubdomains(isRemote, myRole)} />
+          <TunnelUrlsPanel
+            canManage={canManagePublishedSubdomains(isRemote, myRole)}
+            // This computer: "This server" follows the Status card above.
+            serverStatus={isRemote ? undefined : status}
+          />
         </SettingsGroup>
 
         {policiesGroup}

@@ -77,8 +77,10 @@ export interface TunnelUrlsState {
  *  window's server in Settings; the room's server in a room's drawer).
  *  Fetches on mount, then converges via broadcasts (with the safety /
  *  fallback polls). One instance per consumer — the underlying GETs are
- *  cheap and the broadcast fan-out is shared anyway. */
-export function useTunnelUrls(scope: ServerScope): TunnelUrlsState {
+ *  cheap and the broadcast fan-out is shared anyway. A change of
+ *  `refreshKey` re-reads at once (Settings → Tunnel passes its status, so
+ *  a Turn on or Forget there doesn't wait for a broadcast or the poll). */
+export function useTunnelUrls(scope: ServerScope, refreshKey?: string): TunnelUrlsState {
   const [status, setStatus] = useState<TunnelStatus | null>(null)
   const [subs, setSubs] = useState<SubdomainsMap | null | undefined>(undefined)
 
@@ -141,7 +143,8 @@ export function useTunnelUrls(scope: ServerScope): TunnelUrlsState {
       cancelled = true
       clearInterval(interval)
     }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey])
 
   return { status, subs }
 }

@@ -179,3 +179,34 @@ describe('TunnelUrlsPanel — per row', () => {
     expect(h.api.remove).not.toHaveBeenCalled()
   })
 })
+
+describe('TunnelUrlsPanel — "This server" agrees with the Status card', () => {
+  const STOPPED = { running: false, public_url: null, frpc_installed: true }
+  const RUNNING = { running: true, public_url: 'https://alex.k2.dev', local_port: 60710, server_addr: 'relay.k2.dev', frpc_installed: true }
+  const row = (): string => screen.getByTestId('tunnel-address-server').textContent ?? ''
+
+  it('just turned on: the card is reachable, so the row shows the address even before its own read catches up', () => {
+    const before = h.tunnel.status
+    h.tunnel.status = STOPPED
+    try {
+      render(<TunnelUrlsPanel serverStatus={RUNNING} />)
+      expect(row()).toContain('https://alex.k2.dev')
+      expect(row()).toContain('local port 60710')
+      expect(row()).not.toContain('No address while the tunnel is off.')
+    } finally {
+      h.tunnel.status = before
+    }
+  })
+
+  it('just forgotten: the card has no address, so the row drops the old one', () => {
+    render(<TunnelUrlsPanel serverStatus={STOPPED} />)
+    expect(row()).toContain('No address while the tunnel is off.')
+    expect(row()).not.toContain('rosson.k2.dev')
+    expect(row()).not.toContain('local port')
+  })
+
+  it('without the card’s status (a remote server) it reads its own', () => {
+    render(<TunnelUrlsPanel />)
+    expect(row()).toContain('https://rosson.k2.dev')
+  })
+})

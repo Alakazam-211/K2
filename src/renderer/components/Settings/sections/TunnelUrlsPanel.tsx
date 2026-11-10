@@ -3,7 +3,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
-import { useTunnelUrls } from '@/hooks/useTunnelUrls'
+import { useTunnelUrls, type TunnelStatus } from '@/hooks/useTunnelUrls'
 import { publishedSubdomains } from '@/lib/published-subdomains'
 import { SiteVisibilityControls } from '@/components/WorkspacePanel/SiteVisibilityControls'
 import {
@@ -37,10 +37,22 @@ import { SettingRow } from '../controls/SettingControls'
 const LINK = 'k2-focus font-mono text-[var(--color-accent-text)] hover:underline truncate no-drag cursor-pointer'
 
 /** Rows for the Addresses card (Settings → Tunnel). Render inside a
- *  `SettingsGroup card`: each child is one row of the card. */
-export function TunnelUrlsPanel({ canManage = false }: { canManage?: boolean } = {}): React.JSX.Element {
+ *  `SettingsGroup card`: each child is one row of the card.
+ *
+ *  `serverStatus` is the status the page's Status card shows (this
+ *  computer's tunnel, polled and refreshed on every Turn on / Forget).
+ *  When given, "This server" reads it, so the two always agree, and the
+ *  sites re-read whenever it changes; without it (a remote server) the
+ *  panel reads its own. */
+export function TunnelUrlsPanel({
+  canManage = false,
+  serverStatus,
+}: { canManage?: boolean; serverStatus?: TunnelStatus | null } = {}): React.JSX.Element {
   const scope = primaryScope()
-  const { status, subs } = useTunnelUrls(scope)
+  const refreshKey = serverStatus ? `${serverStatus.running}|${serverStatus.public_url ?? ''}|${serverStatus.subdomain ?? ''}` : undefined
+  const own = useTunnelUrls(scope, refreshKey)
+  const status = serverStatus !== undefined ? serverStatus : own.status
+  const subs = own.subs
   const projects = useProjectsStore((s) => s.projects)
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const confirm = useConfirmDialogStore((s) => s.confirm)

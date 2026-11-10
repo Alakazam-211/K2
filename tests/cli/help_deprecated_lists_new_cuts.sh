@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# 0.39.0f Phase 2.1b — `k2so help-deprecated` must list every verb
-# that 2.1b hard-cut. This is a docs regression check: if someone
-# adds a new hard-deprecation without updating the help page, the
-# help-deprecated map drifts out of sync. Fail loudly.
+# `k2 help-deprecated` must list every 2.1b verb that still answers with
+# a pointer, and must not list the ones that were removed (they now get
+# the normal "Unknown command" answer). A docs drift check: fail loudly.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -20,14 +19,21 @@ if ! K2SO_PORT=1 "$K2SO_CLI" help-deprecated >"$OUTPUT_FILE" 2>&1; then
     exit 1
 fi
 
-# Each verb cut in 2.1b must appear in the help page somewhere.
+# Each 2.1b verb that still answers with a pointer must appear in the
+# help page somewhere.
 REQUIRED_VERBS=(
     "work create"
-    "work inbox"
     "work move"
     "work send"
-    "work done"
     "agents create"
+    "agents running"
+    "whatsnew"
+)
+
+# Verbs whose pointer was removed: the map must not offer them.
+REMOVED_VERBS=(
+    "work inbox"
+    "work done"
     "agents delete"
     "agents list"
     "agents work"
@@ -37,8 +43,13 @@ REQUIRED_VERBS=(
     "agents profile"
     "agents status"
     "agents generate-md"
-    "agents running"
-    "whatsnew"
+    "agents triage"
+    "agents reap"
+    "agentic"
+    "companion"
+    "feed"
+    "roster"
+    "signal"
 )
 
 MISSING=()
@@ -57,4 +68,19 @@ if [ ${#MISSING[@]} -gt 0 ]; then
     exit 1
 fi
 
-echo "OK: help-deprecated lists all ${#REQUIRED_VERBS[@]} cut verbs"
+LISTED=()
+for verb in "${REMOVED_VERBS[@]}"; do
+    if grep -qE "(^  |k2 )${verb}( |\$)" "$OUTPUT_FILE"; then
+        LISTED+=("$verb")
+    fi
+done
+
+if [ ${#LISTED[@]} -gt 0 ]; then
+    echo "FAIL: help-deprecated still lists these removed verbs:" >&2
+    for v in "${LISTED[@]}"; do echo "  - $v" >&2; done
+    echo "---" >&2
+    cat "$OUTPUT_FILE" >&2
+    exit 1
+fi
+
+echo "OK: help-deprecated lists all ${#REQUIRED_VERBS[@]} kept pointers and none of the ${#REMOVED_VERBS[@]} removed verbs"

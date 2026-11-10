@@ -12,7 +12,7 @@ export const THREAD_TEXT_WIDTH_MIN_PX = 480
  *  column of about 944px, so a wider limit only pushes the two sides apart. */
 export const THREAD_TEXT_WIDTH_MAX_PX = 960
 export const THREAD_TEXT_WIDTH_STEP_PX = 20
-export const THREAD_TEXT_WIDTH_DEFAULT_PX = 720
+export const THREAD_TEXT_WIDTH_DEFAULT_PX = 820
 
 export interface ThreadTextWidthPref {
   /** False is "Full width": no limit. `px` is kept for when it comes back on. */

@@ -32,7 +32,7 @@ describe('threadTextWidth', () => {
 
   it('reads anything that is not a finite number as the default width', () => {
     for (const bad of [NaN, Infinity, '720', null, undefined, {}]) {
-      expect(clampThreadTextWidthPx(bad)).toBe(720)
+      expect(clampThreadTextWidthPx(bad)).toBe(820)
     }
   })
 
@@ -58,7 +58,7 @@ describe('threadTextWidth', () => {
   it('caps only when limited', () => {
     expect(threadTextCapPx({ limited: true, px: 640 })).toBe(640)
     expect(threadTextCapPx({ limited: false, px: 640 })).toBeNull()
-    expect(threadTextCapPx(undefined)).toBe(720)
+    expect(threadTextCapPx(undefined)).toBe(820)
   })
 
   it('knows the default for the Reset link', () => {

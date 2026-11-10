@@ -755,10 +755,11 @@ fn deliver_to_clients(r: &trust::StoredRoster, only_new: bool) -> Vec<Value> {
         let sent = fed_send(&s.peer_fp, KIND_NODE_ROSTER, payload).and_then(|_| {
             // Each live seat's lane template (an offer the client already
             // took changes nothing but the lane).
+            // With the owner attestations the roster names (an evidence
+            // bundle carries them).
+            let atts = own_attestations(r);
             for x in theirs.iter().filter(|x| x.state != "ended") {
-                if let Some(l) = lanes.get(&x.id) {
-                    fed_send(&s.peer_fp, KIND_SEAT_OFFER, json!({"seat": x.statement, "roster": r.signed, "lane": l}))?;
-                }
+                fed_send(&s.peer_fp, KIND_SEAT_OFFER, json!({"seat": x.statement, "roster": r.signed, "lane": lanes.get(&x.id), "attestations": atts}))?;
             }
             Ok(())
         });
@@ -1318,7 +1319,7 @@ fn approve_lane(req: &TrustRequest, by: &str, via: &str) -> R<Value> {
     let mut clients = Vec::new();
     if let Some(r) = roster {
         for s in seats.iter().filter(|s| s.statement.is_some()) {
-            match fed_send(&s.peer_fp, KIND_SEAT_OFFER, json!({"seat": s.statement, "roster": r.signed, "lane": t})) {
+            match fed_send(&s.peer_fp, KIND_SEAT_OFFER, json!({"seat": s.statement, "roster": r.signed, "lane": t, "attestations": own_attestations(&r)})) {
                 Ok(_) => clients.push(json!({"client": s.peer_host, "seat": s.id, "sent": true})),
                 Err(e) => clients.push(json!({"client": s.peer_host, "seat": s.id, "sent": false, "why": e.hint})),
             }
@@ -1721,7 +1722,7 @@ fn approve_seat_offer(req: &TrustRequest, by: &str, via: &str) -> R<Value> {
     let signed = sign_owner(ci::DOMAIN_NODE_SEAT, &st)?;
     SeatStatement::open(&signed, &key).map_err(|e| no("sign", 500, e))?;
     // The client needs the roster and its seat before a node enrols there.
-    fed_send(&row.peer_fp, KIND_SEAT_OFFER, json!({"seat": signed, "roster": roster.signed, "lane": lane_t}))
+    fed_send(&row.peer_fp, KIND_SEAT_OFFER, json!({"seat": signed, "roster": roster.signed, "lane": lane_t, "attestations": own_attestations(&roster)}))
         .map_err(|e| no("client_unreachable", 502, format!("the seat wasn't sent to {}: {} (nothing changed; approve again when it's back)", row.peer_host, e.hint)))?;
     decide_now(req, by, via)?;
     let batch = format!("seat-{}", crypto::random_id().map_err(db_err)?);
@@ -1903,6 +1904,13 @@ fn trusted_peer(host: &str) -> R<FederationPeer> {
     Ok(peer)
 }
 
+/// The owner attestations (V12) the roster names, as this owner signed them.
+fn own_attestations(r: &trust::StoredRoster) -> Vec<Signed> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    trust::own_attestations_named(&conn, &r.roster)
+}
+
 /// A paired server's verified host (what it was paired as, from this
 /// server's own peer record; never a name the peer sends, M2).
 fn verified_host(peer: &FederationPeer) -> String {
@@ -2054,7 +2062,27 @@ fn receive_seat_offer(peer_fp: &str, p: &Value) -> R<Value> {
     let seat: Signed = serde_json::from_value(p.get("seat").cloned().unwrap_or_default()).map_err(|e| no(tcodes::BAD_ARGS, 400, e.to_string()))?;
     let roster: Signed = serde_json::from_value(p.get("roster").cloned().unwrap_or_default()).map_err(|e| no(tcodes::BAD_ARGS, 400, e.to_string()))?;
     let peek: SeatStatement = seat.peek(ci::DOMAIN_NODE_SEAT).map_err(|e| no(tcodes::BAD_ARGS, 400, e))?;
+    let key_fp = roster
+        .peek::<NodeRoster>(ci::DOMAIN_NODE_ROSTER)
+        .ok()
+        .and_then(|r| ApprovalKey::parse(&r.roster_key))
+        .map(|k| k.fingerprint())
+        .ok_or_else(|| no(tcodes::BAD_ARGS, 400, "roster key unreadable"))?;
     let fx = client_take_roster(Some(peer_fp), &NodeRosterDoc { roster, seats: vec![seat] }, "peer")?;
+    // The owner's attestations for the nodes it vouches for that way (V12),
+    // checked against the roster just taken (the pinned key, a naming entry).
+    let atts: Vec<Signed> = match p.get("attestations") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| no(tcodes::BAD_ARGS, 400, format!("attestations: {e}")))?,
+    };
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Err((c, h)) = trust::receive_attestations(&conn, &key_fp, &atts, now()) {
+            store::record_event(&conn, "controller", "attestation_refused", None, None, None, json!({"seat": peek.seat_id, "why": h}));
+            return Err(no(c, 409, h));
+        }
+    }
     let lane: Option<LaneTemplate> = p.get("lane").cloned().and_then(|l| serde_json::from_value(l).ok()).filter(|t: &LaneTemplate| t.check().is_ok());
     if let Some(t) = lane {
         let db = k2_core::db::shared();

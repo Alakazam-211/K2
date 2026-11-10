@@ -1412,6 +1412,88 @@ fn an_expired_lanes_plan_is_sealed_again_when_the_node_is_back() {
     assert!(admin_cmds(&n1.id).iter().all(|c| node_open(&n1, c).cmd.verb != plane::VERB_LANES_WRITE), "once");
 }
 
+/// V12 attestations reach the client: a node the owner vouches for by
+/// attestation (its key predates the taint flag) is attested on the client
+/// too. The attestation comes with the seat offer, opens with the pinned
+/// roster key and is named by the roster's entry, so an evidence bundle can
+/// carry it (the signer refuses an `owner_attested` node without one). A
+/// forged one, or one the roster doesn't name, is refused on arrival.
+#[test]
+fn a_client_sees_an_attested_node_as_attested() {
+    let _ci = ci_on();
+    let owner_guard = k2_core::db::scoped_for_test();
+    let client_guard = k2_core::db::scoped_for_test();
+    let (odb, cdb) = (owner_guard.handle(), client_guard.handle());
+    let owner_peer = peer("owner", OWNER);
+    let client_peer = peer("client", CLIENT);
+    test_seams::add_peer(owner_peer.clone());
+    test_seams::add_peer(client_peer.clone());
+    {
+        let (odb2, cdb2, ofp, cfp) = (odb.clone(), cdb.clone(), owner_peer.fingerprint.clone(), client_peer.fingerprint.clone());
+        test_seams::set_fed(Some(Box::new(move |to: &str, kind: &str, p: &Value| {
+            if to == ofp {
+                on(&odb2, OWNER, || receive(&cfp, CLIENT, kind, p))
+            } else if to == cfp {
+                on(&cdb2, CLIENT, || receive(&ofp, OWNER, kind, p))
+            } else {
+                Err(no("peer_unreachable", 502, "no such peer"))
+            }
+        })));
+    }
+    // Owner: a1 clean, a2 attested (taint: unknown), the lane.
+    let k2 = on(&odb, OWNER, || {
+        owned_node("a1", Taint::Clean, P9);
+        let (_, k2) = owned_node("a2", Taint::Unknown, P9);
+        approve(&roster_set("a1", json!({})));
+        approve(&roster_set("a2", json!({"attest": "installed with the job wall; no unwalled job in its ledger"})));
+        let r = call(LANES_SET, &Who::Owner, json!({"name": "ci-standard", "from": "ci-standard"})).unwrap();
+        approve(r["request"]["id"].as_str().unwrap());
+        k2
+    });
+    // The seat: the client asks and approves; the owner offers both nodes.
+    let cws = on(&cdb, CLIENT, || operating_ws("att"));
+    let req = on(&cdb, CLIENT, || call(SEATS_REQUEST, &agent(&cws), json!({"owner": OWNER, "lane": "ci-standard"})).unwrap());
+    let out = on(&cdb, CLIENT, || approve(req["request"]["id"].as_str().unwrap()));
+    let oreq = out["result"]["ownerRequest"].as_str().unwrap().to_string();
+    on(&odb, OWNER, || {
+        call(SEATS_OFFER, &Who::Owner, json!({"request": oreq, "nodes": ["a1", "a2"]})).unwrap();
+        approve(&oreq);
+    });
+    let key = on(&odb, OWNER, || roster_key().unwrap());
+    // A real roster-key signature on an attestation no roster entry names.
+    let unnamed = on(&odb, OWNER, || {
+        let att = trust::entry_by_fp(&k2_core::db::shared().lock(), &k2.fingerprint()).unwrap().attestation.unwrap();
+        let mut a = OwnerAttestation::open(&att, &key).unwrap();
+        a.checked = "something else".into();
+        sign_owner(ci::DOMAIN_NODE_ATTEST, &a).unwrap()
+    });
+    // Client: the roster says a2 is owner-attested, and the attestation it
+    // names is here, opening with the pinned key, for a2's key.
+    on(&cdb, CLIENT, || {
+        let h = k2_core::db::shared();
+        let c = h.lock();
+        let r = trust::latest_roster(&c, &key.fingerprint()).unwrap();
+        let e = r.roster.entry(&k2.fingerprint()).unwrap();
+        assert_eq!(e.taint_basis, Some(TaintBasis::OwnerAttested));
+        let atts = trust::attestations_named(&c, &key.fingerprint(), &r.roster);
+        assert_eq!(atts.len(), 1, "the one attestation the roster names");
+        assert_eq!(Some(atts[0].digest()), e.attestation_digest);
+        let a = OwnerAttestation::open(&atts[0], &key).unwrap();
+        assert_eq!((a.node_fp.as_str(), a.owner_id.as_str()), (k2.fingerprint().as_str(), OWNER));
+        // A forged one (another key), or one the roster doesn't name: refused.
+        let evil = wire::ApprovalSigner::from_seed(&[44u8; 32]).unwrap();
+        let mut fake = a.clone();
+        fake.roster_key = evil.public().encode();
+        let forged = fake.sign(&evil).unwrap();
+        assert!(trust::receive_attestations(&c, &key.fingerprint(), &[forged], 1).is_err(), "not the pinned key");
+        assert!(trust::receive_attestations(&c, &key.fingerprint(), &[unnamed.clone()], 1).is_err(), "signed by the owner, but no entry names it");
+        assert_eq!(trust::attestations_named(&c, &key.fingerprint(), &r.roster).len(), 1, "nothing refused was kept");
+    });
+    test_seams::set_fed(None);
+    drop(client_guard);
+    drop(owner_guard);
+}
+
 /// M3 (11-07 review): a lane's approval seals node admin plans for every
 /// live seat on it with the owner's approval key, so an Admin login can't
 /// approve one (only the owner, like a seat).

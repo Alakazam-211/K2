@@ -160,6 +160,7 @@ const CI_TABLES: &[&str] = &[
     // 0286 (the 11-07 trust review): the re-key chain and the taint memory.
     "compute_key_rotations",
     "compute_tainted_keys",
+    "compute_owner_attestations",
 ];
 
 fn ci_rows() -> Vec<(String, i64)> {

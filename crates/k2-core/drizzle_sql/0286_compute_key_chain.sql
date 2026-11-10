@@ -14,6 +14,8 @@
 --                          or a job-readable key). Never forgotten: a later
 --                          statement saying "clean" doesn't clear it; only a
 --                          new key does (M4).
+--   compute_owner_attestations  (client) the owners' attestations that came
+--                          with a seat offer, verified on arrival.
 CREATE TABLE IF NOT EXISTS compute_key_rotations (
   new_fp     TEXT PRIMARY KEY NOT NULL,
   old_fp     TEXT NOT NULL,
@@ -28,4 +30,17 @@ CREATE TABLE IF NOT EXISTS compute_tainted_keys (
   node_fp  TEXT PRIMARY KEY NOT NULL,
   why      TEXT NOT NULL,
   at       INTEGER NOT NULL
+);
+--> statement-breakpoint
+-- Client side: the node owners' attestations (V12) this server received with
+-- a seat offer, each verified on arrival with the owner's pinned roster key
+-- and named by an entry of that owner's roster (an evidence bundle carries
+-- them; the signer refuses an owner_attested node without one).
+CREATE TABLE IF NOT EXISTS compute_owner_attestations (
+  digest       TEXT PRIMARY KEY NOT NULL,
+  key_fp       TEXT NOT NULL,
+  node_fp      TEXT NOT NULL,
+  body         TEXT NOT NULL,
+  sig          TEXT NOT NULL,
+  received_at  INTEGER NOT NULL
 );

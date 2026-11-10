@@ -1012,6 +1012,65 @@ pub fn receive_roster(conn: &Connection, s: &Signed, source: &str, at: i64) -> R
     Ok(RosterEffects { stored, seq: r.seq, revoked })
 }
 
+/// Owner side: the signed attestations (V12) the roster `r` names, from the
+/// working entries (sent to seated clients with the seat offer).
+pub fn own_attestations_named(conn: &Connection, r: &NodeRoster) -> Vec<Signed> {
+    let named: Vec<&str> = r.entries.iter().filter_map(|e| e.attestation_digest.as_deref()).collect();
+    entries(conn).into_iter().filter_map(|e| e.attestation).filter(|a| named.contains(&a.digest().as_str())).collect()
+}
+
+/// Client side: an owner's attestations arriving with a seat offer, checked
+/// as its rosters are: each opens with the owner's pinned roster key, names
+/// the pinned owner, and is named by an entry of the newest roster held
+/// under that key for the same key, epoch and statement. One that doesn't
+/// is refused, and then none is kept. Returns how many were new.
+pub fn receive_attestations(conn: &Connection, key_fp: &str, atts: &[Signed], at: i64) -> Result<usize, (&'static str, String)> {
+    if atts.is_empty() {
+        return Ok(0);
+    }
+    let trust = owner_trust(conn, key_fp).ok_or_else(|| (codes::OWNER_NOT_TRUSTED, "no person here pinned that roster key".to_string()))?;
+    let pinned = ApprovalKey::parse(&trust.roster_key).ok_or((codes::BAD_ARGS, "pinned roster key unreadable".to_string()))?;
+    let r = latest_roster(conn, key_fp).ok_or_else(|| (codes::NODE_NOT_ON_ROSTER, format!("no roster from {} held here yet", trust.owner_id)))?;
+    let mut ok = Vec::new();
+    for s in atts {
+        let a = OwnerAttestation::open(s, &pinned).map_err(|e| (codes::BAD_ARGS, format!("an attestation from {}: {e}", trust.owner_id)))?;
+        if a.owner_id != trust.owner_id {
+            return Err((codes::OWNER_NOT_TRUSTED, format!("an attestation names its owner {:?}, but this key was pinned for {}", a.owner_id, trust.owner_id)));
+        }
+        let d = s.digest();
+        let named = r.roster.entries.iter().any(|e| e.attestation_digest.as_deref() == Some(d.as_str()) && e.node_fp == a.node_fp && e.key_epoch == a.key_epoch && e.statement_digest == a.statement_digest);
+        if !named {
+            return Err((codes::BAD_ARGS, format!("an attestation for {}… that {}'s roster seq {} doesn't name", &a.node_fp[..12], trust.owner_id, r.roster.seq)));
+        }
+        ok.push((d, a.node_fp, s));
+    }
+    let mut n = 0;
+    for (d, fp, s) in ok {
+        n += conn
+            .execute(
+                "INSERT OR IGNORE INTO compute_owner_attestations (digest, key_fp, node_fp, body, sig, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![d, key_fp, fp, s.body, s.sig, at],
+            )
+            .map_err(|e| (codes::BAD_ARGS, e.to_string()))?;
+    }
+    Ok(n)
+}
+
+/// Client side: the attestations held here that the roster `r` (under the
+/// pinned key `key_fp`) names: what an evidence bundle carries.
+pub fn attestations_named(conn: &Connection, key_fp: &str, r: &NodeRoster) -> Vec<Signed> {
+    r.entries
+        .iter()
+        .filter_map(|e| e.attestation_digest.as_deref())
+        .filter_map(|d| {
+            conn.query_row("SELECT body, sig FROM compute_owner_attestations WHERE digest = ?1 AND key_fp = ?2", params![d, key_fp], |r| Ok(Signed { body: r.get(0)?, sig: r.get(1)? }))
+                .optional()
+                .ok()
+                .flatten()
+        })
+        .collect()
+}
+
 /// The owner side records its own revocations too (its receipts view).
 pub fn record_revocation(conn: &Connection, node_fp: &str, key_fp: &str, reason: RevokeReason, seq: u64, at: i64) {
     let _ = conn.execute(

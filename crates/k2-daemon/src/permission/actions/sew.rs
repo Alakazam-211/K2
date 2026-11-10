@@ -365,10 +365,123 @@ fn apply(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
     }
 }
 
+// ── sew.recording-enable (0.46.11 K-a) ──────────────────────────────────
+//
+// A "Manage Sew" agent asks for Sew's recorder to be installed and
+// recording turned on. `POST /cli/sew/recording/enable` answers every
+// passport `person_only` (it never installs anything itself); that refusal
+// is this card's wall. An Owner or an Admin answers (the route's floor), with
+// the same confirm the CLI takes, bound to this request; at the click K2
+// turns it into the route's own (bound to the Sew install) for the same
+// person, and the route's own entry runs as them.
+
+/// The card's route wall.
+pub(crate) const RECORDING_ROUTE: &str = crate::sew::recording::ENABLE_ROUTE;
+
+pub(crate) static RECORDING_ENABLE: ActionSpec = ActionSpec {
+    id: crate::sew::recording::CARD,
+    area: Area::Sew,
+    params: &[],
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::SettingsConfirm { action: ConfirmAction::SewRecordingEnable },
+    expiry: Expiry { default_secs: 24 * 3600, max_secs: MAX_EXPIRY_SECS },
+    words: Words {
+        setting: "Install Sew's recorder",
+        what_changes: "Install Sew's recorder and transcriber on this server and turn recording on ({ws} asked)",
+        consequences: "Calls can then be recorded and transcribed where an App or a room allows it, and only for people who \
+            consent; nobody is recorded without saying yes. It needs 8 GiB of RAM and some disk under /var/lib. Turning it \
+            off later (k2 hostchat recording disable) keeps the recorder and every recording; uninstalling it never deletes \
+            recordings.",
+        scope: "this server's chat, for everyone",
+        duration: "until someone turns it off",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "sew", path: "k2 hostchat recording enable (a terminal outside K2)" },
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: "person_only" },
+        route_prefix: RECORDING_ROUTE,
+        method: WallMethod::Post,
+        params: &[],
+    }],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
+/// Still wanted: the asking workspace has "Manage Sew", this server's Sew
+/// can record (`app_recording`), and recording isn't on yet.
+fn check_recording(ctx: &Ctx) -> Check {
+    if !k2_core::workspace::settings::agents_can_manage_chat(&ctx.workspace_id) {
+        return Check::Unavailable {
+            code: "chat_manage_off",
+            why: format!("\"Manage Chat / Voice Hosting\" is off for {}: only an agent that manages it may ask", ctx.workspace_handle),
+        };
+    }
+    let env = crate::sew::supervisor::live();
+    if !crate::sew::recording::feature_on(&env) {
+        return Check::Unavailable {
+            code: "sew_feature_missing",
+            why: "this server's Sew can't record yet (it needs Sew 0.9.0: app_recording)".into(),
+        };
+    }
+    let st = crate::sew::recording::load(&env);
+    if st.installed && st.enabled {
+        return Check::AlreadyDone;
+    }
+    Check::Needed
+}
+
+/// On Allow: the card's confirm for this request, turned into the route's
+/// own for the same person, then the route as them (Owner or Admin).
+fn apply_recording(_ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
+    if let Err(refused) = super::held::route_floor(RECORDING_ROUTE, who) {
+        return refused;
+    }
+    let Some(token) = token else {
+        return Applied::Refused { code: "vault_confirm_required".into(), message: "confirm it's you first".into() };
+    };
+    let Some(request) = super::super::answer::current_request() else {
+        return Applied::Refused { code: "failed".into(), message: "no request is being answered".into() };
+    };
+    let stamp = who.stamp();
+    let vault = match crate::vault::get() {
+        Ok(v) => v,
+        Err(e) => return Applied::Refused { code: e.code.into(), message: e.hint },
+    };
+    let method = match vault.confirm.take(token, crate::sew::recording::CONFIRM_ENABLE, Some(&request), &stamp) {
+        Ok(k2_vault::HumanProof::Confirmed { method }) => method,
+        Ok(k2_vault::HumanProof::None) => return Applied::Refused { code: "vault_confirm_required".into(), message: "confirm again".into() },
+        Err(e) => return Applied::Refused { code: e.code.into(), message: e.hint },
+    };
+    let route_token = vault.confirm.mint(crate::sew::recording::CONFIRM_ENABLE, Some(&crate::sew::routes::confirm_secret_id()), &stamp, &method);
+    let body = json!({ "confirmToken": route_token });
+    let route_who = match who {
+        Answerer::OwnerToken => crate::compute_routes::Who::Owner,
+        Answerer::Login { user, role } => crate::compute_routes::Who::Login {
+            username: user.clone(),
+            role: k2_core::connect_users::Role::parse_wire(role).unwrap_or(k2_core::connect_users::Role::Member),
+        },
+    };
+    let r = crate::sew::routes::handle(RECORDING_ROUTE, route_who, body.to_string().as_bytes(), &std::collections::HashMap::new());
+    if !r.status.starts_with("200") {
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap_or_default();
+        let (code, message) = super::held::error_of(&v, "recording_refused");
+        return Applied::Refused { code, message };
+    }
+    Applied::Done {
+        message: "Sew's recorder is installing; recording turns on when it's done (k2 hostchat recording status). Each person \
+                  still consents for themselves."
+            .into(),
+    }
+}
+
 pub(crate) fn actions() -> Vec<Registered> {
     vec![
         Registered { spec: &OWNER_HANDOFF, check, apply },
         Registered { spec: &ROLLBACK_DATA_LOSS, check: check_rollback, apply: apply_rollback },
+        Registered { spec: &RECORDING_ENABLE, check: check_recording, apply: apply_recording },
     ]
 }
 

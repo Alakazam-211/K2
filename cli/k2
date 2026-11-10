@@ -11695,7 +11695,8 @@ the fix.
 HOME. The owner's home client (k2 hostchat home client <app>, usually
 Hearth) sees every Space a person is in; k2 hostchat home app <app>
 --hidden on keeps an App out of it. Both wait for Sew's home_client flag.
-Recording is off by default. Guide: docs/app-chat-sew.md.
+Recording is off by default. An Owner or Admin installs the recorder
+with k2 hostchat recording enable (Sew 0.9.0+). Guide: docs/app-chat-sew.md.
 
 VOICE ROOMS AND PROJECT CHANNELS, start to finish (who does which step,
 in what order, what goes wrong): k2 study chat-voice.
@@ -47737,6 +47738,7 @@ cmd_schema() {
     },
     {"name": "hostchat", "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|restart|reconfigure|app-url|ship|mirror|app-spaces|app-space|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|on-behalf|log> ...", "description": "Chat / Voice Hosting on this box: the chat and voice server (powered by Sew), over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Chat / Voice Hosting (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge and recovery-key, Sew's launch key, are the owner's; --drop-prev the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output (any subcommand)."}]},
     {"name": "hostchat enable", "usage": "k2 hostchat enable [--tarball FILE] [--recovery-key-file FILE] [--identity k2|standalone] [--voice [--voice-url wss://HOST] [--media-tarball FILE] [--node-ip IP]] [--no-wait] [--json]", "description": "Install and start Chat / Voice Hosting (POST /cli/sew/server/enable), then wait on GET /cli/sew/status. With no --tarball the daemon downloads the pinned release from github.com/Alakazam-211/sew-releases (or reuses ~/.k2/cache/sew) and installs it only if its sha256 matches K2's pin; --tarball and --media-tarball are for a box without internet. --identity is fixed for the life of the install (default k2; standalone = Sew's own password logins); changing it means k2 hostchat purge then enable. --voice also installs voice once chat runs (TURN over TLS on 5349 with a turn-<label>.k2.dev certificate from K2 Connect).", "args": [], "flags": [{"name": "--identity", "arg": "k2|standalone", "description": "Identity provider (explicit; fixed per install)."}, {"name": "--voice-url", "arg": "wss://HOST", "description": "voice.public_url: an origin on this box's k2.dev label or a bound custom domain (e.g. an App that proxies /rtc). Default wss://voice.<label>.k2.dev."}, {"name": "--media-tarball", "arg": "FILE", "description": "The sew-media release tarball (sha256 must be this build's pin)."}, {"name": "--no-wait", "arg": null, "description": "Return once the install started."}]},
+    {"name": "hostchat recording", "usage": "k2 hostchat recording <status|preflight|enable|disable|uninstall> [--json]", "description": "Sew's call recorder (Sew 0.9.0+, app_recording): status (installed, enabled, version, org policies, Sew's flags), preflight (8 GiB of RAM, the fit rule on a shared box, voice installed, disk above the disk guard's reserve; each failed check names its fix), enable [--recorder-tarball FILE] [--transcriber-tarball FILE] [--model-file FILE] [--no-wait] (installs the recorder, the transcriber and the speech model, then turns the org policy recording.enabled on; an Owner or Admin in person, with Touch ID or the vault password; an agent asks on the sew.recording-enable card), disable (recording off; the recorder and every recording are kept), uninstall [--yes] (removes the recorder; never deletes recordings).", "args": [], "flags": [{"name": "--yes", "arg": null, "description": "uninstall only: confirm without a prompt (required with no terminal). Also -y."}, {"name": "--no-wait", "arg": null, "description": "enable only: return while the install runs."}]},
     {"name": "hostchat media", "usage": "k2 hostchat media <preflight|install|url|status|renew|tier|probe|uninstall> ...", "description": "Voice: preflight (ports TCP 7881, UDP 7882, TCP 5349, loopback 7880; with the voice tunnel preview: the tunnel tier checks instead), install [--url wss://HOST] [--node-ip IP] [--tarball FILE] (the URL goes to sew media install), url <wss://HOST> (change voice.public_url later: re-runs sew media install --reconfigure with the new URL, then restarts sew), status, renew (the TURN certificate), tier tunnel|direct (tunnel is a preview: k2 settings set voiceTunnelPreview true, or K2_VOICE_TUNNEL=1: TURN through the tunnel on a second frpc, relay-only, no public port; or direct; restarts sew-media), probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail (record a call test from outside), uninstall [--yes] (live calls end: asks on a terminal, needs --yes without one; Sew's voice already gone still cleans up K2's TURN DNS, label and key). K2 opens no firewall.", "args": [], "flags": [{"name": "--yes", "arg": null, "description": "uninstall only: confirm without a prompt (required with no terminal). Also -y."}]},
     {"name": "hostchat users", "usage": "k2 hostchat users <list|owner|invite|reset|revoke|reactivate|role> [<name|email>] [--display-name NAME] [--role member|admin|guest] [--email EMAIL]", "description": "Sew's own users on a standalone install (refused with provider_is_k2 on a K2-identity install). owner = the first install owner; invite/reset print a one-time setup link to stdout only (24 h). Names and emails become Sew handles ([a-z0-9_-]{2,64}).", "args": [], "flags": []},
     {"name": "hostchat config", "usage": "k2 hostchat config [set approvals.by people|people+agents] [set default_space <space>|none] | config --public-url https://HOST [--json]", "description": "No arguments: every key, its value and allowed values. set approvals.by: who may approve queued chat posts (people, or people+agents with Manage Chat / Voice Hosting). set default_space: the Space whose chat access governs DMs outside every Space (a person sets it; none clears). While voice rooms are on and the K5 Space exists it is fixed to k5-admin: any other value (or none) answers 409 default_space_fixed; give an agent access to k5-admin instead. --public-url: set Sew's server.public_url to a host on this box (its k2.dev label or a bound custom domain), then restart sew. Sew builds password setup links as <public-url>/setup. Until it is set, k2 hostchat status (and enable) warn public_url_unset with this fix. The voice URL is not set here: k2 hostchat media url.", "args": [], "flags": []},
@@ -73632,6 +73634,33 @@ Voice (sew-media, TURN over TLS on 5349, WebRTC DTLS-SRTP):
                                             where Sew's voice is already gone still has K2's voice
                                             records (TURN DNS, label, key) cleaned up
 
+Recording (Sew's recorder and transcriber; needs Sew 0.9.0, app_recording):
+  k2 hostchat recording status [--json]     installed, enabled, version, org policies, Sew's flags
+  k2 hostchat recording preflight [--json]  what enable checks first; each failed check names its fix
+  k2 hostchat recording enable [--recorder-tarball FILE] [--transcriber-tarball FILE]
+                               [--model-file FILE] [--no-wait] [--json]
+                                            install the recorder, the transcriber and the speech
+                                            model (when not installed yet), then turn recording on
+                                            (Sew's org policy recording.enabled). An Owner or Admin,
+                                            in person: Touch ID, the vault password or your login.
+                                            An agent can't: it asks on a card
+                                            (k2 permission request sew.recording-enable --why "...").
+                                            Needs at least 8 GiB of RAM, voice installed
+                                            (k2 hostchat media install), room for every Sew unit in
+                                            memory (on a shared box 40% stays with K2's database) and
+                                            free disk on /var/lib above the disk guard's reserve.
+                                            The files come from Sew's release (or the FILE flags on a
+                                            box without internet), each checked against K2's sha256
+                                            pin; a file that doesn't match stops everything.
+  k2 hostchat recording disable [--json]    turn recording off (live recordings stop). The recorder
+                                            stays installed and every recording is kept.
+  k2 hostchat recording uninstall [--yes] [--json]
+                                            remove the recorder, the transcriber and the model.
+                                            Never deletes recordings: they stay in Sew. Asks on a
+                                            terminal; with no terminal, --yes is required.
+  Turning recording on doesn't record anyone: Apps and rooms choose who may record, and each
+  person consents for themselves. Refused with sew_feature_missing on a Sew older than 0.9.0.
+
 Meet (the reserved meet.<box>.k2.dev label):
   k2 hostchat meet bind <app-id> [--json]   point meet.<box>.k2.dev at an installed App (K2 Connect
                                             needed); restart the App once so K2_APP_ORIGINS has it
@@ -73754,6 +73783,9 @@ if verb in ("status",):
     for w in v.get("warnings") or []:
         line("warning", w.get("message") or w.get("code"))
     line("last error", v.get("lastError"))
+    rc = v.get("recording") or {}
+    if rc.get("installed"):
+        line("recording", "%s (recorder %s)" % ("on" if rc.get("enabled") else "off, recorder kept", rc.get("version") or "?"))
     vo = v.get("voice") or {}
     if vo:
         line("voice", vo.get("state"))
@@ -73771,7 +73803,35 @@ if verb in ("status",):
         ex = vo.get("exposure") or {}
         if ex.get("note"):
             line("exposure", ex.get("note"))
-elif verb in ("preflight", "media-preflight"):
+elif verb == "recording-status":
+    line("recording", ("on" if v.get("enabled") else "off") if v.get("installed") else "not installed")
+    ver = v.get("version") or {}
+    line("recorder", ver.get("recorder"))
+    line("transcriber", ver.get("transcriber"))
+    line("model", v.get("model"))
+    pol = v.get("policies") or {}
+    line("policies", ", ".join("%s=%s" % (k, json.dumps(pol[k])) for k in sorted(pol)))
+    fl = v.get("flags") or {}
+    line("Sew flags", ", ".join(k for k in sorted(fl) if fl[k]) or "none of the Sew 0.9.0 recording flags")
+    p = v.get("progress") or {}
+    if p.get("result") in ("running", "error"):
+        line("step", "%s (%s)" % (p.get("step"), p.get("result")))
+    line("last error", v.get("lastError"))
+    r = v.get("ready") or {}
+    if r.get("ok") is False:
+        line("not ready", "%s: %s" % (r.get("code"), r.get("hint")))
+elif verb in ("recording-enable", "recording-disable", "recording-uninstall"):
+    if verb == "recording-enable":
+        line("recording", "installing (k2 hostchat recording status)" if v.get("state") == "installing" else "on")
+        line("version", v.get("version"))
+        line("model", v.get("model"))
+        line("next", v.get("next"))
+    else:
+        line("recording", "off" if v.get("installed") else "removed")
+        line("kept", v.get("kept"))
+        for w in v.get("warnings") or []:
+            line("warning", w)
+elif verb in ("preflight", "media-preflight", "recording-preflight"):
     print("ready" if v.get("ready") else "NOT ready")
     for c in v.get("checks") or []:
         print("  %-5s %-14s %s%s" % (c.get("status"), c.get("id"), c.get("detail"), ("  (" + c["hint"] + ")") if c.get("hint") else ""))
@@ -74058,6 +74118,7 @@ cmd_hostchat() {
     case "$sub" in
         -h|--help|help) _hostchat_usage; return 0 ;;
         media) _hostchat_media "$@"; return ;;
+        recording) _hostchat_recording "$@"; return ;;
         users|user) _hostchat_users "$@"; return ;;
         meet) _hostchat_meet "$@"; return ;;
         people|person) _hostchat_people "$@"; return ;;
@@ -74519,6 +74580,126 @@ _hostchat_meet() {
             _hostchat_print meet-unbind "$as_json" ;;
         ""|-h|--help|help) _hostchat_usage ;;
         *) echo "{\"error\":\"usage\",\"hint\":\"unknown meet command '$sub' (k2 hostchat meet bind <app-id> | unbind)\"}" >&2; exit 2 ;;
+    esac
+}
+
+_hostchat_recording_usage() {
+    cat <<'EOF'
+k2 hostchat recording — Sew's call recorder on this box (Chat / Voice Hosting)
+
+Recording (Sew's recorder and transcriber; needs Sew 0.9.0, app_recording):
+  k2 hostchat recording status [--json]     installed, enabled, version, org policies, Sew's flags
+  k2 hostchat recording preflight [--json]  what enable checks first; each failed check names its fix
+  k2 hostchat recording enable [--recorder-tarball FILE] [--transcriber-tarball FILE]
+                               [--model-file FILE] [--no-wait] [--json]
+                                            install the recorder, the transcriber and the speech
+                                            model (when not installed yet), then turn recording on
+                                            (Sew's org policy recording.enabled). An Owner or Admin,
+                                            in person: Touch ID, the vault password or your login.
+                                            An agent can't: it asks on a card
+                                            (k2 permission request sew.recording-enable --why "...").
+                                            Needs at least 8 GiB of RAM, voice installed
+                                            (k2 hostchat media install), room for every Sew unit in
+                                            memory (on a shared box 40% stays with K2's database) and
+                                            free disk on /var/lib above the disk guard's reserve.
+                                            The files come from Sew's release (or the FILE flags on a
+                                            box without internet), each checked against K2's sha256
+                                            pin; a file that doesn't match stops everything.
+  k2 hostchat recording disable [--json]    turn recording off (live recordings stop). The recorder
+                                            stays installed and every recording is kept.
+  k2 hostchat recording uninstall [--yes] [--json]
+                                            remove the recorder, the transcriber and the model.
+                                            Never deletes recordings: they stay in Sew. Asks on a
+                                            terminal; with no terminal, --yes is required.
+  Turning recording on doesn't record anyone: Apps and rooms choose who may record, and each
+  person consents for themselves. Refused with sew_feature_missing on a Sew older than 0.9.0.
+EOF
+}
+
+# k2 hostchat recording (0.46.11 K-a): Sew's recorder install. Enable is an
+# Owner's or Admin's, in person (a vault confirm bound to this install); in
+# a K2 terminal the daemon answers person_only with the card's Ask-with line.
+_hostchat_recording() {
+    local sub="${1:-}"; [ $# -gt 0 ] && shift
+    local as_json=0 yes=0 wait=1 rec="" tra="" model=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --yes|-y)
+                [ "$sub" = "uninstall" ] || { echo "{\"error\":\"usage\",\"hint\":\"$1 only applies to k2 hostchat recording uninstall\"}" >&2; exit 2; }
+                yes=1; shift ;;
+            --no-wait) wait=0; shift ;;
+            --recorder-tarball|--transcriber-tarball|--model-file)
+                [ "$sub" = "enable" ] || { echo "{\"error\":\"usage\",\"hint\":\"$1 only applies to k2 hostchat recording enable\"}" >&2; exit 2; }
+                [ $# -ge 2 ] || { echo "{\"error\":\"usage\",\"hint\":\"$1 FILE\"}" >&2; exit 2; }
+                local f="$2"; case "$f" in /*) ;; *) f="$PWD/$f" ;; esac
+                case "$1" in
+                    --recorder-tarball) rec="$f" ;;
+                    --transcriber-tarball) tra="$f" ;;
+                    *) model="$f" ;;
+                esac
+                shift 2 ;;
+            -h|--help) _hostchat_recording_usage; return 0 ;;
+            -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 hostchat recording --help)\"}" >&2; exit 2 ;;
+            *) echo "{\"error\":\"usage\",\"hint\":\"unexpected '$1' (k2 hostchat recording --help)\"}" >&2; exit 2 ;;
+        esac
+    done
+    case "$sub" in
+        status) _hostchat_call GET /cli/sew/recording ""; _hostchat_print recording-status "$as_json" ;;
+        preflight) _hostchat_call GET /cli/sew/recording/preflight ""; _hostchat_print recording-preflight "$as_json" ;;
+        enable)
+            if _compute_in_session; then
+                # An agent: the daemon refuses (person_only) with the card's line.
+                _hostchat_call POST /cli/sew/recording/enable '{}'
+                _hostchat_print recording-enable "$as_json"
+                return 0
+            fi
+            # Refuse before asking for Touch ID when the box can't do it.
+            _hostchat_call GET /cli/sew/recording ""
+            local notready
+            notready="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+r = (json.load(sys.stdin).get("ready") or {})
+if r.get("ok") is False:
+    print(json.dumps({"error": r.get("code") or "not_ready", "hint": r.get("hint") or ""}))
+')"
+            if [ -n "$notready" ]; then echo "$notready" >&2; exit 3; fi
+            local id tok
+            id="$(_hostchat_install_id)"
+            tok="$(_vault_confirm_token sew-recording-enable "$id" "Install Sew's recorder and turn recording on")" || exit 3
+            _hostchat_call POST /cli/sew/recording/enable "$(_compute_json K2_CJ_confirmToken="$tok" K2_CJ_recorderTarballPath="$rec" \
+                K2_CJ_transcriberTarballPath="$tra" K2_CJ_modelFilePath="$model")" tcp
+            if [ "$wait" = "1" ] && [ "$(_hostchat_field state)" = "installing" ]; then
+                local i=0 res=""
+                while [ "$i" -lt 900 ]; do
+                    _hostchat_call GET /cli/sew/recording ""
+                    res="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; p=json.load(sys.stdin).get("progress") or {}; print(p.get("result") or "")')"
+                    [ "$res" = "running" ] || break
+                    sleep 2; i=$((i + 1))
+                done
+                _hostchat_print recording-status "$as_json"
+                [ "$res" = "done" ] || exit 3
+                return 0
+            fi
+            _hostchat_print recording-enable "$as_json" ;;
+        disable) _hostchat_call POST /cli/sew/recording/disable '{}'; _hostchat_print recording-disable "$as_json" ;;
+        uninstall)
+            if [ "$yes" != "1" ]; then
+                if [ ! -t 0 ]; then
+                    echo '{"error":"confirm_required","hint":"Remove the recorder? Live recordings stop; every recording is kept. There is no terminal to ask on: pass --yes (k2 hostchat recording uninstall --yes)"}' >&2
+                    exit 2
+                fi
+                printf 'Remove the recorder? Live recordings stop; every recording is kept. [y/N] ' >&2
+                local ans; IFS= read -r ans || ans=""
+                case "$ans" in
+                    y|Y|yes|YES|Yes) ;;
+                    *) echo "Recorder not removed." >&2; exit 1 ;;
+                esac
+            fi
+            _hostchat_call POST /cli/sew/recording/uninstall '{"confirm": true}'
+            _hostchat_print recording-uninstall "$as_json" ;;
+        ""|-h|--help|help) _hostchat_recording_usage ;;
+        *) echo "{\"error\":\"usage\",\"hint\":\"unknown recording command '$sub' (k2 hostchat recording --help)\"}" >&2; exit 2 ;;
     esac
 }
 

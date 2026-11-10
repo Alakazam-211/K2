@@ -320,10 +320,15 @@ pub enum ConfirmAction {
     /// name the App, the Space and the side.
     #[serde(rename = "sew-space-governance")]
     SewSpaceGovernance,
+    /// Installing Sew's recorder and turning recording on (0.46.11 K-a, the
+    /// card `sew.recording-enable`); bound to the request id. At the click
+    /// K2 turns it into the route's own (bound to the Sew install).
+    #[serde(rename = "sew-recording-enable")]
+    SewRecordingEnable,
 }
 
 impl ConfirmAction {
-    pub const ALL: [ConfirmAction; 8] = [
+    pub const ALL: [ConfirmAction; 9] = [
         ConfirmAction::AppApprove,
         ConfirmAction::NodeAdmin,
         ConfirmAction::VaultMove,
@@ -332,6 +337,7 @@ impl ConfirmAction {
         ConfirmAction::VaultShareService,
         ConfirmAction::AppsChatKey,
         ConfirmAction::SewSpaceGovernance,
+        ConfirmAction::SewRecordingEnable,
     ];
 
     /// The `CONFIRM_ACTIONS` string (`vaultApi.confirmStart(<this>, …)`).
@@ -345,6 +351,7 @@ impl ConfirmAction {
             ConfirmAction::VaultShareService => "vault-share-service",
             ConfirmAction::AppsChatKey => "apps-chat-key",
             ConfirmAction::SewSpaceGovernance => "sew-space-governance",
+            ConfirmAction::SewRecordingEnable => "sew-recording-enable",
         }
     }
 }
@@ -728,7 +735,8 @@ mod tests {
                 "sew-rollback-data-loss",
                 "vault-share-service",
                 "apps-chat-key",
-                "sew-space-governance"
+                "sew-space-governance",
+                "sew-recording-enable"
             ]
         );
         for c in ConfirmAction::ALL {

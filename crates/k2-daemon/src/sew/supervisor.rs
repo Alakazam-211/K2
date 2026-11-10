@@ -2829,6 +2829,17 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
             }
         },
     };
+    // 0.46.11 K-a (Sew 2026-11-10): a box with the recorder upgrades it to
+    // the new release's sidecars once the core is up. Never fails the
+    // upgrade; a failure is recorded (sew doctor flags the mismatch).
+    if matches!(result, "done" | "media_failed") && super::recording::load(env).installed {
+        upgrade_note(env, Some("recording"), None);
+        match super::recording::after_upgrade(env) {
+            Ok(None) => {}
+            Ok(Some(note)) => k2_core::log_debug!("[sew] upgrade to {to}: recording: {note}"),
+            Err(why) => save_enable(env, |r| r.last_error = Some(format!("Sew is upgraded to {to}, but {why}"))),
+        }
+    }
     let _ = helper(env, &["unstage"], None);
     upgrade_note(env, None, Some(result));
     store::load().and_then(|r| r.upgrade_progress).unwrap_or_default()

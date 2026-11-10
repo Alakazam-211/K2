@@ -1853,6 +1853,13 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/owner-handoff", Owner),
     post("/cli/sew/pass", Member),
     get("/cli/sew/preflight", Member),
+    // 0.46.11 K-a: Sew's recorder. Reads: any login. Enable: an Owner or
+    // Admin in person (vault confirm); disable and uninstall: Manage Sew.
+    get("/cli/sew/recording", Member),
+    post("/cli/sew/recording/disable", Admin),
+    post("/cli/sew/recording/enable", Admin),
+    get("/cli/sew/recording/preflight", Member),
+    post("/cli/sew/recording/uninstall", Admin),
     // S32 (K27): the app URL behind Open Sew as owner (Manage Sew).
     post("/cli/sew/server/app-url", Admin),
     post("/cli/sew/server/backup", Admin),

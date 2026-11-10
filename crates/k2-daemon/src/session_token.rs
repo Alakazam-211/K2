@@ -983,6 +983,13 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/sew/media/probe",
         "/cli/sew/media/rebind",
         "/cli/sew/media/uninstall",
+        // 0.46.11 K-a: the recorder. An agent reads; its enable answers
+        // person_only (the card), never the cell's bare 403.
+        "/cli/sew/recording",
+        "/cli/sew/recording/preflight",
+        "/cli/sew/recording/enable",
+        "/cli/sew/recording/disable",
+        "/cli/sew/recording/uninstall",
         "/cli/sew/meet/bind",
         "/cli/sew/meet/unbind",
         "/cli/sew/users",

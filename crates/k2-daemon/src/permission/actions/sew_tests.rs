@@ -224,3 +224,33 @@ fn without_a_rollback_point_the_card_is_not_offered() {
     let (s, v) = ask(&ws, "sew.rollback-data-loss", json!({}));
     assert_eq!((s.as_str(), &v["error"]["code"]), ("400 Bad Request", &json!("bad_params")), "{v}");
 }
+
+// ── sew.recording-enable (0.46.11 K-a) ──────────────────────────────────
+
+#[test]
+fn the_recording_card_is_registered_admin_floor_with_the_routes_confirm() {
+    let r = super::super::find("sew.recording-enable").expect("registered");
+    k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(r.spec.floor, Floor::Admin, "an Owner or an Admin answers (Rosson Q5)");
+    assert_eq!(r.spec.proof, Proof::SettingsConfirm { action: ConfirmAction::SewRecordingEnable });
+    assert_eq!(ConfirmAction::SewRecordingEnable.as_str(), crate::sew::recording::CONFIRM_ENABLE, "the same confirm the CLI takes");
+    assert_eq!(r.spec.walls[0].route_prefix, crate::sew::recording::ENABLE_ROUTE);
+    assert!(matches!(r.spec.walls[0].matches, WallMatch::Code { status: 403, code: "person_only" }));
+    assert!(r.spec.words.consequences.contains("only for people who consent"), "{}", r.spec.words.consequences);
+    assert!(r.spec.words.consequences.contains("never deletes recordings"));
+    let row = crate::routes::route_policy::lookup(RECORDING_ROUTE).and_then(|x| x.post).expect("a POST row");
+    assert_eq!(row, crate::routes::route_policy::Floor::Admin);
+}
+
+/// Only a Manage-Sew agent asks, and while this server's Sew can't record
+/// (0.8.x: no `app_recording`) the card is unavailable, not a dead button.
+#[test]
+fn the_recording_card_is_unavailable_until_sew_reports_app_recording() {
+    let _home = crate::test_support::TempHome::new();
+    let ws = seed("sewrec");
+    let (s, v) = ask(&ws, "sew.recording-enable", json!({}));
+    assert_eq!((s.as_str(), &v["error"]["code"]), ("409 Conflict", &json!("chat_manage_off")), "{v}");
+    k2_core::workspace::settings::set_agents_can_manage_chat(&ws.id, true).unwrap();
+    let (s, v) = ask(&ws, "sew.recording-enable", json!({}));
+    assert_eq!((s.as_str(), &v["error"]["code"]), ("409 Conflict", &json!("sew_feature_missing")), "{v}");
+}

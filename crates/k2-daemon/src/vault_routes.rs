@@ -2304,6 +2304,10 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // (`secretId` = `<install id>:<bundle>`; the card binds its own to the
     // request id).
     crate::sew::supervisor::CONFIRM_ROLLBACK_DATA_LOSS,
+    // Sew's recorder install (0.46.11 K-a): an Owner or Admin in person
+    // (`secretId` = the Sew install id; the card binds its own to the
+    // request id).
+    crate::sew::recording::CONFIRM_ENABLE,
     // Clone carries vault secrets (prd-clone-carries-threads-and-vault-v1
     // §6.4, CL14): copying secrets (or sending .env files) to a clone;
     // `secretId` = `clone:<sha256(plan)>`, reason written by the daemon.

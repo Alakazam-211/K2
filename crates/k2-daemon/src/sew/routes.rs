@@ -122,11 +122,11 @@ pub fn accept_binary_secret_id(sha: &str) -> String {
 }
 
 pub fn is_route(p: &str) -> bool {
-    ROUTES.contains(&p) || super::s32::is_route(p) || super::home::is_route(p)
+    ROUTES.contains(&p) || super::s32::is_route(p) || super::home::is_route(p) || super::recording::is_route(p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
-    POST_ROUTES.contains(&p) || super::s32::is_post_route(p) || super::home::is_post_route(p)
+    POST_ROUTES.contains(&p) || super::s32::is_post_route(p) || super::home::is_post_route(p) || super::recording::is_post_route(p)
 }
 
 // ── responses ────────────────────────────────────────────────────────────
@@ -426,6 +426,8 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
             let mut v = sup::status(&env, params.get("health").is_some_and(|h| h == "1" || h == "true"));
             // S32 (K26): `you`, owner, target, mirror, backup.ship.
             super::s32::decorate_status(&env, &mut v, who);
+            // 0.46.11 K-a: the recorder (K2's record; no helper call).
+            v["recording"] = super::recording::status_brief(&env);
             Ok(v)
         }
         "/cli/sew/preflight" => {
@@ -777,6 +779,11 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
             let r = sup::recovery_key(&env, &actor, &proof)?;
             crate::vault::auth_audit(super::secrets::LAUNCH_NAME, &who.label(), &format!("shown via {method}"), "cli");
             Ok(r)
+        }
+        // 0.46.11 K-a: Sew's recorder (`k2 hostchat recording`).
+        p if super::recording::is_route(p) => {
+            let v = json_body(body)?;
+            super::recording::route(env, p, who, &v, background)
         }
         // S32 (K27 routes, K31): app URL, off-box copies, App Spaces.
         // Decision 13: the owner's home-client settings.

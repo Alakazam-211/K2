@@ -161,7 +161,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 60] = [
+pub(crate) const V1_ACTIONS: [&str; 61] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -265,6 +265,9 @@ pub(crate) const V1_ACTIONS: [&str; 60] = [
     // 0.46.11 (prd-vault-for-agents-v1 A6): use a server's or another
     // workspace's secret for a while.
     "vault.use",
+    // 0.46.11 (K-a): install Sew's recorder and turn recording on (an
+    // Owner or Admin, in person; the agent never installs it).
+    "sew.recording-enable",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -459,6 +462,9 @@ pub(crate) const ROWS: &[Row] = &[
     // An agent's (or a K2 terminal's) emergency rollback: a person rolls
     // Sew back across a schema change; the owner answers on a card.
     row(ask("sew.rollback-data-loss", Floor::Owner), code(403, "rollback_needs_person"), "/cli/sew/server/rollback", POST),
+    // 0.46.11 K-a: an agent's `k2 hostchat recording enable` (Manage Sew
+    // or not past the switch): an Owner or Admin installs the recorder.
+    row(ask("sew.recording-enable", Floor::Admin), code(403, "person_only"), "/cli/sew/recording/enable", POST),
     // The home client (AG-21): its sessions see every Space each person is
     // in, so no agent sets or clears it, Manage Sew or not: not requestable.
     row(Target::Cannot { r#where: HOME_CLIENT_WHERE }, code(403, "owner_only"), "/cli/sew/home/client", POST),
@@ -1354,6 +1360,8 @@ mod tests {
             // 0.46.7: an agent turning its own App's chat key on (cards on), and switching a Space's governance.
             (403, "POST", "/cli/app/chat-key", vec![], Some(json!({"app":"jobs"})), json!({"error":{"code":"owner_only","hint":"x","app":"jobs"}}), "apps.chat-key"),
             (403, "POST", "/cli/sew/app-spaces/governance", vec![], Some(json!({"app":"jobs","spaceId":"5101","governance":"app"})), json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "sew.space-governance"),
+            // 0.46.11 K-a: an agent's recorder install.
+            (403, "POST", "/cli/sew/recording/enable", vec![], None, json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "sew.recording-enable"),
             // 0.46.6: an agent pausing / resuming another workspace's heartbeat.
             (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "false"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":false}}), "heartbeat.pause-other"),
             (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "true"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":true}}), "heartbeat.resume-other"),
@@ -1901,7 +1909,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 60);
+        assert_eq!(V1_ACTIONS.len(), 61);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

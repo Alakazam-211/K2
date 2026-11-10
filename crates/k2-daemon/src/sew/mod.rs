@@ -44,6 +44,8 @@
 //! - [`autosetup`]: voice rooms S6 (0.46.8, dark behind the preview): Sew
 //!   set up on every Linux box, started by the Pro tier watch, with the
 //!   small-box floor.
+//! - [`recording`]: Sew's recorder install (0.46.11 K-a, root helper
+//!   protocol 15): `k2 hostchat recording`, `/cli/sew/recording*`.
 //! - [`pro_gate`]: voice rooms S7: the host's Pro gate (cached tier), the
 //!   direct-mode exposure note and the ports file.
 
@@ -56,6 +58,7 @@ pub mod home;
 pub mod meet;
 pub mod ops;
 pub mod pro_gate;
+pub mod recording;
 pub mod routes;
 pub mod s32;
 pub mod secrets;

@@ -245,7 +245,8 @@ the fix.
 HOME. The owner's home client (k2 hostchat home client <app>, usually
 Hearth) sees every Space a person is in; k2 hostchat home app <app>
 --hidden on keeps an App out of it. Both wait for Sew's home_client flag.
-Recording is off by default. Guide: docs/app-chat-sew.md.
+Recording is off by default. An Owner or Admin installs the recorder
+with k2 hostchat recording enable (Sew 0.9.0+). Guide: docs/app-chat-sew.md.
 
 VOICE ROOMS AND PROJECT CHANNELS, start to finish (who does which step,
 in what order, what goes wrong): k2 study chat-voice.

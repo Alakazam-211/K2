@@ -235,6 +235,22 @@ class H(BaseHTTPRequestHandler):
         elif p == "/cli/sew/users":
             out = {"ok": True, "users": [{"username": "rosson", "installRole": "owner", "kind": "person", "displayName": "Rosson"},
                                          {"username": "bob", "installRole": "member", "kind": "person", "deactivated": True}]}
+        elif p == "/cli/sew/recording":
+            ready = os.path.exists(os.path.join(work, "rec_ready"))
+            out = {"ok": True, "installed": False, "enabled": False, "version": {"recorder": None, "transcriber": None},
+                   "flags": {"app_recording": ready}, "policies": None,
+                   "ready": {"ok": True} if ready else {"ok": False, "code": "sew_feature_missing",
+                             "hint": "this server's Sew can't record yet (it needs Sew 0.9.0: app_recording). Nothing changed."}}
+        elif p == "/cli/sew/recording/enable":
+            if token == scoped:
+                status, out = 403, {"ok": False, "error": {"code": "person_only",
+                    "hint": "nothing changed: an Owner or Admin installs Sew's recorder in person. Ask on a permission card: k2 permission request sew.recording-enable --why \"<why>\""}}
+            else:
+                out = {"ok": True, "state": "enabled", "installed": True, "enabled": True, "version": "0.9.0", "model": "base-q8_0"}
+        elif p == "/cli/sew/recording/disable":
+            out = {"ok": True, "enabled": False, "installed": True, "kept": "the recorder stays installed and every recording is kept"}
+        elif p == "/cli/sew/recording/uninstall":
+            out = {"ok": True, "installed": False, "enabled": False, "kept": "every recording stays in Sew"}
         elif p.startswith("/cli/sew/media/") or p.startswith("/cli/sew/server/"):
             out = {"ok": True, "echo": b}
         else:
@@ -615,6 +631,53 @@ run cell hostchat upgrade --tarball sew.tar.gz --accept-binary 7ed8031efba449713
 assert_eq "accept-binary from a K2 terminal → exit 3" "$rc" "3"
 assert_contains "accept-binary from a K2 terminal: person only" "$err" '"error":"person_only"'
 assert_eq "accept-binary refusals sent nothing to /cli/sew" "$(nreq)" "$before"
+
+echo "== recording (0.46.11 K-a) =="
+run owner hostchat recording --help
+assert_eq "recording --help exit 0" "$rc" "0"
+assert_contains "recording help: 8 GiB" "$out" "at least 8 GiB of RAM"
+assert_contains "recording help: disable keeps recordings" "$out" "every recording is kept"
+assert_contains "recording help: uninstall never deletes" "$out" "Never deletes recordings"
+assert_contains "recording help: an agent asks on a card" "$out" "k2 permission request sew.recording-enable"
+run owner hostchat --help
+assert_contains "hostchat help lists recording" "$out" "k2 hostchat recording enable"
+before="$(nreq)"
+run owner hostchat recording enable --bogus
+assert_eq "recording: unknown flag → exit 2" "$rc" "2"
+run owner hostchat recording status --model-file x.gguf
+assert_eq "recording: --model-file outside enable → exit 2" "$rc" "2"
+assert_contains "recording: --model-file names enable" "$err" "only applies to k2 hostchat recording enable"
+run owner hostchat recording status --yes
+assert_eq "recording: --yes outside uninstall → exit 2" "$rc" "2"
+run owner hostchat recording uninstall </dev/null
+assert_eq "recording uninstall, no tty, no --yes → exit 2" "$rc" "2"
+assert_contains "recording uninstall says recordings are kept" "$err" "every recording is kept"
+assert_eq "recording usage errors send nothing" "$(nreq)" "$before"
+# Sew 0.8.x: refused before any confirm, exit 3, no enable POST.
+run owner hostchat recording enable </dev/null
+assert_eq "recording enable on 0.8.x → exit 3" "$rc" "3"
+assert_contains "recording enable on 0.8.x: sew_feature_missing" "$err" '"error": "sew_feature_missing"'
+assert_eq "recording enable on 0.8.x: one GET, no POST" "$(req_where /cli/sew/recording method)" "GET"
+if grep -q '"path": "/cli/sew/recording/enable"' "$WORK/reqs.jsonl"; then bad "recording enable on 0.8.x sent the POST"; else ok "recording enable on 0.8.x sent no POST"; fi
+# An agent: the daemon's person_only, with the card's line; exit 3.
+run cell hostchat recording enable
+assert_eq "recording enable from a K2 terminal → exit 3" "$rc" "3"
+assert_contains "recording enable from a K2 terminal: person_only" "$err" '"error": "person_only"'
+assert_contains "recording enable from a K2 terminal: the card" "$err" "k2 permission request sew.recording-enable"
+assert_eq "recording enable from a K2 terminal carries no confirm" "$(req_where /cli/sew/recording/enable body)" '{}'
+run owner hostchat recording status
+assert_eq "recording status exit 0" "$rc" "0"
+assert_contains "recording status: not installed" "$out" "not installed"
+assert_contains "recording status: why it can't enable" "$out" "sew_feature_missing"
+run owner hostchat recording disable --json
+assert_eq "recording disable exit 0" "$rc" "0"
+assert_eq "recording disable is a POST" "$(req_where /cli/sew/recording/disable method)" "POST"
+run owner hostchat recording disable
+assert_contains "recording disable says what stays" "$out" "every recording is kept"
+run owner hostchat recording uninstall --yes </dev/null
+assert_eq "recording uninstall --yes exit 0" "$rc" "0"
+assert_eq "recording uninstall --yes body" "$(req_where /cli/sew/recording/uninstall body)" '{"confirm": true}'
+assert_contains "recording uninstall keeps recordings" "$out" "every recording stays in Sew"
 
 echo
 echo "hostchat CLI: $pass passed, $fail failed"

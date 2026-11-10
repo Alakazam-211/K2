@@ -247,6 +247,17 @@ pub trait SewOps: Send + Sync {
     /// the root helper (protocol 13) when the files are root-only; cached
     /// for [`super::box_backup::CACHE_SECS`]. The machine tests answer it
     /// from memory.
+    /// Every flag the box's Sew last reported (the reconcile sweep's list;
+    /// empty before any sweep or without Sew). K2 gates on flags, never on
+    /// versions.
+    fn sew_features(&self) -> Vec<String> {
+        k2_core::tool_hook::sew_features().unwrap_or_default()
+    }
+    /// The App disk guard's reserve (`~/.k2/disk-guard.json`, default
+    /// 10 GiB): the recorder's preflight keeps it free.
+    fn disk_reserve(&self) -> u64 {
+        k2_core::disk_guard::load_settings().lines.reserve_bytes
+    }
     fn box_backup_facts(&self) -> super::box_backup::BoxBackupFacts {
         use super::box_backup as bb;
         bb::cached(|| bb::read_with(&self.helper_state(), bb::direct_read, bb::timer_word, |argv| self.helper(argv, None)))
@@ -939,6 +950,11 @@ pub mod fake {
         pub box_backup: Mutex<crate::sew::box_backup::BoxBackupFacts>,
         /// How many times [`SewOps::box_backup_facts`] was read.
         pub box_backup_reads: Mutex<usize>,
+        /// What `sew recording status` reports (0.46.11 K-a): `installed`,
+        /// `enabled`, `model`, and the sidecars' `versions`.
+        pub recording: Mutex<Value>,
+        /// Sew's org policies (`GET|POST /mgmt/v1/policies`).
+        pub policies: Mutex<serde_json::Map<String, Value>>,
     }
 
     pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -1071,6 +1087,8 @@ pub mod fake {
                     timer: "not-found".into(),
                 }),
                 box_backup_reads: Mutex::new(0),
+                recording: Mutex::new(json!({"installed": false, "enabled": false, "model": null})),
+                policies: Mutex::new(serde_json::Map::new()),
             }
         }
 
@@ -1310,6 +1328,31 @@ pub mod fake {
                     json!({"sewExit": 0, "results": []})
                 }
                 "engine sew unstage" => json!({"removed": []}),
+                // 0.46.11 K-a: the recorder (the real helper checks pins; see
+                // k2-root-helper's sew_tests).
+                "engine sew recording stage" => json!({"staged": true}),
+                "engine sew recording install" => {
+                    let model = stdin.and_then(|b| serde_json::from_slice::<Value>(b).ok()).map(|v| v["model"].clone()).unwrap_or(Value::Null);
+                    let v = pinned().recorder.as_ref().map(|r| r.version).unwrap_or(pin);
+                    *self.recording.lock().unwrap() = json!({"installed": true, "enabled": true, "model": model,
+                        "versions": {"recorder": {"version": v}, "transcriber": {"version": v}}});
+                    let mut out = Self::sew_exit(0, json!({"changed": ["sew-recorder.service", "sew-transcriber.service"]}));
+                    out["step"] = json!("enable");
+                    out
+                }
+                "engine sew recording status" => {
+                    let r = self.recording.lock().unwrap().clone();
+                    let mut out = Self::sew_exit(0, json!({"installed": r["installed"], "enabled": r["enabled"], "model": r["model"],
+                        "recorder": {"ActiveState": "active"}, "transcriber": {"ActiveState": "active"}}));
+                    out["versions"] = r.get("versions").cloned().unwrap_or(json!({"recorder": null, "transcriber": null}));
+                    out
+                }
+                "engine sew recording plan" => Self::sew_exit(0, json!({"pick": "test-q8_0", "fits": true})),
+                "engine sew recording upgrade" => Self::sew_exit(0, json!({"changed": ["sew-recorder"]})),
+                "engine sew recording uninstall" => {
+                    *self.recording.lock().unwrap() = json!({"installed": false, "enabled": false, "model": null});
+                    Self::sew_exit(0, json!({"removed": ["sew-recorder.service", "sew-transcriber.service"]}))
+                }
                 "engine sew install-bin" => {
                     *self.on_disk.lock().unwrap() = Some(pin.into());
                     json!({"installed": pin, "changed": true})
@@ -1657,12 +1700,33 @@ pub mod fake {
                     Ok(st)
                 }
                 "/mgmt/v1/keys/rotate-master" => Ok(json!({"job_id": "job_rot1"})),
+                "/mgmt/v1/policies" => {
+                    let mut p = self.policies.lock().unwrap();
+                    if method == "POST" {
+                        let changes = body.and_then(|b| b.get("changes")).and_then(Value::as_object).cloned().unwrap_or_default();
+                        for (k, v) in changes {
+                            p.insert(k, v);
+                        }
+                    }
+                    Ok(json!({"policies": Value::Object(p.clone())}))
+                }
                 p if p.starts_with("/mgmt/v1/jobs/") => Ok(json!({"id": &p[14..], "state": "done"})),
                 _ => Err(MgmtError::Status(404, "unknown_route".into())),
             }
         }
         fn now(&self) -> i64 {
             *self.clock.lock().unwrap()
+        }
+        /// The flags `GET /mgmt/v1/status` reports in this fake.
+        fn sew_features(&self) -> Vec<String> {
+            self.mgmt_status.lock().unwrap()["features"]
+                .as_array()
+                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_default()
+        }
+        /// The disk guard's default reserve (never this machine's settings).
+        fn disk_reserve(&self) -> u64 {
+            k2_core::disk_guard::Lines::default().reserve_bytes
         }
         fn sleep_ms(&self, ms: u64) {
             *self.clock.lock().unwrap() += (ms / 1000).max(1) as i64;

@@ -7,6 +7,9 @@
 //! - [`flow`]: the ack window (N frames in flight, sized to the RTT) and the
 //!   bitrate controller the daemon's viewer loop uses.
 //! - [`fake`]: a deterministic H.264-shaped encoder for tests on any OS.
+//! - [`link`]: the helper link, protocol 4 (fix 1): framing, the encoded
+//!   unit header, the version gate, and the `layers` / `keyframe` / `rate`
+//!   requests that k2-simhelper and k2-deskd answer.
 //!
 //! Low-latency settings (VideoToolbox): real-time, no frame reordering (no
 //! B-frames), keyframes on join / size change / request only, and a bitrate
@@ -15,6 +18,7 @@
 pub mod annexb;
 pub mod fake;
 pub mod flow;
+pub mod link;
 #[cfg(target_os = "macos")]
 mod vt;
 

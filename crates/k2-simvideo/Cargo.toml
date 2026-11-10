@@ -5,11 +5,15 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "The Mobile tab's device stream: H.264 encoding (VideoToolbox on macOS, platform API, no codec library), Annex B helpers, and the ack-window / rate flow control. No K2 dependencies and no crate dependencies."
+description = "The Mobile tab's device stream: H.264 encoding (VideoToolbox on macOS, platform API, no codec library), Annex B helpers, the ack-window / rate flow control, and the helper link (protocol 4) that k2-simhelper and k2-deskd speak. No K2 dependencies; serde only."
 
-# No [dependencies] on purpose: VideoToolbox, CoreMedia, CoreVideo and
-# CoreFoundation are system frameworks called through hand-written FFI
-# (src/vt.rs), so nothing here adds a shipped licence.
+# VideoToolbox, CoreMedia, CoreVideo and CoreFoundation are system
+# frameworks called through hand-written FFI (src/vt.rs). The only crates
+# are serde and serde_json (MIT OR Apache-2.0, already in k2-core), for the
+# helper link's JSON (src/link.rs), so k2-deskd-proto can re-export it.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 # The before/after bench (examples/stream_bench.rs) measures the daemon's

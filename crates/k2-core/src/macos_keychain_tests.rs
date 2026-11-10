@@ -489,8 +489,8 @@ fn a_10kb_claude_login_with_mcp_tokens_round_trips_with_apple_tool_intact() {
     assert_eq!(read("Claude Code-credentials-1a2b3c4d", ACCT, Some(kc.p())).unwrap().unwrap(), big);
 }
 
-/// The Connect sign-in / companion items: written with their real
-/// options (on a throwaway keychain), they keep `apple-tool:`; one that
+/// The Connect sign-in item: written with its real
+/// options (on a throwaway keychain), it keeps `apple-tool:`; one that
 /// 0.45.1/0.45.2 broke is read silently by K2 (on its ACL) and repaired.
 fn k2_owned_round_trip_and_repair(label: &str, opts: WriteOptions, value: &[u8]) {
     let kc = TempKeychain::new(label);

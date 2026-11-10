@@ -209,7 +209,7 @@ export function AgentSessionChrome({
                     sessionKey={agentName}
                     conversationId={conversationId}
                     resolveProjectId={() => (cwd ? roomProjectForCwd(room, cwd)?.id ?? null : null)}
-                    floating={viewTab === 'thread'}
+                    floating={viewTab === 'thread' || splitColumn}
                   />
                 ) : null
               }

@@ -1289,7 +1289,7 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     localStorage.clear()
   })
 
-  it('in Split view the Thread column has the floats, only the picture and name, the bell and search; the view menu sits over the other side', async () => {
+  it('in Split view the Thread column has the floats: the picture and name, the bell and search, and session and restart on the right; the view menu sits over the other side', async () => {
     localStorage.clear()
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
@@ -1313,8 +1313,13 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     expect(screen.getAllByTestId('pinned-chat-header')).toHaveLength(1)
     expect(floats.querySelector('[data-testid="thread-view-identity"]')).not.toBeNull()
     expect(floats.querySelector('[data-testid="thread-search-button"]')).not.toBeNull()
-    expect(screen.queryByLabelText('Switch pinned chat session')).toBeNull()
-    expect(screen.queryByLabelText('Refresh chat session')).toBeNull()
+    const history = screen.getByLabelText('Switch pinned chat session')
+    const refresh = screen.getByLabelText('Refresh chat session')
+    expect(floats.contains(history)).toBe(true)
+    expect(floats.contains(refresh)).toBe(true)
+    expect(history.getAttribute('data-k2-float')).toBe('pill')
+    expect(refresh.getAttribute('data-k2-float')).toBe('round')
+    expect(history.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
     const bar = screen.getByTestId('split-view-bar')
     expect(screen.getByTestId('session-split-left').contains(bar)).toBe(true)

@@ -60,12 +60,12 @@ afterEach(() => {
 })
 
 describe('SPLIT_VIEW_THREAD_FLOATS', () => {
-  it('is the picture and name, the bell and search, and nothing else', () => {
-    expect([...SPLIT_VIEW_THREAD_FLOATS].sort()).toEqual(['bell', 'identity', 'search'])
+  it('is the picture and name, the bell, search, Token, session and restart, and nothing else', () => {
+    expect([...SPLIT_VIEW_THREAD_FLOATS].sort()).toEqual(['bell', 'history', 'identity', 'refresh', 'search', 'token'])
     expect(threadFloatShown('chatter', 'split')).toBe(false)
     expect(threadFloatShown('heartbeats', 'split')).toBe(false)
     const shownInSplit = EVERY_FLOAT.filter((id) => threadFloatShown(id, 'split'))
-    expect(shownInSplit.sort()).toEqual(['bell', 'identity', 'search'])
+    expect(shownInSplit.sort()).toEqual(['bell', 'history', 'identity', 'refresh', 'search', 'token'])
   })
 
   it('Thread view shows every object', () => {
@@ -111,7 +111,7 @@ function header(viewTab: SessionViewTab, splitColumn: boolean) {
 }
 
 describe('the header in a split Thread column', () => {
-  it('floats, with only the picture and name, the bell and search', () => {
+  it('floats, with the picture and name, the bell and search, and Token and restart on the right', () => {
     renderInRoom(room, header('split', true))
     const h = screen.getByTestId('sidecar-session-header')
     expect(h.hasAttribute('data-thread-floats')).toBe(true)
@@ -123,9 +123,15 @@ describe('the header in a split Thread column', () => {
     expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
     expect(screen.queryByTestId('thread-panel-toggle-chatter')).toBeNull()
     expect(screen.queryByTestId('thread-panel-toggle-heartbeats')).toBeNull()
-    expect(screen.queryByTestId('token-stub')).toBeNull()
-    expect(screen.queryByLabelText('Refresh session')).toBeNull()
     expect(screen.queryByTestId('sidecar-session-title')).toBeNull()
+    // The right-hand group, as in Thread view: Token, then restart, floating.
+    const token = screen.getByTestId('token-stub')
+    const refresh = screen.getByLabelText('Refresh session')
+    expect(refresh.getAttribute('data-k2-float')).toBe('round')
+    const right = h.lastElementChild as HTMLElement
+    expect(right.contains(token)).toBe(true)
+    expect(right.contains(refresh)).toBe(true)
+    expect(token.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('Thread view still shows them all', () => {
@@ -221,8 +227,11 @@ describe('split view in a session', () => {
     expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
     expect(screen.queryByTestId('thread-panel-toggle-chatter')).toBeNull()
     expect(screen.queryByTestId('thread-panel-toggle-heartbeats')).toBeNull()
-    expect(screen.queryByLabelText('Refresh session')).toBeNull()
     expect(screen.queryByTestId('sidecar-session-title')).toBeNull()
+    // Restart is back on the Thread's right, floating.
+    const refresh = screen.getByLabelText('Refresh session')
+    expect(floats.contains(refresh)).toBe(true)
+    expect(refresh.getAttribute('data-k2-float')).toBe('round')
     // Only one header, and it is in the column.
     expect(screen.getAllByTestId('sidecar-session-header')).toHaveLength(1)
     // The view menu is still reachable: on a bar over the terminal's column.

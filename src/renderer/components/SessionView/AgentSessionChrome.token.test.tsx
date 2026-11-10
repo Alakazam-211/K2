@@ -44,6 +44,8 @@ vi.stubGlobal(
 )
 
 import { AgentSessionChrome } from './AgentSessionChrome'
+import { SplitSessionColumns } from './SplitSessionColumns'
+import { useSessionViewChrome } from './sessionViewChrome'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { resetLlmAccountsForTests } from '@/stores/llm-accounts'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
@@ -148,5 +150,39 @@ describe('agent chat tab header Token picker', () => {
     expect(screen.getAllByTestId('sidecar-session-header')).toHaveLength(2)
     expect(screen.queryByTestId('chat-login-picker')).toBeNull()
     expect(h.daemonCliGet).not.toHaveBeenCalled()
+  })
+
+  it('in split view it floats on the Thread column\'s right, before restart', async () => {
+    pins = []
+    const room = testRoom({ tabs: {}, projects: [PROJECT] })
+    function Columns() {
+      const chrome = useSessionViewChrome()
+      if (!chrome) return null
+      return (
+        <SplitSessionColumns
+          showSplit={chrome.viewTab === 'split'}
+          hidePty={false}
+          left={chrome.splitLeft}
+          right={chrome.splitRight}
+          terminal={<div data-testid="terminal-pane" />}
+          sharedTerminal={null}
+          renderView={() => <div data-testid="thread-column" />}
+          single={null}
+        />
+      )
+    }
+    // A new agent opens in Split view: Terminal left, Thread right.
+    renderInRoom(
+      room,
+      <AgentSessionChrome title="sales/reviewer" addr="sales/reviewer" conversationId="conv-r" agentName="tab-xyz" cwd="/ws/sales" command="claude">
+        <Columns />
+      </AgentSessionChrome>,
+    )
+    const thread = screen.getByTestId('session-split-right')
+    const chip = await within(thread).findByRole('button', { name: /^Claude token for this chat/ })
+    expect(chip.getAttribute('data-k2-float')).toBe('pill')
+    const refresh = within(thread).getByLabelText('Refresh session')
+    expect(chip.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId('session-split-left').contains(chip)).toBe(false)
   })
 })

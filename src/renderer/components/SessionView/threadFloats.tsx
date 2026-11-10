@@ -50,12 +50,21 @@ export type ThreadFloatId =
   | 'chatter'
   | 'heartbeats'
 
-/** The only objects split view's Thread column shows (Rosson, 2026-11-09):
- *  the agent's picture and name, the bell and search. Split view already
- *  picks what each side shows, so the view menu, the terminal and every
- *  other object stay in Thread view. An object not listed here is hidden in
+/** The only objects split view's Thread column shows: the agent's picture
+ *  and name, the bell and search (Rosson, 2026-11-09), and on the right, as
+ *  in Thread view, restart, the pinned chat's session and Token, since split
+ *  view has no top bar of its own to hold them (2026-11-10). Split view
+ *  already picks what each side shows, so the view menu, the terminal and
+ *  the drawers stay in Thread view. An object not listed here is hidden in
  *  split view, so a new one needs no rule of its own. */
-export const SPLIT_VIEW_THREAD_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>(['identity', 'bell', 'search'])
+export const SPLIT_VIEW_THREAD_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>([
+  'identity',
+  'bell',
+  'search',
+  'token',
+  'history',
+  'refresh',
+])
 
 /** Whether `id` is drawn in `place`: Thread view shows them all. */
 export function threadFloatShown(id: ThreadFloatId, place: ThreadFloatsPlace): boolean {

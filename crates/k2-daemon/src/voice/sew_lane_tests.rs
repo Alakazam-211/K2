@@ -288,6 +288,44 @@ async fn the_gateway_splices_and_a_second_socket_on_one_credential_passes_too() 
     tokio::time::timeout(Duration::from_secs(5), second_task).await.expect("closed").expect("task");
 }
 
+/// K2 PRD prd-k2-bobbin-in-apps-v1 §8 K-f (pin: passes today): the call
+/// door splices Sew's gateway byte for byte, so Sew 0.9.0's
+/// `recording_updated` (with `trigger` and `required`) reaches the engine
+/// unchanged, with no K2 change.
+#[tokio::test]
+async fn a_recording_updated_frame_crosses_the_gateway_splice() {
+    let payload = br#"{"op":0,"t":"recording_updated","s":7,"d":{"recording":{"id":"77","channel_id":"10","trigger":"required","required":true}}}"#;
+    let mut frame = vec![0x81u8, 126, (payload.len() >> 8) as u8, (payload.len() & 0xff) as u8];
+    frame.extend_from_slice(payload);
+    let l = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = l.local_addr().expect("addr").to_string();
+    let sent = frame.clone();
+    tokio::spawn(async move {
+        let (mut s, _) = l.accept().await.expect("accept");
+        let mut got = Vec::new();
+        let mut b = [0u8; 4096];
+        while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = s.read(&mut b).await.expect("read");
+            assert!(n > 0, "closed in the handshake");
+            got.extend_from_slice(&b[..n]);
+        }
+        s.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n").await.expect("101");
+        // The client says it has the 101 (a byte through the splice), then
+        // Sew's frame follows.
+        let n = s.read(&mut b).await.expect("the client's go");
+        assert!(n > 0, "the client's go");
+        s.write_all(&sent).await.expect("frame");
+        let _ = s.read(&mut b).await;
+    });
+    let (mut client, task) = open_gateway(&addr, "sewcc_rec-a.secret").await;
+    client.write_all(b"go").await.expect("go");
+    let mut got = vec![0u8; frame.len()];
+    tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut got)).await.expect("in time").expect("the frame");
+    assert_eq!(got, frame, "byte for byte");
+    drop(client);
+    tokio::time::timeout(Duration::from_secs(5), task).await.expect("closed").expect("task");
+}
+
 #[tokio::test]
 async fn a_refused_handshake_passes_through_and_opens_no_socket() {
     let (addr, _seen) = fake_sew("HTTP/1.1 403 Forbidden\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}", false).await;

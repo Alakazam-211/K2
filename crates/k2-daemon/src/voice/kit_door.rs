@@ -20,8 +20,18 @@
 //! Sew checks every right; K2 never acts with anyone else's session.
 //!
 //! **The allowlist** ([`kit_route`]): the method and every segment exact; ids
-//! are `[0-9]{1,19}`; no query except R1's `ids=` list. Anything else is 404
-//! and never reaches Sew. App sessions get every kit route, R4–R7 (recording,
+//! are `[0-9]{1,19}`; no query except R1's `ids=` list and the recording
+//! reads' one cursor. Anything else is 404 and never reaches Sew.
+//!
+//! **Recording reads (Sew 0.9.0, flag `app_recording`; K2 PRD
+//! prd-k2-bobbin-in-apps-v1 K-f):** the 0.9.0 kit's reads use Sew's own
+//! client routes, R10–R13: `GET /channels/{id}/recording` (the active one),
+//! `GET /channels/{id}/recordings[?before=<id>]`, `GET /recordings/{id}` and
+//! `GET /messages/{record message id}/replies[?after=<id>]` (the transcript is
+//! that message's thread; Sew checks the person's rights on each, B14). With
+//! the flag, R3's answer also keeps `recording_rule` and `recording_required`
+//! (the kit hides Stop in a required room). Without it every one of them is
+//! 404 here, as before, and R3 is trimmed as before. App sessions get every kit route, R4–R7 (recording,
 //! member mute, deafen and move) too: Sew checks the person's own rights on
 //! each (the channel's recording permission and consent, the Space's
 //! moderation permissions), and its answer comes back unchanged. An App that
@@ -97,6 +107,15 @@ pub enum KitRoute {
     MyDevices,
     /// R9 `POST /devices/{id}/revoke`
     DeviceRevoke,
+    /// R10 `GET /channels/{id}/recording` (Sew 0.9.0, `app_recording`)
+    ChannelRecording,
+    /// R11 `GET /channels/{id}/recordings[?before=<id>]` (`app_recording`)
+    ChannelRecordings,
+    /// R12 `GET /recordings/{id}` (`app_recording`)
+    Recording,
+    /// R13 `GET /messages/{id}/replies[?after=<id>]`: a recording's
+    /// transcript thread (`app_recording`)
+    TranscriptReplies,
     /// `GET /_k2/voice/sew/feed`, the event feed (WebSocket).
     Feed,
 }
@@ -127,9 +146,29 @@ pub fn ids_query(q: &str) -> bool {
     n <= MAX_IDS && list.split(',').all(dec)
 }
 
+/// Does this box's Sew report `app_recording` (the kit's recording reads,
+/// R3's recording fields and `transcript_ready` on the feed)?
+pub fn recording_kit_on() -> bool {
+    k2_core::tool_hook::sew_has(k2_core::tool_hook::features::APP_RECORDING).unwrap_or(false)
+}
+
+/// A one-cursor query: absent, or exactly `<name>=<id>`.
+fn cursor_query(q: Option<&str>, name: &str) -> bool {
+    match q {
+        None => true,
+        Some(q) => q.strip_prefix(name).and_then(|r| r.strip_prefix('=')).is_some_and(dec),
+    }
+}
+
 /// The kit route for a request on the door: `path` has the door prefix
 /// stripped (`/api/v1/…` or `/feed`), `query` is after `?` when there is one.
+/// The recording reads follow this box's Sew ([`recording_kit_on`]).
 pub fn kit_route(method: &str, path: &str, query: Option<&str>) -> Option<KitRoute> {
+    kit_route_with(method, path, query, recording_kit_on())
+}
+
+/// [`kit_route`] with Sew's `app_recording` given (pure).
+pub fn kit_route_with(method: &str, path: &str, query: Option<&str>, recording: bool) -> Option<KitRoute> {
     if path == "/feed" {
         return (method == "GET" && query.is_none()).then_some(KitRoute::Feed);
     }
@@ -144,9 +183,15 @@ pub fn kit_route(method: &str, path: &str, query: Option<&str>) -> Option<KitRou
         ("POST", ["spaces", s, "members", m, "voice", "move"]) if dec(s) && dec(m) => KitRoute::MemberMove,
         ("GET", ["me", "devices"]) => KitRoute::MyDevices,
         ("POST", ["devices", id, "revoke"]) if dec(id) => KitRoute::DeviceRevoke,
+        ("GET", ["channels", id, "recording"]) if recording && dec(id) => KitRoute::ChannelRecording,
+        ("GET", ["channels", id, "recordings"]) if recording && dec(id) => KitRoute::ChannelRecordings,
+        ("GET", ["recordings", id]) if recording && dec(id) => KitRoute::Recording,
+        ("GET", ["messages", id, "replies"]) if recording && dec(id) => KitRoute::TranscriptReplies,
         _ => return None,
     };
     let query_ok = match (route, query) {
+        (KitRoute::ChannelRecordings, q) => cursor_query(q, "before"),
+        (KitRoute::TranscriptReplies, q) => cursor_query(q, "after"),
         (KitRoute::Members, Some(q)) => ids_query(q),
         (_, None) => route != KitRoute::Members,
         (_, Some(_)) => false,
@@ -535,13 +580,23 @@ pub(super) async fn write_out<S: AsyncWrite + Unpin>(client: &mut S, out: &Out) 
     }
 }
 
-/// R3's 200, trimmed to what the kit reads.
-pub fn trim_channel(body: &[u8]) -> Option<Vec<u8>> {
+/// R3's 200, trimmed to what the kit reads. With Sew's `app_recording`
+/// (`recording`) the channel's `recording_rule` and `recording_required`
+/// stay too, when Sew sent them (both are omitted for none / inherited).
+pub fn trim_channel(body: &[u8], recording: bool) -> Option<Vec<u8>> {
     let v: Value = serde_json::from_slice(body).ok()?;
     let o = v.as_object()?;
     let id = o.get("id")?.clone();
     let days = o.get("recording_audio_days").cloned().unwrap_or(Value::Null);
-    Some(json!({ "id": id, "recording_audio_days": days }).to_string().into_bytes())
+    let mut out = json!({ "id": id, "recording_audio_days": days });
+    if recording {
+        for k in ["recording_rule", "recording_required"] {
+            if let Some(x) = o.get(k).filter(|x| !x.is_null()) {
+                out[k] = x.clone();
+            }
+        }
+    }
+    Some(out.to_string().into_bytes())
 }
 
 // ── the request ──────────────────────────────────────────────────────
@@ -665,7 +720,8 @@ pub(super) async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
     ctx: &KitCtx,
     sew_addr: &str,
 ) {
-    let Some(route) = kit_route(method, sew_path, query) else {
+    let recording = recording_kit_on();
+    let Some(route) = kit_route_with(method, sew_path, query, recording) else {
         return refuse(client, &Refusal::new(404, "not_found", "no such route")).await;
     };
     // One credential and plain framing, or nothing: never two readings.
@@ -732,7 +788,7 @@ pub(super) async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
         Err(r) => return refuse(client, &r).await,
     };
     if route == KitRoute::Channel && a.status == 200 {
-        return match trim_channel(&a.body) {
+        return match trim_channel(&a.body, recording) {
             Some(b) => relay_answer(client, &a, &b).await,
             None => refuse(client, &Refusal::new(502, "voice_unavailable", "Sew's channel answer wasn't a channel")).await,
         };
@@ -771,7 +827,18 @@ mod voice_chat_door_tests {
             let refusal = voice_chat_kit_refusal(r).unwrap_or_else(|| panic!("{r:?} refused"));
             assert_eq!((refusal.status, refusal.code.as_str()), (403, "voice_chat_not_allowed"));
         }
-        for r in [KitRoute::Members, KitRoute::CallDecline, KitRoute::Channel, KitRoute::MyDevices, KitRoute::DeviceRevoke, KitRoute::Feed] {
+        for r in [
+            KitRoute::Members,
+            KitRoute::CallDecline,
+            KitRoute::Channel,
+            KitRoute::MyDevices,
+            KitRoute::DeviceRevoke,
+            KitRoute::Feed,
+            KitRoute::ChannelRecording,
+            KitRoute::ChannelRecordings,
+            KitRoute::Recording,
+            KitRoute::TranscriptReplies,
+        ] {
             assert!(voice_chat_kit_refusal(r).is_none(), "{r:?}");
         }
     }

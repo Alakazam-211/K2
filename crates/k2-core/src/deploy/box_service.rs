@@ -551,6 +551,24 @@ mod tests {
         assert_eq!(want("sew-api", 8470, 9000).display(), "sew-api (host 127.0.0.1:8470, in the wall :9000)");
     }
 
+    /// K2 PRD prd-k2-bobbin-in-apps-v1 §8 K-f (pin: passes today): a web
+    /// App's `sew-api` box service is a plain TCP forward of Sew's client API
+    /// (pasta `-T` and one nft rule), with no path in K2's record at all, so
+    /// Sew 0.9.0's `POST /api/v1/channels/{id}/recording/start` and every
+    /// `/api/v1/recordings/*` path reach Sew unchanged. The live forward
+    /// itself needs the guarded engine on a Linux box.
+    #[test]
+    fn sew_api_is_a_plain_tcp_forward_with_no_path_filter() {
+        let api = preset("sew-api").unwrap();
+        assert!(api.what.contains("client API"), "{}", api.what);
+        let w = want("sew-api", api.default_port, api.default_port);
+        assert_eq!(w.proto, PROTO_TCP);
+        let fields: Vec<String> = serde_json::to_value(&w).unwrap().as_object().unwrap().keys().cloned().collect();
+        for f in &fields {
+            assert!(!f.contains("path") && !f.contains("route") && !f.contains("allow"), "a box service names no paths: {fields:?}");
+        }
+    }
+
     #[test]
     fn presets_read_sews_config_and_refuse_a_public_bind() {
         let api = preset("sew-api").unwrap();

@@ -813,6 +813,93 @@ fn gate_of(t: &str, d: Value) -> Gate {
     kit_feed::gate(t, &d, "1001")
 }
 
+// ── Sew 0.9.0: recording reads, R3's recording fields, transcript_ready ──
+
+/// K2 PRD prd-k2-bobbin-in-apps-v1 §8 K-f: with Sew's `app_recording` the
+/// door admits the 0.9.0 kit's four reads (ids decimal, one fixed cursor);
+/// without it each is 404, as before.
+#[test]
+fn the_recording_reads_need_app_recording() {
+    let reads: [(&str, Option<&str>, KitRoute); 7] = [
+        ("/api/v1/channels/10/recording", None, KitRoute::ChannelRecording),
+        ("/api/v1/channels/10/recordings", None, KitRoute::ChannelRecordings),
+        ("/api/v1/channels/10/recordings", Some("before=77"), KitRoute::ChannelRecordings),
+        ("/api/v1/recordings/77", None, KitRoute::Recording),
+        ("/api/v1/messages/9001/replies", None, KitRoute::TranscriptReplies),
+        ("/api/v1/messages/9001/replies", Some("after=9002"), KitRoute::TranscriptReplies),
+        ("/api/v1/channels/10", None, KitRoute::Channel),
+    ];
+    for (p, q, want) in reads {
+        assert_eq!(kit_route_with("GET", p, q, true), Some(want), "{p} {q:?}");
+        let without = kit_route_with("GET", p, q, false);
+        if want == KitRoute::Channel {
+            assert_eq!(without, Some(KitRoute::Channel), "R3 is the kit's either way");
+        } else {
+            assert_eq!(without, None, "Sew 0.8.x: {p} {q:?} is 404 here");
+        }
+    }
+    for (m, p, q) in [
+        ("POST", "/api/v1/channels/10/recording", None),
+        ("POST", "/api/v1/recordings/77", None),
+        ("GET", "/api/v1/recordings/77/audio", None),
+        ("GET", "/api/v1/recordings/77/transcript", None),
+        ("GET", "/api/v1/recordings/abc", None),
+        ("GET", "/api/v1/messages/1e3/replies", None),
+        ("GET", "/api/v1/messages/9001/replies", Some("after=x")),
+        ("GET", "/api/v1/messages/9001/replies", Some("limit=5")),
+        ("GET", "/api/v1/messages/9001/replies", Some("after=1&after=2")),
+        ("GET", "/api/v1/messages/9001", None),
+        ("GET", "/api/v1/channels/10/recordings", Some("after=77")),
+        ("GET", "/api/v1/channels/10/recordings", Some("before=")),
+        ("GET", "/api/v1/channels/10/recording", Some("x=1")),
+        ("GET", "/api/v1/recordings/77", Some("app_id=1")),
+    ] {
+        assert_eq!(kit_route_with(m, p, q, true), None, "{m} {p} {q:?}");
+    }
+    // Reads: never a POST, so a 401 retries once on a fresh session.
+    for r in [KitRoute::ChannelRecording, KitRoute::ChannelRecordings, KitRoute::Recording, KitRoute::TranscriptReplies] {
+        assert!(!r.is_post(), "{r:?}");
+    }
+}
+
+/// §8 K-f: R3 keeps `recording_rule` / `recording_required` with the flag,
+/// and is trimmed exactly as before without it.
+#[test]
+fn r3_keeps_the_recording_rule_with_app_recording() {
+    let sew = json!({"id": "10", "name": "standup", "recording_audio_days": 30, "recording_rule": "required",
+                     "recording_required": true, "topic": "never crosses"})
+    .to_string();
+    let with: Value = serde_json::from_slice(&trim_channel(sew.as_bytes(), true).expect("a channel")).unwrap();
+    assert_eq!(with, json!({"id": "10", "recording_audio_days": 30, "recording_rule": "required", "recording_required": true}));
+    let without: Value = serde_json::from_slice(&trim_channel(sew.as_bytes(), false).expect("a channel")).unwrap();
+    assert_eq!(without, json!({"id": "10", "recording_audio_days": 30}), "Sew 0.8.x: as before");
+    // Omitted by Sew (none / inherited): omitted here too.
+    let plain: Value = serde_json::from_slice(&trim_channel(br#"{"id":"11","recording_audio_days":null}"#, true).unwrap()).unwrap();
+    assert_eq!(plain, json!({"id": "11", "recording_audio_days": null}));
+}
+
+/// §8 K-f, B19: `transcript_ready` (Sew's `notification_created`, reason
+/// `transcript_ready`) reaches a person who sees its channel; any other
+/// notification, or one without a channel, is dropped; without the flag it
+/// is dropped, as before.
+#[test]
+fn transcript_ready_passes_by_its_channel_with_app_recording() {
+    let ready = json!({"reason": "transcript_ready", "channel_id": "10", "recording_id": "77"});
+    assert_eq!(kit_feed::gate_with("notification_created", &ready, "1001", true), Gate::AnyOf(vec!["10".into()]));
+    assert_eq!(kit_feed::gate_with("notification_created", &ready, "1001", false), Gate::Drop, "Sew 0.8.x: dropped");
+    assert_eq!(kit_feed::gate("notification_created", &ready, "1001"), Gate::Drop);
+    let mention = json!({"reason": "mention", "channel_id": "10", "message": {"content": "hi"}});
+    assert_eq!(kit_feed::gate_with("notification_created", &mention, "1001", true), Gate::Drop);
+    let no_channel = json!({"reason": "transcript_ready", "recording_id": "77"});
+    assert_eq!(kit_feed::gate_with("notification_created", &no_channel, "1001", true), Gate::Drop, "fails closed");
+    // A person who sees channel 10 gets it; one who doesn't, not.
+    let mut seen = FeedSeen::from_ready(&ready_for("alice-x", 1));
+    seen.recording = true;
+    assert_eq!(seen.known("10"), Some(true));
+    assert_eq!(seen.known("99"), None, "asked of Sew as the person before it passes");
+    assert_eq!(gate_of("message_created", json!({"channel_id": "10"})), Gate::Drop, "transcript turns stay off the kit feed");
+}
+
 #[tokio::test]
 async fn the_feed_sends_ready_first_filters_and_renumbers() {
     let (addr, fake) = fake_sew().await;

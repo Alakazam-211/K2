@@ -19,7 +19,9 @@
 //!
 //! **K2's own narrowing** (Sew's §2.3 table, on top of Sew's filter): a
 //! voice state, recording, call or channel event passes only when it names a
-//! channel the person can see ([`gate`]); `voice_state_updated` for the
+//! channel the person can see ([`gate`]); with Sew 0.9.0's `app_recording`,
+//! so does `notification_created` with reason `transcript_ready` (by its
+//! `channel_id`; no channel id, or any other notification, is dropped); `voice_state_updated` for the
 //! person themselves always passes. A channel is visible when READY listed
 //! it, or when `GET /api/v1/channels/{id}` as the person answers 200 (403
 //! and 404 are hidden). Perms and membership changes drop what K2 learned.
@@ -88,7 +90,13 @@ pub const EVENTS: &[&str] = &[
     "space_updated",
     "category_updated",
     "category_deleted",
+    // Sew 0.9.0 (`app_recording`): only its `transcript_ready` reason
+    // ([`gate_with`]).
+    "notification_created",
 ];
+
+/// The `notification_created` reason that reaches the kit.
+pub const TRANSCRIPT_READY: &str = "transcript_ready";
 
 fn id_of(v: Option<&Value>) -> Option<String> {
     match v? {
@@ -109,8 +117,14 @@ pub enum Gate {
 }
 
 /// The gate for event `t` with body `d`, for the person whose Sew member id
-/// is `me` (pure).
+/// is `me` (pure), on a Sew without `app_recording`.
 pub fn gate(t: &str, d: &Value, me: &str) -> Gate {
+    gate_with(t, d, me, false)
+}
+
+/// [`gate`] with Sew's `app_recording` given: `transcript_ready` passes by
+/// its channel, like `recording_updated` (B19).
+pub fn gate_with(t: &str, d: &Value, me: &str, recording: bool) -> Gate {
     if !EVENTS.contains(&t) {
         return Gate::Drop;
     }
@@ -130,6 +144,12 @@ pub fn gate(t: &str, d: &Value, me: &str) -> Gate {
             chans(vec![id_of(d.get("channel_id")), id_of(d.get("previous_channel_id"))])
         }
         "recording_updated" => chans(vec![id_of(d.pointer("/recording/channel_id"))]),
+        "notification_created" => {
+            if !recording || d.get("reason").and_then(Value::as_str) != Some(TRANSCRIPT_READY) {
+                return Gate::Drop;
+            }
+            chans(vec![id_of(d.get("channel_id"))])
+        }
         "call_updated" => chans(vec![id_of(d.pointer("/call/channel_id"))]),
         "channel_created" | "channel_updated" => chans(vec![id_of(d.get("id"))]),
         _ => Gate::Pass,
@@ -143,12 +163,14 @@ pub struct Seen {
     /// READY's `member.id`.
     pub me: String,
     verdicts: HashMap<String, bool>,
+    /// Sew reported `app_recording` when the feed opened.
+    pub recording: bool,
 }
 
 impl Seen {
     /// Seeded from READY: its member, channels, voice channels and calls.
     pub fn from_ready(d: &Value) -> Seen {
-        let mut s = Seen { me: id_of(d.pointer("/member/id")).unwrap_or_default(), verdicts: HashMap::new() };
+        let mut s = Seen { me: id_of(d.pointer("/member/id")).unwrap_or_default(), verdicts: HashMap::new(), recording: false };
         for (list, key) in [("channels", "id"), ("voice_channels", "id"), ("calls", "channel_id")] {
             for item in d.get(list).and_then(Value::as_array).into_iter().flatten() {
                 if let Some(id) = id_of(item.get(key)) {
@@ -397,7 +419,7 @@ async fn verify(ctx: &KitCtx, p: &KitPerson, sew_addr: &str, ch: &str) -> Result
 
 /// Forward event `t`? `Err`: the check failed (the feed resets).
 async fn decide(seen: &mut Seen, t: &str, d: &Value, ctx: &KitCtx, p: &KitPerson, sew_addr: &str) -> Result<bool, ()> {
-    match gate(t, d, &seen.me) {
+    match gate_with(t, d, &seen.me, seen.recording) {
         Gate::Pass => Ok(true),
         Gate::Drop => Ok(false),
         Gate::AnyOf(chans) => {
@@ -427,6 +449,7 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(
 ) {
     let Upstream { ws: mut upws, mut ready, ready_s, beat } = up;
     let mut seen = Seen::from_ready(&ready);
+    seen.recording = kit_door::recording_kit_on();
     // L7: a Voice & Chat only login's feed names only its own room's people.
     let narrow = person.is_voice_chat();
     let mut mine = if narrow { narrow_ready(&mut ready, &seen.me) } else { None };

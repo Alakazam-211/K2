@@ -22,6 +22,12 @@ const VARIANTS: Record<string, string> = {
   /** Destructive action (red-600/700 idiom). */
   danger:
     'bg-[var(--color-danger)] border border-[var(--color-danger)] text-[var(--color-on-accent)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)] [--k2-ch-focus:var(--color-on-accent)]',
+  /** A destructive action on a resting page (Reset…): present but quiet. The
+   *  quiet button's outline with the label in the error colour (4.5:1 on a
+   *  card); it fills red only under the pointer and on press, where the white
+   *  label clears 4.5:1 too. Its confirm dialog keeps the filled red. */
+  'danger-quiet':
+    'bg-transparent border border-[var(--color-control-edge)] text-[var(--color-status-error-text)] hover:bg-[var(--color-danger-muted)] hover:border-[var(--color-danger-muted)] hover:text-[var(--color-on-accent)] active:bg-[var(--color-danger-active)] active:border-[var(--color-danger-active)] active:text-[var(--color-on-accent)]',
   /** Muted destructive (ConfirmDialog confirm / kick). */
   'danger-muted':
     'bg-[var(--color-danger-muted)] border border-[var(--color-danger-muted)] text-[var(--color-on-accent)] [--k2-ch-focus:var(--color-on-accent)]',

@@ -15,13 +15,13 @@ function rule(sel: string): string {
 }
 
 describe('Tag', () => {
-  it('is a chip cut in Terminal, with its tone and the badge type role', () => {
+  it('is a chip cut in Terminal, with its tone, at the hint size', () => {
     render(<Tag tone="accent" className="ml-auto" title="t">beta</Tag>)
     const tag = screen.getByText('beta')
     expect(tag.tagName).toBe('SPAN')
     expect(tag.getAttribute('data-k2-chamfer')).toBe('chip')
     expect(tag.getAttribute('data-tone')).toBe('accent')
-    expect(tag.className).toBe('k2-tag type-badge ml-auto')
+    expect(tag.className).toBe('k2-tag type-hint font-medium ml-auto')
     expect(tag.getAttribute('title')).toBe('t')
   })
 

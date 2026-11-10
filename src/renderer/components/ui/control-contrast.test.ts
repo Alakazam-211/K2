@@ -109,7 +109,54 @@ describe('Filled accent controls', () => {
   it('the Button, the selected segment and Glass\'s segment thumb paint the fill', () => {
     expect(readFileSync(join(__dirname, 'Button.tsx'), 'utf8')).toContain("'bg-[var(--color-accent-fill)] border border-[var(--color-accent-fill)] text-[var(--color-on-accent)]")
     expect(rule(globals, '.k2-segment-thumb')).toContain('background: var(--color-accent-fill)')
-    expect(rule(generated, '[data-style="glass"] .k2-segment-thumb:not([data-zen-root] *)')).toContain('var(--color-accent-fill) 92%')
+    expect(rule(generated, '[data-style="glass"] .k2-segment-thumb:not([data-zen-root] *)')).toContain('background: var(--color-accent-fill);')
+  })
+})
+
+describe('Segmented in Glass', () => {
+  it('is one design in both palettes: edged track, secondary labels, the accent fill under a white label', () => {
+    const track = rule(generated, '[data-style="glass"] .k2-segmented[data-material="frost"]:not([data-zen-root] *)')
+    expect(track).toContain('border: 1px solid var(--color-control-edge)')
+    // Clear, so the track is the card: a Frost wash takes the chosen segment under 3:1 on Obsidian.
+    expect(track).toContain('background: transparent')
+    expect(rule(generated, '[data-style="glass"] .k2-segment:not([data-zen-root] *)')).toContain('color: var(--color-text-secondary)')
+    expect(rule(generated, '[data-style="glass"] .k2-segment[aria-checked="true"]:not([data-zen-root] *)')).toContain('color: var(--color-on-accent)')
+    // No palette draws its own thumb or labels.
+    expect(generated).not.toMatch(/\[data-palette="veil"\] \.k2-segment(-thumb)?[:[]/)
+  })
+
+  it.each([['obsidian'], ['veil']])('the edge holds 3:1 on the card and the labels 4.5:1 on the track (%s)', (id) => {
+    const p = palette('glass', id)
+    const card = hex(p['bg-surface'])
+    const track = card
+    expect(contrast(hex(p['control-edge']), card), `${id} edge on card`).toBeGreaterThanOrEqual(3)
+    expect(contrast(hex(p['control-edge']), hex(p['bg-elevated'])), `${id} edge on a raised card`).toBeGreaterThanOrEqual(3)
+    expect(contrast(hex(p['text-secondary']), track), `${id} label on track`).toBeGreaterThanOrEqual(4.5)
+    const fill = resolve('glass', id, 'var(--color-accent-fill)')
+    expect(contrast(hex(p['on-accent']), fill), `${id} selected label`).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(fill, track), `${id} selected segment on the track`).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('Quiet destructive button', () => {
+  const variant = (): string => /'danger-quiet':\s*'([^']+)'/.exec(readFileSync(join(__dirname, 'Button.tsx'), 'utf8'))![1]
+
+  it('rests as the quiet outline with an error label, and fills red only on hover and press', () => {
+    const cls = variant()
+    expect(cls).toContain('bg-transparent border border-[var(--color-control-edge)] text-[var(--color-status-error-text)]')
+    expect(cls).toContain('hover:bg-[var(--color-danger-muted)]')
+    expect(cls).toContain('active:bg-[var(--color-danger-active)]')
+    expect(cls).not.toMatch(/(^|\s)bg-\[var\(--color-danger/)
+  })
+
+  it.each(LOOKS)('the error label reads at 4.5:1 on a card, and white at 4.5:1 on the hover and press fills (%s %s)', (style, id) => {
+    const p = palette(style, id)
+    for (const ground of ['bg-surface', 'bg-elevated']) {
+      expect(contrast(hex(p['status-error-text']), hex(p[ground])), `${id} label on ${ground}`).toBeGreaterThanOrEqual(4.5)
+    }
+    for (const fill of ['danger-muted', 'danger-active']) {
+      expect(contrast(hex(p['on-accent']), hex(p[fill])), `${id} white on ${fill}`).toBeGreaterThanOrEqual(4.5)
+    }
   })
 })
 

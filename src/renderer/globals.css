@@ -1778,7 +1778,9 @@ html:not([data-style="terminal"]) .k2-segmented { overflow: hidden; }
   background-color: var(--k2-tag-fill);
   color: var(--k2-tag-ink);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
+  /* The hint size on a tight line, so a tag doesn't make its row taller. */
+  line-height: 1.2;
   white-space: nowrap;
   --k2-tag-fill: transparent;
 }

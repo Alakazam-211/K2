@@ -2540,8 +2540,13 @@ pub(super) mod tests {
                 let mut stdin = None;
                 loop {
                     let (mut s, _) = l.accept().map_err(|e| e.to_string())?;
-                    let h = crate::admin::server::read_frame(&mut s, 1 << 20)?;
-                    let answer = match serde_json::from_slice::<LocalRequest>(&h).map_err(|e| e.to_string())? {
+                    let Ok(h) = crate::admin::server::read_frame(&mut s, 1 << 20) else { continue };
+                    let req = match serde_json::from_slice::<LocalRequest>(&h) {
+                        Ok(r) => r,
+                        // Anything else the node asks: a refusal, and on.
+                        Err(_) => LocalRequest::Status,
+                    };
+                    let answer = match req {
                         // The start: stdout, stderr and the stdin pipe's
                         // read end; started without a uid of its own.
                         LocalRequest::Job { job: JobOp::Start(_) } => {
@@ -2566,7 +2571,8 @@ pub(super) mod tests {
                         }
                         _ => JobAnswer::Refused(k2_node_proto::admin::AdminRefusal::new("not_configured", "the test executor only starts and releases")),
                     };
-                    crate::admin::server::write_frame(&mut s, &serde_json::to_vec(&LocalResponse::Job(answer)).unwrap())?;
+                    // A closed connection on the node's side ends nothing here.
+                    let _ = crate::admin::server::write_frame(&mut s, &serde_json::to_vec(&LocalResponse::Job(answer)).unwrap());
                 }
             })();
             let _ = tx.send(r);
@@ -2593,7 +2599,7 @@ pub(super) mod tests {
         let secrets = k2_node_proto::secret::Plain(vec![("K2T_SECRET".into(), "k2test-secret-M8-value".into())]);
         let r = n.start_unit(&t, &a, &dirs, &dirs.root, &[], vec![], Network::On, 1 << 30, Some(&secrets), None, true).await;
         let e = r.err().expect("the start fails");
-        assert!(e.contains(crate::admin::jobpool::JOB_UID_UNAVAILABLE), "{e}");
+        assert!(e.contains(crate::admin::jobpool::JOB_UID_UNAVAILABLE), "{e} (the fake executor: {:?})", rx.try_recv());
         let got = rx.recv_timeout(Duration::from_secs(20)).expect("the fake executor answered").expect("the fake executor ran");
         assert!(got.is_empty(), "the unit's stdin got {} bytes: a secret reached a job without its own uid", got.len());
         let _ = std::fs::remove_file(&sock);

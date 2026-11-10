@@ -96,6 +96,14 @@ pub mod chat_user_archive;
 // bundle). Powers both the high-bar push (P2) and the README fallback
 // (P3). HTTP/Tauri-free; see module docs + PRD k2-connect-clone-to.md.
 pub mod cli_stage;
+/// `k2` on the person's PATH with no admin prompt (0.46.11): links
+/// `~/.local/bin/k2` and adds one marked PATH block. Lives in k2-client so
+/// the app runs the same code; the tests here use `test_env::TempHome`.
+#[cfg(unix)]
+pub use k2_client::cli_install;
+#[cfg(all(test, unix))]
+#[path = "cli_install_tests.rs"]
+mod cli_install_tests;
 /// Pre-trust Claude/Codex/Grok/Gemini folders on workspace add + harness spawn.
 pub mod cli_folder_trust;
 pub mod clone;

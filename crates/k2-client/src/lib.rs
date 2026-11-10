@@ -40,6 +40,9 @@ pub mod airgap;
 pub mod app_settings_view;
 pub mod bg_proc;
 pub mod browser_notes;
+/// `k2` on the person's PATH with no admin prompt (0.46.11).
+#[cfg(unix)]
+pub mod cli_install;
 pub mod daemon_lifecycle;
 pub mod download_file;
 pub mod editors;

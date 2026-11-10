@@ -82,8 +82,9 @@ fn write_exec(path: &Path, content: &str) -> Result<(), String> {
 /// Testable core — decide + act at an explicit `target`. Returns
 /// `Ok(Some(path))` when the CLI is now staged (freshly written or
 /// already current), `Ok(None)` when deliberately skipped because the
-/// target is a SYMLINK (owned by the app / a dev), and `Err` only on a
-/// real write/permission failure.
+/// target is a SYMLINK (owned by the app / a dev) or a file that isn't
+/// the K2 CLI (another program named `k2`), and `Err` only on a real
+/// write/permission failure.
 pub fn stage_cli_at(target: &Path) -> Result<Option<PathBuf>, String> {
     // Never clobber a symlink: the macOS app points it into its bundle,
     // and a developer may link it at their repo checkout. We manage only
@@ -95,12 +96,27 @@ pub fn stage_cli_at(target: &Path) -> Result<Option<PathBuf>, String> {
         return Ok(None);
     }
 
+    // 0.46.11: never overwrite a `k2` that isn't K2's. A regular file is
+    // replaced only when it is the K2 CLI (any version) or empty (a write
+    // that died half way); another program named `k2` stays, with one log
+    // line. A directory still falls through to the write, which fails, so
+    // the caller's fallback runs.
+    let on_disk = std::fs::metadata(target)
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|_| std::fs::read(target).unwrap_or_default());
+    if let Some(bytes) = &on_disk {
+        let text = String::from_utf8_lossy(bytes);
+        if !text.trim().is_empty() && k2_cli_version_of(&text).is_none() {
+            crate::log_debug!("[cli-stage] left {} alone: it isn't the K2 CLI", target.display());
+            return Ok(None);
+        }
+    }
+
     let embedded = cli_version(CLI_CONTENT);
     debug_assert!(embedded.is_some(), "cli/k2 lost its K2_CLI_VERSION line");
 
-    let current = std::fs::read_to_string(target)
-        .ok()
-        .and_then(|d| cli_version(&d));
+    let current = on_disk.as_ref().and_then(|b| cli_version(&String::from_utf8_lossy(b)));
     if embedded.is_some() && current == embedded {
         return Ok(Some(target.to_path_buf())); // already current — leave it
     }
@@ -251,6 +267,25 @@ mod tests {
             "#!/bin/bash\nK2_CLI_VERSION=\"9.9.9\"\n",
             "the symlink's real target must be untouched"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn never_overwrites_a_k2_that_is_not_the_k2_cli() {
+        // 0.46.11: another program named `k2` (a binary, or a script with
+        // no K2 version line) stays byte for byte, and nothing is staged.
+        let dir = tmp_dir("foreign");
+        let target = dir.join("k2");
+        for other in [&b"\x7fELF\x02\x01\x01\x00"[..], b"#!/bin/sh\necho some other k2\n"] {
+            std::fs::write(&target, other).unwrap();
+            let out = stage_cli_at(&target).expect("stage ok");
+            assert_eq!(out, None, "a k2 that isn't K2's must be skipped");
+            assert_eq!(std::fs::read(&target).unwrap(), other, "and left untouched");
+        }
+        // An empty file (a write that died) is K2's to fill.
+        std::fs::write(&target, b"").unwrap();
+        assert_eq!(stage_cli_at(&target).expect("stage ok"), Some(target.clone()));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), CLI_CONTENT);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

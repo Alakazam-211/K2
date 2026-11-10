@@ -43,7 +43,8 @@ import { AgentSessionChrome, BAR_CONTROLS, SidecarSessionHeader } from './AgentS
 import { SplitSessionColumns } from './SplitSessionColumns'
 import { useSessionViewChrome } from './sessionViewChrome'
 import { sessionViewSplitStorageKey, sessionViewTabStorageKey, type SessionViewTab } from './sessionViewTab'
-import { SPLIT_VIEW_THREAD_FLOATS, THREAD_FLOATS_HOST_ATTR, threadFloatShown, type ThreadFloatId } from './threadFloats'
+import { CHATTER_VIEW_FLOATS, SPLIT_VIEW_THREAD_FLOATS, THREAD_FLOATS_HOST_ATTR, threadFloatShown, type ThreadFloatId } from './threadFloats'
+import { splitThreadSide } from './splitChrome'
 
 const room = testRoom({
   tabs: { room: { dropTabAfterFailedSidecarRefresh: vi.fn() } },
@@ -66,6 +67,21 @@ describe('SPLIT_VIEW_THREAD_FLOATS', () => {
     expect(threadFloatShown('drawers', 'split')).toBe(false)
     const shownInSplit = EVERY_FLOAT.filter((id) => threadFloatShown(id, 'split'))
     expect(shownInSplit.sort()).toEqual(['bell', 'history', 'identity', 'refresh', 'search', 'token'])
+  })
+
+  it('Chatter view: the view menu, picture and name, search, Token, session and restart', () => {
+    expect([...CHATTER_VIEW_FLOATS].sort()).toEqual(['history', 'identity', 'refresh', 'search', 'token', 'view'])
+    const shown = EVERY_FLOAT.filter((id) => threadFloatShown(id, 'chatter'))
+    expect(shown.sort()).toEqual(['history', 'identity', 'refresh', 'search', 'token', 'view'])
+  })
+
+  it('the floats column: the first Thread side, else the first Chatter side', () => {
+    expect(splitThreadSide('split', 'chatter', 'thread')).toBe('right')
+    expect(splitThreadSide('split', 'thread', 'chatter')).toBe('left')
+    expect(splitThreadSide('split', 'terminal', 'chatter')).toBe('right')
+    expect(splitThreadSide('split', 'chatter', 'terminal')).toBe('left')
+    expect(splitThreadSide('split', 'terminal', 'terminal')).toBeNull()
+    expect(splitThreadSide('chatter', 'terminal', 'chatter')).toBeNull()
   })
 
   it('Thread view shows every object', () => {
@@ -253,8 +269,24 @@ describe('split view in a session', () => {
     expect(screen.getByTestId('session-split-right').contains(screen.getByTestId('split-view-bar'))).toBe(true)
   })
 
-  it('split view without a Thread keeps the usual bar', () => {
+  it('split view with Chatter and no Thread: the Chatter column takes the Thread column\'s objects', async () => {
     renderSplit({ left: 'terminal', right: 'chatter' })
+    const chatter = screen.getByTestId('session-split-right')
+    const floats = await waitFor(() => {
+      const el = chatter.querySelector<HTMLElement>('[data-thread-floats]')
+      if (!el) throw new Error('no floats in the Chatter column')
+      return el
+    })
+    expect(chatter.hasAttribute(THREAD_FLOATS_HOST_ATTR)).toBe(true)
+    expect(floats.querySelector('[data-testid="thread-view-identity"]')).not.toBeNull()
+    expect(floats.querySelector('[data-testid="thread-search-button"]')).not.toBeNull()
+    expect(floats.contains(screen.getByLabelText('Refresh session'))).toBe(true)
+    expect(floats.querySelector('[data-testid="session-view-menu"]')).toBeNull()
+    expect(screen.getByTestId('session-split-left').contains(screen.getByTestId('split-view-bar'))).toBe(true)
+  })
+
+  it('split view with only terminals keeps the usual bar', () => {
+    renderSplit({ left: 'terminal', right: 'terminal' })
     const h = screen.getByTestId('sidecar-session-header')
     expect(h.hasAttribute('data-thread-floats')).toBe(false)
     expect(screen.getByLabelText('Refresh session')).toBeTruthy()

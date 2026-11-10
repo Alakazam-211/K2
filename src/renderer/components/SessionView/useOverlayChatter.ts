@@ -7,6 +7,7 @@ import {
   mergeOlderOverlayItems,
   movedConversation,
   OVERLAY_PAGE_SIZE,
+  OVERLAY_SEARCH_PAGE_SIZE,
   releaseOverlayWebSocket,
   type OverlayThreadItem,
   type OverlayWsFrame,
@@ -26,6 +27,8 @@ export function useOverlayChatter(opts: {
   error: string | null
   hasMore: boolean
   loadOlder: () => Promise<void>
+  /** Every older page, for the Chatter view's search (as the Thread's). */
+  loadAll: () => Promise<void>
   loadingOlder: boolean
   /** The first page hasn't answered yet (the Thread view's Chatter panel). */
   loading: boolean
@@ -36,7 +39,8 @@ export function useOverlayChatter(opts: {
   const [error, setError] = useState<string | null>(null)
   const [hasMore, setHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
-  const [loading, setLoading] = useState(false)
+  // Waiting from the first render, so no "nothing yet" shows before the first page.
+  const [loading, setLoading] = useState(() => enabled && !!addr.trim())
   const snapshotSeqRef = useRef(0)
   /** Bumped when the Thread moved to another conversation key (Codex/Hermes
    *  adoption): re-read and re-subscribe on the new one. */
@@ -150,5 +154,41 @@ export function useOverlayChatter(opts: {
     }
   }, [scope, addr])
 
-  return { items, conversationId: resolvedConv, error, hasMore, loadOlder, loadingOlder, loading }
+  // Search reads the whole mailbox once (useThreadSearchPane), in big pages.
+  const loadAll = useCallback(async () => {
+    if (!addr.trim() || !hasMoreRef.current || loadingOlderRef.current) return
+    const first = itemsRef.current
+    if (first.length === 0) return
+    let before = first.reduce((m, it) => (it.seq < m ? it.seq : m), Number.POSITIVE_INFINITY)
+    if (!Number.isFinite(before)) return
+    const requestedAddr = addr
+    loadingOlderRef.current = true
+    setLoadingOlder(true)
+    try {
+      while (addrRef.current === requestedAddr && hasMoreRef.current) {
+        const raw = await daemonCliGet<unknown>(scope, 'chatter', {
+          addr,
+          limit: OVERLAY_SEARCH_PAGE_SIZE,
+          before_seq: before,
+        })
+        if (addrRef.current !== requestedAddr) return
+        const snap = chatterItemsFromSnapshot(raw)
+        hasMoreRef.current = snap.has_more
+        setHasMore(snap.has_more)
+        setItems((prev) => mergeOlderOverlayItems(prev, snap.items))
+        const next = snap.items.reduce((m, it) => (it.seq < m ? it.seq : m), Number.POSITIVE_INFINITY)
+        if (!Number.isFinite(next) || next >= before) break
+        before = next
+      }
+    } catch (e) {
+      if (addrRef.current === requestedAddr) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      loadingOlderRef.current = false
+      setLoadingOlder(false)
+    }
+  }, [scope, addr])
+
+  return { items, conversationId: resolvedConv, error, hasMore, loadOlder, loadAll, loadingOlder, loading }
 }

@@ -36,8 +36,9 @@ export const THREAD_FLOATS_GRID =
 export type ThreadFloatShape = 'round' | 'pill' | 'name' | 'note' | 'capsule'
 
 /** Where a pane's floating objects are drawn: over the Thread on its own
- *  (Thread view), or over the Thread's column in split view. */
-export type ThreadFloatsPlace = 'thread' | 'split'
+ *  (Thread view), over the Chatter on its own (Chatter view), or over the
+ *  Thread's column in split view (else the Chatter's, splitChrome.tsx). */
+export type ThreadFloatsPlace = 'thread' | 'chatter' | 'split'
 
 /** Each floating object, by name. */
 export type ThreadFloatId =
@@ -67,9 +68,25 @@ export const SPLIT_VIEW_THREAD_FLOATS: ReadonlySet<ThreadFloatId> = new Set<Thre
   'refresh',
 ])
 
+/** The only objects Chatter view shows (2026-11-10, "look nice like the
+ *  rest of our threads"): Thread view's header without what belongs to the
+ *  Thread itself. The view menu (the way out), the agent's picture and name,
+ *  search over the chatter, and on the right restart, the pinned chat's
+ *  session and Token. No terminal toggle or drawers (Thread view's reveal),
+ *  and no bell (it rings for the agent's turns with you, not for chatter). */
+export const CHATTER_VIEW_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>([
+  'view',
+  'identity',
+  'search',
+  'token',
+  'history',
+  'refresh',
+])
+
 /** Whether `id` is drawn in `place`: Thread view shows them all. */
 export function threadFloatShown(id: ThreadFloatId, place: ThreadFloatsPlace): boolean {
-  return place === 'thread' || SPLIT_VIEW_THREAD_FLOATS.has(id)
+  if (place === 'thread') return true
+  return (place === 'chatter' ? CHATTER_VIEW_FLOATS : SPLIT_VIEW_THREAD_FLOATS).has(id)
 }
 
 /** A floating object: chamfered in Terminal, Frost in Glass. Off, it changes

@@ -458,6 +458,12 @@ export interface ThreadBubbleProps {
   /** The Thread's one receipt (threadReceipt), on your newest confirmed
    *  message: its status line says it instead of the time. */
   receipt?: ThreadReceipt | null
+  /** Who your message went to, where a chat has many recipients (the
+   *  Chatter view): your status line leads with it ("to ops · 2m ago"). */
+  to?: string | null
+  /** No Reply in the message menu (the Chatter view: the mailbox has no
+   *  message box of its own, and its words are not the person's Thread). */
+  noReply?: boolean
 }
 
 /** The name line over another sender's run, and your status line under
@@ -575,6 +581,8 @@ export function sameBubbleProps(a: ThreadBubbleProps, b: ThreadBubbleProps): boo
     a.tail === b.tail &&
     a.runStart === b.runStart &&
     (a.receipt ?? null) === (b.receipt ?? null) &&
+    (a.to ?? null) === (b.to ?? null) &&
+    !!a.noReply === !!b.noReply &&
     sameSenderSlot(a.sender, b.sender) &&
     shallowSame(a.secret, b.secret) &&
     sameChatNode(a.footer, b.footer)
@@ -601,6 +609,8 @@ export const ThreadBubble = memo(function ThreadBubble({
   tail,
   runStart,
   receipt = null,
+  to = null,
+  noReply = false,
 }: ThreadBubbleProps): JSX.Element {
   const kind = item.doc.kind
   // A handoff doc as it arrived (a live frame, another server's row) is
@@ -640,14 +650,14 @@ export const ThreadBubble = memo(function ThreadBubble({
       agentName: mine ? null : author,
       quote: reply ? { text: reply.quote, from: reply.from } : null,
       reply:
-        source && replyAddr
+        source && replyAddr && !noReply
           ? {
               key: threadReplyKey(source.scope, replyAddr),
               target: { id: item.id, seq: item.seq, from: fromLabel, addr: replyAddr, text: menuText, part: false },
             }
           : null,
     }),
-    [source, replyAddr, menuText, mine, item.doc.from, item.id, item.seq, author, fromLabel, reply],
+    [source, replyAddr, menuText, mine, item.doc.from, item.id, item.seq, author, fromLabel, reply, noReply],
   )
   const bubbleRef = useRef<HTMLDivElement | null>(null)
   const openMenu = useCallback(
@@ -823,6 +833,7 @@ export const ThreadBubble = memo(function ThreadBubble({
           style={META_STATUS_STYLE}
         >
           {more && <span data-zen-message-more-slot="" style={MORE_STATUS_SLOT}>{more}</span>}
+          {to ? <><span data-thread-recipient="">to {to}</span> · </> : null}
           {via ? <>via {via} · </> : null}
           {shownReceipt ? (
             <span data-thread-receipt="" title={timeLabel}>

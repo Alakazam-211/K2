@@ -20,6 +20,10 @@ export interface ThreadRunInput {
   from: string
   /** Unix seconds or ms; null when unknown. */
   at: number | null | undefined
+  /** Who the viewer's own message went to, where a chat has many
+   *  recipients (Chatter): a new recipient starts a new run of yours, so
+   *  each run's status line names one. Absent (the Thread): ignored. */
+  to?: string | null
 }
 
 /** Seconds, from Unix seconds or ms; null when unknown. */
@@ -32,6 +36,7 @@ function secondsOf(at: number | null | undefined): number | null {
 export function sameThreadRun(a: ThreadRunInput, b: ThreadRunInput, gapS = RUN_GAP_S): boolean {
   if (a.mine !== b.mine) return false
   if (!a.mine && a.from !== b.from) return false
+  if (a.mine && (a.to ?? null) !== (b.to ?? null)) return false
   const sa = secondsOf(a.at)
   const sb = secondsOf(b.at)
   if (sa == null || sb == null) return true

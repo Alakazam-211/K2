@@ -240,6 +240,25 @@ describe('useOverlayChatter paging', () => {
     expect(result.current.items[0].id).toBe('chatter-1')
     expect(result.current.hasMore).toBe(false)
   })
+  it('is loading from the first render; loadAll (search) reads every older page', async () => {
+    daemonCliGet
+      .mockResolvedValueOnce({ conversation_id: '', has_more: true, items: pageItems(31, 40, 'chatter') })
+      .mockResolvedValueOnce({ conversation_id: '', has_more: true, items: pageItems(11, 30, 'chatter') })
+      .mockResolvedValueOnce({ conversation_id: '', has_more: false, items: pageItems(1, 10, 'chatter') })
+    const { result } = renderHook(() =>
+      useOverlayChatter({ scope: primaryScope(), addr: 'sales', conversationId: null, enabled: true }),
+    )
+    expect(result.current.loading).toBe(true)
+    await waitFor(() => expect(result.current.items).toHaveLength(10))
+    expect(result.current.loading).toBe(false)
+    await act(async () => {
+      await result.current.loadAll()
+    })
+    expect(daemonCliGet).toHaveBeenCalledWith('chatter', { addr: 'sales', limit: OVERLAY_SEARCH_PAGE_SIZE, before_seq: 31 })
+    expect(daemonCliGet).toHaveBeenCalledWith('chatter', { addr: 'sales', limit: OVERLAY_SEARCH_PAGE_SIZE, before_seq: 11 })
+    expect(result.current.items).toHaveLength(40)
+    expect(result.current.hasMore).toBe(false)
+  })
 })
 
 class FakeOverlayWS {

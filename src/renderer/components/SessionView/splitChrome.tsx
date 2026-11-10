@@ -24,7 +24,9 @@ export function useSplitChromeSlots(): SplitChromeSlots | null {
   return useContext(SplitChromeSlotsContext)
 }
 
-/** Split view with a Thread side: the floats go on the first Thread column. */
+/** Split view's floats column: the first Thread column, else the first
+ *  Chatter column (Chatter wears the Thread's look, so it takes the
+ *  Thread column's objects, SPLIT_VIEW_THREAD_FLOATS). Terminal only: none. */
 export function splitThreadSide(
   viewTab: SessionViewTab,
   left: SplitPaneView,
@@ -33,6 +35,8 @@ export function splitThreadSide(
   if (viewTab !== 'split') return null
   if (left === 'thread') return 'left'
   if (right === 'thread') return 'right'
+  if (left === 'chatter') return 'left'
+  if (right === 'chatter') return 'right'
   return null
 }
 

@@ -86,8 +86,25 @@ describe('the header', () => {
     expect(search.closest('[data-testid="thread-search"]')?.previousElementSibling?.getAttribute('data-testid')).toBe('bell-stub')
   })
 
+  it('floats in Chatter view too, with only what Chatter keeps', () => {
+    renderInRoom(room, header('chatter'))
+    const h = screen.getByTestId('sidecar-session-header')
+    expect(h.hasAttribute('data-thread-floats')).toBe(true)
+    expect(h.className).not.toContain('border-b')
+    expect(screen.getByTestId('session-view-button').getAttribute('data-k2-float')).toBe('pill')
+    expect(screen.getByTestId('thread-view-identity')).not.toBeNull()
+    expect(screen.getByTestId('thread-search-button').getAttribute('data-k2-float')).toBe('round')
+    expect(screen.getByRole('button', { name: 'Refresh session' }).getAttribute('data-k2-float')).toBe('round')
+    expect(screen.getByTestId('thread-float-scrim')).not.toBeNull()
+    // The Thread's own objects stay in Thread view.
+    expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
+    expect(screen.queryByTestId('thread-panel-toggle-chatter')).toBeNull()
+    expect(screen.queryByTestId('bell-stub')).toBeNull()
+    expect(screen.queryByTestId('sidecar-session-title')).toBeNull()
+  })
+
   it('stays a bar in every other view', () => {
-    for (const view of ['terminal', 'split', 'chatter'] as const) {
+    for (const view of ['terminal', 'split'] as const) {
       renderInRoom(room, header(view))
       const h = screen.getByTestId('sidecar-session-header')
       expect(h.hasAttribute('data-thread-floats')).toBe(false)

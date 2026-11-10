@@ -5899,6 +5899,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
                   addr={sessionChrome.overlayAddr}
                   conversationId={sessionChrome.conversationId}
                   active={showChatterOverlay}
+                  textCapPx={threadTextCap}
                 />
               </div>
             </div>

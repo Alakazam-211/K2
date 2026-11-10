@@ -19,8 +19,9 @@ import { splitThreadSide, useSplitChromeSlots } from './splitChrome'
  * doesn't slide.
  *
  * In split view, under a session chrome (`splitChrome.tsx`), the first Thread
- * column offers a slot for the chrome's floating objects and the other column
- * a place for its view menu, so neither column has a bar over the Thread.
+ * column (else the first Chatter column) offers a slot for the chrome's
+ * floating objects and the other column a place for its view menu, so
+ * neither column has a bar over the Thread.
  */
 export function SplitSessionColumns({
   showSplit,

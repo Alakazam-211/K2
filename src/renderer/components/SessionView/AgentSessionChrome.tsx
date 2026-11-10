@@ -208,7 +208,7 @@ export function AgentSessionChrome({
                     sessionKey={agentName}
                     conversationId={conversationId}
                     resolveProjectId={() => (cwd ? roomProjectForCwd(room, cwd)?.id ?? null : null)}
-                    floating={viewTab === 'thread' || splitColumn}
+                    floating={sessionFloatsPlace(viewTab, splitColumn) !== null}
                   />
                 ) : null
               }
@@ -220,10 +220,10 @@ export function AgentSessionChrome({
             role="alert"
             data-testid="sidecar-refresh-error"
             className={`px-3 py-1 text-xs text-[var(--color-status-error,var(--color-text-muted))] ${
-              viewTab === 'thread' ? 'thread-float-note' : ''
+              viewTab === 'thread' || viewTab === 'chatter' ? 'thread-float-note' : ''
             }`}
           >
-            {viewTab === 'thread' ? <span {...floatProps(true, 'note')}>{refreshError}</span> : refreshError}
+            {viewTab === 'thread' || viewTab === 'chatter' ? <span {...floatProps(true, 'note')}>{refreshError}</span> : refreshError}
           </p>
         ) : null}
         <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
@@ -245,10 +245,11 @@ function Remount({ children }: { children: ReactNode }): JSX.Element {
  *  no bar form (the terminal toggle, the bell, search) are not among them. */
 export const BAR_CONTROLS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>(['view', 'token', 'history', 'refresh'])
 
-/** Where a session header floats: Thread view, or split view's Thread column;
- *  null is a bar. */
+/** Where a session header floats: Thread view, Chatter view, or split
+ *  view's Thread (else Chatter) column; null is a bar. */
 export function sessionFloatsPlace(viewTab: SessionViewTab, splitColumn: boolean): ThreadFloatsPlace | null {
   if (viewTab === 'thread') return 'thread'
+  if (viewTab === 'chatter') return 'chatter'
   if (viewTab === 'split' && splitColumn) return 'split'
   return null
 }

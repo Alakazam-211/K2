@@ -32,6 +32,15 @@ describe('thread runs (the tail goes on the last bubble of each)', () => {
     expect(sameThreadRun(me(T0), me(null))).toBe(true)
   })
 
+  it('a recipient, where given (Chatter), splits your runs; the Thread gives none', () => {
+    const to = (who: string | null | undefined, at: number): ThreadRunInput => ({ mine: true, from: 'x', at, to: who })
+    expect(sameThreadRun(to('ops', T0), to('ops', T0 + 5))).toBe(true)
+    expect(sameThreadRun(to('ops', T0), to('sales/reviewer', T0 + 5))).toBe(false)
+    expect(sameThreadRun(to(undefined, T0), to(null, T0 + 5))).toBe(true)
+    // Another sender's run ignores it.
+    expect(sameThreadRun({ ...them('agent:a', T0), to: 'x' }, { ...them('agent:a', T0 + 5), to: 'y' })).toBe(true)
+  })
+
   it('marks the last of each run, on both sides', () => {
     const rows = [
       them('agent:a', T0),

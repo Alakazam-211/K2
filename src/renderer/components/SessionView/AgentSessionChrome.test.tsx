@@ -222,7 +222,14 @@ describe('Thread view header (S2)', () => {
     expect(beats.getAttribute('aria-pressed')).toBe('false')
   })
 
-  for (const view of ['terminal', 'chatter', 'split']) {
+  it('chatter view floats the picture and name, as Thread view', async () => {
+    renderIn('chatter')
+    await waitFor(() => expect(screen.queryByTestId('thread-view-identity')).not.toBeNull())
+    expect(screen.queryByTestId('sidecar-session-title')).toBeNull()
+    expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
+  })
+
+  for (const view of ['terminal', 'split']) {
     it(`${view} view keeps the plain title`, async () => {
       renderIn(view)
       await waitFor(() => expect(screen.queryByTestId('sidecar-session-title')).not.toBeNull())

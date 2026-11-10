@@ -14,7 +14,8 @@
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
 //   VoiceRooms, PhoneOff
-//     Lucide 1.58 `phone`, `phone-off`, unedited (round: the handset is curves).
+//     Lucide `phone` (lucide-react 1.48.0's path, as K2 Companion has it) and
+//     `phone-off`, unedited (round: the handset is curves).
 //   Bookmark
 //     Lucide 1.58 `bookmark`, squared.
 //   Settings, Link, Globe
@@ -503,9 +504,9 @@ export function MoonIcon(props: K2IconProps = {}): React.JSX.Element {
   )
 }
 
-/** Voice rooms (prd-k2-voice-rooms-v1 §4.1): Lucide `phone`, the handset
- *  kept round as `phone-off` is (Rosson 2026-11-10: the rooms are calls, and
- *  headphones are Deafen's). `live` adds a small accent dot top right
+/** Voice rooms (prd-k2-voice-rooms-v1 §4.1): Lucide `phone`, its exact path
+ *  as K2 Companion has it (lucide-react 1.48.0), round as `phone-off` is
+ *  (Rosson 2026-11-10: the rooms are calls, and headphones are Deafen's). `live` adds a small accent dot top right
  *  (someone's in a room, or in a call); `muted` turns that dot the error
  *  colour. Never a slash: a slashed phone is Leave call, right beside it. */
 export function VoiceRoomsIcon({
@@ -515,7 +516,7 @@ export function VoiceRoomsIcon({
 }: K2IconProps & { muted?: boolean; live?: boolean }): React.JSX.Element {
   return (
     <svg {...iconProps('phone', props, 'round')} data-testid="voice-icon" data-muted={muted ? 'true' : 'false'} data-live={live ? 'true' : 'false'}>
-      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92Z" />
+      <path d="M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384" />
       {live || muted ? (
         <circle
           data-testid={muted ? 'voice-icon-muted' : 'voice-icon-dot'}

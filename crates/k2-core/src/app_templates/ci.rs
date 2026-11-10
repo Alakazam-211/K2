@@ -305,7 +305,9 @@ normalise_appimage() {{
     off="$(python3 -c 'import struct,sys; b=open(sys.argv[1],"rb").read(64); o,=struct.unpack_from("<Q",b,0x28); e,n=struct.unpack_from("<HH",b,0x3A); print(o+e*n)' "$img")"
     head -c "$off" "$img" > "$w/image"
     (cd "$w" && "$img" --appimage-extract >/dev/null)
-    "$mks" "$w/squashfs-root" "$w/fs" -noappend -quiet -no-progress -all-root -no-xattrs \
+    # mksquashfs refuses SOURCE_DATE_EPOCH next to -mkfs-time/-all-time, so
+    # pass the commit time as flags and unset it for this one call.
+    env -u SOURCE_DATE_EPOCH "$mks" "$w/squashfs-root" "$w/fs" -noappend -quiet -no-progress -all-root -no-xattrs \
         -comp zstd -b 131072 -mkfs-time "$SOURCE_DATE_EPOCH" -all-time "$SOURCE_DATE_EPOCH" >/dev/null
     cat "$w/fs" >> "$w/image"
     python3 - "$w/image" <<'PY'

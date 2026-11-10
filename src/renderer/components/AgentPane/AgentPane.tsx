@@ -329,8 +329,8 @@ function WorktreeDetailPane({ worktreeId, projectPath }: { worktreeId: string; p
               <div className="flex items-center justify-center h-full">
                 <p className="text-xs text-[var(--color-text-muted)] text-center max-w-md leading-relaxed">
                   This worktree has no <code>CLAUDE.md</code>. The Task brief is
-                  rendered here when the harness or <code>k2so delegate</code>
-                  {' '}writes one to the worktree root.
+                  rendered here when your harness or K2 writes one to the
+                  worktree root.
                 </p>
               </div>
             )}

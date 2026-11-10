@@ -26,7 +26,7 @@
 //!
 //! This module is intentionally pure: the daemon HTTP route in
 //! `k2so-daemon::cli` is the only network surface; the CLI verb
-//! `k2so whatsnew` and the renderer's modal both go through that
+//! `k2 whats-new` and the renderer's modal both go through that
 //! route. Daemon-first per the architecture invariant.
 
 use std::cmp::Ordering;
@@ -282,7 +282,7 @@ pub fn write_last_seen(version: &str) -> std::io::Result<()> {
 }
 
 /// Clear the last-seen state. Forces the popup to show again on the
-/// next app launch (or the next `k2so whatsnew` invocation). Idempotent
+/// next app launch (or the next `k2 whats-new` invocation). Idempotent
 /// — succeeds even if the file doesn't exist.
 pub fn clear_last_seen() -> std::io::Result<()> {
     let path = state_path();

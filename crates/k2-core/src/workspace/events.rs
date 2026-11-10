@@ -2,7 +2,7 @@
 //! agents running on the adaptive-heartbeat channel model.
 //!
 //! When a new work item lands in an agent's inbox while that agent
-//! isn't actively connected (e.g. via `k2so work send`, or any other
+//! isn't actively connected (e.g. via `k2 msg --inbox-wake`, or any other
 //! inbox writer), K2SO drops a [`ChannelEvent`] into a per-agent
 //! queue here. The agent's next wake (via `k2so checkin`
 //! or the `/cli/events` drain route) reads them all in one shot,

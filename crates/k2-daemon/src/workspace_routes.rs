@@ -325,7 +325,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         //
         // The pre-0.38.6 `delivery=inbox` branch is retired — `msg`
         // never silently writes to inbox now. Callers that want queued
-        // delivery use `k2so work send` (separate endpoint).
+        // delivery use `k2 msg --inbox-wake|--inbox-silent`
+        // (separate endpoint, /cli/inbox/deliver).
         "/cli/workspace/msg" => {
             let workspace = str_param(params, "workspace");
             // H14 (prd-agent-secret-handoff-v1) backstop: a known vault

@@ -87,25 +87,28 @@ export function __resetTileWidthForTests(): void {
   sessionWidth = null
 }
 
-// ── full screen ─────────────────────────────────────────────────────
+// ── expand ──────────────────────────────────────────────────────────
 
-/** The registry id of the chord (`@shared/hotkeys`, rebindable). */
-export const CALL_FULLSCREEN_HOTKEY = 'toggleCallFullscreen'
+/** The registry id of the chord (`@shared/hotkeys`, rebindable). The id is
+ *  the one it had as full screen, so a chord someone rebound still works. */
+export const CALL_EXPAND_HOTKEY = 'toggleCallFullscreen'
 
-/** The full-screen chord, as this person has it bound: ⌃⌘V on macOS,
+/** The Expand chord, as this person has it bound: ⌃⌘V on macOS,
  *  Ctrl+Alt+V elsewhere by default. AltGr (Windows reports Ctrl+Alt) types
  *  a character, so it never counts. */
-export function isCallFullscreenChord(e: KeyComboEventLike, keybindings: Record<string, string>, isMac: boolean): boolean {
+export function isCallExpandChord(e: KeyComboEventLike, keybindings: Record<string, string>, isMac: boolean): boolean {
   if (!isMac && e.ctrlKey && e.altKey && typeof e.getModifierState === 'function' && e.getModifierState('AltGraph')) return false
-  return keyEventMatchesCombo(e, effectiveKeybinding(keybindings, CALL_FULLSCREEN_HOTKEY, isMac))
+  return keyEventMatchesCombo(e, effectiveKeybinding(keybindings, CALL_EXPAND_HOTKEY, isMac))
 }
 
 /** Double-click window for the tile: a single click waits this long before
- *  opening the call view, so a double-click can go full screen instead. */
+ *  opening the call view, so a double-click can expand it instead. */
 export const DOUBLE_CLICK_MS = 280
 
-/** Full-screen controls hide after this long with no pointer or key. */
-export const CONTROLS_HIDE_MS = 2_500
+/** The expanded view's margin from the window's edges on every side (px):
+ *  the page shows round it, so it reads as K2's, and a click there shrinks
+ *  it. */
+export const CALL_EXPAND_MARGIN = 32
 
 // ── the call's own window ───────────────────────────────────────────
 
@@ -192,4 +195,79 @@ export function callStartedAt(callId: string, seen: number | null): number | nul
     // Storage unavailable: this window's own.
   }
   return seen
+}
+
+// ── the share in the middle, and popping back in ────────────────────
+
+export const CALL_SHARE_PICK_KEY = 'k2.voice.callSharePick.v1'
+
+/** The share someone picked for the middle, kept per call on this client so
+ *  the call's window and the room's window agree (pop out, pop in). */
+export function readSharePick(callId: string | null): string | null {
+  if (!callId) return null
+  try {
+    const raw = localStorage.getItem(CALL_SHARE_PICK_KEY)
+    const v = raw ? (JSON.parse(raw) as { callId?: unknown; key?: unknown }) : null
+    return v && v.callId === callId && typeof v.key === 'string' ? v.key : null
+  } catch {
+    return null
+  }
+}
+
+export function writeSharePick(callId: string | null, key: string | null): void {
+  if (!callId) return
+  try {
+    if (key === null) localStorage.removeItem(CALL_SHARE_PICK_KEY)
+    else localStorage.setItem(CALL_SHARE_PICK_KEY, JSON.stringify({ callId, key }))
+  } catch {
+    // Storage unavailable: each window keeps its own pick.
+  }
+}
+
+export const CALL_POPPED_FROM_KEY = 'k2.voice.callPoppedFrom.v1'
+export const CALL_HAND_BACK_KEY = 'k2.voice.callHandBack.v1'
+/** A pop in older than this is stale (the window it was for had gone). */
+export const CALL_HAND_BACK_MS = 15_000
+
+/** The window that popped the call out: Pop in brings it back there. */
+export function notePoppedOutFrom(windowLabel: string): void {
+  try {
+    localStorage.setItem(CALL_POPPED_FROM_KEY, windowLabel)
+  } catch {
+    // Storage unavailable: Pop in lands on the tile, as closing does.
+  }
+}
+
+/** Pop in: what the call's window hands back as it closes. `to` is the
+ *  window that popped it out, which opens the call view; every other window
+ *  just gets its tile back, as when the call's window is closed. */
+export interface CallHandBack {
+  callId: string
+  to: string
+  at: number
+}
+
+export function writeCallHandBack(callId: string, now: number): void {
+  try {
+    const to = localStorage.getItem(CALL_POPPED_FROM_KEY) ?? 'main'
+    localStorage.setItem(CALL_HAND_BACK_KEY, JSON.stringify({ callId, to, at: now }))
+  } catch {
+    // Storage unavailable: the call comes back as the tile.
+  }
+}
+
+/** The hand-back for this window and call, taken (read once). Null: none,
+ *  someone else's, or stale. */
+export function takeCallHandBack(callId: string | null, windowLabel: string, now: number): CallHandBack | null {
+  if (!callId) return null
+  try {
+    const raw = localStorage.getItem(CALL_HAND_BACK_KEY)
+    const v = raw ? (JSON.parse(raw) as Partial<CallHandBack>) : null
+    if (!v || v.to !== windowLabel) return null
+    localStorage.removeItem(CALL_HAND_BACK_KEY)
+    if (v.callId !== callId || typeof v.at !== 'number' || now - v.at > CALL_HAND_BACK_MS || now < v.at - 1_000) return null
+    return { callId, to: windowLabel, at: v.at }
+  } catch {
+    return null
+  }
 }

@@ -8,14 +8,21 @@
 // the window doesn't rejoin, and closing it doesn't hang up. The window is
 // src-tauri's `window_open_call` (call_window.rs), which tells every window
 // `k2-call-popout { open }` when it opens and when it's destroyed.
+//
+// Pop in (the call's window's button) closes that window and brings the call
+// back where it came from: the window that popped it out opens its call view,
+// with the same share in the middle (call-view.ts keeps both per client).
+// Closing the call's window with the OS's close button pops it back in too,
+// as the floating tile: the call never ends because a window closed.
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow, Window as TauriWindow } from '@tauri-apps/api/window'
 import { create } from 'zustand'
 import { isWebClient } from '@/lib/is-web'
-import { CALL_POPOUT_EVENT, CALL_WINDOW_LABEL, readWindowFrame, writeWindowFrame, type WindowFrame } from '@/lib/voice/call-view'
-import { exitCallFullscreen, fullscreenElement } from './call-fullscreen'
+import { getWindowLabel } from '@/lib/window-chrome'
+import { CALL_POPOUT_EVENT, CALL_WINDOW_LABEL, notePoppedOutFrom, readWindowFrame, writeCallHandBack, writeWindowFrame, type WindowFrame } from '@/lib/voice/call-view'
+import { shrinkCall } from './call-expand'
 
 /** What this needs from the app: injected, so tests run without Tauri. */
 export interface CallPopoutBridge {
@@ -52,7 +59,8 @@ export function setCallPopoutBridge(b: CallPopoutBridge | null): void {
 export async function popOutCall(): Promise<void> {
   const b = bridge
   if (!b) return
-  exitCallFullscreen()
+  shrinkCall()
+  notePoppedOutFrom(getWindowLabel())
   gen += 1
   // At once: the tile gives way while the window comes up.
   useCallPopout.setState({ open: true, error: null })
@@ -64,6 +72,13 @@ export async function popOutCall(): Promise<void> {
     console.warn('[call] could not open the call window:', why)
     useCallPopout.setState({ open: false, error: `Couldn't open the call in its own window: ${why}` })
   }
+}
+
+/** In the call's window: Pop in. Hands the call back to the window that
+ *  popped it out (its call view opens there), then closes this one. */
+export function popInCall(callId: string | null, closeWindow: () => void, now = Date.now()): void {
+  if (callId) writeCallHandBack(callId, now)
+  closeWindow()
 }
 
 let watchers = 0
@@ -128,13 +143,13 @@ function inTauri(): boolean {
 if (!isWebClient() && inTauri()) setCallPopoutBridge(tauriBridge)
 
 /** In the call's window: keep its size and place for next time (per client).
- *  Not while it's full screen. Resolves to the unsubscribe. */
+ *  Not while the OS has it full screen. Resolves to the unsubscribe. */
 export async function keepCallWindowFrame(): Promise<() => void> {
   if (!inTauri()) return () => {}
   const w = getCurrentWindow()
   let timer: ReturnType<typeof setTimeout> | null = null
   const save = async (): Promise<void> => {
-    if (fullscreenElement() || (await w.isFullscreen()) || (await w.isMinimized())) return
+    if ((await w.isFullscreen()) || (await w.isMinimized())) return
     const scale = await w.scaleFactor()
     const pos = (await w.outerPosition()).toLogical(scale)
     const size = (await w.innerSize()).toLogical(scale)

@@ -669,14 +669,14 @@ export function GlobeIcon(props: K2IconProps = {}): React.JSX.Element {
   )
 }
 
-// ── Call video: full screen and pop out ─────────────────────────────────
+// ── Call video: expand, pop out and pop in ──────────────────────────────
 
-/** The call's video full screen: Lucide `maximize`, squared; `exit` is
+/** Expand the call over K2: Lucide `maximize`, squared; `shrink` is
  *  `minimize` (the corners turned in). */
-export function FullscreenIcon({ exit = false, ...props }: K2IconProps & { exit?: boolean }): React.JSX.Element {
+export function ExpandIcon({ shrink = false, ...props }: K2IconProps & { shrink?: boolean }): React.JSX.Element {
   return (
-    <svg {...iconProps(exit ? 'minimize' : 'maximize', props)}>
-      {exit ? (
+    <svg {...iconProps(shrink ? 'minimize' : 'maximize', props)}>
+      {shrink ? (
         <>
           <path d="M8 3v5H3" />
           <path d="M21 8h-5V3" />
@@ -700,6 +700,18 @@ export function PopOutIcon(props: K2IconProps = {}): React.JSX.Element {
   return (
     <svg {...iconProps('external-link', props)}>
       <path d="M15 3h6v6" />
+      <path d="M10 14L21 3" />
+      <path d="M18 13v8H3V6h8" />
+    </svg>
+  )
+}
+
+/** Back from the call's own window (pop in): Pop out's box with the arrow
+ *  turned to point in (Lucide `external-link`, its arrow reversed), squared. */
+export function PopInIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('pop-in', props)}>
+      <path d="M10 9v5h5" />
       <path d="M10 14L21 3" />
       <path d="M18 13v8H3V6h8" />
     </svg>

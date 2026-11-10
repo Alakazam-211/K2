@@ -1,15 +1,16 @@
-// Full screen and Pop out (Rosson 2026-11-10): the two ways to give the
-// call's video more room. On the picture they're small icon buttons on the
-// same chip as its labels; in a panel's header or a control bar, the strip's
-// square buttons. Both act at once, inside the click: full screen must be
-// asked for in the person's own gesture.
+// Expand, Pop out and Pop in (Rosson 2026-11-10): the ways to give the call's
+// video more room, and to bring it back. Expand opens the call over K2, inside
+// the app (CallExpanded; it was OS full screen); Pop out moves it to its own
+// window, and that window's Pop in brings it back. On the picture they're
+// small icon buttons on the same chip as its labels; in a panel's header or a
+// control bar, the strip's square buttons.
 
-import { FullscreenIcon, PopOutIcon } from '@/components/icons/K2Icons'
+import { ExpandIcon, PopInIcon, PopOutIcon } from '@/components/icons/K2Icons'
 import { effectiveKeybinding, formatKeyCombo } from '@shared/hotkeys'
 import { isMacPlatform } from '@/lib/desktop-chrome'
-import { CALL_FULLSCREEN_HOTKEY } from '@/lib/voice/call-view'
+import { CALL_EXPAND_HOTKEY } from '@/lib/voice/call-view'
 import { useSettingsStore } from '@/stores/settings'
-import { enterCallFullscreen, exitCallFullscreen, useCallFullscreen } from '@/stores/call-fullscreen'
+import { expandCall, shrinkCall, useCallExpand } from '@/stores/call-expand'
 import { popOutCall, useCallPopout } from '@/stores/call-popout'
 import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
 
@@ -38,36 +39,36 @@ export function PictureButton({
   )
 }
 
-/** The full-screen chord as this person has it bound, painted for this OS. */
-export function useFullscreenChordLabel(): string | null {
+/** The Expand chord as this person has it bound, painted for this OS. */
+export function useExpandChordLabel(): string | null {
   const keybindings = useSettingsStore((s) => s.keybindings)
   const mac = isMacPlatform()
-  const combo = effectiveKeybinding(keybindings, CALL_FULLSCREEN_HOTKEY, mac)
+  const combo = effectiveKeybinding(keybindings, CALL_EXPAND_HOTKEY, mac)
   if (!combo) return null
   return mac ? formatKeyCombo(combo, true) : combo
 }
 
-/** The label with the chord, for the tooltip ("Full screen (⌃⌘V)"). */
-export function fullscreenLabel(chord: string | null): string {
-  return chord ? `Full screen (${chord})` : 'Full screen'
+/** The label with the chord, for the tooltip ("Expand (⌃⌘V)"). */
+export function expandLabel(chord: string | null): string {
+  return chord ? `Expand (${chord})` : 'Expand'
 }
 
-/** Full screen, or Exit full screen while in it. `look`: on the picture, or
- *  the strip's square button. */
-export function FullscreenButton({ testId, look, chord }: { testId: string; look: 'picture' | 'panel'; chord: string | null }): React.JSX.Element {
-  const on = useCallFullscreen((s) => s.mode !== 'off')
-  const label = on ? 'Exit full screen (Esc)' : fullscreenLabel(chord)
-  const press = (): void => (on ? exitCallFullscreen() : enterCallFullscreen())
+/** Expand, or Shrink while expanded. `look`: on the picture, or the strip's
+ *  square button. */
+export function ExpandButton({ testId, look, chord }: { testId: string; look: 'picture' | 'panel'; chord: string | null }): React.JSX.Element {
+  const on = useCallExpand((s) => s.expanded)
+  const label = on ? 'Shrink (Esc)' : expandLabel(chord)
+  const press = (): void => (on ? shrinkCall() : expandCall(testId))
   if (look === 'picture') {
     return (
       <PictureButton label={label} testId={testId} onPress={press}>
-        <FullscreenIcon exit={on} size={13} />
+        <ExpandIcon shrink={on} size={13} />
       </PictureButton>
     )
   }
   return (
     <CallPanelButton label={label} testId={testId} onPress={press}>
-      <FullscreenIcon exit={on} size={CALL_PANEL_ICON} />
+      <ExpandIcon shrink={on} size={CALL_PANEL_ICON} />
     </CallPanelButton>
   )
 }
@@ -89,6 +90,16 @@ export function PopOutButton({ testId, look }: { testId: string; look: 'picture'
   return (
     <CallPanelButton label={label} testId={testId} onPress={press}>
       <PopOutIcon size={CALL_PANEL_ICON} />
+    </CallPanelButton>
+  )
+}
+
+/** Pop in, in the call's own window: back into K2's window, and this one
+ *  closes. Pop out's square button. */
+export function PopInButton({ testId, onPress }: { testId: string; onPress: () => void }): React.JSX.Element {
+  return (
+    <CallPanelButton label="Pop back into K2's window" testId={testId} onPress={onPress}>
+      <PopInIcon size={CALL_PANEL_ICON} />
     </CallPanelButton>
   )
 }

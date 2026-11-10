@@ -46,7 +46,7 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   // Portals that only host a component that claims its own box.
   'components/Voice/VoicePopover.tsx': "rendered only through VoiceButton's anchored menu, which claims its box",
   'components/Voice/CallLayer.tsx': 'portals the call view; VideoStage claims its own box (CallTile claims its own)',
-  'components/Voice/CallWindow.tsx': "the call's own window: it has no room, so no Browser tab (its full screen is CallFullscreen, which claims)",
+  'components/Voice/CallWindow.tsx': "the call's own window: it has no room, so no Browser tab",
   // Settings / Projects / Feedback / Wiki pages: the room (and every
   // Browser tab) is hidden while they are open.
   'components/Settings/SettingsSearchModal.tsx': 'Settings is open: Browser tabs are hidden',

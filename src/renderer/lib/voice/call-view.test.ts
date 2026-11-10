@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { HOTKEYS, getDefaultKeybindings } from '@shared/hotkeys'
 import {
   CALL_CLOCK_KEY,
-  CALL_FULLSCREEN_HOTKEY,
+  CALL_EXPAND_HOTKEY,
   CALL_TILE_DEFAULT_WIDTH,
   CALL_TILE_MAX_WIDTH,
   CALL_TILE_MIN_WIDTH,
@@ -18,7 +18,7 @@ import {
   callStartedAt,
   clampTileWidth,
   inwardEdges,
-  isCallFullscreenChord,
+  isCallExpandChord,
   isCallWindow,
   maxTileWidth,
   noteCallConnected,
@@ -97,32 +97,32 @@ describe('the full-screen chord', () => {
   })
 
   it('is in the shortcut registry, rebindable, and clashes with no other default', () => {
-    const def = HOTKEYS.find((h) => h.id === CALL_FULLSCREEN_HOTKEY)
+    const def = HOTKEYS.find((h) => h.id === CALL_EXPAND_HOTKEY)
     expect(def?.defaultKey).toBe('Ctrl+Meta+V')
     expect(def?.defaultKeyOther).toBe('Ctrl+Alt+V')
     for (const mac of [true, false]) {
       const all = Object.values(getDefaultKeybindings(mac))
-      expect(all.filter((c) => c === getDefaultKeybindings(mac)[CALL_FULLSCREEN_HOTKEY])).toHaveLength(1)
+      expect(all.filter((c) => c === getDefaultKeybindings(mac)[CALL_EXPAND_HOTKEY])).toHaveLength(1)
     }
   })
 
   it('⌃⌘V on macOS, Ctrl+Alt+V elsewhere; plain paste never counts', () => {
-    expect(isCallFullscreenChord(key({ ctrlKey: true, metaKey: true }), {}, true)).toBe(true)
-    expect(isCallFullscreenChord(key({ metaKey: true }), {}, true)).toBe(false)
-    expect(isCallFullscreenChord(key({ ctrlKey: true, altKey: true }), {}, false)).toBe(true)
-    expect(isCallFullscreenChord(key({ ctrlKey: true }), {}, false)).toBe(false)
-    expect(isCallFullscreenChord(key({ ctrlKey: true, shiftKey: true }), {}, false)).toBe(false)
+    expect(isCallExpandChord(key({ ctrlKey: true, metaKey: true }), {}, true)).toBe(true)
+    expect(isCallExpandChord(key({ metaKey: true }), {}, true)).toBe(false)
+    expect(isCallExpandChord(key({ ctrlKey: true, altKey: true }), {}, false)).toBe(true)
+    expect(isCallExpandChord(key({ ctrlKey: true }), {}, false)).toBe(false)
+    expect(isCallExpandChord(key({ ctrlKey: true, shiftKey: true }), {}, false)).toBe(false)
   })
 
-  it('AltGr (Ctrl+Alt on Windows) types a character, never full screen', () => {
+  it('AltGr (Ctrl+Alt on Windows) types a character, never Expand', () => {
     const altGr = key({ ctrlKey: true, altKey: true, getModifierState: (m: string) => m === 'AltGraph' })
-    expect(isCallFullscreenChord(altGr, {}, false)).toBe(false)
+    expect(isCallExpandChord(altGr, {}, false)).toBe(false)
   })
 
   it('follows a rebind', () => {
-    const kb = { [CALL_FULLSCREEN_HOTKEY]: 'Meta+Shift+Enter' }
-    expect(isCallFullscreenChord(key({ key: 'Enter', code: 'Enter', metaKey: true, shiftKey: true }), kb, true)).toBe(true)
-    expect(isCallFullscreenChord(key({ ctrlKey: true, metaKey: true }), kb, true)).toBe(false)
+    const kb = { [CALL_EXPAND_HOTKEY]: 'Meta+Shift+Enter' }
+    expect(isCallExpandChord(key({ key: 'Enter', code: 'Enter', metaKey: true, shiftKey: true }), kb, true)).toBe(true)
+    expect(isCallExpandChord(key({ ctrlKey: true, metaKey: true }), kb, true)).toBe(false)
   })
 })
 

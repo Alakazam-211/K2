@@ -15,10 +15,13 @@
 //
 // A press that never drags is a click: a button's is the button's; anywhere
 // else on the tile opens the call view over the current page. A double-click
-// (or the tile's Full screen button, or ⌃⌘V) puts the video full screen
-// (CallFullscreen); Pop out moves the call to its own window. The name sits
+// (or the tile's Expand button, or ⌃⌘V) expands the call over K2
+// (CallExpanded); Pop out moves the call to its own window. The name sits
 // at the picture's bottom left and the call's time at its bottom right, on
-// the picture itself (Rosson 2026-11-10: no band under it). The tile resizes
+// the picture itself (Rosson 2026-11-10: no band under it). While someone
+// else shares a screen the tile isn't showing (it follows the speaker), a
+// chip on the picture says whose, and a click on it expands the call, where
+// the share is in the middle. The tile resizes
 // from its two inward edges and the corner between them, keeping 16:9, and
 // the width is remembered per client.
 
@@ -32,6 +35,7 @@ import { cornerSpots, freeArea, type Bounds, type Corner, type Rect, type Vec } 
 import { usePanelsStore } from '@/stores/panels'
 import { DRAWER_ANIM_MS } from '@/components/Layout/drawer-motion'
 import { holdLeft, nextSpeaker, NO_SPEAKER, speakingIds, tilePicture, videoLive, type SpeakerHold } from '@/lib/voice/call-tile-picture'
+import { isShare } from '@/lib/voice/call-share'
 import { videoTiles, type CallPerson, type VideoTile as Tile } from '@/lib/voice/video-labels'
 import { getWindowLabel } from '@/lib/window-chrome'
 import {
@@ -45,16 +49,17 @@ import {
   type ResizeHandle,
   type TileRoom,
 } from '@/lib/voice/call-view'
-import { enterCallFullscreen } from '@/stores/call-fullscreen'
+import { expandCall } from '@/stores/call-expand'
 import { useCallScreen } from '@/stores/call-screen'
 import type { VideoController } from '@/stores/video-core'
 import type { VoiceCall } from '@/stores/voice-core'
 import CallControls, { type CallControlsProps } from './CallControls'
-import { FullscreenButton, PopOutButton, useFullscreenChordLabel } from './CallViewButtons'
+import { ExpandButton, PopOutButton, useExpandChordLabel } from './CallViewButtons'
 import { ScreenPicker, VideoNoticeLine } from './VideoControls'
 import { callDuration } from './voice-labels'
 import { reduceMotion, useCornerDrag, useFadeIn } from './useCornerDrag'
-import VideoTile from './VideoTile'
+import VideoTile, { MEDIA_LABEL } from './VideoTile'
+import { ExpandIcon, ScreenShareIcon } from '@/components/icons/K2Icons'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 
 /** The tile's first width (px); the picture is 16:9 inside it. The person
@@ -88,7 +93,9 @@ export function useCallVideoLive(video: VideoController, people: readonly CallPe
  *  talking takes over (Sew's active-speaker hold). */
 export function useActiveSpeaker(people: readonly CallPerson[]): string | null {
   const key = speakingIds(people).join('\n')
-  const [hold, setHold] = useState<SpeakerHold>(NO_SPEAKER)
+  // Whoever is talking already has it from the first draw (a tile drawn
+  // again after the call shrinks never flashes someone else first).
+  const [hold, setHold] = useState<SpeakerHold>(() => nextSpeaker(NO_SPEAKER, speakingIds(people), Date.now()))
   const [recheck, setRecheck] = useState(0)
   useEffect(() => {
     const speaking = key ? key.split('\n') : []
@@ -257,8 +264,10 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
   const tiles = useCallTiles(video, people)
   const speaker = useActiveSpeaker(people)
   const picture = tilePicture(tiles, speaker)
+  // Someone else's share the picture isn't showing.
+  const hiddenShare = picture?.source === 'screen' ? null : (tiles.find((t) => isShare(t) && !t.self) ?? null)
   const time = useCallDuration(call.connectedAt)
-  const chord = useFullscreenChordLabel()
+  const chord = useExpandChordLabel()
   const windowLabel = useMemo(getWindowLabel, [])
   // The width this person chose (per client), and the one that fits now.
   const [wanted, setWanted] = useState(readTileWidth)
@@ -279,7 +288,7 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
     )
   }
   // A single click opens the call view, once it's clear it wasn't the first
-  // half of a double-click (full screen).
+  // half of a double-click (Expand).
   const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(
     () => () => {
@@ -364,7 +373,7 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
     setWanted(widthRef.current)
   }
 
-  const label = `Video call in ${call.roomName}. Click the video to open the call; double-click for full screen.`
+  const label = `Video call in ${call.roomName}. Click the video to open the call; double-click to expand it.`
   // The buttons sit on the top edge, clear of the resize corner.
   const buttonsLeft = corner === 'bottom-left'
   return (
@@ -421,7 +430,7 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
             clearTimeout(tapTimer.current)
             tapTimer.current = null
           }
-          enterCallFullscreen()
+          expandCall('call-tile-picture')
         }}
       >
         {picture ? (
@@ -444,8 +453,24 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
           }`}
         >
           <PopOutButton testId="call-tile-popout" look="picture" />
-          <FullscreenButton testId="call-tile-fullscreen" look="picture" chord={chord} />
+          <ExpandButton testId="call-tile-expand" look="picture" chord={chord} />
         </div>
+        {hiddenShare ? (
+          <button
+            type="button"
+            data-testid="call-tile-share-cue"
+            data-track={hiddenShare.key}
+            aria-label={`Expand to see ${hiddenShare.name}`}
+            title={`Expand to see ${hiddenShare.name}`}
+            className={`absolute top-1.5 ${buttonsLeft ? 'right-1.5' : 'left-1.5'} ${MEDIA_LABEL} max-w-[70%] opacity-90 hover:opacity-100 focus-visible:opacity-100`}
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            onClick={() => expandCall('call-tile-share-cue')}
+          >
+            <ScreenShareIcon size={12} />
+            <span className="truncate">{hiddenShare.name}</span>
+            <ExpandIcon size={11} />
+          </button>
+        ) : null}
         <ResizeHandles corner={corner} onDown={onResizeDown} />
       </Surface>
       <Surface ref={stripRef} role2="elevated" elevation={held ? 5 : 3} data-testid="call-tile-strip" className="pointer-events-auto p-1.5">

@@ -2,8 +2,9 @@
 // that stays while the headset's list is closed. Screens draw large; with no
 // screen shared, the last person who spoke draws large (3 or more tiles). The
 // speaker's tile has the accent outline. Your own camera is the mirrored self-view.
-// In a call, its header also has Full screen and Pop out (the call in its own
-// window), and the call's window draws the same grid (`StageGrid`).
+// In a call, its header also has Expand (the call over K2, CallExpanded) and
+// Pop out (the call in its own window); those two draw a share in the middle
+// with the people beside it (CallStage), and the same grid without one.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from 'zustand'
@@ -12,7 +13,7 @@ import { videoTiles, withSpeakerEmphasis, type CallPerson } from '@/lib/voice/vi
 import type { VideoController } from '@/stores/video-core'
 import VideoTile from './VideoTile'
 import { ScreenPicker, VideoCallButtons, VideoNoticeLine } from './VideoControls'
-import { FullscreenButton, PopOutButton, useFullscreenChordLabel } from './CallViewButtons'
+import { ExpandButton, PopOutButton, useExpandChordLabel } from './CallViewButtons'
 
 const SMALL_BTN =
   'border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-50'
@@ -77,14 +78,14 @@ export interface VideoStageProps {
   /** The call's view hides back to the floating tile (CallLayer). Without
    *  this or `onClose`, it hides to a pill. */
   onHide?: () => void
-  /** A call's view (not the demo): Full screen and Pop out in the header. */
+  /** A call's view (not the demo): Expand and Pop out in the header. */
   viewButtons?: boolean
 }
 
 export default function VideoStage({ ctl, people, title, footerStart, footer, onClose, onHide, viewButtons = false }: VideoStageProps): React.JSX.Element | null {
   const availability = useStore(ctl.store, (s) => s.availability)
   const tiles = useStageTiles(ctl, people)
-  const chord = useFullscreenChordLabel()
+  const chord = useExpandChordLabel()
   const [hidden, setHidden] = useState(false)
   const [wide, setWide] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -117,7 +118,7 @@ export default function VideoStage({ ctl, people, title, footerStart, footer, on
       <header className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-1 text-[12px] text-[var(--color-text-primary)]">
         <span className="min-w-0 flex-1 truncate">{title}</span>
         {viewButtons ? <PopOutButton testId="video-stage-popout" look="panel" /> : null}
-        {viewButtons ? <FullscreenButton testId="video-stage-fullscreen" look="panel" chord={chord} /> : null}
+        {viewButtons ? <ExpandButton testId="video-stage-expand" look="panel" chord={chord} /> : null}
         <button type="button" data-testid="video-stage-size" className={SMALL_BTN} onClick={() => setWide(!wide)}>
           {wide ? 'Smaller' : 'Bigger'}
         </button>

@@ -103,13 +103,14 @@ export const HOTKEYS: HotkeyDefinition[] = [
   // tab or open one. Only on a server that can run a device (M-A13). ⌘⇧M was
   // free (catalog, native menu accelerators and App.tsx all checked).
   { id: 'openMobile', label: 'Open Mobile', defaultKey: 'Meta+Shift+M', category: 'App' },
-  // A call's video full screen (Rosson 2026-11-10), while the call has
-  // video: the floating tile, the call view or the call's own window.
+  // Expand a call's video over K2 (Rosson 2026-11-10; it was full screen,
+  // and keeps that id so a rebound chord still works), while the call has
+  // video: the floating tile or the call view.
   // ⌃⌘V on macOS ("V" for video), Ctrl+Alt+V elsewhere, as the page chords.
   // Free: this list, the native menu (⌃⌘F is the window's own Enter Full
   // Screen, ⌃⌘Z Zen), and every renderer key handler (⌘V / Ctrl+V /
-  // Ctrl+Shift+V are paste). Handled by CallLayer and the call's window.
-  { id: 'toggleCallFullscreen', label: 'Call Video Full Screen', defaultKey: 'Ctrl+Meta+V', defaultKeyOther: 'Ctrl+Alt+V', category: 'App' }
+  // Ctrl+Shift+V are paste). Handled by CallLayer.
+  { id: 'toggleCallFullscreen', label: 'Expand Call Video', defaultKey: 'Ctrl+Meta+V', defaultKeyOther: 'Ctrl+Alt+V', category: 'App' }
 ]
 
 /** Build a map of id -> default combo for quick lookup. `isMac` false

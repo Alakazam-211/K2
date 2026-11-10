@@ -1,8 +1,7 @@
 // Video in voice rooms: one tile. A canvas the tile's sink draws on, the
 // person's name and mic at its bottom left, and in place of the picture: their
 // avatar while the camera's off, or a line saying why it's paused. A tile may
-// carry one more label at its bottom right (the floating tile's and full
-// screen's call time). Labels sit on the picture on a chip of their own
+// carry one more label at its bottom right (the floating tile's call time). Labels sit on the picture on a chip of their own
 // (`--color-media-label-*`), readable on any video in every Style.
 
 import { useEffect, useRef, type ReactNode } from 'react'
@@ -35,7 +34,7 @@ export interface VideoTileProps {
   ctl: VideoController
   /** At the bottom right, on the picture (the call's time). */
   corner?: ReactNode
-  /** Fill the box it's given (full screen) instead of keeping 16:9 itself;
+  /** Fill the box it's given (a share in the middle) instead of keeping 16:9 itself;
    *  the picture is letterboxed inside. */
   fill?: boolean
 }
@@ -74,6 +73,9 @@ export default function VideoTile({ tile, ctl, corner, fill = false }: VideoTile
       style={fill ? undefined : { aspectRatio: '16 / 9' }}
     >
       <canvas
+        // A canvas per track: a sink that's closing (its short grace period)
+        // must never draw over the next track's picture on a reused canvas.
+        key={tile.key}
         ref={canvasRef}
         data-testid="video-canvas"
         className="absolute inset-0 h-full w-full object-contain"

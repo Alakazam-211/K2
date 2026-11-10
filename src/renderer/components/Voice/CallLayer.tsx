@@ -9,16 +9,19 @@
 // web client's calls are seats with no media, so it never shows either.
 // Everything it shows comes from the voice and video stores (the engine's
 // truth); the only state here is this window's view of it: the call view
-// open or closed, full screen (CallFullscreen, ⌃⌘V / Ctrl+Alt+V), and
+// open or closed, expanded over K2 (CallExpanded, ⌃⌘V / Ctrl+Alt+V), and
 // whether the call is in its own window (Pop out), where every other window
-// shows neither the tile nor the call view until that window closes.
+// shows neither the tile nor the call view until that window closes. Pop in
+// there brings it back to the window that popped it out, as its call view
+// with the same share in the middle; the others get their tile back.
 
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { isMacPlatform } from '@/lib/desktop-chrome'
-import { isCallFullscreenChord, isCallWindow, noteCallConnected } from '@/lib/voice/call-view'
+import { isCallExpandChord, isCallWindow, noteCallConnected, takeCallHandBack } from '@/lib/voice/call-view'
 import { getWindowLabel } from '@/lib/window-chrome'
-import { toggleCallFullscreen, useCallFullscreen } from '@/stores/call-fullscreen'
+import { toggleCallExpand, useCallExpand } from '@/stores/call-expand'
+import { loadSharePick } from '@/stores/call-share'
 import { useCallPopout, watchCallPopout } from '@/stores/call-popout'
 import { useSettingsStore } from '@/stores/settings'
 import { useCallScreen } from '@/stores/call-screen'
@@ -28,7 +31,7 @@ import type { VoiceCall } from '@/stores/voice-core'
 import type { CallPerson } from '@/lib/voice/video-labels'
 import CallTile, { useCallVideoLive } from './CallTile'
 import VideoStage from './VideoStage'
-import CallFullscreen from './CallFullscreen'
+import CallExpanded from './CallExpanded'
 import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
 import { MicIcon, MicOffIcon, PhoneOffIcon } from '@/components/icons/K2Icons'
 
@@ -52,15 +55,15 @@ export function inCallWindow(): boolean {
   return isCallWindow(window.location.hash, getWindowLabel())
 }
 
-/** The full-screen chord, while the call has video in this window. */
-export function useCallFullscreenChord(active: boolean): void {
+/** The Expand chord, while the call has video in this window. */
+export function useCallExpandChord(active: boolean): void {
   useEffect(() => {
     if (!active) return
     const onKey = (e: KeyboardEvent): void => {
-      if (e.repeat || !isCallFullscreenChord(e, useSettingsStore.getState().keybindings ?? {}, isMacPlatform())) return
+      if (e.repeat || !isCallExpandChord(e, useSettingsStore.getState().keybindings ?? {}, isMacPlatform())) return
       e.preventDefault()
       e.stopPropagation()
-      toggleCallFullscreen()
+      toggleCallExpand()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
@@ -77,9 +80,20 @@ function InCall({ call }: { call: VoiceCall }): React.JSX.Element | null {
   const open = useCallScreen((s) => s.open)
   const settingsOpen = useSettingsStore((s) => s.settingsOpen) === true
   const live = useCallVideoLive(video, call.participants)
-  const fullscreen = useCallFullscreen((s) => s.mode) !== 'off'
+  const expanded = useCallExpand((s) => s.expanded)
   const poppedOut = useCallPopout((s) => s.open)
-  useCallFullscreenChord(live && !poppedOut)
+  useCallExpandChord(live && !poppedOut)
+  // The call's window closed. Pop in (not the OS's close) hands the call
+  // back to the window that popped it out: its call view opens, and every
+  // window takes up the share that was in the middle there.
+  const wasOut = useRef(poppedOut)
+  useEffect(() => {
+    const was = wasOut.current
+    wasOut.current = poppedOut
+    if (!was || poppedOut) return
+    loadSharePick(call.callId)
+    if (takeCallHandBack(call.callId, getWindowLabel(), Date.now())) useCallScreen.getState().ask()
+  }, [poppedOut, call.callId])
   // The video stopped: the call view goes with it, and next time the tile
   // comes first again.
   useEffect(() => {
@@ -94,9 +108,10 @@ function InCall({ call }: { call: VoiceCall }): React.JSX.Element | null {
 
   // In its own window: that window draws it.
   if (poppedOut) return null
-  const host = live ? <CallFullscreen call={call} video={video} actions={callActions} /> : null
-  // Full screen: the view is the host's; the tile and call view wait.
-  if (fullscreen) return host
+  const host = live ? <CallExpanded call={call} video={video} actions={callActions} /> : null
+  // Expanded: the view is drawn there; the tile and the call view wait (one
+  // sink per track).
+  if (expanded) return host
   if (open && live) {
     const stage = createPortal(
       <VideoStage

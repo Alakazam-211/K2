@@ -25,8 +25,8 @@ import { policyBlockText } from '@/lib/voice/video-labels'
 import type { VoiceCall } from '@/stores/voice-core'
 import type { VideoController } from '@/stores/video-core'
 
-/** `tile`: the floating tile's strip; `overlay`: full screen and the call's
- *  own window (the strip's buttons, their own test ids). */
+/** `tile`: the floating tile's strip; `overlay`: the expanded view and the
+ *  call's own window (the strip's buttons, their own test ids). */
 export type CallControlsVariant = 'topbar' | 'tile' | 'overlay'
 
 /** The tile strip's button (px). */

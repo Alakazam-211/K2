@@ -35,7 +35,8 @@ export const ADD_WORKSPACE_Z = 1000
  *  and toast. It steps aside while a menu or popover overlaps it. */
 export const CALL_TILE_Z = 160
 
-/** The call's video full screen (Voice/CallFullscreen): over everything in
- *  the window, Settings and modals included, since it is the whole screen
- *  while it's on; below toasts (9999), so a call notice still shows. */
-export const CALL_FULLSCREEN_Z = 9000
+/** The call expanded over K2 (Voice/CallExpanded): its scrim, and its frame
+ *  one above. Over everything in the window, Settings and modals included,
+ *  since it is what the person is looking at while it's open; below toasts
+ *  (9999), so a call notice still shows. */
+export const CALL_EXPANDED_Z = 9000

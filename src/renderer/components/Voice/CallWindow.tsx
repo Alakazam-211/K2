@@ -1,13 +1,17 @@
 // The call in its own window (Rosson 2026-11-10, "pop out", as a Focus
-// window holds one agent): the call's video grid, its time, and its controls,
-// and nothing else. Opened by `window_open_call` (src-tauri call_window.rs).
+// window holds one agent): the call's video, its time, and its controls, and
+// nothing else. With a screen share, the share is in the middle and the
+// people in a column of smaller tiles on the left (CallStage); with none, the
+// grid. Opened by `window_open_call` (src-tauri call_window.rs).
 //
 // The call doesn't move here: it lives in the app's Rust process, and this
 // window adopts it as any K2 window does (voice-core `adoptNativeCall`) and
 // draws its own video sinks. Closing the window leaves the call up and puts
 // it back in the room's window (the floating tile); leaving the call here
-// ends it everywhere, and then this window closes itself. Its size and place
-// are kept per client; full screen works here too.
+// ends it everywhere, and then this window closes itself. Pop in (title bar)
+// closes this window and opens the call view in the window that popped it
+// out, with the same share in the middle. Its size and place are kept per
+// client; the OS's own full screen (its green button) is the window's.
 //
 // K2's voice rooms have no in-call chat today, so there's none to bring.
 
@@ -18,17 +22,17 @@ import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { CALL_WINDOW_ADOPT_MS, callStartedAt } from '@/lib/voice/call-view'
 import { useSettingsStore } from '@/stores/settings'
-import { useCallFullscreen } from '@/stores/call-fullscreen'
-import { keepCallWindowFrame } from '@/stores/call-popout'
+import { keepCallWindowFrame, popInCall } from '@/stores/call-popout'
+import { loadSharePick } from '@/stores/call-share'
 import { retainVideo, video } from '@/stores/video'
 import { retainVoice, useVoice } from '@/stores/voice'
 import CallControls from './CallControls'
-import CallFullscreen from './CallFullscreen'
-import { callActions, useCallFullscreenChord } from './CallLayer'
+import { callActions } from './CallLayer'
+import CallStage from './CallStage'
 import { useCallDuration } from './CallTile'
-import { FullscreenButton, useFullscreenChordLabel } from './CallViewButtons'
+import { PopInButton } from './CallViewButtons'
 import { ScreenPicker, VideoNoticeLine } from './VideoControls'
-import { StageGrid, useStageTiles } from './VideoStage'
+import { useStageTiles } from './VideoStage'
 import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 
 const NO_PEOPLE: never[] = []
@@ -71,13 +75,13 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
   const preview = useSettingsStore((s) => s.videoRoomsPreview) === true
   const people = call?.participants ?? NO_PEOPLE
   const tiles = useStageTiles(video, people)
-  const fullscreen = useCallFullscreen((s) => s.mode) !== 'off'
-  const chord = useFullscreenChordLabel()
   // The call's own clock: when it connected, as the first window to see it
   // knew (this window adopted it later).
   const startedAt = call ? (call.callId ? callStartedAt(call.callId, call.connectedAt) : call.connectedAt) : null
   const time = useCallDuration(startedAt)
-  useCallFullscreenChord(call !== null && tiles.length > 0)
+  // The share the room's window had in the middle, here too.
+  const callId = call?.callId ?? null
+  useEffect(() => loadSharePick(callId), [callId])
 
   // The call shows up once this window has adopted it. It ending after that
   // (left here or elsewhere, or dropped) closes the window; never showing up
@@ -123,7 +127,7 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
             {time}
           </span>
         ) : null}
-        {call && tiles.length > 0 ? <FullscreenButton testId="call-window-fullscreen" look="panel" chord={chord} /> : null}
+        {call ? <PopInButton testId="call-window-popin" onPress={() => popInCall(call.callId, closeWindow)} /> : null}
         <DesktopChromeRight />
       </div>
       {!call ? (
@@ -146,11 +150,8 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
         </div>
       ) : (
         <>
-          {fullscreen ? (
-            // The full-screen view draws the video; one sink per track.
-            <div className="flex-1" />
-          ) : tiles.length > 0 ? (
-            <StageGrid tiles={tiles} ctl={video} className="flex-1 content-center" />
+          {tiles.length > 0 ? (
+            <CallStage ctl={video} people={people} callId={call.callId} className="flex-1" />
           ) : (
             <div data-testid="call-window-no-video" className="flex flex-1 items-center justify-center text-[12px] text-[var(--color-text-muted)]">
               No one has video on.
@@ -161,7 +162,6 @@ export default function CallWindow({ closeWindow = closeThisWindow }: CallWindow
             <ScreenPicker ctl={video} />
             <VideoNoticeLine ctl={video} noticeOnly />
           </div>
-          {tiles.length > 0 ? <CallFullscreen call={call} video={video} actions={callActions} inWindow startedAt={startedAt} /> : null}
         </>
       )}
     </div>

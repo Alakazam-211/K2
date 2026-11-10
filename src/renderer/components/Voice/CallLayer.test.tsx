@@ -140,16 +140,17 @@ vi.mock('@/stores/video', async () => {
 import VoiceButton from './VoiceButton'
 import CallLayer from './CallLayer'
 import CallWindow from './CallWindow'
-import { __resetCallFullscreenForTests, useCallFullscreen } from '@/stores/call-fullscreen'
+import { __resetCallExpandForTests, useCallExpand } from '@/stores/call-expand'
+import { __resetCallShareForTests, useCallShare } from '@/stores/call-share'
 import { __resetCallPopoutForTests, setCallPopoutBridge, useCallPopout, type CallPopoutBridge } from '@/stores/call-popout'
-import { CALL_TILE_WIDTH_KEY, CONTROLS_HIDE_MS, DOUBLE_CLICK_MS, __resetTileWidthForTests } from '@/lib/voice/call-view'
+import { CALL_EXPAND_MARGIN, CALL_HAND_BACK_KEY, CALL_POPPED_FROM_KEY, CALL_SHARE_PICK_KEY, CALL_TILE_WIDTH_KEY, DOUBLE_CLICK_MS, __resetTileWidthForTests } from '@/lib/voice/call-view'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { CORNER_KEY_PREFIX, __resetCornersForTests } from './useCornerDrag'
 import { voice } from '@/stores/voice'
 import { video } from '@/stores/video'
 import { useCallScreen } from '@/stores/call-screen'
 import { fakeTrack } from '@/lib/voice/fake-video-engine'
-import { resetBrowserOverlaysForTest } from '@/lib/browser-overlay'
+import { overlayClaims, resetBrowserOverlaysForTest } from '@/lib/browser-overlay'
 import { usePanelsStore } from '@/stores/panels'
 
 const list: VoiceRoomsList = {
@@ -245,7 +246,8 @@ beforeEach(async () => {
     voice.store.setState({ rooms: {}, notice: null, popoverOpen: false, engineKind: 'seat' })
   })
   useCallScreen.setState({ open: false })
-  __resetCallFullscreenForTests()
+  __resetCallExpandForTests()
+  __resetCallShareForTests()
   __resetCallPopoutForTests()
   __resetTileWidthForTests()
 })
@@ -577,33 +579,20 @@ describe("camera and screen from the call's controls (Sew's plugin video)", () =
   })
 })
 
-// ── Full screen, labels on the picture, resize, pop out (Rosson 2026-11-10) ──
+// ── Expand, labels on the picture, resize, pop out (Rosson 2026-11-10) ──
 
-/** The element Fullscreen API, as WKWebView has it: a request puts the
- *  element in full screen and fires `fullscreenchange`; so does leaving. */
-let fsElement: Element | null = null
+/** The element Fullscreen API, as WKWebView has it, recording every request:
+ *  Expand must never ask for OS full screen. */
 const fsCalls: string[] = []
-function installFullscreenApi(opts: { refuse?: boolean } = {}): void {
-  fsElement = null
+function installFullscreenApi(): void {
   fsCalls.length = 0
   Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, get: () => true })
-  Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => fsElement })
-  Object.defineProperty(document, 'exitFullscreen', {
-    configurable: true,
-    value: () => {
-      fsCalls.push('exit')
-      fsElement = null
-      document.dispatchEvent(new Event('fullscreenchange'))
-      return Promise.resolve()
-    },
-  })
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => null })
+  Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: () => fsCalls.push('exit') })
   Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', {
     configurable: true,
     value(this: HTMLElement) {
       fsCalls.push(`request:${this.dataset.testid ?? this.tagName}`)
-      if (opts.refuse) return Promise.reject(new TypeError('not allowed'))
-      fsElement = this
-      document.dispatchEvent(new Event('fullscreenchange'))
       return Promise.resolve()
     },
   })
@@ -611,18 +600,31 @@ function installFullscreenApi(opts: { refuse?: boolean } = {}): void {
 function uninstallFullscreenApi(): void {
   for (const k of ['fullscreenEnabled', 'fullscreenElement', 'exitFullscreen']) delete (document as unknown as Record<string, unknown>)[k]
   delete (HTMLElement.prototype as unknown as Record<string, unknown>).requestFullscreen
-  fsElement = null
-}
-/** The OS (or the browser's own Esc) took it out of full screen. */
-function osLeavesFullscreen(): void {
-  act(() => {
-    fsElement = null
-    document.dispatchEvent(new Event('fullscreenchange'))
-  })
 }
 
-function fullscreenChord(): KeyboardEventInit {
+function expandChord(): KeyboardEventInit {
   return isMacPlatform() ? { key: 'v', code: 'KeyV', ctrlKey: true, metaKey: true } : { key: 'v', code: 'KeyV', ctrlKey: true, altKey: true }
+}
+
+/** Four people (you, Ada, Grace, Linus) and Ada sharing her screen; Grace's
+ *  camera is on, Linus is muted and talking. */
+function fourPeopleAndAShare(more: ReturnType<typeof fakeTrack>[] = []): void {
+  act(() => h.videoEngine?.setTracks([fakeTrack('7', { source: 'screen', track: 'TR_S7' }), fakeTrack('8'), ...more]))
+  act(() => {
+    const c = voice.store.getState().call
+    if (!c) throw new Error('no call')
+    voice.store.setState({
+      call: {
+        ...c,
+        participants: [
+          { user: 'You', memberId: '1', isSelf: true, speaking: false, muted: false },
+          { user: 'Ada', memberId: '7', speaking: false, muted: false },
+          { user: 'Grace', memberId: '8', speaking: false, muted: false },
+          { user: 'Linus', memberId: '9', speaking: true, muted: true },
+        ],
+      },
+    })
+  })
 }
 
 describe('labels on the picture', () => {
@@ -664,42 +666,92 @@ describe('labels on the picture', () => {
   })
 })
 
-describe('full screen', () => {
-  it("the tile's Full screen button puts the video in OS full screen; Esc leaves", async () => {
+describe('expand: the call over K2, inside the app', () => {
+  it("the tile's Expand button opens the call over K2 with a margin, never OS full screen; Shrink puts the tile back", async () => {
     installFullscreenApi()
     await inCall()
     await cameraOn()
-    fireEvent.click(screen.getByTestId('call-tile-fullscreen'))
-    expect(fsCalls).toEqual(['request:call-fullscreen'])
-    expect(useCallFullscreen.getState().mode).toBe('element')
-    const view = screen.getByTestId('call-fullscreen')
-    expect(view.dataset.mode).toBe('element')
-    // The tile gives way; the picture is drawn once, full screen.
+    const expand = screen.getByTestId('call-tile-expand')
+    expect(expand.getAttribute('aria-label')).toMatch(/^Expand \(.+\)$/)
+    expect(expand.getAttribute('title')).toBe(expand.getAttribute('aria-label'))
+    expand.focus()
+    fireEvent.click(expand)
+    expect(useCallExpand.getState().expanded).toBe(true)
+    const view = screen.getByTestId('call-expanded')
+    expect(view.getAttribute('role')).toBe('dialog')
+    expect(view.getAttribute('aria-modal')).toBe('true')
+    // A margin all round, inside the window; over the scrim.
+    expect(view.style.width).toBe(`calc(100vw - ${CALL_EXPAND_MARGIN * 2}px)`)
+    expect(view.style.height).toBe(`calc(100vh - ${CALL_EXPAND_MARGIN * 2}px)`)
+    expect(screen.getByTestId('call-expanded-scrim').dataset.scrim).toBe('')
+    expect(fsCalls).toEqual([])
+    // The tile gives way; the video is drawn once, in the view.
     expect(screen.queryByTestId('call-tile')).toBeNull()
-    expect(within(view).getByTestId('call-fullscreen-picture').querySelector('[data-testid="video-tile"]')?.getAttribute('data-track')).toBe('local:camera')
     await waitFor(() => expect(video.sinks().map((s) => s.track)).toEqual(['local:camera']))
-    // Labels on the full-screen picture too.
-    expect(within(view).getByTestId('video-tile-label').dataset.at).toBe('bottom-left')
-    expect(within(view).getByTestId('call-fullscreen-duration').closest('[data-testid="video-tile-corner"]')).toBeTruthy()
-    fireEvent.keyDown(window, { key: 'Escape' })
-    expect(fsCalls).toEqual(['request:call-fullscreen', 'exit'])
-    expect(useCallFullscreen.getState().mode).toBe('off')
+    // Focus moves in, to Shrink.
+    const shrink = within(view).getByTestId('call-expanded-shrink')
+    expect(document.activeElement).toBe(shrink)
+    expect(shrink.textContent).toBe('Shrink')
+    fireEvent.click(shrink)
+    expect(useCallExpand.getState().expanded).toBe(false)
+    expect(screen.queryByTestId('call-expanded')).toBeNull()
     expect(await screen.findByTestId('call-tile')).toBeTruthy()
+    // Focus is back on the tile's Expand button.
+    expect(document.activeElement).toBe(screen.getByTestId('call-tile-expand'))
   })
 
-  it("leaving by the OS's own means (the browser's Esc, the green button) is followed", async () => {
-    installFullscreenApi()
+  it('a click on the scrim round it shrinks it; a click inside does not', async () => {
     await inCall()
     await cameraOn()
-    fireEvent.click(screen.getByTestId('call-tile-fullscreen'))
-    expect(useCallFullscreen.getState().mode).toBe('element')
-    osLeavesFullscreen()
-    expect(useCallFullscreen.getState().mode).toBe('off')
+    screen.getByTestId('call-tile-expand').focus()
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    fireEvent.click(screen.getByTestId('call-expanded-title'))
+    expect(useCallExpand.getState().expanded).toBe(true)
+    fireEvent.click(screen.getByTestId('call-expanded-scrim'))
+    expect(useCallExpand.getState().expanded).toBe(false)
     expect(await screen.findByTestId('call-tile')).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByTestId('call-tile-expand'))
   })
 
-  it('a double-click on the tile goes full screen, and does not open the call view', async () => {
-    installFullscreenApi()
+  it('Esc shrinks it, and focus goes back to the Expand button (a click there never focused it, as in WebKit)', async () => {
+    await inCall()
+    await cameraOn()
+    expect(document.activeElement).toBe(document.body)
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(useCallExpand.getState().expanded).toBe(false)
+    expect(await screen.findByTestId('call-tile')).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByTestId('call-tile-expand'))
+  })
+
+  it('Tab stays inside the view', async () => {
+    await inCall()
+    await cameraOn()
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    const view = screen.getByTestId('call-expanded')
+    const buttons = [...view.querySelectorAll('button')]
+    buttons[buttons.length - 1].focus()
+    fireEvent.keyDown(buttons[buttons.length - 1], { key: 'Tab' })
+    expect(document.activeElement).toBe(buttons[0])
+    fireEvent.keyDown(buttons[0], { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(buttons[buttons.length - 1])
+  })
+
+  it("the call's controls sit along its bottom, and work", async () => {
+    await inCall()
+    await cameraOn()
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    const bar = screen.getByTestId('call-expanded-controls')
+    expect(bar.tagName).toBe('FOOTER')
+    expect(screen.getByTestId('call-expanded').lastElementChild).toBe(bar)
+    // Mute, Deafen, Camera, Share screen, Leave call.
+    expect(within(bar).getByTestId('call-overlay-controls').querySelectorAll('button')).toHaveLength(5)
+    fireEvent.click(within(bar).getByTestId('call-overlay-mute'))
+    expect(voice.store.getState().call?.muted).toBe(true)
+    expect(screen.getByTestId('call-expanded-duration').textContent).toMatch(/^\d+:\d\d$/)
+  })
+
+  it('a double-click on the tile expands it, and does not open the call view', async () => {
     await inCall()
     await cameraOn()
     const picture = screen.getByTestId('call-tile-picture')
@@ -708,7 +760,7 @@ describe('full screen', () => {
       fireEvent.pointerUp(picture, { clientX: 100, clientY: 100, pointerId: 1, button: 0 })
     }
     fireEvent.doubleClick(picture)
-    expect(useCallFullscreen.getState().mode).toBe('element')
+    expect(useCallExpand.getState().expanded).toBe(true)
     await new Promise((r) => setTimeout(r, DOUBLE_CLICK_MS + 50))
     expect(useCallScreen.getState().open).toBe(false)
   })
@@ -717,97 +769,160 @@ describe('full screen', () => {
     installFullscreenApi()
     await inCall()
     await cameraOn()
-    fireEvent.keyDown(window, fullscreenChord())
-    expect(useCallFullscreen.getState().mode).toBe('element')
-    fireEvent.keyDown(window, fullscreenChord())
-    expect(useCallFullscreen.getState().mode).toBe('off')
-    expect(fsCalls).toEqual(['request:call-fullscreen', 'exit'])
-  })
-
-  it('the chord does nothing without video', async () => {
-    installFullscreenApi()
-    await inCall()
-    fireEvent.keyDown(window, fullscreenChord())
-    expect(useCallFullscreen.getState().mode).toBe('off')
+    fireEvent.keyDown(window, expandChord())
+    expect(useCallExpand.getState().expanded).toBe(true)
+    fireEvent.keyDown(window, expandChord())
+    expect(useCallExpand.getState().expanded).toBe(false)
     expect(fsCalls).toEqual([])
   })
 
-  it('no Fullscreen API: the same view covers the window instead, and Esc leaves it', async () => {
+  it('the chord does nothing without video', async () => {
     await inCall()
-    await cameraOn()
-    fireEvent.click(screen.getByTestId('call-tile-fullscreen'))
-    const view = screen.getByTestId('call-fullscreen')
-    expect(view.dataset.mode).toBe('overlay')
-    expect(view.className).toContain('fixed')
-    expect(view.className).toContain('inset-0')
-    expect(screen.queryByTestId('call-tile')).toBeNull()
-    fireEvent.keyDown(window, { key: 'Escape' })
-    expect(useCallFullscreen.getState().mode).toBe('off')
-    expect(await screen.findByTestId('call-tile')).toBeTruthy()
+    fireEvent.keyDown(window, expandChord())
+    expect(useCallExpand.getState().expanded).toBe(false)
   })
 
-  it('a refused request keeps the in-window view', async () => {
-    installFullscreenApi({ refuse: true })
-    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+  it('Leave call in the expanded view ends the call and the view with it', async () => {
     await inCall()
     await cameraOn()
-    fireEvent.click(screen.getByTestId('call-tile-fullscreen'))
-    await waitFor(() => expect(info).toHaveBeenCalledWith('[call] element full screen refused; showing it over the window', expect.any(TypeError)))
-    expect(useCallFullscreen.getState().mode).toBe('overlay')
-    expect(screen.getByTestId('call-fullscreen').dataset.mode).toBe('overlay')
-  })
-
-  it("the call's controls are there in full screen, and hide after a moment until the pointer moves", async () => {
-    installFullscreenApi()
-    await inCall()
-    await cameraOn()
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-    try {
-      fireEvent.click(screen.getByTestId('call-tile-fullscreen'))
-      const bar = screen.getByTestId('call-fullscreen-controls')
-      expect(bar.dataset.shown).toBe('true')
-      // Mute, Deafen, Camera, Share screen, Leave call; then Exit full screen.
-      expect(within(bar).getByTestId('call-overlay-controls').querySelectorAll('button')).toHaveLength(5)
-      expect(within(bar).getByTestId('call-fullscreen-exit')).toBeTruthy()
-      act(() => vi.advanceTimersByTime(CONTROLS_HIDE_MS + 10))
-      expect(bar.dataset.shown).toBe('false')
-      fireEvent.pointerMove(screen.getByTestId('call-fullscreen-picture'))
-      expect(bar.dataset.shown).toBe('true')
-      // A key brings them back too.
-      act(() => vi.advanceTimersByTime(CONTROLS_HIDE_MS + 10))
-      expect(bar.dataset.shown).toBe('false')
-      fireEvent.keyDown(window, { key: 'Tab' })
-      expect(bar.dataset.shown).toBe('true')
-    } finally {
-      vi.useRealTimers()
-    }
-    fireEvent.click(screen.getByTestId('call-overlay-mute'))
-    expect(voice.store.getState().call?.muted).toBe(true)
-    fireEvent.click(screen.getByTestId('call-fullscreen-exit'))
-    expect(useCallFullscreen.getState().mode).toBe('off')
-    expect(fsCalls).toEqual(['request:call-fullscreen', 'exit'])
-  })
-
-  it('Leave call in full screen ends the call and the view with it', async () => {
-    installFullscreenApi()
-    await inCall()
-    await cameraOn()
-    fireEvent.click(screen.getByTestId('call-tile-fullscreen'))
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
     fireEvent.click(screen.getByTestId('call-overlay-leave'))
     await waitFor(() => expect(voice.store.getState().call).toBeNull())
-    expect(useCallFullscreen.getState().mode).toBe('off')
-    expect(screen.queryByTestId('call-fullscreen')).toBeNull()
+    expect(useCallExpand.getState().expanded).toBe(false)
+    expect(screen.queryByTestId('call-expanded')).toBeNull()
   })
 
-  it("the call view's header has Full screen too, and Esc goes back to the call view", async () => {
+  it("the call view's header has Expand too, and shrinking goes back to the call view", async () => {
     await inCall()
     await cameraOn()
     act(() => useCallScreen.getState().ask())
-    fireEvent.click(await screen.findByTestId('video-stage-fullscreen'))
-    expect(useCallFullscreen.getState().mode).toBe('overlay')
+    const expand = await screen.findByTestId('video-stage-expand')
+    expect(expand.getAttribute('aria-label')).toMatch(/^Expand/)
+    expand.focus()
+    fireEvent.click(expand)
+    expect(useCallExpand.getState().expanded).toBe(true)
     expect(screen.queryByTestId('video-stage')).toBeNull()
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(await screen.findByTestId('video-stage')).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByTestId('video-stage-expand'))
+  })
+
+  it('claims the window over a live Browser page while open', async () => {
+    await inCall()
+    await cameraOn()
+    const before = overlayClaims().filter((c) => c.area === 'fullscreen' && c.kind === 'modal').length
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    expect(overlayClaims().filter((c) => c.area === 'fullscreen' && c.kind === 'modal').length).toBe(before + 1)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(overlayClaims().filter((c) => c.area === 'fullscreen' && c.kind === 'modal').length).toBe(before)
+  })
+})
+
+describe('a screen share in the middle, the people on the left', () => {
+  it('expanded: the share takes the middle, and everyone is a smaller tile in the column, with names, speaking and muted', async () => {
+    await inCall()
+    fourPeopleAndAShare()
+    await screen.findByTestId('call-tile')
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    const layout = await screen.findByTestId('call-share-layout')
+    expect(layout.dataset.main).toBe('TR_S7')
+    const main = within(screen.getByTestId('call-share-main')).getByTestId('video-tile')
+    expect(main.dataset.track).toBe('TR_S7')
+    expect(main.dataset.large).toBe('true')
+    expect(within(main).getByTestId('video-tile-name').textContent).toBe("Ada's screen")
+    // The column comes first (the left), then the middle.
+    expect(layout.firstElementChild).toBe(screen.getByTestId('call-share-column'))
+    const people = within(screen.getByTestId('call-share-people')).getAllByTestId('video-tile')
+    // Ada, Grace (camera), Linus (no camera: their picture), then you.
+    expect(people.map((t) => within(t).getByTestId('video-tile-name').textContent)).toEqual(['Ada', 'Grace', 'Linus', 'You'])
+    expect(people.map((t) => t.dataset.large)).toEqual(['false', 'false', 'false', 'false'])
+    expect(people[1].dataset.track).toBe('TR_8')
+    expect(people[1].dataset.state).toBe('live')
+    expect(people[2].dataset.state).toBe('off')
+    expect(people[2].dataset.speaking).toBe('true')
+    expect(within(people[2]).getByTestId('video-tile-muted')).toBeTruthy()
+    // One sink per track: the share and Grace's camera.
+    await waitFor(() => expect(video.sinks().map((s) => s.track).sort()).toEqual(['TR_8', 'TR_S7']))
+  })
+
+  it('no share: the grid, as before', async () => {
+    await inCall()
+    act(() => h.videoEngine?.setTracks([fakeTrack('7'), fakeTrack('8')]))
+    await screen.findByTestId('call-tile')
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    expect(within(screen.getByTestId('call-expanded')).getByTestId('video-grid')).toBeTruthy()
+    expect(screen.queryByTestId('call-share-layout')).toBeNull()
+  })
+
+  it('the layout switches as a share starts and stops', async () => {
+    await inCall()
+    act(() => h.videoEngine?.setTracks([fakeTrack('8')]))
+    await screen.findByTestId('call-tile')
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    expect(screen.getByTestId('video-grid')).toBeTruthy()
+    fourPeopleAndAShare()
+    expect(await screen.findByTestId('call-share-layout')).toBeTruthy()
+    expect(screen.queryByTestId('video-grid')).toBeNull()
+    act(() => h.videoEngine?.setTracks([fakeTrack('8')]))
+    expect(await screen.findByTestId('video-grid')).toBeTruthy()
+    expect(screen.queryByTestId('call-share-layout')).toBeNull()
+  })
+
+  it('several shares: the first one in the middle, the others at the top of the column, a click away', async () => {
+    await inCall()
+    fourPeopleAndAShare([fakeTrack('9', { source: 'screen', track: 'TR_S9' })])
+    await screen.findByTestId('call-tile')
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    expect((await screen.findByTestId('call-share-layout')).dataset.main).toBe('TR_S7')
+    const pick = screen.getByTestId('call-share-pick')
+    expect(pick.dataset.track).toBe('TR_S9')
+    expect(pick.getAttribute('aria-label')).toBe("Show Linus's screen in the middle")
+    fireEvent.click(pick)
+    expect(screen.getByTestId('call-share-layout').dataset.main).toBe('TR_S9')
+    expect(screen.getByTestId('call-share-pick').dataset.track).toBe('TR_S7')
+    // The pick sticks while that share lasts; when it stops, the other takes the middle.
+    act(() => h.videoEngine?.setTracks([fakeTrack('7', { source: 'screen', track: 'TR_S7' }), fakeTrack('8')]))
+    await waitFor(() => expect(screen.getByTestId('call-share-layout').dataset.main).toBe('TR_S7'))
+    expect(screen.queryByTestId('call-share-pick')).toBeNull()
+  })
+
+  it("the tile following someone talking shows a cue for the share it isn't showing; the cue expands the call onto it", async () => {
+    await inCall()
+    fourPeopleAndAShare()
+    act(() => {
+      const c = voice.store.getState().call
+      if (!c) throw new Error('no call')
+      voice.store.setState({ call: { ...c, participants: c.participants.map((p) => ({ ...p, speaking: p.memberId === '8' })) } })
+    })
+    // After Linus's 1.5 s hold.
+    await waitFor(() => expect(screen.getByTestId('call-tile').dataset.picture).toBe('TR_8'), { timeout: 3000 })
+    const cue = screen.getByTestId('call-tile-share-cue')
+    expect(cue.dataset.track).toBe('TR_S7')
+    expect(cue.getAttribute('aria-label')).toBe("Expand to see Ada's screen")
+    fireEvent.click(cue)
+    expect(useCallExpand.getState().expanded).toBe(true)
+    expect(screen.getByTestId('call-share-layout').dataset.main).toBe('TR_S7')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(await screen.findByTestId('call-tile')).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByTestId('call-tile-share-cue'))
+    // The tile showing the share itself needs no cue.
+    act(() => {
+      const c = voice.store.getState().call
+      if (!c) throw new Error('no call')
+      voice.store.setState({ call: { ...c, participants: c.participants.map((p) => ({ ...p, speaking: p.memberId === '7' })) } })
+    })
+    await waitFor(() => expect(screen.getByTestId('call-tile').dataset.picture).toBe('TR_S7'), { timeout: 3000 })
+    expect(screen.queryByTestId('call-tile-share-cue')).toBeNull()
+  })
+
+  it('the call view and the floating tile keep their own layout (the share on the tile, the grid in the view)', async () => {
+    await inCall()
+    fourPeopleAndAShare()
+    const tile = await screen.findByTestId('call-tile')
+    expect(tile.dataset.picture).toBe('TR_S7')
+    act(() => useCallScreen.getState().ask())
+    expect(within(await screen.findByTestId('video-stage')).getByTestId('video-grid')).toBeTruthy()
+    expect(screen.queryByTestId('call-share-layout')).toBeNull()
   })
 })
 
@@ -921,25 +1036,26 @@ describe('pop out: the call in its own window', () => {
     expect(h.voiceEngine?.calls).not.toContain('disconnect')
   })
 
-  it('Pop out from full screen leaves full screen first', async () => {
+  it('Pop out from the expanded view shrinks it first, and notes which window it came from', async () => {
     installFullscreenApi()
     const p = fakePopout()
     setCallPopoutBridge(p.bridge)
     await inCall()
     await cameraOn()
-    fireEvent.click(screen.getByTestId('call-tile-fullscreen'))
-    fireEvent.click(screen.getByTestId('call-fullscreen-popout'))
-    expect(useCallFullscreen.getState().mode).toBe('off')
-    expect(fsCalls).toEqual(['request:call-fullscreen', 'exit'])
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    fireEvent.click(screen.getByTestId('call-expanded-popout'))
+    expect(useCallExpand.getState().expanded).toBe(false)
+    expect(fsCalls).toEqual([])
     await waitFor(() => expect(p.opened).toHaveLength(1))
-    expect(screen.queryByTestId('call-fullscreen')).toBeNull()
+    expect(screen.queryByTestId('call-expanded')).toBeNull()
+    expect(localStorage.getItem(CALL_POPPED_FROM_KEY)).toBe('main')
   })
 
   it('no Pop out where the app cannot open windows (the web client)', async () => {
     await inCall()
     await cameraOn()
     expect(screen.queryByTestId('call-tile-popout')).toBeNull()
-    expect(screen.getByTestId('call-tile-fullscreen')).toBeTruthy()
+    expect(screen.getByTestId('call-tile-expand')).toBeTruthy()
   })
 
   it("the call's window draws the call and its controls, and closes itself when the call ends", async () => {
@@ -953,7 +1069,9 @@ describe('pop out: the call in its own window', () => {
     expect(within(win).getByTestId('call-window-title').textContent).toBe('Standup')
     expect(within(win).getByTestId('video-grid')).toBeTruthy()
     expect(within(win).getByTestId('call-window-duration').textContent).toMatch(/^\d+:\d\d$/)
-    expect(within(win).getByTestId('call-window-fullscreen')).toBeTruthy()
+    // No Expand here (the window is the call); Pop in instead.
+    expect(within(win).queryByTestId('call-window-fullscreen')).toBeNull()
+    expect(within(win).getByTestId('call-window-popin').getAttribute('aria-label')).toBe("Pop back into K2's window")
     fireEvent.click(within(win).getByTestId('call-overlay-mute'))
     expect(voice.store.getState().call?.muted).toBe(true)
     expect(closeWindow).not.toHaveBeenCalled()
@@ -962,18 +1080,97 @@ describe('pop out: the call in its own window', () => {
     expect(closeWindow).toHaveBeenCalledTimes(1)
   })
 
-  it("full screen works inside the call's window too", async () => {
-    installFullscreenApi()
+  it("the call's window puts a share in the middle and the people on the left", async () => {
     await inCall()
-    await cameraOn()
+    fourPeopleAndAShare()
+    await screen.findByTestId('call-tile')
     act(() => useCallPopout.setState({ open: true }))
     render(<CallWindow closeWindow={() => {}} />)
-    fireEvent.click(screen.getByTestId('call-window-fullscreen'))
-    expect(useCallFullscreen.getState().mode).toBe('element')
-    // Already out: no Pop out in its full-screen bar.
-    expect(within(screen.getByTestId('call-fullscreen-controls')).queryByTestId('call-fullscreen-popout')).toBeNull()
-    fireEvent.keyDown(window, { key: 'Escape' })
-    expect(useCallFullscreen.getState().mode).toBe('off')
+    const win = screen.getByTestId('call-window')
+    expect(within(win).getByTestId('call-share-layout').dataset.main).toBe('TR_S7')
+    expect(within(within(win).getByTestId('call-share-people')).getAllByTestId('video-tile')).toHaveLength(4)
+    expect(within(win).queryByTestId('video-grid')).toBeNull()
+  })
+
+  it('Pop in closes the call window and hands the call back: the call view opens where it came from, with the same share in the middle', async () => {
+    const p = fakePopout()
+    setCallPopoutBridge(p.bridge)
+    await inCall()
+    fourPeopleAndAShare([fakeTrack('9', { source: 'screen', track: 'TR_S9' })])
+    await screen.findByTestId('call-tile')
+    // Expanded here, Linus's share picked for the middle, then Pop out.
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    fireEvent.click(screen.getByTestId('call-share-pick'))
+    expect(screen.getByTestId('call-share-layout').dataset.main).toBe('TR_S9')
+    fireEvent.click(screen.getByTestId('call-expanded-popout'))
+    await waitFor(() => expect(p.opened).toHaveLength(1))
+    const before = h.voiceEngine?.calls.length ?? 0
+
+    // The call's window is a fresh webview: its own store, the kept pick.
+    act(() => __resetCallShareForTests())
+    const closeWindow = vi.fn()
+    render(<CallWindow closeWindow={closeWindow} />)
+    expect(screen.getByTestId('call-share-layout').dataset.main).toBe('TR_S9')
+    // Ada's share back in the middle, there.
+    fireEvent.click(screen.getByTestId('call-share-pick'))
+    expect(screen.getByTestId('call-share-layout').dataset.main).toBe('TR_S7')
+
+    // The room's window still remembers its own pick.
+    act(() => useCallShare.setState({ picked: 'TR_S9' }))
+    fireEvent.click(screen.getByTestId('call-window-popin'))
+    expect(closeWindow).toHaveBeenCalledTimes(1)
+    expect(localStorage.getItem(CALL_HAND_BACK_KEY)).toContain('"to":"main"')
+    // The app closes the window and tells every window. (It stays drawn
+    // here: in this one document its unmount would stop the shared video
+    // controller, which a real window's never shares.)
+    p.emit(false)
+
+    // Back here as the call view (not just the tile), with Ada's share.
+    expect(await screen.findByTestId('video-stage')).toBeTruthy()
+    expect(useCallScreen.getState().open).toBe(true)
+    expect(useCallShare.getState().picked).toBe('TR_S7')
+    expect(localStorage.getItem(CALL_HAND_BACK_KEY)).toBeNull()
+    expect(JSON.parse(localStorage.getItem(CALL_SHARE_PICK_KEY) ?? '{}').key).toBe('TR_S7')
+    fireEvent.click(screen.getByTestId('video-stage-expand'))
+    expect(within(screen.getByTestId('call-expanded')).getByTestId('call-share-layout').dataset.main).toBe('TR_S7')
+    // The call itself never moved.
+    expect(voice.store.getState().call?.phase).toBe('connected')
+    expect(h.voiceEngine?.calls.length ?? 0).toBe(before)
+  })
+
+  it("closing the call's window with the OS's close button pops it back in as the tile, with the call still up", async () => {
+    const p = fakePopout()
+    setCallPopoutBridge(p.bridge)
+    await inCall()
+    await cameraOn()
+    fireEvent.click(screen.getByTestId('call-tile-popout'))
+    await waitFor(() => expect(p.opened).toHaveLength(1))
+    p.emit(false)
+    expect(await screen.findByTestId('call-tile')).toBeTruthy()
+    expect(useCallScreen.getState().open).toBe(false)
+    expect(voice.store.getState().call?.phase).toBe('connected')
+  })
+
+  it('a hand-back meant for another window, or a stale one, opens nothing here', async () => {
+    const p = fakePopout()
+    setCallPopoutBridge(p.bridge)
+    await inCall()
+    await cameraOn()
+    const callId = voice.store.getState().call?.callId ?? ''
+    fireEvent.click(screen.getByTestId('call-tile-popout'))
+    await waitFor(() => expect(p.opened).toHaveLength(1))
+    localStorage.setItem(CALL_HAND_BACK_KEY, JSON.stringify({ callId, to: 'window-2', at: Date.now() }))
+    p.emit(false)
+    expect(await screen.findByTestId('call-tile')).toBeTruthy()
+    expect(useCallScreen.getState().open).toBe(false)
+    // Still there for the window it's for.
+    expect(localStorage.getItem(CALL_HAND_BACK_KEY)).toContain('window-2')
+    fireEvent.click(screen.getByTestId('call-tile-popout'))
+    await waitFor(() => expect(p.opened).toHaveLength(2))
+    localStorage.setItem(CALL_HAND_BACK_KEY, JSON.stringify({ callId, to: 'main', at: Date.now() - 60_000 }))
+    p.emit(false)
+    expect(await screen.findByTestId('call-tile')).toBeTruthy()
+    expect(useCallScreen.getState().open).toBe(false)
   })
 
   it("the call's window waits for the call, then says there's none", async () => {

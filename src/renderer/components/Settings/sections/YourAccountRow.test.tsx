@@ -18,12 +18,16 @@ const cli = vi.hoisted(() => ({
   gets: [] as string[],
   posts: [] as Array<{ route: string; body: Json }>,
   pushAvailable: true,
+  whoamiError: null as string | null,
 }))
 
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (_scope: unknown, route: string) => {
     cli.gets.push(route)
-    if (route === 'auth/whoami') return cli.whoami
+    if (route === 'auth/whoami') {
+      if (cli.whoamiError) throw new Error(cli.whoamiError)
+      return cli.whoami
+    }
     if (route === 'users') return { users: cli.users }
     if (route === 'owner/accounts') return cli.ownerAccounts
     throw new Error(`unexpected GET ${route}`)
@@ -68,6 +72,7 @@ beforeEach(() => {
   cli.gets = []
   cli.posts = []
   cli.pushAvailable = true
+  cli.whoamiError = null
 })
 
 afterEach(() => cleanup())
@@ -164,6 +169,7 @@ describe('Settings → General → Your account', () => {
     cli.whoami = { owner: false, role: 'member', username: 'gina' }
     render(<YourAccountRow />)
     await waitFor(() => expect(cli.gets).toEqual(['auth/whoami']))
+    await waitFor(() => expect(screen.queryByTestId('your-account-status')).toBeNull())
     expect(screen.queryByTestId('your-account-row')).toBeNull()
   })
 
@@ -173,5 +179,31 @@ describe('Settings → General → Your account', () => {
     await Promise.resolve()
     expect(screen.queryByTestId('your-account-row')).toBeNull()
     expect(cli.gets).toEqual([])
+  })
+
+  it('shows a loading row until the reads land, never a bare heading', async () => {
+    render(<YourAccountRow groupTitle="Your account" />)
+    expect(screen.getByTestId('your-account-status').textContent).toContain('Loading…')
+    expect(screen.getByRole('heading', { name: 'Your account' })).toBeTruthy()
+    await waitFor(() => expect(trigger().textContent).toContain('None'))
+    expect(screen.queryByTestId('your-account-status')).toBeNull()
+  })
+
+  it('a failed read says so and Try again reads again', async () => {
+    cli.whoamiError = 'connection refused'
+    render(<YourAccountRow groupTitle="Your account" />)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe("Couldn't read your account from this server: connection refused")
+    cli.whoamiError = null
+    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Try again' })))
+    await waitFor(() => expect(trigger().textContent).toContain('None'))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('a Member sees no group at all', async () => {
+    cli.whoami = { owner: false, role: 'member', username: 'gina' }
+    render(<YourAccountRow groupTitle="Your account" />)
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Your account' })).toBeNull())
+    expect(cli.gets).toEqual(['auth/whoami'])
   })
 })

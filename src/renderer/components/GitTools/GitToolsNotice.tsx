@@ -4,7 +4,9 @@
 // waiting git steps itself once the tools land (headless, no client needed).
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { Callout } from '@/components/ui'
+import { Button, Callout } from '@/components/ui'
+import { SettingRow } from '@/components/Settings/controls/SettingControls'
+import { StatusDot, type HealthTone } from '@/components/Settings/sections/ConnectionsParts'
 import {
   APPLE_INSTALLER_HINT,
   fetchGitTools,
@@ -75,7 +77,7 @@ export function useGitTools(): GitToolsHandle {
 function Broken({ status }: { status: GitToolsStatus }): React.JSX.Element | null {
   if (status.state !== 'git_broken') return null
   return (
-    <div className="mt-1 text-[10px]" data-testid="git-tools-broken">
+    <div className="mt-1 type-hint" data-testid="git-tools-broken">
       <p className="break-all">
         {status.gitPath}: {status.gitError}
       </p>
@@ -95,39 +97,32 @@ function HowTo({ status }: { status: GitToolsStatus }): React.JSX.Element | null
     : 'Install git yourself:'
   return (
     <details className="mt-1.5" data-testid="git-tools-howto">
-      <summary className="cursor-pointer text-[10px] text-[var(--color-text-muted)]">{title}</summary>
-      <pre className="mt-1 whitespace-pre-wrap break-all text-[10px] font-mono text-[var(--color-text-secondary)]">
+      <summary className="outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)] cursor-pointer type-hint text-[var(--color-text-secondary)]">{title}</summary>
+      <pre className="mt-1 whitespace-pre-wrap break-all type-hint font-mono text-[var(--color-text-secondary)]">
         {status.howTo.join('\n')}
       </pre>
     </details>
   )
 }
 
-function Actions({ h }: { h: GitToolsHandle }): React.JSX.Element | null {
+function Actions({ h, primary = true }: { h: GitToolsHandle; primary?: boolean }): React.JSX.Element | null {
   const s = h.status
   if (!s || s.state === 'ready') return null
   return (
     <div className="flex items-center gap-2 flex-shrink-0">
       {s.canInstall && s.state === 'not_installed' && (
-        <button
-          type="button"
+        <Button
+          variant={primary ? 'accent' : 'default'}
           data-testid="git-tools-install"
           onClick={() => void h.install()}
           disabled={h.busy}
-          className="px-2 py-0.5 text-[10px] bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
         >
           {h.busy ? 'Opening installer…' : 'Install command line tools'}
-        </button>
+        </Button>
       )}
-      <button
-        type="button"
-        data-testid="git-tools-recheck"
-        onClick={() => void h.recheck()}
-        disabled={h.busy}
-        className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer disabled:opacity-50"
-      >
+      <Button variant="quiet" data-testid="git-tools-recheck" onClick={() => void h.recheck()} disabled={h.busy}>
         Check again
-      </button>
+      </Button>
     </div>
   )
 }
@@ -136,7 +131,7 @@ function Actions({ h }: { h: GitToolsHandle }): React.JSX.Element | null {
 function InstallerHint({ status }: { status: GitToolsStatus }): React.JSX.Element | null {
   if (status.state !== 'installing') return null
   return (
-    <p className="mt-1 text-[10px]" data-testid="git-tools-installer-hint">
+    <p className="mt-1 type-hint" data-testid="git-tools-installer-hint">
       {APPLE_INSTALLER_HINT}
     </p>
   )
@@ -147,7 +142,7 @@ function Waiting({ status }: { status: GitToolsStatus }): React.JSX.Element | nu
   return (
     <ul className="mt-1 space-y-0.5" data-testid="git-tools-waiting">
       {status.waiting.map((w) => (
-        <li key={w.projectId} className="text-[10px] text-[var(--color-text-muted)]">
+        <li key={w.projectId} className="type-hint text-[var(--color-text-secondary)]">
           <span className="text-[var(--color-text-secondary)]">{w.name}</span> — {w.note}
           {w.lastError && (
             <span className="block text-[var(--color-status-error-soft)]" data-testid="git-tools-waiting-error">
@@ -160,47 +155,58 @@ function Waiting({ status }: { status: GitToolsStatus }): React.JSX.Element | nu
   )
 }
 
-/** Settings → General line: git state, the install button, waiting workspaces. */
-export function GitToolsRow(): React.JSX.Element | null {
+/** Settings → General row: git state, the install button, waiting workspaces.
+ *  A row of General's card (SettingRow), so it lines up with the rest. */
+export function GitToolsRow({ primary = true }: { primary?: boolean } = {}): React.JSX.Element | null {
   const h = useGitTools()
   const s = h.status
   if (!s) return null
-  const dot =
-    s.state === 'ready'
-      ? 'var(--color-status-ok-soft)'
-      : s.state === 'installing'
-        ? 'var(--color-accent)'
-        : 'var(--color-status-warn-soft)'
-  return (
-    <div className="py-2 border-b border-[var(--color-border)]" data-settings-id="general.git-tools" data-testid="git-tools-row">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">Git</span>
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span className="w-1.5 h-1.5 flex-shrink-0" style={{ backgroundColor: dot }} />
-            <span className="text-xs text-[var(--color-text-muted)] truncate" data-testid="git-tools-state">
-              {gitToolsStateLabel(s)}
-            </span>
-          </div>
-          <Actions h={h} />
+  const tone: HealthTone = s.state === 'ready' ? 'ok' : s.state === 'installing' ? 'neutral' : 'warn'
+  const notes =
+    s.state !== 'ready' ? (
+      <div className="space-y-1">
+        {s.needs === 'apple_clt' && (
+          <p className="type-hint text-[var(--color-text-secondary)]">
+            Apple&apos;s command line tools give this Mac git (about 1–2 GB; Xcode isn&apos;t needed). Workspaces
+            are added anyway; K2 sets up their git when the tools are ready.
+          </p>
+        )}
+        <div className="text-[var(--color-text-secondary)]">
+          <InstallerHint status={s} />
         </div>
+        <div className="text-[var(--color-text-secondary)]">
+          <Broken status={s} />
+        </div>
+        <Waiting status={s} />
+        <HowTo status={s} />
       </div>
-      {s.state !== 'ready' && s.needs === 'apple_clt' && (
-        <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
-          Apple&apos;s command line tools give this Mac git (about 1–2 GB; Xcode isn&apos;t needed). Workspaces
-          are added anyway; K2 sets up their git when the tools are ready.
-        </p>
-      )}
-      <div className="text-[var(--color-text-secondary)]">
-        <InstallerHint status={s} />
-      </div>
-      <div className="text-[var(--color-text-muted)]">
-        <Broken status={s} />
-      </div>
-      <Waiting status={s} />
-      <HowTo status={s} />
-      {h.error && <p className="mt-1 text-[10px] text-[var(--color-status-error-soft)]">{h.error}</p>}
-    </div>
+    ) : null
+  return (
+    <SettingRow
+      label="Git"
+      settingId="general.git-tools"
+      testId="git-tools-row"
+      hint={
+        <span className="inline-flex items-center gap-1.5 min-w-0">
+          <StatusDot tone={tone} />
+          <span data-testid="git-tools-state">{gitToolsStateLabel(s)}</span>
+        </span>
+      }
+      below={
+        notes || h.error ? (
+          <>
+            {notes}
+            {h.error && (
+              <Callout tone="error" role="alert" className="mt-2">
+                <p className="type-hint">{h.error}</p>
+              </Callout>
+            )}
+          </>
+        ) : undefined
+      }
+    >
+      <Actions h={h} primary={primary} />
+    </SettingRow>
   )
 }
 
@@ -220,7 +226,7 @@ export function GitToolsBanner(): React.JSX.Element | null {
             : "git isn't installed on this server yet. K2 adds the workspace now and sets up git once git is installed."}
       </p>
       <div className="mt-2 flex items-center justify-between gap-2">
-        <span className="text-[10px]" data-testid="git-tools-state">
+        <span className="type-hint" data-testid="git-tools-state">
           {gitToolsStateLabel(s)}
         </span>
         <Actions h={h} />
@@ -228,7 +234,7 @@ export function GitToolsBanner(): React.JSX.Element | null {
       <InstallerHint status={s} />
       <Broken status={s} />
       <HowTo status={s} />
-      {h.error && <p className="mt-1 text-[10px]">{h.error}</p>}
+      {h.error && <p className="mt-1 type-hint">{h.error}</p>}
     </Callout>
   )
 }

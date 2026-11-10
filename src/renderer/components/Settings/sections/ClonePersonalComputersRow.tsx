@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 
 import { Toggle } from '@/components/ui'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow } from '../controls/SettingControls'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -48,7 +49,7 @@ export function ClonePersonalComputersRow({ scope }: { scope: ServerScope }): Re
         setWho(w)
         setOn(cloneSwitchValue(s as unknown as Record<string, unknown>))
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+        if (!cancelled) setError(`Couldn't read this setting: ${e instanceof Error ? e.message : String(e)}`)
       }
     })()
     return () => {
@@ -71,29 +72,34 @@ export function ClonePersonalComputersRow({ scope }: { scope: ServerScope }): Re
       setOn(cloneSwitchValue(s as unknown as Record<string, unknown>))
     } catch (e) {
       setOn(prev)
-      setError(e instanceof Error ? e.message : String(e))
+      setError(`Couldn't change it: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div className="py-2 border-b border-[var(--color-border)]" data-settings-id="general.clone-personal-computers">
-      <div className="flex items-center justify-between gap-3">
-        <span className="type-row text-[var(--color-text-secondary)]">{CLONE_SWITCH_LABEL}</span>
+    <SettingSwitchRow
+      settingId="general.clone-personal-computers"
+      control={
         <Toggle
           checked={on}
           onChange={(v: boolean) => void change(v)}
           disabled={!editable || busy}
           aria-label={CLONE_SWITCH_LABEL}
         />
-      </div>
-      <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
-        When off, Admins and Members can&apos;t clone agents from this server to their own computers. The owner always
-        can. Who may clone at all is set per person in Admin Access.
-        {!editable && who ? ` ${CLONE_SWITCH_OWNER_HINT}` : ''}
+      }
+    >
+      <div className={SETTING_ROW_LABEL}>{CLONE_SWITCH_LABEL}</div>
+      <p className={SETTING_ROW_HINT}>
+        When off, Admins and Members can&apos;t clone agents from this server to their own computers. The owner
+        always can. {CLONE_SWITCH_OWNER_HINT}
       </p>
-      {error && <p className="type-hint text-[var(--color-status-error-soft)] mt-1">{error}</p>}
-    </div>
+      {error && (
+        <p role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1">
+          {error}
+        </p>
+      )}
+    </SettingSwitchRow>
   )
 }

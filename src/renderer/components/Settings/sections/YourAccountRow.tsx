@@ -14,7 +14,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
-import { SettingDropdown } from '../controls/SettingControls'
+import { Button, Callout } from '@/components/ui'
+import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import { ownerLinkAccess, useOwnerAccounts, OWNER_LINK_EXPLAINER, type OwnerAccountsState } from './OwnerAccountToggle'
 import { threadPushAvailable } from './useNotifyPrefs'
 
@@ -106,10 +107,13 @@ export function YourAccountSelect({
   users,
   owner,
   readOnly,
+  fullWidth = false,
 }: {
   users: AccountChoice[]
   owner: OwnerAccountsState
   readOnly: boolean
+  /** Fill a field column (Settings rows use the shared field width). */
+  fullWidth?: boolean
 }): React.JSX.Element {
   const options = useMemo(() => yourAccountOptions(users, owner.accounts), [users, owner.accounts])
   return (
@@ -118,6 +122,7 @@ export function YourAccountSelect({
       options={options}
       disabled={readOnly || owner.busy !== null}
       ariaLabel="Your account"
+      fullWidth={fullWidth}
       onChange={(v) => {
         const next = nextOwnerAccounts(owner.accounts, v)
         if (next) void owner.setAccounts(next)
@@ -126,9 +131,22 @@ export function YourAccountSelect({
   )
 }
 
-export function YourAccountRow(): React.JSX.Element | null {
+const ACCOUNT_HINT = 'The login you use on your phone or laptop.'
+
+/** Settings → General → Your account. Loading and a failed read are rows of
+ *  their own (never a bare heading); a Member, or a server without
+ *  owner-linked accounts, sees nothing. With `groupTitle` the row brings
+ *  its own card group, so the group is gone whenever the row is. */
+export function YourAccountRow({ groupTitle }: { groupTitle?: string } = {}): React.JSX.Element | null {
+  // A retry remounts the reads from scratch.
+  const [attempt, setAttempt] = useState(0)
+  return <YourAccountReads key={attempt} groupTitle={groupTitle} onRetry={() => setAttempt((n) => n + 1)} />
+}
+
+function YourAccountReads({ groupTitle, onRetry }: { groupTitle?: string; onRetry: () => void }): React.JSX.Element | null {
   const [who, setWho] = useState<Who | null>(null)
   const [users, setUsers] = useState<AccountChoice[] | null>(null)
+  const [readError, setReadError] = useState<string | null>(null)
   const available = threadPushAvailable()
 
   useEffect(() => {
@@ -144,7 +162,7 @@ export function YourAccountRow(): React.JSX.Element | null {
         const list = parseAccountChoices(await daemonCliGet<unknown>(primaryScope(), 'users'))
         if (!cancelled) setUsers(list)
       } catch (e) {
-        if (!cancelled) console.debug('[settings] your account: whoami/users skipped:', e)
+        if (!cancelled) setReadError(e instanceof Error ? e.message : String(e))
       }
     })()
     return () => {
@@ -152,33 +170,78 @@ export function YourAccountRow(): React.JSX.Element | null {
     }
   }, [available])
 
-  const access = who ? ownerLinkAccess(who.ownerToken, who.role) : 'hidden'
-  const owner = useOwnerAccounts(available && access !== 'hidden')
+  const access = who ? ownerLinkAccess(who.ownerToken, who.role) : null
+  const owner = useOwnerAccounts(available && access !== null && access !== 'hidden')
 
-  if (!available || access === 'hidden' || !owner.loaded || users === null) return null
+  if (!available || access === 'hidden') return null
+
+  const wrap = (row: React.JSX.Element): React.JSX.Element =>
+    groupTitle ? (
+      <SettingsGroup title={groupTitle} card>
+        {row}
+      </SettingsGroup>
+    ) : (
+      row
+    )
+
+  // The first read failed, or the linked list couldn't be read: say so and
+  // offer the read again.
+  const failed = readError ?? (!owner.loaded ? owner.error : null)
+  if (failed) {
+    return wrap(
+      <SettingRow
+        label="Your account"
+        hint={ACCOUNT_HINT}
+        settingId="general.your-account"
+        testId="your-account-status"
+        below={
+          <Callout tone="error" role="alert">
+            <p className="type-hint">Couldn&apos;t read your account from this server: {failed}</p>
+          </Callout>
+        }
+      >
+        <Button onClick={onRetry} className="flex-shrink-0">
+          Try again
+        </Button>
+      </SettingRow>,
+    )
+  }
+
+  if (access === null || !owner.loaded || users === null) {
+    return wrap(
+      <SettingRow label="Your account" hint={ACCOUNT_HINT} settingId="general.your-account" testId="your-account-status">
+        <span role="status" className="type-hint text-[var(--color-text-secondary)]">
+          Loading…
+        </span>
+      </SettingRow>,
+    )
+  }
+
   const readOnly = access === 'read'
   const many = owner.accounts.length > 1
 
-  return (
-    <div
-      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
-      data-settings-id="general.your-account"
-      data-testid="your-account-row"
-    >
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="type-row text-[var(--color-text-secondary)]">Your account</span>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5" data-testid="your-account-hint">
-          The login you use on your phone or laptop. {OWNER_LINK_EXPLAINER}
+  return wrap(
+    <SettingRow
+      label="Your account"
+      settingId="general.your-account"
+      testId="your-account-row"
+      field
+      hint={
+        <span data-testid="your-account-hint">
+          {ACCOUNT_HINT} {OWNER_LINK_EXPLAINER}
           {many ? ' More than one login is marked as yours; they stay until you pick a different one.' : ''}
           {readOnly ? ' Only the owner, on the server’s own computer, can change it.' : ''}
-        </p>
-        {owner.error && (
-          <p role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-0.5">
-            {owner.error}
-          </p>
-        )}
-      </div>
-      <YourAccountSelect users={users} owner={owner} readOnly={readOnly} />
-    </div>
+        </span>
+      }
+      below={
+        owner.error ? (
+          <Callout tone="error" role="alert">
+            <p className="type-hint">Couldn&apos;t save your account: {owner.error}</p>
+          </Callout>
+        ) : undefined
+      }
+    >
+      <YourAccountSelect users={users} owner={owner} readOnly={readOnly} fullWidth />
+    </SettingRow>,
   )
 }

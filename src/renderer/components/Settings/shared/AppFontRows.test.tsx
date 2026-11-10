@@ -45,10 +45,11 @@ async function pick(row: HTMLElement, trigger: string, option: string): Promise<
 describe('General page order', () => {
   it('the app font sits below the app and CLI versions (Rosson 2026-10-16)', () => {
     const src = readFileSync(join(__dirname, '../sections/GeneralSection.tsx'), 'utf8')
-    const version = src.indexOf('data-settings-id="general.app-version"')
-    const cli = src.indexOf('<CLIVersionRow />')
-    const font = src.indexOf('data-settings-id="general.font"')
-    const devtools = src.indexOf('<DevToolsRow />')
+    const body = src.slice(src.indexOf('function GeneralTab('))
+    const version = body.indexOf('<AppVersionRow')
+    const cli = body.indexOf('<CLIVersionRow')
+    const font = body.indexOf('<AppFontRows where="general" />')
+    const devtools = body.indexOf('<DevToolsRow />')
     expect(version).toBeGreaterThan(0)
     expect(cli).toBeGreaterThan(version)
     expect(font).toBeGreaterThan(cli)
@@ -61,7 +62,7 @@ describe('AppFontRows', () => {
     render(
       <>
         <div data-testid="general">
-          <AppFontRows where="general" lastHasBorder={false} />
+          <AppFontRows where="general" />
         </div>
         <div data-testid="code">
           <AppFontRows where="code-editor" />
@@ -87,12 +88,14 @@ describe('AppFontRows', () => {
     expect(within(general).getByRole('button', { name: 'Font size' }).textContent).toContain('11px')
   })
 
-  it('search ids sit on the rows; General owns its border', () => {
-    render(<AppFontRows where="general" lastHasBorder={false} />)
+  it('search ids sit on the rows; General leaves the dividers to its card', () => {
+    render(<AppFontRows where="general" />)
     const family = document.querySelector('[data-settings-id="general.font-family"]') as HTMLElement
     const size = document.querySelector('[data-settings-id="general.font-size"]') as HTMLElement
-    expect(family.className).toContain('border-b')
-    expect(size.className).not.toContain('border-b')
+    expect(family).not.toBeNull()
+    expect(size).not.toBeNull()
+    // Field rows: the dropdown fills the shared field width.
+    expect(within(family).getByRole('button', { name: 'Font family' }).closest('.w-60')).not.toBeNull()
     cleanup()
     render(<AppFontRows where="code-editor" />)
     expect(document.querySelector('[data-settings-id="code-editor.font-family"]')).not.toBeNull()
@@ -109,9 +112,9 @@ describe('AppFontRows', () => {
     expect(code.map((e) => e.section)).toEqual(['code-editor', 'code-editor'])
     const dir = join(process.cwd(), 'src/renderer/components/Settings/sections')
     const gen = readFileSync(join(dir, 'GeneralSection.tsx'), 'utf8')
-    const body = gen.slice(gen.indexOf("{tab === 'general' && ("))
-    expect(body.indexOf('<AppFontRows where="general" lastHasBorder={false} />')).toBeGreaterThan(0)
-    expect(body.indexOf('<AppFontRows where="general"')).toBeGreaterThan(body.indexOf('data-settings-id="general.app-version"'))
+    const body = gen.slice(gen.indexOf('function GeneralTab('))
+    expect(body.indexOf('<AppFontRows where="general" />')).toBeGreaterThan(0)
+    expect(body.indexOf('<AppFontRows where="general"')).toBeGreaterThan(body.indexOf('<AppVersionRow'))
     const codeSrc = readFileSync(join(dir, 'CodeEditorSettingsSection.tsx'), 'utf8')
     expect(codeSrc).toContain('<AppFontRows where="code-editor" />')
   })

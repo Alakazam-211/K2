@@ -4,12 +4,11 @@ import type { SettingsSection } from '@/stores/settings'
 import { SectionErrorBoundary } from './SectionErrorBoundary'
 import { SettingsSearchModal } from './SettingsSearchModal'
 import { searchPickPage, type SettingEntry } from './searchManifest'
-import { GeneralSection, GeneralRemoteHostPanel, GENERAL_MANIFEST } from './sections/GeneralSection'
+import { GeneralSection, GENERAL_MANIFEST } from './sections/GeneralSection'
 import { WORKSPACE_SETTINGS_MANIFEST } from './sections/WorkspaceSettingsPage'
 import { TokenUsageSection, TOKEN_USAGE_MANIFEST } from './sections/TokenUsageSection'
 import { LlmTokensSection, LLM_TOKENS_MANIFEST } from './sections/LlmTokensSection'
 import { StylesSection, STYLES_MANIFEST } from './sections/StylesSection'
-import { useConnectHostStore } from '@/stores/connect-host'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import { topBarLeftClusterMinWidth, TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
@@ -329,10 +328,6 @@ export default function Settings(): React.JSX.Element {
   const appApprovalsPending = useAppApprovalsStore((s) => s.pending)
   const setSection = useSettingsStore((s) => s.setSection)
   const closeSettings = useSettingsStore((s) => s.closeSettings)
-  // General splits into a half/half pane (host controls on the right, full-
-  // height divider) ONLY when connected to a remote host — same shell idiom
-  // as k2-connect/connections below.
-  const isRemote = useConnectHostStore((s) => s.activeHost) !== 'local'
   const [searchOpen, setSearchOpen] = useState(false)
   // The Gardens group shows where the Zen toggle shows. Read this
   // computer's Gardens once per open so a daemon without them hides it.
@@ -647,19 +642,11 @@ export default function Settings(): React.JSX.Element {
         }`}
       >
         {activeSection === 'general' && (
-          /* General owns its own chrome (full-width tabs) + scroll.
-             Remote: half/half with Connected host controls on the right. */
-          <div className="flex h-full min-h-0">
-            <div className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
-              <GeneralSection />
-            </div>
-            {isRemote && (
-              <div className="flex-1 min-w-0 overflow-y-auto p-6 border-l border-[var(--color-border)]">
-                <SectionErrorBoundary>
-                  <GeneralRemoteHostPanel />
-                </SectionErrorBoundary>
-              </div>
-            )}
+          /* General owns its own chrome (title + tabs) and scroll. Connected
+             to another server, it adds the Connected server card as a
+             second column (GeneralRemoteHostPanel). */
+          <div className="h-full min-h-0 overflow-hidden flex flex-col">
+            <GeneralSection />
           </div>
         )}
         {activeSection === 'token-usage' && (

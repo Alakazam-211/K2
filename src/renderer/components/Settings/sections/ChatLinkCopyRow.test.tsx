@@ -76,9 +76,9 @@ describe('ChatLinkCopyRow', () => {
     expect(localStorage.getItem(LS_CHAT_LINK_COPY_BUTTON)).toBeNull()
   })
 
-  it('sits right after the font rows on Settings → General, with a search entry', () => {
+  it('sits right after the font card on Settings → General, with a search entry', () => {
     const src = readFileSync(join(__dirname, 'GeneralSection.tsx'), 'utf8')
-    const body = src.slice(src.indexOf("{tab === 'general' && ("))
+    const body = src.slice(src.indexOf('function GeneralTab('))
     const font = body.indexOf('<AppFontRows where="general"')
     const row = body.indexOf('<ChatLinkCopyRow />')
     const devtools = body.indexOf('<DevToolsRow />')

@@ -379,7 +379,8 @@ interface SettingsState {
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
   updateStyleSettings: (partial: Partial<StyleSettingsBackend>) => void
   setDefaultAgent: (agent: string) => void
-  resetAllSettings: () => void
+  /** Rejects when the server refuses (a non-Owner gets 403). */
+  resetAllSettings: () => Promise<void>
   fetchSettings: () => Promise<void>
 }
 

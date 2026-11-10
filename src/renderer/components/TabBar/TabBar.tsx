@@ -45,13 +45,11 @@ import {
 } from '@/components/Settings/shared/LlmLoginPicker'
 import { errorText, useLlmAccountsStore, type LlmAccountsDoc } from '@/stores/llm-accounts'
 import type { Tab } from '@/stores/tabs'
-import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
-import { BrowserGlobe, BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
-import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
+import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { cachedChangesMenuState, probeChangesMenuState, type ChangesMenuState } from '@/stores/git-changes'
 import { PinnedTabMark } from '@/components/TabBar/TabPin'
 import { clampTabDropIndex, isPinnedFeatureTab, isPinnedMobileTab, isPinnedTab } from '@/lib/pinned-tabs'
-import { PaletteIcon, SmartphoneIcon } from '@/components/icons/K2Icons'
+import { FEATURE_ICONS } from '@/components/icons/feature-icons'
 import { isDesignModeEnabled } from '@/components/Design/design-mode-setting'
 import { mobileTabSetting, type PinnedTabKind } from '@/lib/workspace-tab-settings'
 import { writePinnedTab } from '@/components/Settings/pinned-tab-settings'
@@ -97,7 +95,7 @@ const CHANGES_MENU_TOOLTIP: Record<Exclude<ChangesMenuState, 'changes'>, string>
  *  grows or shifts when the async `git/info` answer lands: greyed with a
  *  tooltip until there is something to review, then active in place. */
 export function changesMenuItem(state: ChangesMenuState): ContextMenuItemDef {
-  const item: ContextMenuItemDef = { id: 'changes', label: 'Changes', icon: <ChangesTabIcon /> }
+  const item: ContextMenuItemDef = { id: 'changes', label: 'Changes', icon: <FEATURE_ICONS.changes /> }
   if (state === 'changes') return item
   item.tooltip = CHANGES_MENU_TOOLTIP[state]
   // Not a repo yet (C5): greyed, but a click still opens the tab, whose
@@ -124,17 +122,17 @@ export function buildPlusMenuItems(
   const items: ContextMenuItemDef[] = [
     { id: 'terminal', label: 'Terminal', shortcut: metaChordLabel('Meta+T') ?? undefined },
     { id: 'new-file', label: 'New File', shortcut: metaChordLabel('Meta+N') ?? undefined },
-    { id: 'browser', label: 'Browser', icon: <BrowserGlobe className="w-3.5 h-3.5" /> },
+    { id: 'browser', label: 'Browser', icon: <FEATURE_ICONS.browser className="w-3.5 h-3.5" /> },
   ]
-  items.push({ id: 'design', label: 'Design', icon: <PaletteIcon size={14} /> })
+  items.push({ id: 'design', label: 'Design', icon: <FEATURE_ICONS.design size={14} /> })
   // prd-board-tab-v1 BT-1: a new `.k5board` in this bar's folder, while the server lists the feature.
-  if (board) items.push({ id: 'board', label: 'Board', badge: 'Beta', icon: <PaletteIcon size={14} /> })
+  if (board) items.push({ id: 'board', label: 'Board', badge: 'Beta', icon: <FEATURE_ICONS.board size={14} /> })
   if (mobile) {
     const combo = effectiveKeybinding(useSettingsStore.getState().keybindings, 'openMobile', isMacPlatform())
     items.push({
       id: 'mobile',
       label: 'Mobile',
-      icon: <SmartphoneIcon size={14} />,
+      icon: <FEATURE_ICONS.mobile size={14} />,
       shortcut: (combo && metaChordLabel(combo)) || undefined,
     })
   }
@@ -1169,7 +1167,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 onContextMenu={(e) => void handlePinnedFeatureContextMenu(e, kind)}
                 title={kind === 'design' ? 'Design' : 'Mobile'}
               >
-                {kind === 'design' ? <PaletteIcon /> : <SmartphoneIcon />}
+                {kind === 'design' ? <FEATURE_ICONS.design /> : <FEATURE_ICONS.mobile />}
               </div>
             )
           }
@@ -1352,7 +1350,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 )) {
                   icon = <AgentIcon agent={cliAgent} size={14} />
                 } else if (cliAgent) {
-                  icon = <ShellTabIcon />
+                  icon = <FEATURE_ICONS.terminal />
                 } else {
                   // First file-viewer path in pane-group order. Basename
                   // only — open and copy keep filePath. Not the tab title.
@@ -1368,13 +1366,13 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   if (fileName) {
                     icon = <SetiFileIcon name={fileName} size={16} />
                   } else if (items.some((item) => item.type === 'terminal')) {
-                    icon = <ShellTabIcon />
+                    icon = <FEATURE_ICONS.terminal />
                   } else if (items.some((item) => item.type === 'changes')) {
-                    icon = <ChangesTabIcon />
+                    icon = <FEATURE_ICONS.changes />
                   } else if (items.some((item) => item.type === 'design')) {
-                    icon = <PaletteIcon size={14} />
+                    icon = <FEATURE_ICONS.design size={14} />
                   } else if (items.some((item) => item.type === 'mobile')) {
-                    icon = <SmartphoneIcon size={14} />
+                    icon = <FEATURE_ICONS.mobile size={14} />
                   } else if (items.some((item) => item.type === 'browser')) {
                     // After file and terminal. A mixed tab never reaches here.
                     const browser = items.find((item) => item.type === 'browser')

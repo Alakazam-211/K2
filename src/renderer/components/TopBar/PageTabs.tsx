@@ -17,15 +17,8 @@ import { initProjectGroupEvents } from '@/stores/project-groups'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { currentShortcutOs, metaChordLabel } from '@/lib/shortcut-label'
-import {
-  AgentsIcon,
-  HomeIcon,
-  K2_ICON_PX,
-  ProjectsIcon,
-  SettingsIcon,
-  TicketsIcon,
-  WikiIcon,
-} from '@/components/icons/K2Icons'
+import { K2_ICON_PX, type K2IconProps } from '@/components/icons/K2Icons'
+import { FEATURE_ICONS } from '@/components/icons/feature-icons'
 import { openWikiTab } from '@/lib/wiki-open'
 import { pageShortcutLabel } from '@/lib/page-shortcuts'
 import { isMacPlatform, type DesktopOs } from '@/lib/desktop-chrome'
@@ -69,12 +62,12 @@ export const PAGE_TAB_ICON_PX = K2_ICON_PX
  *  2026-10-16) opens the wiki of the workspace on screen
  *  (`lib/wiki-open.ts`), not a bare page switch. */
 export const PAGE_TAB_ITEMS = [
-  { page: 'home', Icon: HomeIcon },
-  { page: 'agents', Icon: AgentsIcon },
-  { page: 'projects', Icon: ProjectsIcon },
-  { page: 'feedback', Icon: TicketsIcon },
-  { page: 'wiki', Icon: WikiIcon },
-] as const satisfies readonly { page: keyof typeof PAGE_TAB_LABELS; Icon: typeof HomeIcon }[]
+  { page: 'home', Icon: FEATURE_ICONS.home },
+  { page: 'agents', Icon: FEATURE_ICONS.agents },
+  { page: 'projects', Icon: FEATURE_ICONS.projects },
+  { page: 'feedback', Icon: FEATURE_ICONS.tickets },
+  { page: 'wiki', Icon: FEATURE_ICONS.wiki },
+] as const satisfies readonly { page: keyof typeof PAGE_TAB_LABELS; Icon: (props: K2IconProps) => React.JSX.Element }[]
 
 /** A page tab's tooltip with its chords: the page shortcut (⌃⌘1–5,
  *  Ctrl+Alt+1–5 off macOS, or the rebound one) and ⌘P for Projects. */
@@ -256,7 +249,7 @@ export default function PageTabs(): React.JSX.Element {
         title={settingsTabTitle(keybindings, currentShortcutOs())}
         ariaLabel="Settings"
       >
-        <SettingsIcon size={PAGE_TAB_ICON_PX} />
+        <FEATURE_ICONS.settings size={PAGE_TAB_ICON_PX} />
       </PageTab>
     </div>
   )

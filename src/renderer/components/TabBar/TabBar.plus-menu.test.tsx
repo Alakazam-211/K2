@@ -32,6 +32,7 @@ import { useContextMenuStore } from '@/stores/context-menu'
 import { showLaunchBarStorageKey, usePresetsStore, type AgentPreset } from '@/stores/presets'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
+import { FEATURE_ICONS } from '@/components/icons/feature-icons'
 import {
   adoptApiSandboxSession,
   registerProjectsPathIndex,
@@ -313,6 +314,11 @@ describe('tab bar plus menu', () => {
     const items = useContextMenuStore.getState().items
     expect(items.map((i) => i.label)).toEqual(['Terminal', 'New File', 'Browser', 'Design', 'Board', 'Mobile', 'Changes'])
     expect(items.find((i) => i.id === 'board')?.badge).toBe('Beta')
+    // Its own icon, never Design's palette (Rosson 2026-11-09).
+    const iconOf = (id: string): unknown => (items.find((i) => i.id === id)?.icon as { type?: unknown } | undefined)?.type
+    expect(iconOf('board')).toBe(FEATURE_ICONS.board)
+    expect(iconOf('design')).toBe(FEATURE_ICONS.design)
+    expect(iconOf('board')).not.toBe(iconOf('design'))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Board/ }))
     })

@@ -5,6 +5,7 @@
 import type { JSX } from 'react'
 import setiWoffUrl from '@/assets/seti/seti.woff?url'
 import { useStyleStore } from '@/stores/style'
+import { FEATURE_ICONS } from '@/components/icons/feature-icons'
 import { resolveSetiIcon, type SetiScheme } from './resolve'
 import { createSetiFontLoader, type SetiFontEnv, type SetiFontLoader } from './seti-font'
 
@@ -20,6 +21,11 @@ function ensureSetiFont(): void {
     })
   }
   loader.ensure()
+}
+
+/** A Board file (`.k5board`, any case), by basename or path. */
+function isBoardFileName(name: string | undefined): boolean {
+  return !!name && name.toLowerCase().endsWith('.k5board')
 }
 
 export interface SetiFileIconProps {
@@ -48,8 +54,23 @@ export function SetiFileIcon({
   const storeScheme = useStyleStore((s) => s.resolvedScheme)
   const scheme: SetiScheme = schemeProp ?? (storeScheme === 'light' ? 'light' : 'dark')
   const def = resolveSetiIcon(name, scheme)
-  const glyph = String.fromCodePoint(def.code)
   const px = `${size}px`
+  if (isBoardFileName(name)) {
+    // A Board file draws the Board's own icon (one source: feature-icons), in
+    // Seti's picture colour, so it never looks like Design or a picture.
+    return (
+      <span
+        data-board-file-icon=""
+        className={`inline-flex items-center justify-center flex-shrink-0 leading-none select-none ${className}`}
+        style={{ color: def.color, width: px, height: px }}
+        title={title}
+        aria-hidden
+      >
+        <FEATURE_ICONS.board size={Math.round(size * 0.875)} />
+      </span>
+    )
+  }
+  const glyph = String.fromCodePoint(def.code)
   return (
     <span
       className={`inline-flex items-center justify-center flex-shrink-0 leading-none select-none ${className}`}

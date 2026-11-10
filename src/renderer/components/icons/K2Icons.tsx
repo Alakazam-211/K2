@@ -4,12 +4,12 @@
 // `currentColor`.
 //
 //   Home, Agents, Projects, Tickets, Wiki, Server, Admin, Run, Drawer,
-//   Clock, Mug, Help, Pin, PinOff, Palette, Smartphone, SmartphoneOff,
+//   Clock, Mug, Help, Pin, PinOff, Palette, Board, Smartphone, SmartphoneOff,
 //   Pencil, Trash, ArrowUp
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `library`,
 //     `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`,
-//     `circle-help`, `pin`, `pin-off`, `palette`, `smartphone`, `pencil`,
-//     `trash-2`, `arrow-up`; SmartphoneOff is
+//     `circle-help`, `pin`, `pin-off`, `palette`, `presentation`,
+//     `smartphone`, `pencil`, `trash-2`, `arrow-up`; SmartphoneOff is
 //     `smartphone` plus the bell's 2,2 → 22,22 slash),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
@@ -311,6 +311,20 @@ export function PaletteIcon(props: K2IconProps = {}): React.JSX.Element {
       <circle cx="17.5" cy="10.5" r=".5" fill="currentColor" />
       <circle cx="6.5" cy="12.5" r=".5" fill="currentColor" />
       <circle cx="8.5" cy="7.5" r=".5" fill="currentColor" />
+    </svg>
+  )
+}
+
+/** Board (a `.k5board` tab, its + menu row, its file in the Files drawer;
+ *  Rosson 2026-11-09: never Design's palette): Lucide `presentation`, a
+ *  whiteboard on its stand, squared (no corner radius). Not a kanban: the
+ *  Board is a whiteboard, and the Kanban is another Garden. */
+export function BoardIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('presentation', props)}>
+      <path d="M2 3h20" />
+      <path d="M21 3v13H3V3" />
+      <path d="M7 21l5-5 5 5" />
     </svg>
   )
 }

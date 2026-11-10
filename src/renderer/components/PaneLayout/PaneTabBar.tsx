@@ -8,11 +8,9 @@ import PinDimensionsModal from './PinDimensionsModal'
 import { Surface } from '@/components/ui'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
 import { isAgentPtyTerminalItem } from '@/lib/chat-session-tab'
-import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { beginBrowserMotion } from '@/lib/browser-overlay'
-import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
-import { PaletteIcon, SmartphoneIcon } from '@/components/icons/K2Icons'
+import { FEATURE_ICONS } from '@/components/icons/feature-icons'
 import { useStore } from 'zustand'
 import { TAB_SLOT_PX, TabSlotRest, terminalsStatus, type StatusTerminal } from '@/components/TabBar/TabStatus'
 
@@ -108,20 +106,20 @@ function paneItemIcon(item: Item): React.JSX.Element | null {
     return <SetiFileIcon name={name} size={16} />
   }
   if (item.type === 'terminal' && !isAgentPtyTerminalItem(item)) {
-    return <ShellTabIcon />
+    return <FEATURE_ICONS.terminal />
   }
   if (item.type === 'browser') {
     const data = item.data as BrowserItemData
     return <BrowserTabGlyph icon={data.icon} />
   }
   if (item.type === 'changes') {
-    return <ChangesTabIcon />
+    return <FEATURE_ICONS.changes />
   }
   if (item.type === 'design') {
-    return <PaletteIcon size={14} />
+    return <FEATURE_ICONS.design size={14} />
   }
   if (item.type === 'mobile') {
-    return <SmartphoneIcon size={14} />
+    return <FEATURE_ICONS.mobile size={14} />
   }
   return null
 }

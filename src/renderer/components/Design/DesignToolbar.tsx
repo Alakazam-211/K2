@@ -7,7 +7,8 @@
 //  - There is no status strip above the page any more: the note count,
 //    Send all and Retry live in the notes tray's header (NoteTray).
 
-import { K2_ICON_PX, PaletteIcon } from '@/components/icons/K2Icons'
+import { K2_ICON_PX } from '@/components/icons/K2Icons'
+import { FEATURE_ICONS } from '@/components/icons/feature-icons'
 
 export interface DesignPaletteButtonProps {
   /** Select (pick an element) is on. */
@@ -34,7 +35,7 @@ export function DesignPaletteButton({ armed, onToggle, disabled = false }: Desig
           : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
       }`}
     >
-      <PaletteIcon size={K2_ICON_PX} />
+      <FEATURE_ICONS.design size={K2_ICON_PX} />
     </button>
   )
 }

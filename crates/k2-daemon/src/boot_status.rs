@@ -810,6 +810,12 @@ pub const FEATURE_APP_CHAT: &str = "app-chat-v1";
 /// `chat.space` (0.46.8): an App's server learns its own Sew Space id and
 /// its manifest channels' ids. A stable shape: only additions under this key.
 pub const FEATURE_APP_CHAT_SPACE: &str = "app-chat-space-v1";
+/// Sew 0.9.0 recording in Apps (K-d): `recordings.list|get|transcript`
+/// and `recordings.events` on an App's own pass. Each answers
+/// `sew_feature_missing` until this box's Sew reports
+/// `mgmt_recording_reads`, and `recording_server_read_off` until the owner
+/// turns the App's `server_read` on.
+pub const FEATURE_APP_RECORDINGS: &str = "app-recordings-v1";
 
 /// The sign-in door (prd-app-hosted-sign-in-v1, 0.46.9): this daemon has
 /// `/.k2/auth/*` on an App's hosts, `auth.exchange` on the link and
@@ -1186,6 +1192,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_EMAIL_NOTIFICATIONS);
     out.push(FEATURE_APP_CHAT);
     out.push(FEATURE_APP_CHAT_SPACE);
+    out.push(FEATURE_APP_RECORDINGS);
     out.push(FEATURE_APP_SIGN_IN_DOOR);
     if crate::access_live::enabled() {
         out.push(FEATURE_LIVE_ACCESS);
@@ -1402,6 +1409,7 @@ mod tests {
                 "email-notifications-v1",
                 "app-chat-v1",
                 "app-chat-space-v1",
+                "app-recordings-v1",
                 "app-hosted-sign-in-v1",
                 "live-access-v1",
                 "activity-live-busy",

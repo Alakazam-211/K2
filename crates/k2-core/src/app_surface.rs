@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 53;
+pub const CATALOG_VERSION: u32 = 54;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens
@@ -343,6 +343,9 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("POST", "/cli/sew/app/channels/bulk"),
     ("POST", "/cli/sew/app/member-channels"),
     ("GET", "/cli/sew/app/space"),
+    ("GET", "/cli/sew/app/recordings"),
+    ("GET", "/cli/sew/app/recording"),
+    ("GET", "/cli/sew/app/recording/transcript"),
     ("GET", "/cli/skin/projects"),
     ("HEAD", "/cli/skin/projects"),
     ("GET", "/cli/skin/projects/messages"),
@@ -359,6 +362,7 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[
     ("/cli/thread/stream", "rooms"),
     ("/cli/fs/events", "workspace"),
     ("/cli/activity/events", "workspace"),
+    ("/cli/sew/app/recordings/events", "app"),
     ("/cli/skin/projects/events", "group"),
 ];
 
@@ -367,7 +371,7 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[
 pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/wallet/list", "/cli/skin/wallet/status", "/cli/skin/wallet/add", "/cli/skin/wallet/login", "/cli/skin/wallet/login/status", "/cli/skin/wallet/login/input", "/cli/skin/wallet/login/cancel", "/cli/skin/wallet/use", "/cli/skin/wallet/remove"];
 
 /// Routes only an App's gateway link serves: a BFF's server-side calls.
-pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/auth/exchange", "/cli/skin/guests/rooms", "/cli/skin/app-rooms", "/cli/skin/guests/list", "/cli/skin/logout", "/cli/skin/refresh", "/cli/skin/push/send", "/cli/skin/push/status", "/cli/skin/push/devices", "/cli/skin/pair/start", "/cli/skin/pair/status", "/cli/skin/pair/cancel", "/cli/skin/pair/check", "/cli/skin/pair", "/cli/skin/email/send", "/cli/skin/email/status", "/cli/skin/email/log", "/cli/skin/app-info", "/cli/skin/password/forgot", "/cli/skin/password/reset", "/cli/skin/self", "/cli/skin/usage", "/cli/sew/pass", "/cli/skin/guests/chat", "/cli/sew/app/member", "/cli/sew/app/whois", "/cli/sew/app/channels", "/cli/sew/app/channels/bulk", "/cli/sew/app/member-channels", "/cli/sew/app/space"];
+pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/auth/exchange", "/cli/skin/guests/rooms", "/cli/skin/app-rooms", "/cli/skin/guests/list", "/cli/skin/logout", "/cli/skin/refresh", "/cli/skin/push/send", "/cli/skin/push/status", "/cli/skin/push/devices", "/cli/skin/pair/start", "/cli/skin/pair/status", "/cli/skin/pair/cancel", "/cli/skin/pair/check", "/cli/skin/pair", "/cli/skin/email/send", "/cli/skin/email/status", "/cli/skin/email/log", "/cli/skin/app-info", "/cli/skin/password/forgot", "/cli/skin/password/reset", "/cli/skin/self", "/cli/skin/usage", "/cli/sew/pass", "/cli/skin/guests/chat", "/cli/sew/app/member", "/cli/sew/app/whois", "/cli/sew/app/channels", "/cli/sew/app/channels/bulk", "/cli/sew/app/member-channels", "/cli/sew/app/space", "/cli/sew/app/recordings", "/cli/sew/app/recording", "/cli/sew/app/recording/transcript"];
 
 /// The catalog verb behind each App-facing pair and socket
 /// (`(method, path, verb, door)`; sockets are `WS`), for refusals, the
@@ -507,6 +511,9 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("POST", "/cli/sew/app/channels/bulk", "chat.channels", "link"),
     ("POST", "/cli/sew/app/member-channels", "chat.setChannels", "link"),
     ("GET", "/cli/sew/app/space", "chat.space", "link"),
+    ("GET", "/cli/sew/app/recordings", "recordings.list", "link"),
+    ("GET", "/cli/sew/app/recording", "recordings.get", "link"),
+    ("GET", "/cli/sew/app/recording/transcript", "recordings.transcript", "link"),
     ("GET", "/cli/skin/projects", "project.list", "both"),
     ("GET", "/cli/skin/projects/messages", "project.read", "both"),
     ("POST", "/cli/skin/projects/post", "project.post", "both"),
@@ -516,6 +523,7 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("WS", "/cli/thread/stream", "thread.stream", "both"),
     ("WS", "/cli/fs/events", "files.events", "both"),
     ("WS", "/cli/activity/events", "activity.events", "both"),
+    ("WS", "/cli/sew/app/recordings/events", "recordings.events", "both"),
     ("WS", "/cli/skin/projects/events", "project.events", "both"),
 ];
 

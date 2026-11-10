@@ -1470,6 +1470,25 @@ pub fn recording_k5_space() -> Result<Option<String>, String> {
     crate::skin::with_skin_conn(admin_space::ready_space_id)
 }
 
+/// K2's own checks of an App server's recording read ([`recording::read_gate`]).
+pub fn recording_read_gate(app_id: &str, space: Option<&str>) -> Result<Result<(), recording::ReadRefusal>, String> {
+    if !skin_store_exists() {
+        return Ok(Err(recording::ReadRefusal::FeatureMissing));
+    }
+    crate::skin::with_skin_conn(|conn| recording::read_gate(conn, app_id, space))
+}
+
+/// The App's feed cursor.
+pub fn recording_feed_cursor(app_id: &str) -> Result<Option<String>, String> {
+    crate::skin::with_skin_conn(|conn| recording::feed_cursor(conn, app_id))
+}
+
+/// Keep (or clear) the App's feed cursor.
+pub fn recording_set_feed_cursor(app_id: &str, cursor: Option<&str>) -> Result<(), String> {
+    let now = outbox::now_secs();
+    crate::skin::with_skin_conn(|conn| recording::set_feed_cursor(conn, app_id, cursor, now))
+}
+
 /// The App a Space is bound to (`None`: not bound).
 pub fn recording_bound_app(space_id: &str) -> Result<Option<String>, String> {
     if !skin_store_exists() {

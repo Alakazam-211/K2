@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 53
+export const CATALOG_VERSION = 54
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -1567,6 +1567,50 @@ export const APP_VERBS = {
     socket: null,
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"manifestChannels":{"items":{"additionalProperties":false,"properties":{"channelId":{"type":["string","null"]},"name":{"type":"string"},"private":{"type":"boolean"},"slug":{"type":"string"},"spaceId":{"type":["string","null"]},"type":{"type":"string"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"},"spaceId":{"type":["string","null"]},"spaces":{"items":{"additionalProperties":false,"properties":{"channels":{"items":{"additionalProperties":false,"properties":{"channelId":{"type":["string","null"]},"name":{"type":"string"},"private":{"type":"boolean"},"slug":{"type":"string"},"source":{"enum":["manifest","app"],"type":"string"},"state":{"type":"string"},"type":{"type":"string"}},"type":"object"},"type":"array"},"governed":{"type":"boolean"},"spaceId":{"type":"string"}},"type":"object"},"type":"array"}},"type":"object"},
+  },
+  'recordings.list': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-recordings-v1',
+    door: 'link',
+    http: { method: 'GET', route: '/cli/sew/app/recordings', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"next":{"type":["string","null"]},"ok":{"type":"boolean"},"recordings":{"items":{"additionalProperties":false,"properties":{"channelId":{"type":"string"},"consents":{"items":{"additionalProperties":false,"properties":{"consent":{"type":"string"},"externalId":{"type":"string"}},"type":"object"},"type":"array"},"id":{"type":"string"},"spaceId":{"type":"string"},"startedAt":{"type":"string"},"startedBy":{"type":["string","null"]},"state":{"type":"string"},"stopReason":{"type":["string","null"]},"stoppedAt":{"type":["string","null"]},"transcriptReady":{"type":"boolean"},"trigger":{"type":"string"}},"type":"object"},"type":"array"},"spaceId":{"type":"string"}},"type":"object"},
+  },
+  'recordings.get': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-recordings-v1',
+    door: 'link',
+    http: { method: 'GET', route: '/cli/sew/app/recording', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"ok":{"type":"boolean"},"recording":{"additionalProperties":false,"properties":{"channelId":{"type":"string"},"consents":{"items":{"additionalProperties":false,"properties":{"consent":{"type":"string"},"externalId":{"type":"string"}},"type":"object"},"type":"array"},"id":{"type":"string"},"spaceId":{"type":"string"},"startedAt":{"type":"string"},"startedBy":{"type":["string","null"]},"state":{"type":"string"},"stopReason":{"type":["string","null"]},"stoppedAt":{"type":["string","null"]},"transcriptReady":{"type":"boolean"},"trigger":{"type":"string"}},"type":"object"}},"type":"object"},
+  },
+  'recordings.transcript': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-recordings-v1',
+    door: 'link',
+    http: { method: 'GET', route: '/cli/sew/app/recording/transcript', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"next":{"type":["string","null"]},"ok":{"type":"boolean"},"recordingId":{"type":"string"},"turns":{"items":{"additionalProperties":false,"properties":{"endMs":{"type":"integer"},"id":{"type":"string"},"speakerExternalId":{"type":"string"},"startMs":{"type":"integer"},"text":{"type":"string"}},"type":"object"},"type":"array"}},"type":"object"},
+  },
+  'recordings.events': {
+    cap: null,
+    effect: 'read',
+    kind: 'subscribe',
+    feature: 'app-recordings-v1',
+    door: 'both',
+    http: null,
+    socket: { path: '/cli/sew/app/recordings/events', param: 'app', frame: 'recording_changed', refetch: 'recordings.list', query: {} },
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"at":{"type":"string"},"change":{"type":"string"},"channelId":{"type":"string"},"kind":{"enum":["recording_changed","recordings_refetch"]},"recordingId":{"type":"string"},"seq":{"type":"integer"},"spaceId":{"type":"string"}},"type":"object"},
   },
   'project.list': {
     cap: 'thread:read',
@@ -3864,6 +3908,77 @@ export interface AppChatSpace {
   readonly spaces: AppChatSpaceRow[]
 }
 
+export interface AppRecordingConsent {
+  /** granted | declined | withdrawn | pending. */
+  readonly consent: string
+  readonly externalId: string
+}
+
+export interface AppRecording {
+  readonly channelId: string
+  /** Who consented to be recorded. */
+  readonly consents: AppRecordingConsent[]
+  readonly id: string
+  readonly spaceId: string
+  readonly startedAt: string
+  /** Who started it (an external id), when a person did. */
+  readonly startedBy: string | null
+  /** active | stopped (a newer state may appear). */
+  readonly state: string
+  /** Sew's stop reason (a number or a name; never match it exhaustively). */
+  readonly stopReason: string | null
+  readonly stoppedAt: string | null
+  readonly transcriptReady: boolean
+  /** manual | auto | required. */
+  readonly trigger: string
+}
+
+export interface AppRecordingsPage {
+  readonly app: string
+  /** The next page's cursor (pass it as after), or null at the end. */
+  readonly next: string | null
+  readonly ok: boolean
+  readonly recordings: AppRecording[]
+  readonly spaceId: string
+}
+
+export interface AppRecordingOne {
+  readonly app: string
+  readonly ok: boolean
+  readonly recording: AppRecording
+}
+
+export interface AppTranscriptTurn {
+  /** Milliseconds from the start of the recording (a duration). */
+  readonly endMs: number
+  readonly id: string
+  readonly speakerExternalId: string
+  /** Milliseconds from the start of the recording (a duration). */
+  readonly startMs: number
+  /** Markdown-escaped. */
+  readonly text: string
+}
+
+export interface AppTranscriptPage {
+  readonly app: string
+  /** The next page's cursor (pass it as after), or null at the end. */
+  readonly next: string | null
+  readonly ok: boolean
+  readonly recordingId: string
+  readonly turns: AppTranscriptTurn[]
+}
+
+export interface AppRecordingFrame {
+  readonly at?: string
+  /** started | stopped | transcript_ready | audio_expired | deleted (a newer one may appear). */
+  readonly change?: string
+  readonly channelId?: string
+  readonly kind: 'recording_changed' | 'recordings_refetch'
+  readonly recordingId?: string
+  readonly seq?: number
+  readonly spaceId?: string
+}
+
 export interface AppProjectMember {
   readonly handle: string
   /** The member agent's project id. */
@@ -3974,7 +4089,7 @@ export interface AppProjectFrame {
 }
 
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'access_lost', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'no_chat_caps', 'app_claim_invalid', 'not_app_granted', 'chat_off_for_person', 'shared_person', 'has_assistants', 'chat_limit', 'username_unusable', 'chat_not_app_scoped', 'no_chat_member', 'sew_feature_missing', 'chat_key_required', 'sew_unreachable', 'sew_refused', 'space_unbound', 'app_mismatch', 'channel_type_mismatch', 'client_msg_id_reused', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'push_server_only', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path', 'email_paused', 'all_suppressed', 'password_change_required', 'password_unchanged', 'bad_code', 'app_suspended', 'not_a_repo', 'attachment_secret', 'sidecar_live', 'sidecar_attached', 'worktree_sidecar', 'guest_pass_required', 'too_many_transfers', 'no_space', 'transfer_expired', 'transfer_token_expired', 'transfer_token_invalid', 'transfer_token_required', 'upload_done', 'upload_incomplete', 'checksum_mismatch', 'bad_range'] as const
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'access_lost', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'no_chat_caps', 'app_claim_invalid', 'not_app_granted', 'chat_off_for_person', 'shared_person', 'has_assistants', 'chat_limit', 'username_unusable', 'chat_not_app_scoped', 'no_chat_member', 'sew_feature_missing', 'recording_server_read_off', 'app_not_governing', 'chat_key_required', 'sew_unreachable', 'sew_refused', 'space_unbound', 'app_mismatch', 'channel_type_mismatch', 'client_msg_id_reused', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'push_server_only', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path', 'email_paused', 'all_suppressed', 'password_change_required', 'password_unchanged', 'bad_code', 'app_suspended', 'not_a_repo', 'attachment_secret', 'sidecar_live', 'sidecar_attached', 'worktree_sidecar', 'guest_pass_required', 'too_many_transfers', 'no_space', 'transfer_expired', 'transfer_token_expired', 'transfer_token_invalid', 'transfer_token_required', 'upload_done', 'upload_incomplete', 'checksum_mismatch', 'bad_range'] as const
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 
@@ -4119,6 +4234,10 @@ export interface AppVerbs {
   'chat.channels': { args: { ops: AppChatChannelOp[]; space?: string }; value: AppChatChannelOps }
   'chat.setChannels': { args: { items: AppChatMemberChannels[]; space?: string }; value: AppChatMemberChannelsResult }
   'chat.space': { args: { app?: string }; value: AppChatSpace }
+  'recordings.list': { args: { after?: string; limit?: number; space: string }; value: AppRecordingsPage }
+  'recordings.get': { args: { id: string }; value: AppRecordingOne }
+  'recordings.transcript': { args: { after?: string; id: string; limit?: number }; value: AppTranscriptPage }
+  'recordings.events': { args: { app: string }; value: AppRecordingFrame }
   'project.list': { args: Record<string, never>; value: AppProjectList }
   'project.read': { args: { afterSeq?: number; beforeSeq?: number; group: string; limit?: number }; value: AppProjectPage }
   'project.post': { args: { body: string; clientMsgId?: string; group: string }; value: AppProjectPosted }
@@ -4126,8 +4245,8 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'auth.exchange' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
-export type AppSubscribeVerb = 'me.events' | 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'auth.exchange' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'recordings.list' | 'recordings.get' | 'recordings.transcript' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppSubscribeVerb = 'me.events' | 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'recordings.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
 export interface AppSurfaces {
@@ -4437,6 +4556,16 @@ export interface AppSurfaces {
     /** This App's own Sew Space id and its manifest channels with their Sew ids, read by the App's own pass (no cap). A stable shape: only additions under app-chat-space-v1. no cap · GET /cli/sew/app/space. e.g. `const {spaceId, manifestChannels} = await k2.asApp().chat.space()` */
     space(args?: { app?: string }): Promise<AppChatSpace>
   }
+  readonly recordings: {
+    /** The recordings in one of the Spaces this App governs, newest first; only with the owner's server_read on (no audio, ever). no cap · GET /cli/sew/app/recordings. e.g. `const {recordings} = await k2.asApp().recordings.list({space: spaceId})` */
+    list(args: { after?: string; limit?: number; space: string }): Promise<AppRecordingsPage>
+    /** One recording in a Space this App governs: who started it, the trigger, who consented; only with the owner's server_read on. no cap · GET /cli/sew/app/recording. e.g. `const {recording} = await k2.asApp().recordings.get({id})` */
+    get(args: { id: string }): Promise<AppRecordingOne>
+    /** A recording's transcript, a page of turns; only with the owner's server_read on, named in each consent notice, every read logged. no cap · GET /cli/sew/app/recording/transcript. e.g. `const {turns, next} = await k2.asApp().recordings.transcript({id})` */
+    transcript(args: { after?: string; id: string; limit?: number }): Promise<AppTranscriptPage>
+    /** A recording in this App's Spaces started, stopped, got its transcript or lost its audio: ids only, never content; recordings_refetch means read recordings.list again. no cap · WS /cli/sew/app/recordings/events?app=. e.g. `const off = k2.asApp().recordings.onChanged({app: me.serviceId}, (f) => f.kind === 'recordings_refetch' ? reload() : fetchOne(f.recordingId))` */
+    events(args: { app: string }, onFrame: (frame: AppRecordingFrame) => void, onError?: (error: K2Error) => void): () => void
+  }
   readonly project: {
     /** The project chats this pass can read: a project shows only when every member agent is a room it holds with thread:read. cap thread:read · GET /cli/skin/projects. e.g. `const {projects} = await k2.project.list()` */
     list(args?: Record<string, never>): Promise<AppProjectList>
@@ -4452,4 +4581,4 @@ export interface AppSurfaces {
 }
 
 /** The surface names, in catalog order (the client builds one object each). */
-export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'auth', 'app', 'password', 'profile', 'diagnostics', 'push', 'pairing', 'email', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'project'] as const
+export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'auth', 'app', 'password', 'profile', 'diagnostics', 'push', 'pairing', 'email', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'recordings', 'project'] as const

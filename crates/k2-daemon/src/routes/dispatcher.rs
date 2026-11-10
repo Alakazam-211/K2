@@ -12066,6 +12066,43 @@ async fn handle_one_request(
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Sew 0.9.0 (recording in Apps, K-d): recordings.list / get /
+        // transcript, an App's own pass with server_read (floor NoLogin; the
+        // handler refuses the rest). Its own arm, as above (B9): a
+        // `/cli/sew/app/*` path never reaches the `/cli/sew` family.
+        crate::sew::app_recordings::LIST | crate::sew::app_recordings::ONE | crate::sew::app_recordings::TRANSCRIPT => {
+            if is_post {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            } else {
+                let _ = stream.read(&mut buf).await;
+            }
+            let presented = super::http::extract_token(&query);
+            let r = if presented.is_some_and(|t| k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t)) {
+                let pass = presented.and_then(crate::apps::gateway::resolve_pass);
+                let params = super::http::parse_params(&path, &query);
+                let link = crate::guest_rooms_routes::OnLink::current();
+                crate::sew::app_recordings::handle(&path, pass, link, is_post, &params).await
+            } else {
+                crate::sew::app_recordings::app_pass_required()
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // Sew 0.9.0: recordings.events, the App's feed (a WebSocket; its
+        // refusals are answered before the upgrade).
+        crate::sew::app_recordings::EVENTS => {
+            let presented = super::http::extract_token(&query);
+            if presented.is_some_and(|t| k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t)) {
+                let pass = presented.and_then(crate::apps::gateway::resolve_pass);
+                let link = crate::guest_rooms_routes::OnLink::current();
+                let params = super::http::parse_params(&path, &query);
+                crate::sew::app_recordings::serve_events(stream, pass, link, &params).await;
+            } else {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::sew::app_recordings::app_pass_required();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+            }
+            return DispatchOutcome::Done;
+        }
         // Sew for Apps A9 (0.46.6): chat.createChannel, an App's own pass
         // with chat:channels, its own Space only (floor NoLogin; the handler
         // refuses the rest). Two mgmt calls: async. Its own arm, as above.

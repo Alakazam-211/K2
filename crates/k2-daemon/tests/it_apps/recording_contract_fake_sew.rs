@@ -255,3 +255,124 @@ async fn sew_0_9_0_speaks_the_recording_names() {
     assert!(reads.len() >= 6 && reads.iter().all(|c| c.actor.as_deref().is_some_and(|a| a.starts_with("app:"))), "{reads:?}");
     e.sew.assert_clean();
 }
+
+// ── K-d: an App server's reads and its feed, through K2 ──────────────
+
+use k2_daemon::sew::app_recordings::{self as reads, Polled};
+
+fn q(kv: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+    kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+}
+
+fn body(r: &k2_daemon::cli_response::CliResponse) -> Value {
+    serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("json ({e}): {}", r.body))
+}
+
+fn sew_reads(e: &Env) -> usize {
+    e.sew.calls().into_iter().filter(|c| c.method == "GET" && c.path.contains("recording")).count()
+}
+
+/// The App governs SPACE (bound in K2 and Sew), a recording with a turn.
+async fn governed(flags: &[&str]) -> Env {
+    k2_core::db::init_for_tests();
+    let e = setup(flags).await;
+    bind_both(&e);
+    e.sweep().await;
+    e.sew.add_recording("71", SPACE, "9");
+    e.sew.add_turn("71", "k2:owner", "hello");
+    e
+}
+
+fn server_read(on: bool) {
+    let mut f = serde_json::Map::new();
+    f.insert("server_read".into(), json!(on));
+    hook::recording_set_app(APP, &f, "owner").expect("server_read");
+}
+
+/// PRD §8 K-d: with `server_read` off, `recordings.transcript` (and every
+/// other read) is K2's own 403 `recording_server_read_off`: Sew is never
+/// asked. On Sew 0.8.x it is `sew_feature_missing`, again before Sew.
+#[tokio::test]
+async fn server_read_off_is_refused_by_k2_before_sew() {
+    let e = governed(&sew_090()).await;
+    for (path, p) in [(reads::TRANSCRIPT, q(&[("id", "71")])), (reads::ONE, q(&[("id", "71")])), (reads::LIST, q(&[("space", SPACE)]))] {
+        let r = reads::read_for_app(APP, path, &p).await;
+        assert_eq!((r.status, body(&r)["error"]["code"].clone()), ("403 Forbidden", json!("recording_server_read_off")), "{path}: {}", r.body);
+    }
+    assert_eq!(sew_reads(&e), 0, "Sew was never asked");
+    hook::note_features_for_tests(&SEW_082).expect("Sew 0.8.2's flags");
+    let r = reads::read_for_app(APP, reads::TRANSCRIPT, &q(&[("id", "71")])).await;
+    assert_eq!(body(&r)["error"]["code"], json!("sew_feature_missing"), "{}", r.body);
+    assert_eq!(sew_reads(&e), 0);
+}
+
+/// PRD §8 K-d (Q7): a participant App (the Space is bound to another App)
+/// gets K2's own 409 `app_not_governing`, server_read or not; Sew is never
+/// asked.
+#[tokio::test]
+async fn a_participant_app_is_refused_app_not_governing() {
+    let e = governed(&sew_090()).await;
+    server_read(true);
+    let r = reads::read_for_app(APP, reads::LIST, &q(&[("space", "5102")])).await;
+    assert_eq!((r.status, body(&r)["error"]["code"].clone()), ("409 Conflict", json!("app_not_governing")), "{}", r.body);
+    assert_eq!(sew_reads(&e), 0);
+}
+
+/// PRD §8 K-d: a transcript read sends `Sew-Actor: app:<service id>`,
+/// writes K2's `deploy_audit` row, and hands on no field K2 doesn't name
+/// (the audio links Sew holds).
+#[tokio::test]
+async fn a_read_names_the_app_and_is_audited() {
+    let e = governed(&sew_090()).await;
+    server_read(true);
+    e.sweep().await;
+    let r = reads::read_for_app(APP, reads::TRANSCRIPT, &q(&[("id", "71")])).await;
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let v = body(&r);
+    assert_eq!(v["turns"][0]["text"], json!("hello"));
+    assert!(!r.body.contains("audio"), "{}", r.body);
+    let r = reads::read_for_app(APP, reads::LIST, &q(&[("space", SPACE)])).await;
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(body(&r)["recordings"][0]["id"], json!("71"));
+    assert!(!r.body.contains("audio"), "{}", r.body);
+    let calls: Vec<_> = e.sew.calls().into_iter().filter(|c| c.method == "GET" && c.path.contains("recording")).collect();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(calls.iter().all(|c| c.actor.as_deref() == Some(format!("app:{APP}").as_str())), "{calls:?}");
+    let audits: i64 = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT COUNT(*) FROM deploy_audit WHERE event = 'recording_transcript_read'", [], |r| r.get(0)).expect("audit")
+    };
+    assert_eq!(audits, 1, "one row per transcript read");
+    e.sew.assert_clean();
+}
+
+/// PRD §8 K-d: a feed page reaches an open socket as `recording_changed`,
+/// with no content; a cursor Sew dropped tells the socket to refetch; the
+/// feed ends when server_read goes off.
+#[tokio::test]
+async fn the_feed_sends_changes_without_content() {
+    let e = governed(&sew_090()).await;
+    server_read(true);
+    e.sweep().await;
+    let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(16);
+    e.sew.push_recording_change(APP, "started", "71");
+    e.sew.push_recording_change(APP, "transcript_ready", "71");
+    assert_eq!(reads::poll_once(APP, &tx, 0).await, Polled::Sent(2));
+    for want in ["started", "transcript_ready"] {
+        let f: Value = serde_json::from_str(&rx.recv().await.expect("a frame")).unwrap();
+        assert_eq!((f["kind"].clone(), f["change"].clone(), f["recordingId"].clone()), (json!("recording_changed"), json!(want), json!("71")), "{f}");
+        assert!(!f.to_string().contains("never on the feed"), "{f}");
+    }
+    assert_eq!(hook::recording_feed_cursor(APP).unwrap().as_deref(), Some("2"), "the cursor is kept");
+    assert_eq!(reads::poll_once(APP, &tx, 0).await, Polled::Sent(0), "nothing new");
+    e.sew.push_recording_change(APP, "stopped", "71");
+    e.sew.prune_recording_feed(3);
+    assert_eq!(reads::poll_once(APP, &tx, 0).await, Polled::Refetch);
+    let f: Value = serde_json::from_str(&rx.recv().await.unwrap()).unwrap();
+    assert_eq!(f, json!({"kind": "recordings_refetch"}));
+    server_read(false);
+    assert!(matches!(reads::poll_once(APP, &tx, 0).await, Polled::Ended(_)), "server_read off ends the feed");
+    let feed_calls = e.sew.calls().into_iter().filter(|c| c.path.ends_with("/recordings/changes")).count();
+    assert_eq!(feed_calls, 3, "the last poll never reached Sew");
+}

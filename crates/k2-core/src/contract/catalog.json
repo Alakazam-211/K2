@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 53,
+  "catalogVersion": 54,
   "caps": [
     {
       "name": "agents:read",
@@ -290,6 +290,8 @@
     {"code": "chat_not_app_scoped", "doc": "Guest chat: this server's Sew doesn't keep an App's sessions to its own Spaces yet (app_scoped_sessions), so an App can't give chat; the owner can (k2 app user chat <user> member --app <app>)."},
     {"code": "no_chat_member", "doc": "Chat: this App user has no Sew member yet (give them chat with guests.setChat; it appears within seconds)."},
     {"code": "sew_feature_missing", "doc": "Chat: this server's Sew doesn't have the feature yet (making channels needs Sew 0.5.0+, flag app_channel_create); the owner upgrades Sew."},
+    {"code": "recording_server_read_off", "doc": "Recording: this App's server may not read recordings; the server's owner turns server_read on (the apps.recording card)."},
+    {"code": "app_not_governing", "doc": "Recording: this App doesn't govern that Space (it isn't bound to it), so it reads none of its recordings."},
     {"code": "chat_key_required", "doc": "Chat: this App holds no chat key, so it can't govern its Space's channels; the owner gives one with k2 app grant <app> --kind chat-key."},
     {"code": "sew_unreachable", "doc": "Chat: K2 couldn't reach this server's Sew; try again shortly (k2 hostchat status)."},
     {"code": "sew_refused", "doc": "Chat: Sew refused the change; the hint carries Sew's own reason."},
@@ -25779,6 +25781,551 @@
       ],
       "doc": "This App's own Sew Space id and its manifest channels with their Sew ids, read by the App's own pass (no cap). A stable shape: only additions under app-chat-space-v1.",
       "example": "const {spaceId, manifestChannels} = await k2.asApp().chat.space()"
+    },
+    {
+      "verb": "recordings.list",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-recordings-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/sew/app/recordings",
+          "door": "link",
+          "head": false
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "space": {
+              "type": "string",
+              "description": "One of this App's Spaces (chat.space)."
+            },
+            "after": {
+              "type": "string",
+              "description": "A page's next cursor.",
+              "default": ""
+            },
+            "limit": {
+              "type": "integer",
+              "description": "1 to 200 (default 50).",
+              "default": 50
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppRecordingsPage",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string"
+          },
+          "spaceId": {
+            "type": "string"
+          },
+          "recordings": {
+            "type": "array",
+            "items": {
+              "title": "AppRecording",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "spaceId": {
+                  "type": "string"
+                },
+                "channelId": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "description": "active | stopped (a newer state may appear)."
+                },
+                "trigger": {
+                  "type": "string",
+                  "description": "manual | auto | required."
+                },
+                "startedBy": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Who started it (an external id), when a person did."
+                },
+                "startedAt": {
+                  "type": "string"
+                },
+                "stoppedAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "stopReason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Sew's stop reason (a number or a name; never match it exhaustively)."
+                },
+                "transcriptReady": {
+                  "type": "boolean"
+                },
+                "consents": {
+                  "type": "array",
+                  "description": "Who consented to be recorded.",
+                  "items": {
+                    "title": "AppRecordingConsent",
+                    "type": "object",
+                    "properties": {
+                      "externalId": {
+                        "type": "string"
+                      },
+                      "consent": {
+                        "type": "string",
+                        "description": "granted | declined | withdrawn | pending."
+                      }
+                    },
+                    "required": [
+                      "externalId",
+                      "consent"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "spaceId",
+                "channelId",
+                "state",
+                "trigger",
+                "startedBy",
+                "startedAt",
+                "stoppedAt",
+                "stopReason",
+                "transcriptReady",
+                "consents"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The next page's cursor (pass it as after), or null at the end."
+          }
+        },
+        "required": [
+          "ok",
+          "app",
+          "spaceId",
+          "recordings",
+          "next"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "app_pass_required",
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "usage",
+        "not_found",
+        "sew_feature_missing",
+        "recording_server_read_off",
+        "app_not_governing",
+        "chat_unavailable",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "The recordings in one of the Spaces this App governs, newest first; only with the owner's server_read on (no audio, ever).",
+      "example": "const {recordings} = await k2.asApp().recordings.list({space: spaceId})"
+    },
+    {
+      "verb": "recordings.get",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-recordings-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/sew/app/recording",
+          "door": "link",
+          "head": false
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The recording's id."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppRecordingOne",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string"
+          },
+          "recording": {
+            "title": "AppRecording",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "spaceId": {
+                "type": "string"
+              },
+              "channelId": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "description": "active | stopped (a newer state may appear)."
+              },
+              "trigger": {
+                "type": "string",
+                "description": "manual | auto | required."
+              },
+              "startedBy": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Who started it (an external id), when a person did."
+              },
+              "startedAt": {
+                "type": "string"
+              },
+              "stoppedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "stopReason": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Sew's stop reason (a number or a name; never match it exhaustively)."
+              },
+              "transcriptReady": {
+                "type": "boolean"
+              },
+              "consents": {
+                "type": "array",
+                "description": "Who consented to be recorded.",
+                "items": {
+                  "title": "AppRecordingConsent",
+                  "type": "object",
+                  "properties": {
+                    "externalId": {
+                      "type": "string"
+                    },
+                    "consent": {
+                      "type": "string",
+                      "description": "granted | declined | withdrawn | pending."
+                    }
+                  },
+                  "required": [
+                    "externalId",
+                    "consent"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "id",
+              "spaceId",
+              "channelId",
+              "state",
+              "trigger",
+              "startedBy",
+              "startedAt",
+              "stoppedAt",
+              "stopReason",
+              "transcriptReady",
+              "consents"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "app",
+          "recording"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "app_pass_required",
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "usage",
+        "not_found",
+        "sew_feature_missing",
+        "recording_server_read_off",
+        "app_not_governing",
+        "chat_unavailable",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "One recording in a Space this App governs: who started it, the trigger, who consented; only with the owner's server_read on.",
+      "example": "const {recording} = await k2.asApp().recordings.get({id})"
+    },
+    {
+      "verb": "recordings.transcript",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-recordings-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/sew/app/recording/transcript",
+          "door": "link",
+          "head": false
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The recording's id."
+            },
+            "after": {
+              "type": "string",
+              "description": "A page's next cursor.",
+              "default": ""
+            },
+            "limit": {
+              "type": "integer",
+              "description": "1 to 200 (default 50).",
+              "default": 50
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppTranscriptPage",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string"
+          },
+          "recordingId": {
+            "type": "string"
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "title": "AppTranscriptTurn",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "speakerExternalId": {
+                  "type": "string"
+                },
+                "startMs": {
+                  "type": "integer",
+                  "description": "Milliseconds from the start of the recording (a duration)."
+                },
+                "endMs": {
+                  "type": "integer",
+                  "description": "Milliseconds from the start of the recording (a duration)."
+                },
+                "text": {
+                  "type": "string",
+                  "description": "Markdown-escaped."
+                }
+              },
+              "required": [
+                "id",
+                "speakerExternalId",
+                "startMs",
+                "endMs",
+                "text"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The next page's cursor (pass it as after), or null at the end."
+          }
+        },
+        "required": [
+          "ok",
+          "app",
+          "recordingId",
+          "turns",
+          "next"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "app_pass_required",
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "usage",
+        "not_found",
+        "sew_feature_missing",
+        "recording_server_read_off",
+        "app_not_governing",
+        "chat_unavailable",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "A recording's transcript, a page of turns; only with the owner's server_read on, named in each consent notice, every read logged.",
+      "example": "const {turns, next} = await k2.asApp().recordings.transcript({id})"
+    },
+    {
+      "verb": "recordings.events",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "app-recordings-v1",
+      "bindings": {
+        "socket": {
+          "path": "/cli/sew/app/recordings/events",
+          "frame": "recording_changed",
+          "param": "app",
+          "refetch": "recordings.list"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string",
+              "description": "This App's own service id (app.self)."
+            }
+          },
+          "required": [
+            "app"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppRecordingFrame",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "recording_changed",
+              "recordings_refetch"
+            ]
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "change": {
+            "type": "string",
+            "description": "started | stopped | transcript_ready | audio_expired | deleted (a newer one may appear)."
+          },
+          "recordingId": {
+            "type": "string"
+          },
+          "spaceId": {
+            "type": "string"
+          },
+          "channelId": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "app_pass_required",
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "usage",
+        "not_found",
+        "sew_feature_missing",
+        "recording_server_read_off",
+        "app_not_governing",
+        "chat_unavailable",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "A recording in this App's Spaces started, stopped, got its transcript or lost its audio: ids only, never content; recordings_refetch means read recordings.list again.",
+      "example": "const off = k2.asApp().recordings.onChanged({app: me.serviceId}, (f) => f.kind === 'recordings_refetch' ? reload() : fetchOne(f.recordingId))"
     },
     {
       "verb": "project.list",

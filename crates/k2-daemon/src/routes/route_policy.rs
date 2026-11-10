@@ -1796,6 +1796,13 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/app/channels/bulk", NoLogin),
     get("/cli/sew/app/member", NoLogin),
     post("/cli/sew/app/member-channels", NoLogin),
+    // Sew 0.9.0: recordings.get / transcript / list / events, an App's own
+    // pass with server_read, in the Spaces it governs (the handler refuses
+    // the rest).
+    get("/cli/sew/app/recording", NoLogin),
+    get("/cli/sew/app/recording/transcript", NoLogin),
+    get("/cli/sew/app/recordings", NoLogin),
+    get("/cli/sew/app/recordings/events", NoLogin),
     get("/cli/sew/app/space", NoLogin),
     post("/cli/sew/app/whois", NoLogin),
     get("/cli/sew/approvals", Admin),

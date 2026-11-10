@@ -49,6 +49,7 @@
 //! - [`pro_gate`]: voice rooms S7: the host's Pro gate (cached tier), the
 //!   direct-mode exposure note and the ports file.
 
+pub mod app_recordings;
 pub mod autosetup;
 pub mod box_backup;
 pub mod fetch;

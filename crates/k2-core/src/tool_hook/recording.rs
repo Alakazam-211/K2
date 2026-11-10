@@ -73,6 +73,11 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             locked_by TEXT NOT NULL,
             locked_at INTEGER NOT NULL
          );
+         CREATE TABLE IF NOT EXISTS tool_recording_feed (
+            app_id  TEXT PRIMARY KEY NOT NULL,
+            cursor  TEXT,
+            seen_at INTEGER NOT NULL
+         );
          CREATE TABLE IF NOT EXISTS tool_recording_policy (
             key     TEXT PRIMARY KEY NOT NULL,
             want    TEXT,
@@ -476,11 +481,66 @@ pub fn set_cap_required(conn: &Connection, app_id: &str, now: i64) -> Result<boo
     Ok(changed)
 }
 
-/// An App was removed: forget its rollout row.
+/// An App was removed: forget its rollout row and its feed cursor (B11).
 pub fn forget_app(conn: &Connection, app_id: &str) -> Result<(), String> {
     conn.execute("DELETE FROM tool_recording_rollout WHERE app_id = ?1", params![app_id])
+        .map_err(|e| format!("recording rollout forget: {e}"))?;
+    conn.execute("DELETE FROM tool_recording_feed WHERE app_id = ?1", params![app_id])
         .map(|_| ())
-        .map_err(|e| format!("recording rollout forget: {e}"))
+        .map_err(|e| format!("recording feed forget: {e}"))
+}
+
+// ── the App feed (K-d) ───────────────────────────────────────────────
+
+/// The App's feed cursor (`None` = never read, or Sew dropped it).
+pub fn feed_cursor(conn: &Connection, app_id: &str) -> Result<Option<String>, String> {
+    conn.query_row("SELECT cursor FROM tool_recording_feed WHERE app_id = ?1", params![app_id], |r| r.get::<_, Option<String>>(0))
+        .optional()
+        .map(Option::flatten)
+        .map_err(|e| format!("recording feed read: {e}"))
+}
+
+/// Keep the App's feed cursor (`None` clears it: start again).
+pub fn set_feed_cursor(conn: &Connection, app_id: &str, cursor: Option<&str>, now: i64) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO tool_recording_feed (app_id, cursor, seen_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(app_id) DO UPDATE SET cursor = excluded.cursor, seen_at = excluded.seen_at",
+        params![app_id, cursor, now],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("recording feed write: {e}"))
+}
+
+/// Why K2 refuses an App server's read before asking Sew.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadRefusal {
+    /// Sew doesn't report `mgmt_recording_reads`.
+    FeatureMissing,
+    /// The App's `server_read` is off (the owner turns it on, on a card).
+    ServerReadOff,
+    /// The App governs no Space (or not this one): a participant App.
+    NotGoverning,
+}
+
+/// K2's own checks of an App server's recording read (PRD K-d): Sew's
+/// flag, the App's `server_read` (as K2 wants it: on only through the
+/// owner's card), and, for one Space, that the App governs it (it is
+/// bound to it); with no Space, that it governs at least one.
+pub fn read_gate(conn: &Connection, app_id: &str, space: Option<&str>) -> Result<Result<(), ReadRefusal>, String> {
+    if !features::has(conn, CHAT_KIND, features::MGMT_RECORDING_READS)? {
+        return Ok(Err(ReadRefusal::FeatureMissing));
+    }
+    if app_recording(conn, app_id)?.get("server_read") != Some(&Value::Bool(true)) || home::is_home_client(conn, app_id)? {
+        return Ok(Err(ReadRefusal::ServerReadOff));
+    }
+    let governs = match space {
+        Some(s) => super::app_space::bound_app(conn, s)?.as_deref() == Some(app_id),
+        None => super::app_space::bindings(conn)?.iter().any(|b| b.app_id == app_id),
+    };
+    if !governs {
+        return Ok(Err(ReadRefusal::NotGoverning));
+    }
+    Ok(Ok(()))
 }
 
 #[cfg(test)]

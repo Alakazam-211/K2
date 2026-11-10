@@ -24,6 +24,12 @@ const MEMBER: &str = "/cli/sew/app/member";
 const WHOIS: &str = "/cli/sew/app/whois";
 const CHANNELS: &str = "/cli/sew/app/channels";
 const SPACE: &str = "/cli/sew/app/space";
+// Sew 0.9.0 (recording in Apps, B9): recordings.list / get / transcript /
+// events.
+const RECORDINGS: &str = "/cli/sew/app/recordings";
+const RECORDING: &str = "/cli/sew/app/recording";
+const TRANSCRIPT: &str = "/cli/sew/app/recording/transcript";
+const EVENTS: &str = "/cli/sew/app/recordings/events";
 
 /// One request with `Authorization: Bearer` (how an App calls its link).
 fn bearer_req(port: u16, method: &str, path: &str, pass: &str, body: Option<&str>) -> Resp {
@@ -89,6 +95,19 @@ async fn an_apps_chat_map_and_channel_routes_reach_their_handlers() {
     let r = post(port, SPACE, &remote, json!({})).await;
     assert_eq!(r.status, 405, "space is a GET: {}", r.body);
 
+    // Sew 0.9.0: the recording reads reach their handler: this box's Sew
+    // (none) doesn't report mgmt_recording_reads, the handler's own answer.
+    for (path, query) in [(RECORDINGS, "space=5101"), (RECORDING, "id=71"), (TRANSCRIPT, "id=71"), (EVENTS, "")] {
+        let r = get(port, path, &remote, query).await;
+        assert_eq!((r.status, r.code()), (409, "sew_feature_missing".to_string()), "{path}: {}", r.body);
+        let r = get(port, path, OWNER, query).await;
+        assert_eq!((r.status, r.code()), (403, "app_pass_required".to_string()), "{path} with the owner token: {}", r.body);
+    }
+    for path in [RECORDINGS, RECORDING, TRANSCRIPT] {
+        let r = post(port, path, &remote, json!({})).await;
+        assert_eq!(r.status, 405, "{path} is a GET: {}", r.body);
+    }
+
     // The owner token is never these routes' credential: the routes' own
     // answer, not the catch-all's.
     for (path, is_post) in [(MEMBER, false), (WHOIS, true), (CHANNELS, true), (SPACE, false)] {
@@ -115,6 +134,10 @@ async fn an_apps_chat_map_and_channel_routes_reach_their_handlers() {
     assert_eq!((r.status, r.code()), (403, "cap_not_granted".to_string()), "channels on the link: {}", r.body);
     let r = bearer(lport, "GET", SPACE.into(), pass.clone(), None).await;
     assert_eq!((r.status, r.json()["app"].clone()), (200, json!(svc)), "space on the link: {}", r.body);
+    for (path, query) in [(RECORDINGS, "space=5101"), (RECORDING, "id=71"), (TRANSCRIPT, "id=71")] {
+        let r = bearer(lport, "GET", format!("{path}?{query}"), pass.clone(), None).await;
+        assert_eq!((r.status, r.code()), (409, "sew_feature_missing".to_string()), "{path} on the link: {}", r.body);
+    }
     gateway::close(&format!("chatapp{tag}"), None, true);
     drop(env);
 }

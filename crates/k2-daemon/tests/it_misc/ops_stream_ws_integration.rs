@@ -24,8 +24,8 @@ use k2_daemon::session_events::{self, SessionEvent};
 /// Serialize.
 static OPS_TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    OPS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+fn lock() -> k2_core::test_env::SerialGuard {
+    k2_core::test_env::serial(&OPS_TEST_LOCK)
 }
 
 /// One-shot listener: hand the accepted connection to

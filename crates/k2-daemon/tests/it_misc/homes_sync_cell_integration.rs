@@ -4,7 +4,6 @@
 //! 403 before any handler runs, and nothing is written.
 // The per-cell socket is a Unix socket; on Windows cells reach the daemon
 // over its TCP arm (cell_uds is a stub there), so this suite is Unix-only.
-#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -52,7 +51,7 @@ async fn uds(sock: &std::path::Path, raw: &str) -> (u16, String) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_agent_cell_socket_refuses_every_homes_route() {
-    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&ENV_LOCK);
     k2_core::test_isolation::assert_no_prod_env();
     let home = set_short_home();
     let sid = SessionId::new();

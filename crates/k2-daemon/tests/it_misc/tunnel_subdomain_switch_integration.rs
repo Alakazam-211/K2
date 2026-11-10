@@ -239,7 +239,7 @@ fn identity_events(rx: &mut tokio::sync::broadcast::Receiver<k2_daemon::session_
 
 #[test]
 fn switching_subdomains_moves_the_e2e_listener_and_cert_without_a_restart() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let _home = k2_core::test_env::TempHome::new();
     let _e2e = k2_core::test_env::EnvVar::remove("K2_E2E"); // E2E on (default)
@@ -432,7 +432,7 @@ fn switching_subdomains_moves_the_e2e_listener_and_cert_without_a_restart() {
 
 #[test]
 fn switch_input_errors_change_nothing() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     let _home = k2_core::test_env::TempHome::new();
     let cp = k2_core::test_env::ErrorHttpServer::start(503);
     let _cp = k2_core::test_env::EnvVar::set(

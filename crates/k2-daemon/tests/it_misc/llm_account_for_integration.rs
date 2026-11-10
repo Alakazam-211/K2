@@ -51,7 +51,7 @@ const VARS: &[&str] = &[
 struct TestEnv {
     home: PathBuf,
     prev: Vec<(&'static str, Option<std::ffi::OsString>)>,
-    _guard: std::sync::MutexGuard<'static, ()>,
+    _guard: k2_core::test_env::SerialGuard,
 }
 
 impl Drop for TestEnv {
@@ -67,7 +67,7 @@ impl Drop for TestEnv {
 }
 
 fn setup() -> TestEnv {
-    let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = k2_core::test_env::serial(&TEST_LOCK);
     k2_core::test_isolation::assert_no_prod_env();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

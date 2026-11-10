@@ -416,6 +416,14 @@ export interface PairCodeChangedEvent {
   sessionId: string | null
 }
 
+/** APP-LEVEL, PERSON-SCOPED (setup checklist) — this person's setup
+ *  checklist changed: hidden, shown, a row skipped, finished, or the owner
+ *  account was created, linked or its prompt dismissed. A refetch signal:
+ *  re-read `GET /cli/first-run/status`. */
+export interface FirstRunChangedEvent {
+  kind: 'first_run_changed'
+}
+
 /** APP-LEVEL — a remote drive attempt was refused (owner audit). Ignored:
  *  no client surface shows it yet. Fields are snake_case on the wire. */
 export interface RemoteSessionAccessDeniedEvent {
@@ -1550,6 +1558,8 @@ type HomesDeviceRemovedHandler = (deviceId: string) => void
 type StashChangedHandler = (cursor: number) => void
 // 0.46.6 pair success — Pair a phone's success / expiry and the phones list.
 type PairCodeChangedHandler = (e: PairCodeChangedEvent) => void
+// Setup checklist — `first_run_changed` (a refetch signal).
+type FirstRunChangedHandler = () => void
 
 type SessionActivityHandler = (e: SessionActivityChangedEvent) => void
 
@@ -1611,6 +1621,7 @@ interface AppBusHandlers {
   homesDeviceRemoved: Set<HomesDeviceRemovedHandler>
   stashChanged: Set<StashChangedHandler>
   pairCodeChanged: Set<PairCodeChangedHandler>
+  firstRunChanged: Set<FirstRunChangedHandler>
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
   zenAgentsOrderChanged: Set<ZenAgentsOrderChangedHandler>
@@ -1678,6 +1689,7 @@ function createBusState(scopeId: string): BusState {
       homesDeviceRemoved: new Set(),
       stashChanged: new Set(),
       pairCodeChanged: new Set(),
+      firstRunChanged: new Set(),
       activeChanged: new Set(),
       zenChanged: new Set(),
       zenAgentsOrderChanged: new Set(),
@@ -2112,6 +2124,12 @@ export function onPairCodeChanged(scope: ServerScope, fn: PairCodeChangedHandler
   return addHandler(busFor(scope).handlers.pairCodeChanged, fn)
 }
 
+/** Setup checklist — subscribe to `first_run_changed` on `scope`'s server
+ *  (only this person's sockets get it). Re-read `first-run/status`. */
+export function onFirstRunChanged(scope: ServerScope, fn: FirstRunChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.firstRunChanged, fn)
+}
+
 /** Home M4: the server's whole Active set changed (`active_changed`).
  *  Fed by a pinned room's carrier socket; the window's own Active set
  *  stays on `subscribeToActiveState` → `useActiveStore`. */
@@ -2328,6 +2346,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   pair_code_changed: (h, m) => {
     for (const fn of h.pairCodeChanged) fn(m)
+  },
+  first_run_changed: (h) => {
+    for (const fn of h.firstRunChanged) fn()
   },
   zen_changed: (h) => {
     for (const fn of h.zenChanged) fn()

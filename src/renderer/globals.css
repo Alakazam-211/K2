@@ -1313,6 +1313,18 @@ html[data-style="terminal"] :is([data-agent-row][aria-current="true"], [data-age
   content: none;
 }
 
+/* Agent rows in a light scheme, every Style: the row lights its selection
+   with 6% white and its hover with 4%, which vanish on a light list. Here
+   the selected row takes the strongest wash (about 1.35:1 on Paper's and
+   Veil's lists) and hover the lightest, as Terminal's tabs do. The accent
+   bar stays; dark schemes keep their white. */
+html[data-scheme="light"] [data-agent-row][aria-current="true"]:not([data-zen-root] *) {
+  background: var(--color-wash-3);
+}
+html[data-scheme="light"] [data-agent-row]:not([aria-current="true"]):hover:not([data-zen-root] *) {
+  background: var(--color-wash-1);
+}
+
 /* Design note tiles (NoteTray, Rosson 2026-10-16) in K2's square Style:
    chamfered like the Thread's surfaces (CHAMFER_CUT.surface = 7px), the
    1px edge drawn by `::before` as an even-odd ring (inner cut 7 − 0.414).

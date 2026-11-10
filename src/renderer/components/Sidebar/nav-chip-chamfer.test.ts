@@ -78,3 +78,10 @@ describe('line-2 chips on the selected or hovered row (every Style)', () => {
     expect(tags).not.toMatch(/hover:bg-\[var\(--color-accent\)\]/)
   })
 })
+
+describe('agent rows in a light scheme (every Style)', () => {
+  it('light the selected row with the strongest wash and hover with the lightest', () => {
+    expect(rule('html[data-scheme="light"] [data-agent-row][aria-current="true"]:not([data-zen-root] *)')).toContain('background: var(--color-wash-3)')
+    expect(rule('html[data-scheme="light"] [data-agent-row]:not([aria-current="true"]):hover:not([data-zen-root] *)')).toContain('background: var(--color-wash-1)')
+  })
+})

@@ -2,7 +2,7 @@
 // (prd-workspace-kb-brain-map-and-publish §7.2).
 //
 // Pattern mirrors FeedbackPage / ProjectsPage: fixed-inset overlay with
-// its own top bar (ServerSwitcher + PageTabs). Opened from the top bar's
+// its own top bar (PageTabs + ServerSwitcher). Opened from the top bar's
 // Wiki tab (the wiki of the workspace on screen, `lib/wiki-open.ts`), the
 // drawer's View Wiki, or the nav menus. The header's workspace picker
 // switches the wiki shown; its first row, "All of K2", is the server-wide
@@ -69,6 +69,7 @@ import {
   type WikiNote,
   type WikiServeStatus,
 } from './wiki-api'
+import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 
 /** The 3D chunk failed to load (F5), as opposed to the 3D view crashing (F6). */
 class Wiki3dLoadError extends Error {}
@@ -108,7 +109,7 @@ class Wiki3DErrorBoundary extends React.Component<
   }
 }
 
-const TOPBAR_HEIGHT = 38
+const TOPBAR_HEIGHT = TOPBAR_HEIGHT_CSS
 /** Quiet poll for new notes — only applies state when structure changes. */
 const POLL_MS = 3_000
 
@@ -626,8 +627,8 @@ export default function WikiPage(): React.JSX.Element | null {
         >
           <DesktopChromeLeft />
           <K2MarkButton />
-          <ServerSwitcher />
           <PageTabs />
+          <ServerSwitcher />
           <WikiWorkspacePicker
             workspaces={pickerWorkspaces}
             value={allWorkspaces ? WIKI_ALL_WORKSPACES : projectPath}

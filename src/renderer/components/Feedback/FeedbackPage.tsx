@@ -36,11 +36,12 @@ import { fetchProjectGroupShow } from '@/components/Projects/projects-api'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { primaryScope } from '@/kessel/server-scope'
 import { TicketBoard } from './TicketBoard'
+import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 
 // The card + its pieces moved to TicketCard.tsx; re-exported for callers.
 export { FeedbackCard, SectionHeader, cardAssigneeNames } from './TicketCard'
 
-const TOPBAR_HEIGHT = 38
+const TOPBAR_HEIGHT = TOPBAR_HEIGHT_CSS
 
 /** The Tickets page's board data: the list (live on the store's
  *  `revision`) and the workspace/project filter. Reads while `active`;
@@ -193,8 +194,8 @@ export default function FeedbackPage(): React.JSX.Element | null {
         >
           <DesktopChromeLeft />
           <K2MarkButton />
-          <ServerSwitcher />
           <PageTabs />
+          <ServerSwitcher />
         </div>
 
         <DesktopChromeRight>

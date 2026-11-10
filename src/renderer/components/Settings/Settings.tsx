@@ -82,7 +82,7 @@ import { PermissionsSection, PERMISSIONS_MANIFEST } from './sections/Permissions
 import { DictationLabSection, DICTATION_LAB_MANIFEST } from './sections/DictationLabSection'
 import ServerSwitcher from '../TopBar/ServerSwitcher'
 import PageTabs from '../TopBar/PageTabs'
-import { TOPBAR_HEIGHT } from '../../../shared/constants'
+import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 import { webFeatures } from '@/web/features'
 import { isAirgap } from '@/lib/airgap'
 import { escOwnedByDialog } from './settings-esc'
@@ -497,7 +497,7 @@ export default function Settings(): React.JSX.Element {
         onMouseDown={titleBarDragOnMouseDown}
         onDoubleClick={titleBarOnDoubleClick}
         onContextMenu={titleBarOnContextMenu}
-        style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
+        style={{ height: TOPBAR_HEIGHT_CSS, minHeight: TOPBAR_HEIGHT_CSS }}
       >
         <div
           className="flex items-center [&>*]:shrink-0"
@@ -505,9 +505,9 @@ export default function Settings(): React.JSX.Element {
         >
           <DesktopChromeLeft />
           <K2MarkButton />
+          <PageTabs />
           {/* K2 server switcher (Local / saved servers / add) */}
           <ServerSwitcher />
-          <PageTabs />
         </div>
         <DesktopChromeRight>
           <TopBarUtilities />

@@ -13,7 +13,7 @@
 // Size: a fixed `min(60vh, 560px)` box with its own scrollbar and a drag
 // handle; no auto-size (the parent can't read an inert frame's height).
 // Expand shows the same document as a full-page overlay. Its header is a
-// title bar like every page's top bar: the window inset, 38px tall, px-3,
+// title bar like every page's top bar: the window inset, the bar height, px-3,
 // draggable, and on macOS it reserves the stoplight cluster before the
 // title (the same spacer DesktopChromeLeft uses), so the lights never
 // cover it. Linux and Windows keep the title at the left edge.
@@ -35,6 +35,7 @@ import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick }
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
 import type { FeedbackBrief } from './feedback-api'
 import { buildBriefSrcDoc, readBriefTokens, type BriefLink } from './brief-srcdoc'
+import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 
 const THEME_ATTRS = ['data-scheme', 'data-palette', 'data-style']
 
@@ -233,7 +234,7 @@ export function BriefFrame({
 }
 
 /** Top bar height shared with the Feedback, Wiki, and Projects pages. */
-const OVERLAY_TOPBAR_HEIGHT = 38
+const OVERLAY_TOPBAR_HEIGHT = TOPBAR_HEIGHT_CSS
 
 /**
  * Width reserved before the overlay title for the macOS stoplights: the

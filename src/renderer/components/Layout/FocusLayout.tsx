@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react'
-import { TOPBAR_HEIGHT } from '../../../shared/constants'
+import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 import { usePanelsStore } from '../../stores/panels'
 import AnimatedDrawer from './AnimatedDrawer'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
@@ -41,8 +41,8 @@ export default function FocusLayout({
         onDoubleClick={titleBarOnDoubleClick}
         onContextMenu={titleBarOnContextMenu}
         style={{
-          height: TOPBAR_HEIGHT,
-          minHeight: TOPBAR_HEIGHT
+          height: TOPBAR_HEIGHT_CSS,
+          minHeight: TOPBAR_HEIGHT_CSS
         }}
       >
         <div className="flex items-center" style={{ gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}>

@@ -105,7 +105,7 @@ export default function TopBarTitle({
   remoteServer?: TopBarRemoteServer
 }): React.JSX.Element {
   return (
-    <div className="flex min-w-0 items-center gap-1.5 text-xs" data-testid="top-bar-title">
+    <div className="flex min-w-0 items-center gap-1.5 px-2 text-xs" data-testid="top-bar-title">
       {agent ? (
         <>
           {remoteServer && (
@@ -130,7 +130,7 @@ export default function TopBarTitle({
           )}
         </>
       ) : (
-        <span className="text-[var(--color-text-muted)]">No workspace selected</span>
+        <span className="truncate text-[var(--color-text-muted)]">No workspace selected</span>
       )}
     </div>
   )

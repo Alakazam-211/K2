@@ -19,7 +19,6 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 import type { ConnectionStatus } from '@/stores/connect-host'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 import ServerSwitcher, {
-  SERVER_CHIP_MARGIN_RIGHT_PX,
   SERVER_ICON_PX,
   SERVER_SWITCHER_WIDTH_CLASS,
   serverChipClass,
@@ -59,6 +58,7 @@ function renderOn(active: 'local' | ConnectHost, hosts: ConnectHost[] = []): HTM
 describe('server switcher trigger: fixed width, ellipsis', () => {
   beforeEach(() => {
     Element.prototype.scrollIntoView = () => {}
+    pickHost.mockClear()
     act(() => useServerSwitcherStore.setState({ open: false }))
   })
 
@@ -98,9 +98,12 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
     expect(t.getAttribute('aria-expanded')).toBe('false')
     // Tokens only: no hard-coded colour in the chip's classes.
     expect(t.className).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(/i)
-    // Air before the first page tab: -8 against the cluster's 14px gap.
-    expect(SERVER_CHIP_MARGIN_RIGHT_PX).toBe(-8)
-    expect(t.parentElement?.style.marginRight).toBe('-8px')
+    // The gaps either side are the bar's own: no pull-in margins.
+    expect(t.parentElement?.style.marginLeft).toBe('')
+    expect(t.parentElement?.style.marginRight).toBe('')
+    // Glass draws it as the frost pill.
+    expect(t.getAttribute('data-material')).toBe('frost')
+    expect(t.getAttribute('data-frost-shape')).toBe('pill')
   })
 
   it('open lifts the chip a step (stronger fill + border) and drops the rest wash', () => {
@@ -223,6 +226,22 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
     expect(spans.map((s) => s.getAttribute('data-testid'))).toEqual(['server-switcher-label'])
     expect(t.querySelectorAll('[style*="background"]')).toHaveLength(0)
     expect(t.querySelectorAll('[aria-label^="Connection"]')).toHaveLength(0)
+  })
+
+  it('triggerHidden: no trigger and no room taken, and the menu still opens from the store (⌘L)', () => {
+    act(() => useConnectHostStore.setState({ activeHost: 'local', hosts: [host('z3thon', 'z3thon.k2.dev')], pickHost }))
+    const { container } = render(<ServerSwitcher triggerHidden />)
+    expect(screen.queryByTestId('server-switcher-trigger')).toBe(null)
+    const root = container.querySelector('[data-server-switcher]')
+    if (!(root instanceof HTMLElement)) throw new Error('root is gone')
+    expect(root.style.width).toBe('0px')
+    expect(root.style.marginRight).toBe('-14px')
+    act(() => useServerSwitcherStore.getState().setOpen(true))
+    expect(screen.getByRole('listbox', { name: 'Servers' })).toBeTruthy()
+    expect(screen.getAllByRole('option').some((o) => o.textContent?.includes('z3thon.k2.dev'))).toBe(true)
+    fireEvent.click(screen.getAllByRole('option').find((o) => o.textContent?.includes('z3thon.k2.dev'))!)
+    expect(pickHost).toHaveBeenCalledTimes(1)
+    expect(useServerSwitcherStore.getState().open).toBe(false)
   })
 
   it('the dropdown still opens below the trigger at its own 260px width, not the trigger width', () => {

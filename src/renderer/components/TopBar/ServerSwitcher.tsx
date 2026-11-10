@@ -1,4 +1,4 @@
-// ServerSwitcher — the always-visible top-bar control that picks which
+// ServerSwitcher — the top-bar control that picks which
 // K2 daemon the app talks to (K2 Connect client UX, build order step #2).
 //
 // Dropdown contents (PRD §1):
@@ -17,7 +17,7 @@
 // the full-screen sign-in (mounted by ConnectionGate).
 //
 // The active host's label + a status dot (connected / connecting /
-// offline) sit in the always-visible trigger. The color-coded latency
+// offline) sit in the trigger. The color-coded latency
 // readout is step #5 — a clean seam is left (the dot reads the gate's
 // connectionStatus today).
 //
@@ -43,6 +43,7 @@ import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { K2_ICON_PX, ServerIcon } from '@/components/icons/K2Icons'
 import { statusColor } from './server-status'
 import { openableHosts } from '@/lib/voice-chat-only'
+import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 
 /** Address shown under a saved host in the dropdown. Omit default
  *  https port 443 (`rosson.k2.dev`, not `rosson.k2.dev:443`). LAN /
@@ -207,11 +208,6 @@ export const SERVER_CHIP_LIFT_CLASS =
 export const SERVER_CHIP_HOVER_CLASS =
   'hover:bg-[var(--color-bg-elevated)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]'
 
-/** Right margin against the cluster's 14px gap. It was -14 (flush) while
- *  the trigger had no visible edge; a chip needs air before the first page tab,
- *  so -8 leaves 6px. */
-export const SERVER_CHIP_MARGIN_RIGHT_PX = -8
-
 export function serverChipClass({ open }: { open: boolean }): string {
   return `${SERVER_CHIP_BASE_CLASS} ${open ? SERVER_CHIP_LIFT_CLASS : `${SERVER_CHIP_REST_CLASS} ${SERVER_CHIP_HOVER_CLASS}`}`
 }
@@ -223,8 +219,18 @@ export function serverChipClass({ open }: { open: boolean }): string {
  * `data-follows-room`. The dropdown checks the window's own server and
  * starts with "Looking at {server} (Home room)". Picking a server still
  * switches the window; picking the room's own server promotes the room (Z7).
+ *
+ * `triggerHidden` (Home): no trigger and no room taken in the bar. The menu
+ * still opens from ⌘L and Switch Server, under the spot the trigger has on
+ * every other page; the negative margin cancels the bar's gap.
  */
-export default function ServerSwitcher({ followRoom = false }: { followRoom?: boolean } = {}): React.JSX.Element {
+export default function ServerSwitcher({
+  followRoom = false,
+  triggerHidden = false,
+}: {
+  followRoom?: boolean
+  triggerHidden?: boolean
+} = {}): React.JSX.Element | null {
   const followed = useTopBarScope(followRoom)
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const hosts = useConnectHostStore((s) => s.hosts)
@@ -411,11 +417,12 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
   // Hosted web: lock to the single same-origin host — no multi-host
   // switcher, no "Local", no "Add a server…". (After all hooks.)
   if (!webFeatures.multiHost) {
+    if (triggerHidden) return null
     const ind = hostIndicator(connectionStatus, recovery, activeHost !== 'local')
     return (
       <div
         className="relative no-drag"
-        style={{ marginLeft: -6, marginRight: SERVER_CHIP_MARGIN_RIGHT_PX, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <div
           className={`${SERVER_SWITCHER_WIDTH_CLASS} ${SERVER_CHIP_BASE_CLASS} ${SERVER_CHIP_REST_CLASS} flex items-center gap-1.5 h-6 px-1.5 text-[11px]`}
@@ -442,27 +449,36 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
     <div
       data-server-switcher=""
       className="relative no-drag"
-      style={{ marginLeft: -6, marginRight: SERVER_CHIP_MARGIN_RIGHT_PX, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      style={
+        {
+          WebkitAppRegion: 'no-drag',
+          ...(triggerHidden ? { width: 0, height: 24, marginRight: -TRAFFIC_LIGHT_CLUSTER_GAP_PX } : null),
+        } as React.CSSProperties
+      }
     >
-      <button
-        onClick={() => toggle()}
-        data-testid="server-switcher-trigger"
-        data-nav-picker=""
-        data-follows-room={roomServer !== null ? 'true' : undefined}
-        aria-expanded={open}
-        className={`${SERVER_SWITCHER_WIDTH_CLASS} ${serverChipClass({ open })} flex items-center justify-start gap-1.5 h-6 px-1.5 text-[11px] no-drag`}
-        title={`${activeLabel} — ${ind.title} (⌘L)`}
-        aria-label={`${shownServer} — ${ind.title}`}
-        aria-keyshortcuts="Meta+L"
-      >
-        <ServerIcon ledColor={ind.color} size={SERVER_ICON_PX} />
-        <span className="min-w-0 flex-1 truncate text-left" data-testid="server-switcher-label">
-          {shownServer}
-        </span>
-        <svg className="shrink-0" width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="2 4 5 7 8 4" />
-        </svg>
-      </button>
+      {!triggerHidden && (
+        <button
+          onClick={() => toggle()}
+          data-testid="server-switcher-trigger"
+          data-material="frost"
+          data-frost-shape="pill"
+          data-nav-picker=""
+          data-follows-room={roomServer !== null ? 'true' : undefined}
+          aria-expanded={open}
+          className={`${SERVER_SWITCHER_WIDTH_CLASS} ${serverChipClass({ open })} flex items-center justify-start gap-1.5 h-6 px-1.5 text-[11px] no-drag`}
+          title={`${activeLabel} — ${ind.title} (⌘L)`}
+          aria-label={`${shownServer} — ${ind.title}`}
+          aria-keyshortcuts="Meta+L"
+        >
+          <ServerIcon ledColor={ind.color} size={SERVER_ICON_PX} />
+          <span className="min-w-0 flex-1 truncate text-left" data-testid="server-switcher-label">
+            {shownServer}
+          </span>
+          <svg className="shrink-0" width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="2 4 5 7 8 4" />
+          </svg>
+        </button>
+      )}
 
       {open && (
         <div

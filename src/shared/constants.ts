@@ -1,5 +1,8 @@
 // ── Layout constants ──────────────────────────────────────────────────
 export const TOPBAR_HEIGHT = 38
+/** The top bar's height as CSS: a Style may set `--k2-topbar-height` (Glass
+ *  makes the bar its capsules' height); everywhere else it is 38px. */
+export const TOPBAR_HEIGHT_CSS = `var(--k2-topbar-height, ${TOPBAR_HEIGHT}px)`
 export const SIDEBAR_MIN_WIDTH = 180
 export const SIDEBAR_MAX_WIDTH = 400
 export const SIDEBAR_DEFAULT_WIDTH = 240

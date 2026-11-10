@@ -4,6 +4,7 @@
 // do not turn that off. The y nudge is the title-bar grow the native
 // command already applies; it is not added to the button origin again.
 
+import { TOPBAR_HEIGHT } from '../../shared/constants'
 import { TOP_BAR_PAD_X_PX, TRAFFIC_LIGHT_CLUSTER_RIGHT_PX } from './desktop-chrome'
 
 export const TRAFFIC_LIGHT_Y_NUDGE_PX = 3
@@ -68,9 +69,14 @@ export function trafficLightShape(styleId: string | null | undefined): TrafficLi
   return styleId === 'terminal' ? 'square' : 'round'
 }
 
-/** x is the window inset. y is inset + the 3px title-bar nudge. */
-export function trafficLightOffsets(inset: number): { x: number; y: number } {
-  return { x: inset, y: inset + TRAFFIC_LIGHT_Y_NUDGE_PX }
+/** x is the window inset. y is inset + the 3px title-bar nudge, which
+ *  centres the lights on a 38px bar; a Style with another bar height moves
+ *  them by half the difference. */
+export function trafficLightOffsets(
+  inset: number,
+  barHeight: number = TOPBAR_HEIGHT,
+): { x: number; y: number } {
+  return { x: inset, y: inset + TRAFFIC_LIGHT_Y_NUDGE_PX + (barHeight - TOPBAR_HEIGHT) / 2 }
 }
 
 /**
@@ -90,6 +96,8 @@ export type ZenTrafficLights = { square: boolean; x: number; y: number; hidden?:
 export function trafficLightCommand(input: {
   styleId: string | null | undefined
   inset: number
+  /** The Style's top-bar height when it isn't the default 38px. */
+  barHeight?: number
   scheme?: string | null
   palette?: string | null
   density?: string | null
@@ -107,7 +115,7 @@ export function trafficLightCommand(input: {
       hidden: input.zen.hidden === true,
     }
   }
-  const { x, y } = trafficLightOffsets(input.inset)
+  const { x, y } = trafficLightOffsets(input.inset, input.barHeight)
   return {
     x,
     y,
@@ -141,6 +149,7 @@ export function createTrafficLightController(opts: {
   read: () => {
     styleId: string | null | undefined
     inset: number
+    barHeight?: number
     zoom?: number | null
     /** Set while the window shows Zen: Zen's lights win (Z49). */
     zen?: ZenTrafficLights | null

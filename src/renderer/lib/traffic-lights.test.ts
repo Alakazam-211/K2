@@ -9,6 +9,7 @@ import {
   createTrafficLightController,
   stoplightSpacerPx,
   trafficLightCommand,
+  trafficLightOffsets,
   trafficLightShape,
   trafficLightZoom,
   type TrafficLightCommand,
@@ -152,6 +153,12 @@ describe('traffic light re-apply', () => {
     expect(applied[2]).toEqual({ x: 0, y: 3, square: true, zoom: 1.2, hidden: false })
   })
 
+  it('a shorter bar moves the lights up by half the difference, staying centred on it', () => {
+    expect(trafficLightOffsets(8)).toEqual({ x: 8, y: 11 })
+    expect(trafficLightOffsets(8, 32)).toEqual({ x: 8, y: 8 })
+    expect(trafficLightCommand({ styleId: 'glass', inset: 8, barHeight: 32, zoom: 1 })).toMatchObject({ x: 8, y: 8 })
+    expect(trafficLightCommand({ styleId: 'terminal', inset: 0, zoom: 1 })).toMatchObject({ x: 0, y: 3 })
+  })
   it('falls back to zoom 1 for a missing or bad zoom', () => {
     expect(trafficLightZoom(undefined)).toBe(1)
     expect(trafficLightZoom(null)).toBe(1)

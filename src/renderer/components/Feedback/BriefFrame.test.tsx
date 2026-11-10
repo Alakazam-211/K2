@@ -261,7 +261,8 @@ describe('BriefFrame — expanded title clears the macOS stoplights', () => {
     expect(spacer.className).toBe('k2-stoplight-spacer-brief')
     expect(spacer.style.width).toBe('')
     expect(title.textContent).toBe('Covered title')
-    expect(header.style.height).toBe('38px')
+    // The page bars' height: 38px, or the Style's bar height (Glass).
+    expect(header.style.height).toBe('var(--k2-topbar-height, 38px)')
     // Same window inset the native lights follow.
     expect(screen.getByTestId('brief-overlay').className).toContain('inset-[var(--inset-window)]')
   })

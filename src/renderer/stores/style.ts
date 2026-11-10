@@ -268,10 +268,12 @@ const trafficLights = createTrafficLightController({
     typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('mac'),
   read: () => {
     const el = document.documentElement
-    const raw = getComputedStyle(el).getPropertyValue('--inset-window').trim()
+    const cs = getComputedStyle(el)
+    const raw = cs.getPropertyValue('--inset-window').trim()
     return {
       styleId: el.getAttribute('data-style'),
       inset: Number.parseFloat(raw) || 0,
+      barHeight: Number.parseFloat(cs.getPropertyValue('--k2-topbar-height')) || undefined,
       // App.tsx sets this with documentElement.style.zoom (Cmd+= / Cmd+-).
       zoom: (window as { __k2soZoom?: number }).__k2soZoom,
       zen: zenTrafficLights(),

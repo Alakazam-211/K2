@@ -9,8 +9,9 @@ import { useFeedbackStore } from '@/stores/feedback'
 import { fetchFeedbackShow, type FeedbackListRow } from './feedback-api'
 import { briefOverlayStoplightInset } from './BriefFrame'
 import { FeedbackItemView } from './FeedbackItemView'
+import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 
-const TOPBAR_HEIGHT = 38
+const TOPBAR_HEIGHT = TOPBAR_HEIGHT_CSS
 
 export function TicketWindow({ ticketId }: { ticketId: string }): React.JSX.Element {
   const revision = useFeedbackStore((s) => s.revision)

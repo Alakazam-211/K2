@@ -3,7 +3,7 @@
 // user can go back to Local. Traffic-light spacer / window controls
 // stay so the window remains movable and closable.
 
-import { TOPBAR_HEIGHT } from '../../../shared/constants'
+import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { Surface } from '@/components/ui'
 import ServerSwitcher from './ServerSwitcher'
@@ -21,7 +21,7 @@ export default function GateChrome(): React.JSX.Element {
       onMouseDown={titleBarDragOnMouseDown}
       onDoubleClick={titleBarOnDoubleClick}
       onContextMenu={titleBarOnContextMenu}
-      style={{ height: TOPBAR_HEIGHT, minHeight: TOPBAR_HEIGHT }}
+      style={{ height: TOPBAR_HEIGHT_CSS, minHeight: TOPBAR_HEIGHT_CSS }}
     >
       <div
         className="flex items-center [&>*]:shrink-0"

@@ -714,6 +714,11 @@
  * me, focus rings, on-state switches and checkmarks) follows it. */
 [data-style="glass"] {
   --glass-accent: #0a84ff;
+  /* The top bar is the capsules' height, so they sit 8px from every edge:
+     the window inset above, the pane gap below, the inset at the sides.
+     The bars read it (TOPBAR_HEIGHT_CSS) and the traffic lights centre on
+     it (style.ts). */
+  --k2-topbar-height: 32px;
 }
 
 /* Every rule below stops at a Garden root ([data-zen-root]): Gardens own
@@ -834,6 +839,8 @@
 [data-style="glass"] [data-chrome="bar"]:not([data-zen-root] *) {
   background: transparent;
   border-color: transparent;
+  /* No hairline, so the capsules centre on the full bar height. */
+  border-bottom-width: 0;
 }
 /* Open canvas under every title bar. */
 [data-style="glass"] [data-chrome="bar"]:not([data-zen-root] *) { margin-bottom: var(--gap-pane); }
@@ -846,6 +853,11 @@
   padding: 2px 8px;
   gap: 4px;
 }
+[data-style="glass"] [data-page-tabs]:not([data-zen-root] *) { padding-block: 3px; }
+[data-style="glass"] [data-chrome="bar"] button[data-nav-picker]:not([data-zen-root] *) { height: var(--k2-topbar-height); }
+/* The server menu clears the pill. From the bar's centre, so it opens in the
+   same place when Home has no trigger. */
+[data-style="glass"] [data-server-switcher] > div:not([data-zen-root] *) { top: calc(50% + 20px); }
 /* The selected page tab is the phone's Home | Agents thumb: a blue pill. */
 [data-style="glass"] [data-page-tab]:not([data-zen-root] *) { border-radius: var(--radius-pill); }
 [data-style="glass"] [data-page-tab][data-selected]:not([data-zen-root] *) {

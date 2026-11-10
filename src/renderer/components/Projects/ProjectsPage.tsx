@@ -56,8 +56,9 @@ import { requestPaneShortcut } from './dashboard-dnd'
 import { primaryScope } from '@/kessel/server-scope'
 import { useUnreadEntry } from '@/stores/unread'
 import { UnreadBadge } from '@/components/common/UnreadBadge'
+import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 
-const TOPBAR_HEIGHT = 38
+const TOPBAR_HEIGHT = TOPBAR_HEIGHT_CSS
 
 // ── Selected-project main area ────────────────────────────────────────────
 
@@ -343,8 +344,8 @@ export default function ProjectsPage(): React.JSX.Element | null {
       aria-hidden={!isOpen}
     >
       {/* Top bar — mirrors the workspace TopBar's left cluster: traffic-
-          light spacer + wordmark + SERVER DROPDOWN + the page switcher
-          (§6.0: both visible on every page), draggable. */}
+          light spacer + wordmark + the page switcher + SERVER DROPDOWN
+          (§6.0), draggable. */}
       <Surface
         role2="surface" data-chrome="bar"
         bordered={false}
@@ -360,8 +361,8 @@ export default function ProjectsPage(): React.JSX.Element | null {
         >
           <DesktopChromeLeft />
           <K2MarkButton />
-          <ServerSwitcher />
           <PageTabs />
+          <ServerSwitcher />
         </div>
 
         {/* Right: utilities + window controls. The nav and chat toggles

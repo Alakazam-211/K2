@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getDesktopChrome } from '@/lib/desktop-chrome'
-import { TOPBAR_HEIGHT } from '../../../shared/constants'
+import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 
 /**
  * Custom window controls for frameless Win/Linux chrome.
@@ -55,7 +55,7 @@ export default function WindowControls(): React.JSX.Element | null {
   const clusterStyle: CSSProperties = {
     display: 'flex',
     flexShrink: 0,
-    height: TOPBAR_HEIGHT,
+    height: TOPBAR_HEIGHT_CSS,
     alignItems: 'stretch',
     // Small gap past close (was 8; Rosson: ~40% less → 5).
     paddingRight: 0,

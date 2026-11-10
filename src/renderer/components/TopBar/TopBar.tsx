@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
-import { TOPBAR_HEIGHT } from '../../../shared/constants'
+import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
+import { usePageViewStore } from '@/stores/page-view'
 import ServerSwitcher from './ServerSwitcher'
 import PageTabs from './PageTabs'
 import DesktopChromeLeft from './DesktopChromeLeft'
@@ -66,6 +67,7 @@ export default function TopBar({
     }
   }
   const leftMinWidth = topBarLeftClusterMinWidth()
+  const onHome = usePageViewStore((s) => s.page === 'home')
 
   return (
     <Surface
@@ -76,21 +78,22 @@ export default function TopBar({
       onDoubleClick={titleBarOnDoubleClick}
       onContextMenu={titleBarOnContextMenu}
       style={{
-        height: TOPBAR_HEIGHT,
-        minHeight: TOPBAR_HEIGHT
+        height: TOPBAR_HEIGHT_CSS,
+        minHeight: TOPBAR_HEIGHT_CSS
       }}
     >
-      {/* Left: spacer or Linux squares, logo, server, page tabs. */}
+      {/* Left: spacer or Linux squares, logo, page tabs, server. */}
       <div
-        className="flex items-center [&>*]:shrink-0"
+        className="flex shrink-0 items-center [&>*]:shrink-0"
         style={{ minWidth: leftMinWidth, gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}
       >
         <DesktopChromeLeft />
         <K2MarkButton />
-        {/* K2 Connect server switcher (This Mac / saved servers / add) */}
-        <ServerSwitcher followRoom />
         {/* §6.0 — Home | Agents | Projects | Tickets | Wiki | ⚙ (cog last, 0.46.3). */}
         <PageTabs />
+        {/* K2 Connect server switcher (This Mac / saved servers / add). No
+            trigger on Home, whose rooms can be on any server. */}
+        <ServerSwitcher followRoom triggerHidden={onHome} />
       </div>
 
       {/* Center: [other server /] agent / branch */}

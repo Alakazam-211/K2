@@ -41,6 +41,7 @@ mod llm_accounts_integration;
 mod login_lock_clear;
 mod macos_daemon_helper_app_layout;
 mod ops_routes_integration;
+mod org_chart_integration;
 mod ops_stream_ws_integration;
 mod power_helper_route_integration;
 mod preset_routes_integration;

@@ -197,8 +197,8 @@ describe('Settings → Admin Access → Users: the "Owner\'s account" tag', () =
   it('Member login: no tag, no owner/accounts read', async () => {
     cli.whoami = { owner: false, role: 'member', username: 'gina' }
     render(<K2ConnectSection panel="people" />)
-    await screen.findByText(/User management is handled by an administrator\./)
-    expect(screen.getByTestId('admin-access-not-admin').textContent).toContain('Only an owner or admin can change who signs in')
+    await screen.findByText(/ask one of its Owners or Admins\./)
+    expect(screen.getByTestId('admin-access-not-admin').textContent).toContain('Only an Owner or Admin can change who signs in')
     expect(document.querySelector('[data-testid^="owner-account-tag-"]')).toBeNull()
     expect(cli.gets).not.toContain('owner/accounts')
   })

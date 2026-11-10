@@ -63,7 +63,10 @@ function AdminSheet({
   const titleId = useId()
   useDialogEscape(onClose, !busy)
   // Portalled to <body>, so the scrim covers the whole window, not just the
-  // Settings panel it opens from.
+  // Settings panel it opens from. Every dialog on this page is one width
+  // with its top edge in one place, whatever its height: a tall form and a
+  // short confirmation open at the same spot, and a form that grows (an
+  // error, the done step) grows downward.
   return createPortal(
     <>
       <DialogScrim />
@@ -72,7 +75,8 @@ function AdminSheet({
         aria-modal="true"
         aria-labelledby={titleId}
         data-testid={testId}
-        className="w-[min(36rem,calc(100vw-2.5rem))] max-h-[calc(100vh-3rem)] flex flex-col"
+        placement="top"
+        className="w-[min(36rem,calc(100vw-2.5rem))] max-h-[calc(100vh-var(--dialog-top)-1rem)] flex flex-col"
       >
         <div className="min-h-0 overflow-y-auto p-5 space-y-4">
           <div>
@@ -120,7 +124,8 @@ function Field({
   )
 }
 
-/** A failed write: what failed, the server's reason, the next step. */
+/** A failed write: what failed, what to do now, then the server's own
+ *  reason, quietly. */
 function FailedNote({ what, detail, next }: { what: string; detail: string; next: string }): React.JSX.Element {
   // At the foot of a long form: bring it into view so the failure is seen.
   const ref = useRef<HTMLDivElement>(null)
@@ -131,8 +136,8 @@ function FailedNote({ what, detail, next }: { what: string; detail: string; next
     <div ref={ref}>
       <Callout tone="error" role="alert" className="type-hint space-y-0.5" data-testid="dialog-error">
         <p className="font-medium">{what}</p>
-        <p>The server said: {detail.trim().replace(/[.\s]+$/, '')}.</p>
         <p>{next}</p>
+        <p>The server said: {detail.trim().replace(/[.\s]+$/, '')}.</p>
       </Callout>
     </div>
   )
@@ -168,6 +173,7 @@ function CopyLine({ label, value, mono = true, testId }: { label: string; value:
 /** Make one / Type one, and the typed field with Show. */
 function PasswordChoice({
   name,
+  makeHint,
   mode,
   setMode,
   password,
@@ -176,6 +182,8 @@ function PasswordChoice({
   problem,
 }: {
   name: string
+  /** What happens to a password K2 makes, in this dialog's words. */
+  makeHint: string
   mode: 'make' | 'type'
   setMode: (m: 'make' | 'type') => void
   password: string
@@ -193,7 +201,7 @@ function PasswordChoice({
           <Radio name={name} className="mt-0.5" checked={mode === 'make'} onChange={() => setMode('make')} aria-label="Make one for me" />
           <span>
             <span className={SETTING_ROW_LABEL}>Make one for me</span>
-            <span className={`block ${MUTED}`}>K2 shows it once, after you add them, for you to copy and send.</span>
+            <span className={`block ${MUTED}`}>{makeHint}</span>
           </span>
         </label>
         <label className="flex items-start gap-2 cursor-pointer">
@@ -448,6 +456,7 @@ export function AddPersonDialog({
 
         <PasswordChoice
           name="add-person-password"
+          makeHint="K2 shows it once, after you add them, for you to copy and send."
           mode={mode}
           setMode={setMode}
           password={password}
@@ -465,7 +474,7 @@ export function AddPersonDialog({
           </span>
         </label>
 
-        {error ? <FailedNote what={`Couldn’t add ${name}.`} detail={error} next="Nothing was added. Check the details and try again." /> : null}
+        {error ? <FailedNote what={`Couldn’t add ${name}.`} detail={error} next="Nothing was added. Check the details above, then try again." /> : null}
 
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
@@ -554,7 +563,11 @@ export function ResetPasswordDialog({
   return (
     <AdminSheet
       title={`Reset ${who}’s password`}
-      intro={`Their old password stops working. ${ownLogin ? 'Your own login: you keep this password.' : MUST_CHANGE_NOTE}`}
+      intro={
+        ownLogin
+          ? 'This is your own login. Your current password stops working, and you keep the new one.'
+          : `${who}’s current password stops working right away. The new one is temporary: when they next sign in, K2 asks them to choose their own.`
+      }
       onClose={onClose}
       busy={busy}
       testId={`reset-form-${who}`}
@@ -568,6 +581,7 @@ export function ResetPasswordDialog({
       >
         <PasswordChoice
           name="reset-password"
+          makeHint={`K2 shows it once, after the reset, for you to copy and send to ${who}.`}
           mode={mode}
           setMode={setMode}
           password={password}
@@ -575,7 +589,7 @@ export function ResetPasswordDialog({
           policy={policy}
           problem={pwProblem}
         />
-        {error ? <FailedNote what={`Couldn’t reset ${who}’s password.`} detail={error} next="Their password is unchanged. Try again." /> : null}
+        {error ? <FailedNote what={`Couldn’t reset ${who}’s password.`} detail={error} next={`Their current password still works. Try again in a moment.`} /> : null}
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
             Cancel
@@ -585,6 +599,42 @@ export function ResetPasswordDialog({
           </Button>
         </div>
       </form>
+    </AdminSheet>
+  )
+}
+
+/** A yes/no question before a change (remove someone, make someone an
+ *  Owner), in the same frame and place as the page's other dialogs. Cancel
+ *  has the focus, so Enter on a destructive question never confirms by
+ *  accident. */
+export function ConfirmSheet({
+  title,
+  message,
+  confirmLabel,
+  destructive = false,
+  onConfirm,
+  onCancel,
+  testId,
+}: {
+  title: string
+  message: React.ReactNode
+  confirmLabel: string
+  destructive?: boolean
+  onConfirm: () => void
+  onCancel: () => void
+  testId: string
+}): React.JSX.Element {
+  return (
+    <AdminSheet title={title} onClose={onCancel} testId={testId}>
+      <p className={MUTED}>{message}</p>
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" size="md" onClick={onCancel} autoFocus>
+          Cancel
+        </Button>
+        <Button variant={destructive ? 'danger-muted' : 'accent'} size="md" onClick={onConfirm}>
+          {confirmLabel}
+        </Button>
+      </div>
     </AdminSheet>
   )
 }
@@ -643,7 +693,7 @@ export function NameAndPictureDialog({
           </Field>
         </div>
         <p className={`${MUTED} -mt-2`}>Leave both empty to show only the username.</p>
-        {error ? <FailedNote what={`Couldn’t save ${who}’s name.`} detail={error} next="The name is unchanged. Try again." /> : null}
+        {error ? <FailedNote what={`Couldn’t save ${who}’s name.`} detail={error} next="The name is unchanged. Try again in a moment." /> : null}
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
             Cancel

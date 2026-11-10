@@ -4,10 +4,15 @@
 //
 //   People          one row per person: picture, name, username, what's
 //                   special about them (You, Temporary password, Off), the
-//                   role on the shared right edge, and a "…" menu for the
+//                   role in the shared field column, and a "…" menu for the
 //                   rest (name and picture, reset password, sign-in on/off,
 //                   cloning, remove). "Add person" opens a dialog.
-//   Password rules  what every password must have; each change saves.
+//   Password rules  what every password must have; each change saves. The
+//                   length field sits in the same column as the roles.
+//
+// Every dialog here (add, reset, name, remove, make Owner) is the page's
+// own sheet, one width, opening at one spot. A failed row change says what
+// failed and what to do on the row, with the server's reason after it.
 //
 // Lock-out guard: a person can't demote, turn off or remove their own
 // login, and the only Owner login can't be demoted by itself. The daemon
@@ -24,15 +29,14 @@ import {
   SaveNote,
   SaveError,
   useSaveStatus,
+  SETTING_FIELD_WIDTH,
   SETTING_ROW_HINT,
-  type SaveState,
 } from '../controls/SettingControls'
 import { Button, Input, OverflowMenu, Tag, Toggle, type OverflowMenuItem } from '@/components/ui'
 import { PresenceChip } from '@/components/Presence/PresenceChip'
 import { setPersonName } from '@/components/Presence/person-name-api'
 import { realName } from '@/lib/person-name'
 import { primaryScope } from '@/kessel/server-scope'
-import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
 import {
@@ -51,9 +55,10 @@ import { MUST_CHANGE_NOTE } from './AppUserDialogs'
 import { OwnerAccountTag, ownerLinkAccess, useOwnerAccounts } from './OwnerAccountToggle'
 import { threadPushAvailable } from './useNotifyPrefs'
 import { SewAdminAccessState } from './SewAccessParts'
-import { AddPersonDialog, NameAndPictureDialog, ResetPasswordDialog } from './AdminAccessDialogs'
+import { AddPersonDialog, ConfirmSheet, NameAndPictureDialog, ResetPasswordDialog } from './AdminAccessDialogs'
 import {
   DEFAULT_POLICY,
+  errReply,
   errText,
   localServerAddress,
   parsePolicy,
@@ -72,14 +77,9 @@ function roleLabel(raw: string | undefined): string {
   return raw[0].toUpperCase() + raw.slice(1)
 }
 
-/** The presence chip's role: Voice & Chat only draws as a member. */
-function chipRole(raw: string | undefined): 'owner' | 'admin' | 'member' {
-  const r = parseK2Role(raw)
-  return r === 'owner' || r === 'admin' ? r : 'member'
-}
-
 /** The roles `actor` may give (§5.3, Q1): the Owner every role; an Admin
- *  only Member and Voice & Chat only, on a server that knows the latter. */
+ *  moves people between Member and the Voice & Chat only role, on a server
+ *  that knows the latter. */
 function pickerOptions(actor: K2Role | null, voiceChatRole: boolean): Array<{ value: K2Role; label: string }> {
   const all = roleOptions(voiceChatRole)
   if (actor === 'owner') return [...all]
@@ -98,20 +98,55 @@ interface Who {
 }
 
 type Load = 'loading' | 'ok' | { error: string }
-type Dialog = { kind: 'add' } | { kind: 'reset'; user: K2User } | { kind: 'name'; user: K2User } | null
+type Dialog =
+  | { kind: 'add' }
+  | { kind: 'reset'; user: K2User }
+  | { kind: 'name'; user: K2User }
+  | { kind: 'remove'; user: K2User }
+  | { kind: 'owner'; user: K2User }
+  | null
 
-/** One save state per person row ("Saved" or why it failed). */
-function useRowStatus(): { of: (u: string) => SaveState; saved: (u: string) => void; failed: (u: string, e: string) => void } {
-  const [map, setMap] = useState<Record<string, SaveState>>({})
+/** A row change that didn't land: what failed, what to do now, and the
+ *  server's own reason (none when the page already says it in its words). */
+interface RowFail {
+  what: string
+  next: string
+  detail: string | null
+}
+type RowState = 'idle' | 'saved' | RowFail
+
+/** One state per person row: "Saved" for a moment, or why it failed. */
+function useRowStatus(): { of: (u: string) => RowState; saved: (u: string) => void; failed: (u: string, f: RowFail) => void } {
+  const [map, setMap] = useState<Record<string, RowState>>({})
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), [])
-  const set = (u: string, s: SaveState): void => {
+  const set = (u: string, s: RowState): void => {
     clearTimeout(timers.current[u])
     setMap((m) => ({ ...m, [u]: s }))
     if (s === 'saved') timers.current[u] = setTimeout(() => setMap((m) => ({ ...m, [u]: 'idle' })), 2000)
   }
-  return { of: (u) => map[u] ?? 'idle', saved: (u) => set(u, 'saved'), failed: (u, e) => set(u, { error: e }) }
+  return { of: (u) => map[u] ?? 'idle', saved: (u) => set(u, 'saved'), failed: (u, f) => set(u, f) }
 }
+
+/** What each row change is, for its failure line. */
+type RowChange = 'role' | 'sign-in on' | 'sign-in off' | 'clone' | 'remove'
+
+/** A failed row change in the page's words. A refusal the page knows
+ *  (an Admin asking for a role change only an Owner makes) is said
+ *  plainly, with no server text; anything else keeps the server's reason. */
+function rowFail(change: RowChange, username: string, code: string | null, detail: string): RowFail {
+  if (change === 'role') {
+    return code === 'role_change_not_allowed'
+      ? { what: `Couldn’t change ${username}’s role.`, next: 'Only an Owner can make this change. Ask an Owner of this server.', detail: null }
+      : { what: `Couldn’t change ${username}’s role.`, next: 'Their role is unchanged. Try again in a moment.', detail }
+  }
+  if (change === 'remove') return { what: `Couldn’t remove ${username}.`, next: 'They can still sign in. Try again in a moment.', detail }
+  if (change === 'clone') return { what: `Couldn’t change whether ${username} can clone agents.`, next: 'Nothing changed. Try again in a moment.', detail }
+  return { what: `Couldn’t turn ${change === 'sign-in on' ? 'on' : 'off'} sign-in for ${username}.`, next: 'Nothing changed. Try again in a moment.', detail }
+}
+
+/** A thrown error's words (a network failure, not a server answer). */
+const thrown = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 export function AdminAccessPanel(): React.JSX.Element {
   const [who, setWho] = useState<Who>({ loaded: false, role: null, ownerToken: false, username: null, error: null })
@@ -128,7 +163,6 @@ export function AdminAccessPanel(): React.JSX.Element {
   const rows = useRowStatus()
   const minSave = useSaveStatus()
   const ruleSave = { requireNumber: useSaveStatus(), requireUppercase: useSaveStatus(), requireSpecial: useSaveStatus() }
-  const confirm = useConfirmDialogStore((s) => s.confirm)
 
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const isRemote = activeHost !== 'local'
@@ -233,60 +267,59 @@ export function AdminAccessPanel(): React.JSX.Element {
 
   /** Optimistic write: apply, POST, keep on success (and re-read), put it
    *  back and say why on failure. */
-  const write = async (username: string, route: string, body: Record<string, unknown>, apply: Partial<K2User>, undo: Partial<K2User>): Promise<void> => {
+  const write = async (
+    change: RowChange,
+    username: string,
+    route: string,
+    body: Record<string, unknown>,
+    apply: Partial<K2User>,
+    undo: Partial<K2User>,
+  ): Promise<void> => {
     patch(username, apply)
     try {
       const res = await userPost(route, body)
       if (!res.ok) {
         patch(username, undo)
-        rows.failed(username, await errText(res))
+        const { code, text } = await errReply(res)
+        rows.failed(username, rowFail(change, username, code, text))
         return
       }
       rows.saved(username)
       void loadUsers()
     } catch (e) {
       patch(username, undo)
-      rows.failed(username, e instanceof Error ? e.message : String(e))
+      rows.failed(username, rowFail(change, username, null, thrown(e)))
     }
   }
 
-  const changeRole = async (u: K2User, role: K2Role): Promise<void> => {
+  const setRole = (u: K2User, role: K2Role): Promise<void> =>
+    write('role', u.username, '/set-role', { username: u.username, role }, { role }, { role: u.role })
+
+  /** Making someone an Owner asks first; other roles save at once. */
+  const changeRole = (u: K2User, role: K2Role): void => {
     if (role === u.role) return
-    if (role === 'owner') {
-      const ok = await confirm({
-        title: `Make ${u.username} an owner?`,
-        message: `Owners can do everything on this server, including changing anyone's role and removing people.`,
-        confirmLabel: 'Make owner',
-      })
-      if (!ok) return
-    }
-    await write(u.username, '/set-role', { username: u.username, role }, { role }, { role: u.role })
+    if (role === 'owner') setDialog({ kind: 'owner', user: u })
+    else void setRole(u, role)
   }
 
   const setSignIn = (u: K2User, on: boolean): Promise<void> =>
-    write(u.username, '/set-disabled', { username: u.username, disabled: !on }, { disabled: !on }, { disabled: u.disabled })
+    write(on ? 'sign-in on' : 'sign-in off', u.username, '/set-disabled', { username: u.username, disabled: !on }, { disabled: !on }, { disabled: u.disabled })
 
   const setClone = (u: K2User, on: boolean): Promise<void> =>
-    write(u.username, '/set-can-clone', { username: u.username, canClone: on }, { canClone: on }, { canClone: u.canClone })
+    write('clone', u.username, '/set-can-clone', { username: u.username, canClone: on }, { canClone: on }, { canClone: u.canClone })
 
   const remove = async (u: K2User): Promise<void> => {
-    const ok = await confirm({
-      title: `Remove ${u.username} from this server?`,
-      message: `${realName(u) ?? u.username} won't be able to sign in here any more. You can add them again later.`,
-      confirmLabel: 'Remove',
-      destructive: true,
-    })
-    if (!ok) return
     try {
       const res = await userPost('/remove', { username: u.username })
       if (!res.ok) {
-        rows.failed(u.username, await errText(res))
+        const { code, text } = await errReply(res)
+        rows.failed(u.username, rowFail('remove', u.username, code, text))
         return
       }
       setNotice(`${u.username} was removed. They can’t sign in to this server any more.`)
       await loadUsers()
     } catch (e) {
-      rows.failed(u.username, e instanceof Error ? e.message : String(e))
+      rows.failed(u.username, rowFail('remove', u.username, null, thrown(e)))
     }
   }
 
@@ -294,13 +327,15 @@ export function AdminAccessPanel(): React.JSX.Element {
     setEnableBusy(username)
     try {
       const res = await userPost('/set-disabled', { username, disabled: false })
-      if (!res.ok) rows.failed(username, await errText(res))
-      else {
+      if (!res.ok) {
+        const { code, text } = await errReply(res)
+        rows.failed(username, rowFail('sign-in on', username, code, text))
+      } else {
         rows.saved(username)
         await loadUsers()
       }
     } catch (e) {
-      rows.failed(username, e instanceof Error ? e.message : String(e))
+      rows.failed(username, rowFail('sign-in on', username, null, thrown(e)))
     } finally {
       setEnableBusy(null)
     }
@@ -391,7 +426,7 @@ export function AdminAccessPanel(): React.JSX.Element {
         action={<Button onClick={() => void loadAll()}>Try again</Button>}
         testId="admin-access-who-failed"
       >
-        K2 needs it to know whether you can change who signs in.
+        K2 needs your role to show who can sign in here. Try again, or check that this server is running.
       </SettingsLoadState>
     )
   }
@@ -401,8 +436,8 @@ export function AdminAccessPanel(): React.JSX.Element {
         It runs K2 {serverVersion}. Managing people here needs K2 {featureMinVersion('roles')} or later on the server.
       </SettingsLoadState>
     ) : (
-      <SettingsLoadState kind="empty" title="Only an owner or admin can change who signs in" testId="admin-access-not-admin">
-        User management is handled by an administrator. Ask the owner of this server if someone needs access.
+      <SettingsLoadState kind="empty" title="Only an Owner or Admin can change who signs in" testId="admin-access-not-admin">
+        If someone needs to sign in to this server, or needs a different role, ask one of its Owners or Admins.
       </SettingsLoadState>
     )
   }
@@ -428,7 +463,7 @@ export function AdminAccessPanel(): React.JSX.Element {
           action={<Button onClick={() => { setUsersLoad('loading'); void loadUsers() }}>Try again</Button>}
           testId="admin-access-read-failed"
         >
-          Nobody was changed. Try again, or check that the server is running.
+          Try again in a moment. If it keeps failing, restart K2 on the server. No one’s access has changed.
         </SettingsLoadState>
       ) : (
         <SettingsGroup
@@ -468,10 +503,10 @@ export function AdminAccessPanel(): React.JSX.Element {
               voiceChatRole={voiceChatRole}
               status={rows.of(u.username)}
               ownerLinked={ownerLink !== 'hidden' && ownerAccounts.loaded && ownerAccounts.isLinked(u.username)}
-              onRole={(r) => void changeRole(u, r)}
+              onRole={(r) => changeRole(u, r)}
               onSignIn={(on) => void setSignIn(u, on)}
               onClone={(on) => void setClone(u, on)}
-              onRemove={() => void remove(u)}
+              onRemove={() => setDialog({ kind: 'remove', user: u })}
               onReset={() => setDialog({ kind: 'reset', user: u })}
               onName={() => setDialog({ kind: 'name', user: u })}
               below={
@@ -507,8 +542,9 @@ export function AdminAccessPanel(): React.JSX.Element {
             </SettingRow>
           ) : null}
           {ownerAccounts.error ? (
-            <div role="alert" className="px-4 py-2.5 type-hint text-[var(--color-status-error-soft)]">
-              Couldn’t tell which login is yours: {ownerAccounts.error.replace(/[.\s]+$/, '')}.
+            <div role="alert" className="px-4 py-2.5 type-hint leading-relaxed">
+              <p className="text-[var(--color-status-error-soft)]">Couldn’t tell which of these logins is yours. Reopen this page to try again.</p>
+              <p className="text-[var(--color-text-secondary)]">The server said: {ownerAccounts.error.replace(/[.\s]+$/, '')}.</p>
             </div>
           ) : null}
         </SettingsGroup>
@@ -523,7 +559,7 @@ export function AdminAccessPanel(): React.JSX.Element {
           action={<Button onClick={() => { setPolicyLoad('loading'); void loadPolicy() }}>Try again</Button>}
           testId="admin-policy-failed"
         >
-          The rules still apply on the server; K2 just couldn’t show them.
+          The rules still apply to every password. Try again to see or change them.
         </SettingsLoadState>
       ) : (
         <SettingsGroup
@@ -537,27 +573,32 @@ export function AdminAccessPanel(): React.JSX.Element {
             label="Minimum length"
             hint={
               <>
-                {minProblem ?? 'Shorter passwords are refused. From 4 to 128 characters.'}
+                {minProblem ?? 'The fewest characters a password can have, from 4 to 128.'}
                 <SaveError state={minSave.state} />
               </>
             }
           >
             <SaveNote state={minSave.state} />
-            <Input
-              type="number"
-              min={4}
-              max={128}
-              className="w-20 type-control text-right"
-              aria-label="Minimum length"
-              aria-invalid={minProblem ? true : undefined}
-              value={minDraft}
-              onChange={(e) => setMinDraft(e.target.value)}
-              onBlur={commitMin}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitMin()
-              }}
-            />
-            <span className="type-hint text-[var(--color-text-secondary)]">characters</span>
+            {/* In the people's role column: the field's edges line up
+                with the role fields above, and the gap on the right is
+                where their "…" menus sit. */}
+            <div className={SETTING_FIELD_WIDTH}>
+              <Input
+                type="number"
+                min={4}
+                max={128}
+                className="w-full type-control text-right"
+                aria-label="Minimum length"
+                aria-invalid={minProblem ? true : undefined}
+                value={minDraft}
+                onChange={(e) => setMinDraft(e.target.value)}
+                onBlur={commitMin}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitMin()
+                }}
+              />
+            </div>
+            <span aria-hidden="true" className={MENU_SLOT} />
           </SettingRow>
           {(
             [
@@ -611,13 +652,59 @@ export function AdminAccessPanel(): React.JSX.Element {
           onClose={() => setDialog(null)}
           onSave={(f, l) => saveName(dialog.user.username, f, l)}
         />
+      ) : dialog?.kind === 'remove' ? (
+        <ConfirmSheet
+          title={`Remove ${dialog.user.username} from this server?`}
+          message={`${realName(dialog.user) ?? dialog.user.username} won’t be able to sign in here any more. You can add them again later.`}
+          confirmLabel="Remove"
+          destructive
+          testId="remove-confirm-dialog"
+          onCancel={() => setDialog(null)}
+          onConfirm={() => {
+            const u = dialog.user
+            setDialog(null)
+            void remove(u)
+          }}
+        />
+      ) : dialog?.kind === 'owner' ? (
+        <ConfirmSheet
+          title={`Make ${dialog.user.username} an Owner?`}
+          message="Owners can do everything on this server, including changing anyone’s role and removing people."
+          confirmLabel="Make Owner"
+          testId="owner-confirm-dialog"
+          onCancel={() => setDialog(null)}
+          onConfirm={() => {
+            const u = dialog.user
+            setDialog(null)
+            void setRole(u, 'owner')
+          }}
+        />
       ) : null}
     </div>
   )
 }
 
+/** The width of a row's "…" menu button: the password rules keep it free
+ *  so their field lines up with the role fields. */
+const MENU_SLOT = 'w-8 flex-shrink-0'
+
+/** A row change that failed: what, what to do now, then the server's
+ *  reason quietly. */
+function RowError({ fail }: { fail: RowFail }): React.JSX.Element {
+  return (
+    <div role="alert" data-save-error="" className={`${SETTING_ROW_HINT} mt-1`}>
+      <p className="text-[var(--color-status-error-soft)]">
+        {fail.what} {fail.next}
+      </p>
+      {fail.detail ? <p>The server said: {fail.detail.trim().replace(/[.\s]+$/, '')}.</p> : null}
+    </div>
+  )
+}
+
 /** One person: picture, name and username, what's special about them,
- *  their role on the shared right edge, and the "…" menu. */
+ *  their role in the shared field column, and the "…" menu. The picture,
+ *  name and controls share the first line; notes and errors go under the
+ *  name, so the role field never moves when a line is added. */
 function PersonRow({
   user: u,
   you,
@@ -643,7 +730,7 @@ function PersonRow({
   soleOwner: boolean
   roles: Array<{ value: K2Role; label: string }>
   voiceChatRole: boolean
-  status: SaveState
+  status: RowState
   ownerLinked: boolean
   onRole: (r: K2Role) => void
   onSignIn: (on: boolean) => void
@@ -658,12 +745,12 @@ function PersonRow({
   const name = realName(u)
   // Why the role can't be changed here, or null when it can.
   const roleLock = you
-    ? 'This is you. Another owner can change your role.'
+    ? 'This is you. Another Owner can change your role.'
     : soleOwner
-      ? 'The only owner. Make someone else an owner first.'
+      ? 'The only Owner. Make someone else an Owner first.'
       : isOwnerViewer || (viewer === 'admin' && voiceChatRole && roles.some((r) => r.value !== rowRole && canSetRole(viewer, rowRole, r.value)))
         ? null
-        : 'Only an owner can change this role.'
+        : 'Only an Owner can change this role.'
   const roleChoices = roles.length > 0 ? roles : [{ value: (rowRole ?? 'member') as K2Role, label: roleLabel(u.role) }]
   const cloneLocked = u.role === 'owner' || !isOwnerViewer
   const canClone = u.role === 'owner' || u.canClone !== false
@@ -671,9 +758,10 @@ function PersonRow({
   // What the tags don't already say.
   const facts: string[] = []
   if (u.disabled) facts.push('Can’t sign in until you turn sign-in back on')
-  if (!canClone) facts.push('Can’t clone agents')
+  if (!canClone) facts.push('Can’t clone agents to their own computer')
 
   const lines = [...((you || soleOwner) && roleLock ? [roleLock] : []), ...facts]
+  const fail = typeof status === 'object' ? status : null
 
   const items: OverflowMenuItem[] = [
     { id: 'name', label: 'Name and picture…', onSelect: onName },
@@ -682,7 +770,7 @@ function PersonRow({
       label: 'Reset password…',
       onSelect: onReset,
       disabled: !isOwnerViewer && !ownerToken,
-      hint: !isOwnerViewer && !ownerToken ? 'Only an owner can reset passwords.' : undefined,
+      hint: !isOwnerViewer && !ownerToken ? 'Only an Owner can reset passwords.' : undefined,
     },
     {
       id: 'signin',
@@ -697,7 +785,7 @@ function PersonRow({
       hint: cloneLocked
         ? u.role === 'owner'
           ? 'Owners can always clone agents.'
-          : 'Only an owner changes who can clone.'
+          : 'Only an Owner can change this.'
         : 'Cloning copies an agent from this server to their own computer.',
       disabled: cloneLocked,
       onSelect: () => onClone(!canClone),
@@ -711,9 +799,9 @@ function PersonRow({
       hint: you
         ? 'You can’t remove yourself.'
         : soleOwner
-          ? 'The only owner can’t be removed.'
+          ? 'The only Owner can’t be removed.'
           : !isOwnerViewer && !ownerToken
-            ? 'Only an owner can remove people.'
+            ? 'Only an Owner can remove people.'
             : undefined,
       onSelect: onRemove,
     },
@@ -721,36 +809,31 @@ function PersonRow({
 
   return (
     <div className="px-4 py-3 transition-colors hover:bg-[var(--color-wash-1)]" data-testid={`person-row-${u.username}`}>
-      <div className="flex items-center justify-between gap-6">
-        <div className="flex items-center gap-3 min-w-0">
-          <span data-testid={`user-chip-${u.username}`} className="flex flex-none">
-            <PresenceChip name={u.username} role={chipRole(u.role)} size={28} color={u.color ?? null} names={u} pictureScope={primaryScope()} title="" away={u.disabled} />
-          </span>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 min-w-0 flex-wrap">
-              {name ? (
-                <span className="type-name text-[var(--color-text-primary)] truncate" data-testid={`user-real-name-${u.username}`}>
-                  {name}
-                </span>
-              ) : null}
-              <span className={`${name ? 'type-hint text-[var(--color-text-secondary)]' : 'type-name text-[var(--color-text-primary)]'} font-mono truncate`}>{u.username}</span>
-              {you ? <Tag tone="accent">You</Tag> : null}
-              {ownerLinked ? <OwnerAccountTag username={u.username} linked /> : null}
-              {u.disabled ? <Tag tone="muted">Sign-in off</Tag> : null}
-              {u.wasViewer ? <WasViewerBadge /> : null}
-              {u.mustChangePassword === true ? (
-                <Tag tone="warn" data-testid={`temporary-password-${u.username}`} title={MUST_CHANGE_NOTE}>
-                  Temporary password
-                </Tag>
-              ) : null}
-            </div>
-            {lines.length > 0 ? <p className={SETTING_ROW_HINT}>{lines.join(' · ')}</p> : null}
-            <SaveError state={status} />
-          </div>
+      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3">
+        {/* No role mark on the picture: the role field says it. */}
+        <span data-testid={`user-chip-${u.username}`} className="flex flex-none">
+          <PresenceChip name={u.username} role="member" size={28} color={u.color ?? null} names={u} pictureScope={primaryScope()} title="" away={u.disabled} />
+        </span>
+        <div className="flex items-center gap-2 min-w-0 flex-wrap">
+          {name ? (
+            <span className="type-name text-[var(--color-text-primary)] truncate" data-testid={`user-real-name-${u.username}`}>
+              {name}
+            </span>
+          ) : null}
+          <span className={`${name ? 'type-hint text-[var(--color-text-secondary)]' : 'type-name text-[var(--color-text-primary)]'} font-mono truncate`}>{u.username}</span>
+          {you ? <Tag tone="accent">You</Tag> : null}
+          {ownerLinked ? <OwnerAccountTag username={u.username} linked /> : null}
+          {u.disabled ? <Tag tone="muted">Sign-in off</Tag> : null}
+          {u.wasViewer ? <WasViewerBadge /> : null}
+          {u.mustChangePassword === true ? (
+            <Tag tone="warn" data-testid={`temporary-password-${u.username}`} title={MUST_CHANGE_NOTE}>
+              Temporary password
+            </Tag>
+          ) : null}
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <SaveNote state={status} />
-          <div className="w-44" title={roleLock ?? undefined}>
+        <div className="flex items-center gap-2 pl-3">
+          <SaveNote state={status === 'saved' ? 'saved' : 'idle'} />
+          <div className={SETTING_FIELD_WIDTH} title={roleLock ?? undefined}>
             <SettingDropdown
               fullWidth
               value={u.role ?? 'member'}
@@ -766,6 +849,12 @@ function PersonRow({
           </div>
           <OverflowMenu label={`More actions for ${u.username}`} items={items} />
         </div>
+        {lines.length > 0 || fail ? (
+          <div className="col-start-2 min-w-0">
+            {lines.length > 0 ? <p className={SETTING_ROW_HINT}>{lines.join(' · ')}</p> : null}
+            {fail ? <RowError fail={fail} /> : null}
+          </div>
+        ) : null}
       </div>
       {below ? <div className="pl-10 empty:hidden">{below}</div> : null}
     </div>

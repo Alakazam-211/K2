@@ -63,19 +63,25 @@ export async function answeredTemporary(res: Response, fallback: boolean): Promi
   return fallback
 }
 
-/** Why a write failed, for a person: the daemon's `message` when it sends
- *  one (a code like `role_change_not_allowed` comes with a sentence), else
- *  its `error`, else the raw body. */
-export async function errText(res: Response): Promise<string> {
+/** A failed answer: the daemon's code when it sends one with a sentence
+ *  (`{ error: "role_change_not_allowed", message: "…" }`), and the text to
+ *  show as its reason: the `message`, else the `error`, else the raw body. */
+export async function errReply(res: Response): Promise<{ code: string | null; text: string }> {
   const text = await res.text()
   try {
     const parsed = JSON.parse(text)
-    if (parsed && typeof parsed.message === 'string' && parsed.message.trim()) return parsed.message
-    if (parsed && typeof parsed.error === 'string') return parsed.error
+    const code = parsed && typeof parsed.error === 'string' && /^[a-z_]+$/.test(parsed.error) ? parsed.error : null
+    if (parsed && typeof parsed.message === 'string' && parsed.message.trim()) return { code, text: parsed.message }
+    if (parsed && typeof parsed.error === 'string') return { code, text: parsed.error }
   } catch {
     /* raw text */
   }
-  return text || `request failed (${res.status})`
+  return { code: null, text: text || `request failed (${res.status})` }
+}
+
+/** Why a write failed, for a person (see `errReply`). */
+export async function errText(res: Response): Promise<string> {
+  return (await errReply(res)).text
 }
 
 /** This computer's internet address from its tunnel settings, or null

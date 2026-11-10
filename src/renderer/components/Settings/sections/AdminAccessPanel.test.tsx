@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // Settings → Admin Access (the redesign): the people list's states, the
 // lock-out guard (you can't demote, turn off or remove your own login),
-// removal behind a confirm, a role change that says Saved or why not, and
-// the password helpers the dialogs use.
+// removal behind the page's own confirm, a role change or removal that says
+// Saved or why not (in the page's words, then the server's reason), and the
+// password helpers the dialogs use.
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -15,6 +16,8 @@ const cli = vi.hoisted(() => ({
   usersError: null as string | null,
   fetches: [] as Array<{ path: string; method: string; body: Json | undefined }>,
   roleError: null as string | null,
+  roleCode: 'role_change_not_allowed' as string,
+  removeError: null as string | null,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -43,7 +46,6 @@ vi.mock('@/kessel/daemon-ws', () => ({
 
 import { AdminAccessPanel } from './AdminAccessPanel'
 import { makePassword, passwordProblem, usernameProblem } from './admin-access-api'
-import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -59,8 +61,9 @@ beforeEach(() => {
   ]
   cli.usersError = null
   cli.roleError = null
+  cli.roleCode = 'role_change_not_allowed'
+  cli.removeError = null
   cli.fetches = []
-  useConfirmDialogStore.setState({ isOpen: false, onResolve: null })
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -76,13 +79,14 @@ beforeEach(() => {
       if (path === '/cli/users/policy') return json(POLICY)
       if (path === '/cli/tunnel/config') return json({ publicUrl: 'https://alex.k2.dev' })
       if (path === '/cli/users/set-role') {
-        if (cli.roleError) return json({ error: 'role_change_not_allowed', message: cli.roleError }, 403)
+        if (cli.roleError) return json({ error: cli.roleCode, message: cli.roleError }, 403)
         const row = (cli.users ?? []).find((u) => u.username === body?.username)
         if (!row) throw new Error('no such user')
         row.role = body?.role
         return json({ success: true })
       }
       if (path === '/cli/users/remove') {
+        if (cli.removeError) return json({ error: cli.removeError }, 500)
         cli.users = (cli.users ?? []).filter((u) => u.username !== body?.username)
         return json({ success: true })
       }
@@ -110,6 +114,7 @@ describe('Admin Access: states', () => {
     render(<AdminAccessPanel />)
     const card = await screen.findByTestId('admin-access-read-failed')
     expect(card.textContent).toContain('Couldn’t load the people on this server')
+    expect(card.textContent).toContain('Try again in a moment. If it keeps failing, restart K2 on the server.')
     expect(card.textContent).toContain('The server said: users file is locked.')
     cli.usersError = null
     act(() => void fireEvent.click(screen.getByRole('button', { name: 'Try again' })))
@@ -127,7 +132,9 @@ describe('Admin Access: states', () => {
   it('a Member sees why they can’t manage people, and no list is read', async () => {
     cli.whoami = { owner: false, role: 'member', username: 'jordan' }
     render(<AdminAccessPanel />)
-    await screen.findByTestId('admin-access-not-admin')
+    const card = await screen.findByTestId('admin-access-not-admin')
+    expect(card.textContent).toContain('Only an Owner or Admin can change who signs in')
+    expect(card.textContent).not.toMatch(/administrator|the owner/)
     expect(cli.fetches.some((f) => f.path === '/cli/users')).toBe(false)
   })
 })
@@ -142,7 +149,7 @@ describe('Admin Access: lock-out guard', () => {
     render(<AdminAccessPanel />)
     const row = await screen.findByTestId('person-row-alex')
     expect(row.textContent).toContain('You')
-    expect(row.textContent).toContain('This is you. Another owner can change your role.')
+    expect(row.textContent).toContain('This is you. Another Owner can change your role.')
     expect((screen.getByRole('button', { name: 'Role for alex' }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: 'Role for sam' }) as HTMLButtonElement).disabled).toBe(false)
     menu('alex')
@@ -170,7 +177,7 @@ describe('Admin Access: lock-out guard', () => {
     cli.whoami = { owner: false, role: 'admin', username: 'jordan' }
     render(<AdminAccessPanel />)
     const row = await screen.findByTestId('person-row-alex')
-    expect(row.textContent).toContain('The only owner. Make someone else an owner first.')
+    expect(row.textContent).toContain('The only Owner. Make someone else an Owner first.')
     expect((screen.getByRole('button', { name: 'Role for alex' }) as HTMLButtonElement).disabled).toBe(true)
   })
 })
@@ -185,14 +192,34 @@ describe('Admin Access: changes', () => {
     expect(cli.fetches.find((f) => f.path === '/cli/users/set-role')?.body).toEqual({ username: 'jordan', role: 'admin' })
   })
 
-  it('a refused role change puts the role back and says why', async () => {
+  it('a role change only an Owner makes: put back, said in the page’s words, no server text', async () => {
     cli.roleError = "An Admin moves people only between Member and Voice & Chat only. Other role changes are the Owner's."
     render(<AdminAccessPanel />)
     await screen.findByTestId('person-row-jordan')
     act(() => void fireEvent.click(screen.getByRole('button', { name: 'Role for jordan' })))
     act(() => void fireEvent.click(screen.getByTestId('setting-dropdown-menu').querySelector('button[data-value="admin"]') as HTMLElement))
-    await waitFor(() => expect(screen.getByTestId('person-row-jordan').textContent).toContain("Couldn’t save: An Admin moves people only between Member and Voice & Chat only. Other role changes are the Owner's. Nothing changed; try again."))
+    const alert = await waitFor(() => {
+      const a = screen.getByTestId('person-row-jordan').querySelector('[role="alert"]')
+      if (!a) throw new Error('no alert yet')
+      return a
+    })
+    expect(alert.textContent).toBe('Couldn’t change jordan’s role. Only an Owner can make this change. Ask an Owner of this server.')
+    expect(screen.getByTestId('person-row-jordan').textContent).not.toContain('Voice & Chat')
     expect(screen.getByRole('button', { name: 'Role for jordan' }).textContent).toContain('Member')
+  })
+
+  it('any other refused role change says what failed, what to do, then the server’s reason', async () => {
+    cli.roleError = 'users file is locked by another process'
+    cli.roleCode = 'internal'
+    render(<AdminAccessPanel />)
+    await screen.findByTestId('person-row-jordan')
+    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Role for jordan' })))
+    act(() => void fireEvent.click(screen.getByTestId('setting-dropdown-menu').querySelector('button[data-value="admin"]') as HTMLElement))
+    await waitFor(() =>
+      expect(screen.getByTestId('person-row-jordan').querySelector('[role="alert"]')?.textContent).toBe(
+        'Couldn’t change jordan’s role. Their role is unchanged. Try again in a moment.The server said: users file is locked by another process.',
+      ),
+    )
   })
 
   it('Remove asks first; cancelling sends nothing, confirming removes and says so', async () => {
@@ -200,19 +227,48 @@ describe('Admin Access: changes', () => {
     await screen.findByTestId('person-row-jordan')
     menu('jordan')
     act(() => void fireEvent.click(item(/Remove from this server/)))
-    await waitFor(() => expect(useConfirmDialogStore.getState().isOpen).toBe(true))
-    expect(useConfirmDialogStore.getState().title).toBe('Remove jordan from this server?')
-    expect(useConfirmDialogStore.getState().confirmDestructive).toBe(true)
-    act(() => useConfirmDialogStore.getState().close())
-    await new Promise((r) => setTimeout(r, 0))
+    const ask = await screen.findByTestId('remove-confirm-dialog')
+    expect(ask.textContent).toContain('Remove jordan from this server?')
+    // Cancel has the focus, so Enter never removes by accident.
+    expect(document.activeElement?.textContent).toBe('Cancel')
+    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Cancel' })))
+    expect(screen.queryByTestId('remove-confirm-dialog')).toBeNull()
     expect(cli.fetches.some((f) => f.path === '/cli/users/remove')).toBe(false)
 
     menu('jordan')
     act(() => void fireEvent.click(item(/Remove from this server/)))
-    await waitFor(() => expect(useConfirmDialogStore.getState().isOpen).toBe(true))
-    act(() => useConfirmDialogStore.getState().onResolve?.(true))
+    await screen.findByTestId('remove-confirm-dialog')
+    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Remove' })))
     expect((await screen.findByTestId('admin-notice')).textContent).toContain('jordan was removed.')
     await waitFor(() => expect(screen.queryByTestId('person-row-jordan')).toBeNull())
+  })
+
+  it('a refused removal keeps the person and says what failed, what to do, then why', async () => {
+    cli.removeError = 'users file is locked by another process'
+    render(<AdminAccessPanel />)
+    await screen.findByTestId('person-row-jordan')
+    menu('jordan')
+    act(() => void fireEvent.click(item(/Remove from this server/)))
+    await screen.findByTestId('remove-confirm-dialog')
+    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Remove' })))
+    await waitFor(() =>
+      expect(screen.getByTestId('person-row-jordan').querySelector('[role="alert"]')?.textContent).toBe(
+        'Couldn’t remove jordan. They can still sign in. Try again in a moment.The server said: users file is locked by another process.',
+      ),
+    )
+    expect(screen.queryByTestId('admin-notice')).toBeNull()
+  })
+
+  it('making someone an Owner asks first, in the page’s own dialog', async () => {
+    render(<AdminAccessPanel />)
+    await screen.findByTestId('person-row-jordan')
+    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Role for jordan' })))
+    act(() => void fireEvent.click(screen.getByTestId('setting-dropdown-menu').querySelector('button[data-value="owner"]') as HTMLElement))
+    const ask = await screen.findByTestId('owner-confirm-dialog')
+    expect(ask.textContent).toContain('Make jordan an Owner?')
+    expect(cli.fetches.some((f) => f.path === '/cli/users/set-role')).toBe(false)
+    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Make Owner' })))
+    await waitFor(() => expect(cli.fetches.find((f) => f.path === '/cli/users/set-role')?.body).toEqual({ username: 'jordan', role: 'owner' }))
   })
 })
 

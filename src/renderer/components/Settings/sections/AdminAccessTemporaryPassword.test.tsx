@@ -177,7 +177,10 @@ describe('Admin Access: temporary passwords', () => {
     cli.users[1].mustChangePassword = false
     menuItem('gina', /Reset password/)
     const form = screen.getByTestId('reset-form-gina')
-    expect(form.textContent).toContain(MUST_CHANGE_NOTE)
+    expect(form.textContent).toContain('The new one is temporary: when they next sign in, K2 asks them to choose their own.')
+    // The reset dialog's own words, not the add form's.
+    expect(form.textContent).toContain('K2 shows it once, after the reset, for you to copy and send to gina.')
+    expect(form.textContent).not.toContain('after you add them')
     act(() => void fireEvent.click(within(form).getByRole('radio', { name: 'Type one' })))
     act(() => void fireEvent.change(within(form).getByLabelText('Password'), { target: { value: 'reset-123' } }))
     act(() => void fireEvent.click(within(form).getByRole('button', { name: 'Reset password' })))
@@ -193,7 +196,7 @@ describe('Admin Access: temporary passwords', () => {
     await waitFor(() => expect(screen.getByTestId('owner-account-tag-z3thon')).toBeTruthy())
     menuItem('z3thon', /Reset password/)
     const form = screen.getByTestId('reset-form-z3thon')
-    expect(form.textContent).toContain('Your own login: you keep this password.')
+    expect(form.textContent).toContain('This is your own login. Your current password stops working, and you keep the new one.')
     act(() => void fireEvent.click(within(form).getByRole('radio', { name: 'Type one' })))
     act(() => void fireEvent.change(within(form).getByLabelText('Password'), { target: { value: 'mine-1234' } }))
     act(() => void fireEvent.click(within(form).getByRole('button', { name: 'Reset password' })))

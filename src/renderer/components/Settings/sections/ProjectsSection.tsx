@@ -2176,8 +2176,8 @@ export function DnsManageToggle({
           </div>
           {!enabled && globalAllow && !readOnly && (
             <div className="type-hint text-[var(--color-status-warn-text)] mt-1 leading-relaxed">
-              Currently allowed anyway: the global &ldquo;Allow agents to manage DNS
-              records&rdquo; (Settings → Tunnel) is on for every workspace.
+              Currently allowed anyway: &ldquo;Agents can change DNS records&rdquo; (Settings →
+              Tunnel → Policies) is on for every workspace.
             </div>
           )}
       <SaveError state={save.state} />
@@ -3308,9 +3308,8 @@ export function AgentsCreateConnectionsToggle({
           </div>
           {!enabled && globalAllow && !readOnly && (
             <div className="type-hint text-[var(--color-status-warn-text)] mt-1 leading-relaxed">
-              Currently allowed anyway: the global &ldquo;Allow agents to create
-              connections&rdquo; (Settings → Tunnel) is on for every
-              workspace.
+              Currently allowed anyway: &ldquo;Agents can add connections&rdquo; (Settings →
+              Tunnel → Policies) is on for every workspace.
             </div>
           )}
       <SaveError state={save.state} />

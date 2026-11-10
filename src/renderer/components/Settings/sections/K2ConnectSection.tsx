@@ -31,7 +31,18 @@ import { invoke } from '@tauri-apps/api/core'
 import { getDaemonWs, getLocalDaemonWs, daemonHttpBase, invalidateDaemonWs } from '@/kessel/daemon-ws'
 import { withRemoteRetry } from '@/lib/remote-retry'
 import type { SettingEntry } from '../searchManifest'
-import { SettingRow, SettingsGroup, SettingDropdown } from '../controls/SettingControls'
+import {
+  SettingRow,
+  SettingsGroup,
+  SettingDropdown,
+  SettingsLoadState,
+  SaveNote,
+  SaveError,
+  useSaveStatus,
+  SETTING_FIELD_WIDTH,
+} from '../controls/SettingControls'
+import { summarizeTunnel, hostOf } from './tunnel-status'
+import { HealthWord, StatusDot } from './ConnectionsParts'
 import {
   addUserBody,
   temporaryDefaultFor,
@@ -59,7 +70,7 @@ import {
 } from './OwnerAccountToggle'
 import { threadPushAvailable } from './useNotifyPrefs'
 import { SewAdminAccessState } from './SewAccessParts'
-import { BetaTag, Toggle, Checkbox, Tag } from '@/components/ui'
+import { BetaTag, Toggle, Checkbox, Tag, Button, Callout, Input } from '@/components/ui'
 import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
 import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
 import { AgentsCanCreateConnectionsRow } from '../shared/AgentsCanCreateConnectionsRow'
@@ -192,20 +203,21 @@ function getDeviceId(): string {
 // renewal — it only fires one-shot claims on explicit user actions.
 
 export const K2_CONNECT_MANIFEST: SettingEntry[] = [
-  { id: 'k2-connect.account-login', section: 'k2-connect', label: 'Sign in to K2 Connect', description: 'Sign in to k2.dev to pick a purchased subdomain', keywords: ['login', 'sign in', 'account', 'k2.dev', 'email', 'password'] },
-  { id: 'k2-connect.subdomain-list', section: 'k2-connect', label: 'Your subdomains', description: 'Purchased k2.dev subdomains bound to this device', keywords: ['subdomain', 'purchased', 'list', 'bind', 'select'] },
-  { id: 'k2-connect.subdomain', section: 'k2-connect', label: 'Subdomain', description: 'The k2.dev subdomain this device exposes as', keywords: ['subdomain', 'expose', 'tunnel', 'k2.dev', 'public url', 'host'] },
-  { id: 'k2-connect.token', section: 'k2-connect', label: 'K2 Connect Token', description: 'Bearer token for the frpc tunnel', keywords: ['token', 'tunnel', 'frpc', 'auth', 'bearer'] },
-  { id: 'k2-connect.server-addr', section: 'k2-connect', label: 'Tunnel Server Address', description: 'The K2 Connect frps endpoint', keywords: ['server', 'frps', 'address', 'hetzner', 'endpoint'] },
-  { id: 'k2-connect.start-stop', section: 'k2-connect', label: 'Start / Stop Tunnel', description: 'Expose this device at a public URL', keywords: ['start', 'stop', 'tunnel', 'expose', 'connect'] },
-  { id: 'k2-connect.auto-start', section: 'k2-connect', label: 'Re-launch tunnel on restart', description: 'Automatically start this tunnel when K2 restarts', keywords: ['auto', 'autostart', 'restart', 'reconnect', 'boot', 'relaunch'] },
+  { id: 'k2-connect.start-stop', section: 'k2-connect', label: 'Tunnel status', description: 'Whether this server can be reached from the internet, at which address; turn the tunnel on or off', keywords: ['start', 'stop', 'turn on', 'turn off', 'tunnel', 'expose', 'connect', 'reachable', 'status'] },
+  { id: 'k2-connect.auto-start', section: 'k2-connect', label: 'Turn on again after a restart', description: 'The tunnel comes back on by itself when K2 or this computer restarts', keywords: ['auto', 'autostart', 'restart', 'reconnect', 'boot', 'relaunch'] },
+  { id: 'k2-connect.account-login', section: 'k2-connect', label: 'k2.dev account', description: 'Sign in to choose the address this server uses', keywords: ['login', 'sign in', 'account', 'k2.dev', 'email', 'password'] },
+  { id: 'k2-connect.subdomain-list', section: 'k2-connect', label: 'Address', description: 'The k2.dev address this server uses on the internet', keywords: ['subdomain', 'address', 'purchased', 'list', 'bind', 'select', 'switch'] },
+  { id: 'k2-connect.urls', section: 'k2-connect', label: 'Addresses', description: "This server's address and the sites it publishes under it", keywords: ['urls', 'nested', 'subdomains', 'sites', 'routing', 'targets', 'ports', 'workspace', 'publish'] },
+  { id: 'k2-connect.subdomain', section: 'k2-connect', label: 'Set up by hand', description: 'Enter an address, token and relay yourself instead of signing in', keywords: ['subdomain', 'manual', 'advanced', 'tunnel', 'k2.dev', 'host'] },
+  { id: 'k2-connect.token', section: 'k2-connect', label: 'Tunnel token', description: 'The token for setting the tunnel up by hand', keywords: ['token', 'tunnel', 'frpc', 'auth', 'manual'] },
+  { id: 'k2-connect.server-addr', section: 'k2-connect', label: 'Relay and port', description: 'The relay the tunnel connects to, when set up by hand', keywords: ['server', 'frps', 'relay', 'address', 'port', 'endpoint'] },
+  { id: 'k2-connect.release-device', section: 'k2-connect', label: 'Release or forget the tunnel', description: 'Remove the tunnel from this computer', keywords: ['release', 'forget', 'unpair', 'remove', 'delete', 'tunnel'] },
   { id: 'k2-connect.users', section: 'k2-connect', label: 'Users / Access', description: 'People you allow to connect in to this computer', keywords: ['users', 'access', 'people', 'login', 'password', 'connect in', 'multi-user', 'allow', 'invite'] },
-  { id: 'k2-connect.urls', section: 'k2-connect', label: 'URLs', description: 'Tunnel status plus every nested subdomain URL and its workspace', keywords: ['urls', 'nested', 'subdomains', 'routing', 'targets', 'ports', 'workspace', 'attribution', 'claim'] },
-  { id: 'k2-connect.federation', section: 'k2-connect', label: 'Enable federation', description: 'Allow cross-server agent communication on this server', keywords: ['federation', 'cross-server', 'peers', 'agents', 'connect', 'mesh', 'cortana'] },
+  { id: 'k2-connect.federation', section: 'k2-connect', label: 'Connect agents across servers', description: 'Agents here can message agents on the servers you add under Connected Servers', keywords: ['federation', 'cross-server', 'peers', 'agents', 'connect', 'mesh'] },
   { id: 'k2-connect.allow-remote-instruct', section: 'k2-connect', label: 'Let agents on other servers message every agent', description: 'List every agent to connected servers and let their agents message it. People who log in here can always message agents.', keywords: ['remote', 'instruct', 'message', 'agents', 'other servers', 'consent', 'federation', 'inbound', 'roster', 'allow'] },
-  { id: 'k2-connect.public-api', section: 'k2-connect', label: 'Enable public API (/v1)', description: 'Serve the external /v1 API from this server. Takes effect immediately.', keywords: ['api', 'v1', 'public api', 'rest', 'http', 'external', 'surface', 'K2_API', 'api keys', 'host sessions'] },
-  { id: 'k2-connect.login-ingress', section: 'k2-connect', label: 'Password sign-in over the tunnel', description: 'Only via K2 edge (recommended), any client, or off: where this server accepts password sign-in through the tunnel', keywords: ['login', 'sign in', 'password', 'tunnel', 'edge', 'ingress', 'scanner', 'brute force', 'connect users', 'app.k2.dev'] },
-  { id: 'k2-connect.boot-status-public', section: 'k2-connect', label: "Hide this server's details from the internet", description: 'Visitors without a sign-in see only that the server is up — not its version or features (boot-status ghost)', keywords: ['boot-status', 'ghost', 'hide', 'version', 'fingerprint', 'scanner', 'privacy', 'stealth', 'ping'] },
+  { id: 'k2-connect.public-api', section: 'k2-connect', label: 'Public API', description: 'Apps with a key from API Keys can use this server. Takes effect right away.', keywords: ['api', 'v1', 'public api', 'rest', 'http', 'external', 'surface', 'K2_API', 'api keys', 'host sessions'] },
+  { id: 'k2-connect.login-ingress', section: 'k2-connect', label: 'Password sign-in from the internet', description: 'Only at its k2.dev address (recommended), from any app, or off', keywords: ['login', 'sign in', 'password', 'tunnel', 'edge', 'ingress', 'scanner', 'brute force', 'connect users', 'app.k2.dev'] },
+  { id: 'k2-connect.boot-status-public', section: 'k2-connect', label: "Hide this server's details from the internet", description: 'Visitors who are not signed in see only that the server is up, not its version or features', keywords: ['boot-status', 'ghost', 'hide', 'version', 'fingerprint', 'scanner', 'privacy', 'stealth', 'ping'] },
 ]
 
 interface TunnelStatus {
@@ -551,9 +563,20 @@ export function K2ConnectSection({
   const [tokenSet, setTokenSet] = useState(false)
   const [autoStart, setAutoStart] = useState(false)
   const [status, setStatus] = useState<TunnelStatus | null>(null)
+  // Why the last status read failed (the card shows it with Try again).
+  const [statusError, setStatusError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [savedMsg, setSavedMsg] = useState<string | null>(null)
+  // A Turn on in flight, and why the last one failed: the status card
+  // shows both (Connecting…, Couldn't turn on).
+  const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState<string | null>(null)
+  // Any other tunnel action that failed: what failed, in plain words, and
+  // the server's reason.
+  const [error, setErrorState] = useState<{ what: string; detail: string } | null>(null)
+  const setError = (detail: string | null, what = "Couldn't change the tunnel."): void =>
+    setErrorState(detail === null ? null : { what, detail })
+  const manualSave = useSaveStatus()
+  const autoStartSave = useSaveStatus()
 
   // ── Account / subdomain-picker state ──────────────────────────────────
   const [session, setSession] = useState<K2Session | null>(null)
@@ -561,7 +584,7 @@ export function K2ConnectSection({
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
-  const [authError, setAuthError] = useState<string | null>(null)
+  const [authError, setAuthError] = useState<{ what: string; detail: string } | null>(null)
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null)
   const [boundMsg, setBoundMsg] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -745,8 +768,15 @@ export function K2ConnectSection({
   const refreshStatus = async (): Promise<void> => {
     try {
       const res = await tunnelGet('status')
-      if (res.ok) setStatus((await res.json()) as TunnelStatus)
-    } catch { /* ignore */ }
+      if (res.ok) {
+        setStatus((await res.json()) as TunnelStatus)
+        setStatusError(null)
+      } else {
+        setStatusError(await errText(res))
+      }
+    } catch (e) {
+      setStatusError(e instanceof Error ? e.message : String(e))
+    }
   }
 
   // 0.45.2: the daemon announces every tunnel identity change (a switch or
@@ -1103,10 +1133,10 @@ export function K2ConnectSection({
   const saveConfig = async (): Promise<void> => {
     setBusy(true)
     setError(null)
-    setSavedMsg(null)
+    manualSave.reset()
     const built = manualConfigBody({ serverAddr, serverPort, subdomain, token, relayEdited })
     if (!built.ok) {
-      setError(built.error)
+      manualSave.failed(built.error)
       setBusy(false)
       return
     }
@@ -1114,7 +1144,7 @@ export function K2ConnectSection({
     try {
       const res = await tunnelPost('config', body)
       if (!res.ok) {
-        setError(await errText(res))
+        manualSave.failed(await errText(res))
         return
       }
       const cfg = (await res.json()) as TunnelConfigView
@@ -1123,10 +1153,9 @@ export function K2ConnectSection({
       setServerAddr(cfg.serverAddr || '')
       setServerPort(cfg.serverPort ? String(cfg.serverPort) : '')
       setRelayEdited(false)
-      setSavedMsg('Saved')
-      setTimeout(() => setSavedMsg(null), 1500)
+      manualSave.saved()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed')
+      manualSave.failed(e)
     } finally {
       setBusy(false)
     }
@@ -1134,7 +1163,9 @@ export function K2ConnectSection({
 
   const startTunnel = async (): Promise<void> => {
     setBusy(true)
+    setStarting(true)
     setError(null)
+    setStartError(null)
     try {
       const sub = subdomain.trim()
       // Mirror the daemon's is_connectable() locally so an unconfigured Start
@@ -1143,7 +1174,7 @@ export function K2ConnectSection({
       // binds its token — with neither a picked subdomain nor a manually-set
       // token, there is nothing to start.
       if (!sub && !tokenSet) {
-        setError('Select a subdomain first — pick one of your purchased subdomains above (or set one under Advanced), then Start.')
+        setStartError('Choose an address first, or set one up by hand under Advanced.')
         return
       }
       // Claim the lease BEFORE starting (one-shot, explicit user action).
@@ -1154,11 +1185,11 @@ export function K2ConnectSection({
         try {
           const result = await claimSubdomain(accessToken, sub, deviceId, deviceLabel)
           if (!result.claimed && result.holder && result.holder !== deviceId) {
-            setError(`${sub}.k2.dev is in use on another device — stop it there first.`)
+            setStartError(`${sub}.k2.dev is in use on another computer. Turn its tunnel off there first.`)
             return
           }
         } catch (e) {
-          setError(e instanceof Error ? e.message : 'Failed to claim subdomain')
+          setStartError(e instanceof Error ? e.message : String(e))
           return
         }
       }
@@ -1172,23 +1203,26 @@ export function K2ConnectSection({
       const res = await tunnelPost(`enable${sub ? `?subdomain=${encodeURIComponent(sub)}` : ''}`)
       if (!res.ok) {
         // The connector surfaces the frpc-not-installed hint verbatim here.
-        setError(await errText(res))
+        setStartError(await errText(res))
         // Don't keep the lease we just took if the tunnel didn't start.
         if (sub && accessToken) void releaseSubdomain(accessToken, sub, deviceId).catch(() => undefined)
         return
       }
+      setBoundMsg(null)
       await refreshStatus()
       // Lease renewal is now the DAEMON's job (tied to the tunnel being up).
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Start failed')
+      setStartError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
+      setStarting(false)
     }
   }
 
   const stopTunnel = async (): Promise<void> => {
     setBusy(true)
     setError(null)
+    setStartError(null)
     // Release the lease (best-effort) regardless of the stop call's
     // outcome. The DAEMON stops its own renewal loop when the tunnel is
     // torn down (K2 #674) — `/cli/tunnel/stop` flips the lifecycle flag
@@ -1203,12 +1237,13 @@ export function K2ConnectSection({
       // incident this PRD was born from). Start symmetrically re-enables.
       const res = await tunnelPost('disable')
       if (!res.ok) {
-        setError(await errText(res))
+        setError(await errText(res), "Couldn't turn the tunnel off.")
         return
       }
+      setBoundMsg(null)
       await refreshStatus()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Stop failed')
+      setError(e instanceof Error ? e.message : String(e), "Couldn't turn the tunnel off.")
     } finally {
       setBusy(false)
     }
@@ -1228,43 +1263,47 @@ export function K2ConnectSection({
   // dropdown above (one switch, no restart).
   const releaseFromDevice = async (mode: 'release' | 'forget'): Promise<void> => {
     const sub = subdomain.trim()
-    const label = sub ? `${sub}.k2.dev` : 'its subdomain'
+    const label = sub ? `${sub}.k2.dev` : 'its address'
     const ok =
       mode === 'forget'
         ? await confirm({
-            title: 'Forget this tunnel on this device?',
+            title: 'Forget the tunnel on this computer?',
             message:
-              `This device stops using ${label} and deletes its local tunnel settings. ` +
-              `Nothing is sent to K2 Connect, so whichever device holds ${label} now keeps it. ` +
-              `Use this for settings copied from another machine.`,
-            confirmLabel: 'Forget on this device',
+              `This computer stops using ${label} and deletes its tunnel settings. ` +
+              `Nothing is sent to k2.dev, so another computer using ${label} keeps it. ` +
+              `Use this for settings copied from another computer.`,
+            confirmLabel: 'Forget',
+            destructive: true,
           })
         : await confirm({
-            title: 'Release subdomain from this device?',
+            title: `Release ${label} from this computer?`,
             message:
-              `${label} will stop routing to THIS DEVICE — this copy of the tunnel identity ` +
-              `is refused from now on. ` +
+              `${label} stops reaching this computer, and these tunnel settings can't be used again. ` +
               (running
-                ? `K2 Connect is told this device let go of it. `
-                : `This device's tunnel is not running, so it is not the holder: nothing is sent to K2 Connect. `) +
-              `Your account keeps the subdomain; you can pair it on any device any time. ` +
-              `(Moving to another subdomain? Pick it above instead. Just want to pause? Use Stop tunnel.)`,
-            confirmLabel: 'Release this device',
+                ? `k2.dev is told this computer let go of it. `
+                : `The tunnel is off, so nothing is sent to k2.dev. `) +
+              `Your account keeps the address for another computer. To pause instead, turn the tunnel off.`,
+            confirmLabel: 'Release',
+            destructive: true,
           })
     if (!ok) return
+    const what = mode === 'forget' ? "Couldn't forget the tunnel settings." : `Couldn't release ${label}.`
     setBusy(true)
     setError(null)
     setSwitchProgress(null)
     try {
       const res = await tunnelPost(mode === 'forget' ? 'release?confirm=1&mode=forget' : 'release?confirm=1')
       if (!res.ok) {
-        setError(await errText(res))
+        setError(await errText(res), what)
         return
       }
       const report = (await res.json()) as { note?: string; localOnly?: boolean; upstreamReported?: boolean }
       setBoundMsg(
-        report.note ??
-          (report.upstreamReported ? `Released ${label}; K2 Connect recorded it.` : `Released ${label} on this device.`),
+        mode === 'forget'
+          ? 'Forgot the tunnel settings on this computer.'
+          : report.upstreamReported
+            ? `Released ${label}. k2.dev knows this computer let go of it.`
+            : (report.note ?? `Released ${label} on this computer.`),
       )
       // Lease: only the holder had one; free it (best-effort).
       const accessToken = session?.accessToken ?? accessTokenRef.current
@@ -1276,7 +1315,7 @@ export function K2ConnectSection({
       await loadConfig()
       await refreshStatus()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Release failed')
+      setError(e instanceof Error ? e.message : String(e), what)
     } finally {
       setBusy(false)
     }
@@ -1287,19 +1326,20 @@ export function K2ConnectSection({
   // flip with revert-on-failure.
   const toggleAutoStart = async (next: boolean): Promise<void> => {
     setAutoStart(next)
-    setError(null)
+    autoStartSave.reset()
     try {
       const res = await tunnelPost('config', { autoStart: next })
       if (!res.ok) {
         setAutoStart(!next) // revert
-        setError(await errText(res))
+        autoStartSave.failed(await errText(res))
         return
       }
       const cfg = (await res.json()) as TunnelConfigView
       setAutoStart(cfg.autoStart ?? next)
+      autoStartSave.saved()
     } catch (e) {
       setAutoStart(!next) // revert
-      setError(e instanceof Error ? e.message : 'Failed to update auto-start')
+      autoStartSave.failed(e)
     }
   }
 
@@ -1315,10 +1355,10 @@ export function K2ConnectSection({
         const subs = await listSubdomains(sess.accessToken)
         setSubdomains(subs)
       } catch (e) {
-        setAuthError(e instanceof Error ? e.message : 'Failed to load subdomains')
+        setAuthError({ what: "Signed in, but couldn't load your addresses.", detail: e instanceof Error ? e.message : String(e) })
       }
     } catch (e) {
-      setAuthError(e instanceof Error ? e.message : 'Sign in failed')
+      setAuthError({ what: "Couldn't sign in. Check your email and password.", detail: e instanceof Error ? e.message : String(e) })
     } finally {
       setAuthBusy(false)
     }
@@ -1346,10 +1386,12 @@ export function K2ConnectSection({
     setToken(sub.tunnel_token)
     setBusy(true)
     setError(null)
+    setStartError(null)
+    const what = `Couldn't switch to ${sub.label}.k2.dev.`
     try {
       const res = await tunnelPost('config', bindConfigBody(sub, deviceId, deviceLabel ?? ''))
       if (!res.ok) {
-        setError(await errText(res))
+        setError(await errText(res), what)
         return
       }
       const cfg = (await res.json()) as TunnelConfigView & {
@@ -1360,12 +1402,13 @@ export function K2ConnectSection({
       // 0.45.2: the daemon moved off the old name as part of this write
       // (listener, cert renewer, routes); a failed step is shown, not lost.
       if (cfg.identityChange && !cfg.identityChange.ok) {
-        setError(`Bound ${sub.label}.k2.dev, but: ${cfg.identityChange.error ?? 'a step failed'}`)
+        setError(cfg.identityChange.error ?? 'a step failed', `${sub.label}.k2.dev is saved, but moving the tunnel to it didn't finish.`)
         return
       }
-      setBoundMsg(`Bound ${sub.label}.k2.dev — Start the tunnel below.`)
+      setBoundMsg(running ? `This server now uses ${sub.label}.k2.dev.` : `This server will use ${sub.label}.k2.dev. Turn the tunnel on to reach it there.`)
+      void refreshStatus()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to bind subdomain')
+      setError(e instanceof Error ? e.message : String(e), what)
     } finally {
       setBusy(false)
     }
@@ -1424,9 +1467,9 @@ export function K2ConnectSection({
     // from the currently-bound subdomain.
     if (running && value !== subdomain.trim()) {
       const ok = await confirm({
-        title: 'Swap tunnel?',
-        message: `This will end your current tunnel at ${subdomain.trim()}.k2.dev and start ${value}.k2.dev.`,
-        confirmLabel: 'Confirm',
+        title: `Switch to ${value}.k2.dev?`,
+        message: `The tunnel moves from ${subdomain.trim()}.k2.dev to ${value}.k2.dev. Apps signed in at the old address need the new one.`,
+        confirmLabel: 'Switch',
       })
       if (!ok) {
         // Revert: nudge the controlled dropdown back to the current value.
@@ -1485,9 +1528,9 @@ export function K2ConnectSection({
       )
       if (outcome.ok) {
         setSelectedLabel(row.label)
-        setBoundMsg(`Swapped to ${row.label}.k2.dev.`)
+        setBoundMsg(`This server now uses ${row.label}.k2.dev.`)
       } else {
-        setError(outcome.error)
+        setError(outcome.error, `Couldn't switch to ${row.label}.k2.dev. The tunnel still uses ${oldLabel}.k2.dev.`)
         // Nothing changed, or the daemon put the old name back.
         setSelectedLabel(oldLabel || null)
       }
@@ -1499,158 +1542,411 @@ export function K2ConnectSection({
     }
   }
 
+  // ── Tunnel page: what the status card says, and its parts ─────────────
+  const configured = tokenSet || !!subdomain.trim()
+  const summary = summarizeTunnel({
+    loaded: status !== null,
+    readError: statusError,
+    running,
+    enabled: status?.enabled,
+    released: status?.released,
+    frpcInstalled: status ? status.frpc_installed !== false : true,
+    tokenSet,
+    subdomain,
+    signedIn: !!session,
+    hasAddresses: subdomains.length > 0,
+    starting: starting || swapBusy,
+    startError,
+    listenerName: listenerMismatch ? (status?.e2eListener?.subdomain ?? null) : null,
+  })
+  const showAddress = !!publicUrl && (summary.state === 'reachable' || summary.state === 'repair')
+  const [copied, setCopied] = useState(false)
+  const copyAddress = async (url: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e), "Couldn't copy the address.")
+    }
+  }
+  const reloadTunnel = async (): Promise<void> => {
+    setStatusError(null)
+    await loadConfig()
+    await refreshStatus()
+  }
+  const errorCallout = error ? (
+    <Callout tone="error" role="alert">
+      <p className="type-hint">{error.what}</p>
+      <p className="type-hint text-[var(--color-text-secondary)]">
+        The server said: {error.detail.replace(/[.\s]+$/, '')}.
+      </p>
+    </Callout>
+  ) : null
+  const doneNote = boundMsg ? (
+    <p role="status" className="inline-flex items-center gap-1 type-hint text-[var(--color-status-ok-soft)]">
+      <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3 flex-shrink-0">
+        <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+      </svg>
+      {boundMsg}
+    </p>
+  ) : null
+  // Under the status: what failed, or what the last change did.
+  const statusBelow = errorCallout ?? doneNote ?? undefined
+  // Under the address: a switch's live steps.
+  const addressBelow =
+    switchProgress && switchProgress.phase !== 'done' ? (
+      <div className="type-hint space-y-0.5" data-testid="tunnel-switch-progress" aria-live="polite">
+        <p className={switchProgress.phase === 'failed' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-secondary)]'}>
+          {switchProgress.phase === 'failed' ? "The switch didn't finish." : switchProgress.message}
+        </p>
+        {switchProgress.steps.map((s, i) => (
+          <p key={`${s.step}-${i}`} className={s.ok ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-status-error-soft)]'}>
+            {s.ok ? '✓' : '✗'} {s.detail}
+          </p>
+        ))}
+      </div>
+    ) : undefined
+  // Advanced → Set up by hand: the address, token and relay as rows.
+  const manualRows = (
+    <div className="space-y-3" data-testid="tunnel-manual">
+      <div className="flex items-center justify-between gap-6" data-settings-id="k2-connect.subdomain">
+        <label htmlFor="tunnel-manual-sub" className="type-row text-[var(--color-text-primary)]">Address</label>
+        <div className={`${SETTING_FIELD_WIDTH} flex items-center gap-1.5 flex-shrink-0`}>
+          <Input id="tunnel-manual-sub" className="flex-1 min-w-0 type-control" placeholder="alex" value={subdomain} onChange={(e) => setSubdomain(e.target.value)} />
+          <span className="type-hint text-[var(--color-text-secondary)]">.k2.dev</span>
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-6" data-settings-id="k2-connect.token">
+        <label htmlFor="tunnel-manual-token" className="type-row text-[var(--color-text-primary)]">
+          Token{tokenSet && <span className="type-hint text-[var(--color-text-secondary)] ml-2">saved</span>}
+        </label>
+        <Input
+          id="tunnel-manual-token"
+          className={`${SETTING_FIELD_WIDTH} flex-shrink-0 type-control`}
+          type="password"
+          placeholder={tokenSet ? 'Leave blank to keep the saved one' : 'From your k2.dev account'}
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+        />
+      </div>
+      <div className="flex items-center justify-between gap-6" data-settings-id="k2-connect.server-addr">
+        <label htmlFor="tunnel-manual-relay" className="type-row text-[var(--color-text-primary)]">Relay and port</label>
+        <div className={`${SETTING_FIELD_WIDTH} flex items-center gap-1.5 flex-shrink-0`}>
+          <Input
+            id="tunnel-manual-relay"
+            className="flex-1 min-w-0 type-control"
+            placeholder={RELAY_PLACEHOLDER}
+            value={serverAddr}
+            onChange={(e) => {
+              setServerAddr(e.target.value)
+              setRelayEdited(true)
+            }}
+          />
+          <Input
+            aria-label="Relay port"
+            className="w-16 flex-shrink-0 type-control"
+            placeholder={PORT_PLACEHOLDER}
+            value={serverPort}
+            onChange={(e) => {
+              setServerPort(e.target.value)
+              setRelayEdited(true)
+            }}
+          />
+        </div>
+      </div>
+      <SaveError state={manualSave.state} />
+      <div className="flex items-center justify-end gap-2">
+        <SaveNote state={manualSave.state} />
+        <Button onClick={() => void saveConfig()} disabled={busy}>
+          {busy ? 'Saving…' : 'Save'}
+        </Button>
+      </div>
+    </div>
+  )
+
+  // Policies: what other servers, apps and agents may do on the server
+  // you're viewing. On Tunnel, and alone on Connected Servers under air-gap.
+  const policiesGroup = (
+    <SettingsGroup
+      title="Policies"
+      hint={`What other servers, apps and agents may do on ${isRemote ? 'the server you are viewing' : 'this server'}.`}
+      card
+      testId="tunnel-policies"
+    >
+      {myRole !== 'member' ? (
+        <>
+          <SettingRow
+            settingId="k2-connect.federation"
+            label="Connect agents across servers"
+            hint="Agents here can message agents on the servers you add under Connected Servers."
+          >
+            <Toggle
+              checked={federationEnabled}
+              onChange={(next) => void setFederationEnabled(next)}
+              aria-label="Connect agents across servers"
+            />
+          </SettingRow>
+          <AllowRemoteInstructRow />
+          <SettingRow
+            settingId="k2-connect.public-api"
+            label="Public API"
+            hint="Apps with a key from Settings → API Keys can use this server. Takes effect right away."
+          >
+            <Toggle checked={apiEnabled} onChange={(next) => void setApiEnabled(next)} aria-label="Public API" />
+          </SettingRow>
+          <DnsManageEnabledRow />
+          <AgentsCanCreateConnectionsRow />
+          <ConnectLoginIngressRow />
+          <BootStatusPublicRow />
+        </>
+      ) : (
+        <SettingRow label="Only an admin can change these." hint="Ask the owner of this server if something here needs to change.">
+          {null}
+        </SettingRow>
+      )}
+    </SettingsGroup>
+  )
   return (
     <div className="w-full h-full min-h-0 flex flex-col">
       {/* Scroll owned by parent shell panes; avoid nested overflow here. */}
-      <div className="space-y-5 pb-4">
-        {/* ── Policies: host-scoped remote access (active daemon) ──
-            Same SettingsGroup chrome as Account / URLs (title + left rule). */}
-        {panel === 'policies' && (
-          <SettingsGroup title="Policies">
-            {myRole !== 'member' ? (
-              <div className="space-y-1">
-                <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.federation">
-                  <div className="min-w-0">
-                    <span className="type-row text-[var(--color-text-secondary)]">
-                      Enable federation (cross-server agents)
-                    </span>
-                    <span className="type-hint text-[var(--color-text-muted)] ml-2">{isRemote ? 'this server' : 'this device'}</span>
-                  </div>
-                  <Toggle
-                    checked={federationEnabled}
-                    onChange={(next) => void setFederationEnabled(next)}
-                    aria-label="Enable federation"
-                  />
-                </div>
-                <AllowRemoteInstructRow />
-                <div
-                  className="flex items-center justify-between gap-3"
-                  data-settings-id="k2-connect.public-api"
-                >
-                  <div className="min-w-0">
-                    <span className="type-row text-[var(--color-text-secondary)]">
-                      Enable public API (/v1)
-                    </span>
-                    <span className="type-hint text-[var(--color-text-muted)] ml-2">
-                      {isRemote ? 'this server' : 'this device'} · takes effect immediately, no restart
-                    </span>
-                  </div>
-                  <Toggle
-                    checked={apiEnabled}
-                    onChange={(next) => void setApiEnabled(next)}
-                    aria-label="Enable public API"
-                  />
-                </div>
-                <DnsManageEnabledRow />
-                <AgentsCanCreateConnectionsRow />
-                <ConnectLoginIngressRow />
-                <BootStatusPublicRow />
-              </div>
-            ) : (
-              <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
-                Host policies are managed by an administrator.
-              </p>
-            )}
-          </SettingsGroup>
-        )}
+      <div className="space-y-6 pb-4">
+        {/* ── Policies alone (Connected Servers under air-gap) ── */}
+        {panel === 'policies' && policiesGroup}
 
-        {/* ── Tunnel: account + expose + URLs nested map ── */}
+        {/* ── Tunnel: status first (can this server be reached, where, and
+            the one next step), then the k2.dev account and address, the
+            addresses it serves, the policies, and Advanced last. ── */}
         {panel === 'tunnel' && (
         <>
         {isRemote ? (
-          <div className="px-3 py-2 border border-[var(--color-border)] type-hint text-[var(--color-text-muted)] leading-relaxed">
-            Tunnels are set up on the computer they belong to. You&apos;re
-            viewing{' '}
-            <span className="text-[var(--color-text-secondary)]">
-              {activeHost.label}
-            </span>
-            . Switch to <span className="text-[var(--color-text-secondary)]">This computer</span> in
-            the server menu to set up your own tunnel.
-          </div>
+          <SettingsLoadState
+            kind="empty"
+            title="Set up a tunnel on its own computer"
+            testId="tunnel-remote"
+          >
+            You&apos;re viewing {activeHost.label}. To set up this computer&apos;s tunnel, switch to This computer in the
+            server menu.
+          </SettingsLoadState>
+        ) : summary.state === 'loading' ? (
+          <SettingsLoadState kind="loading" title="Checking the tunnel…" testId="tunnel-status-loading">
+            Looking up whether this server can be reached from the internet.
+          </SettingsLoadState>
+        ) : summary.state === 'read-failed' ? (
+          <SettingsLoadState
+            kind="error"
+            title="Couldn't check the tunnel"
+            detail={summary.detail}
+            testId="tunnel-status-error"
+            action={<Button onClick={() => void reloadTunnel()}>Try again</Button>}
+          >
+            K2 couldn&apos;t read this computer&apos;s tunnel status.
+          </SettingsLoadState>
         ) : (
           <>
-        {/* ── Account: sign-in + purchased-subdomain picker ──────────── */}
+        <SettingsGroup title="Status" card testId="tunnel-status">
+          <SettingRow
+            settingId="k2-connect.start-stop"
+            testId="tunnel-status-row"
+            label={
+              <span className="inline-flex items-center gap-2 flex-wrap" aria-live="polite">
+                <StatusDot tone={summary.tone} />
+                <HealthWord tone={summary.tone}>{summary.word}</HealthWord>
+                {showAddress && (
+                  <a
+                    href={publicUrl as string}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="k2-focus font-mono text-[var(--color-accent-text)] hover:underline no-drag"
+                  >
+                    {publicUrl}
+                  </a>
+                )}
+              </span>
+            }
+            hint={
+              <>
+                {summary.hint}
+                {summary.detail && (
+                  <span className="block text-[var(--color-text-secondary)]">
+                    The server said: {summary.detail.replace(/[.\s]+$/, '')}.
+                  </span>
+                )}
+                {summary.state === 'missing-helper' && (
+                  <a
+                    href="https://github.com/fatedier/frp/releases"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="k2-focus block text-[var(--color-accent-text)] hover:underline no-drag"
+                  >
+                    Open the frp releases page
+                  </a>
+                )}
+              </>
+            }
+            below={statusBelow}
+          >
+            {summary.state === 'reachable' && publicUrl && (
+              <Button variant="quiet" className="flex-shrink-0" onClick={() => void copyAddress(publicUrl)}>
+                {copied ? 'Copied' : 'Copy address'}
+              </Button>
+            )}
+            {summary.action === 'turn-off' && (
+              <Button className="flex-shrink-0" onClick={() => void stopTunnel()} disabled={busy || swapBusy}>
+                {busy ? 'Turning off…' : 'Turn off'}
+              </Button>
+            )}
+            {(summary.action === 'turn-on' || summary.action === 'try-again') && (
+              <Button variant="accent" className="flex-shrink-0" onClick={() => void startTunnel()} disabled={busy || swapBusy}>
+                {summary.action === 'try-again' ? 'Try again' : 'Turn on'}
+              </Button>
+            )}
+            {summary.state === 'connecting' && (
+              <Button variant="accent" className="flex-shrink-0" disabled>
+                Turning on…
+              </Button>
+            )}
+            {summary.action === 'repair' && (
+              <Button variant="accent" className="flex-shrink-0" onClick={() => void swapTunnel(subdomain.trim())} disabled={busy || swapBusy}>
+                Repair
+              </Button>
+            )}
+            {summary.action === 'check-again' && (
+              <Button className="flex-shrink-0" onClick={() => void refreshStatus()}>
+                Check again
+              </Button>
+            )}
+          </SettingRow>
+          {configured && !tunnelReleased && summary.state !== 'paused' && (
+            <SettingRow
+              settingId="k2-connect.auto-start"
+              label="Turn on again after a restart"
+              hint={
+                <>
+                  When K2 or this computer restarts, the tunnel comes back on by itself.
+                  <SaveError state={autoStartSave.state} />
+                </>
+              }
+            >
+              <SaveNote state={autoStartSave.state} />
+              <Toggle
+                checked={autoStart}
+                onChange={(next) => void toggleAutoStart(next)}
+                aria-label="Turn on again after a restart"
+              />
+            </SettingRow>
+          )}
+        </SettingsGroup>
+
+        {/* ── k2.dev account: sign in, then choose this server's address ── */}
         <SettingsGroup
-          title="Account"
+          title="k2.dev account"
           badge={<BetaTag />}
+          hint={
+            session
+              ? "Your account holds the addresses you've bought for your servers."
+              : "Your account holds the addresses you've bought. Sign in to choose the one this server uses."
+          }
+          card
+          testId="tunnel-account"
         >
           {!session ? (
-            <div data-settings-id="k2-connect.account-login">
-              <div className="flex flex-col mb-2">
-                <span className="type-row text-[var(--color-text-secondary)]">Sign in to K2 Connect</span>
-                <span className="type-hint text-[var(--color-text-muted)]">
-                  Sign in with your k2.dev account to pick a purchased subdomain automatically.
-                </span>
-              </div>
-              <form
-                className="space-y-2"
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  void handleSignIn()
-                }}
-              >
-                <input
-                  className={inputCls}
+            <form
+              data-settings-id="k2-connect.account-login"
+              aria-label="Sign in to k2.dev"
+              className="divide-y divide-[var(--color-border)]"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void handleSignIn()
+              }}
+            >
+              <SettingRow label="Email" field>
+                <Input
+                  className="w-full type-control"
                   type="email"
                   autoComplete="email"
+                  aria-label="Email"
                   placeholder="you@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
-                <input
-                  className={inputCls}
+              </SettingRow>
+              <SettingRow label="Password" field>
+                <Input
+                  className="w-full type-control"
                   type="password"
                   autoComplete="current-password"
-                  placeholder="Password"
+                  aria-label="Password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
-                {authError && (
-                  <div className="type-hint text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{authError}</div>
-                )}
-                <button
-                  type="submit"
-                  disabled={authBusy || !email.trim() || !password}
-                  className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
-                >
+              </SettingRow>
+              <SettingRow
+                label="Sign in to choose an address"
+                hint={
+                  <>
+                    No account yet? Create one at{' '}
+                    <a href="https://k2.dev" target="_blank" rel="noreferrer" className="k2-focus text-[var(--color-accent-text)] hover:underline no-drag">
+                      k2.dev
+                    </a>
+                    .
+                  </>
+                }
+                below={
+                  authError ? (
+                    <Callout tone="error" role="alert">
+                      <p className="type-hint">{authError.what}</p>
+                      <p className="type-hint text-[var(--color-text-secondary)]">The server said: {authError.detail.replace(/[.\s]+$/, '')}.</p>
+                    </Callout>
+                  ) : undefined
+                }
+              >
+                <Button type="submit" variant={configured ? 'default' : 'accent'} disabled={authBusy || !email.trim() || !password}>
                   {authBusy ? 'Signing in…' : 'Sign in'}
-                </button>
-              </form>
-            </div>
+                </Button>
+              </SettingRow>
+            </form>
           ) : (
             <>
               <SettingRow
                 settingId="k2-connect.account-login"
-                label={
-                  <>
-                    Signed in as{' '}
-                    <span className="text-[var(--color-text-primary)]">{session.email || 'your account'}</span>
-                  </>
+                label={<>Signed in as {session.email || 'your account'}</>}
+                hint="Signing out keeps the tunnel as it is."
+                below={
+                  authError ? (
+                    <Callout tone="error" role="alert">
+                      <p className="type-hint">{authError.what}</p>
+                      <p className="type-hint text-[var(--color-text-secondary)]">The server said: {authError.detail.replace(/[.\s]+$/, '')}.</p>
+                    </Callout>
+                  ) : undefined
                 }
               >
-                <button
-                  onClick={() => void handleSignOut()}
-                  className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer"
-                >
+                <Button variant="quiet" onClick={() => void handleSignOut()}>
                   Sign out
-                </button>
+                </Button>
               </SettingRow>
-
-              <SettingRow settingId="k2-connect.subdomain-list" label="Your subdomains">
-                {subdomains.length === 0 ? (
-                  <span className="type-hint text-[var(--color-text-muted)]">
-                    No subdomains yet — buy one at{' '}
-                    <a
-                      href="https://k2.dev"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[var(--color-accent)] hover:underline"
-                    >
-                      k2.dev
-                    </a>
-                    .
-                  </span>
-                ) : (
+              <SettingRow
+                settingId="k2-connect.subdomain-list"
+                label="Address"
+                hint={
+                  subdomains.length === 0 ? (
+                    <>
+                      Your account has no addresses yet. Buy one at{' '}
+                      <a href="https://k2.dev" target="_blank" rel="noreferrer" className="k2-focus text-[var(--color-accent-text)] hover:underline no-drag">
+                        k2.dev
+                      </a>
+                      , then come back.
+                    </>
+                  ) : running ? (
+                    'The address this server uses. Choosing another moves the tunnel in one step.'
+                  ) : (
+                    'The address this server uses on the internet.'
+                  )
+                }
+                field={subdomains.length > 0}
+                below={addressBelow}
+              >
+                {subdomains.length > 0 ? (
                   <SettingDropdown
                     value={selectedLabel ?? subdomain ?? ''}
                     options={subdomainOptions}
@@ -1658,246 +1954,73 @@ export function K2ConnectSection({
                     // user didn't choose. Picking is what binds the subdomain's
                     // token into config; a phantom "selected" default let users
                     // hit Start with no token bound ("tunnel not configured").
-                    placeholder="Select a subdomain…"
+                    placeholder="Choose an address…"
+                    ariaLabel="Address"
+                    fullWidth
                     onChange={(v) => void handleSubdomainPick(v)}
                   />
-                )}
+                ) : null}
               </SettingRow>
-              {boundMsg && (
-                <div className="type-hint text-[var(--color-status-ok-soft)] py-1">{boundMsg}</div>
-              )}
-              {switchProgress && switchProgress.phase !== 'done' && (
-                <div
-                  className="type-hint py-1 space-y-0.5"
-                  data-testid="tunnel-switch-progress"
-                  aria-live="polite"
-                >
-                  <div
-                    className={
-                      switchProgress.phase === 'failed'
-                        ? 'text-[var(--color-status-error-soft)]'
-                        : 'text-[var(--color-text-secondary)]'
-                    }
-                  >
-                    {switchProgress.phase === 'failed' ? 'Switch failed' : switchProgress.message}
-                  </div>
-                  {switchProgress.steps.map((s, i) => (
-                    <div
-                      key={`${s.step}-${i}`}
-                      className={
-                        s.ok
-                          ? 'text-[var(--color-text-muted)]'
-                          : 'text-[var(--color-status-error-soft)]'
-                      }
-                    >
-                      {s.ok ? '✓' : '✗'} {s.detail}
-                    </div>
-                  ))}
-                </div>
-              )}
             </>
           )}
         </SettingsGroup>
-
-        {/* ── Live status — tri-state, never a spinner that hides which
-            (PRD tunnel-disable-unpair §4): Connected / Disabled (by you)
-            / Released (this device unpaired) / plain stopped. ────────── */}
-        <div className="flex items-center gap-2 px-3 py-2 border border-[var(--color-border)]">
-          <span
-            className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)]"
-            style={{
-              backgroundColor: running
-                ? 'var(--color-status-ok)'
-                : tunnelReleased || tunnelDisabled
-                  ? 'var(--color-status-warn-amber)'
-                  : 'var(--color-neutral)',
-            }}
-          />
-          <span className="type-row text-[var(--color-text-secondary)]">
-            {running
-              ? 'Tunnel running'
-              : tunnelReleased
-                ? 'Released — this device is unpaired (re-pair to use a subdomain here)'
-                : tunnelDisabled
-                  ? 'Tunnel disabled (by you) — persists across restarts'
-                  : 'Tunnel stopped'}
-          </span>
-          {running && publicUrl && (
-            <a
-              href={publicUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="ml-auto type-hint text-[var(--color-accent)] hover:underline font-mono truncate max-w-[220px]"
-            >
-              {publicUrl}
-            </a>
-          )}
-        </div>
-
-        {listenerMismatch && (
-          <div className="type-hint px-3 py-1.5 border border-[color-mix(in_srgb,var(--color-status-warn-amber)_30%,transparent)] text-[var(--color-status-warn-amber-soft)]">
-            The tunnel is {subdomain.trim()}.k2.dev but the encrypted listener still holds the{' '}
-            {status?.e2eListener?.subdomain}.k2.dev certificate, so direct connections fail. Pick{' '}
-            {subdomain.trim()} in the list above again to repair it (no restart needed).
-          </div>
-        )}
-
-        {frpcMissing && (
-          <div className="flex items-start gap-2 px-3 py-2 border border-[color-mix(in_srgb,var(--color-status-warn-amber)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warn-amber)_5%,transparent)]">
-            <span className="text-[var(--color-status-warn-amber)] type-row leading-none flex-shrink-0 mt-0.5">&#9888;</span>
-            <div className="type-hint text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] leading-relaxed">
-              <strong className="text-[var(--color-status-warn-amber-soft)]">frpc not installed.</strong>{' '}
-              K2 Connect needs the <span className="font-mono">frpc</span> client on your PATH.
-              Install it from <span className="font-mono">github.com/fatedier/frp/releases</span>{' '}
-              (or via <span className="font-mono">brew install frpc</span>) and try again.
-            </div>
-          </div>
-        )}
-
-        {error && <div className="type-hint text-[var(--color-status-error-soft)] px-3 py-1.5 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{error}</div>}
-
-        {/* ── Auto-start toggle (left) + Start/Stop (right), one row,
-            above the Advanced/manual config ──────────────────────────── */}
-        <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.start-stop">
-          <label className="flex items-center gap-2 cursor-pointer select-none no-drag">
-            <Checkbox
-              checked={autoStart}
-              onChange={(e) => void toggleAutoStart(e.target.checked)}
-            />
-            <span className="type-row text-[var(--color-text-secondary)]">Re-launch this tunnel on restart</span>
-          </label>
-          {running ? (
-            <button
-              onClick={() => void stopTunnel()}
-              disabled={busy || swapBusy}
-              className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[color-mix(in_srgb,var(--color-status-error)_80%,transparent)] hover:bg-[var(--color-status-error)] no-drag cursor-pointer disabled:opacity-60"
-            >
-              {swapBusy ? 'Swapping…' : 'Stop tunnel'}
-            </button>
-          ) : (
-            <button
-              onClick={() => void startTunnel()}
-              disabled={busy || swapBusy}
-              className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
-            >
-              Start tunnel
-            </button>
-          )}
-        </div>
-
-        {/* ── Release subdomain from this device (PRD tunnel-disable-
-            unpair §2B) — destructive, confirm-gated. Only offered while
-            an identity exists to release (token bound, not yet
-            released). ─────────────────────────────────────────────────── */}
-        {tokenSet && !tunnelReleased && (
-          <div className="flex items-center justify-end gap-4" data-settings-id="k2-connect.release-device">
-            <button
-              onClick={() => void releaseFromDevice('forget')}
-              disabled={busy || swapBusy}
-              title="Delete this device's tunnel settings without telling K2 Connect (settings copied from another machine)"
-              className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer disabled:opacity-60"
-            >
-              Forget this tunnel on this device…
-            </button>
-            <button
-              onClick={() => void releaseFromDevice('release')}
-              disabled={busy || swapBusy}
-              className="type-hint text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error)] hover:underline no-drag cursor-pointer disabled:opacity-60"
-            >
-              Release subdomain from this device…
-            </button>
-          </div>
-        )}
-
-        <div className="type-hint text-[var(--color-text-muted)] space-y-1">
-          <p>1. Sign in to k2.dev above and pick a subdomain you own (e.g. <span className="font-mono">alice</span>).</p>
-          <p>2. Start the tunnel. This computer becomes reachable at <span className="font-mono">https://&lt;sub&gt;.k2.dev</span>.</p>
-          <p>3. Add that address as a server on another computer (Settings → Connected Servers), or pair the K2 Companion app.</p>
-        </div>
-
-        {/* ── Advanced / manual config (fallback) — below the instructions ── */}
-        <div>
-          <button
-            onClick={() => setShowAdvanced((v) => !v)}
-            className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] no-drag cursor-pointer mb-2"
-          >
-            {showAdvanced ? '▾' : '▸'} Advanced / manual config
-          </button>
-          {showAdvanced && (
-            <SettingsGroup title="Advanced / manual config">
-              <SettingRow settingId="k2-connect.subdomain" label="Subdomain">
-                <input
-                  className={inputCls}
-                  style={{ maxWidth: 200 }}
-                  placeholder="e.g. alice"
-                  value={subdomain}
-                  onChange={(e) => setSubdomain(e.target.value)}
-                />
-              </SettingRow>
-              <SettingRow
-                settingId="k2-connect.token"
-                label={
-                  <>
-                    Token
-                    {tokenSet && <span className="ml-2 type-hint text-[var(--color-status-ok-soft)]">Set</span>}
-                  </>
-                }
-              >
-                <input
-                  className={inputCls}
-                  style={{ maxWidth: 200 }}
-                  type="password"
-                  placeholder={tokenSet ? '•••••••• (leave blank to keep)' : 'K2 Connect token'}
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                />
-              </SettingRow>
-              <SettingRow settingId="k2-connect.server-addr" label="Tunnel Server">
-                <div className="flex gap-1.5">
-                  <input
-                    className={inputCls}
-                    style={{ maxWidth: 150 }}
-                    placeholder={RELAY_PLACEHOLDER}
-                    value={serverAddr}
-                    onChange={(e) => {
-                      setServerAddr(e.target.value)
-                      setRelayEdited(true)
-                    }}
-                  />
-                  <input
-                    className={inputCls}
-                    style={{ maxWidth: 64 }}
-                    placeholder={PORT_PLACEHOLDER}
-                    value={serverPort}
-                    onChange={(e) => {
-                      setServerPort(e.target.value)
-                      setRelayEdited(true)
-                    }}
-                  />
-                </div>
-              </SettingRow>
-              <div className="flex items-center gap-2 pt-2">
-                <button
-                  onClick={() => void saveConfig()}
-                  disabled={busy}
-                  className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60"
-                >
-                  {busy ? 'Saving…' : 'Save'}
-                </button>
-                {savedMsg && <span className="type-hint text-[var(--color-status-ok-soft)]">{savedMsg}</span>}
-              </div>
-            </SettingsGroup>
-          )}
-        </div>
           </>
         )}
 
-        {/* URLs on Tunnel for both This Mac and remote active host */}
-        <SettingsGroup title="URLs">
-          <div data-settings-id="k2-connect.urls">
-            <TunnelUrlsPanel canManage={canManagePublishedSubdomains(isRemote, myRole)} />
-          </div>
+        {/* Addresses: this server's and the sites published under it (This
+            computer or the server you're viewing). */}
+        <SettingsGroup
+          title="Addresses"
+          hint="This server's address and the sites it publishes under it."
+          card
+          settingId="k2-connect.urls"
+          testId="tunnel-addresses"
+        >
+          <TunnelUrlsPanel canManage={canManagePublishedSubdomains(isRemote, myRole)} />
         </SettingsGroup>
+
+        {policiesGroup}
+
+        {/* ── Advanced: manual setup and removing the tunnel ── */}
+        {!isRemote && summary.state !== 'loading' && summary.state !== 'read-failed' && (
+          <SettingsGroup
+            title="Advanced"
+            hint="Set the tunnel up by hand, or remove it from this computer."
+            card
+            testId="tunnel-advanced"
+          >
+            <SettingRow
+              label="Set up by hand"
+              hint="Enter an address and token yourself instead of signing in."
+              below={showAdvanced ? manualRows : undefined}
+            >
+              <Button variant="quiet" aria-expanded={showAdvanced} onClick={() => setShowAdvanced((v) => !v)}>
+                {showAdvanced ? 'Hide' : 'Set up by hand'}
+              </Button>
+            </SettingRow>
+            {tokenSet && !tunnelReleased && (
+              <SettingRow
+                settingId="k2-connect.release-device"
+                label={`Release ${subdomain.trim() ? hostOf(subdomain.trim()) : 'the address'} from this computer`}
+                hint="It stops reaching this computer. Your account keeps the address for another computer."
+              >
+                <Button variant="danger-quiet" onClick={() => void releaseFromDevice('release')} disabled={busy || swapBusy}>
+                  Release…
+                </Button>
+              </SettingRow>
+            )}
+            {tokenSet && !tunnelReleased && (
+              <SettingRow
+                label="Forget the tunnel settings"
+                hint="Deletes this computer's tunnel settings without telling k2.dev. For settings copied from another computer."
+              >
+                <Button variant="danger-quiet" onClick={() => void releaseFromDevice('forget')} disabled={busy || swapBusy}>
+                  Forget…
+                </Button>
+              </SettingRow>
+            )}
+          </SettingsGroup>
+        )}
         </>
         )}
 

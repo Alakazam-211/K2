@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-// 0.45.7 Settings → K2 Connect → URLs: Add published subdomain + per-row
+// 0.45.7 Settings → K2 Connect → URLs: Add a site + per-row
 // Change target / Remove, shown only to the local server's owner/admin.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -68,8 +68,8 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 function openAddForm(): HTMLElement {
-  fireEvent.click(screen.getByRole('button', { name: 'Add published subdomain' }))
-  return screen.getByRole('form', { name: 'Add published subdomain' })
+  fireEvent.click(screen.getByRole('button', { name: 'Add a site' }))
+  return screen.getByRole('form', { name: 'Add a site' })
 }
 
 describe('TunnelUrlsPanel — who sees the controls', () => {
@@ -77,20 +77,20 @@ describe('TunnelUrlsPanel — who sees the controls', () => {
     h.activeHost = { id: 'r1', label: 'ironwood', hostname: 'ironwood.k2.dev' }
     render(<TunnelUrlsPanel canManage />)
     expect(screen.getByText('localhost:3000')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Add published subdomain' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add a site' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Change target' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull()
   })
 
   it('without canManage (member) the panel is read-only', () => {
     render(<TunnelUrlsPanel />)
-    expect(screen.queryByRole('button', { name: 'Add published subdomain' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add a site' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull()
   })
 
   it('the local owner/admin gets add plus per-row actions', () => {
     render(<TunnelUrlsPanel canManage />)
-    expect(screen.getByRole('button', { name: 'Add published subdomain' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Add a site' })).toBeTruthy()
     expect(screen.getAllByRole('button', { name: 'Change target' })).toHaveLength(2)
     expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(2)
   })
@@ -140,7 +140,7 @@ describe('TunnelUrlsPanel — add', () => {
     })
     fireEvent.click(within(form).getByRole('button', { name: 'Add' }))
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('That label is already taken.'))
-    expect(screen.getByRole('form', { name: 'Add published subdomain' })).toBeTruthy()
+    expect(screen.getByRole('form', { name: 'Add a site' })).toBeTruthy()
   })
 })
 

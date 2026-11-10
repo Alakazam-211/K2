@@ -14,10 +14,12 @@ import {
   nestedPublicUrl,
   sortedTargets,
 } from '@/components/WorkspacePanel/urls-ports'
+import { SettingRow } from '../controls/SettingControls'
 
-// URLs — the SERVER-WIDE tunnel view inside Settings → K2 Connect:
-// tunnel running / public URL / local port / relay plus the FULL nested
-// subdomain table with its 0074 workspace-attribution column. This is the
+// Addresses — the SERVER-WIDE tunnel view inside Settings → Tunnel, as rows
+// of the Addresses card: this server's address (with its local port and
+// relay), then every site published under it with the workspace it
+// belongs to (0074 attribution). This is the
 // generic surface the workspace drawer deliberately is NOT (the drawer
 // shows only the active workspace's attributed URLs); state comes from
 // the same shared `useTunnelUrls` hook so both can never disagree.
@@ -32,18 +34,10 @@ import {
 // (local host + whoami role); the panel re-checks the window's host so a
 // remote server never shows them.
 
-// One label/value row, matching the drawer's identity-row idiom.
-function InfoRow({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
-  return (
-    <div className="flex items-baseline gap-2 mt-1 first:mt-0">
-      <span className="type-section uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0 w-16">
-        {label}
-      </span>
-      {children}
-    </div>
-  )
-}
+const LINK = 'k2-focus font-mono text-[var(--color-accent-text)] hover:underline truncate no-drag cursor-pointer'
 
+/** Rows for the Addresses card (Settings → Tunnel). Render inside a
+ *  `SettingsGroup card`: each child is one row of the card. */
 export function TunnelUrlsPanel({ canManage = false }: { canManage?: boolean } = {}): React.JSX.Element {
   const scope = primaryScope()
   const { status, subs } = useTunnelUrls(scope)
@@ -59,158 +53,113 @@ export function TunnelUrlsPanel({ canManage = false }: { canManage?: boolean } =
   const primary = subs && typeof subs === 'object' ? subs.primary : ''
   const rows = sortedTargets(targets)
 
-  const workspaceName = (projectId: string | null): string => {
-    if (!projectId) return '—'
+  const workspaceName = (projectId: string | null): string | null => {
+    if (!projectId) return null
     return projects.find((p) => p.id === projectId)?.name ?? projectId
   }
 
+  const serverDetails = [
+    typeof status?.local_port === 'number' ? `local port ${status.local_port}` : null,
+    status?.server_addr ? `relay ${status.server_addr}` : null,
+  ].filter(Boolean)
+
   return (
-    <div className="space-y-3">
-      {/* ── Tunnel status ── */}
-      {status === null ? (
-        <p className="type-hint text-[var(--color-text-muted)]">
-          Checking tunnel status…
-        </p>
-      ) : !running ? (
-        <div className="flex items-center gap-2">
-          <span
-            className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)]"
-            style={{ backgroundColor: 'var(--color-neutral)' }}
-          />
-          <span className="type-hint text-[var(--color-text-muted)]">
-            K2 Connect tunnel isn&apos;t running
-          </span>
-        </div>
+    <>
+      <SettingRow
+        label="This server"
+        testId="tunnel-address-server"
+        hint={
+          status === null ? (
+            'Checking the tunnel…'
+          ) : !running ? (
+            'No address while the tunnel is off.'
+          ) : (
+            <>
+              {publicUrl ? (
+                <a href={publicUrl} target="_blank" rel="noreferrer" className={LINK}>
+                  {publicUrl}
+                </a>
+              ) : (
+                'The relay gives this server its address.'
+              )}
+              {serverDetails.length > 0 && <> · {serverDetails.join(' · ')}</>}
+            </>
+          )
+        }
+      >
+        {null}
+      </SettingRow>
+
+      {subs === undefined ? (
+        <SettingRow label="Sites" hint="Loading the sites this server publishes…">
+          {null}
+        </SettingRow>
+      ) : subs === null ? (
+        <SettingRow label="Sites" hint="This server's version of K2 can't list its published sites. Update K2 there to see them.">
+          {null}
+        </SettingRow>
+      ) : rows.length === 0 ? (
+        <SettingRow
+          label="Sites"
+          hint={
+            manage
+              ? 'No sites yet. A site shares a port on this computer at its own address, like docs.' + (primary || 'you') + '.k2.dev.'
+              : 'No sites published yet.'
+          }
+        >
+          {null}
+        </SettingRow>
       ) : (
-        <div>
-          <InfoRow label="Public">
-            {publicUrl ? (
-              <a
-                href={publicUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="type-hint font-mono text-[var(--color-accent)] hover:underline truncate no-drag cursor-pointer"
-              >
-                {publicUrl}
-              </a>
-            ) : (
-              <span className="type-hint text-[var(--color-text-muted)]">
-                (assigned by server)
-              </span>
-            )}
-          </InfoRow>
-          {status.subdomain && (
-            <InfoRow label="Subdomain">
-              <span className="type-hint font-mono text-[var(--color-text-primary)] truncate">
-                {status.subdomain}
-              </span>
-            </InfoRow>
-          )}
-          {typeof status.local_port === 'number' && (
-            <InfoRow label="Local port">
-              <span className="type-hint font-mono tabular-nums text-[var(--color-text-primary)]">
-                {status.local_port}
-              </span>
-            </InfoRow>
-          )}
-          {status.server_addr && (
-            <InfoRow label="Relay">
-              <span className="type-hint font-mono text-[var(--color-text-primary)] truncate">
-                {status.server_addr}
-              </span>
-            </InfoRow>
-          )}
-        </div>
+        rows.map(([label, info]) => {
+          const url = nestedPublicUrl(label, primary, publicUrl)
+          const ws = workspaceName(info.projectId)
+          return (
+            <SettingRow
+              key={label}
+              testId="tunnel-address-site"
+              label={
+                url ? (
+                  <a href={url} target="_blank" rel="noreferrer" className={LINK}>
+                    {url}
+                  </a>
+                ) : (
+                  <span className="font-mono">{label}</span>
+                )
+              }
+              hint={
+                <>
+                  Shows <span className="font-mono">{info.target}</span>
+                  {' · '}
+                  <span title={info.projectId ?? undefined}>{ws ? `${ws} workspace` : 'No workspace'}</span>
+                </>
+              }
+              below={manage ? <SiteVisibilityControls scope={scope} label={label} settings /> : undefined}
+            >
+              {manage && (
+                <PublishedSubdomainRowActions
+                  api={api}
+                  label={label}
+                  target={info.target}
+                  projectId={info.projectId}
+                  host={(url ?? label).replace(/^https:\/\//, '')}
+                  confirmRemove={confirm}
+                />
+              )}
+            </SettingRow>
+          )
+        })
       )}
 
-      {/* ── Nested subdomain table (full, server-wide) ── */}
-      <div className="pt-2 border-t border-[var(--color-border)]">
-        <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-          Nested URLs
-        </span>
-        {subs === undefined ? (
-          <p className="type-hint text-[var(--color-text-muted)] mt-1">Loading…</p>
-        ) : subs === null ? (
-          <p className="type-hint text-[var(--color-text-muted)] mt-1">
-            Not available on this server.
-          </p>
-        ) : rows.length === 0 ? (
-          manage ? (
-            <p className="type-hint text-[var(--color-text-muted)] mt-1">No nested URLs yet.</p>
-          ) : (
-            <p className="type-hint text-[var(--color-text-muted)] mt-1">
-              No nested URLs —{' '}
-              <span className="font-mono">
-                k2 publish subdomain create &lt;label&gt; --target localhost:&lt;port&gt;
-              </span>
-            </p>
-          )
-        ) : (
-          <div className="mt-1.5">
-            <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] gap-x-3 type-section uppercase tracking-wider text-[var(--color-text-muted)] pb-1 border-b border-[var(--color-border)]">
-              <span>URL</span>
-              <span>Target</span>
-              <span>Workspace</span>
-            </div>
-            {rows.map(([label, info]) => {
-              const url = nestedPublicUrl(label, primary, publicUrl)
-              return (
-                <div
-                  key={label}
-                  className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] gap-x-3 py-1 border-b border-[var(--color-border)] last:border-b-0"
-                >
-                  {url ? (
-                    <a
-                      href={url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="type-hint font-mono text-[var(--color-accent)] hover:underline truncate no-drag cursor-pointer"
-                    >
-                      {url}
-                    </a>
-                  ) : (
-                    <span className="type-hint font-mono text-[var(--color-text-primary)] truncate">
-                      {label}
-                    </span>
-                  )}
-                  <span className="type-hint font-mono text-[var(--color-text-secondary)] truncate">
-                    {info.target}
-                  </span>
-                  <span
-                    className={`type-hint truncate ${info.projectId ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-muted)]'}`}
-                    title={info.projectId ?? 'Not attributed to a workspace — adopt with: k2 publish subdomain claim <label>'}
-                  >
-                    {workspaceName(info.projectId)}
-                  </span>
-                  {manage && (
-                    <div className="col-span-3 pt-1">
-                      <SiteVisibilityControls scope={scope} label={label} />
-                    </div>
-                  )}
-                  {manage && (
-                    <PublishedSubdomainRowActions
-                      api={api}
-                      label={label}
-                      target={info.target}
-                      projectId={info.projectId}
-                      host={(url ?? label).replace(/^https:\/\//, '')}
-                      confirmRemove={confirm}
-                    />
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-        {manage && subs !== null && (
+      {manage && subs !== null && subs !== undefined && (
+        <div className="px-4 py-3">
           <AddPublishedSubdomainForm
             api={api}
             primary={primary || status?.subdomain || ''}
             publicUrl={publicUrl}
             workspaces={projects}
           />
-        )}
-      </div>
-    </div>
+        </div>
+      )}
+    </>
   )
 }

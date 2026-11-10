@@ -104,7 +104,7 @@ describe('ApiTokensSection hire scope', () => {
     const hint = await screen.findByTestId('api-surface-off')
     // The toggle moved: there is no "K2 Connect" item in Settings now.
     expect(hint.textContent).not.toContain('K2 Connect')
-    expect(hint.textContent).toContain('Settings → Network → Tunnel → Policies → Enable public API (/v1)')
+    expect(hint.textContent).toContain('Settings → Network → Tunnel → Policies → Public API')
     expect(hint.textContent).toContain('k2 api on')
   })
 

@@ -2,6 +2,7 @@ import React from 'react'
 import { useCallback } from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import { Toggle } from '@/components/ui'
+import { SettingRow } from '../controls/SettingControls'
 
 // ── DNS K1 — "Allow agents to manage DNS records" ──────────────────
 // Per-host opt-in that lets agents create/update/delete DNS records at
@@ -25,18 +26,16 @@ export function DnsManageEnabledRow(): React.JSX.Element {
   }, [allow, setAllow])
 
   return (
-    <div className="flex items-center justify-between py-2" data-settings-id="k2-connect.dns-manage-enabled">
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="type-row text-[var(--color-text-secondary)]">
-          Allow agents to manage DNS records
-        </span>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
-          {allow
-            ? 'Agents on this host may create, update, and delete DNS records. Each workspace can also opt in individually under Workspaces.'
-            : 'Off (recommended): agents cannot mutate DNS. Turn on to let agents manage DNS records for this host — each workspace can also opt in individually under Workspaces.'}
-        </p>
-      </div>
-      <Toggle checked={allow} onChange={toggle} aria-label="Allow agents to manage DNS records" />
-    </div>
+    <SettingRow
+      settingId="k2-connect.dns-manage-enabled"
+      label="Agents can change DNS records"
+      hint={
+        allow
+          ? 'Agents here can add, change and delete DNS records for this server. Workspaces can also turn this on one at a time.'
+          : 'Off (recommended). When on, agents here can add, change and delete DNS records for this server. Workspaces can also turn this on one at a time.'
+      }
+    >
+      <Toggle checked={allow} onChange={toggle} aria-label="Agents can change DNS records" />
+    </SettingRow>
   )
 }

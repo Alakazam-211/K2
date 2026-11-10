@@ -2,6 +2,7 @@ import React from 'react'
 import { useCallback } from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import { Toggle } from '@/components/ui'
+import { SettingRow } from '../controls/SettingControls'
 
 // ── C1 (0.40.45) — "Allow agents to create connections" ─────────────
 // Per-host opt-in that lets agents add/remove workspace connections
@@ -27,25 +28,16 @@ export function AgentsCanCreateConnectionsRow(): React.JSX.Element {
   }, [allow, setAllow])
 
   return (
-    <div
-      className="flex items-center justify-between py-2"
-      data-settings-id="k2-connect.agents-can-create-connections"
+    <SettingRow
+      settingId="k2-connect.agents-can-create-connections"
+      label="Agents can add connections"
+      hint={
+        allow
+          ? 'Agents here can add and remove connections between workspaces. Workspaces can also turn this on one at a time. You can always manage connections yourself.'
+          : 'Off (recommended). When on, agents here can add and remove connections between workspaces. You can always manage connections yourself.'
+      }
     >
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="type-row text-[var(--color-text-secondary)]">
-          Allow agents to create connections
-        </span>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
-          {allow
-            ? 'Agents on this host may add and remove workspace connections. Each workspace can also opt in individually under Workspaces. You (the owner) can always manage connections.'
-            : 'Off (recommended): agents cannot add or remove connections. Turn on to let agents wire workspaces on this host — each workspace can also opt in individually under Workspaces. You (the owner) can always manage connections.'}
-        </p>
-      </div>
-      <Toggle
-        checked={allow}
-        onChange={toggle}
-        aria-label="Allow agents to create connections"
-      />
-    </div>
+      <Toggle checked={allow} onChange={toggle} aria-label="Agents can add connections" />
+    </SettingRow>
   )
 }

@@ -1,6 +1,7 @@
 // Settings → Network → Tunnel / Connected Servers and Settings → Access →
-// Admin Access (sidebar; one K2 Server group before 0.45.7). Tunnel is a
-// middle split (expose left, policies right). Deep-link: `connections` →
+// Admin Access (sidebar; one K2 Server group before 0.45.7). Tunnel is one
+// column at the Settings content width, like General: status first, then
+// the account, addresses, policies and Advanced. Deep-link: `connections` →
 // Connected Servers; `k2-connect` → Tunnel; `k2-access` → Admin Access.
 
 import React from 'react'
@@ -16,8 +17,7 @@ type ConnectTab = 'tunnel' | 'people' | 'servers'
 const PAGE: Record<ConnectTab, { title: string; blurb: string }> = {
   tunnel: {
     title: 'Tunnel',
-    blurb:
-      'Make this computer reachable from other devices (left) and set policies for the current server (right).',
+    blurb: 'Reach this server from your phone and other computers over the internet, at its own k2.dev address.',
   },
   people: {
     title: 'Admin Access',
@@ -44,11 +44,11 @@ export function K2ConnectSettingsShell(): React.JSX.Element {
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden p-6">
-      <div className="flex-shrink-0 space-y-1 pb-3">
+      <div className={`flex-shrink-0 ${tab === 'tunnel' ? 'pb-5 max-w-[52rem]' : 'pb-3'}`}>
         <h2 className="type-title text-[var(--color-text-primary)]">
           {PAGE[tab].title}
         </h2>
-        <p className="type-hint text-[var(--color-text-muted)]">{PAGE[tab].blurb}</p>
+        <p className="type-hint text-[var(--color-text-secondary)] mt-0.5">{PAGE[tab].blurb}</p>
         {tab === 'people' && <AccessAuditLink />}
       </div>
 
@@ -77,16 +77,11 @@ export function K2ConnectSettingsShell(): React.JSX.Element {
           </div>
           )
         ) : tab === 'tunnel' && !hideTunnel ? (
-          /* Middle split: Tunnel (expose + URLs) | Policies */
-          <div className="flex h-full min-h-0">
-            <div className="flex-1 min-w-0 overflow-y-auto pr-3 [scrollbar-gutter:stable]">
+          /* One column: status, account, addresses, policies, Advanced. */
+          <div className="h-full min-h-0 overflow-y-auto pr-3 pb-8 [scrollbar-gutter:stable]">
+            <div className="w-full max-w-[52rem]">
               <SectionErrorBoundary>
                 <K2ConnectSection panel="tunnel" />
-              </SectionErrorBoundary>
-            </div>
-            <div className="flex-1 min-w-0 overflow-y-auto border-l border-[var(--color-border)] pl-6 pr-3 [scrollbar-gutter:stable]">
-              <SectionErrorBoundary>
-                <K2ConnectSection panel="policies" />
               </SectionErrorBoundary>
             </div>
           </div>

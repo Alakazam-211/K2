@@ -43,7 +43,7 @@ import { SettingDropdown, SettingsGroup } from '../controls/SettingControls'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
 
-/** Where the "Enable public API (/v1)" toggle lives: the Policies column
+/** Where the "Public API" switch lives: the Policies column
  *  of Network → Tunnel, or of Connected Servers under air-gap (Tunnel is
  *  hidden then; `K2ConnectSettingsShell`). */
 export function publicApiToggleLocation(airgap: boolean = isAirgap()): string {
@@ -168,7 +168,7 @@ export function ApiTokensSection(): React.JSX.Element {
         {!apiEnabled && (
           <p className="type-hint text-[var(--color-status-warn-text)] mt-1 max-w-2xl" data-testid="api-surface-off">
             The public /v1 API is off on this server, so no key works yet (hiring agents included).
-            Turn it on under {publicApiToggleLocation()} → Enable public API (/v1), or{' '}
+            Turn it on under {publicApiToggleLocation()} → Public API, or{' '}
             <code className="type-hint">k2 api on</code>.
           </p>
         )}

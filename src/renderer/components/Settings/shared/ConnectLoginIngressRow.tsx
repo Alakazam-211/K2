@@ -1,7 +1,7 @@
 import React, { useCallback } from 'react'
 import { useSettingsStore, normalizeConnectLoginIngress } from '@/stores/settings'
 import type { ConnectLoginIngress } from '@shared/types'
-import { SettingDropdown } from '../controls/SettingControls'
+import { SettingDropdown, SettingRow } from '../controls/SettingControls'
 
 // ── S1 (PRD connect-login-edge-only) — "Password sign-in over the tunnel" ──
 // Where the daemon answers `POST /cli/auth/login` on TUNNEL ingress:
@@ -25,21 +25,21 @@ export const CONNECT_LOGIN_INGRESS_OPTIONS: ReadonlyArray<{
 }> = [
   {
     value: 'edge',
-    label: 'Only via K2 edge (recommended)',
+    label: 'Only at its k2.dev address',
     detail:
-      'Password sign-in over the tunnel is accepted only through this server’s web address (its K2 edge). Direct hits on the tunnel get 404.',
+      'Recommended. People can sign in with a password only through this server’s k2.dev web address. Other attempts are refused.',
   },
   {
     value: 'any',
-    label: 'Any client',
+    label: 'From any app',
     detail:
-      'Any client may attempt password sign-in over the tunnel. Use only when this server is not behind the K2 edge (self-hosted tunnel).',
+      'Any app can try a password sign-in through the tunnel. Use this only with a tunnel you host yourself.',
   },
   {
     value: 'off',
     label: 'Off',
     detail:
-      'No password sign-in over the tunnel at all. Sign in locally or on the LAN; existing sessions and tokens keep working.',
+      'No password sign-in from the internet. Sign in on this computer or your local network; apps already signed in keep working.',
   },
 ]
 
@@ -57,26 +57,22 @@ export function ConnectLoginIngressRow(): React.JSX.Element {
   const current = CONNECT_LOGIN_INGRESS_OPTIONS.find((o) => o.value === mode) ?? CONNECT_LOGIN_INGRESS_OPTIONS[0]
 
   return (
-    <div
-      className="flex items-center justify-between gap-3 py-2"
-      data-settings-id="k2-connect.login-ingress"
+    <SettingRow
+      settingId="k2-connect.login-ingress"
+      label="Password sign-in from the internet"
+      hint={current.detail}
+      field
     >
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="type-row text-[var(--color-text-secondary)]">
-          Password sign-in over the tunnel
-        </span>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">{current.detail}</p>
-      </div>
       <SettingDropdown
         value={mode}
         onChange={onChange}
-        ariaLabel="Password sign-in over the tunnel"
-        className="flex-shrink-0"
+        ariaLabel="Password sign-in from the internet"
+        fullWidth
         options={CONNECT_LOGIN_INGRESS_OPTIONS.map((o) => ({
           value: o.value,
           label: o.label,
         }))}
       />
-    </div>
+    </SettingRow>
   )
 }

@@ -2,6 +2,7 @@ import React from 'react'
 import { useCallback } from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import { Toggle } from '@/components/ui'
+import { SettingRow } from '../controls/SettingControls'
 
 /** App master label (Rosson 2026-10-16). */
 export const MASTER_SWITCH_LABEL = 'Let agents on other servers message every agent'
@@ -31,14 +32,12 @@ export function AllowRemoteInstructRow(): React.JSX.Element {
   }, [allow, setAllow])
 
   return (
-    <div className="flex items-center justify-between py-2" data-settings-id="k2-connect.allow-remote-instruct">
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="type-row text-[var(--color-text-secondary)]">{MASTER_SWITCH_LABEL}</span>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
-          {allow ? MASTER_SWITCH_ON_TEXT : MASTER_SWITCH_OFF_TEXT}
-        </p>
-      </div>
+    <SettingRow
+      settingId="k2-connect.allow-remote-instruct"
+      label={MASTER_SWITCH_LABEL}
+      hint={allow ? MASTER_SWITCH_ON_TEXT : MASTER_SWITCH_OFF_TEXT}
+    >
       <Toggle checked={allow} onChange={toggle} aria-label={MASTER_SWITCH_LABEL} />
-    </div>
+    </SettingRow>
   )
 }

@@ -6,18 +6,34 @@ import { useCallback, useEffect, useState } from 'react'
 import { getSiteVisibility, openSite, setSiteVisibility, siteModeLabel, type SiteVisibility } from '@/lib/published-sites'
 import { scopeMayWrite, type ServerScope } from '@/kessel/server-scope'
 import { SitePinForm } from './SitePinForm'
+import { Button, Tag } from '@/components/ui'
 
 const DEV_PUBLIC_WARNING =
   'This is a dev server. Made public, anyone with the address can see its source maps, error pages with file paths, and anything the dev server evaluates.'
 
 const buttonCls =
   'px-1.5 py-0.5 text-[10px] border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer disabled:opacity-50 no-drag'
+const FIELD_SETTINGS =
+  'k2-focus w-full px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-control-edge)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] rounded-[var(--radius-field)] no-drag'
 const fieldCls =
   'w-full px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] no-drag'
 
-export function SiteChip({ mode, dev }: { mode: string | null | undefined; dev?: boolean }): React.JSX.Element | null {
+/** A visibility action: the drawer's compact button, or in a Settings row
+ *  (`settings`) the shared quiet Button at the Settings size. */
+function Act({ settings, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement> & { settings: boolean }): React.JSX.Element {
+  return settings ? <Button variant="quiet" {...rest} /> : <button type="button" className={buttonCls} {...rest} />
+}
+
+export function SiteChip({ mode, dev, settings = false }: { mode: string | null | undefined; dev?: boolean; settings?: boolean }): React.JSX.Element | null {
   const text = siteModeLabel(mode, dev)
   if (!text) return null
+  if (settings) {
+    return (
+      <Tag tone="neutral" data-testid="site-visibility-chip" data-mode={mode ?? ''} className="flex-shrink-0">
+        {text}
+      </Tag>
+    )
+  }
   return (
     <span
       data-testid="site-visibility-chip"
@@ -35,11 +51,15 @@ export function SiteVisibilityControls({
   scope,
   label,
   onChanged,
+  settings = false,
 }: {
   scope: ServerScope
   label: string
   onChanged?: (v: SiteVisibility) => void
+  /** In a Settings row: shared buttons and the Settings type roles. */
+  settings?: boolean
 }): React.JSX.Element | null {
+  const small = settings ? 'type-hint' : 'text-[10px]'
   const [site, setSite] = useState<SiteVisibility | null>(null)
   const [step, setStep] = useState<Step>({ kind: 'idle' })
   const [reason, setReason] = useState('')
@@ -107,7 +127,7 @@ export function SiteVisibilityControls({
 
   if (!site) {
     return error ? (
-      <div data-testid="site-visibility-error" className="text-[10px] text-[var(--color-text-muted)]">
+      <div data-testid="site-visibility-error" className={`${small} text-[var(--color-text-secondary)]`}>
         {error}
       </div>
     ) : null
@@ -117,35 +137,35 @@ export function SiteVisibilityControls({
   return (
     <div data-testid="site-visibility" className="flex flex-col gap-1.5 min-w-0">
       <div className="flex flex-wrap items-center gap-1.5">
-        <SiteChip mode={site.mode} dev={site.dev} />
+        <SiteChip mode={site.mode} dev={site.dev} settings={settings} />
         {site.url ? (
-          <button type="button" data-testid="site-open" className={buttonCls} onClick={() => void openSite(scope, site.url as string)}>
+          <Act settings={settings} data-testid="site-open" onClick={() => void openSite(scope, site.url as string)}>
             Open
-          </button>
+          </Act>
         ) : null}
         {mayChange && site.mode !== 'private' ? (
-          <button type="button" data-testid="site-make-private" disabled={busy} className={buttonCls} onClick={() => void makePrivate(false)}>
+          <Act settings={settings} data-testid="site-make-private" disabled={busy} onClick={() => void makePrivate(false)}>
             Make private
-          </button>
+          </Act>
         ) : null}
         {mayChange ? (
-          <button type="button" data-testid="site-share-pin" disabled={busy} className={buttonCls} onClick={() => setStep({ kind: 'pin' })}>
+          <Act settings={settings} data-testid="site-share-pin" disabled={busy} onClick={() => setStep({ kind: 'pin' })}>
             {site.mode === 'pin' ? 'Change the PIN' : 'Share with a PIN'}
-          </button>
+          </Act>
         ) : null}
         {mayChange && site.mode !== 'public' ? (
-          <button type="button" data-testid="site-make-public" disabled={busy} className={buttonCls} onClick={() => setStep({ kind: 'public' })}>
+          <Act settings={settings} data-testid="site-make-public" disabled={busy} onClick={() => setStep({ kind: 'public' })}>
             Make public
-          </button>
+          </Act>
         ) : null}
       </div>
       {site.mode === 'public' && site.reason ? (
-        <div data-testid="site-public-reason" className="text-[10px] text-[var(--color-text-muted)]">
+        <div data-testid="site-public-reason" className={`${small} text-[var(--color-text-secondary)]`}>
           Public because: {site.reason}
         </div>
       ) : null}
       {site.warnings.map((w) => (
-        <div key={w} data-testid="site-visibility-warning" className="text-[10px] text-[var(--color-status-warn-text)]">
+        <div key={w} data-testid="site-visibility-warning" className={`${small} text-[var(--color-status-warn-text)]`}>
           {w}
         </div>
       ))}
@@ -154,23 +174,23 @@ export function SiteVisibilityControls({
       ) : null}
       {step.kind === 'private-yes' ? (
         <div className="flex flex-col gap-1">
-          <div data-testid="site-private-warning" className="text-[10px] text-[var(--color-status-warn-text)]">
+          <div data-testid="site-private-warning" className={`${small} text-[var(--color-status-warn-text)]`}>
             {step.warning}
           </div>
           <div className="flex gap-1.5">
-            <button type="button" data-testid="site-private-yes" disabled={busy} className={buttonCls} onClick={() => void makePrivate(true)}>
+            <Act settings={settings} data-testid="site-private-yes" disabled={busy} onClick={() => void makePrivate(true)}>
               Go ahead
-            </button>
-            <button type="button" disabled={busy} className={buttonCls} onClick={() => setStep({ kind: 'idle' })}>
+            </Act>
+            <Act settings={settings} disabled={busy} onClick={() => setStep({ kind: 'idle' })}>
               Cancel
-            </button>
+            </Act>
           </div>
         </div>
       ) : null}
       {step.kind === 'public' ? (
         <div className="flex flex-col gap-1">
           {site.dev ? (
-            <div data-testid="site-public-dev-warning" className="text-[10px] text-[var(--color-status-warn-text)]">
+            <div data-testid="site-public-dev-warning" className={`${small} text-[var(--color-status-warn-text)]`}>
               {DEV_PUBLIC_WARNING}
             </div>
           ) : null}
@@ -181,20 +201,20 @@ export function SiteVisibilityControls({
             maxLength={200}
             onChange={(e) => setReason(e.target.value)}
             placeholder="Why is this site public?"
-            className={fieldCls}
+            className={settings ? FIELD_SETTINGS : fieldCls}
           />
           <div className="flex gap-1.5">
-            <button type="button" data-testid="site-public-save" disabled={busy || !reason.trim()} className={buttonCls} onClick={() => void makePublic()}>
+            <Act settings={settings} data-testid="site-public-save" disabled={busy || !reason.trim()} onClick={() => void makePublic()}>
               {site.dev ? 'Make it public anyway' : 'Make public'}
-            </button>
-            <button type="button" disabled={busy} className={buttonCls} onClick={() => setStep({ kind: 'idle' })}>
+            </Act>
+            <Act settings={settings} disabled={busy} onClick={() => setStep({ kind: 'idle' })}>
               Cancel
-            </button>
+            </Act>
           </div>
         </div>
       ) : null}
       {error ? (
-        <div data-testid="site-visibility-error" className="text-[10px] text-[var(--color-status-error)]">
+        <div data-testid="site-visibility-error" className={`${small} text-[var(--color-status-error-soft)]`}>
           {error}
         </div>
       ) : null}

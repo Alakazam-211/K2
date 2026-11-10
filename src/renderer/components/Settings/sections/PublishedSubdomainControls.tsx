@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { SettingDropdown } from '../controls/SettingControls'
+import { SettingDropdown, SETTING_FIELD_WIDTH } from '../controls/SettingControls'
+import { Button, Input } from '@/components/ui'
 import {
   isReservedNestedLabel,
   previewHost,
@@ -15,14 +16,18 @@ import {
 // components only collect input and show the outcome. The panel decides
 // whether to render them at all (local server, owner or admin).
 
-export const inputCls =
-  'w-full px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
-
-export const buttonCls =
-  'px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60 disabled:cursor-default'
-
-const smallButtonCls =
-  'px-1.5 py-0.5 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60 disabled:cursor-default'
+/** One labelled field row of the add form: label left, field on the
+ *  Settings field width at the right. */
+function FieldRow({ label, htmlFor, children }: { label: string; htmlFor?: string; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div className="flex items-start justify-between gap-6">
+      <label htmlFor={htmlFor} className="type-row text-[var(--color-text-primary)] pt-1">
+        {label}
+      </label>
+      <div className={`${SETTING_FIELD_WIDTH} flex-shrink-0 space-y-1`}>{children}</div>
+    </div>
+  )
+}
 
 const NO_WORKSPACE = ''
 
@@ -98,34 +103,36 @@ export function AddPublishedSubdomainForm({
 
   if (!open) {
     return (
-      <div className="mt-2 space-y-1">
-        <button type="button" className={buttonCls} onClick={() => setOpen(true)}>
-          Add published subdomain
-        </button>
-        {note && <p className="type-hint text-[var(--color-status-ok-soft)]">{note}</p>}
-        {warning && (
-          <p className="type-hint text-[var(--color-status-warn-amber-soft)] leading-relaxed">{warning}</p>
-        )}
+      <div className="flex items-start justify-between gap-6">
+        <div className="min-w-0">
+          <p className="type-row text-[var(--color-text-primary)]">Add a site</p>
+          <p className="type-hint text-[var(--color-text-secondary)] mt-0.5">Share a port on this computer at its own address.</p>
+          {note && <p role="status" className="type-hint text-[var(--color-status-ok-soft)] mt-1">{note}</p>}
+          {warning && (
+            <p className="type-hint text-[var(--color-status-warn-text)] leading-relaxed mt-1">{warning}</p>
+          )}
+        </div>
+        <Button className="flex-shrink-0" onClick={() => setOpen(true)}>
+          Add a site
+        </Button>
       </div>
     )
   }
 
   return (
     <form
-      className="mt-2 p-2 border border-[var(--color-border)] space-y-2"
-      aria-label="Add published subdomain"
+      className="space-y-3"
+      aria-label="Add a site"
       onSubmit={(e) => {
         e.preventDefault()
         void submit()
       }}
     >
-      <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-        Add published subdomain
-      </span>
-      <label className="block">
-        <span className="block type-hint text-[var(--color-text-muted)] mb-0.5">Label</span>
-        <input
-          className={inputCls}
+      <p className="type-row text-[var(--color-text-primary)]">Add a site</p>
+      <FieldRow label="Name" htmlFor="add-site-label">
+        <Input
+          id="add-site-label"
+          className="w-full type-control"
           placeholder="staging"
           autoCapitalize="off"
           autoCorrect="off"
@@ -134,15 +141,15 @@ export function AddPublishedSubdomainForm({
           onChange={(e) => setLabel(e.target.value)}
           aria-invalid={labelError ? true : undefined}
         />
-      </label>
-      <p className="type-hint font-mono text-[var(--color-text-secondary)]" data-testid="subdomain-preview">
-        {previewHost(label, primary, publicUrl)}
-      </p>
-      {labelError && <p className="type-hint text-[var(--color-status-error-soft)]">{labelError}</p>}
-      <label className="block">
-        <span className="block type-hint text-[var(--color-text-muted)] mb-0.5">Target</span>
-        <input
-          className={inputCls}
+        <p className="type-hint font-mono text-[var(--color-text-secondary)] break-all" data-testid="subdomain-preview">
+          {previewHost(label, primary, publicUrl)}
+        </p>
+        {labelError && <p className="type-hint text-[var(--color-status-error-soft)]">{labelError}</p>}
+      </FieldRow>
+      <FieldRow label="Shows" htmlFor="add-site-target">
+        <Input
+          id="add-site-target"
+          className="w-full type-control"
           placeholder="localhost:<port>"
           autoCapitalize="off"
           autoCorrect="off"
@@ -151,30 +158,25 @@ export function AddPublishedSubdomainForm({
           onChange={(e) => setTarget(e.target.value)}
           aria-invalid={targetError ? true : undefined}
         />
-      </label>
-      {targetError && <p className="type-hint text-[var(--color-status-error-soft)]">{targetError}</p>}
-      <div>
-        <span className="block type-hint text-[var(--color-text-muted)] mb-0.5">Workspace</span>
+        {targetError && <p className="type-hint text-[var(--color-status-error-soft)]">{targetError}</p>}
+      </FieldRow>
+      <FieldRow label="Workspace">
         <SettingDropdown
           value={owner}
           options={ownerOptions}
           onChange={(v) => setOwner(v)}
-          menuAlign="left"
-          ariaLabel="Workspace that owns this subdomain"
+          fullWidth
+          ariaLabel="Workspace that owns this site"
         />
-      </div>
+      </FieldRow>
       {error && (
         <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed">
           {error}
         </p>
       )}
-      <div className="flex items-center gap-2">
-        <button type="submit" className={buttonCls} disabled={!canSubmit}>
-          {busy ? 'Adding…' : 'Add'}
-        </button>
-        <button
-          type="button"
-          className={buttonCls}
+      <div className="flex items-center justify-end gap-2">
+        <Button
+          variant="ghost"
           disabled={busy}
           onClick={() => {
             reset()
@@ -183,7 +185,10 @@ export function AddPublishedSubdomainForm({
           }}
         >
           Cancel
-        </button>
+        </Button>
+        <Button type="submit" variant="accent" disabled={!canSubmit}>
+          {busy ? 'Adding…' : 'Add'}
+        </Button>
       </div>
     </form>
   )
@@ -258,7 +263,7 @@ export function PublishedSubdomainRowActions({
   }
 
   return (
-    <div className="col-span-full space-y-1">
+    <div className="flex flex-col items-end gap-1 max-w-[18rem]">
       {editing ? (
         <form
           className="flex items-center gap-1.5"
@@ -268,9 +273,8 @@ export function PublishedSubdomainRowActions({
             void save()
           }}
         >
-          <input
-            className={inputCls}
-            style={{ maxWidth: 200 }}
+          <Input
+            className="w-40 type-control"
             placeholder="localhost:<port>"
             autoCapitalize="off"
             autoCorrect="off"
@@ -279,12 +283,8 @@ export function PublishedSubdomainRowActions({
             onChange={(e) => setDraft(e.target.value)}
             aria-label="New target"
           />
-          <button type="submit" className={smallButtonCls} disabled={busy || !draftCheck.ok}>
-            {busy ? 'Saving…' : 'Save'}
-          </button>
-          <button
-            type="button"
-            className={smallButtonCls}
+          <Button
+            variant="ghost"
             disabled={busy}
             onClick={() => {
               setDraft(target)
@@ -293,13 +293,15 @@ export function PublishedSubdomainRowActions({
             }}
           >
             Cancel
-          </button>
+          </Button>
+          <Button type="submit" variant="accent" disabled={busy || !draftCheck.ok}>
+            {busy ? 'Saving…' : 'Save'}
+          </Button>
         </form>
       ) : (
         <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            className={smallButtonCls}
+          <Button
+            variant="quiet"
             disabled={busy || reserved}
             title={reserved ? `'${label}' is reserved; it can be removed but not repointed.` : undefined}
             onClick={() => {
@@ -309,21 +311,21 @@ export function PublishedSubdomainRowActions({
             }}
           >
             Change target
-          </button>
-          <button type="button" className={smallButtonCls} disabled={busy} onClick={() => void remove()}>
+          </Button>
+          <Button variant="danger-quiet" disabled={busy} onClick={() => void remove()}>
             {busy ? 'Removing…' : 'Remove'}
-          </button>
+          </Button>
         </div>
       )}
       {draftError && editing && (
         <p className="type-hint text-[var(--color-status-error-soft)]">{draftError}</p>
       )}
       {error && (
-        <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed">
+        <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed text-right">
           {error}
         </p>
       )}
-      {note && <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">{note}</p>}
+      {note && <p role="status" className="type-hint text-[var(--color-text-secondary)] leading-relaxed text-right">{note}</p>}
     </div>
   )
 }

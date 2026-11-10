@@ -17,10 +17,11 @@ export const CONTACT_ADDRESS = 'hello@alakazamlabs.com'
 export const MAX_TEXT_BYTES = 20_000
 
 export type FeedbackCategory = 'bug' | 'idea' | 'praise' | 'other'
+/** The dialog's picker (Rosson 2026-11-10: no Praise tab). 'praise' stays a
+ *  valid category for `k2 send-feedback` and for rows already sent. */
 export const CATEGORIES: readonly { value: FeedbackCategory; label: string }[] = [
   { value: 'bug', label: 'Bug' },
   { value: 'idea', label: 'Idea' },
-  { value: 'praise', label: 'Praise' },
   { value: 'other', label: 'Other' },
 ]
 
@@ -33,6 +34,9 @@ export const WHATS_SENT_LINE =
 export const DIAGNOSTICS_LABEL = 'Include details about K2 on this computer'
 export const DIAGNOSTICS_HINT =
   "Versions, settings that are on, recent errors and the end of K2's log, with passwords, keys and names taken out. You can read all of it first."
+/** The hint at the top of the Send tab (Rosson 2026-11-10): agents can send it too. */
+export const ASK_AGENT_HINT =
+  'Tip: in any agent\u2019s chat you can say \u201cSend this issue as feedback to K2\u201d, and the agent sends it for you.'
 export const REMEMBER_LABEL = 'Remember this for my feedback on this server'
 
 export interface FeedbackService {

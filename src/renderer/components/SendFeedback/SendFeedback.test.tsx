@@ -169,6 +169,22 @@ describe('the dialog', () => {
     await waitFor(() => expect(useSendFeedbackStore.getState().tab).toBe('sent'))
   })
 
+  it('starts with the ask-your-agent hint, and the picker is Bug, Idea, Other (no Praise)', async () => {
+    render(<SendFeedbackDialog />)
+    await waitFor(() => expect(screen.getByTestId('send-feedback-ask-agent').textContent).toBe(
+      'Tip: in any agent\u2019s chat you can say \u201cSend this issue as feedback to K2\u201d, and the agent sends it for you.',
+    ))
+    const picker = screen.getByTestId('send-feedback-category')
+    expect(Array.from(picker.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['Bug', 'Idea', 'Other'])
+  })
+
+  it('no ask-your-agent hint while the owner keeps agents off', async () => {
+    h.settings = { ...CAN_SEND, agents: false }
+    render(<SendFeedbackDialog />)
+    await waitFor(() => expect(h.calls.some((c) => c.route === 'product-feedback/settings')).toBe(true))
+    expect(screen.queryByTestId('send-feedback-ask-agent')).toBeNull()
+  })
+
   it('without the tick, the send carries no diagnostics', async () => {
     render(<SendFeedbackDialog />)
     await waitFor(() => expect(h.calls.some((c) => c.route === 'product-feedback/settings')).toBe(true))

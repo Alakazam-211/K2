@@ -18,6 +18,7 @@ import { Button, Callout, Checkbox, DialogFrame, DialogScrim, Input, Segmented }
 import { primaryScope } from '@/kessel/server-scope'
 import { isWebClient } from '@/lib/is-web'
 import {
+  ASK_AGENT_HINT,
   CATEGORIES,
   CONTACT_ADDRESS,
   DIAGNOSTICS_HINT,
@@ -303,6 +304,11 @@ export default function SendFeedbackDialog(): React.JSX.Element {
 
         {tab === 'send' ? (
           <div className="px-4 py-3 flex flex-col gap-3 min-h-0 overflow-y-auto" data-testid="send-feedback-form">
+            {settings?.agents === true ? (
+              <p className="type-hint text-[var(--color-text-muted)]" data-testid="send-feedback-ask-agent">
+                {ASK_AGENT_HINT}
+              </p>
+            ) : null}
             {unavailableLine ? (
               <Callout tone="warn" data-testid="send-feedback-unavailable">
                 <div>{unavailableLine}</div>
@@ -328,6 +334,7 @@ export default function SendFeedbackDialog(): React.JSX.Element {
             <Segmented<FeedbackCategory>
               aria-label="Category"
               data-testid="send-feedback-category"
+              className="self-start"
               value={category}
               onChange={setCategory}
               options={CATEGORIES.map((c) => ({ value: c.value, label: c.label }))}
@@ -355,6 +362,10 @@ export default function SendFeedbackDialog(): React.JSX.Element {
               ) : null}
             </div>
 
+            <p className="type-hint text-[var(--color-text-muted)]" data-testid="send-feedback-whats-sent">
+              {WHATS_SENT_LINE}
+            </p>
+
             <div className="flex flex-col gap-1.5">
               <label className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)] cursor-pointer select-none">
                 <Checkbox
@@ -366,20 +377,18 @@ export default function SendFeedbackDialog(): React.JSX.Element {
                 Alakazam may email me about this
               </label>
               {contactOn ? (
-                <Input
-                  data-testid="send-feedback-email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  aria-invalid={!emailOk}
-                />
+                <div className="pl-[calc(var(--control-check)+0.5rem)]">
+                  <Input
+                    data-testid="send-feedback-email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    aria-invalid={!emailOk}
+                  />
+                </div>
               ) : null}
             </div>
-
-            <p className="type-hint text-[var(--color-text-muted)]" data-testid="send-feedback-whats-sent">
-              {WHATS_SENT_LINE}
-            </p>
 
             <div className="flex flex-col gap-1.5">
               <label className="flex items-start gap-2 text-[12px] text-[var(--color-text-secondary)] cursor-pointer select-none">
@@ -401,7 +410,7 @@ export default function SendFeedbackDialog(): React.JSX.Element {
                 </span>
               </label>
               {diagOn ? (
-                <div className="flex flex-col gap-1.5 pl-6">
+                <div className="flex flex-col gap-1.5 pl-[calc(var(--control-check)+0.5rem)]">
                   <div className="flex items-center gap-2">
                     <Button
                       size="sm"

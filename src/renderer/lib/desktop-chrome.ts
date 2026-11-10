@@ -2,8 +2,9 @@
  * Desktop window chrome flags — single owner for the traffic-light
  * spacer, the Linux square stoplights, and Windows min/max/close.
  *
- * Hosted web: no chrome. macOS: system lights + menu bar (logo opens
- * the dashboard). Windows: window controls, no Menu button (the logo
+ * Hosted web: no chrome (the logo opens the dashboard). macOS: system
+ * lights + the system menu bar, and no logo (the page tabs sit right
+ * after the lights). Windows: window controls, no Menu button (the logo
  * opens the menu). Linux: in-flow square stoplights, no spacer and no
  * window controls (a spacer here is an empty gap). The logo opens the
  * menu on Windows and Linux.
@@ -34,8 +35,9 @@ const NO_CHROME: DesktopChrome = {
  * macOS 27 system lights at inset 0, measured in-process: each button is
  * 14×14, origins at 9 / 32 / 55, so the zoom frame ends at 69. The top bar's
  * px-3 (12) sits outside this spacer, so the spacer is 69 − 12. The flex gap
- * after the zoom light, and between the logo, page tabs, and server switcher,
- * is 14 (the 9px light gap plus the 5px Rosson asked to add).
+ * after the zoom light, and between the logo (not on macOS), page tabs, and
+ * server switcher, is 14 (the 9px light gap plus the 5px Rosson asked to
+ * add). On macOS the page tabs start at 69 + 14 = 83.
  */
 export const TRAFFIC_LIGHT_CLUSTER_RIGHT_PX = 69
 export const TRAFFIC_LIGHT_CLUSTER_GAP_PX = 14
@@ -75,6 +77,16 @@ export function desktopChromeFor(web: boolean, os: DesktopOs): DesktopChrome {
   if (os === 'mac') return { ...NO_CHROME, trafficLightSpacer: true }
   if (os === 'linux') return { ...NO_CHROME, linuxStoplights: true }
   return { ...NO_CHROME, windowControls: true }
+}
+
+/**
+ * The K2 logo at the far left of every top bar. Not on macOS desktop: the
+ * app menu lives in the system menu bar there. Windows and Linux keep it
+ * (it is their Menu button). Hosted web keeps it: a browser tab has no app
+ * menu, and the logo opens the dashboard.
+ */
+export function showsK2Mark(web: boolean, os: DesktopOs): boolean {
+  return web || os !== 'mac'
 }
 
 /** Win/Linux (and any other non-mac desktop). Not hosted web, not macOS. */

@@ -1,22 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import k2Logo from '../../assets/k2-logo.png'
-import { desktopOsFromNavigator, logoOpensAppMenu } from '@/lib/desktop-chrome'
+import { desktopOsFromNavigator, logoOpensAppMenu, showsK2Mark, type DesktopOs } from '@/lib/desktop-chrome'
 import { isWebClient } from '@/lib/is-web'
 import AppMenuPanel from './AppMenuPanel'
 
 const DASHBOARD_URL = 'https://k2.dev/dashboard'
 
 /**
- * 16×16 K2 mark. macOS and hosted web open the dashboard.
+ * 16×16 K2 mark. Hosted web opens the dashboard.
  * Windows and Linux open the app menu from this icon (the relative
  * parent), not from a separate Menu button in the left slot.
+ * macOS desktop draws nothing: the system menu bar has the app menu, and
+ * every top bar's flex gap closes up so the page tabs follow the lights.
  */
-export default function K2MarkButton(): React.JSX.Element {
-  const opensMenu = logoOpensAppMenu(
-    isWebClient(),
-    desktopOsFromNavigator(typeof navigator === 'undefined' ? null : navigator),
-  )
+export default function K2MarkButton(): React.JSX.Element | null {
+  const os = desktopOsFromNavigator(typeof navigator === 'undefined' ? null : navigator)
+  if (!showsK2Mark(isWebClient(), os)) return null
+  return <K2Mark os={os} />
+}
+
+function K2Mark({ os }: { os: DesktopOs }): React.JSX.Element {
+  const opensMenu = logoOpensAppMenu(isWebClient(), os)
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 

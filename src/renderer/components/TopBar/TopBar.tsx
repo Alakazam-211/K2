@@ -82,7 +82,7 @@ export default function TopBar({
         minHeight: TOPBAR_HEIGHT_CSS
       }}
     >
-      {/* Left: spacer or Linux squares, logo, page tabs, server. */}
+      {/* Left: spacer or Linux squares, logo (not on macOS), page tabs, server. */}
       <div
         className="flex shrink-0 items-center [&>*]:shrink-0"
         style={{ minWidth: leftMinWidth, gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}

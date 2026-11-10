@@ -8,6 +8,7 @@ import {
   desktopChromeFor,
   desktopOsFromNavigator,
   logoOpensAppMenu,
+  showsK2Mark,
   topBarLeftClusterMinWidth,
   TRAFFIC_LIGHT_SPACER_BASE_PX,
   type DesktopChrome,
@@ -106,6 +107,17 @@ describe('logo menu vs dashboard', () => {
     expect(logoOpensAppMenu(true, 'windows')).toBe(false)
     expect(logoOpensAppMenu(true, 'linux')).toBe(false)
     expect(logoOpensAppMenu(true, 'mac')).toBe(false)
+  })
+
+  it('hides the logo on macOS desktop only (the system menu bar has the app menu)', () => {
+    expect(showsK2Mark(false, 'mac')).toBe(false)
+    expect(showsK2Mark(false, 'windows')).toBe(true)
+    expect(showsK2Mark(false, 'linux')).toBe(true)
+    expect(showsK2Mark(false, 'other')).toBe(true)
+    // A browser tab has no app menu: hosted web keeps it on every OS.
+    expect(showsK2Mark(true, 'mac')).toBe(true)
+    expect(showsK2Mark(true, 'windows')).toBe(true)
+    expect(showsK2Mark(true, 'linux')).toBe(true)
   })
 
   it('anchors the panel on the icon, not a left-slot Menu button', () => {

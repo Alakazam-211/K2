@@ -51,6 +51,7 @@
       "$type": "color"
     },
     "control-edge": { "$value": "#7d776c", "$type": "color" },
+    "divider": { "$value": "#59554c", "$type": "color", "$description": "Short dividers between items in a row: tab-strip tabs, top-bar groups. Between border and control-edge, about 2:1 on the tab strip and the top bar capsule." },
     "text-muted": {
       "$value": "#a09a8e",
       "$type": "color"

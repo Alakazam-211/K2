@@ -45,6 +45,7 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--color-border': zen('border'),
   '--color-border-strong': mix('text', 25),
   '--color-control-edge': zen('border'),
+  '--color-divider': zen('border'),
   // Text
   '--color-text': zen('text'),
   '--color-text-primary': zen('text'),

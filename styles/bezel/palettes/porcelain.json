@@ -14,6 +14,7 @@
     "border": { "$value": "rgba(28, 26, 20, 0.08)", "$type": "color", "$description": "Quiet — rings do the definition work in this style." },
     "border-strong": { "$value": "rgba(28, 26, 20, 0.26)", "$type": "color" },
     "control-edge": { "$value": "#837f76", "$type": "color" },
+    "divider": { "$value": "#b2b0aa", "$type": "color", "$description": "Short dividers between items in a row: tab-strip tabs, top-bar groups. Between border and control-edge, about 2:1 on the tab strip and the top bar capsule." },
     "text-primary": { "$value": "#1c1b18", "$type": "color", "$description": "Warm ink." },
     "text-secondary": { "$value": "#57544c", "$type": "color" },
     "text-muted": { "$value": "#8d897e", "$type": "color" },

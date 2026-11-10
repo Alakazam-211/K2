@@ -46,7 +46,7 @@ const REQUIRED_TOKEN_SLOTS = {
 
 const REQUIRED_COLOR_SLOTS = [
   'bg', 'bg-surface', 'bg-elevated', 'bg-inset', 'bg-stripe', 'bg-canvas', 'bg-hover',
-  'border', 'border-strong', 'control-edge',
+  'border', 'border-strong', 'control-edge', 'divider',
   'text-primary', 'text-secondary', 'text-muted',
   'accent', 'accent-hover', 'accent-soft', 'on-accent',
   'status-working', 'status-error', 'status-ok', 'status-warn',

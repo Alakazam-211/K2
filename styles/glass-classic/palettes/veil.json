@@ -14,6 +14,7 @@
     "border": { "$value": "rgba(20, 30, 60, 0.10)", "$type": "color" },
     "border-strong": { "$value": "rgba(20, 30, 60, 0.30)", "$type": "color" },
     "control-edge": { "$value": "#7c8294", "$type": "color" },
+    "divider": { "$value": "#aaaebb", "$type": "color", "$description": "Short dividers between items in a row: tab-strip tabs, top-bar groups. Between border and control-edge, about 2:1 on the tab strip and the top bar capsule." },
     "text-primary": { "$value": "#1a1d26", "$type": "color" },
     "text-secondary": { "$value": "#4c5568", "$type": "color" },
     "text-muted": { "$value": "#616776", "$type": "color" },

@@ -1285,6 +1285,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               data-tab-reorder-index={index}
               data-tab-pinned={isPinnedTab(tab) ? 'true' : undefined}
               data-selected={isActive ? '' : undefined}
+              // Styles hide the dividers beside a tab being dragged.
+              data-dragging={isDragged ? '' : undefined}
               // Width (Rosson 2026-10-16): the tab is as wide as its
               // content (icon + title + status slot + padding), capped at
               // TAB_MAX_PX where the title truncates, never below

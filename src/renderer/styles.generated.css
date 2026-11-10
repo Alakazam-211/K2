@@ -74,6 +74,7 @@
   --color-border: #2a2a2a;
   --color-border-strong: rgba(255, 255, 255, 0.25);
   --color-control-edge: #6b6b72;
+  --color-divider: #48484b;
   --color-text-primary: #e4e4e7;
   --color-text-secondary: #b0b0b8;
   --color-text-muted: #87878f;
@@ -213,6 +214,7 @@
   --color-border: rgba(255, 255, 255, 0.07);
   --color-border-strong: rgba(255, 255, 255, 0.26);
   --color-control-edge: #727068;
+  --color-divider: #4d4c46;
   --color-text-primary: #eae6de;
   --color-text-secondary: #a89f92;
   --color-text-muted: #6f695f;
@@ -296,6 +298,7 @@
   --color-border: rgba(28, 26, 20, 0.08);
   --color-border-strong: rgba(28, 26, 20, 0.26);
   --color-control-edge: #837f76;
+  --color-divider: #b2b0aa;
   --color-text-primary: #1c1b18;
   --color-text-secondary: #57544c;
   --color-text-muted: #8d897e;
@@ -443,6 +446,7 @@
   --color-border: #333333;
   --color-border-strong: rgba(255, 255, 255, 0.28);
   --color-control-edge: #787880;
+  --color-divider: #525255;
   --color-text-primary: #ffffff;
   --color-text-secondary: #c7c7cc;
   --color-text-muted: #98989d;
@@ -529,6 +533,7 @@
   --color-border: #eaeaea;
   --color-border-strong: rgba(60, 60, 67, 0.35);
   --color-control-edge: #8a8a8f;
+  --color-divider: #ababae;
   --color-text-primary: #000000;
   --color-text-secondary: #58585d;
   --color-text-muted: #6e6e73;
@@ -615,6 +620,7 @@
   --color-border: #33302b;
   --color-border-strong: rgba(255, 255, 255, 0.28);
   --color-control-edge: #7d776c;
+  --color-divider: #59554c;
   --color-text-primary: #eae6de;
   --color-text-secondary: #a89f92;
   --color-text-muted: #a09a8e;
@@ -1315,20 +1321,23 @@
   background: radial-gradient(circle at 100% 0, transparent calc(var(--k2-wave-r) - 0.5px), var(--k2-wave-fill) var(--k2-wave-r));
 }
 
-/* Short dividers between unselected tabs. None beside the selected tab, beside
-   a hovered pill, or at the end of the row. */
+/* Short dividers between unselected tabs, the top bar's colour and size (a
+   size smaller in a split pane's strip). None beside the selected tab, a
+   hovered pill or a dragged tab, or at the end of the row. Drawn in the 2px
+   gap, so they take no width. */
 [data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id]):not([data-selected]):not([data-zen-root] *)::after {
   content: "";
   position: absolute;
   top: 50%;
   right: -1.5px;
   width: 1px;
-  height: 14px;
-  background: var(--color-border);
+  height: 16px;
+  background: var(--color-divider);
   transform: translateY(-50%);
   pointer-events: none;
 }
-[data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id]):is(:last-child, :hover, :has(+ [data-selected]), :has(+ :hover)):not([data-selected]):not([data-zen-root] *)::after { content: none; }
+[data-style="glass"] [data-pane-tab-bar] [data-pane-tab-id]:not([data-selected]):not([data-zen-root] *)::after { height: 14px; }
+[data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id]):is(:last-child, :hover, [data-dragging], :has(+ [data-selected]), :has(+ :hover), :has(+ [data-dragging])):not([data-selected]):not([data-zen-root] *)::after { content: none; }
 
 /* The status badge's mask sits on whatever is behind the tab's slot. */
 [data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id]) :is([data-tab-close-slot], [data-tab-status-slot], [data-pane-tab-close-slot]):not([data-zen-root] *) {
@@ -1500,6 +1509,7 @@
   --color-border: rgba(255, 255, 255, 0.09);
   --color-border-strong: rgba(255, 255, 255, 0.28);
   --color-control-edge: #6a7084;
+  --color-divider: #444856;
   --color-text-primary: #eef1f8;
   --color-text-secondary: #a8b0c2;
   --color-text-muted: #7f869f;
@@ -1579,6 +1589,7 @@
   --color-border: rgba(20, 30, 60, 0.10);
   --color-border-strong: rgba(20, 30, 60, 0.30);
   --color-control-edge: #7c8294;
+  --color-divider: #aaaebb;
   --color-text-primary: #1a1d26;
   --color-text-secondary: #4c5568;
   --color-text-muted: #616776;
@@ -1658,6 +1669,7 @@
   --color-border: rgba(255, 255, 255, 0.09);
   --color-border-strong: rgba(255, 255, 255, 0.28);
   --color-control-edge: #7d776c;
+  --color-divider: #4f4b44;
   --color-text-primary: #eae6de;
   --color-text-secondary: #a89f92;
   --color-text-muted: #a09a8e;
@@ -1871,6 +1883,7 @@
   --color-border: #2a2a2a;
   --color-border-strong: rgba(255, 255, 255, 0.25);
   --color-control-edge: #6b6b72;
+  --color-divider: #48484b;
   --color-text-primary: #e4e4e7;
   --color-text-secondary: #b0b0b8;
   --color-text-muted: #87878f;
@@ -1946,6 +1959,7 @@
   --color-border: #dcd5c6;
   --color-border-strong: rgba(62, 52, 34, 0.30);
   --color-control-edge: #7f7767;
+  --color-divider: #b2aa9b;
   --color-text-primary: #221e15;
   --color-text-secondary: #4a4437;
   --color-text-muted: #686157;
@@ -2021,6 +2035,7 @@
   --color-border: #2e2b27;
   --color-border-strong: rgba(255, 255, 255, 0.25);
   --color-control-edge: #7d776c;
+  --color-divider: #4f4b44;
   --color-text-primary: #eae6de;
   --color-text-secondary: #a89f92;
   --color-text-muted: #a09a8e;

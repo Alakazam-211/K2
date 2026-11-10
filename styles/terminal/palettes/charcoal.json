@@ -53,6 +53,11 @@
       "$type": "color",
       "$description": "Outline of interactive controls (buttons, fields, dropdowns, checkboxes, radios, switch tracks, segmented pickers): at least 3:1 on every background, bg-elevated being the worst case. Hairline dividers stay on border."
     },
+    "divider": {
+      "$value": "#48484b",
+      "$type": "color",
+      "$description": "Short dividers between items in a row: tab-strip tabs, top-bar groups. Between border and control-edge, about 2:1 on the tab strip and the top bar capsule."
+    },
     "text-primary": {
       "$value": "#e4e4e7",
       "$type": "color"

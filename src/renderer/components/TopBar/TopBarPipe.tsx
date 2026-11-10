@@ -2,5 +2,5 @@
  *  sizes the same in any flex row) so it may sit inside a button too, such
  *  as the usage chip's "{server} | 42%". */
 export default function TopBarPipe(): React.JSX.Element {
-  return <span aria-hidden="true" className="block w-px h-4 bg-[var(--color-control-edge)] mx-1" data-top-bar-pipe="" />
+  return <span aria-hidden="true" className="block w-px h-4 bg-[var(--color-divider)] mx-1" data-top-bar-pipe="" />
 }

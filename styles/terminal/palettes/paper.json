@@ -14,6 +14,7 @@
     "border": { "$value": "#dcd5c6", "$type": "color" },
     "border-strong": { "$value": "rgba(62, 52, 34, 0.30)", "$type": "color" },
     "control-edge": { "$value": "#7f7767", "$type": "color", "$description": "Outline of interactive controls (buttons, fields, dropdowns, checkboxes, radios, switch tracks, segmented pickers): at least 3:1 on every background, bg-elevated being the worst case. Hairline dividers stay on border." },
+    "divider": { "$value": "#b2aa9b", "$type": "color", "$description": "Short dividers between items in a row: tab-strip tabs, top-bar groups. Between border and control-edge, about 2:1 on the tab strip and the top bar capsule." },
     "text-primary": { "$value": "#221e15", "$type": "color", "$description": "Warm ink-black." },
     "text-secondary": { "$value": "#4a4437", "$type": "color" },
     "text-muted": { "$value": "#686157", "$type": "color", "$description": "Information text: at least 4.5:1 on bg, bg-surface, bg-elevated, bg-inset, bg-stripe and bg-canvas. Stays visibly quieter than text-secondary. Disabled controls are exempt." },

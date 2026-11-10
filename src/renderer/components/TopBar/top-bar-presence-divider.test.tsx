@@ -75,7 +75,7 @@ describe('the presence divider in the top bar', () => {
     const pipe = document.querySelector('[data-testid="presence-roster"]')?.nextElementSibling
     if (!pipe) throw new Error('nothing after the roster')
     expect(pipe.hasAttribute('data-top-bar-pipe')).toBe(true)
-    expect(pipe.className).toBe('block w-px h-4 bg-[var(--color-control-edge)] mx-1')
+    expect(pipe.className).toBe('block w-px h-4 bg-[var(--color-divider)] mx-1')
   })
 
   it('just you: no roster and no extra pipe before the usage chip', () => {

@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { Surface } from '@/components/ui/Surface'
 import { CALL_FULLSCREEN_Z } from '@/lib/overlay-layers'
 import { tilePicture, hasVideo } from '@/lib/voice/call-tile-picture'
@@ -143,8 +144,11 @@ export default function CallFullscreen(props: CallFullscreenProps): React.JSX.El
       setCallFullscreenHost(null)
     }
   }, [])
-  if (typeof document === 'undefined') return null
   const on = mode !== 'off'
+  // Over the window, a live Browser page (a native view above the DOM) gives
+  // way while it's on.
+  useBrowserOverlay({ active: on, ref, fullscreen: true, kind: 'modal' })
+  if (typeof document === 'undefined') return null
   return createPortal(
     <div
       ref={ref}

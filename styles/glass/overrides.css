@@ -158,13 +158,33 @@
    stays padded: the traffic-light spacer is sized to sit after that padding. */
 [data-style="glass"] [data-chrome="bar"]:not([data-zen-root] *) { padding-right: 0; }
 [data-style="glass"] [data-chrome="bar"]:not(:has(.k2-stoplight-spacer)):not([data-zen-root] *) { padding-left: 0; }
-[data-style="glass"] [data-top-bar-cluster]:not([data-zen-root] *),
-[data-style="glass"] [data-page-tabs]:not([data-zen-root] *) {
-  padding: 2px 8px;
-  gap: 4px;
+/* Both capsules: 24px controls 3px in from the rim on every side, so a
+   selected or hovered circle sits evenly inside, like the phone's thumb. 8px
+   between controls (Rosson, 2026-11-09: 4px was too packed). */
+[data-style="glass"] :is([data-top-bar-cluster], [data-page-tabs]):not([data-zen-root] *) {
+  --k2-capsule-gap: 8px;
+  padding: 3px;
+  gap: var(--k2-capsule-gap);
 }
-/* The selected pill sits the same 3px in from the capsule on every side, like the phone's thumb. */
-[data-style="glass"] [data-page-tabs]:not([data-zen-root] *) { padding: 3px; }
+/* The right capsule's controls (not the menus and dialogs they open): icons
+   are 24px circles, text is a 24px pill, so hover, lit and focus follow the
+   shape. Some sit one wrapper deep (Usage, Voice, Keep awake, the timer, the
+   mode toggle); the wrappers keep the same rhythm. */
+[data-style="glass"] [data-top-bar-cluster] > div:not([data-material], [role="dialog"], [data-k2-chamfer-float]):not([data-zen-root] *),
+[data-style="glass"] [data-top-bar-cluster] [data-testid="call-topbar-controls"]:not([data-zen-root] *) {
+  gap: var(--k2-capsule-gap);
+  margin-inline: 0;
+}
+[data-style="glass"] :is([data-top-bar-cluster] > button, [data-top-bar-cluster] > div:not([data-material], [role="dialog"], [data-k2-chamfer-float]) > button, [data-top-bar-cluster] [data-testid="call-topbar-controls"] > button):not([data-zen-root] *) {
+  height: 24px;
+  min-width: 24px;
+  border-radius: var(--radius-pill);
+}
+[data-style="glass"] [data-top-bar-cluster] button[class~="w-5"]:not([data-zen-root] *) { width: 24px; }
+[data-style="glass"] [data-top-bar-cluster] > [data-testid="presence-roster"]:not([data-zen-root] *) { padding-inline: 2px; }
+[data-style="glass"] [data-top-bar-cluster] [data-testid="subscription-usage"]:not([data-zen-root] *) { padding-inline: 8px; }
+/* Dividers stand in the same 4px gaps, centred, shorter than the controls. */
+[data-style="glass"] [data-top-bar-cluster] > [data-top-bar-pipe]:not([data-zen-root] *) { margin-inline: 0; }
 [data-style="glass"] [data-chrome="bar"] button[data-nav-picker]:not([data-zen-root] *) { height: var(--k2-topbar-height); }
 /* The server menu clears the pill. From the bar's centre, so it opens in the
    same place when Home has no trigger. */
@@ -219,7 +239,15 @@
   box-shadow: none;
 }
 [data-style="glass"] [data-settings-card]:not([data-zen-root] *) { border-radius: var(--radius-box); }
-[data-style="glass"] [data-mode-toggle]:not([data-zen-root] *) { border-radius: var(--radius-pill); overflow: hidden; }
+/* The mode toggle is two circles, like the page tabs: the lit one is filled. */
+[data-style="glass"] [data-mode-toggle]:not([data-zen-root] *) { border-width: 0; border-radius: var(--radius-pill); }
+/* With no rim round the pair, the lit half needs a firmer wash than a hover. */
+[data-style="glass"] [data-mode-toggle] button[aria-pressed="true"]:not([data-zen-root] *) {
+  background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+}
+[data-style="glass"] [data-mode-toggle] button[aria-pressed="false"]:hover:not(:disabled):not([data-zen-root] *) {
+  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+}
 
 /* ── Form controls, tuned to the phone ────────────────────────────────── */
 [data-style="glass"] .k2-checkbox:not([data-zen-root] *),

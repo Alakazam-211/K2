@@ -25,7 +25,7 @@ export function WasViewerNotice({
         disabled={busy}
         onClick={() => onEnableAsMember(username)}
         aria-label={`Enable ${username} as Member`}
-        className="flex-shrink-0 px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+        className="flex-shrink-0 px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
       >
         {busy ? 'Enabling…' : 'Enable as Member'}
       </button>

@@ -14,9 +14,11 @@ const VARIANTS: Record<string, string> = {
   /** Transparent base that fills on hover (the Settings/Connections idiom). */
   quiet:
     'bg-transparent border border-[var(--color-control-edge)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]',
-  /** Primary action. */
+  /** Primary action. The fill is the accent deep enough for its label to
+   *  read (--color-accent-fill); hover and press go deeper still, never
+   *  lighter, so the label keeps its contrast. */
   accent:
-    'bg-[var(--color-accent)] border border-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 active:bg-[var(--color-accent-active,var(--color-accent))] active:border-[var(--color-accent-active,var(--color-accent))] [--k2-ch-focus:var(--color-on-accent)]',
+    'bg-[var(--color-accent-fill)] border border-[var(--color-accent-fill)] text-[var(--color-on-accent)] hover:bg-[color-mix(in_srgb,var(--color-accent-fill)_90%,black)] hover:border-[color-mix(in_srgb,var(--color-accent-fill)_90%,black)] active:bg-[color-mix(in_srgb,var(--color-accent-fill)_80%,black)] active:border-[color-mix(in_srgb,var(--color-accent-fill)_80%,black)] [--k2-ch-focus:var(--color-on-accent)]',
   /** Destructive action (red-600/700 idiom). */
   danger:
     'bg-[var(--color-danger)] border border-[var(--color-danger)] text-[var(--color-on-accent)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)] [--k2-ch-focus:var(--color-on-accent)]',

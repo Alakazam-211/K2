@@ -705,7 +705,7 @@ export function AgentsSection(): React.JSX.Element {
                 <button
                   type="button"
                   onClick={() => void submitForm()}
-                  className="px-3 py-1 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/80 no-drag cursor-pointer font-mono"
+                  className="px-3 py-1 type-control bg-[var(--color-accent-fill)] text-[var(--color-on-accent)] hover:bg-[color-mix(in_srgb,var(--color-accent-fill)_90%,black)] no-drag cursor-pointer font-mono"
                 >
                   {presetForm.editingId ? 'Save' : 'Add'}
                 </button>

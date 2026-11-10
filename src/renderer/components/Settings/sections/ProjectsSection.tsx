@@ -3653,7 +3653,7 @@ function ContextLayerFileEditor({
                   onClick={() => setPreviewMode('preview')}
                   className={`px-2 py-0.5 type-control no-drag cursor-pointer ${
                     previewMode === 'preview'
-                      ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
+                      ? 'bg-[var(--color-accent-fill)] text-[var(--color-on-accent)]'
                       : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
                   }`}
                 >
@@ -3663,7 +3663,7 @@ function ContextLayerFileEditor({
                   onClick={() => setPreviewMode('edit')}
                   className={`px-2 py-0.5 type-control no-drag cursor-pointer ${
                     previewMode === 'edit'
-                      ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
+                      ? 'bg-[var(--color-accent-fill)] text-[var(--color-on-accent)]'
                       : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
                   }`}
                 >
@@ -3814,7 +3814,7 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
                     onClick={() => setPreviewMode(mode)}
                     className={`px-2 py-1 type-control transition-colors no-drag cursor-pointer ${
                       previewMode === mode
-                        ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
+                        ? 'bg-[var(--color-accent-fill)] text-[var(--color-on-accent)]'
                         : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)]'
                     }`}
                   >

@@ -70,3 +70,45 @@ describe('Slider', () => {
     expect(body).toContain('0 0 0 1px var(--color-control-edge)')
   })
 })
+
+/** The colour a palette slot paints, for the few forms the shipped palettes
+ *  use: #rrggbb, var() of another slot or Glass's accent, and
+ *  color-mix(in srgb, <colour> N%, black|white). */
+function resolve(style: string, id: string, value: string): Rgb {
+  const p = palette(style, id)
+  const v = value.trim()
+  if (v.startsWith('#')) return hex(v)
+  if (v === 'black') return [0, 0, 0]
+  if (v === 'white') return [255, 255, 255]
+  if (v === 'var(--glass-accent)') {
+    const overrides = readFileSync(join(repo, 'styles', style, 'overrides.css'), 'utf8')
+    return hex(/--glass-accent:\s*(#[0-9a-f]{6})/i.exec(overrides)![1])
+  }
+  const ref = /^var\(--color-([a-z-]+)\)$/.exec(v)
+  if (ref) return resolve(style, id, p[ref[1]])
+  const m = /^color-mix\(in srgb, (.+) (\d+)%, (black|white)\)$/.exec(v)
+  if (!m) throw new Error(`can't resolve ${value}`)
+  const [a, b, t] = [resolve(style, id, m[1]), resolve(style, id, m[3]), Number(m[2]) / 100]
+  return a.map((c, i) => c * t + b[i] * (1 - t)) as Rgb
+}
+
+const over = (top: Rgb, ground: Rgb, alpha: number): Rgb => top.map((c, i) => c * alpha + ground[i] * (1 - alpha)) as Rgb
+
+describe('Filled accent controls', () => {
+  it.each(LOOKS)('the label reads at 4.5:1 on the accent fill, also at a 90%% hover (%s %s)', (style, id) => {
+    const p = palette(style, id)
+    const fill = resolve(style, id, 'var(--color-accent-fill)')
+    const label = hex(p['on-accent'])
+    expect(contrast(label, fill)).toBeGreaterThanOrEqual(4.5)
+    for (const ground of ['bg-surface', 'bg-elevated']) {
+      const g = hex(p[ground])
+      expect(contrast(over(label, g, 0.9), over(fill, g, 0.9)), `${id} hover on ${ground}`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('the Button, the selected segment and Glass\'s segment thumb paint the fill', () => {
+    expect(readFileSync(join(__dirname, 'Button.tsx'), 'utf8')).toContain("'bg-[var(--color-accent-fill)] border border-[var(--color-accent-fill)] text-[var(--color-on-accent)]")
+    expect(rule(globals, '.k2-segment-thumb')).toContain('background: var(--color-accent-fill)')
+    expect(rule(generated, '[data-style="glass"] .k2-segment-thumb:not([data-zen-root] *)')).toContain('var(--color-accent-fill) 92%')
+  })
+})

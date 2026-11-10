@@ -22,6 +22,7 @@
     "accent-hover": { "$value": "#1b4979", "$type": "color" },
     "accent-soft": { "$value": "#6f9cc4", "$type": "color" },
     "on-accent": { "$value": "#ffffff", "$type": "color" },
+    "accent-fill": { "$value": "var(--color-accent)", "$type": "color", "$description": "Fountain ink already carries white text at 7:1." },
     "status-working": { "$value": "#255a92", "$type": "color" },
     "status-error": { "$value": "#b3261e", "$type": "color" },
     "status-ok": { "$value": "#276b3d", "$type": "color" },

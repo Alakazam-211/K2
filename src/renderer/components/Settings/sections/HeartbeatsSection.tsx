@@ -328,7 +328,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
                     onClick={() => toggleDay(d)}
                     className={`px-2 py-1 type-control cursor-pointer no-drag ${
                       on
-                        ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
+                        ? 'bg-[var(--color-accent-fill)] text-[var(--color-on-accent)]'
                         : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border)]'
                     }`}
                   >
@@ -374,7 +374,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
                     onClick={() => toggleMonth(m)}
                     className={`px-2 py-1 type-control cursor-pointer no-drag ${
                       on
-                        ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
+                        ? 'bg-[var(--color-accent-fill)] text-[var(--color-on-accent)]'
                         : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border)]'
                     }`}
                   >
@@ -522,7 +522,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
           <button
             onClick={handleSave}
             disabled={busy || (!isEdit && !nameValid) || formError !== null}
-            className="px-3 py-1.5 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag disabled:opacity-50"
+            className="px-3 py-1.5 type-control bg-[var(--color-accent-fill)] text-[var(--color-on-accent)] cursor-pointer no-drag disabled:opacity-50"
           >
             {busy ? 'Saving…' : isEdit ? 'Update' : 'Add'}
           </button>
@@ -1160,7 +1160,7 @@ export function HeartbeatsPanel({
         <button
           onClick={() => setShowAdd(true)}
           title="Add heartbeat"
-          className="w-6 h-6 flex items-center justify-center type-control leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
+          className="w-6 h-6 flex items-center justify-center type-control leading-none bg-[var(--color-accent-fill)] text-[var(--color-on-accent)] cursor-pointer no-drag"
         >
           +
         </button>
@@ -1285,7 +1285,7 @@ export function HeartbeatsPanel({
                 <button
                   onClick={() => onConfigureWakeup?.(r)}
                   disabled={!onConfigureWakeup}
-                  className="px-2 py-1 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag justify-self-end disabled:opacity-50"
+                  className="px-2 py-1 type-control bg-[var(--color-accent-fill)] text-[var(--color-on-accent)] cursor-pointer no-drag justify-self-end disabled:opacity-50"
                 >
                   Configure Wakeup
                 </button>
@@ -1317,7 +1317,7 @@ export function HeartbeatsPanel({
                         ? 'Fire this heartbeat now'
                         : 'Fire now to test — stays off the schedule until you enable it'
                     }
-                    className="px-2 py-0.5 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="px-2 py-0.5 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {launchingName === r.name ? '…' : 'Launch'}
                   </button>

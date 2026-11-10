@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { STYLES, getStyle } from '@/styles.generated'
 import {
   ACCENT_VARS,
+  accentFillFor,
   accentFillHex,
   accentTextFor,
   accentVarsFor,
@@ -147,5 +148,31 @@ describe('the Yellow palettes', () => {
     expect(yellow.name).toBe('Yellow')
     expect(yellow.schemes).toEqual(['dark'])
     expect(yellow.swatch.accent).toBe('#ffc700')
+  })
+})
+
+describe('the accent as a fill under its label', () => {
+  const samples = ['#3b82f6', '#0a84ff', '#3366cc', '#ff00aa', '#e11d48', '#16a34a', '#9333ea', '#0891b2', '#f97316', '#ffc700', '#ffffff', '#000000']
+
+  it.each(samples)('%s carries its label at 4.5:1 or better, on dark and light palettes', (c) => {
+    for (const [style, id, scheme] of [['terminal', 'charcoal', 'dark'], ['glass', 'veil', 'light']] as const) {
+      const vars = accentVarsFor(c, palette(style, id), scheme)
+      expect(contrast(vars['--color-accent-fill'], vars['--color-on-accent']), `${c} on ${id}`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('deepens the shipped blues only a little, toward black, keeping the hue', () => {
+    const fill = accentFillFor('#0a84ff', '#ffffff')
+    expect(fill).not.toBe('#0a84ff')
+    expect(contrast(fill, '#ffffff')).toBeGreaterThanOrEqual(5)
+    expect(contrast(fill, '#ffffff')).toBeLessThan(5.6)
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(fill.slice(i, i + 2), 16))
+    expect(b).toBeGreaterThan(g)
+    expect(g).toBeGreaterThan(r)
+  })
+
+  it('leaves a colour alone when its label already reads, and a bright one under dark ink', () => {
+    expect(accentFillFor('#1e3a8a', '#ffffff')).toBe('#1e3a8a')
+    expect(accentFillFor('#ffc700', '#1a1400')).toBe('#ffc700')
   })
 })

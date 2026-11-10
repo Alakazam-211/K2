@@ -1138,7 +1138,7 @@ export function SkinAccessSection(): React.JSX.Element {
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+                    className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
                     disabled={publishBusy === selectedPublished.id}
                     onClick={() => void publishAction('start', selectedPublished)}
                   >
@@ -1279,7 +1279,7 @@ export function SkinAccessSection(): React.JSX.Element {
               <button
                 type="submit"
                 disabled={roleBusy || !newRoleName.trim()}
-                className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+                className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
               >
                 {roleBusy ? 'Saving…' : 'Create role'}
               </button>
@@ -1585,7 +1585,7 @@ export function SkinAccessSection(): React.JSX.Element {
               </SettingRow>
               <button
                 type="button"
-                className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+                className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
                 disabled={busyId === 'add-user' || !addPersonId || !addRoleId}
                 onClick={() => void addAppUser()}
               >

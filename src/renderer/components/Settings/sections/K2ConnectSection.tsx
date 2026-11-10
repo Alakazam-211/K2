@@ -1615,7 +1615,7 @@ export function K2ConnectSection({
                 <button
                   type="submit"
                   disabled={authBusy || !email.trim() || !password}
-                  className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+                  className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
                 >
                   {authBusy ? 'Signing in…' : 'Sign in'}
                 </button>
@@ -1782,7 +1782,7 @@ export function K2ConnectSection({
             <button
               onClick={() => void startTunnel()}
               disabled={busy || swapBusy}
-              className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+              className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
             >
               Start tunnel
             </button>
@@ -2055,7 +2055,7 @@ export function K2ConnectSection({
                 <button
                   type="submit"
                   disabled={addBusy || !newUsername.trim() || !newPassword}
-                  className="flex-shrink-0 px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+                  className="flex-shrink-0 px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
                 >
                   {addBusy ? 'Adding…' : 'Add user'}
                 </button>

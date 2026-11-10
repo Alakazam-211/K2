@@ -272,7 +272,7 @@ export function GeneralSection(): React.JSX.Element {
               )}
             </div>
             <button
-              className="px-3 py-1 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer"
+              className="px-3 py-1 type-control bg-[var(--color-accent-fill)] text-[var(--color-on-accent)] hover:bg-[color-mix(in_srgb,var(--color-accent-fill)_90%,black)] transition-colors no-drag cursor-pointer"
               onClick={() => void useUpdateStore.getState().openAvailableDownload()}
             >
               {updatePackageUrl && linuxCanInstall ? 'Install & relaunch' : 'Download'}
@@ -559,7 +559,7 @@ function CLIVersionRow(): React.JSX.Element {
               <button
                 onClick={handleInstallOrUpdate}
                 disabled={loading}
-                className="px-2 py-0.5 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
+                className="px-2 py-0.5 type-control bg-[var(--color-accent-fill)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
               >
                 {loading ? 'Updating...' : `Update to v${status.bundledVersion}`}
               </button>
@@ -579,7 +579,7 @@ function CLIVersionRow(): React.JSX.Element {
             <button
               onClick={handleInstallOrUpdate}
               disabled={loading}
-              className="px-2 py-0.5 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
+              className="px-2 py-0.5 type-control bg-[var(--color-accent-fill)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
             >
               {loading ? 'Installing...' : 'Install'}
             </button>
@@ -825,7 +825,7 @@ function DaemonRow(): React.JSX.Element {
             <button
               onClick={handleInstall}
               disabled={busy !== null}
-              className="px-2 py-0.5 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
+              className="px-2 py-0.5 type-control bg-[var(--color-accent-fill)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
             >
               {busy === 'install' ? 'Installing...' : 'Install'}
             </button>

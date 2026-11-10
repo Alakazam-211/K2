@@ -186,7 +186,7 @@ export default function IconCropDialog({
           </button>
           <button
             onClick={handleConfirm}
-            className="px-4 py-1.5 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer transition-colors font-mono"
+            className="px-4 py-1.5 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer transition-colors font-mono"
           >
             Apply
           </button>

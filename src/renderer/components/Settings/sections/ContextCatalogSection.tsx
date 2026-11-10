@@ -236,7 +236,7 @@ export function ContextCatalogSection(): React.JSX.Element {
             <button
               type="submit"
               disabled={adding || !slugDraft.trim()}
-              className="px-3 py-1.5 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] no-drag cursor-pointer disabled:opacity-50"
+              className="px-3 py-1.5 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] no-drag cursor-pointer disabled:opacity-50"
             >
               {adding ? 'Creating…' : 'Create'}
             </button>

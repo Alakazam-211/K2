@@ -118,6 +118,7 @@
   --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.4);
+  --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
   --term-fg: #e0e0e0;
   --term-bg: #0a0a0a;
   --term-cursor: #e0e0e0;
@@ -490,6 +491,7 @@
   --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.25);
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.28);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.42);
+  --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.22);
   --color-ring-edge: rgba(255, 255, 255, 0.14);
   --color-ring-hairline: rgba(255, 255, 255, 0.06);
@@ -577,6 +579,7 @@
   --color-scrollbar-thumb-hover: rgba(60, 60, 67, 0.32);
   --color-scrollbar-thumb-strong: rgba(60, 60, 67, 0.34);
   --color-scrollbar-thumb-strong-hover: rgba(60, 60, 67, 0.5);
+  --color-accent-fill: color-mix(in srgb, var(--color-accent) 78%, black);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.85);
   --color-ring-edge: rgba(255, 255, 255, 0.7);
   --color-ring-hairline: rgba(60, 60, 67, 0.08);
@@ -949,7 +952,7 @@
 /* ── Controls still written by hand ─────────────────────────────────────
    Many buttons, inputs and dropdown triggers don't use the primitives yet.
    They read the field radius here, so Glass has no square controls. */
-[data-style="glass"] :is(button[class~="border"], button[class~="bg-[var(--color-accent)]"], select, textarea, input:not([type="checkbox"], [type="radio"], [type="range"])):not([data-zen-root] *, [data-k2-thread-zen] *) {
+[data-style="glass"] :is(button[class~="border"], button[class~="bg-[var(--color-accent)]"], button[class~="bg-[var(--color-accent-fill)]"], select, textarea, input:not([type="checkbox"], [type="radio"], [type="range"])):not([data-zen-root] *, [data-k2-thread-zen] *) {
   border-radius: var(--radius-field);
 }
 
@@ -1040,7 +1043,7 @@
 [data-style="glass"] .k2-segment-thumb:not([data-zen-root] *) {
   top: 3px;
   bottom: 3px;
-  background: color-mix(in srgb, var(--color-accent) 92%, transparent);
+  background: color-mix(in srgb, var(--color-accent-fill) 92%, transparent);
   /* Glass on the selected circle, drawn so it reads on desktop displays: a
      soft light falling from the top, and a faint rim all the way round. The
      phone's top-only 0.5px line showed as a band here (Rosson, 2026-11-09). */
@@ -1938,6 +1941,7 @@
   --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.4);
+  --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
   --term-fg: #e0e0e0;
   --term-bg: #0a0a0a;
   --term-cursor: #e0e0e0;
@@ -2014,6 +2018,7 @@
   --color-scrollbar-thumb-hover: rgba(40, 32, 16, 0.28);
   --color-scrollbar-thumb-strong: rgba(40, 32, 16, 0.30);
   --color-scrollbar-thumb-strong-hover: rgba(40, 32, 16, 0.45);
+  --color-accent-fill: var(--color-accent);
   --term-fg: #221e15;
   --term-bg: #faf8f3;
   --term-cursor: #221e15;

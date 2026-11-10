@@ -1686,7 +1686,7 @@ html:not([data-style="terminal"]) .k2-segmented { overflow: hidden; }
   bottom: 2px;
   left: 0;
   border-radius: var(--radius-pill);
-  background: var(--color-accent);
+  background: var(--color-accent-fill);
   pointer-events: none;
   --k2-ch-cut: calc(var(--chamfer-control) - 1.757px);
   --k2-ch-bw: 0px;

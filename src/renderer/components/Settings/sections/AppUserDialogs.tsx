@@ -28,7 +28,7 @@ export type DaemonPost = (route: string, body: Record<string, unknown>) => Promi
 const FIELD_CLS =
   'w-full px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 const BTN_PRIMARY =
-  'px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
+  'px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
 const BTN_PLAIN =
   'px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50'
 const LINK_BTN = 'type-hint text-[var(--color-accent)] hover:underline no-drag cursor-pointer disabled:opacity-40'

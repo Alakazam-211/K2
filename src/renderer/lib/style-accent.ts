@@ -45,6 +45,7 @@ export const ACCENT_VARS = [
   '--color-accent-active',
   '--color-accent-soft',
   '--color-accent-text',
+  '--color-accent-fill',
   '--color-on-accent',
   '--glass-accent',
 ] as const
@@ -60,6 +61,8 @@ const TEXT_CONTRAST = 4.5
 /** White stays on a colour down to 3:1, the band K2's shipped blues sit in
  *  (#3b82f6 is 3.7:1, #0a84ff is 3.6:1). */
 const WHITE_ON_ACCENT_MIN = 3
+/** A filled control's label: AA with room for a 90% hover over a white card. */
+const FILL_LABEL_CONTRAST = 5
 
 function parseHex(raw: string): Rgb | null {
   const m = /^#([0-9a-f]{6})$/i.exec(raw.trim())
@@ -142,6 +145,25 @@ export function defaultAccentHex(palette: StylePaletteMeta): string {
   return parseHex(palette.swatch.accent) ? palette.swatch.accent : '#0a84ff'
 }
 
+/**
+ * The accent as the fill under on-accent text (filled buttons, the selected
+ * segment, count badges): unchanged when its label already reads, else
+ * deepened toward black until white text clears AA with room to spare. The
+ * hue stays; only a pale-enough colour to carry white text gets darker.
+ */
+export function accentFillFor(hex: string, onAccent: string): string {
+  const accent = parseHex(hex)
+  const ink = parseHex(onAccent)
+  if (!accent || !ink) return hex
+  // A dark label on a bright accent (onAccentFor's ink): the accent itself.
+  if (luminance(ink) < luminance(accent)) return toHex(accent)
+  for (let t = 0; t <= 1; t += 0.02) {
+    const candidate = mix(accent, BLACK, t)
+    if (contrast(candidate, ink) >= FILL_LABEL_CONTRAST) return toHex(candidate)
+  }
+  return toHex(BLACK)
+}
+
 /** The CSS values for an accent colour on a palette. */
 export function deriveAccentVars(
   hex: string,
@@ -154,13 +176,15 @@ export function deriveAccentVars(
   const accent = toHex(base)
   // Same direction the palettes take: hover lifts on dark, deepens on light.
   const toward = scheme === 'light' ? BLACK : WHITE
+  const onAccent = own.onAccent ?? onAccentFor(accent)
   return {
     '--color-accent': accent,
     '--color-accent-hover': own.hover ?? toHex(mix(base, toward, 0.16)),
     '--color-accent-active': toHex(mix(base, BLACK, scheme === 'light' ? 0.28 : 0.16)),
     '--color-accent-soft': own.soft ?? toHex(mix(base, WHITE, 0.42)),
     '--color-accent-text': accentTextFor(accent, palette, scheme),
-    '--color-on-accent': own.onAccent ?? onAccentFor(accent),
+    '--color-accent-fill': accentFillFor(accent, onAccent),
+    '--color-on-accent': onAccent,
     '--glass-accent': accent,
   }
 }

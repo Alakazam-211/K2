@@ -298,7 +298,7 @@ describe('Tokens column', () => {
       expect(btn.className).toContain('focus-visible:outline')
     }
     expect(within(row).getByRole('button', { name: 'Remove' }).className).toContain('bg-[var(--color-danger-muted)]')
-    expect(within(row).getByRole('button', { name: 'Use this token' }).className).toContain('bg-[var(--color-accent)]')
+    expect(within(row).getByRole('button', { name: 'Use this token' }).className).toContain('bg-[var(--color-accent-fill)]')
     const claude = screen.getByTestId('llm-tool-claude')
     for (const name of ['+ Add subscription', '+ Add API token']) {
       const btn = within(claude).getByRole('button', { name })

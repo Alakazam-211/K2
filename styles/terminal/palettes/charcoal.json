@@ -89,6 +89,11 @@
       "$type": "color",
       "$description": "Glyphs/knobs drawn on accent or bright fills (checkbox check, slider thumb)."
     },
+    "accent-fill": {
+      "$value": "color-mix(in srgb, var(--color-accent) 82%, black)",
+      "$type": "color",
+      "$description": "The accent as a fill under on-accent text (filled buttons, the selected segment, count badges): deep enough that the label clears 4.5:1, including at a 90% hover. Icons, rings and switches keep accent."
+    },
     "status-working": {
       "$value": "#3b82f6",
       "$type": "color"

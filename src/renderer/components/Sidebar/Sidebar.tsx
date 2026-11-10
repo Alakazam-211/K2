@@ -20,6 +20,7 @@ import { emit } from '@tauri-apps/api/event'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
 import { addWorkspaceWithIngest } from '@/lib/add-workspace'
+import { SetupChecklist } from '@/components/SetupChecklist/SetupChecklist'
 import { showContextMenu } from '@/lib/context-menu'
 import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -1127,6 +1128,9 @@ export default function Sidebar(): React.JSX.Element {
           </p>
         </div>
       )}
+
+      {/* Setup checklist (renders nothing while off, hidden or finished) */}
+      <SetupChecklist />
 
       {/* Add Workspace + collapse the nav */}
       <div className="p-3 border-t border-[var(--color-border)] flex gap-2" data-nav-footer="">

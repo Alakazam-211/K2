@@ -115,6 +115,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.5 Mark all as read: a Home row on the window's own server reads and
   // marks through it (a row on another server goes through a room scope).
   'components/Home/HomeSidebar.tsx',
+  // Setup checklist: the window's own server's list, in both sidebars.
+  'components/SetupChecklist/SetupChecklist.tsx',
   'components/MergeDialog/MergeDialog.tsx',
   // 0.46.0: the "Your account" setup prompt is about the window's own server.
   'components/OwnerAccountPrompt/OwnerAccountPrompt.tsx',

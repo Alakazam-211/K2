@@ -17,6 +17,7 @@ import { ProjectIcon } from '@/components/Sidebar/IconRail'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
 import { useHomeAddPickerStore, useRowStatus } from './home-room'
+import { SetupChecklistRailButton } from '@/components/SetupChecklist/SetupChecklist'
 import { OTHER_SERVER_AVATAR_COLOR, homeRowContextMenu } from './HomeSidebar'
 
 const RAIL_WIDTH = 48
@@ -105,6 +106,7 @@ export default function HomeIconRail(): React.JSX.Element {
       </div>
 
       <div className="flex flex-col items-center mt-1 flex-shrink-0" data-nav-rail-actions="">
+        <SetupChecklistRailButton />
         <button
           data-material="frost"
           data-frost-shape="round"

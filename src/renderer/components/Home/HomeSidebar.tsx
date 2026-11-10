@@ -58,6 +58,7 @@ import { RowDropLine, dropTargetIndex, useRowDragReorder } from '@/components/Si
 import HomePicker from './HomePicker'
 import { AddAgentPicker } from './HomeAddPanels'
 import { useConnectedRowNote, useHomeAddPickerStore, useRoomRowFacts, useRowStatus } from './home-room'
+import { SetupChecklist } from '@/components/SetupChecklist/SetupChecklist'
 import { GrokBotHomeRow } from '@/components/GrokBots/GrokBotRows'
 import { isGrokBotAddress } from '@/lib/grokbots'
 
@@ -480,6 +481,9 @@ export default function HomeSidebar(): React.JSX.Element {
           </div>
         )}
       </div>
+
+      {/* Setup checklist (renders nothing while off, hidden or finished) */}
+      <SetupChecklist />
 
       {/* Add Agent + collapse the nav — the Add Workspace bar. (Zen Mode is
           the window's top-bar toggle, prd-zen-gardens-v1 G5/G6.) */}

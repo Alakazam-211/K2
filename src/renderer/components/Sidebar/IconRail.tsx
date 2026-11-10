@@ -11,6 +11,7 @@ import { usePresenceStore, usersForWorkspace } from '../../stores/presence'
 import { presenceDisplayName } from '../Presence/PresenceAvatar'
 import { invoke } from '@tauri-apps/api/core'
 import { addWorkspaceWithIngest } from '@/lib/add-workspace'
+import { SetupChecklistRailButton } from '@/components/SetupChecklist/SetupChecklist'
 import { showContextMenu } from '../../lib/context-menu'
 import { pickWorkspaceFolder } from '../../lib/pick-workspace-folder'
 import { useConnectHostStore } from '../../stores/connect-host'
@@ -316,6 +317,7 @@ export default function IconRail(): React.JSX.Element {
 
       {/* Add workspace, then open the full nav. The rail is one icon wide. */}
       <div className="flex flex-col items-center mt-1 flex-shrink-0" data-nav-rail-actions="">
+        <SetupChecklistRailButton />
         <button
           data-material="frost"
           data-frost-shape="round"

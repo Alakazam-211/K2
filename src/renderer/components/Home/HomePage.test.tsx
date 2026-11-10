@@ -169,6 +169,13 @@ vi.mock('@/stores/session-events', () => ({
   onPresenceChanged: vi.fn(() => () => undefined),
   // 0.46.8: person chips follow their server's picture changes.
   onPersonPictureChanged: vi.fn(() => () => undefined),
+  // The setup checklist in the Home sidebar and rail re-reads on these.
+  onFirstRunChanged: vi.fn(() => () => undefined),
+  onLlmAccountsChanged: vi.fn(() => () => undefined),
+  onProjectsChanged: vi.fn(() => () => undefined),
+  onTunnelStatusChanged: vi.fn(() => () => undefined),
+  onTunnelIdentityChanged: vi.fn(() => () => undefined),
+  onPairCodeChanged: vi.fn(() => () => undefined),
 }))
 
 import AgentsShell from '@/components/Layout/AgentsShell'

@@ -5,9 +5,9 @@
 //!
 //! - **`/cli/agents/triage`** → `handle_triage` — read-only
 //!   plain-text summary of what's pending in every agent's
-//!   inbox, for the user's `k2so agents triage` verb. Matches
-//!   the byte-for-byte shape Tauri's agent_hooks returned in
-//!   0.33.0. No side effects.
+//!   inbox. A public route with no CLI verb left (the old
+//!   `k2so agents triage` is gone; `k2 workspace triage` reads
+//!   `/cli/inbox/list`). No side effects.
 //!
 //! - **`/cli/scheduler-tick`** → `handle_scheduler_fire` — the
 //!   destructive heartbeat path: runs `scheduler_tick` + the
@@ -83,8 +83,8 @@ fn lease_watchdog_grace_secs() -> u64 {
 }
 
 /// Handler for `/cli/agents/triage` — read-only summary. Matches
-/// pre-Phase-4 Tauri's `k2so_agents_triage_summary` shape. Used
-/// by the user-facing `k2so agents triage` verb. Never spawns.
+/// pre-Phase-4 Tauri's `k2so_agents_triage_summary` shape. No CLI
+/// verb calls it any more; the route is public API. Never spawns.
 pub fn handle_triage(project_path: &str) -> String {
     triage_summary::triage_summary(project_path)
         .unwrap_or_else(|e| format!("Triage error: {}", e))

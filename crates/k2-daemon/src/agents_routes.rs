@@ -802,8 +802,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/agents/reap" => crate::terminal_routes::handle_agents_reap(params),
 
         // ── Scheduler / triage ──────────────────────────────────────
-        // `/cli/agents/triage` is READ-ONLY (plain-text summary for
-        // `k2so agents triage`). `/cli/scheduler-tick` is the
+        // `/cli/agents/triage` is READ-ONLY (plain-text summary; no
+        // CLI verb calls it any more). `/cli/scheduler-tick` is the
         // DESTRUCTIVE heartbeat fire path — `~/.k2so/heartbeat.sh`
         // invokes it on launchd's schedule and parses `"count":N`
         // to log what fired.

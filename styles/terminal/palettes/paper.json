@@ -27,7 +27,7 @@
     "status-error": { "$value": "#b3261e", "$type": "color" },
     "status-ok": { "$value": "#276b3d", "$type": "color" },
     "status-warn": { "$value": "#9a6a08", "$type": "color" },
-    "status-ok-soft": { "$value": "#2f8a4e", "$type": "color" },
+    "status-ok-soft": { "$value": "#266e3e", "$type": "color", "$description": "Ok text and dots (the (active) mark, ok callouts): at least 4.5:1 on every ground." },
     "status-warn-soft": { "$value": "#a87908", "$type": "color" },
     "status-error-soft": { "$value": "#a12b24", "$type": "color" },
     "status-error-bright": { "$value": "#8c211b", "$type": "color", "$description": "'Bright' inverts to darkest on light — it's the emphasis step." },

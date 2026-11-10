@@ -101,8 +101,9 @@
       "$type": "color"
     },
     "status-ok-soft": {
-      "$value": "#248a3d",
-      "$type": "color"
+      "$value": "#207c37",
+      "$type": "color",
+      "$description": "Ok text and dots (the (active) mark, ok callouts): at least 4.5:1 on every ground."
     },
     "status-warn-soft": {
       "$value": "#c26b00",

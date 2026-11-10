@@ -112,3 +112,16 @@ describe('Filled accent controls', () => {
     expect(rule(generated, '[data-style="glass"] .k2-segment-thumb:not([data-zen-root] *)')).toContain('var(--color-accent-fill) 92%')
   })
 })
+
+describe('Information text on every ground', () => {
+  const GROUNDS = ['bg', 'bg-surface', 'bg-elevated', 'bg-inset', 'bg-stripe', 'bg-canvas']
+
+  it.each(LOOKS)('muted text and ok text (the (active) mark) read at 4.5:1 (%s %s)', (style, id) => {
+    const p = palette(style, id)
+    for (const slot of ['text-muted', 'status-ok-soft']) {
+      for (const ground of GROUNDS) {
+        expect(contrast(hex(p[slot]), hex(p[ground])), `${id} ${slot} on ${ground}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  })
+})

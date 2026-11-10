@@ -73,32 +73,6 @@ fn enc(s: &str) -> String {
     out
 }
 
-/// A temp `$HOME` for the connect-user store and the vault (restored on drop).
-struct Home {
-    prev: Option<std::ffi::OsString>,
-    dir: std::path::PathBuf,
-}
-
-impl Home {
-    fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!("k2-oa0-{}-{}", std::process::id(), uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(dir.join(".k2")).expect("temp HOME");
-        let prev = std::env::var_os("HOME");
-        std::env::set_var("HOME", &dir);
-        Home { prev, dir }
-    }
-}
-
-impl Drop for Home {
-    fn drop(&mut self) {
-        match self.prev.take() {
-            Some(p) => std::env::set_var("HOME", p),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
 /// An email the fake engine serves (`account` lists it in `Email/query`).
 fn seed_email(fake: &FakeJmap, account: &str, id: &str, subject: &str) {
     let mut st = fake.state.lock().unwrap();
@@ -127,7 +101,7 @@ fn seed_email(fake: &FakeJmap, account: &str, id: &str, subject: &str) {
 }
 
 struct Fx {
-    _home: Home,
+    _home: k2_core::test_env::TempHome,
     _key: k2_core::test_env::EnvVar,
     _mail: crate::mail::MailServerTestGuard,
     _row: crate::mail::MailServerRowCleanup,
@@ -152,7 +126,7 @@ struct Fx {
 
 impl Fx {
     async fn start() -> Fx {
-        let home = Home::new();
+        let home = k2_core::test_env::TempHome::new();
         let key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
         let mail = crate::mail::mail_server_test_lock();
         let row = crate::mail::MailServerRowCleanup;
@@ -161,7 +135,7 @@ impl Fx {
         let short = &uuid::Uuid::new_v4().simple().to_string()[..10];
         let domain = format!("oa0{short}.example");
         let ws_id = uuid::Uuid::new_v4().to_string();
-        let ws_path = home.dir.join(format!("ws-oa0-{short}")).to_string_lossy().to_string();
+        let ws_path = home.path().join(format!("ws-oa0-{short}")).to_string_lossy().to_string();
         std::fs::create_dir_all(&ws_path).expect("workspace dir");
         let agent_addr = format!("bot@{domain}");
         let person_addr = format!("pat@{domain}");

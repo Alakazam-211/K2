@@ -50,8 +50,9 @@
       "$value": "#a89f92",
       "$type": "color"
     },
+    "control-edge": { "$value": "#7d776c", "$type": "color" },
     "text-muted": {
-      "$value": "#7f796e",
+      "$value": "#a09a8e",
       "$type": "color"
     },
     "accent": {

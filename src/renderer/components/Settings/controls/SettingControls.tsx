@@ -307,7 +307,7 @@ export function SettingDropdown({
         title={title}
         data-k2-chamfer="control"
         {...triggerData}
-        className={`flex items-center type-control ${compact ? 'h-6 max-w-full gap-1 px-1.5' : 'gap-2 px-2 py-1'} bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] transition-colors ${
+        className={`flex items-center type-control ${compact ? 'h-6 max-w-full gap-1 px-1.5' : 'gap-2 px-2 py-1'} bg-[var(--color-bg)] border border-[var(--color-control-edge)] text-[var(--color-text-primary)] transition-colors ${
           disabled
             ? 'opacity-50 cursor-not-allowed'
             : 'hover:border-[var(--color-text-muted)] cursor-pointer'

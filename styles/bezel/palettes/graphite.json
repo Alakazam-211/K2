@@ -13,6 +13,7 @@
     "bg-hover": { "$value": "#252320", "$type": "color" },
     "border": { "$value": "rgba(255, 255, 255, 0.07)", "$type": "color", "$description": "Quiet — rings do the definition work in this style." },
     "border-strong": { "$value": "rgba(255, 255, 255, 0.26)", "$type": "color" },
+    "control-edge": { "$value": "#727068", "$type": "color" },
     "text-primary": { "$value": "#eae6de", "$type": "color", "$description": "Warm off-white." },
     "text-secondary": { "$value": "#a89f92", "$type": "color" },
     "text-muted": { "$value": "#6f695f", "$type": "color" },

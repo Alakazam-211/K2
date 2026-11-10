@@ -42,6 +42,10 @@
       "$value": "rgba(255, 255, 255, 0.28)",
       "$type": "color"
     },
+    "control-edge": {
+      "$value": "#787880",
+      "$type": "color"
+    },
     "text-primary": {
       "$value": "#ffffff",
       "$type": "color"
@@ -51,7 +55,7 @@
       "$type": "color"
     },
     "text-muted": {
-      "$value": "#8e8e93",
+      "$value": "#98989d",
       "$type": "color"
     },
     "accent": {

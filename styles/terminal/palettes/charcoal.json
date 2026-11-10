@@ -48,17 +48,23 @@
       "$type": "color",
       "$description": "Checkbox outlines and other controls needing more contrast than border."
     },
+    "control-edge": {
+      "$value": "#6b6b72",
+      "$type": "color",
+      "$description": "Outline of interactive controls (buttons, fields, dropdowns, checkboxes, radios, switch tracks, segmented pickers): at least 3:1 on every background, bg-elevated being the worst case. Hairline dividers stay on border."
+    },
     "text-primary": {
       "$value": "#e4e4e7",
       "$type": "color"
     },
     "text-secondary": {
-      "$value": "#a1a1aa",
+      "$value": "#b0b0b8",
       "$type": "color"
     },
     "text-muted": {
-      "$value": "#71717a",
-      "$type": "color"
+      "$value": "#87878f",
+      "$type": "color",
+      "$description": "Information text: at least 4.5:1 on bg, bg-surface, bg-elevated, bg-inset, bg-stripe and bg-canvas. Stays visibly quieter than text-secondary. Disabled controls are exempt."
     },
     "accent": {
       "$value": "#3b82f6",

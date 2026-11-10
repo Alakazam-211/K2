@@ -44,6 +44,7 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--color-bg-hover': zen('surface-raised'),
   '--color-border': zen('border'),
   '--color-border-strong': mix('text', 25),
+  '--color-control-edge': zen('border'),
   // Text
   '--color-text': zen('text'),
   '--color-text-primary': zen('text'),
@@ -193,6 +194,7 @@ export function zenBubbleShield(side: ZenBubbleSide): Record<string, string> {
     '--color-bg-inset': mix(text, 8),
     '--color-bg-stripe': mix(text, 6),
     '--color-border': mix(text, 22),
+    '--color-control-edge': mix(text, 22),
   }
 }
 
@@ -203,6 +205,7 @@ export function zenBubbleShield(side: ZenBubbleSide): Record<string, string> {
  */
 export const ZEN_SHIELD_CSS = `
 [data-zen-root] ::placeholder { color: var(--zen-text-muted); opacity: 1; }
+[data-zen-root] :is(.k2-checkbox, .k2-radio, .k2-switch) { --color-control-edge: var(--color-border-strong); }
 [data-zen-root] [data-zen-bubble="agent"] *::selection,
 [data-zen-root] [data-zen-bubble="agent"]::selection { background: color-mix(in srgb, var(--zen-accent) 30%, transparent); color: var(--zen-bubble-agent-text); }
 [data-zen-root] [data-zen-bubble="me"] *::selection,

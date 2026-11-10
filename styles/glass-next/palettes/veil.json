@@ -42,12 +42,16 @@
       "$value": "rgba(60, 60, 67, 0.35)",
       "$type": "color"
     },
+    "control-edge": {
+      "$value": "#8a8a8f",
+      "$type": "color"
+    },
     "text-primary": {
       "$value": "#000000",
       "$type": "color"
     },
     "text-secondary": {
-      "$value": "#666666",
+      "$value": "#58585d",
       "$type": "color"
     },
     "text-muted": {

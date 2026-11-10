@@ -7,13 +7,13 @@ import { usePressSpring } from './usePressSpring'
 const VARIANTS: Record<string, string> = {
   /** Settings-style default: elevated chip, brightens on hover. */
   default:
-    'bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-border)] hover:text-[var(--color-text-primary)]',
+    'bg-[var(--color-bg-elevated)] border border-[var(--color-control-edge)] text-[var(--color-text-secondary)] hover:bg-[var(--color-border)] hover:text-[var(--color-text-primary)]',
   /** Bordered but transparent (dialog Cancel). */
   ghost:
-    'bg-transparent border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
+    'bg-transparent border border-[var(--color-control-edge)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
   /** Transparent base that fills on hover (the Settings/Connections idiom). */
   quiet:
-    'bg-transparent border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]',
+    'bg-transparent border border-[var(--color-control-edge)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]',
   /** Primary action. */
   accent:
     'bg-[var(--color-accent)] border border-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 active:bg-[var(--color-accent-active,var(--color-accent))] active:border-[var(--color-accent-active,var(--color-accent))] [--k2-ch-focus:var(--color-on-accent)]',

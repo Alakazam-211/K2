@@ -1227,7 +1227,7 @@ html[data-style="terminal"] :where([data-k2-chamfer]:not(input):not([data-zen-ro
     50% 50%);
 }
 html[data-style="terminal"] :where(input[data-k2-chamfer]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
-  --k2-ch-edge: var(--color-border);
+  --k2-ch-edge: var(--color-control-edge);
   --k2-ch-s: calc(var(--k2-ch-cut) + 2 * var(--k2-ch-w));
   --k2-ch-stop: calc(0.7071 * var(--k2-ch-cut) + min(var(--k2-ch-w), var(--k2-ch-cut)));
   background-image:
@@ -1421,11 +1421,11 @@ html[data-style="terminal"] [data-limit-track] {
   flex-shrink: 0;
   vertical-align: middle;
   background-color: transparent;
-  border: 1px solid var(--color-border-strong);
+  border: 1px solid var(--color-control-edge);
   border-radius: var(--radius-selector);
   cursor: pointer;
   transition: background-color var(--motion-duration-medium), border-color var(--motion-duration-medium);
-  --k2-ch-edge: var(--color-border-strong);
+  --k2-ch-edge: var(--color-control-edge);
 }
 .k2-radio { border-radius: var(--radius-pill); }
 .k2-radio:hover:not(:disabled):not(:checked),
@@ -1493,7 +1493,7 @@ html:not([data-style="terminal"]) .k2-radio:checked {
   border: none;
   border-radius: var(--radius-pill);
   background-color: var(--color-control-track-off);
-  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+  box-shadow: inset 0 0 0 1px var(--color-control-edge);
   cursor: pointer;
   transition: background-color var(--motion-duration-medium);
   --k2-ch-bw: 0px;
@@ -1563,9 +1563,18 @@ html[data-style="terminal"] .k2-switch:focus-visible:not([data-zen-root] *, [dat
   background-position: left top, right top, right bottom, left bottom;
   background-repeat: no-repeat;
 }
-/* A square inset edge can't follow the cut, so Terminal's track has no edge:
-   the knob carries the contrast. */
-html[data-style="terminal"] .k2-switch:not([data-zen-root] *, [data-k2-thread-zen] *) { box-shadow: none; }
+/* A square inset edge can't follow the cut, so Terminal's track carries a real
+   border: the chamfer's diagonal inherits border-color and the outline stays
+   on the cut. The checked track's border matches its fill. The knob sits 1px
+   up and left to stay centred inside the border. */
+html[data-style="terminal"] .k2-switch:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  box-shadow: none;
+  border: 1px solid var(--color-control-edge);
+  --k2-ch-bw: 1px;
+  transition: background-color var(--motion-duration-medium), border-color var(--motion-duration-medium);
+}
+html[data-style="terminal"] .k2-switch[aria-checked="true"]:not([data-zen-root] *, [data-k2-thread-zen] *) { border-color: var(--color-accent); }
+html[data-style="terminal"] .k2-switch-knob:not([data-zen-root] *, [data-k2-thread-zen] *) { margin: -1px 0 0 -1px; }
 
 .k2-slider {
   -webkit-appearance: none;
@@ -1609,7 +1618,7 @@ html[data-style="terminal"] .k2-slider::-webkit-slider-thumb {
   display: inline-flex;
   flex-shrink: 0;
   padding: 2px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-control-edge);
   border-radius: var(--radius-pill);
 }
 html:not([data-style="terminal"]) .k2-segmented { overflow: hidden; }

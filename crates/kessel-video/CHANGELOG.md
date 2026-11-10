@@ -28,6 +28,11 @@ The encoder report now matches what VideoToolbox actually used.
   session's `EncoderID` and the profile VideoToolbox took, for example
   `VideoToolbox H.264 (hardware, encoder com.apple.videotoolbox.videoencoder.ave.avc, Constrained High)`.
   It is still free text for logs; no API changes.
+- Each H.264 encoder session open also logs one line at `info`, target
+  `kessel_video::apple`, through the `log` crate (a new dependency of the
+  Apple backend, MIT OR Apache-2.0): `implementation`, `encoder_id`,
+  `profile`, `low_latency_rc` and the size. Your logger decides whether it
+  prints.
 
 ## 0.1.5
 

@@ -364,6 +364,16 @@ impl VtEncoder {
                 "VTCompressionSessionPrepareToEncodeFrames",
             ));
         }
+        log::info!(
+            target: "kessel_video::apple",
+            "H.264 encoder session opened: implementation={:?} encoder_id={} profile={} low_latency_rc={} size={}x{}",
+            enc.implementation,
+            enc.encoder_id.as_deref().unwrap_or("none"),
+            enc.profile_name,
+            enc.low_latency,
+            cfg.width,
+            cfg.height,
+        );
         Ok(enc)
     }
 

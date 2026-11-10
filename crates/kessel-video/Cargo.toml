@@ -28,7 +28,7 @@ default = ["system"]
 fake = []
 # macOS and iOS: AVFoundation, VideoToolbox, and ScreenCaptureKit (macOS
 # only). System frameworks through FFI; no codec library is linked or shipped.
-apple = ["dep:objc2", "dep:block2"]
+apple = ["dep:objc2", "dep:block2", "dep:log"]
 # Media Foundation cameras, Windows Graphics Capture screens, and H.264
 # through Media Foundation's MFTs (the GPU driver's or Microsoft's own). OS
 # components through the `windows` crate.
@@ -69,6 +69,10 @@ vp8-encoder = { version = "0.1", optional = true }
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2 = { version = "0.6", optional = true }
 block2 = { version = "0.6", optional = true }
+# One info line per H.264 encoder session open (target
+# `kessel_video::apple`): what VideoToolbox actually made. The app's
+# logger decides whether it prints. MIT OR Apache-2.0.
+log = { version = "0.4", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { version = "0.2", optional = true }

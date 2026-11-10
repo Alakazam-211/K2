@@ -2,7 +2,7 @@
 // MCS2 (prd-app-mail-calendar-surfaces-v1): "Connect Microsoft" is enabled
 // only when the daemon reports a real Microsoft OAuth app (baked into the
 // build or the owner's own); otherwise it says why. Older daemons (no
-// `configured` field) keep "Coming soon".
+// `configured` field) say the server needs an update.
 import React from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -35,7 +35,7 @@ describe('microsoftLinkState', () => {
     expect(microsoftLinkState(cfg({ configured: true, clientId: 'abc' }))).toEqual({
       enabled: true,
       badge: null,
-      title: expect.stringContaining('device code'),
+      title: expect.stringContaining('short code'),
     })
   })
 
@@ -43,12 +43,12 @@ describe('microsoftLinkState', () => {
     const st = microsoftLinkState(cfg({ configured: false, clientId: 'REPLACE_ME-microsoft-client-id' }))
     expect(st.enabled).toBe(false)
     expect(st.badge).toBe('Needs an app')
-    expect(st.title).toContain('OAuth apps')
+    expect(st.title).toContain('Sign-in apps')
   })
 
-  it('keeps "Coming soon" for a daemon from before Graph send', () => {
+  it('says to update a daemon from before Graph send', () => {
     const st = microsoftLinkState(cfg({}))
-    expect(st).toEqual({ enabled: false, badge: 'Coming soon', title: expect.any(String) })
+    expect(st).toEqual({ enabled: false, badge: 'Update needed', title: expect.stringContaining('Update it') })
   })
 
   it('is disabled while loading and when the read failed', () => {
@@ -56,7 +56,7 @@ describe('microsoftLinkState', () => {
     expect(microsoftLinkState('error')).toEqual({
       enabled: false,
       badge: 'Unavailable',
-      title: expect.stringContaining("Couldn't read"),
+      title: expect.stringContaining("Couldn't check"),
     })
   })
 })
@@ -67,7 +67,7 @@ describe('MicrosoftConnectButton', () => {
     render(<MicrosoftConnectButton cfg={cfg({ configured: true })} canStart busy={false} onStart={onStart} />)
     const btn = screen.getByTestId('connect-microsoft') as HTMLButtonElement
     expect(btn.disabled).toBe(false)
-    expect(btn.textContent).not.toContain('Coming soon')
+    expect(screen.queryByText('Update needed')).toBeNull()
     fireEvent.click(btn)
     expect(onStart).toHaveBeenCalledTimes(1)
   })
@@ -77,12 +77,12 @@ describe('MicrosoftConnectButton', () => {
     expect((screen.getByTestId('connect-microsoft') as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('is disabled with a "Needs an app" badge without a Microsoft app', () => {
+  it('is disabled with a "Needs an app" tag without a Microsoft app', () => {
     const onStart = vi.fn()
     render(<MicrosoftConnectButton cfg={cfg({ configured: false })} canStart busy={false} onStart={onStart} />)
     const btn = screen.getByTestId('connect-microsoft') as HTMLButtonElement
     expect(btn.disabled).toBe(true)
-    expect(btn.textContent).toContain('Needs an app')
+    expect(screen.getByText('Needs an app')).toBeTruthy()
     fireEvent.click(btn)
     expect(onStart).not.toHaveBeenCalled()
   })

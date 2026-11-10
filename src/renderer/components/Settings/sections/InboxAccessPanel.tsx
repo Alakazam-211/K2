@@ -22,11 +22,20 @@
 // Send row shows the daemon's effective `sendState` right under the level,
 // and when it is blocked offers "Turn on sending" for that workspace.
 
-import React, { useCallback, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
-import { Toggle, Tag } from '@/components/ui'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { Button, OverflowMenu, Toggle, Tag } from '@/components/ui'
+import {
+  SaveError,
+  SaveNote,
+  SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
+  SettingDropdown,
+  SettingsGroup,
+  type SaveState,
+} from '../controls/SettingControls'
 import { InboxWakePanel } from './InboxWakePanel'
-import { SettingDropdown } from '../controls/SettingControls'
 import {
   grantInboxAccess,
   mailErrorMessage,
@@ -50,18 +59,18 @@ export function sendStateNote(
     case 'blocked_off':
       return {
         blocked: true,
-        text: "Send is blocked: this workspace's agent sending is off, so its agents get 'gated' when they send.",
+        text: "Can't send yet: sending is off for this workspace's agents.",
       }
     // Daemons before MCS2 (linked approval hand-off) still answer this.
     case 'blocked_approval':
       return {
         blocked: true,
-        text: "Send is blocked: this workspace's agent sending is set to Approval, which only queues hosted mailboxes. A linked inbox needs On.",
+        text: "Can't send yet: this workspace sends only after your approval, which this account doesn't support. Turn sending on instead.",
       }
     case 'approval':
-      return { blocked: false, text: 'Sends wait for your approval (Email → Approvals).' }
+      return { blocked: false, text: 'Each email waits for your approval before it goes out.' }
     case 'on':
-      return { blocked: false, text: 'Sending is on for this workspace.' }
+      return { blocked: false, text: 'Sending is on for its agents.' }
     default:
       return null
   }
@@ -70,7 +79,7 @@ export function sendStateNote(
 /** Keep `sendState` right across an OPTIMISTIC level change (until the next
  *  catalog read brings the daemon's value). Mirrors `send_state` in
  *  crates/k2-daemon/src/mail/access.rs; unknown gate → leave it unset. */
-function withLevel(p: InboxParticipant, level: InboxLevel, source: Inbox['source']): InboxParticipant {
+function withLevel(p: InboxParticipant, level: InboxLevel): InboxParticipant {
   if (!p.agentSend) return { ...p, level, sendState: undefined }
   let sendState: SendState = 'no_send_level'
   if (level === 'send') {
@@ -82,56 +91,17 @@ function withLevel(p: InboxParticipant, level: InboxLevel, source: Inbox['source
   return { ...p, level, sendState }
 }
 
-function SendStateLine({
-  participant,
-  canMutate,
-  busy,
-  pending,
-  onTurnOn,
-}: {
-  participant: InboxParticipant
-  canMutate: boolean
-  busy: boolean
-  pending: boolean
-  onTurnOn: () => void
-}): React.JSX.Element | null {
-  if (participant.level !== 'send') return null
-  const note = sendStateNote(participant.sendState)
-  if (!note) return null
-  return (
-    <div
-      className="flex items-center gap-2"
-      data-testid={`send-state-${participant.projectId}`}
-      data-send-state={participant.sendState}
-    >
-      <span
-        className={`type-hint flex-1 min-w-0 ${
-          note.blocked
-            ? 'text-[var(--color-status-error-soft)]'
-            : 'text-[var(--color-text-muted)]'
-        }`}
-      >
-        {note.text}
-      </span>
-      {note.blocked && (
-        <button
-          type="button"
-          disabled={!canMutate || busy}
-          onClick={onTurnOn}
-          title="Let this workspace's agents send email (k2 mail sending <workspace> on)"
-          className="px-2 py-1 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
-        >
-          {pending ? '…' : 'Turn on sending'}
-        </button>
-      )}
-    </div>
-  )
+const LEVEL_LABEL: Record<InboxLevel, string> = {
+  read: 'Read',
+  draft: 'Read and draft',
+  send: 'Read, draft and send',
 }
 
-const LEVEL_LABEL: Record<InboxLevel, string> = {
-  read: 'Read-only',
-  draft: 'Read + Draft',
-  send: 'Read + Draft + Send',
+/** What a level lets a workspace's agents do, in one line. */
+export const LEVEL_HINT: Record<InboxLevel, string> = {
+  read: 'Its agents can read mail.',
+  draft: 'Its agents can read mail and save draft replies for you to send.',
+  send: 'Its agents can read mail, save drafts and send as this account.',
 }
 
 /** Level options for a dropdown — Read / Draft always; Send whenever the
@@ -146,56 +116,140 @@ function levelOptions(maxLevel: Inbox['maxLevel']): { value: InboxLevel; label: 
   return opts
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
+/** The control column every row shares: the level dropdown, then the row's
+ *  "…" menu (or a slot its width, so switches below line up). */
+const LEVEL_FIELD = 'w-52'
+const MENU_SLOT = 'w-[30px] flex-shrink-0'
+
+/** One workspace on the inbox: its name, what its level allows, whether a
+ *  Send level really sends, and its folder and Trash switches. */
+function ParticipantRow({
+  participant,
+  name,
+  isPrimary,
+  options,
+  disabled,
+  saved,
+  sendPending,
+  menu,
+  onLevel,
+  onManage,
+  onTurnOnSending,
+}: {
+  participant: InboxParticipant
+  name: string
+  isPrimary: boolean
+  options: { value: InboxLevel; label: string }[]
+  disabled: boolean
+  saved: boolean
+  sendPending: boolean
+  menu: React.ReactNode
+  onLevel: (level: InboxLevel) => void
+  onManage: (canManage: boolean, canDelete: boolean) => void
+  onTurnOnSending: () => void
+}): React.JSX.Element {
+  const note = participant.level === 'send' ? sendStateNote(participant.sendState) : null
+  const { canManage, canDelete } = participant
   return (
-    <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-      {children}
-    </h3>
+    <div className="px-4 py-3" data-testid={`access-row-${participant.projectId}`}>
+      <div className="flex items-start justify-between gap-6">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className={`${SETTING_ROW_LABEL} truncate`}>{name}</span>
+            {isPrimary && <Tag tone="accent">Primary</Tag>}
+            <SaveNote state={saved ? 'saved' : 'idle'} />
+          </div>
+          <p className={SETTING_ROW_HINT}>{LEVEL_HINT[participant.level]}</p>
+          {note && (
+            <div
+              className="flex items-center gap-3 mt-1"
+              data-testid={`send-state-${participant.projectId}`}
+              data-send-state={participant.sendState}
+            >
+              <span
+                className={`type-hint leading-relaxed ${
+                  note.blocked ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-secondary)]'
+                }`}
+              >
+                {note.text}
+              </span>
+              {note.blocked && (
+                <Button
+                  className="flex-shrink-0"
+                  disabled={disabled}
+                  onClick={onTurnOnSending}
+                  title={`Let ${name}'s agents send email`}
+                >
+                  {sendPending ? 'Turning on…' : 'Turn on sending'}
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <div className={`${LEVEL_FIELD} flex-shrink-0`}>
+            <SettingDropdown
+              value={participant.level}
+              options={options}
+              onChange={(v) => onLevel(v as InboxLevel)}
+              disabled={disabled}
+              ariaLabel={`What ${name} can do`}
+              fullWidth
+            />
+          </div>
+          <div className={MENU_SLOT}>{menu}</div>
+        </div>
+      </div>
+      <div className="mt-2 space-y-2">
+        <SwitchLine
+          label="Sort mail into folders"
+          checked={canManage}
+          disabled={disabled}
+          // Folders off → Trash off, in one server-valid change.
+          onChange={(next) => onManage(next, next ? canDelete : false)}
+          ariaLabel={`Let ${name} sort mail into folders`}
+        />
+        {canManage && (
+          <SwitchLine
+            label="Move mail to Trash"
+            hint="Mail in Trash can still be recovered."
+            checked={canDelete}
+            disabled={disabled}
+            onChange={(next) => onManage(true, next)}
+            ariaLabel={`Let ${name} move mail to Trash`}
+          />
+        )}
+      </div>
+    </div>
   )
 }
 
-/** The per-workspace mailbox-management capabilities: "Allow inbox management"
- *  and, nested beneath it, "Allow delete". Delete requires management, so the
- *  nested toggle only appears while management is ON, and turning management
- *  OFF forces delete OFF in the same change — the callback NEVER emits the
- *  invalid `canDelete && !canManage` combo the daemon rejects. */
-function ManageToggles({
-  participant,
+/** A switch under a workspace row, its switch on the dropdown's right edge. */
+function SwitchLine({
+  label,
+  hint,
+  checked,
   disabled,
   onChange,
+  ariaLabel,
 }: {
-  participant: InboxParticipant
+  label: string
+  hint?: string
+  checked: boolean
   disabled: boolean
-  /** Emits the resulting flags; delete is already forced false when manage
-   *  goes off, so this is always a server-valid pair. */
-  onChange: (canManage: boolean, canDelete: boolean) => void
+  onChange: (next: boolean) => void
+  ariaLabel: string
 }): React.JSX.Element {
-  const { canManage, canDelete } = participant
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-2">
-        <span className="type-hint text-[var(--color-text-secondary)]">
-          Allow inbox management
-        </span>
-        <Toggle
-          checked={canManage}
-          disabled={disabled}
-          // Manage off → delete off, in one server-valid change.
-          onChange={(next) => onChange(next, next ? canDelete : false)}
-          aria-label="Allow inbox management"
-        />
+    <div className="flex items-center justify-between gap-6">
+      <span className="type-hint text-[var(--color-text-secondary)] min-w-0">
+        {label}
+        {hint && <span className="text-[var(--color-text-secondary)]"> · {hint}</span>}
+      </span>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <Toggle size="sm" checked={checked} disabled={disabled} onChange={onChange} aria-label={ariaLabel} />
+        <div className={MENU_SLOT} />
       </div>
-      {canManage && (
-        <div className="flex items-center justify-between gap-2 pl-5">
-          <span className="type-hint text-[var(--color-text-secondary)]">Allow delete</span>
-          <Toggle
-            checked={canDelete}
-            disabled={disabled}
-            onChange={(next) => onChange(true, next)}
-            aria-label="Allow delete"
-          />
-        </div>
-      )}
     </div>
   )
 }
@@ -204,92 +258,57 @@ export function InboxAccessPanel({
   inbox,
   canMutate,
   patchInbox,
+  card = false,
 }: {
   inbox: Inbox
   canMutate: boolean
   /** Optimistically patch this inbox's row in the parent list (primary +
    *  grants) — no refetch (no fetch-in-render). */
   patchInbox: (address: string, patch: (i: Inbox) => Inbox) => void
+  /** A Settings card group with its own title (Email Link). Without it the
+   *  rows sit in a plain bordered list under a section label (Email Hosting's
+   *  address rows). */
+  card?: boolean
 }): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
-  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<SaveState>('idle')
+  const [savedId, setSavedId] = useState<string | null>(null)
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (savedTimer.current) clearTimeout(savedTimer.current)
+  }, [])
   // projectId in flight, or 'add', or `primary:<id>` for a transfer.
   const [pending, setPending] = useState<string | null>(null)
   const [newProject, setNewProject] = useState('')
   const [newLevel, setNewLevel] = useState<InboxLevel>('read')
 
   const options = useMemo(() => levelOptions(inbox.maxLevel), [inbox.maxLevel])
-  const canSend = inbox.maxLevel === 'send'
   const primaryId = inbox.primary.projectId
   const grantedIds = useMemo(() => new Set(inbox.grants.map((g) => g.projectId)), [inbox.grants])
   const projectName = useCallback(
     (id: string): string => projects.find((p) => p.id === id)?.name ?? id,
     [projects],
   )
+  const nameOf = (p: InboxParticipant): string => p.workspace ?? projectName(p.projectId)
 
-  // Change the Primary's OWN level (project = primary). Optimistic.
-  const changePrimaryLevel = useCallback(
-    async (level: InboxLevel): Promise<void> => {
-      setError(null)
-      setPending(primaryId)
-      const before = inbox.primary
-      patchInbox(inbox.address, (i) => ({ ...i, primary: withLevel(i.primary, level, i.source) }))
+  /** One write: optimistic patch, the call, then "Saved" on that row or the
+   *  reason it failed (the patch rolls back). */
+  const run = useCallback(
+    async (key: string, rowId: string, patch: (i: Inbox) => Inbox, call: () => Promise<unknown>): Promise<boolean> => {
+      setResult('idle')
+      setPending(key)
+      const before = { primary: inbox.primary, grants: inbox.grants }
+      patchInbox(inbox.address, patch)
       try {
-        await setInboxLevel({ address: inbox.address, project: primaryId, level })
+        await call()
+        setSavedId(rowId)
+        if (savedTimer.current) clearTimeout(savedTimer.current)
+        savedTimer.current = setTimeout(() => setSavedId(null), 2000)
+        return true
       } catch (e) {
-        patchInbox(inbox.address, (i) => ({ ...i, primary: before }))
-        setError(mailErrorMessage(e))
-      } finally {
-        setPending(null)
-      }
-    },
-    [inbox.address, inbox.primary, primaryId, patchInbox],
-  )
-
-  // Change a grant's level. Optimistic.
-  const changeGrantLevel = useCallback(
-    async (projectId: string, level: InboxLevel): Promise<void> => {
-      setError(null)
-      setPending(projectId)
-      const before = inbox.grants
-      patchInbox(inbox.address, (i) => ({
-        ...i,
-        grants: i.grants.map((g) => (g.projectId === projectId ? withLevel(g, level, i.source) : g)),
-      }))
-      try {
-        await setInboxLevel({ address: inbox.address, project: projectId, level })
-      } catch (e) {
-        patchInbox(inbox.address, (i) => ({ ...i, grants: before }))
-        setError(mailErrorMessage(e))
-      } finally {
-        setPending(null)
-      }
-    },
-    [inbox.address, inbox.grants, patchInbox],
-  )
-
-  // Change a participant's management capabilities (Primary OR a grant, keyed
-  // by projectId). Enforces canDelete⇒canManage client-side so the payload is
-  // never the combo the daemon rejects. Optimistic.
-  const changeManage = useCallback(
-    async (projectId: string, canManage: boolean, canDelete: boolean): Promise<void> => {
-      const nextDelete = canManage ? canDelete : false
-      setError(null)
-      setPending(`manage:${projectId}`)
-      const beforePrimary = inbox.primary
-      const beforeGrants = inbox.grants
-      const apply = (p: InboxParticipant): InboxParticipant =>
-        p.projectId === projectId ? { ...p, canManage, canDelete: nextDelete } : p
-      patchInbox(inbox.address, (i) => ({
-        ...i,
-        primary: apply(i.primary),
-        grants: i.grants.map(apply),
-      }))
-      try {
-        await setInboxManage({ address: inbox.address, project: projectId, canManage, canDelete: nextDelete })
-      } catch (e) {
-        patchInbox(inbox.address, (i) => ({ ...i, primary: beforePrimary, grants: beforeGrants }))
-        setError(mailErrorMessage(e))
+        patchInbox(inbox.address, (i) => ({ ...i, primary: before.primary, grants: before.grants }))
+        setResult({ error: mailErrorMessage(e) })
+        return false
       } finally {
         setPending(null)
       }
@@ -297,114 +316,105 @@ export function InboxAccessPanel({
     [inbox.address, inbox.primary, inbox.grants, patchInbox],
   )
 
-  // Turn a workspace's agent-send gate ON (the fix for a blocked Send).
-  // Optimistic: every row of that workspace in this inbox flips to `on`.
-  const turnOnSending = useCallback(
-    async (projectId: string): Promise<void> => {
-      setError(null)
-      setPending(`sending:${projectId}`)
-      const beforePrimary = inbox.primary
-      const beforeGrants = inbox.grants
-      const apply = (p: InboxParticipant): InboxParticipant =>
-        p.projectId === projectId
-          ? { ...p, agentSend: 'on', sendState: p.level === 'send' ? 'on' : p.sendState }
-          : p
-      patchInbox(inbox.address, (i) => ({
+  const changeLevel = (projectId: string, level: InboxLevel): void => {
+    void run(
+      projectId,
+      projectId,
+      (i) => ({
         ...i,
-        primary: apply(i.primary),
-        grants: i.grants.map(apply),
-      }))
-      try {
-        await setWorkspaceAgentSend({ workspace: projectId, agentSend: 'on' })
-      } catch (e) {
-        patchInbox(inbox.address, (i) => ({ ...i, primary: beforePrimary, grants: beforeGrants }))
-        setError(mailErrorMessage(e))
-      } finally {
-        setPending(null)
-      }
-    },
-    [inbox.address, inbox.primary, inbox.grants, patchInbox],
-  )
+        primary: i.primary.projectId === projectId ? withLevel(i.primary, level) : i.primary,
+        grants: i.grants.map((g) => (g.projectId === projectId ? withLevel(g, level) : g)),
+      }),
+      () => setInboxLevel({ address: inbox.address, project: projectId, level }),
+    )
+  }
 
-  const doRevoke = useCallback(
-    async (projectId: string): Promise<void> => {
-      setError(null)
-      setPending(projectId)
-      const before = inbox.grants
-      patchInbox(inbox.address, (i) => ({
-        ...i,
-        grants: i.grants.filter((g) => g.projectId !== projectId),
-      }))
-      try {
-        await revokeInboxAccess({ address: inbox.address, project: projectId })
-      } catch (e) {
-        patchInbox(inbox.address, (i) => ({ ...i, grants: before }))
-        setError(mailErrorMessage(e))
-      } finally {
-        setPending(null)
-      }
-    },
-    [inbox.address, inbox.grants, patchInbox],
-  )
+  // Folder and Trash rights. Never sends Trash without folders (the daemon
+  // refuses that pair).
+  const changeManage = (projectId: string, canManage: boolean, canDelete: boolean): void => {
+    const nextDelete = canManage ? canDelete : false
+    const apply = (p: InboxParticipant): InboxParticipant =>
+      p.projectId === projectId ? { ...p, canManage, canDelete: nextDelete } : p
+    void run(
+      `manage:${projectId}`,
+      projectId,
+      (i) => ({ ...i, primary: apply(i.primary), grants: i.grants.map(apply) }),
+      () => setInboxManage({ address: inbox.address, project: projectId, canManage, canDelete: nextDelete }),
+    )
+  }
 
-  // Transfer Primary to a granted workspace: the target becomes Primary
-  // (keeps its level); the old Primary demotes to a grant (keeps its level).
-  const doMakePrimary = useCallback(
-    async (projectId: string): Promise<void> => {
-      setError(null)
-      setPending(`primary:${projectId}`)
-      const beforePrimary = inbox.primary
-      const beforeGrants = inbox.grants
-      patchInbox(inbox.address, (i) => {
+  // Turn a workspace's agent sending on (the fix for a blocked Send). Every
+  // row of that workspace in this inbox flips to `on`.
+  const turnOnSending = (projectId: string): void => {
+    const apply = (p: InboxParticipant): InboxParticipant =>
+      p.projectId === projectId
+        ? { ...p, agentSend: 'on', sendState: p.level === 'send' ? 'on' : p.sendState }
+        : p
+    void run(
+      `sending:${projectId}`,
+      projectId,
+      (i) => ({ ...i, primary: apply(i.primary), grants: i.grants.map(apply) }),
+      () => setWorkspaceAgentSend({ workspace: projectId, agentSend: 'on' }),
+    )
+  }
+
+  const removeAccess = async (g: InboxParticipant): Promise<void> => {
+    const name = nameOf(g)
+    const ok = await useConfirmDialogStore.getState().confirm({
+      title: `Remove ${name}'s access?`,
+      message: `${name}'s agents will no longer be able to use ${inbox.address}. You can give it access again at any time.`,
+      confirmLabel: 'Remove access',
+      destructive: true,
+    })
+    if (!ok) return
+    void run(
+      g.projectId,
+      primaryId,
+      (i) => ({ ...i, grants: i.grants.filter((x) => x.projectId !== g.projectId) }),
+      () => revokeInboxAccess({ address: inbox.address, project: g.projectId }),
+    )
+  }
+
+  // Hand the Primary to a workspace with access: it becomes the Primary
+  // (keeping its level); the old Primary becomes an ordinary grant.
+  const makePrimary = (projectId: string): void => {
+    void run(
+      `primary:${projectId}`,
+      projectId,
+      (i) => {
         const target = i.grants.find((g) => g.projectId === projectId)
         if (!target) return i
-        const grants = i.grants
-          .filter((g) => g.projectId !== projectId)
-          .concat([{ ...i.primary }])
         return {
           ...i,
           primary: { ...target },
-          grants,
+          grants: i.grants.filter((g) => g.projectId !== projectId).concat([{ ...i.primary }]),
         }
-      })
-      try {
-        await setInboxPrimary({ address: inbox.address, project: projectId })
-      } catch (e) {
-        patchInbox(inbox.address, (i) => ({ ...i, primary: beforePrimary, grants: beforeGrants }))
-        setError(mailErrorMessage(e))
-      } finally {
-        setPending(null)
-      }
-    },
-    [inbox.address, inbox.primary, inbox.grants, patchInbox],
-  )
+      },
+      () => setInboxPrimary({ address: inbox.address, project: projectId }),
+    )
+  }
 
-  // Grant OR upsert a new workspace at the chosen level.
-  const doAdd = useCallback(async (): Promise<void> => {
+  const addAccess = async (): Promise<void> => {
     if (!newProject) return
     const projectId = newProject
     const level = newLevel
-    setError(null)
-    setPending('add')
-    const before = inbox.grants
-    patchInbox(inbox.address, (i) => {
-      const exists = i.grants.some((g) => g.projectId === projectId)
-      const grants = exists
-        ? i.grants.map((g) => (g.projectId === projectId ? { ...g, level } : g))
-        : [...i.grants, { projectId, workspace: projectName(projectId), level, canManage: false, canDelete: false }]
-      return { ...i, grants }
-    })
-    try {
-      await grantInboxAccess({ address: inbox.address, project: projectId, level })
+    const ok = await run(
+      'add',
+      projectId,
+      (i) => {
+        const exists = i.grants.some((g) => g.projectId === projectId)
+        const grants = exists
+          ? i.grants.map((g) => (g.projectId === projectId ? { ...g, level } : g))
+          : [...i.grants, { projectId, workspace: projectName(projectId), level, canManage: false, canDelete: false }]
+        return { ...i, grants }
+      },
+      () => grantInboxAccess({ address: inbox.address, project: projectId, level }),
+    )
+    if (ok) {
       setNewProject('')
       setNewLevel('read')
-    } catch (e) {
-      patchInbox(inbox.address, (i) => ({ ...i, grants: before }))
-      setError(mailErrorMessage(e))
-    } finally {
-      setPending(null)
     }
-  }, [newProject, newLevel, inbox.address, inbox.grants, patchInbox, projectName])
+  }
 
   // Candidates for a new grant: every workspace that isn't the Primary and
   // doesn't already hold a grant.
@@ -413,149 +423,127 @@ export function InboxAccessPanel({
     [projects, primaryId, grantedIds],
   )
   const busy = pending !== null
-  const disabledCls = !canMutate || busy ? 'opacity-50 pointer-events-none' : undefined
+  const locked = !canMutate || busy
 
+  const rows = (
+    <>
+      <ParticipantRow
+        participant={inbox.primary}
+        name={nameOf(inbox.primary)}
+        isPrimary
+        options={options}
+        disabled={locked}
+        saved={savedId === primaryId}
+        sendPending={pending === `sending:${primaryId}`}
+        menu={null}
+        onLevel={(l) => changeLevel(primaryId, l)}
+        onManage={(m, d) => changeManage(primaryId, m, d)}
+        onTurnOnSending={() => turnOnSending(primaryId)}
+      />
+      {inbox.grants.map((g) => (
+        <ParticipantRow
+          key={g.projectId}
+          participant={g}
+          name={nameOf(g)}
+          isPrimary={false}
+          options={options}
+          disabled={locked}
+          saved={savedId === g.projectId}
+          sendPending={pending === `sending:${g.projectId}`}
+          menu={
+            <OverflowMenu
+              label={`More actions for ${nameOf(g)}`}
+              items={[
+                {
+                  id: 'primary',
+                  label: 'Make Primary',
+                  hint: 'It manages this account and who can use it.',
+                  disabled: locked,
+                  onSelect: () => makePrimary(g.projectId),
+                },
+                {
+                  id: 'remove',
+                  label: 'Remove access…',
+                  danger: true,
+                  group: true,
+                  disabled: locked,
+                  onSelect: () => void removeAccess(g),
+                },
+              ]}
+            />
+          }
+          onLevel={(l) => changeLevel(g.projectId, l)}
+          onManage={(m, d) => changeManage(g.projectId, m, d)}
+          onTurnOnSending={() => turnOnSending(g.projectId)}
+        />
+      ))}
+      <div className="px-4 py-3" data-testid="access-add">
+        <div className="flex items-start justify-between gap-6">
+          <div className="flex-1 min-w-0">
+            <div className={SETTING_ROW_LABEL}>Give another workspace access</div>
+            <div className={SETTING_ROW_HINT}>
+              {addable.length === 0
+                ? 'Every workspace already has access.'
+                : 'Choose a workspace and what its agents may do.'}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="w-44 flex-shrink-0">
+              <SettingDropdown
+                value={newProject}
+                placeholder={addable.length === 0 ? 'No workspaces left' : 'Choose a workspace'}
+                options={addable.map((p) => ({ value: p.id, label: p.name }))}
+                onChange={(v) => setNewProject(v)}
+                disabled={locked || addable.length === 0}
+                ariaLabel="Workspace to give access"
+                fullWidth
+              />
+            </div>
+            <div className="w-44 flex-shrink-0">
+              <SettingDropdown
+                value={newLevel}
+                options={options}
+                onChange={(v) => setNewLevel(v as InboxLevel)}
+                disabled={locked || addable.length === 0}
+                ariaLabel="What it can do"
+                fullWidth
+              />
+            </div>
+            <Button
+              className="flex-shrink-0"
+              disabled={locked || !newProject}
+              onClick={() => void addAccess()}
+            >
+              {pending === 'add' ? 'Giving access…' : 'Give access'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+
+  const failure = <SaveError state={result} />
+
+  if (card) {
+    return (
+      <div className="space-y-1" data-settings-id="email-link.access">
+        <SettingsGroup
+          title="Workspace access"
+          hint="Which workspaces' agents can use this account, and what they may do. The Primary workspace manages this list."
+          card
+        >
+          {rows}
+        </SettingsGroup>
+        {failure}
+        <InboxWakePanel inbox={inbox} canMutate={canMutate} />
+      </div>
+    )
+  }
   return (
     <div className="space-y-2">
-      <SectionTitle>Workspace access</SectionTitle>
-      <p className="type-hint text-[var(--color-text-muted)]">
-        The <strong>Primary</strong> workspace manages this inbox and its access list. Grant other
-        workspaces <strong>Read-only</strong>{canSend ? ', ' : ' or '}
-        <strong>Read + Draft</strong>
-        {canSend && (
-          <>
-            {' '}or <strong>Read + Send</strong> — granting Send lets that workspace's agents send
-            email as this account
-            {inbox.source === 'linked' ? ' (from your real external account)' : ''}, once that
-            workspace&rsquo;s agent sending is on (Settings → Workspaces / Agents → its Email
-            sending, or <span className="font-mono">k2 mail sending</span>). Each Send row below
-            says whether sending really works.
-          </>
-        )}{' '}
-        Agents use the inbox via <span className="font-mono">k2 mail</span>.
-      </p>
-      <p className="type-hint text-[var(--color-text-muted)]">
-        <strong>Inbox management</strong> lets a workspace move and organize mail into folders;{' '}
-        <strong>Allow delete</strong> lets it move messages to Trash (recoverable) — not permanent
-        removal. Delete requires management.
-      </p>
-
-      <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-        {/* Primary row — workspace + its own level (editable), no remove. */}
-        <div className="px-3 py-2 space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="type-row text-[var(--color-text-primary)] truncate flex-1 min-w-0">
-              {inbox.primary.workspace ?? inbox.primary.projectId}
-            </span>
-            <Tag tone="accent">
-              Primary
-            </Tag>
-            <SettingDropdown
-              value={inbox.primary.level}
-              options={options}
-              onChange={(v) => void changePrimaryLevel(v as InboxLevel)}
-              className={`flex-shrink-0 ${disabledCls ?? ''}`}
-            />
-          </div>
-          <SendStateLine
-            participant={inbox.primary}
-            canMutate={canMutate}
-            busy={busy}
-            pending={pending === `sending:${primaryId}`}
-            onTurnOn={() => void turnOnSending(primaryId)}
-          />
-          <ManageToggles
-            participant={inbox.primary}
-            disabled={!canMutate || busy}
-            onChange={(m, d) => void changeManage(primaryId, m, d)}
-          />
-        </div>
-
-        {/* Grant rows */}
-        {inbox.grants.map((g) => (
-          <div key={g.projectId} className="px-3 py-2 space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="type-row text-[var(--color-text-primary)] truncate flex-1 min-w-0">
-                {g.workspace ?? projectName(g.projectId)}
-              </span>
-              <SettingDropdown
-                value={g.level}
-                options={options}
-                onChange={(v) => void changeGrantLevel(g.projectId, v as InboxLevel)}
-                className={`flex-shrink-0 ${disabledCls ?? ''}`}
-              />
-              <button
-                type="button"
-                disabled={!canMutate || busy}
-                onClick={() => void doMakePrimary(g.projectId)}
-                title="Transfer Primary to this workspace"
-                className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
-              >
-                {pending === `primary:${g.projectId}` ? '…' : 'Make Primary'}
-              </button>
-              <button
-                type="button"
-                disabled={!canMutate || busy}
-                onClick={() => void doRevoke(g.projectId)}
-                title="Remove this workspace's access"
-                className="px-2 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
-              >
-                {pending === g.projectId ? '…' : 'Remove'}
-              </button>
-            </div>
-            <SendStateLine
-              participant={g}
-              canMutate={canMutate}
-              busy={busy}
-              pending={pending === `sending:${g.projectId}`}
-              onTurnOn={() => void turnOnSending(g.projectId)}
-            />
-            <ManageToggles
-              participant={g}
-              disabled={!canMutate || busy}
-              onChange={(m, d) => void changeManage(g.projectId, m, d)}
-            />
-          </div>
-        ))}
-
-        {inbox.grants.length === 0 && (
-          <div className="px-3 py-2 type-hint text-[var(--color-text-muted)] italic">
-            No other workspaces have access yet — only the Primary can use this inbox.
-          </div>
-        )}
-      </div>
-
-      {/* Add access */}
-      <div className="flex items-center gap-2 flex-wrap pt-1">
-        <SettingDropdown
-          value={newProject}
-          placeholder={addable.length === 0 ? 'No workspaces to add' : 'Add a workspace…'}
-          options={addable.map((p) => ({ value: p.id, label: p.name }))}
-          onChange={(v) => setNewProject(v)}
-          menuAlign="left"
-          className={
-            !canMutate || busy || addable.length === 0 ? 'opacity-50 pointer-events-none' : undefined
-          }
-        />
-        <SettingDropdown
-          value={newLevel}
-          options={options}
-          onChange={(v) => setNewLevel(v as InboxLevel)}
-          className={disabledCls}
-        />
-        <button
-          type="button"
-          disabled={!canMutate || busy || !newProject}
-          onClick={() => void doAdd()}
-          className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
-        >
-          {pending === 'add' ? 'Adding…' : 'Add access'}
-        </button>
-      </div>
-
-      {error && (
-        <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
-      )}
+      <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">Workspace access</h3>
+      <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">{rows}</div>
+      {failure}
 
       <InboxWakePanel inbox={inbox} canMutate={canMutate} />
     </div>

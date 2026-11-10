@@ -78,10 +78,10 @@ describe('sendStateNote', () => {
   it('words every daemon state; blocked ones say why', () => {
     expect(sendStateNote('blocked_off')).toEqual({
       blocked: true,
-      text: expect.stringContaining("agent sending is off"),
+      text: expect.stringContaining("sending is off for this workspace's agents"),
     })
     expect(sendStateNote('blocked_approval')?.blocked).toBe(true)
-    expect(sendStateNote('blocked_approval')?.text).toContain('A linked inbox needs On')
+    expect(sendStateNote('blocked_approval')?.text).toContain('Turn sending on instead')
     expect(sendStateNote('approval')).toEqual({ blocked: false, text: expect.stringContaining('approval') })
     expect(sendStateNote('on')?.blocked).toBe(false)
     expect(sendStateNote('no_send_level')).toBeNull()
@@ -94,7 +94,7 @@ describe('InboxAccessPanel effective send state', () => {
     render(<Harness start={inbox({})} />)
     const line = screen.getByTestId('send-state-p-appa')
     expect(line.getAttribute('data-send-state')).toBe('blocked_off')
-    expect(line.textContent).toContain("Send is blocked: this workspace's agent sending is off")
+    expect(line.textContent).toContain("Can't send yet: sending is off for this workspace's agents")
     // The primary (gate on) says it works, with no button.
     const primary = screen.getByTestId('send-state-p-baden')
     expect(primary.textContent).toContain('Sending is on')
@@ -118,7 +118,7 @@ describe('InboxAccessPanel effective send state', () => {
 
   it('linked + approval is blocked (no queue for linked)', () => {
     render(<Harness start={inbox({ agentSend: 'approval', sendState: 'blocked_approval' })} />)
-    expect(screen.getByTestId('send-state-p-appa').textContent).toContain('A linked inbox needs On')
+    expect(screen.getByTestId('send-state-p-appa').textContent).toContain('Turn sending on instead')
     expect(screen.getByRole('button', { name: 'Turn on sending' })).toBeTruthy()
   })
 
@@ -139,6 +139,6 @@ describe('InboxAccessPanel effective send state', () => {
   it('copy no longer claims sending is immediate', () => {
     render(<Harness start={inbox({})} />)
     expect(document.body.textContent).not.toContain('Sending is immediate for now')
-    expect(document.body.textContent).toContain("agent sending is on")
+    expect(document.body.textContent).toContain('Sending is on for its agents')
   })
 })

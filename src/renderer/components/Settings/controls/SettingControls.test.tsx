@@ -208,4 +208,17 @@ describe('SettingsLoadState', () => {
     render(<SettingsLoadState kind="empty" title="No domains yet" detail="  " />)
     expect(screen.getByRole('status').textContent).toBe('No domains yet')
   })
+  it('stands in for a card group under the same title', () => {
+    const { unmount } = render(
+      <SettingsGroup title="Domains" card state={<SettingsLoadState kind="loading" title={"Loading\u2026"} />}>
+        <div>row</div>
+      </SettingsGroup>,
+    )
+    expect(screen.getByText('Domains')).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toBe('Loading\u2026')
+    expect(screen.queryByText('row')).toBeNull()
+    unmount()
+    render(<SettingsGroup title="Domains" card><div>row</div></SettingsGroup>)
+    expect(screen.getByText('row')).toBeTruthy()
+  })
 })

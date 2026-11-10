@@ -1,14 +1,16 @@
 // Settings → Email Link (K2 Mail, prd-email-server-v1 §17.5 + GH #28) —
 // the CROSS-PLATFORM surface: the user connects their OWN external email
-// accounts (Gmail app-password / Fastmail / IMAP) so a workspace's agents
-// can READ the inbox and save reply DRAFTS into the account's real Drafts
-// folder. The user reviews and sends from their own mail client — K2 never
-// sends from a linked account (drafts only, no send code path).
+// accounts (Gmail and Microsoft by sign-in, any other provider over IMAP
+// with an app password) so a workspace's agents can read the inbox, save
+// reply drafts and, at the Send level, send as the account.
+//
+// One page of card groups, like Workspaces / Agents: the connected accounts
+// (each opens its own page: account, calendar, workspace access,
+// disconnect), then "Connect an account", then the advanced sign-in apps.
 //
 // Linked inboxes are managed through the SAME unified access layer as
 // hosted inboxes (GH #28): each has a **Primary** workspace plus grants,
-// via the shared <InboxAccessPanel>. Source-aware: because these are
-// linked, the panel caps access at Read + Draft and NEVER offers Send.
+// via the shared <InboxAccessPanel>.
 //
 // NOT LINUX-GATED (BINDING): unlike Email Hosting, this is purely an IMAP
 // client — nothing is installed or hosted — so the page NEVER reads GET
@@ -16,11 +18,13 @@
 // Mac and Linux. Primary-gating on access/* is enforced server-side; the
 // client only disables mutating controls in viewer mode.
 //
-// CREDENTIALS HYGIENE (§17.5): the app-password is WRITE-ONLY — sent ONCE
+// Every reply it reads goes through email-api's shape guards: a reply it
+// can't read is a failed read with Try again, never a crash.
+//
+// CREDENTIALS HYGIENE (§17.5): the app password is WRITE-ONLY — sent ONCE
 // in the add body, vaulted server-side, and never returned, listed, or
-// persisted client-side. The connected-inbox list omits it (and even the
-// username). This component holds it in local state only while the add
-// form is open and clears it on submit/close.
+// persisted client-side. This component holds it in local state only while
+// the form is open and clears it on submit/close.
 
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -33,8 +37,19 @@ import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useWindowModeStore } from '@/stores/window-mode'
 import { webFeatures } from '@/web/features'
+import { Button, Callout, Input, Spinner, Tag } from '@/components/ui'
 import type { SettingEntry } from '../searchManifest'
-import { SettingDropdown } from '../controls/SettingControls'
+import {
+  SaveError,
+  SaveNote,
+  SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
+  SettingDropdown,
+  SettingRow,
+  SettingsGroup,
+  SettingsLoadState,
+  type SaveState,
+} from '../controls/SettingControls'
 import { InboxAccessPanel } from './InboxAccessPanel'
 import {
   addLinkedInbox,
@@ -45,6 +60,7 @@ import {
   linkOauthStart,
   linkOauthStatus,
   linkOauthUpgrade,
+  MailReplyError,
   mailErrorInfo,
   mailErrorMessage,
   removeLinkedInbox,
@@ -54,70 +70,36 @@ import {
   type OauthConfig,
   type OauthProviderConfig,
 } from './email-api'
-import { Tag } from '@/components/ui/Tag'
 
 export const EMAIL_LINK_MANIFEST: SettingEntry[] = [
-  { id: 'email-link.inboxes', section: 'email-link', label: 'Connected Inboxes', description: 'External email accounts your workspaces can read and draft replies for', keywords: ['imap', 'gmail', 'fastmail', 'inbox', 'external', 'connect', 'email', 'account', 'app password', 'link'] },
-  { id: 'email-link.add', section: 'email-link', label: 'Connect an Inbox', description: 'Add a Gmail / Fastmail / IMAP account owned by one workspace', keywords: ['add', 'connect', 'imap', 'gmail', 'app password', 'drafts', 'external inbox', 'imap host', 'port', 'tls', 'primary', 'workspace'] },
-  { id: 'email-link.oauth', section: 'email-link', label: 'Connect with Google or Microsoft', description: 'Link Gmail or Microsoft (Outlook / 365) via OAuth — no app-password', keywords: ['oauth', 'google', 'gmail', 'microsoft', 'outlook', '365', 'office', 'device code', 'sign in', 'connect', 'link', 'consent'] },
-  { id: 'email-link.access', section: 'email-link', label: 'Inbox Access', description: 'Grant other workspaces read or read+draft access to a connected inbox', keywords: ['access', 'grant', 'revoke', 'share', 'read', 'draft', 'workspace', 'permission', 'primary', 'members', 'transfer'] },
-  { id: 'email-link.oauth-apps', section: 'email-link', label: 'OAuth apps (advanced)', description: 'Bring your own Google / Microsoft OAuth app so K2 uses your quota and consent screen', keywords: ['oauth', 'client id', 'client secret', 'google', 'gmail', 'microsoft', 'app', 'bring your own', 'byo', 'quota', 'consent screen', 'verification', 'advanced', 'override'] },
+  { id: 'email-link.inboxes', section: 'email-link', label: 'Connected email accounts', description: 'Your email accounts that workspaces’ agents can use', keywords: ['imap', 'gmail', 'fastmail', 'inbox', 'external', 'connect', 'email', 'account', 'app password', 'link'] },
+  { id: 'email-link.add', section: 'email-link', label: 'Connect an email account', description: 'Add a Gmail, Microsoft or other email account for a workspace', keywords: ['add', 'connect', 'imap', 'gmail', 'app password', 'drafts', 'external inbox', 'imap host', 'port', 'tls', 'primary', 'workspace'] },
+  { id: 'email-link.oauth', section: 'email-link', label: 'Sign in with Google or Microsoft', description: 'Connect Gmail, Outlook or Microsoft 365 without an app password', keywords: ['oauth', 'google', 'gmail', 'microsoft', 'outlook', '365', 'office', 'device code', 'sign in', 'connect', 'link', 'consent'] },
+  { id: 'email-link.access', section: 'email-link', label: 'Email account access', description: 'Choose which workspaces can read, draft or send from an account', keywords: ['access', 'grant', 'revoke', 'share', 'read', 'draft', 'send', 'workspace', 'permission', 'primary', 'members', 'transfer'] },
+  { id: 'email-link.oauth-apps', section: 'email-link', label: 'Sign-in apps', description: 'Use your own Google or Microsoft app to sign in to email accounts', keywords: ['oauth', 'client id', 'client secret', 'google', 'gmail', 'microsoft', 'app', 'bring your own', 'byo', 'quota', 'consent screen', 'verification', 'advanced', 'override'] },
 ]
 
 const TLS_IMPLICIT = 'implicit-tls'
 const TLS_STARTTLS = 'starttls'
 
 const TLS_OPTIONS = [
-  { value: TLS_IMPLICIT, label: 'Implicit TLS (993)' },
-  { value: TLS_STARTTLS, label: 'STARTTLS (143)' },
+  { value: TLS_IMPLICIT, label: 'SSL/TLS' },
+  { value: TLS_STARTTLS, label: 'STARTTLS' },
 ]
+/** The usual port for each security mode. */
+const TLS_PORT: Record<string, string> = { [TLS_IMPLICIT]: '993', [TLS_STARTTLS]: '143' }
 
-type Selection = { kind: 'add' } | { kind: 'inbox'; address: string }
+const VIEWER_NOTE = 'Not available while you view this server'
 
 // ── Small shared bits ────────────────────────────────────────────────────
 
-function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return (
-    <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-      {children}
-    </h3>
-  )
-}
-
-/** Connect-health → status-token color. */
-function statusColor(status: string): string {
-  switch (status) {
-    case 'connected':
-    case 'running':
-      return 'var(--color-status-ok)'
-    case 'error':
-      return 'var(--color-status-error-soft)'
-    default:
-      return 'var(--color-text-muted)'
-  }
-}
-
-function StatusChip({ status }: { status: string }): React.JSX.Element {
-  const color = statusColor(status)
-  const label = status === 'connected' ? 'Connected' : status === 'error' ? 'Error' : status
-  return (
-    <span
-      className="type-badge px-1.5 py-0.5 flex-shrink-0 uppercase tracking-wide"
-      style={{ color, backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)` }}
-    >
-      {label}
-    </span>
-  )
-}
-
-/** Copy-to-clipboard with a transient "Copied" flash (mirrors the Email
- *  Hosting page's CopyButton). */
-function CopyButton({ text, title }: { text: string; title?: string }): React.JSX.Element {
+/** Copy with a short "Copied" on the button itself. */
+function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
   return (
-    <button
-      type="button"
-      title={title ?? 'Copy code'}
+    <Button
+      variant="quiet"
+      className="flex-shrink-0"
       onClick={() => {
         void navigator.clipboard
           .writeText(text)
@@ -126,22 +108,69 @@ function CopyButton({ text, title }: { text: string; title?: string }): React.JS
             window.setTimeout(() => setCopied(false), 1200)
           })
           .catch(() => {
-            useToastStore.getState().addToast('Copy failed', 'error')
+            useToastStore.getState().addToast('K2 couldn’t copy to the clipboard', 'error')
           })
       }}
-      className="px-1.5 py-0.5 type-control text-[var(--color-text-muted)] hover:text-[var(--color-accent)] border border-[var(--color-border)] transition-colors cursor-pointer flex-shrink-0"
     >
-      {copied ? 'Copied' : 'Copy'}
-    </button>
+      {copied ? 'Copied' : label}
+    </Button>
   )
 }
 
-// ── OAuth connect (Gmail / Microsoft — no app-password, O4 flows) ─────────
+/** How an account was connected, in the words a person uses. */
+function providerName(inbox: Inbox): string {
+  switch (inbox.capabilities?.source) {
+    case 'google':
+      return 'Gmail'
+    case 'microsoft':
+      return 'Microsoft'
+    case 'imap':
+      return 'App password'
+    default:
+      return inbox.host ? 'App password' : 'Email account'
+  }
+}
+
+/** The account's health as a tag. */
+function StatusTag({ status }: { status: string }): React.JSX.Element {
+  if (status === 'connected' || status === 'running') return <Tag tone="ok">Connected</Tag>
+  if (status === 'error') return <Tag tone="danger">Can’t connect</Tag>
+  return <Tag tone="neutral">Not checked yet</Tag>
+}
+
+/** Who uses an account: the Primary, then how many more. */
+function usedBy(inbox: Inbox): string {
+  const primary = inbox.primary.workspace ?? 'one workspace'
+  const more = inbox.grants.length
+  if (more === 0) return `Used by ${primary}`
+  if (more === 1) return `Used by ${primary} and ${inbox.grants[0].workspace ?? '1 more workspace'}`
+  return `Used by ${primary} and ${more} more workspaces`
+}
+
+/** The plain line and the server's reason for a failed read. A reply K2
+ *  couldn't read gets its own line; the raw parser text never shows. */
+function readFailure(err: unknown): { line: string; detail: string | null } {
+  if (err instanceof MailReplyError) {
+    return {
+      line: 'This server sent an answer K2 couldn’t read. Try again; if it keeps happening, update K2 on the server.',
+      detail: null,
+    }
+  }
+  return { line: 'K2 couldn’t reach this server’s email settings. Try again in a moment.', detail: mailErrorMessage(err) }
+}
+
+/** Why a step failed, in the server's words, or nothing for a reply K2
+ *  couldn't read (its own line says so). */
+function serverReason(err: unknown): string | null {
+  return err instanceof MailReplyError ? null : mailErrorMessage(err)
+}
+
+// ── Sign-in flows (Gmail / Microsoft — no app password, O4 flows) ─────────
 //
 // Gmail: client-side loopback + **embedded BrowserPane on this Settings
-// page** (same native child-webview as tab browsers). The IMAP app-password
-// form is hidden while the session is live. Works for local and remote
-// daemons (PKCE verifier stays on the daemon; code is relayed via complete).
+// page** (same native child-webview as tab browsers). The rest of the page
+// is hidden while the session is live. Works for local and remote daemons
+// (PKCE verifier stays on the daemon; code is relayed via complete).
 // Microsoft: device flow card (enabled once a Microsoft app is configured,
 // MCS2). Tokens never render.
 
@@ -164,59 +193,87 @@ type OauthFlow =
       browserItemId: string
     }
 
-type OauthResult =
-  | { kind: 'connected'; address?: string }
-  | {
-      kind: 'failed'
-      state: 'denied' | 'expired' | 'error'
-      hint?: string
-      code?: string
-      adminConsentUrl?: string
-    }
-  | { kind: 'remote_unsupported'; message: string }
-  | { kind: 'error'; message: string }
+type ConnectFailure = {
+  /** What failed, in plain words. */
+  title: string
+  /** What it means and the next step. */
+  line: string
+  /** The server's own reason, shown quietly. */
+  detail: string | null
+  adminConsentUrl?: string
+}
+
+/** Binds the desktop's loopback listener for a Google sign-in. Throws a
+ *  plain error when this computer can't (the web build, an old app). */
+async function bindLoopback(): Promise<{ captureId: string; redirectUri: string }> {
+  const bind = await invoke<{ captureId?: unknown; redirectUri?: unknown } | null>('oauth_loopback_bind')
+  if (!bind || typeof bind.captureId !== 'string' || typeof bind.redirectUri !== 'string') {
+    throw new Error('K2 couldn’t open a Google sign-in window on this computer. Use the K2 desktop app, or update it.')
+  }
+  return { captureId: bind.captureId, redirectUri: bind.redirectUri }
+}
+
+/** Words for a sign-in that ended without connecting. */
+function signInFailure(
+  provider: OauthProvider,
+  st: { state: string; code?: string; hint?: string; adminConsentUrl?: string },
+): ConnectFailure {
+  const who = provider === 'gmail' ? 'Google' : 'Microsoft'
+  const title = `Couldn’t connect ${provider === 'gmail' ? 'Gmail' : 'Microsoft'}`
+  let line: string
+  if (st.state === 'denied') line = `Access wasn’t allowed on ${who}’s page. Try again and choose Allow.`
+  else if (st.state === 'expired') line = 'The sign-in took too long and expired. Try again.'
+  else if (st.code === 'account_mismatch') line = 'A different account signed in. Try again and sign in to the address you entered.'
+  else if (st.code === 'admin_consent_required') line = 'Your Microsoft 365 admin needs to approve K2 first. Send them the approval page, then try again.'
+  else line = 'The sign-in didn’t finish. Try again.'
+  return { title, line, detail: st.hint ?? null, adminConsentUrl: st.adminConsentUrl }
+}
 
 /** What the "Connect Microsoft" button can do, from the daemon's OAuth app
  *  config (MCS2). `cfg` is `null` while loading and `'error'` when the read
  *  failed. Enabled only when a real Microsoft client id is in effect —
- *  either baked into this build or the owner's own (OAuth apps, below). */
+ *  either baked into this build or the owner's own (Sign-in apps, below). */
 export function microsoftLinkState(cfg: OauthConfig | null | 'error'): {
   enabled: boolean
   badge: string | null
   title: string
 } {
   if (cfg === null) {
-    return { enabled: false, badge: null, title: 'Checking for a Microsoft app…' }
+    return { enabled: false, badge: null, title: 'Checking Microsoft sign-in on this server…' }
   }
   if (cfg === 'error') {
     return {
       enabled: false,
       badge: 'Unavailable',
-      title: "Couldn't read the OAuth app settings from this server",
+      title: "Couldn't check Microsoft sign-in on this server. Try again under Sign-in apps.",
     }
   }
   const ms = cfg.providers.microsoft
   if (ms.configured === undefined) {
     // A daemon from before Graph send: Microsoft linking isn't offered here.
-    return { enabled: false, badge: 'Coming soon', title: 'Microsoft (Outlook / 365) linking is coming soon' }
+    return {
+      enabled: false,
+      badge: 'Update needed',
+      title: 'This server’s K2 is too old to connect Microsoft accounts. Update it to add one.',
+    }
   }
   if (!ms.configured) {
     return {
       enabled: false,
       badge: 'Needs an app',
-      title:
-        'No Microsoft app on this K2 build — add your Entra app id under OAuth apps (advanced) below',
+      title: 'This copy of K2 has no Microsoft sign-in app. Add your own under Sign-in apps below.',
     }
   }
   return {
     enabled: true,
     badge: null,
-    title: 'Sign in with a device code (Outlook / Microsoft 365)',
+    title: 'Sign in on Microsoft’s page with a short code.',
   }
 }
 
 /** The "Connect Microsoft" button, enabled only when a Microsoft OAuth app
- *  is configured (see {@link microsoftLinkState}). */
+ *  is configured (see {@link microsoftLinkState}); the tag beside it says
+ *  why it is off. */
 export function MicrosoftConnectButton({
   cfg,
   canStart,
@@ -230,76 +287,59 @@ export function MicrosoftConnectButton({
 }): React.JSX.Element {
   const st = microsoftLinkState(cfg)
   return (
-    <button
-      type="button"
-      disabled={!st.enabled || !canStart}
-      onClick={onStart}
-      title={st.title}
-      data-testid="connect-microsoft"
-      className="inline-flex items-center gap-2 px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-    >
-      {busy ? 'Starting…' : 'Connect Microsoft (Outlook / 365)'}
-      {st.badge && (
-        <Tag tone="neutral">
-          {st.badge}
-        </Tag>
-      )}
-    </button>
+    <>
+      {st.badge && <Tag tone="muted">{st.badge}</Tag>}
+      <Button
+        disabled={!st.enabled || !canStart}
+        onClick={onStart}
+        title={st.title}
+        data-testid="connect-microsoft"
+        className="flex-shrink-0"
+      >
+        {busy ? 'Starting…' : 'Connect Microsoft'}
+      </Button>
+    </>
   )
 }
 
-function OauthConnect({
+/** "Connect an account": the workspace and address once, then Gmail,
+ *  Microsoft, or any other provider with an app password. */
+function ConnectGroup({
   canMutate,
+  oauthCfg,
   onConnected,
   onSessionActiveChange,
-  oauthRevision = 0,
 }: {
   canMutate: boolean
-  /** Refresh the connected-inbox list + select the new inbox. */
-  onConnected: (address: string) => void
-  /** Parent hides IMAP chrome and expands the panel while the browser is up. */
-  onSessionActiveChange?: (active: boolean) => void
-  /** Bumped when the owner saves/resets an OAuth app, so the Microsoft
-   *  button re-reads whether one is configured. */
-  oauthRevision?: number
+  oauthCfg: OauthConfig | null | 'error'
+  /** Refresh the list and say the account is connected. */
+  onConnected: (address: string, workspace: string) => void
+  /** Root hides the rest of the page while Google's page is up. */
+  onSessionActiveChange: (active: boolean) => void
 }): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
-  const [oauthCfg, setOauthCfg] = useState<OauthConfig | null | 'error'>(null)
-  useEffect(() => {
-    let cancelled = false
-    fetchOauthConfig()
-      .then((c) => {
-        if (!cancelled) setOauthCfg(c)
-      })
-      .catch(() => {
-        if (!cancelled) setOauthCfg('error')
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [oauthRevision])
 
   const [project, setProject] = useState('')
   const [address, setAddress] = useState('')
-  const [busy, setBusy] = useState<OauthProvider | null>(null)
+  const [busy, setBusy] = useState<OauthProvider | 'imap' | null>(null)
   const [flow, setFlow] = useState<OauthFlow | null>(null)
-  const [result, setResult] = useState<OauthResult | null>(null)
+  const [failure, setFailure] = useState<ConnectFailure | null>(null)
+  const [imapOpen, setImapOpen] = useState(false)
   // Cancel in-flight client-capture wait when the user resets or unmounts.
   const captureCancelRef = useRef<string | null>(null)
   // Latest embedded consent webview id (for unmount reap without depending
   // on `flow` in a cleanup that would re-fire on every flow transition).
   const oauthBrowserItemIdRef = useRef<string | null>(null)
 
-  const canStart = canMutate && busy === null && project.trim().length > 0 && address.trim().length > 0
-  const gmailSession =
-    flow?.kind === 'loopback' && flow.clientCapture && flow.authorizationUrl
-      ? flow
-      : null
+  const workspaceName = projects.find((p) => p.id === project)?.name ?? 'the workspace'
+  const fieldsReady = project.trim().length > 0 && address.trim().length > 0
+  const canStart = canMutate && busy === null && flow === null && fieldsReady
+  const gmailSession = flow?.kind === 'loopback' && flow.clientCapture && flow.authorizationUrl ? flow : null
 
   useEffect(() => {
-    onSessionActiveChange?.(gmailSession !== null)
-    return () => onSessionActiveChange?.(false)
+    onSessionActiveChange(gmailSession !== null)
   }, [gmailSession, onSessionActiveChange])
+  useEffect(() => () => onSessionActiveChange(false), [onSessionActiveChange])
 
   /** Reap the embedded Gmail consent webview before dropping flow state.
    *  Relying on BrowserPane unmount alone races Cancel → Start again and
@@ -315,25 +355,25 @@ function OauthConnect({
     void invoke('browser_close', { itemId, parentWindow }).catch(() => undefined)
   }, [])
 
+  const dropFlow = useCallback((): void => {
+    closeOauthBrowser(oauthBrowserItemIdRef.current)
+    oauthBrowserItemIdRef.current = null
+    setFlow(null)
+  }, [closeOauthBrowser])
+
   const start = useCallback(
     async (provider: OauthProvider): Promise<void> => {
       if (!canStart) return
       setBusy(provider)
       // New start: drop any previous consent webview first.
-      closeOauthBrowser(oauthBrowserItemIdRef.current)
-      oauthBrowserItemIdRef.current = null
-      setFlow(null)
-      setResult(null)
+      dropFlow()
+      setFailure(null)
       try {
         if (provider === 'gmail') {
           // Always client-capture from the Email Link UI so consent runs
           // inside K2 (embedded browser), not a system window the user
           // may never see when they only have K2 focused / remote desktop.
-          const bind = await invoke<{
-            captureId: string
-            redirectUri: string
-            port: number
-          }>('oauth_loopback_bind')
+          const bind = await bindLoopback()
           captureCancelRef.current = bind.captureId
           try {
             const res = await linkOauthStart({
@@ -344,7 +384,7 @@ function OauthConnect({
               redirectUri: bind.redirectUri,
             })
             if (res.flow !== 'loopback' || !res.authorizationUrl || !res.state) {
-              throw new Error('Daemon did not return a client-capture authorization URL')
+              throw new MailReplyError('the sign-in step', 'no Google sign-in page')
             }
             // Narrow for the async complete path (TS does not keep the guard).
             const oauthState = res.state
@@ -370,7 +410,7 @@ function OauthConnect({
                   code?: string | null
                   state?: string | null
                   error?: string | null
-                }>('oauth_loopback_wait', {
+                } | null>('oauth_loopback_wait', {
                   captureId: bind.captureId,
                   expectedState: oauthState,
                   timeoutSecs: 300,
@@ -378,16 +418,14 @@ function OauthConnect({
                 if (captureCancelRef.current !== bind.captureId) return
                 await linkOauthComplete({
                   linkId,
-                  code: capture.code ?? undefined,
-                  state: capture.state ?? oauthState,
-                  error: capture.error ?? undefined,
+                  code: capture?.code ?? undefined,
+                  state: capture?.state ?? oauthState,
+                  error: capture?.error ?? undefined,
                 })
               } catch (e) {
                 if (captureCancelRef.current !== bind.captureId) return
-                setResult({ kind: 'error', message: mailErrorMessage(e) })
-                closeOauthBrowser(oauthBrowserItemIdRef.current)
-                oauthBrowserItemIdRef.current = null
-                setFlow(null)
+                setFailure({ title: 'Couldn’t connect Gmail', line: 'The sign-in didn’t finish. Try again.', detail: serverReason(e) })
+                dropFlow()
               } finally {
                 if (captureCancelRef.current === bind.captureId) {
                   captureCancelRef.current = null
@@ -398,8 +436,7 @@ function OauthConnect({
           } catch (e) {
             await invoke('oauth_loopback_cancel', { captureId: bind.captureId }).catch(() => undefined)
             captureCancelRef.current = null
-            closeOauthBrowser(oauthBrowserItemIdRef.current)
-            oauthBrowserItemIdRef.current = null
+            dropFlow()
             throw e
           }
         }
@@ -419,29 +456,35 @@ function OauthConnect({
             deadlineMs: Date.now() + Math.min(bound, OAUTH_MAX_MS),
           })
         } else {
-          // Unexpected non-capture loopback from daemon — teach, don't hang.
-          setResult({
-            kind: 'error',
-            message: res.hint ?? 'Gmail link started without an in-app browser URL. Update K2 on this server and try again.',
+          setFailure({
+            title: 'Couldn’t connect Microsoft',
+            line: 'This server started a sign-in K2 can’t show. Update K2 on the server and try again.',
+            detail: res.hint ?? null,
           })
         }
       } catch (e) {
         const info = mailErrorInfo(e)
+        const name = provider === 'gmail' ? 'Gmail' : 'Microsoft'
         if (info.code === 'remote_unsupported') {
-          setResult({
-            kind: 'remote_unsupported',
-            message:
-              info.hint ??
-              'Gmail must be linked from the K2 desktop app (it shows Google consent in-app). A headless CLI on the server cannot open a browser.',
+          setFailure({
+            title: `Couldn’t connect ${name} from here`,
+            line: 'Connect this account from the K2 desktop app: it shows the sign-in page inside K2.',
+            detail: info.hint ?? null,
           })
+        } else if (e instanceof MailReplyError) {
+          setFailure({ title: `Couldn’t connect ${name}`, line: readFailure(e).line, detail: null })
         } else {
-          setResult({ kind: 'error', message: mailErrorMessage(e) })
+          setFailure({
+            title: `Couldn’t connect ${name}`,
+            line: 'K2 couldn’t start the sign-in. Check the address and try again.',
+            detail: mailErrorMessage(e),
+          })
         }
       } finally {
         setBusy(null)
       }
     },
-    [canStart, address, project, closeOauthBrowser],
+    [canStart, address, project, dropFlow],
   )
 
   const onConnectedRef = useRef(onConnected)
@@ -452,39 +495,30 @@ function OauthConnect({
     const tick = async (): Promise<void> => {
       if (cancelled) return
       if (Date.now() > flow.deadlineMs) {
-        setResult({ kind: 'failed', state: 'expired' })
-        closeOauthBrowser(oauthBrowserItemIdRef.current)
-        oauthBrowserItemIdRef.current = null
-        setFlow(null)
+        setFailure(signInFailure(flow.provider, { state: 'expired' }))
+        dropFlow()
         return
       }
       try {
         const s = await linkOauthStatus(flow.linkId)
         if (cancelled) return
         if (s.state === 'connected') {
-          setResult({ kind: 'connected', address: s.address })
-          closeOauthBrowser(oauthBrowserItemIdRef.current ?? undefined)
-          oauthBrowserItemIdRef.current = null
-          setFlow(null)
-          onConnectedRef.current(s.address ?? address.trim())
+          dropFlow()
+          setAddress('')
+          setProject('')
+          onConnectedRef.current(s.address ?? address.trim(), workspaceName)
         } else if (s.state === 'denied' || s.state === 'expired' || s.state === 'error') {
-          setResult({
-            kind: 'failed',
-            state: s.state,
-            hint: s.hint,
-            code: s.code,
-            adminConsentUrl: s.adminConsentUrl,
-          })
-          closeOauthBrowser(oauthBrowserItemIdRef.current ?? undefined)
-          oauthBrowserItemIdRef.current = null
-          setFlow(null)
+          setFailure(signInFailure(flow.provider, s))
+          dropFlow()
         }
       } catch (e) {
         if (cancelled) return
-        setResult({ kind: 'error', message: mailErrorMessage(e) })
-        closeOauthBrowser(oauthBrowserItemIdRef.current ?? undefined)
-        oauthBrowserItemIdRef.current = null
-        setFlow(null)
+        setFailure({
+          title: `Couldn’t connect ${flow.provider === 'gmail' ? 'Gmail' : 'Microsoft'}`,
+          line: e instanceof MailReplyError ? readFailure(e).line : 'K2 lost track of the sign-in. Try again.',
+          detail: serverReason(e),
+        })
+        dropFlow()
       }
     }
     const id = window.setInterval(() => void tick(), OAUTH_POLL_MS)
@@ -493,19 +527,17 @@ function OauthConnect({
       cancelled = true
       window.clearInterval(id)
     }
-  }, [flow, address, closeOauthBrowser])
+  }, [flow, address, workspaceName, dropFlow])
 
-  const reset = useCallback((): void => {
+  const cancel = useCallback((): void => {
     const cap = captureCancelRef.current
     captureCancelRef.current = null
     if (cap) {
       void invoke('oauth_loopback_cancel', { captureId: cap }).catch(() => undefined)
     }
-    closeOauthBrowser(oauthBrowserItemIdRef.current)
-    oauthBrowserItemIdRef.current = null
-    setFlow(null)
-    setResult(null)
-  }, [closeOauthBrowser])
+    dropFlow()
+    setFailure(null)
+  }, [dropFlow])
 
   // Unmount-only: cancel capture + reap consent webview if Settings closes
   // mid-flow. Must NOT re-run on flow transitions (would cancel a live start).
@@ -521,56 +553,41 @@ function OauthConnect({
     }
   }, [closeOauthBrowser])
 
-  const inputCls =
-    'px-2 py-1 type-hint font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'
-
-  const disabledField = busy !== null || flow !== null
-
-  // ── Full-page Gmail consent: replaces IMAP + OAuth chrome ───────────
+  // ── Google's sign-in page, full height, in place of the page ──────────
   if (gmailSession) {
     return (
       <div className="flex flex-col h-full min-h-0" data-settings-id="email-link.oauth-browser">
-        <div className="flex-shrink-0 px-4 pt-4 pb-3 space-y-2 border-b border-[var(--color-border)]">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 space-y-1">
-              <h2 className="type-title text-[var(--color-text-primary)]">
-                Approve Google access
-              </h2>
-              <p className="type-hint text-[var(--color-text-muted)]">
-                Sign in and allow K2 in the browser below. When Google finishes, this page updates
-                automatically — you can stay in Settings.
+        <div className="flex-shrink-0 px-6 pt-6 pb-4 space-y-3 border-b border-[var(--color-border)]">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="type-title text-[var(--color-text-primary)]">Sign in to Google</h2>
+              <p className={SETTING_ROW_HINT}>
+                Sign in as {address.trim() || 'your account'} and choose Allow. This page moves on by itself
+                when Google is done.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={reset}
-              className="px-2.5 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
-            >
-              Cancel
-            </button>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <Button
+                variant="quiet"
+                onClick={() =>
+                  void openUrl(gmailSession.authorizationUrl).catch(() => {
+                    useToastStore.getState().addToast('K2 couldn’t open your browser', 'error')
+                  })
+                }
+                title="Use this if the page below doesn't load"
+              >
+                Open in your browser
+              </Button>
+              <Button variant="quiet" onClick={cancel}>
+                Cancel
+              </Button>
+            </div>
           </div>
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="type-hint text-[var(--color-text-muted)] flex-shrink-0">URL</span>
-            <code className="flex-1 min-w-0 truncate type-hint font-mono text-[var(--color-text-secondary)] select-all">
-              {gmailSession.authorizationUrl}
-            </code>
-            <CopyButton text={gmailSession.authorizationUrl} title="Copy consent URL" />
-            <button
-              type="button"
-              onClick={() =>
-                void openUrl(gmailSession.authorizationUrl).catch(() => {
-                  useToastStore.getState().addToast('Could not open system browser', 'error')
-                })
-              }
-              className="px-2 py-0.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
-              title="Open in the system browser if the in-app view is blocked"
-            >
-              Open outside K2
-            </button>
+          <div className="flex items-center gap-2 min-w-0 type-hint text-[var(--color-text-secondary)]">
+            <Spinner />
+            <span className="flex-1 min-w-0 truncate">{gmailSession.hint ?? 'Waiting for you to allow access…'}</span>
+            <CopyButton text={gmailSession.authorizationUrl} label="Copy page link" />
           </div>
-          <p className="type-hint text-[var(--color-text-muted)]">
-            {gmailSession.hint ?? 'Waiting for approval…'}
-          </p>
         </div>
         {/* absolute inset-0 so the dock has a real non-zero rect for
             browser_create (flex-1 alone can stay 0×0 for a frame in Settings). */}
@@ -589,16 +606,12 @@ function OauthConnect({
             ) : (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
                 <p className="type-row text-[var(--color-text-secondary)] max-w-md">
-                  In-app browser is not available here. Open the consent URL in your system browser,
-                  then return to K2 — the link still completes automatically.
+                  K2 can’t show Google’s page here. Open it in your browser and sign in; this page still
+                  moves on by itself.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => void openUrl(gmailSession.authorizationUrl)}
-                  className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer"
-                >
-                  Open consent page
-                </button>
+                <Button variant="accent" onClick={() => void openUrl(gmailSession.authorizationUrl)}>
+                  Open Google sign-in
+                </Button>
               </div>
             )}
           </div>
@@ -607,166 +620,324 @@ function OauthConnect({
     )
   }
 
-  return (
-    <div className="space-y-3" data-settings-id="email-link.oauth">
-      <SectionTitle>Connect with Google or Microsoft</SectionTitle>
-      <p className="type-hint text-[var(--color-text-muted)]">
-        No app-password needed — approve access in your provider and K2 stores the connection in the
-        K2 vault. Pick the <strong>Primary</strong> workspace and enter the account&rsquo;s email
-        so K2 can label the pending link. Gmail opens Google consent <strong>in this page</strong>.
-      </p>
+  const locked = !canMutate || busy !== null || flow !== null
+  const notReady = !canMutate ? VIEWER_NOTE : !fieldsReady ? 'Choose a workspace and enter the address first' : undefined
+  const msState = microsoftLinkState(oauthCfg)
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="flex flex-col gap-0.5 min-w-0">
-          <span className="type-hint text-[var(--color-text-secondary)]">Primary workspace</span>
+  return (
+    <div className="space-y-3">
+      <SettingsGroup
+        title="Connect an account"
+        hint="Choose the workspace whose agents will use it and enter the address, then sign in with your provider. You can share it with more workspaces later."
+        settingId="email-link.add"
+        card
+      >
+        <SettingRow label="Workspace" hint="Its agents can use the account, and it decides who else can." field>
           <SettingDropdown
             value={project}
-            placeholder="Pick a workspace…"
+            placeholder="Choose a workspace"
             options={projects.map((p) => ({ value: p.id, label: p.name }))}
             onChange={(v) => setProject(v)}
-            menuAlign="left"
-            className={disabledField || !canMutate ? 'opacity-50 pointer-events-none' : undefined}
+            disabled={locked}
+            ariaLabel="Workspace"
+            fullWidth
           />
-        </div>
-        <label className="flex flex-col gap-0.5 min-w-0">
-          <span className="type-hint text-[var(--color-text-secondary)]">Email address</span>
-          <input
+        </SettingRow>
+        <SettingRow label="Email address" hint="The account you’ll sign in to." field>
+          <Input
             type="email"
+            aria-label="Email address"
             value={address}
-            disabled={!canMutate || disabledField}
+            disabled={locked}
             onChange={(e) => setAddress(e.target.value)}
-            placeholder="you@gmail.com / you@outlook.com"
-            className={inputCls}
+            placeholder="you@example.com"
+            className="w-full type-control disabled:opacity-50 disabled:cursor-not-allowed"
+            spellCheck={false}
           />
-        </label>
-      </div>
-
-      <div className="flex items-center gap-2 flex-wrap">
-        <button
-          type="button"
-          disabled={!canStart}
-          onClick={() => void start('gmail')}
-          title={canMutate ? 'Open Google consent in K2' : 'Not available in viewer mode'}
-          className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+        </SettingRow>
+        <div data-settings-id="email-link.oauth">
+          <SettingRow label="Gmail" hint="Sign in with Google here in K2.">
+            <Button
+              // The IMAP form's Connect is the one filled button while it's open.
+              variant={imapOpen ? 'default' : 'accent'}
+              className="flex-shrink-0"
+              disabled={!canStart}
+              onClick={() => void start('gmail')}
+              title={notReady ?? 'Open Google’s sign-in page in K2'}
+            >
+              {busy === 'gmail' ? 'Starting…' : 'Connect Gmail'}
+            </Button>
+          </SettingRow>
+        </div>
+        <SettingRow label="Outlook or Microsoft 365" hint={msState.title}>
+          <MicrosoftConnectButton
+            cfg={oauthCfg}
+            canStart={canStart}
+            busy={busy === 'microsoft'}
+            onStart={() => void start('microsoft')}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Other email"
+          hint="Fastmail, iCloud and others, with an app password from your provider."
+          below={
+            imapOpen ? (
+              <ImapForm
+                canMutate={canMutate}
+                project={project}
+                address={address}
+                fieldsReady={fieldsReady}
+                busy={busy === 'imap'}
+                setBusy={(b) => setBusy(b ? 'imap' : null)}
+                onCancel={() => setImapOpen(false)}
+                onConnected={(addr) => {
+                  setImapOpen(false)
+                  setAddress('')
+                  setProject('')
+                  onConnected(addr, workspaceName)
+                }}
+              />
+            ) : undefined
+          }
         >
-          {busy === 'gmail' ? 'Starting…' : 'Connect Gmail'}
-        </button>
-        <MicrosoftConnectButton
-          cfg={oauthCfg}
-          canStart={canStart}
-          busy={busy === 'microsoft'}
-          onStart={() => void start('microsoft')}
-        />
-      </div>
+          <Button
+            variant="quiet"
+            className="flex-shrink-0"
+            aria-expanded={imapOpen}
+            disabled={!canMutate || flow !== null}
+            onClick={() => setImapOpen((o) => !o)}
+            title={canMutate ? undefined : VIEWER_NOTE}
+          >
+            {imapOpen ? 'Hide' : 'Set up…'}
+          </Button>
+        </SettingRow>
+      </SettingsGroup>
 
       {flow?.kind === 'device' && (
-        <div className="border border-[var(--color-border)] px-3 py-3 space-y-2">
-          <p className="type-hint text-[var(--color-text-secondary)]">
-            Go to{' '}
-            <button
-              type="button"
-              onClick={() => void openUrl(flow.verificationUrl)}
-              className="font-mono text-[var(--color-accent)] hover:underline cursor-pointer"
-            >
-              {flow.verificationUrl}
-            </button>{' '}
-            and enter this code:
-          </p>
-          <div className="flex items-center gap-2">
-            <span className="px-2 py-1 text-[length:var(--type-xl)] font-mono tracking-widest bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] select-all">
-              {flow.userCode}
+        <SettingsGroup title="Finish signing in to Microsoft" hint="Open Microsoft’s sign-in page and enter this code." card testId="device-flow">
+          <SettingRow label="Your code" hint="It works once, for a few minutes.">
+            <span className="type-title font-mono tracking-widest text-[var(--color-text-primary)] select-all">{flow.userCode}</span>
+            <CopyButton text={flow.userCode} label="Copy code" />
+          </SettingRow>
+          <SettingRow label="Sign-in page" hint={<span className="font-mono">{flow.verificationUrl}</span>}>
+            <Button variant="accent" className="flex-shrink-0" onClick={() => void openUrl(flow.verificationUrl)}>
+              Open sign-in page
+            </Button>
+          </SettingRow>
+          <div className="px-4 py-3 flex items-center justify-between gap-6" role="status">
+            <span className="flex items-center gap-2 type-row text-[var(--color-text-secondary)]">
+              <Spinner />
+              Waiting for you to sign in as {address.trim() || 'the account'}…
             </span>
-            <CopyButton text={flow.userCode} title="Copy code" />
-            <button
-              type="button"
-              onClick={() => void openUrl(flow.verificationUrl)}
-              className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
-            >
-              Open page
-            </button>
+            <Button variant="quiet" className="flex-shrink-0" onClick={cancel}>
+              Cancel
+            </Button>
           </div>
-          <p className="type-hint text-[var(--color-text-muted)]">
-            Waiting for approval… this card updates automatically.
-          </p>
-        </div>
+        </SettingsGroup>
       )}
 
-      {result?.kind === 'connected' && (
-        <div className="border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)] px-3 py-2 flex items-center gap-2">
-          <p className="type-hint text-[var(--color-status-ok)]">
-            Connected{result.address ? <span className="font-mono"> {result.address}</span> : ''}.
-          </p>
-        </div>
-      )}
-
-      {result?.kind === 'failed' && (
-        <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2 space-y-2">
-          <p className="type-hint text-[var(--color-status-error-soft)]">
-            {result.state === 'denied'
-              ? 'Access was denied.'
-              : result.state === 'expired'
-                ? 'The request expired before it was approved.'
-                : result.code === 'account_mismatch'
-                  ? 'A different account signed in.'
-                  : result.code === 'admin_consent_required'
-                    ? 'Your Microsoft 365 admin needs to approve K2 first.'
-                    : 'Something went wrong linking the account.'}
-            {result.hint ? ` ${result.hint}` : ''}
-          </p>
-          {result.adminConsentUrl && (
-            <button
-              type="button"
-              onClick={() => void openUrl(result.adminConsentUrl as string)}
-              className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer mr-2"
-            >
-              Open the admin consent page
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={reset}
-            className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-          >
-            Try again
-          </button>
-        </div>
-      )}
-
-      {result?.kind === 'remote_unsupported' && (
-        <div className="border border-[color-mix(in_srgb,var(--color-status-warn)_30%,transparent)] px-3 py-2">
-          <p className="type-hint text-[var(--color-text-secondary)]">{result.message}</p>
-        </div>
-      )}
-
-      {result?.kind === 'error' && (
-        <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2 space-y-2">
-          <p className="type-hint text-[var(--color-status-error-soft)] break-words">{result.message}</p>
-          <button
-            type="button"
-            onClick={reset}
-            className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-          >
-            Try again
-          </button>
-        </div>
+      {failure && (
+        <SettingsLoadState
+          kind="error"
+          title={failure.title}
+          detail={failure.detail}
+          testId="connect-error"
+          action={
+            <>
+              {failure.adminConsentUrl && (
+                <Button variant="quiet" onClick={() => void openUrl(failure.adminConsentUrl as string)}>
+                  Open the approval page
+                </Button>
+              )}
+              <Button variant="quiet" onClick={() => setFailure(null)}>
+                Try again
+              </Button>
+            </>
+          }
+        >
+          {failure.line}
+        </SettingsLoadState>
       )}
     </div>
   )
 }
 
-// ── OAuth apps (advanced) — bring-your-own OAuth client override ─────────
+/** Any other provider: the mail server and an app password. Uses the
+ *  workspace and address from the rows above. */
+function ImapForm({
+  canMutate,
+  project,
+  address,
+  fieldsReady,
+  busy,
+  setBusy,
+  onCancel,
+  onConnected,
+}: {
+  canMutate: boolean
+  project: string
+  address: string
+  fieldsReady: boolean
+  busy: boolean
+  setBusy: (b: boolean) => void
+  onCancel: () => void
+  onConnected: (address: string) => void
+}): React.JSX.Element {
+  const [host, setHost] = useState('')
+  const [port, setPort] = useState('993')
+  const [tls, setTls] = useState(TLS_IMPLICIT)
+  const [username, setUsername] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [draftsFolder, setDraftsFolder] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState<{ line: string; detail: string | null } | null>(null)
+
+  const canSubmit = canMutate && !busy && fieldsReady && host.trim().length > 0 && password.length > 0
+  const missing = !fieldsReady
+    ? 'Choose a workspace and enter the address above.'
+    : host.trim() === ''
+      ? 'Enter the mail server.'
+      : password === ''
+        ? 'Enter the app password.'
+        : null
+
+  const submit = async (): Promise<void> => {
+    if (!canSubmit) return
+    setBusy(true)
+    setError(null)
+    const portNum = Number(port)
+    try {
+      const res = await addLinkedInbox({
+        project: project.trim(),
+        address: address.trim(),
+        host: host.trim(),
+        port: Number.isFinite(portNum) && portNum > 0 ? portNum : undefined,
+        tls,
+        username: username.trim() || undefined,
+        displayName: displayName.trim() || undefined,
+        draftsFolder: draftsFolder.trim() || undefined,
+        password,
+      })
+      // WRITE-ONLY: drop the secret from memory the instant it's sent.
+      setPassword('')
+      onConnected(res.address)
+    } catch (e) {
+      // The daemon's own reason (bad drafts folder → the real folder list,
+      // login or server failure, unknown workspace), quietly under the line.
+      setError({
+        line: 'K2 couldn’t sign in to the mail server. Check the server, port and app password, then try again.',
+        detail: serverReason(e),
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const disabled = !canMutate || busy
+  const row = (label: string, hint: string, node: React.ReactNode): React.JSX.Element => (
+    <div className="flex items-start justify-between gap-6 py-2.5">
+      <div className="flex-1 min-w-0">
+        <div className={SETTING_ROW_LABEL}>{label}</div>
+        <div className={SETTING_ROW_HINT}>{hint}</div>
+      </div>
+      <div className="w-60 flex-shrink-0">{node}</div>
+    </div>
+  )
+
+  return (
+    <div
+      className="mt-1 border-t border-[var(--color-border)] divide-y divide-[var(--color-border)]"
+      data-testid="imap-form"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') {
+          e.preventDefault()
+          void submit()
+        }
+      }}
+    >
+      {row(
+        'Mail server',
+        'Your provider’s IMAP server, from its help pages.',
+        <Input aria-label="Mail server" value={host} disabled={disabled} onChange={(e) => setHost(e.target.value)} placeholder="imap.example.com" className="w-full type-control disabled:opacity-50 disabled:cursor-not-allowed" spellCheck={false} />,
+      )}
+      {row(
+        'Port and security',
+        'Most providers use SSL/TLS on port 993; STARTTLS uses 143.',
+        <div className="flex items-center gap-2">
+          <Input aria-label="Port" inputMode="numeric" value={port} disabled={disabled} onChange={(e) => setPort(e.target.value)} className="w-16 type-control disabled:opacity-50 disabled:cursor-not-allowed" />
+          <SettingDropdown
+            value={tls}
+            options={TLS_OPTIONS}
+            onChange={(v) => {
+              // Follow the mode's usual port unless one was typed in.
+              if (port === TLS_PORT[tls]) setPort(TLS_PORT[v] ?? port)
+              setTls(v)
+            }}
+            disabled={disabled}
+            ariaLabel="Security"
+            fullWidth
+            className="flex-1 min-w-0"
+          />
+        </div>,
+      )}
+      {row(
+        'App password',
+        'Make one in your provider’s security settings; your normal password won’t work. K2 keeps it in its vault and never shows it again.',
+        <Input aria-label="App password" type="password" autoComplete="new-password" value={password} disabled={disabled} onChange={(e) => setPassword(e.target.value)} placeholder="App password" className="w-full type-control disabled:opacity-50 disabled:cursor-not-allowed" />,
+      )}
+      {row(
+        'User name',
+        'Optional. Most providers use the email address.',
+        <Input aria-label="User name" value={username} disabled={disabled} onChange={(e) => setUsername(e.target.value)} placeholder={address.trim() || 'Same as the address'} className="w-full type-control disabled:opacity-50 disabled:cursor-not-allowed" spellCheck={false} />,
+      )}
+      {row(
+        'Name on drafts',
+        'Optional. Shown as the sender on drafts.',
+        <Input aria-label="Name on drafts" value={displayName} disabled={disabled} onChange={(e) => setDisplayName(e.target.value)} placeholder="Alex" className="w-full type-control disabled:opacity-50 disabled:cursor-not-allowed" />,
+      )}
+      {row(
+        'Drafts folder',
+        'Optional. K2 finds it; enter a name only if it picks the wrong one.',
+        <Input aria-label="Drafts folder" value={draftsFolder} disabled={disabled} onChange={(e) => setDraftsFolder(e.target.value)} placeholder="Found automatically" className="w-full type-control disabled:opacity-50 disabled:cursor-not-allowed" spellCheck={false} />,
+      )}
+      <div className="pt-3 space-y-3">
+        <div className="flex items-center justify-between gap-6">
+          <span className="type-hint text-[var(--color-text-secondary)]">{missing ?? 'K2 checks the sign-in before it saves the account.'}</span>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Button variant="quiet" onClick={onCancel} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="accent" disabled={!canSubmit} onClick={() => void submit()} data-testid="imap-connect">
+              {busy ? 'Connecting…' : 'Connect account'}
+            </Button>
+          </div>
+        </div>
+        {error && (
+          <div role="alert" data-testid="imap-error" className="leading-relaxed max-w-[75ch]">
+            <p className="type-hint text-[var(--color-status-error-soft)]">Couldn’t connect this account. {error.line}</p>
+            {error.detail && (
+              <p className={SETTING_ROW_HINT}>The server said: {error.detail.trim().replace(/[.\s]+$/, '')}.</p>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Sign-in apps (advanced) — bring-your-own OAuth client override ───────
 //
 // Owner-only. Overrides K2's built-in default OAuth client with the owner's
-// OWN registered Google/Microsoft app, per provider, so the O4 consent flow
-// (OauthConnect, above) runs against THEIR quota, verification, and consent
-// screen. Gmail takes a client id + secret; Microsoft is a public client
-// (PKCE) and takes a client id ONLY.
+// OWN registered Google/Microsoft app, per provider, so the consent flow
+// runs against THEIR quota, verification, and consent screen. Gmail takes a
+// client id + secret; Microsoft is a public client (PKCE) and takes a
+// client id ONLY.
 //
-// SECRET HYGIENE (mirrors the app-password): the client secret is WRITE-ONLY.
-// The GET never returns it — `secretSet` only reports whether one is vaulted.
-// The secret field is NEVER prefilled; when a secret is already set we show a
-// masked placeholder and only send `clientSecret` if the owner types a new
-// one. The non-secret client id IS prefilled from the config.
+// SECRET HYGIENE (mirrors the app password): the client secret is
+// WRITE-ONLY. The GET never returns it — `secretSet` only reports whether
+// one is vaulted. The secret field is NEVER prefilled; when a secret is
+// already set we say so and only send `clientSecret` if the owner types a
+// new one. The non-secret client id IS prefilled from the config.
 
 function OauthClientRow({
   provider,
@@ -786,27 +957,37 @@ function OauthClientRow({
   onChanged: () => void
 }): React.JSX.Element {
   const isCustom = cfg.source === 'custom'
-
-  const [clientId, setClientId] = useState(cfg.clientId ?? '')
+  const [open, setOpen] = useState(false)
+  const [clientId, setClientId] = useState(isCustom ? cfg.clientId ?? '' : '')
   // WRITE-ONLY: never seeded from the server; only holds a freshly typed value.
   const [clientSecret, setClientSecret] = useState('')
   const [busy, setBusy] = useState<null | 'save' | 'reset'>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<SaveState>('idle')
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (savedTimer.current) clearTimeout(savedTimer.current)
+  }, [])
 
   // Re-seed the (non-secret) client id when the server config changes — e.g.
   // after another save or a reset-to-default. The secret is left untouched.
   useEffect(() => {
-    setClientId(cfg.clientId ?? '')
+    setClientId(cfg.source === 'custom' ? cfg.clientId ?? '' : '')
     setClientSecret('')
-    setError(null)
   }, [cfg.source, cfg.clientId, cfg.secretSet])
 
-  const canSave = canMutate && busy === null && clientId.trim().length > 0
+  const done = (): void => {
+    setResult('saved')
+    if (savedTimer.current) clearTimeout(savedTimer.current)
+    savedTimer.current = setTimeout(() => setResult('idle'), 2000)
+    setOpen(false)
+    onChanged()
+  }
 
-  const save = useCallback(async (): Promise<void> => {
+  const canSave = canMutate && busy === null && clientId.trim().length > 0
+  const save = async (): Promise<void> => {
     if (!canSave) return
     setBusy('save')
-    setError(null)
+    setResult('idle')
     try {
       await setOauthClient({
         provider,
@@ -817,489 +998,167 @@ function OauthClientRow({
       })
       // Drop the secret from memory the instant it's sent.
       setClientSecret('')
-      useToastStore.getState().addToast(`${label} OAuth app saved`, 'success')
-      onChanged()
+      done()
     } catch (e) {
-      setError(mailErrorMessage(e))
+      setResult({ error: mailErrorMessage(e) })
     } finally {
       setBusy(null)
     }
-  }, [canSave, provider, clientId, clientSecret, hasSecret, label, onChanged])
+  }
 
-  const reset = useCallback(async (): Promise<void> => {
+  const reset = async (): Promise<void> => {
     if (!canMutate || busy !== null) return
+    const ok = await useConfirmDialogStore.getState().confirm({
+      title: `Go back to K2’s ${label} app?`,
+      message: `K2 forgets your ${label} app’s ID${hasSecret ? ' and secret' : ''}. Accounts you connected keep working until they next sign in.`,
+      confirmLabel: 'Use K2’s app',
+    })
+    if (!ok) return
     setBusy('reset')
-    setError(null)
+    setResult('idle')
     try {
       await clearOauthClient(provider)
       setClientSecret('')
-      useToastStore.getState().addToast(`${label} reverted to K2's default`, 'success')
-      onChanged()
+      done()
     } catch (e) {
-      setError(mailErrorMessage(e))
+      setResult({ error: mailErrorMessage(e) })
     } finally {
       setBusy(null)
     }
-  }, [canMutate, busy, provider, label, onChanged])
+  }
 
-  const inputCls =
-    'px-2 py-1 type-hint font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'
-
+  const idChanged = clientId.trim() !== (cfg.clientId ?? '')
   return (
-    <div className="border border-[var(--color-border)] px-3 py-3 space-y-3">
-      <div className="flex items-center gap-2 min-w-0">
-        <span className="type-name text-[var(--color-text-primary)] flex-1 min-w-0 truncate">
-          {label}
-        </span>
-        <span
-          className="type-badge px-1.5 py-0.5 flex-shrink-0 uppercase tracking-wide"
-          style={{
-            color: isCustom ? 'var(--color-accent)' : 'var(--color-text-muted)',
-            backgroundColor: isCustom
-              ? 'color-mix(in srgb, var(--color-accent) 14%, transparent)'
-              : 'color-mix(in srgb, var(--color-text-muted) 12%, transparent)',
-          }}
-        >
-          {isCustom ? 'Using your own app' : "Using K2's default"}
-        </span>
-      </div>
-
-      <label className="flex flex-col gap-0.5 min-w-0">
-        <span className="type-hint text-[var(--color-text-secondary)]">Client ID</span>
-        <input
-          type="text"
-          value={clientId}
-          disabled={!canMutate || busy !== null}
-          autoComplete="off"
-          onChange={(e) => setClientId(e.target.value)}
-          placeholder={provider === 'gmail' ? '…apps.googleusercontent.com' : 'Application (client) ID'}
-          className={`w-full ${inputCls}`}
-        />
-      </label>
-
-      {hasSecret && (
-        <label className="flex flex-col gap-0.5 min-w-0">
-          <span className="type-hint text-[var(--color-text-secondary)]">Client secret</span>
-          <input
-            type="password"
-            value={clientSecret}
-            disabled={!canMutate || busy !== null}
-            autoComplete="new-password"
-            onChange={(e) => setClientSecret(e.target.value)}
-            placeholder={cfg.secretSet ? '••••••••  (set — leave blank to keep)' : 'Client secret'}
-            className={`w-full ${inputCls}`}
-          />
-          <span className="type-hint text-[var(--color-text-muted)]">
-            Write-only: stored in the K2 vault and never shown again.
-          </span>
-          {cfg.secretSet &&
-            clientSecret.length === 0 &&
-            clientId.trim() !== (cfg.clientId ?? '') && (
-              <span className="type-hint text-[var(--color-status-warn)]">
-                You changed the client ID — re-enter the secret too, or the new ID pairs
-                with the old secret and the link will fail.
-              </span>
+    <SettingRow
+      label={label}
+      testId={`oauth-app-${provider}`}
+      hint={
+        <>
+          {isCustom ? 'Signs in with your own app.' : 'Signs in with K2’s app.'}
+          <SaveError state={result} />
+        </>
+      }
+      below={
+        open ? (
+          <div className="mt-1 border-t border-[var(--color-border)] divide-y divide-[var(--color-border)]" data-testid={`oauth-app-form-${provider}`}>
+            <div className="flex items-start justify-between gap-6 py-2.5">
+              <div className="flex-1 min-w-0">
+                <div className={SETTING_ROW_LABEL}>Client ID</div>
+                <div className={SETTING_ROW_HINT}>From the app you registered with {label}.</div>
+              </div>
+              <Input
+                aria-label={`${label} client ID`}
+                value={clientId}
+                disabled={!canMutate || busy !== null}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => setClientId(e.target.value)}
+                placeholder={provider === 'gmail' ? '….apps.googleusercontent.com' : 'Application (client) ID'}
+                className="w-60 flex-shrink-0 type-control font-mono disabled:opacity-50"
+              />
+            </div>
+            {hasSecret && (
+              <div className="flex items-start justify-between gap-6 py-2.5">
+                <div className="flex-1 min-w-0">
+                  <div className={SETTING_ROW_LABEL}>Client secret</div>
+                  <div className={SETTING_ROW_HINT}>
+                    {cfg.secretSet
+                      ? 'A secret is saved. Leave this empty to keep it.'
+                      : 'K2 keeps it in its vault and never shows it again.'}
+                  </div>
+                  {cfg.secretSet && clientSecret.length === 0 && idChanged && isCustom && (
+                    <p className="type-hint text-[var(--color-status-error-soft)] mt-1 leading-relaxed max-w-[75ch]">
+                      You changed the client ID, so enter its secret too.
+                    </p>
+                  )}
+                </div>
+                <Input
+                  aria-label={`${label} client secret`}
+                  type="password"
+                  value={clientSecret}
+                  disabled={!canMutate || busy !== null}
+                  autoComplete="new-password"
+                  onChange={(e) => setClientSecret(e.target.value)}
+                  placeholder={cfg.secretSet ? 'Saved' : 'Client secret'}
+                  className="w-60 flex-shrink-0 type-control disabled:opacity-50"
+                />
+              </div>
             )}
-        </label>
+            <div className="pt-3 flex items-center justify-end gap-2">
+              <Button variant="quiet" onClick={() => setOpen(false)} disabled={busy !== null}>
+                Cancel
+              </Button>
+              <Button variant="accent" disabled={!canSave} onClick={() => void save()}>
+                {busy === 'save' ? 'Saving…' : 'Save'}
+              </Button>
+            </div>
+          </div>
+        ) : undefined
+      }
+    >
+      <SaveNote state={result} />
+      {isCustom && !open && (
+        <Button variant="quiet" className="flex-shrink-0" disabled={!canMutate || busy !== null} onClick={() => void reset()}>
+          {busy === 'reset' ? 'Switching…' : 'Use K2’s app…'}
+        </Button>
       )}
-
-      <div className="flex items-center gap-2 flex-wrap">
-        <button
-          type="button"
-          disabled={!canSave}
-          onClick={() => void save()}
-          title={canMutate ? `Use your own ${label} OAuth app` : 'Not available in viewer mode'}
-          className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-        >
-          {busy === 'save' ? 'Saving…' : 'Save'}
-        </button>
-        {isCustom && (
-          <button
-            type="button"
-            disabled={!canMutate || busy !== null}
-            onClick={() => void reset()}
-            title={canMutate ? "Revert to K2's built-in OAuth client" : 'Not available in viewer mode'}
-            className="px-2.5 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-          >
-            {busy === 'reset' ? 'Resetting…' : 'Reset to default'}
-          </button>
-        )}
-        {error && (
-          <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
-        )}
-      </div>
-    </div>
+      <Button
+        variant="quiet"
+        className="flex-shrink-0"
+        aria-expanded={open}
+        disabled={!canMutate || busy !== null}
+        title={canMutate ? undefined : VIEWER_NOTE}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? 'Hide' : isCustom ? 'Change…' : 'Use your own…'}
+      </Button>
+    </SettingRow>
   )
 }
 
-function OauthAppsSection({
+function SignInAppsGroup({
   canMutate,
+  cfg,
+  cfgError,
+  onRetry,
   onChanged,
 }: {
   canMutate: boolean
-  /** Tell the Connect buttons an OAuth app was saved or reset. */
-  onChanged?: () => void
+  cfg: OauthConfig | null | 'error'
+  cfgError: unknown
+  onRetry: () => void
+  onChanged: () => void
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const [config, setConfig] = useState<OauthConfig | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [revision, setRevision] = useState(0)
-  const bump = useCallback(() => {
-    setRevision((r) => r + 1)
-    onChanged?.()
-  }, [onChanged])
-
-  // Lazy-load: only hit the daemon once the section is expanded (and on
-  // refetch after a save/reset). Collapsed = network-silent.
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    fetchOauthConfig()
-      .then((c) => {
-        if (cancelled) return
-        setConfig(c)
-        setError(null)
-      })
-      .catch((e) => {
-        if (cancelled) return
-        setConfig(null)
-        setError(mailErrorMessage(e))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [open, revision])
-
+  const failure = cfg === 'error' ? readFailure(cfgError) : null
   return (
-    <div className="border-t border-[var(--color-border)] pt-4" data-settings-id="email-link.oauth-apps">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-2 text-left no-drag cursor-pointer group"
-      >
-        <svg
-          className={`w-3 h-3 text-[var(--color-text-muted)] transition-transform ${open ? 'rotate-90' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-        </svg>
-        <SectionTitle>OAuth apps (advanced)</SectionTitle>
-      </button>
-
-      {open && (
-        <div className="mt-3 space-y-3">
-          <p className="type-hint text-[var(--color-text-muted)]">
-            Bring your own Google/Microsoft OAuth app so K2 uses your quota, verification, and consent
-            screen instead of the built-in default. You register the app in Google/Microsoft; paste the
-            client ID (and, for Google, the secret) here.
-          </p>
-
-          {!canMutate && (
-            <p className="type-hint text-[var(--color-text-muted)] italic">
-              Only the owner can change OAuth apps — this is read-only in viewer mode.
-            </p>
-          )}
-
-          {error ? (
-            <div className="space-y-2">
-              <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
-              <button
-                type="button"
-                onClick={bump}
-                className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer no-drag"
-              >
-                Retry
-              </button>
-            </div>
-          ) : config === null ? (
-            <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
-          ) : (
-            <div className="space-y-3">
-              <OauthClientRow
-                provider="gmail"
-                label="Google (Gmail)"
-                hasSecret
-                cfg={config.providers.gmail}
-                canMutate={canMutate}
-                onChanged={bump}
-              />
-              <OauthClientRow
-                provider="microsoft"
-                label="Microsoft (Outlook / 365)"
-                hasSecret={false}
-                cfg={config.providers.microsoft}
-                canMutate={canMutate}
-                onChanged={bump}
-              />
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Add-inbox form ───────────────────────────────────────────────────────
-
-function AddInboxForm({
-  canMutate,
-  onAdded,
-  onGmailOauthActive,
-}: {
-  canMutate: boolean
-  onAdded: (address: string) => void
-  onGmailOauthActive?: (active: boolean) => void
-}): React.JSX.Element {
-  const projects = useProjectsStore((s) => s.projects)
-
-  const [project, setProject] = useState('')
-  const [address, setAddress] = useState('')
-  const [host, setHost] = useState('')
-  const [port, setPort] = useState('993')
-  const [tls, setTls] = useState(TLS_IMPLICIT)
-  const [username, setUsername] = useState('')
-  const [displayName, setDisplayName] = useState('')
-  const [draftsFolder, setDraftsFolder] = useState('')
-  const [password, setPassword] = useState('')
-  const [gmailOauthActive, setGmailOauthActive] = useState(false)
-  // Bumped when an OAuth app is saved/reset so "Connect Microsoft" re-reads it.
-  const [oauthRevision, setOauthRevision] = useState(0)
-  const bumpOauthRevision = useCallback(() => setOauthRevision((r) => r + 1), [])
-
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const handleGmailOauthActive = useCallback(
-    (active: boolean): void => {
-      setGmailOauthActive(active)
-      onGmailOauthActive?.(active)
-    },
-    [onGmailOauthActive],
-  )
-
-  const canSubmit =
-    canMutate &&
-    !busy &&
-    project.trim().length > 0 &&
-    address.trim().length > 0 &&
-    host.trim().length > 0 &&
-    password.length > 0
-
-  const submit = useCallback(async (): Promise<void> => {
-    if (!canSubmit) return
-    setBusy(true)
-    setError(null)
-    const portNum = Number(port)
-    try {
-      const res = await addLinkedInbox({
-        project: project.trim(),
-        address: address.trim(),
-        host: host.trim(),
-        port: Number.isFinite(portNum) && portNum > 0 ? portNum : undefined,
-        tls,
-        username: username.trim() || undefined,
-        displayName: displayName.trim() || undefined,
-        draftsFolder: draftsFolder.trim() || undefined,
-        password,
-      })
-      // WRITE-ONLY: drop the secret from memory the instant it's sent.
-      setPassword('')
-      useToastStore.getState().addToast(`Connected ${res.address}`, 'success')
-      onAdded(res.address)
-    } catch (e) {
-      // The daemon's structured hint (bad drafts folder → real folder
-      // list, login/connect failure, workspace-not-found) verbatim.
-      setError(mailErrorMessage(e))
-    } finally {
-      setBusy(false)
-    }
-  }, [canSubmit, project, address, host, port, tls, username, displayName, draftsFolder, password, onAdded])
-
-  const field = (
-    label: string,
-    node: React.JSX.Element,
-    hint?: string,
-  ): React.JSX.Element => (
-    <div className="flex flex-col gap-0.5 min-w-0">
-      <span className="type-hint text-[var(--color-text-secondary)]">{label}</span>
-      {node}
-      {hint && <span className="type-hint text-[var(--color-text-muted)]">{hint}</span>}
-    </div>
-  )
-
-  const inputCls =
-    'px-2 py-1 type-hint font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'
-
-  // Single OauthConnect mount: when Gmail session is active it expands
-  // to full pane and the IMAP/app-password chrome is not rendered.
-  return (
-    <div
-      className={
-        gmailOauthActive
-          ? 'h-full min-h-0 flex flex-col'
-          : 'grid gap-6 grid-cols-[minmax(0,42rem)]'
+    <SettingsGroup
+      title="Sign-in apps"
+      badge={<Tag tone="muted">Advanced</Tag>}
+      hint="K2 signs in to Google and Microsoft with its own app. Use your own app to have your own quota and sign-in screen."
+      settingId="email-link.oauth-apps"
+      card
+      state={
+        cfg === null ? (
+          <SettingsLoadState kind="loading" title="Checking the sign-in apps…" />
+        ) : failure ? (
+          <SettingsLoadState
+            kind="error"
+            title="Couldn’t load the sign-in apps"
+            detail={failure.detail}
+            action={<Button variant="quiet" onClick={onRetry}>Try again</Button>}
+          >
+            {failure.line}
+          </SettingsLoadState>
+        ) : undefined
       }
     >
-      {!gmailOauthActive && (
-        <div className="min-w-0" data-settings-id="email-link.add">
-          <h2 className="type-title text-[var(--color-text-primary)]">Connect an inbox</h2>
-          <p className="type-hint text-[var(--color-text-muted)] mt-1">
-            Connect one of your email accounts and pick the workspace that will be its{' '}
-            <strong>Primary</strong>. Prefer <strong>Connect Gmail</strong> (opens Google consent
-            in this page). Or use an app-password over IMAP below. The Primary manages the account
-            and can grant other workspaces access. Agents send from it only at the Send level, under the workspace's sending mode.
-          </p>
-        </div>
+      {cfg !== null && cfg !== 'error' && (
+        <>
+          <OauthClientRow provider="gmail" label="Google" hasSecret cfg={cfg.providers.gmail} canMutate={canMutate} onChanged={onChanged} />
+          <OauthClientRow provider="microsoft" label="Microsoft" hasSecret={false} cfg={cfg.providers.microsoft} canMutate={canMutate} onChanged={onChanged} />
+        </>
       )}
-
-      <div className={gmailOauthActive ? 'flex-1 min-h-0 flex flex-col' : undefined}>
-        <OauthConnect
-          canMutate={canMutate}
-          onConnected={onAdded}
-          onSessionActiveChange={handleGmailOauthActive}
-          oauthRevision={oauthRevision}
-        />
-      </div>
-
-      {!gmailOauthActive && (
-        <OauthAppsSection canMutate={canMutate} onChanged={bumpOauthRevision} />
-      )}
-
-      {!gmailOauthActive && (
-        <div className="border-t border-[var(--color-border)] pt-4 space-y-3">
-          <SectionTitle>Or connect manually over IMAP (app-password)</SectionTitle>
-          <div className="grid grid-cols-2 gap-3">
-            {field(
-              'Primary workspace',
-              <SettingDropdown
-                value={project}
-                placeholder="Pick a workspace…"
-                options={projects.map((p) => ({ value: p.id, label: p.name }))}
-                onChange={(v) => setProject(v)}
-                menuAlign="left"
-                disabled={!canMutate || busy}
-              />,
-              'The workspace that manages the account and who else can use it.',
-            )}
-            {field(
-              'Email address',
-              <input
-                type="email"
-                value={address}
-                disabled={!canMutate || busy}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="you@gmail.com"
-                className={inputCls}
-              />,
-            )}
-            {field(
-              'IMAP host',
-              <input
-                type="text"
-                value={host}
-                disabled={!canMutate || busy}
-                onChange={(e) => setHost(e.target.value)}
-                placeholder="imap.gmail.com"
-                className={inputCls}
-              />,
-            )}
-            <div className="grid grid-cols-2 gap-2">
-              {field(
-                'Port',
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={port}
-                  disabled={!canMutate || busy}
-                  onChange={(e) => setPort(e.target.value)}
-                  placeholder="993"
-                  className={inputCls}
-                />,
-              )}
-              {field(
-                'TLS',
-                <SettingDropdown
-                  value={tls}
-                  options={TLS_OPTIONS}
-                  onChange={(v) => setTls(v)}
-                  className={!canMutate || busy ? 'opacity-50 pointer-events-none' : undefined}
-                />,
-              )}
-            </div>
-            {field(
-              'Username',
-              <input
-                type="text"
-                value={username}
-                disabled={!canMutate || busy}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder={address.trim() || 'defaults to the address'}
-                className={inputCls}
-              />,
-            )}
-            {field(
-              'Display name (optional)',
-              <input
-                type="text"
-                value={displayName}
-                disabled={!canMutate || busy}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Rosson"
-                className={inputCls}
-              />,
-            )}
-            {field(
-              'Drafts folder (optional)',
-              <input
-                type="text"
-                value={draftsFolder}
-                disabled={!canMutate || busy}
-                onChange={(e) => setDraftsFolder(e.target.value)}
-                placeholder="auto-detect"
-                className={inputCls}
-              />,
-              'Blank = K2 finds it. A wrong name errors with the real folder list.',
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <SectionTitle>App password</SectionTitle>
-            <input
-              type="password"
-              value={password}
-              disabled={!canMutate || busy}
-              autoComplete="new-password"
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="app-specific password"
-              className={`w-full ${inputCls}`}
-            />
-            <p className="type-hint text-[var(--color-text-muted)]">
-              Use an <span className="font-mono">app-specific password</span> (Gmail / Fastmail issue
-              these), not your login password. It&rsquo;s stored securely in the K2 vault and never
-              shown again — K2 never displays it back and never sends from this account.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 pb-6">
-            <button
-              type="button"
-              disabled={!canSubmit}
-              onClick={() => void submit()}
-              title={canMutate ? 'Connect and verify over IMAP' : 'Not available in viewer mode'}
-              className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-            >
-              {busy ? 'Connecting…' : 'Connect inbox'}
-            </button>
-            {error && (
-              <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+    </SettingsGroup>
   )
 }
 
@@ -1324,6 +1183,9 @@ type UpgradeFlow =
   | { kind: 'device'; linkId: string; userCode: string; verificationUrl: string; deadlineMs: number }
   | { kind: 'browser'; linkId: string; authorizationUrl: string; deadlineMs: number }
 
+/** The Calendar card for an account signed in for mail only: one row with
+ *  Add calendar, then the sign-in it starts, then what went wrong if it
+ *  did. Renders nothing for an account that has nothing to add. */
 export function AddCalendarAccess({
   inbox,
   canMutate,
@@ -1353,7 +1215,7 @@ export function AddCalendarAccess({
   useEffect(() => cancelCapture, [cancelCapture])
 
   const startGoogle = useCallback(async (): Promise<void> => {
-    const bind = await invoke<{ captureId: string; redirectUri: string; port: number }>('oauth_loopback_bind')
+    const bind = await bindLoopback()
     captureRef.current = bind.captureId
     try {
       const res = await linkOauthUpgrade({
@@ -1376,16 +1238,16 @@ export function AddCalendarAccess({
       // drives the UI.
       void (async () => {
         try {
-          const capture = await invoke<{ code?: string | null; state?: string | null; error?: string | null }>(
+          const capture = await invoke<{ code?: string | null; state?: string | null; error?: string | null } | null>(
             'oauth_loopback_wait',
             { captureId: bind.captureId, expectedState: oauthState, timeoutSecs: 300 },
           )
           if (captureRef.current !== bind.captureId) return
           await linkOauthComplete({
             linkId,
-            code: capture.code ?? undefined,
-            state: capture.state ?? oauthState,
-            error: capture.error ?? undefined,
+            code: capture?.code ?? undefined,
+            state: capture?.state ?? oauthState,
+            error: capture?.error ?? undefined,
           })
         } catch (e) {
           if (captureRef.current !== bind.captureId) return
@@ -1423,7 +1285,7 @@ export function AddCalendarAccess({
         setFailure({ text: res.hint ?? 'K2 could not start a Microsoft device sign-in. Try again.' })
       }
     } catch (e) {
-      setFailure({ text: mailErrorMessage(e) })
+      setFailure({ text: e instanceof MailReplyError ? readFailure(e).line : mailErrorMessage(e) })
     } finally {
       setBusy(false)
     }
@@ -1465,7 +1327,7 @@ export function AddCalendarAccess({
         }
       } catch (e) {
         if (cancelled) return
-        setFailure({ text: mailErrorMessage(e) })
+        setFailure({ text: e instanceof MailReplyError ? readFailure(e).line : mailErrorMessage(e) })
         setFlow(null)
       }
     }
@@ -1479,387 +1341,451 @@ export function AddCalendarAccess({
 
   if (!needsCalendarConsent(inbox)) return null
   return (
-    <div className="space-y-2" data-testid="add-calendar">
-      <SectionTitle>Calendar</SectionTitle>
-      <div className="border border-[var(--color-border)] px-3 py-2 space-y-2">
-        <div className="flex items-center gap-3">
-          <div className="flex-1 min-w-0">
-            <p className="type-row text-[var(--color-text-primary)]">Calendar isn&rsquo;t connected</p>
-            <p className="type-hint text-[var(--color-text-muted)]">
-              This account was linked for mail only. Add calendar access so agents with a grant can
-              use <span className="font-mono">k2 calendar</span> — same inbox, same access.
-              {isGoogle && ' Google asks you to allow calendar access in your browser.'}
-            </p>
+    <SettingsGroup title="Calendar" card testId="add-calendar">
+      <SettingRow
+        label="Calendar isn’t connected"
+        hint={`This account was connected for mail only. Add its calendar so agents with access can read and add events.${isGoogle ? ' Google asks you to allow it in your browser.' : ''}`}
+        below={
+          failure ? (
+            <div className="space-y-2" data-testid="add-calendar-error" role="alert">
+              <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">{failure.text}</p>
+              {failure.adminConsentUrl && (
+                <Button variant="quiet" onClick={() => void openUrl(failure.adminConsentUrl as string)}>
+                  Open the admin consent page
+                </Button>
+              )}
+            </div>
+          ) : undefined
+        }
+      >
+        <Button
+          data-testid="add-calendar-button"
+          className="flex-shrink-0"
+          disabled={!canMutate || busy || flow !== null}
+          onClick={() => void start()}
+          title={
+            !canMutate
+              ? VIEWER_NOTE
+              : isGoogle
+                ? 'Open Google’s page to allow calendar access'
+                : 'Sign in again with a code to add calendar access'
+          }
+        >
+          {busy ? 'Starting…' : 'Add calendar'}
+        </Button>
+      </SettingRow>
+      {flow?.kind === 'browser' && (
+        <div className="px-4 py-3 space-y-2" data-testid="add-calendar-browser" role="status">
+          <p className={SETTING_ROW_HINT}>
+            Allow calendar access for {inbox.address} on Google’s page. It opened in your browser.
+          </p>
+          <div className="flex items-center justify-between gap-6">
+            <span className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)]">
+              <Spinner />
+              Waiting for approval… this updates by itself.
+            </span>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <CopyButton text={flow.authorizationUrl} label="Copy page link" />
+              <Button variant="quiet" onClick={() => void openUrl(flow.authorizationUrl)}>
+                Open Google’s page again
+              </Button>
+            </div>
           </div>
-          <button
-            type="button"
-            data-testid="add-calendar-button"
-            disabled={!canMutate || busy || flow !== null}
-            onClick={() => void start()}
-            title={
-              !canMutate
-                ? 'Not available in viewer mode'
-                : isGoogle
-                  ? 'Open Google consent to add calendar access'
-                  : 'Sign in again with a device code to add calendar access'
-            }
-            className="px-2.5 py-1 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-          >
-            {busy ? 'Starting…' : 'Add calendar'}
-          </button>
         </div>
-        {flow?.kind === 'browser' && (
-          <div className="space-y-2" data-testid="add-calendar-browser">
-            <p className="type-hint text-[var(--color-text-secondary)]">
-              Allow calendar access for <span className="font-mono">{inbox.address}</span> on
-              Google&rsquo;s consent page (it opened in your browser).
-            </p>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void openUrl(flow.authorizationUrl)}
-                className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-              >
-                Open Google consent again
-              </button>
-              <CopyButton text={flow.authorizationUrl} title="Copy consent URL" />
+      )}
+      {flow?.kind === 'device' && (
+        <div className="px-4 py-3 space-y-2" data-testid="add-calendar-device" role="status">
+          <p className={SETTING_ROW_HINT}>
+            Go to <span className="font-mono">{flow.verificationUrl}</span> and enter this code, signed in as{' '}
+            {inbox.address}:
+          </p>
+          <div className="flex items-center justify-between gap-6">
+            <span className="type-title font-mono tracking-widest text-[var(--color-text-primary)] select-all">{flow.userCode}</span>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <CopyButton text={flow.userCode} label="Copy code" />
+              <Button variant="quiet" onClick={() => void openUrl(flow.verificationUrl)}>
+                Open sign-in page
+              </Button>
             </div>
-            <p className="type-hint text-[var(--color-text-muted)]">
-              Waiting for approval… this updates automatically.
-            </p>
           </div>
-        )}
-        {flow?.kind === 'device' && (
-          <div className="space-y-2" data-testid="add-calendar-device">
-            <p className="type-hint text-[var(--color-text-secondary)]">
-              Go to{' '}
-              <button
-                type="button"
-                onClick={() => void openUrl(flow.verificationUrl)}
-                className="font-mono text-[var(--color-accent)] hover:underline cursor-pointer"
-              >
-                {flow.verificationUrl}
-              </button>{' '}
-              and enter this code, signed in as <span className="font-mono">{inbox.address}</span>:
-            </p>
-            <div className="flex items-center gap-2">
-              <span className="px-2 py-1 text-[length:var(--type-xl)] font-mono tracking-widest bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] select-all">
-                {flow.userCode}
-              </span>
-              <CopyButton text={flow.userCode} title="Copy code" />
-            </div>
-            <p className="type-hint text-[var(--color-text-muted)]">
-              Waiting for approval… this updates automatically.
-            </p>
-          </div>
-        )}
-        {failure && (
-          <div className="space-y-1">
-            <p className="type-hint text-[var(--color-status-error-soft)]" data-testid="add-calendar-error">
-              {failure.text}
-            </p>
-            {failure.adminConsentUrl && (
-              <button
-                type="button"
-                onClick={() => void openUrl(failure.adminConsentUrl as string)}
-                className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-              >
-                Open the admin consent page
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+          <p className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)]">
+            <Spinner />
+            Waiting for approval… this updates by itself.
+          </p>
+        </div>
+      )}
+    </SettingsGroup>
   )
 }
 
-// ── Inbox detail ─────────────────────────────────────────────────────────
+// ── One account's page ───────────────────────────────────────────────────
 
-function InboxDetail({
+function AccountDetail({
   inbox,
   canMutate,
+  onBack,
   onRemoved,
   onChanged,
   patchInbox,
 }: {
   inbox: Inbox
   canMutate: boolean
-  onRemoved: () => void
+  onBack: () => void
+  onRemoved: (address: string) => void
   /** Re-read the inbox list (capabilities changed server-side). */
   onChanged: () => void
   /** Optimistically patch this inbox's row in the parent list. */
   patchInbox: (address: string, patch: (i: Inbox) => Inbox) => void
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const source = inbox.capabilities?.source
+  const oauth = source === 'google' || source === 'microsoft'
+  const calendarOn = oauth && inbox.capabilities?.calendar?.read === true
 
-  const doRemove = useCallback(async (): Promise<void> => {
+  const disconnect = useCallback(async (): Promise<void> => {
     const confirmed = await useConfirmDialogStore.getState().confirm({
       title: `Disconnect ${inbox.address}?`,
       message:
-        'This removes the connection and permanently deletes its stored app-password from the ' +
-        'vault. Agents lose read + draft access to this inbox. Nothing in the account itself is ' +
-        'touched.',
+        'Agents in every workspace lose access to this account, and K2 deletes its saved sign-in. ' +
+        'Nothing in the mailbox changes. You can connect it again later.',
       confirmLabel: 'Disconnect',
       destructive: true,
     })
     if (!confirmed) return
     setBusy(true)
+    setError(null)
     try {
       await removeLinkedInbox(inbox.address)
-      onRemoved()
+      onRemoved(inbox.address)
     } catch (e) {
-      useToastStore.getState().addToast(`Disconnect failed: ${mailErrorMessage(e)}`, 'error')
-    } finally {
+      setError(mailErrorMessage(e))
       setBusy(false)
     }
   }, [inbox.address, onRemoved])
 
-  const detailRow = (label: string, value: React.ReactNode): React.JSX.Element => (
-    <div className="flex items-center gap-3 px-3 py-2">
-      <span className="type-hint text-[var(--color-text-secondary)] w-28 flex-shrink-0">
-        {label}
-      </span>
-      <span className="type-row text-[var(--color-text-primary)] truncate min-w-0">{value}</span>
-    </div>
-  )
-
   return (
-    <div className="grid gap-6 grid-cols-[minmax(0,42rem)]">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <h2 className="type-title text-[var(--color-text-primary)] font-mono truncate">
-            {inbox.address}
-          </h2>
-          <StatusChip status={inbox.status} />
+    <div className="space-y-6" data-testid="email-account">
+      <header className="space-y-3">
+        <Button variant="quiet" onClick={onBack} data-testid="email-back">
+          &larr; All accounts
+        </Button>
+        <div className="min-w-0">
+          <h2 className="type-title text-[var(--color-text-primary)] truncate">{inbox.address}</h2>
+          <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed">
+            {providerName(inbox)} · {usedBy(inbox)}
+            {!canMutate && ' · You’re viewing this server, so you can’t change it here.'}
+          </p>
         </div>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1">
-          Primary{' '}
-          <span className="text-[var(--color-text-secondary)]">
-            {inbox.primary.workspace ?? 'unknown workspace'}
+      </header>
+
+      <SettingsGroup title="Account" card>
+        <SettingRow
+          label="Status"
+          hint={
+            inbox.status === 'error'
+              ? 'K2 couldn’t sign in to this account the last time it checked, so agents can’t use it. If its password changed, disconnect it and connect it again.'
+              : inbox.status === 'connected' || inbox.status === 'running'
+                ? 'K2 signs in to this account normally.'
+                : 'K2 hasn’t checked this account yet.'
+          }
+        >
+          <StatusTag status={inbox.status} />
+        </SettingRow>
+        <SettingRow
+          label="Signed in with"
+          hint={oauth ? `K2 keeps the sign-in from ${source === 'google' ? 'Google' : 'Microsoft'}; no password is stored.` : 'An app password, kept in K2’s vault.'}
+        >
+          <span className="type-row text-[var(--color-text-secondary)]">
+            {source === 'google' ? 'Google' : source === 'microsoft' ? 'Microsoft' : 'App password'}
           </span>
-          {' · '}the Primary manages the account and who can use it. Workspaces with access read it
-          and draft replies with <span className="font-mono">k2 mail</span> — nobody sends from it.
-        </p>
-      </div>
+        </SettingRow>
+        {!oauth && inbox.host && (
+          <SettingRow label="Mail server" hint={inbox.tls === TLS_STARTTLS ? 'STARTTLS' : 'SSL/TLS'}>
+            <span className="type-row font-mono text-[var(--color-text-secondary)]">{inbox.host}</span>
+          </SettingRow>
+        )}
+      </SettingsGroup>
 
-      <div className="space-y-2">
-        <SectionTitle>Connection</SectionTitle>
-        <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-          {detailRow('Primary', inbox.primary.workspace ?? '—')}
-          {inbox.host && detailRow('IMAP host', <span className="font-mono">{inbox.host}</span>)}
-          {inbox.tls && detailRow('TLS', inbox.tls)}
-          {detailRow('Status', inbox.status)}
-        </div>
-      </div>
+      {needsCalendarConsent(inbox) ? (
+        <AddCalendarAccess inbox={inbox} canMutate={canMutate} onUpgraded={onChanged} />
+      ) : calendarOn ? (
+        <SettingsGroup title="Calendar" card>
+          <SettingRow label="Calendar" hint="Agents with access can read this account’s calendar and add events.">
+            <Tag tone="ok">Connected</Tag>
+          </SettingRow>
+        </SettingsGroup>
+      ) : null}
 
-      <AddCalendarAccess inbox={inbox} canMutate={canMutate} onUpgraded={onChanged} />
+      <InboxAccessPanel inbox={inbox} canMutate={canMutate} patchInbox={patchInbox} card />
 
-      <InboxAccessPanel inbox={inbox} canMutate={canMutate} patchInbox={patchInbox} />
-
-      <div className="space-y-2 pb-6">
-        <SectionTitle>Danger zone</SectionTitle>
-        <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2">
-          <div className="flex items-center gap-3">
-            <div className="flex-1 min-w-0">
-              <p className="type-row text-[var(--color-text-primary)]">Disconnect this inbox</p>
-              <p className="type-hint text-[var(--color-text-muted)]">
-                Deletes the stored app-password and revokes agent access. The account itself is
-                untouched.
+      <SettingsGroup title="Disconnect" card>
+        <SettingRow
+          label="Disconnect this account"
+          hint="Agents lose access and K2 deletes the saved sign-in. Nothing in the mailbox changes."
+          below={
+            error ? (
+              <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">
+                Couldn’t disconnect: {error.replace(/[.\s]+$/, '')}. The account is still connected; try again.
               </p>
-            </div>
-            <button
-              type="button"
-              disabled={!canMutate || busy}
-              onClick={() => void doRemove()}
-              className="px-2.5 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-            >
-              {busy ? 'Disconnecting…' : 'Disconnect'}
-            </button>
-          </div>
-        </div>
-      </div>
+            ) : undefined
+          }
+        >
+          <Button
+            variant="danger-quiet"
+            className="flex-shrink-0"
+            disabled={!canMutate || busy}
+            title={canMutate ? undefined : VIEWER_NOTE}
+            onClick={() => void disconnect()}
+          >
+            {busy ? 'Disconnecting…' : 'Disconnect…'}
+          </Button>
+        </SettingRow>
+      </SettingsGroup>
     </div>
   )
 }
 
-// ── The section root (master-detail shell) ───────────────────────────────
+// ── The page ─────────────────────────────────────────────────────────────
+
+type ListState = { kind: 'loading' } | { kind: 'error'; err: unknown } | { kind: 'ready'; rows: Inbox[] }
+type Notice = { kind: 'connected'; address: string; workspace: string } | { kind: 'disconnected'; address: string }
+
+function AccountRow({ inbox, onOpen }: { inbox: Inbox; onOpen: () => void }): React.JSX.Element {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      data-k2-focus=""
+      data-testid={`account-row-${inbox.address}`}
+      aria-label={`Manage ${inbox.address}`}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
+      className="relative flex items-center gap-4 px-4 py-3 no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-wash-1)]"
+    >
+      <div className="flex-1 min-w-0">
+        <div className="type-name text-[var(--color-text-primary)] truncate">{inbox.address}</div>
+        <div className="type-hint text-[var(--color-text-secondary)] mt-0.5 truncate">
+          {providerName(inbox)} · {usedBy(inbox)}
+        </div>
+      </div>
+      <StatusTag status={inbox.status} />
+      <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-secondary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+      </svg>
+    </div>
+  )
+}
 
 export function EmailLinkSection(): React.JSX.Element {
   const viewerReadOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
   const canMutate = !viewerReadOnly
 
-  const [inboxes, setInboxes] = useState<Inbox[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [list, setList] = useState<ListState>({ kind: 'loading' })
   const [revision, setRevision] = useState(0)
-  const bump = useCallback(() => setRevision((r) => r + 1), [])
-  const [selection, setSelection] = useState<Selection>({ kind: 'add' })
-  /** Gmail OAuth embeds BrowserPane — right panel goes edge-to-edge. */
-  const [gmailOauthActive, setGmailOauthActive] = useState(false)
+  const reload = useCallback(() => setRevision((r) => r + 1), [])
+  const [openAddress, setOpenAddress] = useState<string | null>(null)
+  const [notice, setNotice] = useState<Notice | null>(null)
+  /** Google's sign-in page fills the page while it is up. */
+  const [gmailActive, setGmailActive] = useState(false)
 
-  // ── Load the connected-inbox table from the unified catalog, filtered
-  //    to LINKED accounts. Cross-platform: no status/supported gate. ────
+  const [oauthCfg, setOauthCfg] = useState<OauthConfig | null | 'error'>(null)
+  const [oauthErr, setOauthErr] = useState<unknown>(null)
+  const [oauthRevision, setOauthRevision] = useState(0)
+  const reloadOauth = useCallback(() => setOauthRevision((r) => r + 1), [])
+
+  // ── The connected accounts: the unified catalog, filtered to LINKED
+  //    accounts. Cross-platform: no status/supported gate. ─────────────
   useEffect(() => {
     let cancelled = false
+    setList((l) => (l.kind === 'ready' ? l : { kind: 'loading' }))
     fetchInboxes()
       .then((r) => {
-        if (cancelled) return
-        setInboxes(r.filter((i) => i.source === 'linked'))
-        setError(null)
+        if (!cancelled) setList({ kind: 'ready', rows: r.filter((i) => i.source === 'linked') })
       })
-      .catch((e) => {
-        if (cancelled) return
-        setInboxes(null)
-        setError(mailErrorMessage(e))
+      .catch((err) => {
+        if (!cancelled) setList({ kind: 'error', err })
       })
     return () => {
       cancelled = true
     }
   }, [revision])
 
-  // Selection healing: a removed inbox falls back to the add form.
+  // ── Which sign-in apps this server has (the Microsoft button, Sign-in
+  //    apps). One read for both. ─────────────────────────────────────────
   useEffect(() => {
-    if (selection.kind !== 'inbox' || inboxes === null) return
-    if (!inboxes.some((i) => i.address === selection.address)) {
-      setSelection({ kind: 'add' })
+    let cancelled = false
+    setOauthCfg(null)
+    fetchOauthConfig()
+      .then((c) => {
+        if (!cancelled) setOauthCfg(c)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setOauthErr(e)
+        setOauthCfg('error')
+      })
+    return () => {
+      cancelled = true
     }
-  }, [inboxes, selection])
+  }, [oauthRevision])
 
-  const selectedInbox = useMemo(() => {
-    if (selection.kind !== 'inbox') return null
-    return inboxes?.find((i) => i.address === selection.address) ?? null
-  }, [selection, inboxes])
+  const rows = list.kind === 'ready' ? list.rows : null
+  const shown = useMemo(
+    () => (openAddress && rows ? rows.find((i) => i.address === openAddress) ?? null : null),
+    [openAddress, rows],
+  )
+  // An account that went away (disconnected elsewhere) falls back to the list.
+  useEffect(() => {
+    if (openAddress && rows && !rows.some((i) => i.address === openAddress)) setOpenAddress(null)
+  }, [openAddress, rows])
 
-  const onAdded = useCallback(
-    (address: string): void => {
-      setSelection({ kind: 'inbox', address })
-      bump()
+  const onConnected = useCallback(
+    (address: string, workspace: string): void => {
+      setNotice({ kind: 'connected', address, workspace })
+      reload()
     },
-    [bump],
+    [reload],
   )
 
   // Optimistic patch of a single inbox row (primary/grants) — mutates the
   // already-loaded list in place, no refetch (no fetch-in-render).
-  const patchInbox = useCallback(
-    (address: string, patch: (i: Inbox) => Inbox): void => {
-      setInboxes((prev) =>
-        prev ? prev.map((i) => (i.address === address ? patch(i) : i)) : prev,
-      )
-    },
-    [],
-  )
+  const patchInbox = useCallback((address: string, patch: (i: Inbox) => Inbox): void => {
+    setList((prev) =>
+      prev.kind === 'ready' ? { kind: 'ready', rows: prev.rows.map((i) => (i.address === address ? patch(i) : i)) } : prev,
+    )
+  }, [])
+
+  const failure = list.kind === 'error' ? readFailure(list.err) : null
+
+  // A confirmation lands at the top of the list, often above where the
+  // person is (the Connect card); bring it into view.
+  const noticeRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (notice) noticeRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
+  }, [notice])
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="flex flex-1 min-h-0">
-        {/* ── Left column ── */}
-        <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0">
-          <div className="px-3 pt-3 pb-1">
-            <SectionTitle>Connected inboxes</SectionTitle>
-          </div>
-          <div className="flex-1 overflow-y-auto px-1 py-1" data-settings-id="email-link.inboxes">
-            {error ? (
-              <div className="px-2 py-2 space-y-2">
-                <p className="type-hint text-[var(--color-status-error-soft)] break-words">
-                  {error}
-                </p>
-                <button
-                  type="button"
-                  onClick={bump}
-                  className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer no-drag"
-                >
-                  Retry
-                </button>
-              </div>
-            ) : inboxes === null ? (
-              <p className="px-2 py-1 type-hint text-[var(--color-text-muted)]">Loading…</p>
-            ) : inboxes.length === 0 ? (
-              <p className="px-2 py-2 type-hint text-[var(--color-text-muted)] italic">
-                No inboxes connected yet — link a personal account to give a workspace&rsquo;s
-                agents read + draft access.
+    <div
+      className={
+        gmailActive ? 'h-full min-h-0 flex flex-col' : 'h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]'
+      }
+    >
+      <div className={gmailActive ? 'flex-1 min-h-0 flex flex-col' : 'w-full max-w-[52rem] space-y-6 pb-6'}>
+        {!gmailActive && shown && (
+          <AccountDetail
+            key={shown.address}
+            inbox={shown}
+            canMutate={canMutate}
+            patchInbox={patchInbox}
+            onChanged={reload}
+            onBack={() => setOpenAddress(null)}
+            onRemoved={(address) => {
+              setOpenAddress(null)
+              setNotice({ kind: 'disconnected', address })
+              setList((prev) =>
+                prev.kind === 'ready' ? { kind: 'ready', rows: prev.rows.filter((i) => i.address !== address) } : prev,
+              )
+              reload()
+            }}
+          />
+        )}
+
+        {!gmailActive && !shown && (
+          <>
+            <header className="min-w-0">
+              <h2 className="type-title text-[var(--color-text-primary)]">Email Link</h2>
+              <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed max-w-[75ch]">
+                Connect your own email accounts so agents can read your mail and draft replies for you. You choose
+                which workspaces can use each account.
               </p>
-            ) : (
-              inboxes.map((i) => {
-                const isSelected = selection.kind === 'inbox' && selection.address === i.address
-                return (
-                  <button
-                    key={i.address}
-                    type="button"
-                    onClick={() => setSelection({ kind: 'inbox', address: i.address })}
-                    className={`w-full flex flex-col gap-0.5 px-2 py-1.5 text-left transition-colors no-drag cursor-pointer min-w-0 ${
-                      isSelected
-                        ? 'bg-[var(--color-accent)]/15'
-                        : 'hover:bg-[var(--color-bg-hover)]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="type-row font-mono truncate flex-1 text-[var(--color-text-primary)]">
-                        {i.address}
-                      </span>
-                      <span
-                        className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0"
-                        style={{ backgroundColor: statusColor(i.status) }}
-                        title={i.status}
-                      />
-                    </div>
-                    <span className="type-hint text-[var(--color-text-muted)] truncate">
-                      {i.primary.workspace ?? 'unknown workspace'}
-                      {i.grants.length > 0 ? ` +${i.grants.length}` : ''}
+            </header>
+
+            <div className="space-y-3">
+              {notice && (
+                <div ref={noticeRef} className="scroll-mt-6">
+                  <Callout tone="ok" role="status" className="type-hint flex items-center justify-between gap-4" data-testid="email-notice">
+                    <span>
+                      {notice.kind === 'connected'
+                        ? `${notice.address} is connected. Agents in ${notice.workspace} can use it now.`
+                        : `${notice.address} is disconnected. No workspace can use it, and K2 deleted its saved sign-in.`}
                     </span>
-                  </button>
-                )
-              })
-            )}
-          </div>
+                    <span className="flex items-center gap-2 flex-shrink-0">
+                      {notice.kind === 'connected' && rows?.some((i) => i.address === notice.address) && (
+                        <Button
+                          variant="quiet"
+                          onClick={() => {
+                            setOpenAddress(notice.address)
+                            setNotice(null)
+                          }}
+                        >
+                          Manage
+                        </Button>
+                      )}
+                      <Button variant="quiet" onClick={() => setNotice(null)}>
+                        Dismiss
+                      </Button>
+                    </span>
+                  </Callout>
+                </div>
+              )}
+              <SettingsGroup
+                title="Connected accounts"
+                hint="Open an account to choose which workspaces can use it, or to disconnect it."
+                settingId="email-link.inboxes"
+                card
+                state={
+                  list.kind === 'loading' ? (
+                    <SettingsLoadState kind="loading" title="Loading your email accounts…" testId="accounts-loading" />
+                  ) : failure ? (
+                    <SettingsLoadState
+                      kind="error"
+                      title="Couldn’t load your email accounts"
+                      detail={failure.detail}
+                      testId="accounts-error"
+                      action={<Button variant="quiet" onClick={reload}>Try again</Button>}
+                    >
+                      {failure.line}
+                    </SettingsLoadState>
+                  ) : rows && rows.length === 0 ? (
+                    <SettingsLoadState kind="empty" title="No email accounts yet" testId="accounts-empty">
+                      Connect one below to let a workspace’s agents read it and draft replies.
+                    </SettingsLoadState>
+                  ) : undefined
+                }
+              >
+                {rows?.map((i) => (
+                  <AccountRow
+                    key={i.address}
+                    inbox={i}
+                    onOpen={() => {
+                      setNotice(null)
+                      setOpenAddress(i.address)
+                    }}
+                  />
+                ))}
+              </SettingsGroup>
+            </div>
+          </>
+        )}
 
-          {/* Add inbox */}
-          <div className="px-2 py-2 border-t border-[var(--color-border)] flex-shrink-0">
-            <button
-              type="button"
-              disabled={!canMutate}
-              onClick={() => setSelection({ kind: 'add' })}
-              title={canMutate ? 'Connect a personal email account' : 'Not available in viewer mode'}
-              className={`w-full flex items-center justify-center gap-1.5 px-2 py-1.5 type-control transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                selection.kind === 'add'
-                  ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-hover)] hover:bg-[var(--color-bg-elevated)]'
-              }`}
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-              </svg>
-              Add inbox
-            </button>
-          </div>
-        </div>
+        {!shown && (
+          <ConnectGroup
+            canMutate={canMutate}
+            oauthCfg={oauthCfg}
+            onConnected={onConnected}
+            onSessionActiveChange={setGmailActive}
+          />
+        )}
 
-        {/* ── Right panel ── */}
-        <div
-          className={
-            gmailOauthActive && (selection.kind === 'add' || selectedInbox === null)
-              ? 'flex-1 min-h-0 overflow-hidden p-0 flex flex-col'
-              : 'flex-1 overflow-y-auto p-6 min-h-0'
-          }
-        >
-          {selection.kind === 'add' || selectedInbox === null ? (
-            <AddInboxForm
-              canMutate={canMutate}
-              onAdded={onAdded}
-              onGmailOauthActive={setGmailOauthActive}
-            />
-          ) : (
-            <InboxDetail
-              inbox={selectedInbox}
-              canMutate={canMutate}
-              patchInbox={patchInbox}
-              onChanged={bump}
-              onRemoved={() => {
-                setSelection({ kind: 'add' })
-                bump()
-              }}
-            />
-          )}
-        </div>
+        {!gmailActive && !shown && (
+          <SignInAppsGroup canMutate={canMutate} cfg={oauthCfg} cfgError={oauthErr} onRetry={reloadOauth} onChanged={reloadOauth} />
+        )}
       </div>
     </div>
   )

@@ -262,6 +262,7 @@ export function SettingsGroup({
   hint,
   action,
   card = false,
+  state,
   children,
   settingId,
   testId,
@@ -278,7 +279,11 @@ export function SettingsGroup({
   /** Rows in one card: chamfered in Terminal, a tile in Glass, hairlines
    *  between rows. The default keeps the section label and left rail. */
   card?: boolean
-  children: React.ReactNode
+  /** Card groups: shown in place of the card, under the same title, while
+   *  the group's data loads, after its read failed, or when it is empty
+   *  (a <SettingsLoadState>). The children are not rendered. */
+  state?: React.ReactNode
+  children?: React.ReactNode
   settingId?: string
   testId?: string
 }): React.JSX.Element {
@@ -295,9 +300,11 @@ export function SettingsGroup({
           </div>
           {hint && <p className={SETTING_ROW_HINT}>{hint}</p>}
         </div>
-        <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
-          <SettingsCardContext.Provider value={true}>{children}</SettingsCardContext.Provider>
-        </Surface>
+        {state ?? (
+          <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
+            <SettingsCardContext.Provider value={true}>{children}</SettingsCardContext.Provider>
+          </Surface>
+        )}
       </section>
     )
   }

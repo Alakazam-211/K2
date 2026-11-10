@@ -15,6 +15,7 @@
 //! | [`APP_CHANNEL_CREATE`] | `POST /mgmt/v1/channels/create` (Sew 0.5.0, A9): an App makes text channels in its own Space (`chat.createChannel`); without it the verb is refused `sew_feature_missing` |
 //! | [`SERVER_GOVERNED_SPACE`], [`MGMT_VOICE_STATES`], [`VOICE_CHANNEL_CLOSING`], [`TURN_RELAY_ONLY`], [`VOICE_MEDIA_PATH`], [`IMPORT_IDENTITY_MAP`] | Sew 0.7.0 (K2 voice rooms, sew-56): read together as [`VoiceFeatures`] (`tool_hook::sew_voice_features()`), one read of the list the last status refresh recorded |
 //! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), the governance switch, the role-driven channel sync, bulk channel ops, App-owned Spaces and the service owner's deprovision ([`super::governed`]). Without it each is refused `sew_feature_missing` |
+//! | [`APP_RECORDING`], [`VOICE_RECORD_CAP`], [`RECORDING_REQUIRED`], [`MGMT_RECORDING_READS`] | Sew 0.9.0 (recording in Apps): read together as [`RecordingFeatures`] (`tool_hook::sew_recording_features()`). Sew 0.8.x reports none, so every recording change is inert there |
 //!
 //! The pin (Sew 0.8.2) reports thirty-one flags: 0.8.0's and 0.8.1's thirty, which are 0.7.3's
 //! twenty-nine (the same as 0.7.2's) and `app_participant_links`, plus 0.8.2's `principal_erase`
@@ -63,6 +64,63 @@ pub const TURN_RELAY_ONLY: &str = "turn_relay_only";
 pub const VOICE_MEDIA_PATH: &str = "voice_media_path";
 /// SW-8: `sew import --to-standalone --identity-map` (move off K2).
 pub const IMPORT_IDENTITY_MAP: &str = "import_identity_map";
+
+// ── Sew 0.9.0 (recording in Apps, K2 PRD prd-k2-bobbin-in-apps-v1) ────
+
+/// An App's `recording {start_level, required, server_read, audio_max_days}`
+/// settings, the recorder install, and the kit door's recording reads and
+/// fields (`recording_rule`, `recording_required`, `transcript_ready`).
+pub const APP_RECORDING: &str = "app_recording";
+/// The `voice:record` pass cap (bit 32) and an App's
+/// `recording.cap_required`. Without it K2 drops `voice:record` from every
+/// pass (an older Sew refuses a pass with an unknown cap).
+pub const VOICE_RECORD_CAP: &str = "voice_record_cap";
+/// Space and K5 recording overrides (`recording_start_level`,
+/// `recording_required` in `spaces/{id}/settings`) and the org policy
+/// `recording.required` (`off | multi_person`).
+pub const RECORDING_REQUIRED: &str = "recording_required";
+/// The mgmt recording reads (`recordings/{id}`, `…/transcript`,
+/// `spaces/{id}/recordings`) and the App feed (`apps/{id}/recordings/changes`).
+pub const MGMT_RECORDING_READS: &str = "mgmt_recording_reads";
+
+/// Sew 0.9.0's four recording flags, read together from ONE feature list
+/// (like [`VoiceFeatures`]). Gates read these fields, never versions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingFeatures {
+    /// [`APP_RECORDING`].
+    pub app_recording: bool,
+    /// [`VOICE_RECORD_CAP`].
+    pub voice_record_cap: bool,
+    /// [`RECORDING_REQUIRED`].
+    pub recording_required: bool,
+    /// [`MGMT_RECORDING_READS`].
+    pub mgmt_recording_reads: bool,
+}
+
+impl RecordingFeatures {
+    /// From a feature list as Sew reported it (any order; unknown flags
+    /// ignored).
+    pub fn from_flags<S: AsRef<str>>(flags: &[S]) -> RecordingFeatures {
+        let has = |f: &str| flags.iter().any(|x| x.as_ref() == f);
+        RecordingFeatures {
+            app_recording: has(APP_RECORDING),
+            voice_record_cap: has(VOICE_RECORD_CAP),
+            recording_required: has(RECORDING_REQUIRED),
+            mgmt_recording_reads: has(MGMT_RECORDING_READS),
+        }
+    }
+
+    /// From the list the last status refresh recorded for `kind` (one read).
+    pub fn read(conn: &Connection, kind: &str) -> Result<RecordingFeatures, String> {
+        Ok(RecordingFeatures::from_flags(&list(conn, kind)?))
+    }
+
+    /// Any of the four: this Sew can record in Apps at all.
+    pub fn any(&self) -> bool {
+        self.app_recording || self.voice_record_cap || self.recording_required || self.mgmt_recording_reads
+    }
+}
 
 /// Sew 0.7.0's six voice flags, read together from ONE feature list (the
 /// one the last status refresh recorded, [`note`]), so a caller never
@@ -303,6 +361,62 @@ mod tests {
         for flag in [APP_ORIGIN, APP_ORIGINS, APP_GOVERNED_SPACES, HOME_CLIENT_OWNER_APPROVAL, K2_MANAGED_AVATAR, "k2_managed_guard", "app_participant_links", "principal_erase"] {
             assert!(has(&conn, "chat", flag).unwrap(), "{flag}");
         }
+    }
+
+    /// Sew 0.8.2's thirty-one flags, as the pin reports them.
+    fn sew_0_8_2() -> Vec<String> {
+        let mut v: Vec<String> = SEW_0_6_0.iter().map(|s| s.to_string()).collect();
+        for f in [
+            "server_governed_space",
+            "import_identity_map",
+            "mgmt_voice_states",
+            "voice_channel_closing",
+            "voice_media_path",
+            "turn_relay_only",
+            "call_credential",
+            "call_stats_native",
+            "app_origins",
+            "app_participant_links",
+            "principal_erase",
+        ] {
+            v.push(f.to_string());
+        }
+        v
+    }
+
+    /// Sew 0.9.0 (K2 PRD prd-k2-bobbin-in-apps-v1 §8, K-h prep): 0.8.2's
+    /// thirty-one flags open no recording gate; 0.9.0's thirty-five (Sew's
+    /// `features_090`) open all four, and each flag alone sets only its field.
+    #[test]
+    fn recording_flags() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        let old = sew_0_8_2();
+        assert_eq!(old.len(), 31);
+        note(&conn, "chat", &old, 1).unwrap();
+        let r = RecordingFeatures::read(&conn, "chat").unwrap();
+        assert_eq!(r, RecordingFeatures::default(), "Sew 0.8.2: inert");
+        assert!(!r.any());
+        let mut new = old.clone();
+        for f in ["mgmt_recording_reads", "recording_required", "voice_record_cap", "app_recording"] {
+            new.push(f.to_string());
+        }
+        assert!(note(&conn, "chat", &new, 2).unwrap());
+        assert_eq!(list(&conn, "chat").unwrap().len(), 35, "features_090 pins 35");
+        let r = RecordingFeatures::read(&conn, "chat").unwrap();
+        assert_eq!(
+            r,
+            RecordingFeatures { app_recording: true, voice_record_cap: true, recording_required: true, mgmt_recording_reads: true }
+        );
+        // Sew's exact strings (never renamed).
+        assert_eq!(
+            [APP_RECORDING, VOICE_RECORD_CAP, RECORDING_REQUIRED, MGMT_RECORDING_READS],
+            ["app_recording", "voice_record_cap", "recording_required", "mgmt_recording_reads"]
+        );
+        let one = RecordingFeatures::from_flags(&["voice_record_cap"]);
+        assert!(one.voice_record_cap && !one.app_recording && !one.recording_required && !one.mgmt_recording_reads);
+        // Voice gates are untouched by the new flags.
+        assert!(VoiceFeatures::read(&conn, "chat").unwrap().rooms_ready());
     }
 
     /// Sew 0.7.0's six voice flags (sew-56 v1.1d §5), read from one list.

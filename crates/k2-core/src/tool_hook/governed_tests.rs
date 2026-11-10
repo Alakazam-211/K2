@@ -684,7 +684,7 @@ fn a_bound_spaces_switch_names_its_app_when_sent() {
     skin::with_skin_conn(|c| app_space::bind(c, APP, SPACE, "owner-token", 1).map(|_| ())).expect("bind");
     let sent = skin::with_skin_conn(|c| space_settings_body(c, &subject, &stored)).expect("bound body");
     let parsed: sew_wire::SpaceSettingsRequest = serde_json::from_str(&sent).expect("Sew's request shape");
-    assert_eq!(parsed.governance, "app");
+    assert_eq!(parsed.governance.as_deref(), Some("app"));
     assert_eq!(parsed.app_id.as_deref(), Some(APP), "a bound Space names its App");
 
     let other = skin::with_skin_conn(|c| space_settings_body(c, "app:someapp", &stored)).expect("other subject");

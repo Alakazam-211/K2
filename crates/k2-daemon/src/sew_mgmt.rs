@@ -195,6 +195,20 @@ impl MgmtClient {
         self.call_t("GET", path, None, None, None, JSON, timeout).await
     }
 
+    /// A GET that names its caller (`Sew-Actor`). Sew 0.9.0: an App
+    /// server's recording read carries `app:<service id>` (audited as
+    /// `recording.transcript_read`), an Owner/Admin compliance read the
+    /// person. Attribution only (KM13), like every `Sew-Actor`.
+    pub async fn get_as(&self, path: &str, actor: &str) -> Result<MgmtResponse, TransportError> {
+        self.call("GET", path, None, None, Some(actor), JSON).await
+    }
+
+    /// [`Self::get_as`] with its own timeout (the App recording feed's
+    /// long-poll: [`long_poll_timeout`]).
+    pub async fn get_as_with_timeout(&self, path: &str, actor: &str, timeout: Duration) -> Result<MgmtResponse, TransportError> {
+        self.call_t("GET", path, None, None, Some(actor), JSON, timeout).await
+    }
+
     pub async fn post(
         &self,
         path: &str,
@@ -485,6 +499,45 @@ mod tests {
         let r = parse_response(&raw).unwrap();
         assert_eq!(r.retry_after(), Some(Duration::from_millis(1500)));
         assert_eq!(r.error_line(), "rate_limited: slow");
+    }
+
+    /// Sew 0.9.0 (K-h prep, PRD §8 `get_as_sends_actor`): an App's recording
+    /// read names `app:<service id>` in `Sew-Actor`; a plain GET still sends
+    /// none (and no Idempotency-Key or body on either).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn get_as_sends_actor() {
+        let dir = std::env::temp_dir().join(format!("k2ga-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("m.sock");
+        let tok = dir.join("t");
+        std::fs::write(&tok, "tok\n").unwrap();
+        let l = tokio::net::UnixListener::bind(&sock).unwrap();
+        let heads = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let h2 = heads.clone();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut s, _) = l.accept().await.unwrap();
+                let mut buf = vec![0u8; 4096];
+                let n = s.read(&mut buf).await.unwrap();
+                h2.lock().unwrap().push(String::from_utf8_lossy(&buf[..n]).to_string());
+                s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}").await.unwrap();
+            }
+        });
+        let c = MgmtClient::new(&sock, &tok);
+        let svc = "7d4e2a10-1111-4222-8333-444455556666";
+        let actor = sew_wire::app_actor(svc);
+        let r = c.get_as(&sew_wire::recording_path("71", svc), &actor).await.expect("get_as");
+        assert_eq!(r.status, 200);
+        let r = c.get("/mgmt/v1/status").await.expect("get");
+        assert_eq!(r.status, 200);
+        server.await.unwrap();
+        let heads = heads.lock().unwrap().clone();
+        assert!(heads[0].starts_with(&format!("GET /mgmt/v1/recordings/71?app_id={svc} HTTP/1.1\r\n")), "{}", heads[0]);
+        assert!(heads[0].contains(&format!("\r\nSew-Actor: app:{svc}\r\n")), "{}", heads[0]);
+        assert!(!heads[0].contains("Idempotency-Key") && !heads[0].contains("Content-Length"), "{}", heads[0]);
+        assert!(!heads[1].contains("Sew-Actor"), "a plain GET names no actor: {}", heads[1]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

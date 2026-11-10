@@ -873,14 +873,29 @@ pub const GOVERNANCE_SEW: &str = "sew";
 /// sends the other PRIV1 field). Sew's settings route answers 409
 /// `app_mismatch` unless `app_id` names the Space's App, absent only for a
 /// Space that is not bound.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Sew 0.9.0 (flags `app_recording` / `recording_required`): `governance`
+/// is optional, and the body may carry a Space's recording overrides
+/// instead (`null` inherits the App's or the org's rule; absent keeps).
+/// An empty body is a 200 no-op. K2 never sends a recording field to a Sew
+/// without its flag (an older Sew denies unknown fields).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpaceSettingsRequest {
     /// [`GOVERNANCE_APP`] | [`GOVERNANCE_SEW`].
-    pub governance: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governance: Option<String>,
     /// The bound App's id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_id: Option<String>,
+    /// `none | admin | moderator | member` ([`recording::START_LEVELS`]);
+    /// `admin` is a 400 in the K5 Space.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub recording_start_level: Patch<String>,
+    /// Record every call with two or more people in this Space's voice
+    /// channels (R1). A false never turns off a higher source's rule.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub recording_required: Patch<bool>,
 }
 
 /// Levels in an App-governed Space (I4), lowest first.
@@ -1460,6 +1475,278 @@ pub fn media_path_refusal(status: u16, err: &ApiError) -> Option<String> {
     .then(|| err.detail_str("media_path_reason").unwrap_or_default().to_string())
 }
 
+// ── recording in Apps: Sew 0.9.0 (K2 PRD prd-k2-bobbin-in-apps-v1) ────
+//
+// Sew's final names (2026-11-10, merged main 17149285d). Requests are
+// `deny_unknown_fields`; answers are read leniently and re-serialized with
+// only the fields named here, so a newer Sew field (an audio link, say)
+// never reaches an App through K2. Gated on the flags in
+// [`super::features`] (`app_recording`, `voice_record_cap`,
+// `recording_required`, `mgmt_recording_reads`), never on versions.
+
+/// Sew 0.9.0's recording vocabulary.
+pub mod recording {
+    /// The pass cap (`PassCap::VoiceRecord`, bit 32 in Sew; a string here).
+    pub const CAP_VOICE_RECORD: &str = "voice:record";
+    /// `start_level` values, lowest first: who may press Record.
+    pub const START_LEVELS: [&str; 4] = ["none", "admin", "moderator", "member"];
+    pub const START_NONE: &str = "none";
+    /// `Recording.trigger` (a payload without it reads as `manual`).
+    pub const TRIGGER_MANUAL: &str = "manual";
+    pub const TRIGGER_AUTO: &str = "auto";
+    pub const TRIGGER_REQUIRED: &str = "required";
+    /// `Channel.recording_rule` (omitted for none).
+    pub const RULE_AUTO: &str = "auto";
+    pub const RULE_REQUIRED: &str = "required";
+    /// Org policies (`GET/POST /mgmt/v1/policies`).
+    pub const POLICY_ENABLED: &str = "recording.enabled";
+    pub const POLICY_DM_ENABLED: &str = "recording.dm_enabled";
+    pub const POLICY_REQUIRE_CONSENT_TO_JOIN: &str = "recording.require_consent_to_join";
+    /// `off | multi_person` (always present in GET policies on 0.9.0).
+    pub const POLICY_REQUIRED: &str = "recording.required";
+    pub const POLICY_AUDIO_MAX_DAYS: &str = "recording.audio_max_days";
+    /// The recording policy keys K2 reads and sets.
+    pub const POLICY_KEYS: [&str; 5] =
+        [POLICY_ENABLED, POLICY_DM_ENABLED, POLICY_REQUIRE_CONSENT_TO_JOIN, POLICY_REQUIRED, POLICY_AUDIO_MAX_DAYS];
+    pub const REQUIRED_OFF: &str = "off";
+    pub const REQUIRED_MULTI_PERSON: &str = "multi_person";
+    /// The App feed's `kind`s (read as strings, so a newer kind parses).
+    pub const CHANGE_STARTED: &str = "started";
+    pub const CHANGE_STOPPED: &str = "stopped";
+    pub const CHANGE_TRANSCRIPT_READY: &str = "transcript_ready";
+    pub const CHANGE_AUDIO_EXPIRED: &str = "audio_expired";
+    pub const CHANGE_DELETED: &str = "deleted";
+    /// `StopReason::MgmtStopped` (= 10). K2 reads stop reasons as numbers
+    /// or strings and never matches them exhaustively (Sew's enum is
+    /// `#[non_exhaustive]` from 0.9.0).
+    pub const STOP_MGMT_STOPPED: u32 = 10;
+    /// Longest `wait` the App feed takes, seconds.
+    pub const CHANGES_WAIT_MAX_S: u32 = 30;
+    /// Most items one read returns (K2's own ceiling; Sew clamps too).
+    pub const LIMIT_MAX: u32 = 200;
+    /// Sew's audit names (K2's `deploy_audit` uses the second too).
+    pub const AUDIT_SETTINGS: &str = "recording_settings";
+    pub const AUDIT_TRANSCRIPT_READ: &str = "recording_transcript_read";
+}
+
+/// Is `s` a `start_level` Sew takes?
+pub fn is_start_level(s: &str) -> bool {
+    recording::START_LEVELS.contains(&s)
+}
+
+/// Rank of a start level (`none` 0 … `member` 3): a higher rank lets more
+/// people press Record, so raising it is a widening.
+pub fn start_level_rank(s: &str) -> Option<usize> {
+    recording::START_LEVELS.iter().position(|l| *l == s)
+}
+
+/// The `Sew-Actor` of an App server's read: `app:<service id>` (audit
+/// only; Sew authorizes by `app_id` and `server_read`).
+pub fn app_actor(service_id: &str) -> String {
+    format!("app:{service_id}")
+}
+
+/// The `recording` object of `POST /mgmt/v1/apps/{app_id}/settings` (any
+/// subset; `cap_required` only to a Sew with `voice_record_cap`). Sew
+/// leaves it out of the answer while every field is at its default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppRecordingSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap_required: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_read: Option<bool>,
+    /// `null` = the org's keep days.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub audio_max_days: Patch<u32>,
+}
+
+/// `POST /mgmt/v1/channels/{channel_id}/recording`: a channel's own
+/// recording rule. K2 doesn't send it in 0.46.11 (the CUI/FCI lock works
+/// through the Space's settings); the shape is here for the compat replay
+/// and Sew must confirm the full body.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MgmtChannelRecording {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub recording_required: Patch<bool>,
+}
+
+/// `POST /mgmt/v1/channels/{channel_id}/recording`.
+pub fn channel_recording_path(channel_id: &str) -> String {
+    format!("/mgmt/v1/channels/{}/recording", pct_path(channel_id))
+}
+
+/// `POST /mgmt/v1/recordings/{id}/stop` (Owner/Admin `Sew-Actor`; no
+/// `app_id`: sending one is a 400).
+pub fn recording_stop_path(id: &str) -> String {
+    format!("/mgmt/v1/recordings/{}/stop", pct_path(id))
+}
+
+fn page_query(after: Option<&str>, limit: u32) -> String {
+    let mut q = String::new();
+    if let Some(a) = after.filter(|a| !a.is_empty()) {
+        q.push_str(&format!("&after={}", pct_path(a)));
+    }
+    q.push_str(&format!("&limit={}", limit.clamp(1, recording::LIMIT_MAX)));
+    q
+}
+
+/// `GET /mgmt/v1/recordings/{id}?app_id=` (the governing-App view; no
+/// `app_id` = the Owner/Admin compliance view).
+pub fn recording_path(id: &str, app_id: &str) -> String {
+    format!("/mgmt/v1/recordings/{}?app_id={}", pct_path(id), pct_path(app_id))
+}
+
+/// `GET /mgmt/v1/recordings/{id}/transcript?app_id=&after=&limit=`.
+pub fn recording_transcript_path(id: &str, app_id: &str, after: Option<&str>, limit: u32) -> String {
+    format!("/mgmt/v1/recordings/{}/transcript?app_id={}{}", pct_path(id), pct_path(app_id), page_query(after, limit))
+}
+
+/// `GET /mgmt/v1/spaces/{space_id}/recordings?app_id=&after=&limit=`.
+pub fn space_recordings_path(space_id: &str, app_id: &str, after: Option<&str>, limit: u32) -> String {
+    format!("/mgmt/v1/spaces/{}/recordings?app_id={}{}", pct_path(space_id), pct_path(app_id), page_query(after, limit))
+}
+
+/// `GET /mgmt/v1/apps/{app_id}/recordings/changes?after=&wait=&limit=`
+/// (long-poll; the caller's timeout must exceed `wait`). Gated by the
+/// App's `server_read`; `seq` in commit order.
+pub fn app_recording_changes_path(app_id: &str, after: Option<&str>, wait_s: u32, limit: u32) -> String {
+    let after = after.filter(|a| !a.is_empty()).map(|a| format!("after={}&", pct_path(a))).unwrap_or_default();
+    format!(
+        "/mgmt/v1/apps/{}/recordings/changes?{after}wait={}&limit={}",
+        pct_path(app_id),
+        wait_s.min(recording::CHANGES_WAIT_MAX_S),
+        limit.clamp(1, recording::LIMIT_MAX)
+    )
+}
+
+fn de_stringy<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        Value::String(s) => s,
+        Value::Null => String::new(),
+        v => v.to_string(),
+    })
+}
+
+fn de_opt_stringy<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        Value::String(s) => Some(s),
+        Value::Null => None,
+        v => Some(v.to_string()),
+    })
+}
+
+/// One person's consent on a recording (who agreed to be recorded).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingConsent {
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub external_id: String,
+    /// `granted | declined | withdrawn | pending` (a string: newer values parse).
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub consent: String,
+}
+
+/// A recording, as K2 hands it on: ids, where, when, who started it, the
+/// trigger, the stop reason and who consented. Never audio or links.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingSummary {
+    #[serde(deserialize_with = "de_stringy")]
+    pub id: String,
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub space_id: String,
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub channel_id: String,
+    /// `active | stopped | …` (a string).
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub state: String,
+    /// [`recording::TRIGGER_MANUAL`] when Sew leaves it out.
+    #[serde(default = "trigger_manual", deserialize_with = "de_stringy")]
+    pub trigger: String,
+    #[serde(default, deserialize_with = "de_opt_stringy", skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<String>,
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub started_at: String,
+    #[serde(default, deserialize_with = "de_opt_stringy", skip_serializing_if = "Option::is_none")]
+    pub stopped_at: Option<String>,
+    /// Sew's stop reason (number or name; never matched exhaustively).
+    #[serde(default, deserialize_with = "de_opt_stringy", skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(default)]
+    pub transcript_ready: bool,
+    #[serde(default)]
+    pub consents: Vec<RecordingConsent>,
+}
+
+fn trigger_manual() -> String {
+    recording::TRIGGER_MANUAL.to_string()
+}
+
+/// A page of recordings: `{recordings | items, next?}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingsPage {
+    #[serde(default, alias = "items")]
+    pub recordings: Vec<RecordingSummary>,
+    #[serde(default, deserialize_with = "de_opt_stringy", skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+
+/// One transcript turn: markdown-escaped text, the speaker, the offsets.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptTurn {
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub id: String,
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub speaker_external_id: String,
+    #[serde(default)]
+    pub start_ms: u64,
+    #[serde(default)]
+    pub end_ms: u64,
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub text: String,
+}
+
+/// A page of a transcript: `{turns | items, next?}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptPage {
+    #[serde(default, alias = "items")]
+    pub turns: Vec<TranscriptTurn>,
+    #[serde(default, deserialize_with = "de_opt_stringy", skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+}
+
+/// One App feed change: never content.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingChange {
+    pub seq: u64,
+    #[serde(deserialize_with = "de_stringy")]
+    pub kind: String,
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub recording_id: String,
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub space_id: String,
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub channel_id: String,
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub at: String,
+}
+
+/// `{changes: [RecordingChange…], next}`. On `410 gone` `cursor_expired`
+/// (Sew keeps 7 days), start again without `after` and refetch.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingChangesPage {
+    #[serde(default)]
+    pub changes: Vec<RecordingChange>,
+    #[serde(default, deserialize_with = "de_stringy")]
+    pub next: String,
+}
+
 // ── errors (`sew_proto::error`) ──────────────────────────────────────
 
 /// `{"ok": false, "error": {code, hint, details}}`.
@@ -1594,6 +1881,20 @@ pub mod reasons {
     /// SW-11 (sew-56 v1.3): `details.reason` of the `503` join/move refusal
     /// while voice is unavailable ([`super::media_path_refusal`]).
     pub const VOICE_UNAVAILABLE: &str = "voice_unavailable";
+    // Recording in Apps (Sew 0.9.0).
+    /// 403 `missing_permission`: a capped session (its App has
+    /// `cap_required`) without `voice:record`; `details.cap` names the cap.
+    pub const CAP_CEILING: &str = "cap_ceiling";
+    /// 422 on a client stop while a `required` rule holds and two or more
+    /// people are in the room. "Stop recording me" still works.
+    pub const RECORDING_REQUIRED: &str = "recording_required";
+    /// 403: an App read while the App's `server_read` is off.
+    pub const RECORDING_SERVER_READ_OFF: &str = "recording_server_read_off";
+    /// 403 `missing_permission`: an Owner/Admin mgmt route whose
+    /// `Sew-Actor` isn't an Owner/Admin person (audited).
+    pub const SEW_ACTOR_ADMIN_REQUIRED: &str = "sew_actor_admin_required";
+    /// 409: an App read for a Space the App doesn't govern (a participant).
+    pub const APP_NOT_GOVERNING: &str = "app_not_governing";
 }
 
 #[cfg(test)]
@@ -1997,5 +2298,61 @@ mod tests {
         .unwrap();
         assert_eq!(media_path_refusal(503, &other.error), None, "another engine state");
         assert_eq!(leave_reasons::MOVED, "moved");
+    }
+
+    /// Sew 0.9.0's recording shapes (K-h prep): requests refuse unknown
+    /// fields; answers parse leniently and keep only the named fields, so a
+    /// newer field (an audio link) never passes through K2.
+    #[test]
+    fn recording_wire_names_and_lenient_answers() {
+        // Space settings: governance optional, recording overrides tri-state.
+        let only_rec: SpaceSettingsRequest =
+            serde_json::from_str(r#"{"app_id":"a","recording_start_level":"none","recording_required":null}"#).unwrap();
+        assert_eq!(only_rec.governance, None);
+        assert_eq!(only_rec.recording_start_level, Patch::Set("none".into()));
+        assert_eq!(only_rec.recording_required, Patch::Clear, "null inherits");
+        let gov: SpaceSettingsRequest = serde_json::from_str(r#"{"governance":"app"}"#).unwrap();
+        assert_eq!(serde_json::to_string(&gov).unwrap(), r#"{"governance":"app"}"#, "a 0.8.x body is unchanged");
+        assert!(serde_json::from_str::<SpaceSettingsRequest>(r#"{"recording_auto":true}"#).is_err());
+        // App settings' recording object.
+        let r: AppRecordingSettings = serde_json::from_str(r#"{"start_level":"moderator","server_read":true,"audio_max_days":null}"#).unwrap();
+        assert_eq!(r.audio_max_days, Patch::Clear);
+        assert!(serde_json::from_str::<AppRecordingSettings>(r#"{"audio":true}"#).is_err());
+        assert!(is_start_level("none") && is_start_level("member") && !is_start_level("owner"));
+        assert!(start_level_rank("member") > start_level_rank("moderator") && start_level_rank("admin") > start_level_rank("none"));
+        // Answers: ids as numbers or strings; unknown fields dropped.
+        let page: RecordingsPage = serde_json::from_str(
+            r#"{"items":[{"id":71,"space_id":"5","channel_id":9,"state":"stopped","started_at":"t","stop_reason":10,
+                "audio_url":"https://x/a.opus","consents":[{"external_id":"k2:owner","consent":"granted","extra":1}]}],"next":"c2"}"#,
+        )
+        .unwrap();
+        let one = &page.recordings[0];
+        assert_eq!((one.id.as_str(), one.channel_id.as_str(), one.trigger.as_str()), ("71", "9", "manual"), "trigger defaults to manual");
+        assert_eq!(one.stop_reason.as_deref(), Some("10"));
+        let out = serde_json::to_string(&page).unwrap();
+        assert!(!out.contains("audio") && !out.contains("extra"), "{out}");
+        let t: TranscriptPage =
+            serde_json::from_str(r#"{"turns":[{"id":"m1","speaker_external_id":"k2:owner","start_ms":0,"end_ms":900,"text":"hi \\*"}]}"#).unwrap();
+        assert_eq!(t.turns[0].end_ms, 900);
+        let c: RecordingChangesPage = serde_json::from_str(
+            r#"{"changes":[{"seq":3,"kind":"transcript_ready","recording_id":71,"space_id":"5","channel_id":"9","at":"t","text":"never"}],"next":"3"}"#,
+        )
+        .unwrap();
+        assert_eq!((c.changes[0].kind.as_str(), c.next.as_str()), (recording::CHANGE_TRANSCRIPT_READY, "3"));
+        assert!(!serde_json::to_string(&c).unwrap().contains("never"), "the feed carries no content");
+        // Paths, percent-encoded and clamped.
+        assert_eq!(recording_path("71", "svc"), "/mgmt/v1/recordings/71?app_id=svc");
+        assert_eq!(recording_transcript_path("71", "svc", Some("m1"), 999), "/mgmt/v1/recordings/71/transcript?app_id=svc&after=m1&limit=200");
+        assert_eq!(space_recordings_path("5", "svc", None, 0), "/mgmt/v1/spaces/5/recordings?app_id=svc&limit=1");
+        assert_eq!(app_recording_changes_path("svc", Some("3"), 99, 50), "/mgmt/v1/apps/svc/recordings/changes?after=3&wait=30&limit=50");
+        assert_eq!(app_recording_changes_path("svc", None, 30, 50), "/mgmt/v1/apps/svc/recordings/changes?wait=30&limit=50");
+        assert_eq!(recording_stop_path("71"), "/mgmt/v1/recordings/71/stop");
+        assert_eq!(channel_recording_path("9"), "/mgmt/v1/channels/9/recording");
+        assert_eq!(app_actor("7d4e2a10-1111-4222-8333-444455556666").len(), 40);
+        assert!(is_sew_actor(&app_actor("7d4e2a10-1111-4222-8333-444455556666")));
+        assert_eq!(
+            [reasons::CAP_CEILING, reasons::RECORDING_REQUIRED, reasons::RECORDING_SERVER_READ_OFF, reasons::SEW_ACTOR_ADMIN_REQUIRED],
+            ["cap_ceiling", "recording_required", "recording_server_read_off", "sew_actor_admin_required"]
+        );
     }
 }

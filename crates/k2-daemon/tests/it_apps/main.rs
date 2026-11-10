@@ -61,6 +61,7 @@ mod handoff_keeps_app_connections;
 mod handoff_keeps_app_front_ports;
 mod publish_skin_gateway;
 mod publish_stop_start_integration;
+mod recording_contract_fake_sew;
 mod sew_for_apps_integration;
 #[cfg(unix)]
 mod site_visibility_integration;

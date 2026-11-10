@@ -4,6 +4,8 @@
 // everywhere; role is a corner mark, never a colour; no amber; rows sit on
 // the status cluster's column grid with no overlap and never show you.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import { CHAMFER_CLIP, CHIP_INK_DARK, CHIP_INK_LIGHT, PERSON_COLORS, PresenceChip, PresenceMoreChip, chipInitials, chipInk, personColor, resolvePersonColor } from './PresenceChip'
@@ -92,6 +94,33 @@ describe('PresenceChip', () => {
     const fill = container.querySelector('[data-presence-more] > span') as HTMLElement
     expect(fill.style.clipPath).toBe(CHAMFER_CLIP)
     expect(fill.textContent).toBe('+2')
+  })
+})
+
+describe('Terminal cut on person chips', () => {
+  const cutOf = (e: Element | null): string => (e as HTMLElement).style.getPropertyValue('--k2-chip-cut')
+  const fillOf = (c: HTMLElement): Element | null => c.querySelector('[data-presence-chip] > span[aria-hidden]:not([data-you-ring])')
+
+  it('under 24px a chip carries the control cut, and the inner layer of a you-chip runs parallel to its ring', () => {
+    expect(cutOf(fillOf(render(<PresenceChip name="anna" role="member" size={14} />).container))).toBe('3.5px')
+    cleanup()
+    const you = render(<PresenceChip name="anna" role="member" size={20} you />).container
+    expect(cutOf(you.querySelector('[data-you-ring]'))).toBe('5px')
+    expect(cutOf(fillOf(you))).toBe('4.121px')
+    cleanup()
+    expect(cutOf(render(<PresenceMoreChip count={2} size={14} />).container.querySelector('[data-presence-more] > span'))).toBe('3.5px')
+  })
+
+  it('24px and up keeps the 20% corners', () => {
+    expect(cutOf(fillOf(render(<PresenceChip name="anna" role="member" size={24} />).container))).toBe('')
+    cleanup()
+    expect(cutOf(render(<PresenceMoreChip count={2} size={24} />).container.querySelector('[data-presence-more] > span'))).toBe('')
+  })
+
+  it('the px clip applies only under the Terminal style and outside Gardens', () => {
+    const globals = readFileSync(join(__dirname, '../../globals.css'), 'utf8')
+    expect(globals).toContain('html[data-style="terminal"] :is([data-presence-chip], [data-presence-more]):not([data-zen-root] *) > span {')
+    expect(globals).not.toMatch(/(^|\n)\s*:is\(\[data-presence-chip\]/)
   })
 })
 

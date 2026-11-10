@@ -22,10 +22,10 @@ function rule(selector: string): string {
 describe('chamfered line-2 chips (square Style only)', () => {
   const cut = `${chamferCutFor(14)}px`
 
-  it('the cut is the Thread rule for a 14px control (2–3px)', () => {
+  it('the cut is the Thread rule for a 14px control (3–4px)', () => {
     const px = chamferCutFor(14)
-    expect(px).toBeGreaterThanOrEqual(2)
-    expect(px).toBeLessThanOrEqual(3)
+    expect(px).toBeGreaterThanOrEqual(3)
+    expect(px).toBeLessThanOrEqual(4)
   })
 
   it('clips the chip to the chamfer and hides its square border, only under html[data-style="terminal"]', () => {

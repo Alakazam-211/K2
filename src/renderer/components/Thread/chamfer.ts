@@ -28,14 +28,16 @@ export type ChamferCorners = readonly [number, number, number, number]
 
 /** Fixed cuts, matching the Terminal tokens (`chamfer.surface` and
  *  `chamfer.control`): cards, bubbles and the field 7px, controls 5px. Rosson
- *  chose 5/7 on 2026-11-09; 3/4 read as rounded. Controls under 24px scale
+ *  chose 5/7 on 2026-11-09; 3/4 read as rounded. Controls under 20px scale
  *  down with `chamferCutFor`. */
 export const CHAMFER_CUT = { surface: 7, button: 5, send: 5, drawer: 5 } as const
 
-/** A control's cut by its height: 5px from 24px up, scaled below that (to the
- *  nearest 0.5px) so a small chip doesn't turn into an octagon. */
+/** A control's cut by its height: a quarter of it (to the nearest 0.5px), up
+ *  to 5px from 20px. Rosson 2026-11-09: 5/24 was too small to read as a cut on
+ *  tiny controls. Much past a quarter a small square becomes a regular octagon
+ *  (0.293) and reads as a circle at 1x. */
 export function chamferCutFor(sizePx: number): number {
-  return Math.min(CHAMFER_CUT.button, Math.round(((sizePx * CHAMFER_CUT.button) / 24) * 2) / 2)
+  return Math.min(CHAMFER_CUT.button, Math.round((sizePx / 4) * 2) / 2)
 }
 
 export function chamferVars(o: {

@@ -11,7 +11,7 @@
   --radius-badge: 9999px;
   --chamfer-surface: 7px;
   --chamfer-control: 5px;
-  --chamfer-chip: 3px;
+  --chamfer-chip: 3.5px;
   --chamfer-send: 5px;
   --control-check: 14px;
   --control-switch-width: 36px;
@@ -1151,7 +1151,7 @@
   --radius-badge: 9999px;
   --chamfer-surface: 7px;
   --chamfer-control: 5px;
-  --chamfer-chip: 3px;
+  --chamfer-chip: 3.5px;
   --chamfer-send: 5px;
   --control-check: 14px;
   --control-switch-width: 36px;

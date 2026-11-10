@@ -587,9 +587,9 @@ describe('chamfered corners in K2\'s Terminal Style', () => {
       expect(small.style.getPropertyValue('--ch-fill')).toBe('transparent')
       expect(small.style.borderRadius).toBe('calc(var(--zen-radius) / 2)')
     }
-    // Scaled like Send (5px at 32px): Stop 20px → 3px, "Earlier messages" 22px → 3.5px.
-    expect(screen.getByTestId('thread-strip-stop').style.getPropertyValue('--ch-tl')).toBe('4px')
-    expect(screen.getByTestId('overlay-load-older').style.getPropertyValue('--ch-tl')).toBe('4.5px')
+    // The control cut from 20px up: Stop 20px and "Earlier messages" 22px are 5px.
+    expect(screen.getByTestId('thread-strip-stop').style.getPropertyValue('--ch-tl')).toBe('5px')
+    expect(screen.getByTestId('overlay-load-older').style.getPropertyValue('--ch-tl')).toBe('5px')
     expect(screen.getByTestId('overlay-load-older').style.getPropertyValue('--ch-fill')).toBe('transparent')
     // The cuts: 4px on surfaces (a bubble tail corner stays sharp), Send 4px (5px at 32px, scaled to its 26px), the drawer 5px (its 32px tab, like Send at 32px).
     const mine = el('[data-zen-bubble="me"]')
@@ -713,13 +713,13 @@ describe('chamfered corners in K2\'s Terminal Style', () => {
     const secretCard = el('[data-testid="thread-secret-card"]')
     expect(cut(secretCard)).toBe(true)
     expect(secretCard.style.getPropertyValue('--ch-bw')).toBe('1px')
-    // The pulse dot squares off (same pulse); the counter and code tags are cut 3px / 2.5px.
+    // The pulse dot squares off (same pulse); the counter and code tags are cut 4.5px / 4px.
     const dot = el('[data-zen-drawer-dot]')
     expect(dot.matches(`${CHAMFER_SCOPE} [data-zen-drawer-dot]`)).toBe(true)
     expect(dot.hasAttribute('data-zen-pulse')).toBe(true)
     expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} [data-zen-drawer-dot] { border-radius: 0 !important; }`)
-    expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} .zen-drawer-tag { border-radius: 0 !important; --ch-tl: 4px;`)
-    expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} .zen-drawer-tag.zen-drawer-code { --ch-tl: 3.5px;`)
+    expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} .zen-drawer-tag { border-radius: 0 !important; --ch-tl: 4.5px;`)
+    expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} .zen-drawer-tag.zen-drawer-code { --ch-tl: 4px;`)
     const code = el('[data-zen-drawer-code]')
     expect(code.matches(`${CHAMFER_SCOPE} .zen-drawer-tag`)).toBe(true)
   })

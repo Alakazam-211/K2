@@ -33,6 +33,7 @@ import { nameInitials, personTooltip, type PersonNames } from '@/lib/person-name
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { usePictureScopeContext } from '@/contexts/PictureScopeContext'
 import { usePersonPicture } from '@/lib/person-pictures'
+import { chamferCutFor } from '@/components/Thread/chamfer'
 
 export type PresenceRole = 'owner' | 'admin' | 'member'
 
@@ -46,6 +47,14 @@ export const PERSON_COLORS = ['#3a9e96', '#3a87a8', '#6a6fc8', '#8c62c4', '#b25c
 
 /** The chamfer polygon (20% corners). */
 export const CHAMFER_CLIP = 'polygon(20% 0, 80% 0, 100% 20%, 100% 80%, 80% 100%, 20% 100%, 0 80%, 0 20%)'
+
+/** Terminal's cut for a chip under 24px: `--k2-chip-cut`, read by the
+ *  Terminal-only clip in globals.css. `inset` is a layer's distance inside the
+ *  chip; inset d takes 0.586d off a parallel cut. */
+function chipCutVar(size: number, inset = 0): CSSProperties | undefined {
+  if (size >= 24) return undefined
+  return { '--k2-chip-cut': `${Number((chamferCutFor(size) - 0.586 * inset).toFixed(3))}px` } as CSSProperties
+}
 
 /** A username's colour: stable, from a string hash. */
 export function personColor(name: string): string {
@@ -179,6 +188,7 @@ export function PresenceChip({ name, role, size = 20, you = false, away = false,
     letterSpacing: '-0.02em',
     filter: away ? 'grayscale(1)' : undefined,
     opacity: away ? 0.45 : undefined,
+    ...chipCutVar(size, you ? 1.5 : 0),
   }
   return (
     <span
@@ -196,7 +206,7 @@ export function PresenceChip({ name, role, size = 20, you = false, away = false,
         <span
           aria-hidden
           data-you-ring=""
-          style={{ position: 'absolute', inset: 0, clipPath: CHAMFER_CLIP, background: 'var(--color-text-secondary)' }}
+          style={{ position: 'absolute', inset: 0, clipPath: CHAMFER_CLIP, background: 'var(--color-text-secondary)', ...chipCutVar(size) }}
         />
       )}
       <span style={{ ...fill, position: 'relative' }} aria-hidden>
@@ -245,6 +255,7 @@ export function PresenceMoreChip({ count, size = 20, title }: { count: number; s
           fontSize: Math.max(7, Math.round(size * (size >= 20 ? 0.4 : 0.5))),
           fontWeight: 600,
           lineHeight: 1,
+          ...chipCutVar(size),
         }}
       >
         +{count}

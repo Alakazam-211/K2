@@ -196,7 +196,10 @@ vi.mock('@/kessel/daemon-ws', () => ({
   daemonWsBase: () => 'ws://127.0.0.1:1',
 }))
 
-vi.mock('@/stores/connect-host', () => ({
+// Split view's chain (home avatars, the host pool) reads other connect-host
+// exports at load, so keep the real ones.
+vi.mock('@/stores/connect-host', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/stores/connect-host')>()),
   useConnectHostStore: Object.assign(
     (sel: (s: { activeHost: 'local' }) => unknown) => sel({ activeHost: 'local' }),
     { getState: () => ({ activeHost: 'local' as const }) },
@@ -1315,7 +1318,7 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     localStorage.clear()
   })
 
-  it('in Split view one bar spans both columns: the view menu, the picture and name, search, session and restart, each once, and nothing in the Thread column', async () => {
+  it('in Split view one bar spans both columns (the view menu, the name, session and restart) and the Thread column floats its picture and name, search and the bell', async () => {
     localStorage.clear()
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
@@ -1339,7 +1342,7 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
       expect(right.contains(bar)).toBe(false)
       expect(screen.getByTestId('session-split-left').contains(bar)).toBe(false)
       expect(bar.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-      expect(right.querySelector('[data-session-header], [data-thread-floats]')).toBeNull()
+      expect(right.querySelector('[data-session-header]')).toBeNull()
       // The left group: the view menu and the side choosers.
       const left = bar.querySelector('[data-split-bar-group="left"]')!
       expect(left.querySelector('[data-testid="session-view-button"]')).not.toBeNull()
@@ -1347,29 +1350,39 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
       expect(left.querySelector('[data-testid="session-view-split-right"]')).not.toBeNull()
       // The middle: the picture and name, one line.
       expect(bar.querySelector('[data-split-bar-centre] [data-testid="thread-view-identity"]')?.hasAttribute('data-compact')).toBe(true)
-      // The right group: search (the Thread's), then session and restart.
-      const rightGroup = bar.querySelector('[data-split-bar-group="right"]')!
-      const search = await waitFor(() => {
-        const el = rightGroup.querySelector<HTMLElement>('[data-testid="thread-search-button"]')
-        if (!el) throw new Error('no search on the bar')
+      // The Thread's column: its picture and name, search and the bell float
+      // at its top, first in the column.
+      const floats = await waitFor(() => {
+        const el = right.querySelector<HTMLElement>('[data-split-column-floats="thread"]')
+        if (!el) throw new Error('no floats on the Thread column')
         return el
       })
-      expect(right.hasAttribute('data-thread-search-host')).toBe(true)
+      expect(right.firstElementChild).toBe(floats)
+      expect(right.hasAttribute('data-thread-floats-host')).toBe(true)
+      const search = floats.querySelector<HTMLElement>('[data-testid="thread-search-button"]')!
+      expect(search.getAttribute('data-k2-float')).toBe('round')
+      expect(floats.querySelector('[data-testid="thread-view-identity"]')).not.toBeNull()
+      expect(floats.contains(await screen.findByTestId('workspace-completion-bell'))).toBe(true)
+      // The bar's right group: session and restart, no search or bell.
+      const rightGroup = bar.querySelector('[data-split-bar-group="right"]')!
+      expect(bar.querySelector('[data-testid="thread-search-button"], [data-testid="workspace-completion-bell"]')).toBeNull()
       const history = screen.getByLabelText('Switch pinned chat session')
       const refresh = screen.getByLabelText('Refresh chat session')
       expect(rightGroup.contains(history)).toBe(true)
       expect(rightGroup.contains(refresh)).toBe(true)
       expect(history.hasAttribute('data-k2-float')).toBe(false)
       expect(refresh.hasAttribute('data-k2-float')).toBe(false)
-      expect(search.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
       expect(history.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
       for (const label of ['Switch pinned chat session', 'Refresh chat session']) {
         expect(screen.getAllByLabelText(label)).toHaveLength(1)
       }
       expect(screen.getAllByTestId('thread-search-button')).toHaveLength(1)
+      expect(screen.getAllByTestId('workspace-completion-bell')).toHaveLength(1)
+      // Only the name is in both the bar and the Thread.
+      expect(screen.getAllByTestId('thread-view-identity')).toHaveLength(2)
       expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
-      // Ready, the mocked terminal draws no columns: the bar stays whole, with
-      // nothing to search.
+      // Ready, the mocked terminal draws no columns: the bar stays whole, and
+      // no Thread column means no floats.
       await act(async () => release())
       await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
       const after = screen.getByTestId('pinned-chat-header')

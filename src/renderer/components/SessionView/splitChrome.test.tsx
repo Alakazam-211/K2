@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-// Split view: one solid bar across both columns, in every side order, with
-// nothing floating over either column. The bar's search searches the Thread
-// side, else the Chatter side.
+// Split view: one solid bar across both columns, in every side order, and the
+// Thread's own objects (its picture and name, search and the bell) floating
+// on the Thread's column, else the Chatter's (no bell there).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 
@@ -17,7 +17,10 @@ vi.mock('@/kessel/daemon-ws', () => ({
   daemonWsBase: () => 'ws://127.0.0.1:1',
 }))
 vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({ AgentAvatar: () => null }))
-vi.mock('@/stores/connect-host', () => ({
+// The bar's and the floats' chain (home avatars, the host pool) reads other
+// connect-host exports at load, so keep the real ones.
+vi.mock('@/stores/connect-host', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/stores/connect-host')>()),
   useConnectHostStore: Object.assign(
     (sel: (s: { activeHost: 'local' }) => unknown) => sel({ activeHost: 'local' }),
     { getState: () => ({ activeHost: 'local' as const, hosts: [] }) },
@@ -53,8 +56,9 @@ import {
 import { SplitSessionColumns } from './SplitSessionColumns'
 import { useSessionViewChrome } from './sessionViewChrome'
 import { sessionViewSplitStorageKey, sessionViewTabStorageKey, type SessionViewTab, type SplitPaneView } from './sessionViewTab'
-import { CHATTER_VIEW_FLOATS, threadFloatShown, type ThreadFloatId } from './threadFloats'
-import { splitSearchKind, splitSearchSide } from './splitChrome'
+import { CHATTER_VIEW_FLOATS, SPLIT_VIEW_THREAD_FLOATS, THREAD_FLOATS_HOST_ATTR, threadFloatShown, type ThreadFloatId } from './threadFloats'
+import { splitFloatsKind, splitFloatsSide } from './splitChrome'
+import { splitColumnFloatShown } from './SplitColumnFloats'
 import { threadSearchState } from './threadSearch'
 import { createStore } from 'zustand/vanilla'
 import type { PresenceView } from '@/stores/server-view'
@@ -88,17 +92,32 @@ afterEach(() => {
 })
 
 describe('what each header draws', () => {
-  it("split view's bar: the view menu, picture and name, search, the bell, Token, session and restart", () => {
-    expect([...SPLIT_BAR_CONTROLS].sort()).toEqual(['bell', 'history', 'identity', 'refresh', 'search', 'token', 'view'])
+  it("split view's bar: the view menu, picture and name, Token, session and restart; no search or bell", () => {
+    expect([...SPLIT_BAR_CONTROLS].sort()).toEqual(['history', 'identity', 'refresh', 'token', 'view'])
+    expect(sessionHeaderShows('search', 'split')).toBe(false)
+    expect(sessionHeaderShows('bell', 'split')).toBe(false)
     // The drawers' selector stays in Thread view: split view picks its sides.
     expect(sessionHeaderShows('drawers', 'split')).toBe(false)
     expect(EVERY_FLOAT.filter((id) => sessionHeaderShows(id, 'split')).sort()).toEqual([...SPLIT_BAR_CONTROLS].sort())
   })
 
-  it("a new object is not on the split bar until it is listed", () => {
+  it("split view's Thread column: the picture and name, search and the bell; a Chatter column the same less the bell", () => {
+    expect([...SPLIT_VIEW_THREAD_FLOATS].sort()).toEqual(['bell', 'identity', 'search'])
+    expect(EVERY_FLOAT.filter((id) => threadFloatShown(id, 'split')).sort()).toEqual(['bell', 'identity', 'search'])
+    expect(EVERY_FLOAT.filter((id) => splitColumnFloatShown(id, 'thread')).sort()).toEqual(['bell', 'identity', 'search'])
+    expect(EVERY_FLOAT.filter((id) => splitColumnFloatShown(id, 'chatter')).sort()).toEqual(['identity', 'search'])
+    // The bar and the column share only the name: everything else is in one place.
+    for (const id of EVERY_FLOAT) {
+      if (id === 'identity') continue
+      expect(sessionHeaderShows(id, 'split') && threadFloatShown(id, 'split'), id).toBe(false)
+    }
+  })
+
+  it('a new object is in neither place until it is listed', () => {
     const added = 'a-new-button' as ThreadFloatId
     expect(sessionHeaderShows(added, 'thread')).toBe(true)
     expect(sessionHeaderShows(added, 'split')).toBe(false)
+    expect(threadFloatShown(added, 'split')).toBe(false)
   })
 
   it('Thread view shows every object; Chatter view its own list; Terminal view its bar', () => {
@@ -109,19 +128,19 @@ describe('what each header draws', () => {
     expect(EVERY_FLOAT.filter((id) => sessionHeaderShows(id, 'terminal')).sort()).toEqual([...BAR_CONTROLS].sort())
   })
 
-  it('search searches the first Thread side, else the first Chatter side, in any order', () => {
-    expect(splitSearchSide('split', 'thread', 'terminal')).toBe('left')
-    expect(splitSearchSide('split', 'terminal', 'thread')).toBe('right')
-    expect(splitSearchSide('split', 'chatter', 'thread')).toBe('right')
-    expect(splitSearchSide('split', 'thread', 'chatter')).toBe('left')
-    expect(splitSearchSide('split', 'thread', 'thread')).toBe('left')
-    expect(splitSearchSide('split', 'terminal', 'chatter')).toBe('right')
-    expect(splitSearchSide('split', 'chatter', 'terminal')).toBe('left')
-    expect(splitSearchSide('split', 'terminal', 'terminal')).toBeNull()
-    expect(splitSearchSide('chatter', 'terminal', 'chatter')).toBeNull()
-    expect(splitSearchKind('chatter', 'thread')).toBe('thread')
-    expect(splitSearchKind('chatter', 'terminal')).toBe('chatter')
-    expect(splitSearchKind('terminal', 'terminal')).toBeNull()
+  it('the floats column is the first Thread side, else the first Chatter side, in any order', () => {
+    expect(splitFloatsSide('split', 'thread', 'terminal')).toBe('left')
+    expect(splitFloatsSide('split', 'terminal', 'thread')).toBe('right')
+    expect(splitFloatsSide('split', 'chatter', 'thread')).toBe('right')
+    expect(splitFloatsSide('split', 'thread', 'chatter')).toBe('left')
+    expect(splitFloatsSide('split', 'thread', 'thread')).toBe('left')
+    expect(splitFloatsSide('split', 'terminal', 'chatter')).toBe('right')
+    expect(splitFloatsSide('split', 'chatter', 'terminal')).toBe('left')
+    expect(splitFloatsSide('split', 'terminal', 'terminal')).toBeNull()
+    expect(splitFloatsSide('chatter', 'terminal', 'chatter')).toBeNull()
+    expect(splitFloatsKind('chatter', 'thread')).toBe('thread')
+    expect(splitFloatsKind('chatter', 'terminal')).toBe('chatter')
+    expect(splitFloatsKind('terminal', 'terminal')).toBeNull()
   })
 
   it('the eye / pencil only with a terminal side, in split view', () => {
@@ -162,7 +181,7 @@ function header(viewTab: SessionViewTab, left: SplitPaneView = 'terminal', right
 }
 
 describe("the session header as split view's bar", () => {
-  it('is a solid bar, not floats: the view menu left, the name in the middle, the bell, Token and restart right', () => {
+  it('is a solid bar, not floats: the view menu left, the name in the middle, Token and restart right; no search or bell', () => {
     renderInRoom(room, header('split'))
     const h = screen.getByTestId('sidecar-session-header')
     expect(h.hasAttribute('data-split-bar')).toBe(true)
@@ -178,18 +197,17 @@ describe("the session header as split view's bar", () => {
     expect(left.querySelector('[data-testid="session-view-split-left"]')).not.toBeNull()
     expect(centre.querySelector('[data-testid="thread-view-identity"]')?.hasAttribute('data-compact')).toBe(true)
     expect(screen.queryByTestId('sidecar-session-title')).toBeNull()
-    const bell = screen.getByTestId('bell-stub')
     const token = screen.getByTestId('token-stub')
     const refresh = screen.getByLabelText('Refresh session')
-    for (const el of [bell, token, refresh]) expect(right.contains(el)).toBe(true)
+    for (const el of [token, refresh]) expect(right.contains(el)).toBe(true)
     expect(refresh.hasAttribute('data-k2-float')).toBe(false)
-    expect(bell.compareDocumentPosition(token) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(token.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Search and the bell belong to the Thread's column.
+    expect(screen.queryByTestId('bell-stub')).toBeNull()
+    expect(screen.queryByTestId('thread-search-button')).toBeNull()
     // Thread view's own objects stay there.
     expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
     expect(screen.queryByTestId('thread-drawer-selector')).toBeNull()
-    // No search until a column offers itself.
-    expect(screen.queryByTestId('thread-search-button')).toBeNull()
   })
 
   it('has the eye / pencil before Token with a terminal side, and not for Thread | Chatter', () => {
@@ -297,7 +315,7 @@ const column = (side: 'left' | 'right'): HTMLElement => screen.getByTestId(`sess
 
 describe('split view in a session, in every side order', () => {
   for (const [left, right] of ORDERS) {
-    it(`${left} | ${right}: one bar above both columns, each object once, nothing over a column`, async () => {
+    it(`${left} | ${right}: one bar above both columns; the Thread's objects on its column; each control once`, async () => {
       renderSplit({ left, right })
       const bars = document.querySelectorAll('[data-split-bar]')
       expect(bars).toHaveLength(1)
@@ -309,57 +327,64 @@ describe('split view in a session, in every side order', () => {
       expect(bar.compareDocumentPosition(cols) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
       expect(cols.contains(bar)).toBe(false)
       for (const side of ['left', 'right'] as const) {
-        const col = column(side)
-        expect(col.querySelector('[data-session-header], [data-thread-floats], [data-thread-float-scrim]')).toBeNull()
-        expect(col.hasAttribute('data-thread-floats-host')).toBe(false)
         // One row: a column never wraps under the terminal's.
-        expect(col.style.gridRow).toBe('1')
+        expect(column(side).style.gridRow).toBe('1')
+        expect(column(side).querySelector('[data-session-header]')).toBeNull()
       }
-      expect(document.querySelector('[data-thread-floats]')).toBeNull()
-      // The left group: the view menu and the side choosers.
+      // The bar: the view menu and side choosers, the name, then restart.
       const leftGroup = bar.querySelector('[data-split-bar-group="left"]')!
       expect(leftGroup.querySelector('[data-testid="session-view-button"]')?.textContent).toContain('Split view')
       expect(leftGroup.querySelector('[data-testid="session-view-split-left"]')?.getAttribute('aria-label')).toBe(
         `Left side ${left[0].toUpperCase()}${left.slice(1)}`,
       )
       expect(leftGroup.querySelector('[data-testid="session-view-split-right"]')).not.toBeNull()
-      // The middle: the picture and name.
       expect(bar.querySelector('[data-split-bar-centre] [data-testid="thread-view-identity"]')).not.toBeNull()
-      // The right group: search (with a Thread or Chatter side), the bell,
-      // the eye / pencil (with a terminal side), Token and restart, each once.
       const rightGroup = bar.querySelector('[data-split-bar-group="right"]')!
-      const bell = await screen.findByTestId('workspace-completion-bell')
-      expect(screen.getAllByTestId('workspace-completion-bell')).toHaveLength(1)
-      expect(rightGroup.contains(bell)).toBe(true)
-      expect(bell.hasAttribute('data-k2-float')).toBe(false)
-      expect(screen.getAllByLabelText('Refresh session')).toHaveLength(1)
       expect(rightGroup.contains(screen.getByLabelText('Refresh session'))).toBe(true)
-      const kind = splitSearchKind(left, right)
-      const searchButtons = screen.queryAllByTestId('thread-search-button')
+      expect(bar.querySelector('[data-testid="thread-search-button"], [data-testid="workspace-completion-bell"]')).toBeNull()
+      // The Thread's column (else the Chatter's) floats its own objects.
+      const kind = splitFloatsKind(left, right)
+      const allFloats = document.querySelectorAll<HTMLElement>('[data-thread-floats]')
       if (kind) {
-        expect(searchButtons).toHaveLength(1)
-        expect(rightGroup.contains(searchButtons[0])).toBe(true)
-        expect(searchButtons[0].hasAttribute('data-k2-float')).toBe(false)
-        expect(searchButtons[0].getAttribute('aria-label')).toBe(kind === 'thread' ? 'Search this Thread' : 'Search the Chatter')
-        expect(searchButtons[0].compareDocumentPosition(bell) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-        const side = splitSearchSide('split', left, right)!
-        expect(column(side).hasAttribute('data-thread-search-host')).toBe(true)
-        expect(column(side === 'left' ? 'right' : 'left').hasAttribute('data-thread-search-host')).toBe(false)
+        const side = splitFloatsSide('split', left, right)!
+        const col = column(side)
+        const other = column(side === 'left' ? 'right' : 'left')
+        expect(allFloats).toHaveLength(1)
+        const floats = allFloats[0]
+        expect(col.firstElementChild).toBe(floats)
+        expect(floats.getAttribute('data-split-column-floats')).toBe(kind)
+        expect(col.hasAttribute(THREAD_FLOATS_HOST_ATTR)).toBe(true)
+        expect(other.hasAttribute(THREAD_FLOATS_HOST_ATTR)).toBe(false)
+        expect(floats.querySelector('[data-testid="thread-view-identity"]')).not.toBeNull()
+        expect(floats.querySelector('[data-testid="thread-search-button"]')?.getAttribute('data-k2-float')).toBe('round')
+        if (kind === 'thread') {
+          const bell = await screen.findByTestId('workspace-completion-bell')
+          expect(floats.contains(bell)).toBe(true)
+          expect(bell.getAttribute('data-k2-float')).toBe('round')
+        }
+        // Nothing else of Thread view's floats.
+        expect(floats.querySelector('[data-testid="session-view-menu"], [data-testid="thread-drawer-selector"], [data-testid="chat-login-picker"]')).toBeNull()
+        expect(floats.querySelector('[aria-label="Refresh session"]')).toBeNull()
       } else {
-        expect(searchButtons).toHaveLength(0)
-        expect(document.querySelector('[data-thread-search-host]')).toBeNull()
+        expect(allFloats).toHaveLength(0)
+        expect(document.querySelector(`[${THREAD_FLOATS_HOST_ATTR}]`)).toBeNull()
       }
-      const mode = bar.querySelectorAll('[data-mode-toggle]')
-      expect(mode).toHaveLength(left === 'terminal' || right === 'terminal' ? 1 : 0)
+      // Each control once; only the name is in both the bar and the column.
+      expect(screen.queryAllByTestId('thread-search-button')).toHaveLength(kind ? 1 : 0)
+      await waitFor(() => expect(screen.queryAllByTestId('workspace-completion-bell')).toHaveLength(kind === 'thread' ? 1 : 0))
+      expect(screen.getAllByLabelText('Refresh session')).toHaveLength(1)
+      expect(bar.querySelectorAll('[data-mode-toggle]')).toHaveLength(left === 'terminal' || right === 'terminal' ? 1 : 0)
+      expect(document.querySelectorAll('[data-mode-toggle]')).toHaveLength(left === 'terminal' || right === 'terminal' ? 1 : 0)
+      expect(screen.getAllByTestId('thread-view-identity')).toHaveLength(kind ? 2 : 1)
       // Thread view's drawers never show in split view.
       expect(screen.queryByTestId('thread-drawer-selector')).toBeNull()
       expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
     })
   }
 
-  it('changing sides moves the search target with them', async () => {
+  it('changing sides moves the floats with the Thread', async () => {
     renderSplit({ left: 'thread', right: 'terminal' })
-    expect(column('left').hasAttribute('data-thread-search-host')).toBe(true)
+    expect(column('left').querySelector('[data-thread-floats]')).not.toBeNull()
     await act(async () => {
       fireEvent.click(screen.getByTestId('session-view-split-left'))
     })
@@ -369,9 +394,10 @@ describe('split view in a session, in every side order', () => {
       fireEvent.click(row)
     })
     await waitFor(() => expect(screen.getByTestId('session-view-menu').getAttribute('data-split-left')).toBe('terminal'))
-    // Terminal | Terminal: nothing to search.
+    // Terminal | Terminal: no floats, nothing to search.
+    expect(document.querySelector('[data-thread-floats]')).toBeNull()
     expect(screen.queryByTestId('thread-search-button')).toBeNull()
-    expect(document.querySelector('[data-thread-search-host]')).toBeNull()
+    expect(document.querySelector(`[${THREAD_FLOATS_HOST_ATTR}]`)).toBeNull()
   })
 
   it('picked from the bar, Thread view takes the header back as floats with all its objects', async () => {
@@ -389,6 +415,7 @@ describe('split view in a session, in every side order', () => {
     const h = screen.getByTestId('sidecar-session-header')
     expect(h.parentElement?.getAttribute('data-testid')).toBe('sidecar-session-chrome')
     expect(h.hasAttribute('data-thread-floats')).toBe(true)
+    expect(document.querySelectorAll('[data-thread-floats]')).toHaveLength(1)
     expect(screen.getByTestId('session-view-menu')).toBeTruthy()
     expect(screen.getByTestId('thread-terminal-toggle')).toBeTruthy()
     expect(screen.getByTestId('thread-panel-toggle-chatter')).toBeTruthy()
@@ -397,10 +424,10 @@ describe('split view in a session, in every side order', () => {
   })
 })
 
-describe("the split bar's search", () => {
+describe("the Thread column's search", () => {
   const searchOpen = (): boolean => screen.queryByTestId('thread-search-input') !== null
 
-  it('opens in the bar and searches the Thread column, with the Thread on either side', async () => {
+  it('opens in the column and searches it, with the Thread on either side', () => {
     for (const [left, right, side] of [
       ['thread', 'terminal', 'left'],
       ['terminal', 'thread', 'right'],
@@ -408,8 +435,8 @@ describe("the split bar's search", () => {
       renderSplit({ left, right })
       fireEvent.click(screen.getByTestId('thread-search-button'))
       const input = screen.getByTestId('thread-search-input')
-      expect(document.querySelector('[data-split-bar]')!.contains(input)).toBe(true)
-      expect(input.getAttribute('aria-label')).toBe('Search messages in this Thread')
+      expect(column(side).contains(input)).toBe(true)
+      expect(document.querySelector('[data-split-bar]')!.contains(input)).toBe(false)
       expect(threadSearchState(column(side)).open).toBe(true)
       expect(threadSearchState(column(side === 'left' ? 'right' : 'left')).open).toBe(false)
       cleanup()
@@ -420,21 +447,27 @@ describe("the split bar's search", () => {
   it('searches the Chatter when there is no Thread side', () => {
     renderSplit({ left: 'chatter', right: 'terminal' })
     fireEvent.click(screen.getByTestId('thread-search-button'))
-    expect(screen.getByTestId('thread-search-input').getAttribute('aria-label')).toBe('Search messages in the Chatter')
+    expect(column('left').contains(screen.getByTestId('thread-search-input'))).toBe(true)
     expect(threadSearchState(column('left')).open).toBe(true)
   })
 
-  it('⌘F opens it from the Thread, the Chatter or the bar; Esc closes it and returns to the button', async () => {
-    for (const from of ['thread-message', 'chatter-message', 'session-view-button']) {
-      renderSplit({ left: 'thread', right: 'chatter' })
-      fireEvent.keyDown(screen.getByTestId(from), { key: 'f', metaKey: true })
-      expect(searchOpen(), from).toBe(true)
+  it('⌘F opens it from the Thread; Esc closes it and returns to the button', () => {
+    for (const sides of [{ left: 'thread', right: 'terminal' }, { left: 'terminal', right: 'thread' }, { left: 'thread', right: 'chatter' }] as const) {
+      renderSplit(sides)
+      fireEvent.keyDown(screen.getByTestId('thread-message'), { key: 'f', metaKey: true })
+      expect(searchOpen()).toBe(true)
       fireEvent.keyDown(screen.getByTestId('thread-search-input'), { key: 'Escape' })
       expect(searchOpen()).toBe(false)
       expect(document.activeElement).toBe(screen.getByTestId('thread-search-button'))
       cleanup()
       localStorage.clear()
     }
+  })
+
+  it('⌘F from a Chatter column standing in for the Thread opens its search', () => {
+    renderSplit({ left: 'terminal', right: 'chatter' })
+    fireEvent.keyDown(screen.getByTestId('chatter-message'), { key: 'f', metaKey: true })
+    expect(searchOpen()).toBe(true)
   })
 
   it('never from the terminal: the terminal keeps the key, on either side', () => {
@@ -448,16 +481,15 @@ describe("the split bar's search", () => {
     }
   })
 
-  it('follows the bar left to right in the tab order: the view menu, the name, then search', () => {
+  it('tab order: the bar left to right, then the Thread column\'s objects, then the Thread', () => {
     renderSplit({ left: 'thread', right: 'terminal' })
     const order = Array.from(document.querySelectorAll<HTMLElement>('button, input, textarea')).map((e) => e.dataset.testid ?? e.getAttribute('aria-label'))
     const at = (id: string): number => order.indexOf(id)
     expect(at('session-view-button')).toBeLessThan(at('session-view-split-left'))
-    expect(at('session-view-split-right')).toBeLessThan(at('thread-search-button'))
-    expect(at('thread-search-button')).toBeLessThan(at('workspace-completion-bell'))
-    expect(at('workspace-completion-bell')).toBeLessThan(at('Refresh session'))
+    expect(at('session-view-split-right')).toBeLessThan(at('Refresh session'))
     // The bar comes before both columns, whatever their order.
-    expect(at('Refresh session')).toBeLessThan(at('thread-message'))
+    expect(at('Refresh session')).toBeLessThan(at('thread-search-button'))
+    expect(at('thread-search-button')).toBeLessThan(at('thread-message'))
     expect(at('Refresh session')).toBeLessThan(at('terminal-input'))
   })
 })
@@ -483,12 +515,12 @@ describe('narrow', () => {
     expect(bar.querySelector('[data-testid="thread-view-name"]')?.className).toContain('truncate')
   })
 
-  it('while searching short of room, the name and the other objects step aside, then the view menu', () => {
-    expect(css).toMatch(
-      /\[data-split-bar\]\[data-thread-searching\] :is\(\[data-split-bar-centre\], \[data-split-bar-group="right"\] > :not\(\[data-testid="thread-search"\]\)\) \{ display: none; \}/,
-    )
-    expect(css).toMatch(/\[data-split-bar\]\[data-thread-searching="tight"\] \[data-split-bar-group="left"\] \{ display: none; \}/)
-    // Thread view's search rules stay on Thread view's floats.
-    expect(css).toMatch(/:is\(\[data-thread-floats\]\[data-thread-searching\]\.grid, \[data-thread-floats\]\[data-thread-searching\] > \.grid\)/)
+  it("the column's floats are Thread view's, so its narrow rules apply (the name shortens; search takes the row)", () => {
+    renderSplit()
+    const floats = document.querySelector<HTMLElement>('[data-split-column-floats]')!
+    expect(floats.hasAttribute('data-thread-floats')).toBe(true)
+    expect(floats.className).toContain('grid-cols-[minmax(max-content,1fr)_minmax(0,auto)_minmax(max-content,1fr)]')
+    expect(floats.querySelector('[data-testid="thread-view-name"]')?.className).toContain('truncate')
+    expect(css).toMatch(/\[data-thread-searching="tight"\] \.thread-float-group > :not\(\[data-testid="thread-search"\]\) \{ display: none; \}/)
   })
 })

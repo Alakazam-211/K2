@@ -15,7 +15,7 @@ import { ThreadViewIdentity } from './ThreadViewIdentity'
 import { ThreadDrawerSelector } from './ThreadDrawerSelector'
 import type { ThreadPanelKind } from './threadPanels'
 import { ThreadFloatBell } from './ThreadFloatBell'
-import { ThreadFloatSearch, type SplitBarSearchTarget } from './ThreadFloatSearch'
+import { ThreadFloatSearch } from './ThreadFloatSearch'
 import {
   THREAD_FLOATS_GRID,
   ThreadFloatScrim,
@@ -25,13 +25,7 @@ import {
   type ThreadFloatId,
   type ThreadFloatsPlace,
 } from './threadFloats'
-import {
-  SPLIT_BAR_ATTR,
-  SplitSearchTargetContext,
-  splitSearchKind,
-  useSplitSearchTarget,
-  type SplitSearchOffer,
-} from './splitChrome'
+import { SPLIT_BAR_ATTR, SplitColumnFloatsContext, type SplitColumnFloatsSource } from './splitChrome'
 import { chatHarnessName } from './chatHarness'
 import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
@@ -106,7 +100,6 @@ export function AgentSessionChrome({
   } = useSessionViewTab(sessionKey, room.scope)
   // Reported by the TerminalPane below (its phase).
   const [terminalLive, setTerminalLive] = useState(false)
-  const splitSearch = useSplitSearchTarget()
   // The harness picks the Token control's provider below.
   const tokenProvider = chatHarnessName({ command, commandHint, provider })
   const [refreshing, setRefreshing] = useState(false)
@@ -114,6 +107,10 @@ export function AgentSessionChrome({
   const [nonce, setNonce] = useState(0)
   // The eye/pencil in any bar of this session reads who else is on it.
   const modeSession = useMemo<ModeToggleSession>(() => ({ path: cwd ?? null, room }), [cwd, room])
+  // The workspace's bell: Thread and Chatter views' floats, and split view's
+  // Thread column (with the picture and name and search).
+  const bell = useMemo(() => (cwd ? <ThreadFloatBell cwd={cwd} /> : null), [cwd])
+  const splitFloats = useSplitColumnFloats(title, addr, bell)
 
   const handleRefresh = useCallback(async () => {
     if (refreshing) return
@@ -193,8 +190,7 @@ export function AgentSessionChrome({
           threadScope={room.scope}
           onRefresh={() => void handleRefresh()}
           refreshing={refreshing}
-          splitSearch={splitBarSearch(viewTab, splitLeft, splitRight, splitSearch.host)}
-          bell={cwd ? <ThreadFloatBell cwd={cwd} floating={sessionFloatsPlace(viewTab) !== null} /> : null}
+          bell={bell}
           tokenPicker={
             tokenProvider && !room.readOnly ? (
               <SessionTokenPicker
@@ -220,9 +216,9 @@ export function AgentSessionChrome({
           </p>
         ) : null}
         <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
-          <SplitSearchTargetContext.Provider value={splitSearch.offer}>
+          <SplitColumnFloatsContext.Provider value={splitFloats}>
             <Remount key={nonce}>{children}</Remount>
-          </SplitSearchTargetContext.Provider>
+          </SplitColumnFloatsContext.Provider>
         </div>
       </div>
       </ModeToggleSessionContext.Provider>
@@ -247,15 +243,14 @@ export function barShowsModeToggle(viewTab: SessionViewTab, place: ThreadFloatsP
 }
 
 /** Split view's one bar across both columns (Rosson, 2026-11-10): the view
- *  menu and side choosers, the picture and name, search (when a side is a
- *  Thread or the Chatter), the bell, and Token, the session and restart.
- *  Neither column has objects of its own, so each appears once. The drawers'
- *  selector stays in Thread view: split view already picks its sides. */
+ *  menu and side choosers, the picture and name (also on the Thread, so it
+ *  shows with Chatter on both sides), and Token, the session and restart.
+ *  Search and the bell belong to the Thread: its column floats them
+ *  (SPLIT_VIEW_THREAD_FLOATS, SplitColumnFloats). The drawers' selector
+ *  stays in Thread view: split view already picks its sides. */
 export const SPLIT_BAR_CONTROLS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>([
   'view',
   'identity',
-  'search',
-  'bell',
   'token',
   'history',
   'refresh',
@@ -283,16 +278,9 @@ export function splitBarModeToggle(viewTab: SessionViewTab, left: SplitPaneView,
   return viewTab === 'split' && (left === 'terminal' || right === 'terminal')
 }
 
-/** The split bar's search: the column offered (`useSplitSearchTarget`), and
- *  what it shows. None outside split view, or with terminals only. */
-export function splitBarSearch(
-  viewTab: SessionViewTab,
-  left: SplitPaneView,
-  right: SplitPaneView,
-  host: HTMLElement | null,
-): SplitBarSearchTarget | null {
-  const kind = viewTab === 'split' ? splitSearchKind(left, right) : null
-  return kind && host ? { host, kind } : null
+/** What split view's floats column needs from the chrome (memoised). */
+export function useSplitColumnFloats(name: string, addr: string, bell: ReactNode): SplitColumnFloatsSource {
+  return useMemo(() => ({ name, addr, bell }), [name, addr, bell])
 }
 
 /** Split view's bar: Terminal view's bar (its height, rule and material),
@@ -326,7 +314,6 @@ export function SidecarSessionHeader({
   threadScope,
   threadPanel,
   onThreadPanel,
-  splitSearch = null,
 }: {
   title: string
   /** The Thread's address: Thread view's header reads the picture by it. */
@@ -352,9 +339,6 @@ export function SidecarSessionHeader({
   /** Thread view's Chatter / Heartbeats panel. No `onThreadPanel`: the drawer selector has the terminal only. */
   threadPanel?: ThreadPanelKind | null
   onThreadPanel?: (next: ThreadPanelKind | null) => void
-  /** Split view's bar: the column its search searches (`splitBarSearch`);
-   *  null hides search there. */
-  splitSearch?: SplitBarSearchTarget | null
 }): JSX.Element {
   const floating = sessionFloatsPlace(viewTab) !== null
   const splitBar = viewTab === 'split'
@@ -439,8 +423,6 @@ export function SidecarSessionHeader({
           data-split-bar-group={splitBar ? 'right' : undefined}
         >
         {barShowsModeToggle(viewTab, sessionFloatsPlace(viewTab)) ? <ModeToggle /> : null}
-        {splitBar && shows('search') && splitSearch ? <ThreadFloatSearch bar={splitSearch} /> : null}
-        {splitBar && shows('bell') ? bell : null}
         {splitBarModeToggle(viewTab, splitLeft, splitRight) ? <ModeToggle /> : null}
         {shows('token') ? tokenPicker : null}
         {shows('refresh') ? (
@@ -491,7 +473,7 @@ export function PinnedSessionBody({
   threadPanel,
   setThreadPanel,
   projectPath,
-  splitSearchOffer,
+  splitFloats,
   children,
 }: {
   viewTab: SessionViewTab
@@ -510,9 +492,8 @@ export function PinnedSessionBody({
   setThreadPanel?: (next: ThreadPanelKind | null) => void
   /** The workspace's path, for the Heartbeats panel. */
   projectPath?: string
-  /** Split view: the bar's search target, offered by the columns
-   *  (`useSplitSearchTarget`). */
-  splitSearchOffer?: SplitSearchOffer
+  /** Split view: what the Thread column's floats show (`useSplitColumnFloats`). */
+  splitFloats?: SplitColumnFloatsSource
   children: ReactNode
 }): JSX.Element {
   return (
@@ -533,7 +514,7 @@ export function PinnedSessionBody({
       }}
     >
       <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
-        <SplitSearchTargetContext.Provider value={splitSearchOffer ?? null}>{children}</SplitSearchTargetContext.Provider>
+        <SplitColumnFloatsContext.Provider value={splitFloats ?? null}>{children}</SplitColumnFloatsContext.Provider>
       </div>
     </SessionViewChromeContext.Provider>
   )

@@ -169,7 +169,7 @@ describe('agent chat tab header Token picker', () => {
     ['terminal', 'chatter'],
     ['chatter', 'thread'],
   ] as const) {
-    it(`in split view (${left} | ${right}) Token, search and restart are each on the bar once, in neither column (the bell: splitChrome.test.tsx)`, async () => {
+    it(`in split view (${left} | ${right}) Token and restart are on the bar once and in neither column; search once, on the Thread's (else the Chatter's) column (the bell: splitChrome.test.tsx)`, async () => {
       pins = []
       localStorage.setItem(sessionViewSplitStorageKey('local', 'conv-r'), JSON.stringify({ left, right }))
       const room = testRoom({ tabs: {}, presence: EMPTY_PRESENCE, projects: [PROJECT] })
@@ -202,17 +202,18 @@ describe('agent chat tab header Token picker', () => {
       expect(chip.hasAttribute('data-k2-float')).toBe(false)
       const refresh = within(bar).getByLabelText('Refresh session')
       expect(chip.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-      const once = [
-        ...screen.getAllByTestId('chat-login-picker'),
-        ...screen.getAllByLabelText('Refresh session'),
-        ...screen.getAllByTestId('thread-search-button'),
-      ]
-      expect(once).toHaveLength(3)
+      const once = [...screen.getAllByTestId('chat-login-picker'), ...screen.getAllByLabelText('Refresh session')]
+      expect(once).toHaveLength(2)
       for (const el of once) {
         expect(bar.contains(el)).toBe(true)
         expect(screen.getByTestId('session-split-left').contains(el)).toBe(false)
         expect(screen.getByTestId('session-split-right').contains(el)).toBe(false)
       }
+      const search = screen.getAllByTestId('thread-search-button')
+      expect(search).toHaveLength(1)
+      expect(bar.contains(search[0])).toBe(false)
+      const side = left === 'thread' || (left === 'chatter' && right !== 'thread') ? 'left' : 'right'
+      expect(screen.getByTestId(`session-split-${side}`).querySelector('[data-thread-floats]')?.contains(search[0])).toBe(true)
       localStorage.clear()
     })
   }

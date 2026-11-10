@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { SplitSessionColumns } from './SplitSessionColumns'
-import { SplitSearchTargetContext } from './splitChrome'
+
+// The picture and name read the room; here only where they go matters.
+vi.mock('./ThreadViewIdentity', () => ({ ThreadViewIdentity: () => <span data-testid="thread-view-identity" /> }))
+import { SplitColumnFloatsContext } from './splitChrome'
 import type { SplitPaneView } from './sessionViewTab'
 
 function Frame({
@@ -85,36 +88,30 @@ describe('SplitSessionColumns', () => {
     })
   }
 
-  it("offers the Thread column (else the Chatter's) as the bar's search target", () => {
-    const offered: Array<HTMLElement | null> = []
-    const offer = (el: HTMLElement | null): void => {
-      offered.push(el)
-    }
-    const { rerender } = render(
-      <SplitSearchTargetContext.Provider value={offer}>
-        <Frame showSplit left="chatter" right="thread" />
-      </SplitSearchTargetContext.Provider>,
+  it("draws the Thread's floating objects first in the Thread column, else the Chatter's", () => {
+    const source = { name: 'sales', addr: 'sales', bell: <button type="button" data-testid="bell" /> }
+    const frame = (left: SplitPaneView, right: SplitPaneView, showSplit = true) => (
+      <SplitColumnFloatsContext.Provider value={source}>
+        <Frame showSplit={showSplit} left={left} right={right} />
+      </SplitColumnFloatsContext.Provider>
     )
-    expect(offered.at(-1)).toBe(screen.getByTestId('session-split-right'))
-    expect(screen.getByTestId('session-split-right').hasAttribute('data-thread-search-host')).toBe(true)
-    expect(screen.getByTestId('session-split-left').hasAttribute('data-thread-search-host')).toBe(false)
-    rerender(
-      <SplitSearchTargetContext.Provider value={offer}>
-        <Frame showSplit left="chatter" right="terminal" />
-      </SplitSearchTargetContext.Provider>,
-    )
-    expect(offered.at(-1)).toBe(screen.getByTestId('session-split-left'))
-    rerender(
-      <SplitSearchTargetContext.Provider value={offer}>
-        <Frame showSplit={false} left="chatter" right="terminal" />
-      </SplitSearchTargetContext.Provider>,
-    )
-    expect(offered.at(-1)).toBeNull()
-    expect(document.querySelector('[data-thread-search-host]')).toBeNull()
+    const { rerender } = render(frame('chatter', 'thread'))
+    const floatsIn = (side: 'left' | 'right'): Element | null => screen.getByTestId(`session-split-${side}`).querySelector('[data-thread-floats]')
+    expect(screen.getByTestId('session-split-right').firstElementChild?.getAttribute('data-split-column-floats')).toBe('thread')
+    expect(floatsIn('left')).toBeNull()
+    expect(screen.getByTestId('bell')).toBeTruthy()
+    rerender(frame('chatter', 'terminal'))
+    expect(screen.getByTestId('session-split-left').firstElementChild?.getAttribute('data-split-column-floats')).toBe('chatter')
+    // Chatter view has no bell.
+    expect(screen.queryByTestId('bell')).toBeNull()
+    rerender(frame('terminal', 'terminal'))
+    expect(document.querySelector('[data-thread-floats]')).toBeNull()
+    rerender(frame('chatter', 'terminal', false))
+    expect(document.querySelector('[data-thread-floats]')).toBeNull()
   })
 
-  it('offers nothing outside a session chrome', () => {
+  it('draws none outside a session chrome', () => {
     render(<Frame showSplit left="thread" right="terminal" />)
-    expect(document.querySelector('[data-thread-search-host]')).toBeNull()
+    expect(document.querySelector('[data-thread-floats]')).toBeNull()
   })
 })

@@ -2,7 +2,8 @@ import { useMemo, useRef, type CSSProperties, type ReactNode, type RefObject } f
 import type { SplitPaneView } from './sessionViewTab'
 import { useTerminalRevealLayout, type TerminalReveal } from './threadReveal'
 import { useThreadFloatsClearOfTerminal } from './threadFloats'
-import { SPLIT_SEARCH_HOST_ATTR, splitSearchSide, useSplitSearchOffer } from './splitChrome'
+import { splitFloatsSide, useSplitColumnFloatsSource } from './splitChrome'
+import { SplitColumnFloats } from './SplitColumnFloats'
 
 /**
  * Split columns around one terminal node. That node stays the first child
@@ -19,11 +20,12 @@ import { SPLIT_SEARCH_HOST_ATTR, splitSearchSide, useSplitSearchOffer } from './
  * doesn't slide.
  *
  * In split view, the session chrome's one bar sits above both columns
- * (`splitChrome.tsx`); nothing is drawn over them. Under a chrome, the first
- * Thread column (else the first Chatter column) offers itself as the bar's
- * search target. Every split column is pinned to the grid's one row: the
- * terminal's node always comes first, and a column placed before it on the
- * left would otherwise wrap to a second row.
+ * (`splitChrome.tsx`). Under a chrome, the first Thread column (else the
+ * first Chatter column) draws the Thread's own floating objects, its picture
+ * and name, search and the bell (`SplitColumnFloats`), over its top. Every
+ * split column is pinned to the grid's one row: the terminal's node always
+ * comes first, and a column placed before it on the left would otherwise
+ * wrap to a second row.
  */
 export function SplitSessionColumns({
   showSplit,
@@ -96,12 +98,12 @@ export function SplitSessionColumns({
         ? 'right'
         : null
   const terminalShown = showSplit ? terminalSide !== null : !hidePty
-  const offerSearch = useSplitSearchOffer()
-  const searchSide = offerSearch ? splitSearchSide(showSplit ? 'split' : 'terminal', left, right) : null
-  // The column the chrome's bar searches: offered, and marked as the
-  // search's host so the Thread (or Chatter) inside finds the same search.
-  const searchTarget = (side: 'left' | 'right'): { ref?: (el: HTMLElement | null) => void } & Record<string, unknown> =>
-    searchSide === side && offerSearch ? { ref: offerSearch, [SPLIT_SEARCH_HOST_ATTR]: '' } : {}
+  const floatsSource = useSplitColumnFloatsSource()
+  const floatsSide = floatsSource ? splitFloatsSide(showSplit ? 'split' : 'terminal', left, right) : null
+  // The Thread's floating objects, first in their column (so first in its
+  // tab order), floating over it.
+  const floats = (side: 'left' | 'right', view: SplitPaneView): ReactNode =>
+    floatsSide === side && view !== 'terminal' ? <SplitColumnFloats kind={view} /> : null
   const terminalStyle: CSSProperties = {
     display: terminalShown || terminalRevealShown ? 'flex' : 'none',
     flexDirection: 'column',
@@ -164,23 +166,23 @@ export function SplitSessionColumns({
       ) : null}
       {showSplit && left !== 'terminal' ? (
         <div
-          {...searchTarget('left')}
           className="relative min-w-0 min-h-0 overflow-hidden flex flex-col"
           style={{ gridColumn: 1, gridRow: 1 }}
           data-testid="session-split-left"
           data-split-view={left}
         >
+          {floats('left', left)}
           {renderView(left)}
         </div>
       ) : null}
       {showSplit && right !== 'terminal' ? (
         <div
-          {...searchTarget('right')}
           className="relative min-w-0 min-h-0 overflow-hidden flex flex-col border-l border-[var(--color-border)]"
           style={{ gridColumn: 2, gridRow: 1 }}
           data-testid="session-split-right"
           data-split-view={right}
         >
+          {floats('right', right)}
           {renderView(right)}
         </div>
       ) : null}

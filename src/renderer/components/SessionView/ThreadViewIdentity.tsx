@@ -66,7 +66,9 @@ export function ThreadViewIdentity({ name, addr, bar = false }: { name: string; 
   // switching layouts can't feed back into this measure.
   useLayoutEffect(() => {
     if (bar) return
-    const header = rootRef.current?.closest('[data-session-header]')
+    // The floats' header: the session's (Thread and Chatter views) or split
+    // view's Thread column's own (SplitColumnFloats).
+    const header = rootRef.current?.closest('[data-thread-floats], [data-session-header]')
     const pane = header ? threadFloatsHostOf(header) : null
     if (!pane) return
     const measure = (): void => {

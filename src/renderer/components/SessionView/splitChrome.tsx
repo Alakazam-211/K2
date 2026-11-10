@@ -1,35 +1,42 @@
-import { createContext, useContext, useState } from 'react'
+import { createContext, useContext, type ReactNode } from 'react'
 import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
 
-// Split view has one solid bar across both columns, at the top of the pane,
-// and nothing floats over either column (Rosson, 2026-11-10). The bar is the
-// session's own header, drawn in place (AgentSessionChrome, ChatHeader): the
-// view menu and the side choosers on the left, the agent's picture and name
-// in the middle, and search, the bell, Token, the session and restart on the
-// right. Both columns start below it, in either order.
+// Split view: one solid bar across both columns at the top of the pane, and
+// the Thread's own objects in the Thread (Rosson, 2026-11-10).
 //
-// Search on the bar searches the Thread side, else the Chatter side. That
-// column (SplitSessionColumns) offers itself through this context and is
-// marked as the search's host (SPLIT_SEARCH_HOST_ATTR), so the pane inside
-// it and the bar's field share one search.
+// - The bar is the session's own header, drawn in place (AgentSessionChrome,
+//   ChatHeader): the view menu and the side choosers on the left; the
+//   eye/pencil (with a terminal side), Token, the session and restart on the
+//   right. Both columns start below it, in either order.
+// - The Thread's column keeps Thread view's floating objects that belong to
+//   the Thread: the agent's picture and name, search and the bell
+//   (SPLIT_VIEW_THREAD_FLOATS in threadFloats.tsx), drawn by the column
+//   itself (SplitColumnFloats). With no Thread side, the first Chatter
+//   column takes the picture and name and search (Chatter view has no bell).
+//
+// The chrome hands the column what it needs through this context: who the
+// agent is and the workspace's bell.
+
+export interface SplitColumnFloatsSource {
+  /** The agent's display name and its Thread's address (the picture). */
+  name: string
+  addr: string
+  /** The workspace's completion bell, as a floating object (null: none). */
+  bell: ReactNode
+}
+
+export const SplitColumnFloatsContext = createContext<SplitColumnFloatsSource | null>(null)
+
+export function useSplitColumnFloatsSource(): SplitColumnFloatsSource | null {
+  return useContext(SplitColumnFloatsContext)
+}
 
 /** On the split bar (the header in split view). */
 export const SPLIT_BAR_ATTR = 'data-split-bar'
-/** On the column the split bar's search searches. */
-export const SPLIT_SEARCH_HOST_ATTR = 'data-thread-search-host'
 
-/** What the column offers: itself, or null when it goes. */
-export type SplitSearchOffer = (el: HTMLElement | null) => void
-
-export const SplitSearchTargetContext = createContext<SplitSearchOffer | null>(null)
-
-export function useSplitSearchOffer(): SplitSearchOffer | null {
-  return useContext(SplitSearchTargetContext)
-}
-
-/** The side the split bar's search searches: the first Thread side, else the
- *  first Chatter side. Terminals only: none. */
-export function splitSearchSide(
+/** The column that carries the Thread's floating objects: the first Thread
+ *  side, else the first Chatter side. Terminals only: none. */
+export function splitFloatsSide(
   viewTab: SessionViewTab,
   left: SplitPaneView,
   right: SplitPaneView,
@@ -42,16 +49,9 @@ export function splitSearchSide(
   return null
 }
 
-/** What that side shows. */
-export function splitSearchKind(left: SplitPaneView, right: SplitPaneView): 'thread' | 'chatter' | null {
-  const side = splitSearchSide('split', left, right)
+/** What that column shows. */
+export function splitFloatsKind(left: SplitPaneView, right: SplitPaneView): 'thread' | 'chatter' | null {
+  const side = splitFloatsSide('split', left, right)
   if (!side) return null
   return (side === 'left' ? left : right) as 'thread' | 'chatter'
-}
-
-/** For the chrome: the offer to provide to the columns, and the column the
- *  bar's search searches once it is there (else null: no search). */
-export function useSplitSearchTarget(): { offer: SplitSearchOffer; host: HTMLElement | null } {
-  const [host, offer] = useState<HTMLElement | null>(null)
-  return { offer, host: host?.isConnected ? host : null }
 }

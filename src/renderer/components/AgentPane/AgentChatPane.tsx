@@ -39,7 +39,7 @@ import {
   sessionFloatsPlace,
   sessionHeaderShows,
   splitBarModeToggle,
-  splitBarSearch,
+  useSplitColumnFloats,
 } from '@/components/SessionView/AgentSessionChrome'
 import ModeToggle, { ModeToggleSessionContext, type ModeToggleSession } from '@/components/Presence/ModeToggle'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
@@ -51,9 +51,9 @@ import { useSessionViewTab } from '@/components/SessionView/useSessionViewTab'
 import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
 import { ThreadViewIdentity } from '@/components/SessionView/ThreadViewIdentity'
 import { ThreadFloatBell } from '@/components/SessionView/ThreadFloatBell'
-import { ThreadFloatSearch, type SplitBarSearchTarget } from '@/components/SessionView/ThreadFloatSearch'
+import { ThreadFloatSearch } from '@/components/SessionView/ThreadFloatSearch'
 import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, useThreadFloats, type ThreadFloatId } from '@/components/SessionView/threadFloats'
-import { SPLIT_BAR_ATTR, SplitSearchTargetContext, useSplitSearchTarget } from '@/components/SessionView/splitChrome'
+import { SPLIT_BAR_ATTR, SplitColumnFloatsContext } from '@/components/SessionView/splitChrome'
 import { ThreadDrawerSelector } from '@/components/SessionView/ThreadDrawerSelector'
 import type { ThreadPanelKind } from '@/components/SessionView/threadPanels'
 import { FolderTrustHoldPanel, useFolderTrustHold } from './FolderTrustHold'
@@ -241,9 +241,6 @@ interface ChatHeaderProps {
   onContinueNewChat: (source: ContinueNewChatSource) => void
   /** Workspace id = the pinned chat's session key (its Token picker). */
   projectId?: string
-  /** Split view's bar: the column its search searches (`splitBarSearch`);
-   *  null hides search there. */
-  splitSearch?: SplitBarSearchTarget | null
 }
 
 interface HistorySession {
@@ -278,7 +275,6 @@ function ChatHeader({
   pinnedProvider,
   onContinueNewChat,
   projectId,
-  splitSearch = null,
 }: ChatHeaderProps): React.JSX.Element {
   const room = useRoom()
   const [historySessions, setHistorySessions] = useState<HistorySession[]>([])
@@ -460,8 +456,6 @@ function ChatHeader({
         data-split-bar-group={splitBar ? 'right' : undefined}
       >
       {barShowsModeToggle(viewTab, sessionFloatsPlace(viewTab)) ? <ModeToggle /> : null}
-      {splitBar && shows('search') && splitSearch ? <ThreadFloatSearch bar={splitSearch} /> : null}
-      {splitBar && shows('bell') && projectId ? <ThreadFloatBell projectId={projectId} floating={false} /> : null}
       {splitBarModeToggle(viewTab, splitLeft, splitRight) ? <ModeToggle /> : null}
       {shows('token') && projectId && (
         <SessionTokenPicker
@@ -882,7 +876,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     threadPanel,
     setThreadPanel,
   } = useSessionViewTab(overlayConv, room.scope)
-  const splitSearch = useSplitSearchTarget()
+  // Split view's Thread column floats the picture and name, search and the
+  // workspace's bell (SplitColumnFloats).
+  const splitBell = useMemo(() => (projectId ? <ThreadFloatBell projectId={projectId} /> : null), [projectId])
   // research-remote-thread-load-v1 Fix 1: the pinned Chat's Thread answers
   // at the workspace handle, which the room's project list (the list a Home
   // row opened by) already has. Known: use it, no lookup round trip.
@@ -891,6 +887,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     (ps) => (ps.find((p) => p.id === projectId) ?? ps.find((p) => p.path === projectPath))?.handle?.trim() ?? '',
   )
   const [overlayAddr, setOverlayAddr] = useState(knownHandle)
+  const splitFloats = useSplitColumnFloats(displayName, overlayAddr, splitBell)
   useEffect(() => {
     if (knownHandle) {
       setOverlayAddr(knownHandle)
@@ -1253,7 +1250,6 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   const header = (
     <ModeToggleSessionContext.Provider value={modeSession}>
     <ChatHeader
-      splitSearch={splitBarSearch(viewTab, splitLeft, splitRight, splitSearch.host)}
       displayName={displayName}
       overlayAddr={overlayAddr}
       projectPath={projectPath}
@@ -1363,7 +1359,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       {continueDialog}
       <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
-        <SplitSearchTargetContext.Provider value={splitSearch.offer}>
+        <SplitColumnFloatsContext.Provider value={splitFloats}>
           <EnsuringThreadBody
             viewTab={viewTab}
             splitLeft={splitLeft}
@@ -1372,7 +1368,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
             conversationId={overlayConv}
             displayName={displayName}
           />
-        </SplitSearchTargetContext.Provider>
+        </SplitColumnFloatsContext.Provider>
       </div>
       </>
     )
@@ -1385,7 +1381,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
       {header}
       <PinnedSessionBody
-        splitSearchOffer={splitSearch.offer}
+        splitFloats={splitFloats}
         viewTab={viewTab}
         splitLeft={splitLeft}
         splitRight={splitRight}
@@ -1630,8 +1626,11 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     threadPanel,
     setThreadPanel,
   } = useSessionViewTab(overlayConv, room.scope)
-  const splitSearch = useSplitSearchTarget()
+  // Split view's Thread column floats the picture and name, search and the
+  // workspace's bell (SplitColumnFloats).
+  const splitBell = useMemo(() => (projectId ? <ThreadFloatBell projectId={projectId} /> : null), [projectId])
   const [overlayAddr, setOverlayAddr] = useState('')
+  const splitFloats = useSplitColumnFloats(displayName, overlayAddr, splitBell)
   useEffect(() => {
     let cancelled = false
     resolvePinnedChatCopyableAddress(room.scope, projectPath, projectId)
@@ -1922,7 +1921,6 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
   const header = (
     <ModeToggleSessionContext.Provider value={modeSession}>
     <ChatHeader
-      splitSearch={splitBarSearch(viewTab, splitLeft, splitRight, splitSearch.host)}
       displayName={displayName}
       overlayAddr={overlayAddr}
       projectPath={projectPath}
@@ -1996,7 +1994,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
       {header}
       <PinnedSessionBody
-        splitSearchOffer={splitSearch.offer}
+        splitFloats={splitFloats}
         viewTab={viewTab}
         splitLeft={splitLeft}
         splitRight={splitRight}

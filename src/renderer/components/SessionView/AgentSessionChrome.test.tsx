@@ -27,7 +27,10 @@ vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({
   AgentAvatar: () => null,
 }))
 
-vi.mock('@/stores/connect-host', () => ({
+// Split view's chain (home avatars, the host pool) reads other connect-host
+// exports at load, so keep the real ones.
+vi.mock('@/stores/connect-host', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/stores/connect-host')>()),
   // `getState` backs primaryScope()'s call-time getters (Home M1).
   useConnectHostStore: Object.assign(
     (sel: (s: { activeHost: 'local' }) => unknown) => sel({ activeHost: 'local' }),

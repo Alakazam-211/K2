@@ -14,13 +14,10 @@
 // scroll still work.
 //
 // The search object (header) and the Thread (pane) are siblings in one
-// pane: they share state through the pane's floats host element. In split
-// view the search sits on the bar above the columns, and the state lives on
-// the column it searches (SPLIT_SEARCH_HOST_ATTR, splitChrome.tsx).
+// pane: they share state through the pane's floats host element.
 
 import { useSyncExternalStore } from 'react'
 import { THREAD_FLOATS_HOST_ATTR, threadFloatsHostOf } from './threadFloats'
-import { SPLIT_SEARCH_HOST_ATTR } from './splitChrome'
 
 // ── Text ────────────────────────────────────────────────────────────────
 
@@ -260,13 +257,12 @@ export function subscribeThreadSearch(cb: () => void): () => void {
   }
 }
 
-/** The pane's floats host, from the header or from inside the Thread; in
- *  split view, the column the bar searches, from inside it. */
+/** The pane's floats host, from the header or from inside the Thread. */
 export function threadSearchHost(el: Element | null | undefined): HTMLElement | null {
   if (!el) return null
   const header = el.closest('[data-thread-floats]')
   if (header) return threadFloatsHostOf(header)
-  return el.closest<HTMLElement>(`[${THREAD_FLOATS_HOST_ATTR}], [${SPLIT_SEARCH_HOST_ATTR}]`)
+  return el.closest<HTMLElement>(`[${THREAD_FLOATS_HOST_ATTR}]`)
 }
 
 /** This pane's search state; `resolveHost` is read on every change. */

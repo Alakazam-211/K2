@@ -30,9 +30,10 @@ export const THREAD_FLOATS_GRID =
 export type ThreadFloatShape = 'round' | 'pill' | 'name' | 'note' | 'capsule'
 
 /** Where a pane's floating objects are drawn: over the Thread on its own
- *  (Thread view) or over the Chatter on its own (Chatter view). Split view
- *  has no floats: one bar across both columns (splitChrome.tsx). */
-export type ThreadFloatsPlace = 'thread' | 'chatter'
+ *  (Thread view), over the Chatter on its own (Chatter view), or over split
+ *  view's Thread column (else its Chatter column), under the bar that holds
+ *  the rest (splitChrome.tsx). */
+export type ThreadFloatsPlace = 'thread' | 'chatter' | 'split'
 
 /** Each floating object, by name. */
 export type ThreadFloatId =
@@ -45,6 +46,16 @@ export type ThreadFloatId =
   | 'token'
   | 'history'
   | 'refresh'
+
+/** The only objects split view's Thread column shows (Rosson, 2026-11-10:
+ *  "the agent name and image can stay in the thread like it was, same with
+ *  the search and the bell icon"): what belongs to the Thread. The view
+ *  menu, Token, the session and restart are on split view's bar; the
+ *  drawers' selector stays in Thread view (split view picks its sides). A
+ *  Chatter column standing in for the Thread shows these less what Chatter
+ *  view leaves out (the bell). An object not listed is hidden in split
+ *  view, so a new one needs no rule of its own. */
+export const SPLIT_VIEW_THREAD_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>(['identity', 'bell', 'search'])
 
 /** The only objects Chatter view shows (2026-11-10, "look nice like the
  *  rest of our threads"): Thread view's header without what belongs to the
@@ -64,7 +75,7 @@ export const CHATTER_VIEW_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFlo
 /** Whether `id` is drawn in `place`: Thread view shows them all. */
 export function threadFloatShown(id: ThreadFloatId, place: ThreadFloatsPlace): boolean {
   if (place === 'thread') return true
-  return CHATTER_VIEW_FLOATS.has(id)
+  return (place === 'chatter' ? CHATTER_VIEW_FLOATS : SPLIT_VIEW_THREAD_FLOATS).has(id)
 }
 
 /** A floating object: chamfered in Terminal, Frost in Glass. Off, it changes

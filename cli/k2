@@ -47681,7 +47681,7 @@ cmd_schema() {
     {
       "name": "project view",
       "usage": "k2 project view <project> [terminal|thread|chatter] [--json]",
-      "description": "Without a view: print the view the project's agents open in on its dashboards (new projects start on thread). With one: set it for everyone. Setting it is for the owner, an admin, or an agent with 'Manage K2 projects' on (a Member login: exit 1 forbidden; the switch off: exit 1 agent_permission_off). Anyone can still switch one agent for themselves with the picker in its bar, until they restart the app or this default changes. Any other view (split too) is exit 2, before the daemon is asked. Exit codes: 0 ok, 1 refused, 2 bad usage, 4 project not found or ambiguous.",
+      "description": "Without a view: print the view the project's agents open in on its dashboards (new projects start on thread). With one: set it for everyone. Setting it is for the owner, an admin, or an agent with 'Manage K2 projects' on (a Member login: exit 1 forbidden; the switch off: exit 1 agent_permission_off). Anyone can still switch one agent for themselves with the picker in its bar, until they restart the app or this default changes (then it goes back to the project's default). Reading needs no permission. Any other view (split, for one) is exit 2, code usage, before the daemon is asked (so before any permission check). Exit codes: 0 ok, 1 refused, 2 bad usage, 4 project not found or ambiguous.",
       "args": [{"name": "project", "required": true}, {"name": "view", "required": false}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output ({ok,project,defaultView})."}]
     },
@@ -69424,7 +69424,7 @@ COMMANDS
   pin <project> [on|off]         Show it in everyone's Pinned section (default on)
   view <project> [<view>]        Print or set the view the project's agents
                                  open in: terminal, thread or chatter
-  delete <project> --yes        Delete a project with its dashboards and chat
+  delete <project> --yes         Delete a project with its dashboards and chat
                                  (owner or admin only; agents can't)
   list                           List this server's projects (members, PoC, pinned)
   show <project>                 One project: members, PoC, last few messages
@@ -69448,9 +69448,8 @@ WHO MAY CHANGE PROJECTS
   projects and add or remove members. Deleting a project (and its chat) and
   setting the view its agents open in (`view`) are for the owner, an admin,
   or an agent with "Manage K2 projects" on: a Member login gets exit 1 with
-  code forbidden. Each workspace has a
-  per-agent switch,
-  "Manage K2 projects" (Settings → Workspaces → <ws> → Agent, or
+  code forbidden. Each workspace has that per-agent switch, "Manage K2
+  projects" (on by default; Settings → Workspaces → <ws> → Agent, or
   `k2 project access`). Off: that agent gets exit 1 with code
   agent_permission_off on every change, but `list`, `show`, `read` and `msg`
   still work. Only the owner or an admin can flip it; an agent never can.
@@ -69570,11 +69569,17 @@ projects start on thread.
 
 Anyone can switch one agent with the view picker in its bar. That switch
 is only for them, and it ends when they restart the app or when this
-default changes.
+default changes; the agent then goes back to the project's default view.
 
-With no <view>, prints the current default. Setting it is for the owner, an
-admin, or an agent with "Manage K2 projects" on. A Member login gets exit 1
-with code forbidden; an agent with the switch off gets agent_permission_off.
+With no <view>, prints the current default, like this:
+  sales opens agents in: thread
+Anyone may read it; no permission is needed. After a set it prints:
+  sales now opens agents in: terminal
+
+Setting it is for the owner, an admin, or an agent with "Manage K2
+projects" on (on by default). A Member login gets exit 1 with code
+forbidden; an agent with the switch off gets exit 1 with code
+agent_permission_off.
 
 USAGE
   k2 project view <project> [terminal|thread|chatter] [--json]
@@ -69583,7 +69588,9 @@ VIEWS
   thread       The agent's Thread: you and the agent, like a text chat (default)
   terminal     The agent's live terminal
   chatter      Messages between this agent and other agents
-  There is no split view for a project: any other view is exit 2.
+  There is no split view for a project. Any other view (split, for one) is
+  refused with exit 2, code usage, before the daemon is asked, so before
+  any permission check.
 
 FLAGS
   --json       JSON output: {"ok":true,"project":"sales","defaultView":"thread"}

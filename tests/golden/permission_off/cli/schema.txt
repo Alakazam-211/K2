@@ -908,7 +908,7 @@ exit: 0
     {
       "name": "project view",
       "usage": "k2 project view <project> [terminal|thread|chatter] [--json]",
-      "description": "Without a view: print the view the project's agents open in on its dashboards (new projects start on thread). With one: set it for everyone. Setting it is for the owner, an admin, or an agent with 'Manage K2 projects' on (a Member login: exit 1 forbidden; the switch off: exit 1 agent_permission_off). Anyone can still switch one agent for themselves with the picker in its bar, until they restart the app or this default changes. Any other view (split too) is exit 2, before the daemon is asked. Exit codes: 0 ok, 1 refused, 2 bad usage, 4 project not found or ambiguous.",
+      "description": "Without a view: print the view the project's agents open in on its dashboards (new projects start on thread). With one: set it for everyone. Setting it is for the owner, an admin, or an agent with 'Manage K2 projects' on (a Member login: exit 1 forbidden; the switch off: exit 1 agent_permission_off). Anyone can still switch one agent for themselves with the picker in its bar, until they restart the app or this default changes (then it goes back to the project's default). Reading needs no permission. Any other view (split, for one) is exit 2, code usage, before the daemon is asked (so before any permission check). Exit codes: 0 ok, 1 refused, 2 bad usage, 4 project not found or ambiguous.",
       "args": [{"name": "project", "required": true}, {"name": "view", "required": false}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output ({ok,project,defaultView})."}]
     },

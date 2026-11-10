@@ -52,14 +52,23 @@ nodaemon() { env HOME="$HOME2" K2_PORT=1 K2_HOOK_TOKEN=test-token "$K2_CLI" "$@"
 pj_help="$(nodaemon project --help)"
 assert_contains "project help lists view" "$pj_help" "view <project> [<view>]        Print or set the view the project's agents"
 assert_contains "project help names the views" "$pj_help" "open in: terminal, thread or chatter"
+assert_contains "project help: switch default" "$pj_help" "projects\" (on by default; Settings"
+assert_contains "project help: switch sentence is one line" "$pj_help" "code forbidden. Each workspace has that per-agent switch, \"Manage K2"
 assert_contains "project help: view is admin" "$pj_help" "setting the view its agents open in (\`view\`) are for the owner, an admin,"
 view_help="$(nodaemon project view --help)"
 assert_contains "view help usage" "$view_help" "k2 project view <project> [terminal|thread|chatter] [--json]"
 assert_contains "view help default" "$view_help" "New
 projects start on thread."
-assert_contains "view help member" "$view_help" "A Member login gets exit 1
-with code forbidden"
-assert_contains "view help no split" "$view_help" "There is no split view for a project: any other view is exit 2."
+assert_contains "view help member" "$view_help" "A Member login gets exit 1 with code
+forbidden"
+assert_contains "view help no split" "$view_help" "Any other view (split, for one) is
+  refused with exit 2, code usage, before the daemon is asked"
+assert_contains "view help: switch falls back" "$view_help" "the agent then goes back to the project's default view."
+assert_contains "view help: reading is open" "$view_help" "Anyone may read it; no permission is needed."
+assert_contains "view help: switch default" "$view_help" "projects\" on (on by default)"
+# The example lines in the help are the real output (checked below).
+assert_contains "view help: print example" "$view_help" "  sales opens agents in: thread"
+assert_contains "view help: set example" "$view_help" "  sales now opens agents in: terminal"
 assert_contains "view help exit codes" "$view_help" "0 ok · 1 refused · 2 bad usage (an unknown view) · 4 project not found or ambiguous"
 assert_eq "view -h is the same text" "$(nodaemon project view sales -h)" "$view_help"
 schema_row="$(nodaemon --schema | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps([c for c in d["commands"] if c["name"]=="project view"]))')"

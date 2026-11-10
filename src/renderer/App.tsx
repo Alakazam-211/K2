@@ -67,7 +67,7 @@ import { startStashSync } from './lib/prompt-stash/sync'
 import { PageLiveContext } from './contexts/TabVisibilityContext'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { applyCmdL } from './stores/server-switcher'
-import { useTabsStore, initApiSandboxTabAdoption, initOpenUrlBrowserTabs, initOpenChangesTabs, initOpenMobileTabs } from './stores/tabs'
+import { useTabsStore, initApiSandboxTabAdoption, initOpenUrlBrowserTabs, initOpenChangesTabs, initOpenMobileTabs, initOpenDesktopTabs } from './stores/tabs'
 import { menuNewTab } from './lib/menu-new-tab'
 import { primaryRoom } from './stores/room'
 import { focusedRoom, installRoomFocusTracking } from './stores/window-room'
@@ -460,6 +460,9 @@ function AppRoot(): React.JSX.Element {
     const offOpenChanges = initOpenChangesTabs()
     // prd-mobile-dev-v1 M-A10 `k2 sim boot`: open the Mobile tab the same way.
     const offOpenMobile = initOpenMobileTabs()
+    // prd-remote-desktop-tab-v1 §5 `k2 desktop open`: the client it names
+    // opens (or focuses) its Desktop tab.
+    const offOpenDesktop = initOpenDesktopTabs()
     const offHostChange = onActiveHostChange(() => {
       // Host flipped: tear down the old host's WS, open one against the
       // new host, and pull its snapshot. onActiveHostChange fires AFTER
@@ -475,6 +478,7 @@ function AppRoot(): React.JSX.Element {
       offOpenUrl()
       offOpenChanges()
       offOpenMobile()
+      offOpenDesktop()
       unsub()
     }
   }, [])

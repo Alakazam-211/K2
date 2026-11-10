@@ -48,6 +48,7 @@ import {
   onOpenUrl,
   onOpenChanges,
   onOpenMobile,
+  onOpenDesktop,
   onceRecovered,
   type SessionAddedEvent,
   type SessionRemovedEvent,
@@ -76,6 +77,13 @@ import {
   type MobileItemData,
   type SerializedMobileItem,
 } from '@/components/Mobile/mobile-serialize'
+import {
+  desktopDataFromSerializedBrowser,
+  serializeDesktopItem,
+  type DesktopItemData,
+  type SerializedDesktopItem,
+} from '@/components/Desktop/desktop-serialize'
+import { DESKTOP_FEATURE, openDesktopIsForMe } from '@/components/Desktop/desktop-state'
 import { takeSessionRemoved } from '@/lib/sidecar-refresh-tab'
 import {
   EMPTY_SERIALIZED_LAYOUT,
@@ -620,9 +628,15 @@ export type { DesignItemData, SerializedDesignItem }
  *  is the daemon's (one sim session per workspace), never in here. */
 export type { MobileItemData, SerializedMobileItem }
 
+/** Desktop tab (prd-remote-desktop-tab-v1 §8): this server machine's
+ *  screen (`console`). Saved as an empty Browser item plus a `desktop`
+ *  marker. Not per workspace: the tab dials the server that owns the
+ *  workspace whose strip holds it (vs-live R22). */
+export type { DesktopItemData, SerializedDesktopItem }
+
 export interface Item {
   id: string
-  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes' | 'design' | 'mobile'
+  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes' | 'design' | 'mobile' | 'desktop'
   data:
     | TerminalItemData
     | FileViewerItemData
@@ -631,6 +645,7 @@ export interface Item {
     | ChangesItemData
     | DesignItemData
     | MobileItemData
+    | DesktopItemData
   pinned?: boolean
 }
 
@@ -1022,9 +1037,23 @@ export interface TabsState {
    *  (any column) is focused; else a NEW one opens in column `groupIndex`
    *  (0 / omitted = primary). Returns its tab id. */
   openMobileTab: (groupIndex?: number) => string
+  /** Desktop tab (prd-remote-desktop-tab-v1 §8, + menu → Desktop (Beta),
+   *  `open_desktop`): one machine per server, so an open Desktop tab (any
+   *  column) is focused; else a NEW one opens in column `groupIndex`
+   *  (0 / omitted = primary). `displayId` is the display to ask for first.
+   *  Returns its tab id. */
+  openDesktopTab: (groupIndex?: number, displayId?: string) => string
   /** Remember the device profile a Mobile tab last picked (its chooser's
    *  default next time). A same-value stamp changes nothing. */
   setMobileItemDevice: (tabId: string, paneGroupId: string, itemId: string, deviceType: string) => void
+  /** Stamp a Desktop item's view choices (display, fit, view only) so they
+   *  survive a restore. A same-value stamp changes nothing (no save). */
+  setDesktopItemState: (
+    tabId: string,
+    paneGroupId: string,
+    itemId: string,
+    patch: Partial<Omit<DesktopItemData, 'desktopId'>>,
+  ) => void
   /** Keep the room's pinned Design tab in line with the workspace's
    *  "Design mode" setting (late decision Q-F2): on → exactly one
    *  `isPinnedDesign` tab after Chat and Inbox (created when missing); off →
@@ -1322,6 +1351,10 @@ function serializeTab(tab: Tab): SerializedTab {
       } else if (item.type === 'mobile') {
         // M-A7: the same guard; an older client shows an empty Browser tab.
         return serializeMobileItem(item.id, item.data as MobileItemData)
+      } else if (item.type === 'desktop') {
+        // Remote desktop §8: the same guard; an older client shows an
+        // empty Browser tab.
+        return serializeDesktopItem(item.id, item.data as DesktopItemData)
       } else if (item.type === 'changes') {
         const d = item.data as ChangesItemData
         const out: SerializedChangesItem = {
@@ -1583,6 +1616,9 @@ function restoreSerializedItem(
       live?.type === 'browser' || live?.type === 'design'
         ? (live.data as BrowserItemData | DesignItemData).navSeq
         : undefined
+    // A Browser item carrying the `desktop` marker is a Desktop tab (§8).
+    const desktop = desktopDataFromSerializedBrowser(si)
+    if (desktop) return { id, type: 'desktop' as const, data: desktop }
     // A Browser item carrying the `mobile` marker is a Mobile tab (M-A7).
     const mobile = mobileDataFromSerializedBrowser(si)
     if (mobile) return { id, type: 'mobile' as const, data: mobile }
@@ -1887,6 +1923,37 @@ function makeMobileTab(data: MobileItemData = {}, extra: Partial<Tab> = {}): Tab
     ]),
     ...extra,
   }
+}
+
+/** A new Desktop tab (title "Desktop", one Desktop item; §8). */
+function makeDesktopTab(data: DesktopItemData = { desktopId: 'console' }, extra: Partial<Tab> = {}): Tab {
+  const paneGroupId = crypto.randomUUID()
+  return {
+    id: crypto.randomUUID(),
+    title: 'Desktop',
+    mosaicTree: paneGroupId,
+    paneGroups: new Map([
+      [paneGroupId, { id: paneGroupId, items: [{ id: crypto.randomUUID(), type: 'desktop', data }], activeItemIndex: 0 }],
+    ]),
+    ...extra,
+  }
+}
+
+/** The room's Desktop tab in its live strips (one machine per server), or
+ *  null. */
+export function findDesktopTab(state: {
+  tabs: Tab[]
+  extraGroups: Array<{ tabs: Tab[]; activeTabId: string | null }>
+}): { groupIndex: number; tabId: string } | null {
+  const columns = [state.tabs, ...state.extraGroups.map((g) => g.tabs)]
+  for (let gi = 0; gi < columns.length; gi++) {
+    for (const tab of columns[gi]) {
+      for (const pg of tab.paneGroups.values()) {
+        if (pg.items.some((item) => item.type === 'desktop')) return { groupIndex: gi, tabId: tab.id }
+      }
+    }
+  }
+  return null
 }
 
 /** The room's Mobile tab in its live strips (one device per workspace, so
@@ -2619,6 +2686,11 @@ export interface TabsRoomApi {
    *  daemon's `open_mobile` names a workspace this room shows (`k2 sim
    *  boot`). Wired like `initOpenChangesTabs`. */
   initOpenMobileTabs(): UnsubscribeFn
+  /** prd-remote-desktop-tab-v1 §5: open (or focus) the Desktop tab when the
+   *  daemon's `open_desktop` names this client (`for`: its login username,
+   *  or `owner` for this computer's app). The primary room is wired from
+   *  App.tsx. */
+  initOpenDesktopTabs(): UnsubscribeFn
   /** Primary only: add a file tab to another workspace's layout without
    *  showing it (a Thread link's Option/Alt-click). Daemon-first: reads the
    *  stored layout with its revision, appends the tab, saves it with that
@@ -5013,6 +5085,18 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       return tab.id
     },
 
+    openDesktopTab: (groupIndex?: number, displayId?: string) => {
+      const existing = findDesktopTab(get())
+      if (existing) {
+        get().setActiveTabInGroup(existing.groupIndex, existing.tabId)
+        get().setActiveGroup(existing.groupIndex)
+        return existing.tabId
+      }
+      const tab = makeDesktopTab({ desktopId: 'console', ...(displayId ? { displayId } : {}) })
+      set((state) => placedTab(state, groupIndex ?? 0, tab))
+      return tab.id
+    },
+
     setMobileItemDevice: (tabId, paneGroupId, itemId, deviceType) => {
       set((state) => {
         let changed = false
@@ -5034,6 +5118,36 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
           })
         const tabs = stamp(state.tabs)
         const extraGroups = changed ? state.extraGroups : state.extraGroups.map((g) => ({ ...g, tabs: stamp(g.tabs) }))
+        if (!changed) return {}
+        return { tabs, extraGroups }
+      })
+    },
+
+    setDesktopItemState: (tabId, paneGroupId, itemId, patch) => {
+      set((state) => {
+        let changed = false
+        const stamp = (tabs: Tab[]): Tab[] =>
+          tabs.map((tab) => {
+            if (tab.id !== tabId) return tab
+            const pg = tab.paneGroups.get(paneGroupId)
+            if (!pg) return tab
+            let mine = false
+            const items = pg.items.map((item) => {
+              if (item.id !== itemId || item.type !== 'desktop') return item
+              const prev = item.data as DesktopItemData
+              const next: DesktopItemData = { ...prev, ...patch, desktopId: 'console' }
+              if (next.displayId === prev.displayId && next.fit === prev.fit && next.viewOnly === prev.viewOnly) return item
+              mine = true
+              return { ...item, data: next }
+            })
+            if (!mine) return tab
+            changed = true
+            const paneGroups = new Map(tab.paneGroups)
+            paneGroups.set(paneGroupId, { ...pg, items })
+            return { ...tab, paneGroups }
+          })
+        const tabs = stamp(state.tabs)
+        const extraGroups = state.extraGroups.map((g) => ({ ...g, tabs: stamp(g.tabs) }))
         if (!changed) return {}
         return { tabs, extraGroups }
       })
@@ -7824,6 +7938,21 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     })
   }
 
+  function initOpenDesktopTabs(): UnsubscribeFn {
+    return onOpenDesktop(scope, (e) => {
+      // A server without the routes never shows a Desktop tab.
+      if (!scope.serverSupports(DESKTOP_FEATURE)) return
+      if (!openDesktopIsForMe(e.for, scope.isRemote, scope.connectHost()?.username, e.owners)) return
+      try {
+        const st = store.getState()
+        const display = typeof e.display === 'string' && e.display ? e.display : undefined
+        st.openDesktopTab(st.activeGroupIndex, display)
+      } catch (err) {
+        console.warn('[tabs] open_desktop tab surface failed:', err)
+      }
+    })
+  }
+
   /** Fetch the daemon-canonical tab titles for a project and apply them to
    *  the surfaced tabs (hydrate labels from the daemon on workspace load +
    *  on reconnect). No-op for tab ids not currently surfaced. Best-effort:
@@ -8240,6 +8369,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     initOpenUrlBrowserTabs,
     initOpenChangesTabs,
     initOpenMobileTabs,
+    initOpenDesktopTabs,
     parkFileTab,
     resetForHostSwitch,
     open,
@@ -8315,6 +8445,11 @@ export function initOpenChangesTabs(): UnsubscribeFn {
 /** Primary room: `open_mobile` → the Mobile tab (App.tsx, at boot). */
 export function initOpenMobileTabs(): UnsubscribeFn {
   return useTabsStore.room.initOpenMobileTabs()
+}
+
+/** Primary room: `open_desktop` → the Desktop tab (App.tsx, at boot). */
+export function initOpenDesktopTabs(): UnsubscribeFn {
+  return useTabsStore.room.initOpenDesktopTabs()
 }
 
 /** Primary room: #625 server-switch reset (tests drive it directly). */

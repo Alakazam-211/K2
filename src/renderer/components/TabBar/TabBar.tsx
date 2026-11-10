@@ -50,6 +50,7 @@ import { cachedChangesMenuState, probeChangesMenuState, type ChangesMenuState } 
 import { PinnedTabMark } from '@/components/TabBar/TabPin'
 import { clampTabDropIndex, isPinnedFeatureTab, isPinnedMobileTab, isPinnedTab } from '@/lib/pinned-tabs'
 import { FEATURE_ICONS } from '@/components/icons/feature-icons'
+import { MonitorIcon } from '@/components/icons/K2Icons'
 import { isDesignModeEnabled } from '@/components/Design/design-mode-setting'
 import { mobileTabSetting, type PinnedTabKind } from '@/lib/workspace-tab-settings'
 import { writePinnedTab } from '@/components/Settings/pinned-tab-settings'
@@ -117,6 +118,7 @@ export function buildPlusMenuItems(
   changes: ChangesMenuState = 'checking',
   mobile = false,
   board = false,
+  desktop = false,
 ): ContextMenuItemDef[] {
   const enabled = presets.filter((p) => p.enabled !== 0)
   const items: ContextMenuItemDef[] = [
@@ -136,6 +138,9 @@ export function buildPlusMenuItems(
       shortcut: (combo && metaChordLabel(combo)) || undefined,
     })
   }
+  // prd-remote-desktop-tab-v1 §8: this server machine's screen, while the
+  // server lists `remote-desktop-v1` (an older daemon has no routes).
+  if (desktop) items.push({ id: 'desktop', label: 'Desktop', badge: 'Beta', icon: <MonitorIcon size={14} /> })
   items.push(changesMenuItem(changes))
   if (enabled.length === 0) return items
   items.push({ id: 'plus-presets-sep', label: '', type: 'separator' })
@@ -467,6 +472,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     // Mobile shows only when the room's server can run a device (M-A13):
     // a box with no lane never shows a dead tab.
     const mobile = room.scope.serverSupports('mobile-sim-v1')
+    // Desktop shows only when the room's server has the routes.
+    const desktop = room.scope.serverSupports('remote-desktop-v1')
     // The Board row: a server that lists the feature (never a guess while its list isn't known: the feature is dark
     // behind `board_file_preview`), where this login may create, and not the web client (no frame there).
     const board = !isWebClient() && reportedSupports(room.scope.hostKey, 'board-file-v1') && scopeMayWrite(room.scope, 'board/file/create')
@@ -487,7 +494,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       shown = optionHeld
       shownChanges = changesState
       useContextMenuStore.getState().replaceItems(
-        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, mobile, board),
+        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, mobile, board, desktop),
       )
     }
     probeChangesMenuState(room.scope, barCwd).then(
@@ -541,7 +548,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       window.removeEventListener('blur', onBlur)
     }
     try {
-      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, mobile, board)
+      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, mobile, board, desktop)
       const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
       if (!picked) return
       if (picked === 'terminal') {
@@ -580,6 +587,11 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       if (picked === 'mobile') {
         // One device per workspace: focus its Mobile tab, or open one.
         room.tabs.getState().openMobileTab(group)
+        return
+      }
+      if (picked === 'desktop') {
+        // One machine per server: focus its Desktop tab, or open one.
+        room.tabs.getState().openDesktopTab(group)
         return
       }
       if (picked === 'changes') {
@@ -1375,6 +1387,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     icon = <FEATURE_ICONS.design size={14} />
                   } else if (items.some((item) => item.type === 'mobile')) {
                     icon = <FEATURE_ICONS.mobile size={14} />
+                  } else if (items.some((item) => item.type === 'desktop')) {
+                    icon = <MonitorIcon size={14} />
                   } else if (items.some((item) => item.type === 'browser')) {
                     // After file and terminal. A mixed tab never reaches here.
                     const browser = items.find((item) => item.type === 'browser')

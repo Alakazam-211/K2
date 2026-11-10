@@ -7,9 +7,10 @@ import { BrowserPane } from '@/components/BrowserPane/BrowserPane'
 import { ChangesPane } from '@/components/Changes/ChangesPane'
 import { DesignPane } from '@/components/Design/DesignPane'
 import { MobilePane } from '@/components/Mobile/MobilePane'
+import { DesktopPane } from '@/components/Desktop/DesktopPane'
 import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
 import { workingAgentInPane } from '@/lib/room-close-guard'
-import type { TerminalItemData, FileViewerItemData, AgentItemData, BrowserItemData, ChangesItemData, DesignItemData, MobileItemData } from '@/stores/tabs'
+import type { TerminalItemData, FileViewerItemData, AgentItemData, BrowserItemData, ChangesItemData, DesignItemData, MobileItemData, DesktopItemData } from '@/stores/tabs'
 import { useActiveAgentsStore, type ActiveAgent } from '@/stores/active-agents'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import { PaneTabBar } from './PaneTabBar'
@@ -395,6 +396,17 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                   tabId={tabId}
                   paneGroupId={paneGroupId}
                   data={item.data as MobileItemData}
+                />
+              )
+            } else if (item.type === 'desktop') {
+              // Desktop tab (prd-remote-desktop-tab-v1 §8): this server
+              // machine's screen on a canvas (D7b), no native child.
+              content = (
+                <DesktopPane
+                  itemId={item.id}
+                  tabId={tabId}
+                  paneGroupId={paneGroupId}
+                  data={item.data as DesktopItemData}
                 />
               )
             } else if (item.type === 'changes') {

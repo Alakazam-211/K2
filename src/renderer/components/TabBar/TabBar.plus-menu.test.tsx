@@ -333,6 +333,32 @@ describe('tab bar plus menu', () => {
     post.mockRestore()
   })
 
+  it('the Desktop row (Beta): only on a server with remote-desktop-v1; it opens one Desktop tab and then focuses it', async () => {
+    usePresetsStore.setState({ presets: [] })
+    seedTabs(0, 1)
+    renderBar(0)
+    await openPlus()
+    expect(useContextMenuStore.getState().items.map((i) => i.id)).not.toContain('desktop')
+    await act(async () => useContextMenuStore.getState().close())
+
+    noteServerVersion(LOCAL_HOME_HOST, null, ['mobile-sim-v1', 'remote-desktop-v1'])
+    await openPlus()
+    const items = useContextMenuStore.getState().items
+    expect(items.map((i) => i.label)).toEqual(['Terminal', 'New File', 'Browser', 'Design', 'Mobile', 'Desktop', 'Changes'])
+    expect(items.find((i) => i.id === 'desktop')?.badge).toBe('Beta')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Desktop/ }))
+    })
+    const desktops = (): number =>
+      useTabsStore.getState().tabs.filter((t) => [...t.paneGroups.values()].some((pg) => pg.items.some((it) => it.type === 'desktop'))).length
+    expect(desktops()).toBe(1)
+    await openPlus()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Desktop/ }))
+    })
+    expect(desktops()).toBe(1)
+  })
+
   it('the Board row is in the first list, not only after a repaint: a second open with the changes state cached keeps it', async () => {
     // Rosson 2026-11-04: no Board in the + menu. The first `show` left the row
     // out and only a repaint (Option, or the git probe moving the changes

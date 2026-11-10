@@ -85,6 +85,11 @@ export const REPORTED_FEATURES = {
    *  no tab, so no box shows a dead tab. `GET /cli/sim/status` lists the
    *  lanes. */
   'mobile-sim-v1': 'mobile-sim-v1',
+  /** prd-remote-desktop-tab-v1 §5 (0.46.11): the `/cli/desktop/*` routes
+   *  exist (`desktop_state`, `open_desktop`). Without it the + menu has no
+   *  Desktop, Settings has no Remote Desktop page, and a saved Desktop tab
+   *  says to update K2 on that computer instead of dialling. */
+  'remote-desktop-v1': 'remote-desktop-v1',
   /** thread-read-v1 (0.46.1): per-person unread counts for Threads and
    *  project chats. `GET /cli/thread/unread`, `POST /cli/thread/read`,
    *  `POST /cli/project-group/read`, `POST /cli/thread/mute`, the

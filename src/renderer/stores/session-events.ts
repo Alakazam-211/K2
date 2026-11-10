@@ -722,6 +722,32 @@ export interface SimHoldEvent {
   hold: unknown
 }
 
+/** APP-LEVEL — Remote desktop (prd-remote-desktop-tab-v1 §5): the switch,
+ *  the machine's state or the viewer count changed. Settings → Remote
+ *  Desktop and every Desktop tab on that server re-read
+ *  `GET /cli/desktop/status`. */
+export interface DesktopStateEvent {
+  kind: 'desktop_state'
+  desktop: string
+  enabled: boolean
+  state: string
+  viewers: number
+}
+
+/** APP-LEVEL — `k2 desktop open`: the client whose identity on that server
+ *  is `for` (its login's username, or `owner` for this computer's own app)
+ *  opens (or focuses) a Desktop tab. */
+export interface OpenDesktopEvent {
+  kind: 'open_desktop'
+  desktop: string
+  display: string | null
+  for: string
+  /** With `for: "owner"` (the owner token or a K2 shell tab asked): the
+   *  Owner logins, so the Owner watching that shell tab from another
+   *  device opens it too. */
+  owners?: string[]
+}
+
 /** APP-LEVEL — this computer's Zen files changed (prd-zen-mode-v1 Z12).
  *  Payload-free: the Zen store re-reads `GET /cli/zen/get` from the LOCAL
  *  daemon. Nothing about the file rides the frame. */
@@ -959,6 +985,8 @@ export type SessionEventMessage =
   | GitNotesChangedEvent
   | OpenChangesEvent
   | OpenMobileEvent
+  | DesktopStateEvent
+  | OpenDesktopEvent
   | SimStateEvent
   | SimHoldEvent
   | ZenChangedEvent
@@ -1463,6 +1491,8 @@ type GitChangedHandler = (e: GitChangedEvent) => void
 type GitNotesChangedHandler = (e: GitNotesChangedEvent) => void
 type OpenChangesHandler = (e: OpenChangesEvent) => void
 type OpenMobileHandler = (e: OpenMobileEvent) => void
+type DesktopStateHandler = (e: DesktopStateEvent) => void
+type OpenDesktopHandler = (e: OpenDesktopEvent) => void
 type SimChangedHandler = (e: SimStateEvent | SimHoldEvent) => void
 // Home 0.43.2 (Q7) — Settings → Email's refetch signal (`reason` unwrapped,
 // the onFeedbackChanged idiom).
@@ -1535,6 +1565,8 @@ interface AppBusHandlers {
   gitNotesChanged: Set<GitNotesChangedHandler>
   openChanges: Set<OpenChangesHandler>
   openMobile: Set<OpenMobileHandler>
+  desktopState: Set<DesktopStateHandler>
+  openDesktop: Set<OpenDesktopHandler>
   simChanged: Set<SimChangedHandler>
   mailChanged: Set<MailChangedHandler>
   sewChanged: Set<SewChangedHandler>
@@ -1598,6 +1630,8 @@ function createBusState(scopeId: string): BusState {
       gitNotesChanged: new Set(),
       openChanges: new Set(),
       openMobile: new Set(),
+      desktopState: new Set(),
+      openDesktop: new Set(),
       simChanged: new Set(),
       mailChanged: new Set(),
       sewChanged: new Set(),
@@ -1926,6 +1960,19 @@ export function onOpenMobile(scope: ServerScope, fn: OpenMobileHandler): Unsubsc
   return addHandler(busFor(scope).handlers.openMobile, fn)
 }
 
+/** prd-remote-desktop-tab-v1 — subscribe to APP-LEVEL `desktop_state` on
+ *  `scope`'s server (Desktop tabs and Settings re-read desktop/status). */
+export function onDesktopState(scope: ServerScope, fn: DesktopStateHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.desktopState, fn)
+}
+
+/** prd-remote-desktop-tab-v1 — subscribe to APP-LEVEL `open_desktop`
+ *  (`k2 desktop open`) on `scope`'s server. The tabs store acts only when
+ *  `for` names this client. */
+export function onOpenDesktop(scope: ServerScope, fn: OpenDesktopHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.openDesktop, fn)
+}
+
 /** prd-mobile-dev-v1 — subscribe to APP-LEVEL `sim_state` and `sim_hold` on
  *  `scope`'s server (the Mobile tab re-reads its device's status). */
 export function onSimChanged(scope: ServerScope, fn: SimChangedHandler): UnsubscribeFn {
@@ -2177,6 +2224,12 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   open_mobile: (h, m) => {
     for (const fn of h.openMobile) fn(m)
+  },
+  desktop_state: (h, m) => {
+    for (const fn of h.desktopState) fn(m)
+  },
+  open_desktop: (h, m) => {
+    for (const fn of h.openDesktop) fn(m)
   },
   sim_state: (h, m) => {
     for (const fn of h.simChanged) fn(m)

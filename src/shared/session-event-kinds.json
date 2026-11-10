@@ -44,6 +44,8 @@
   "sim_state": "app",
   "open_mobile": "app",
   "sim_hold": "app",
+  "desktop_state": "app",
+  "open_desktop": "app",
   "thread_read": "app",
   "project_read": "app",
   "zen_changed": "app",

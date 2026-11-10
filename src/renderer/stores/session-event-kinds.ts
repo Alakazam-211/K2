@@ -143,6 +143,11 @@ export const SESSION_EVENT_ROUTES = {
   // prd-mobile-dev-v1 M-A10 `k2 sim boot`: a window whose room shows the
   // workspace opens its Mobile tab. Carried like open_changes.
   open_mobile: { class: 'app', app: true, carried: true },
+  // prd-remote-desktop-tab-v1 §5: the switch / state / viewer count changed
+  // (Desktop tabs and Settings re-read desktop/status), and `k2 desktop
+  // open` (the named client opens a Desktop tab). Carried like open_mobile.
+  desktop_state: { class: 'app', app: true, carried: true },
+  open_desktop: { class: 'app', app: true, carried: true },
   // prd-mobile-dev-v1: a device's state / hold changed; a Mobile tab
   // showing that workspace re-reads sim/status. Carried like open_mobile.
   sim_state: { class: 'app', app: true, carried: true },

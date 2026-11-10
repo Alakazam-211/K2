@@ -11,6 +11,7 @@ import { isAgentPtyTerminalItem } from '@/lib/chat-session-tab'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { beginBrowserMotion } from '@/lib/browser-overlay'
 import { FEATURE_ICONS } from '@/components/icons/feature-icons'
+import { MonitorIcon } from '@/components/icons/K2Icons'
 import { useStore } from 'zustand'
 import { TAB_SLOT_PX, TabSlotRest, terminalsStatus, type StatusTerminal } from '@/components/TabBar/TabStatus'
 
@@ -49,10 +50,15 @@ interface MobileItemData {
   deviceType?: string
 }
 
+/** Desktop tab (prd-remote-desktop-tab-v1 §8): the machine's `console`. */
+interface DesktopItemData {
+  desktopId: 'console'
+}
+
 interface Item {
   id: string
-  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes' | 'design' | 'mobile'
-  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData | MobileItemData | { workspacePath: string }
+  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes' | 'design' | 'mobile' | 'desktop'
+  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData | MobileItemData | DesktopItemData | { workspacePath: string }
   pinned?: boolean
 }
 
@@ -83,6 +89,9 @@ function getTabLabel(item: Item): string {
   }
   if (item.type === 'mobile') {
     return 'Mobile'
+  }
+  if (item.type === 'desktop') {
+    return 'Desktop'
   }
   if (item.type === 'browser') {
     const data = item.data as BrowserItemData
@@ -120,6 +129,9 @@ function paneItemIcon(item: Item): React.JSX.Element | null {
   }
   if (item.type === 'mobile') {
     return <FEATURE_ICONS.mobile size={14} />
+  }
+  if (item.type === 'desktop') {
+    return <MonitorIcon size={14} />
   }
   return null
 }

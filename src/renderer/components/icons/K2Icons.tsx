@@ -388,6 +388,18 @@ export function SmartphoneOffIcon(props: K2IconProps = {}): React.JSX.Element {
   )
 }
 
+/** The Desktop tab and its + menu entry (prd-remote-desktop-tab-v1 §8):
+ *  Lucide `monitor`, squared (no corner radius). */
+export function MonitorIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('monitor', props)}>
+      <rect width="20" height="14" x="2" y="3" />
+      <path d="M8 21h8" />
+      <path d="M12 17v4" />
+    </svg>
+  )
+}
+
 // ── Mobile tab device toolbar (prd-mobile-dev-v1 §2.2) ─────────────────
 // The Mobile tab and its + menu entry reuse `SmartphoneIcon` (M-A8). These
 // are the toolbar's own controls, Lucide glyphs squared like the rest.

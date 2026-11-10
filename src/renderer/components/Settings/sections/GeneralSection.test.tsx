@@ -11,6 +11,8 @@ const tauri = vi.hoisted(() => ({
   calls: [] as string[],
   cli: { installed: true, installedVersion: '0.46.11', bundledVersion: '0.46.11', updateAvailable: false } as Record<string, unknown>,
   daemon: { state: 'running', version: '0.46.11', uptime_secs: 3600, pid: 42, port: 7777 } as Record<string, unknown>,
+  /** cmd → [what it returns, the cli status after it]. */
+  cliActions: {} as Record<string, [unknown, Record<string, unknown>]>,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -18,6 +20,11 @@ vi.mock('@tauri-apps/api/core', () => ({
     tauri.calls.push(cmd)
     if (cmd === 'get_current_version') return '0.46.11'
     if (cmd === 'cli_install_status') return tauri.cli
+    if (cmd in tauri.cliActions) {
+      const [result, after] = tauri.cliActions[cmd]
+      tauri.cli = after
+      return result
+    }
     if (cmd === 'daemon_status') return tauri.daemon
     if (cmd === 'daemon_restart') return null
     return null
@@ -55,6 +62,7 @@ const reset = vi.fn(async () => {})
 beforeEach(() => {
   tauri.calls = []
   tauri.cli = { installed: true, installedVersion: '0.46.11', bundledVersion: '0.46.11', updateAvailable: false }
+  tauri.cliActions = {}
   tauri.daemon = { state: 'running', version: '0.46.11', uptime_secs: 3600, pid: 42, port: 7777 }
   confirm.mockReset().mockResolvedValue(true)
   reset.mockReset().mockResolvedValue(undefined)
@@ -96,6 +104,101 @@ describe('Settings → General', () => {
     const install = await within(row('general.cli-version')).findByRole('button', { name: 'Install' })
     expect(install.className).not.toContain('accent-fill')
     expect(within(row('general.app-version')).queryByRole('button', { name: 'Check for updates' })).toBeNull()
+  })
+
+  // 0.46.11: k2 in a new Terminal window with no admin (k2_client::cli_install).
+  const home = '/Users/pat'
+  const pathStatus = (over: Record<string, unknown>) => ({
+    userBin: `${home}/.local/bin`,
+    shell: '/bin/zsh',
+    startupFile: `${home}/.zprofile`,
+    blockPresent: false,
+    onLoginPath: false,
+    newTerminalsRun: null,
+    newTerminalsFindIt: false,
+    optedOut: false,
+    ...over,
+  })
+  const installedMac = (over: Record<string, unknown> = {}) => ({
+    installed: true,
+    installedVersion: '0.46.11',
+    bundledVersion: '0.46.11',
+    updateAvailable: false,
+    symlinkPath: `${home}/.local/bin/k2`,
+    systemLinkPath: '/usr/local/bin/k2',
+    systemLink: { state: 'missing' },
+    path: pathStatus({ blockPresent: true, newTerminalsRun: `${home}/.local/bin/k2`, newTerminalsFindIt: true }),
+    ...over,
+  })
+
+  it('Install puts k2 in ~/.local/bin with no admin and says new Terminal windows will find it', async () => {
+    tauri.cli = { installed: false, installedVersion: null, bundledVersion: '0.46.11', updateAvailable: false, systemLink: { state: 'missing' }, path: pathStatus({}) }
+    tauri.cliActions = { cli_install: [`${home}/.local/bin/k2`, installedMac()] }
+    render(<GeneralSection />)
+    const install = await within(row('general.cli-version')).findByRole('button', { name: 'Install' })
+    await act(async () => {
+      fireEvent.click(install)
+    })
+    expect(tauri.calls).toContain('cli_install')
+    expect(tauri.calls).not.toContain('cli_install_system')
+    await waitFor(() =>
+      expect(row('general.cli-version').textContent).toContain(
+        "It's at ~/.local/bin/k2. New Terminal windows will find it: K2 added a PATH line to ~/.zprofile. Windows that are already open won't.",
+      ),
+    )
+    expect(useToastStore.getState().toasts.map((t) => t.message)).toContain(
+      'Installed the k2 command (0.46.11) at ~/.local/bin/k2. Open a new Terminal window to use it.',
+    )
+  })
+
+  it('the admin install in /usr/local/bin is an optional extra, never the Install button', async () => {
+    tauri.cli = installedMac()
+    tauri.cliActions = { cli_install_system: ['/usr/local/bin/k2', installedMac({ systemLink: { state: 'current' } })] }
+    render(<GeneralSection />)
+    const extra = await within(row('general.cli-version')).findByRole('button', { name: 'Also install in /usr/local/bin' })
+    expect(extra.className).not.toContain('accent-fill')
+    expect(within(row('general.cli-version')).queryByRole('button', { name: 'Install' })).toBeNull()
+    await act(async () => {
+      fireEvent.click(extra)
+    })
+    expect(tauri.calls).toContain('cli_install_system')
+    await waitFor(() =>
+      expect(within(row('general.cli-version')).queryByRole('button', { name: 'Also install in /usr/local/bin' })).toBeNull(),
+    )
+  })
+
+  it('Remove the PATH line undoes only the block, then offers to add it back', async () => {
+    tauri.cli = installedMac()
+    tauri.cliActions = {
+      cli_remove_path_block: [
+        [`${home}/.zprofile`],
+        installedMac({ path: pathStatus({ optedOut: true }) }),
+      ],
+    }
+    render(<GeneralSection />)
+    const remove = await within(row('general.cli-version')).findByRole('button', { name: 'Remove the PATH line' })
+    await act(async () => {
+      fireEvent.click(remove)
+    })
+    expect(tauri.calls).toContain('cli_remove_path_block')
+    await waitFor(() => expect(row('general.cli-version').textContent).toContain("New Terminal windows won't find it: you removed K2's PATH line."))
+    expect(useToastStore.getState().toasts.map((t) => t.message)).toContain(
+      "Removed K2's PATH line from ~/.zprofile. Only the lines between its markers changed.",
+    )
+    expect(within(row('general.cli-version')).queryByRole('button', { name: 'Remove the PATH line' })).toBeNull()
+    expect(within(row('general.cli-version')).getByRole('button', { name: 'Add the PATH line' })).toBeTruthy()
+  })
+
+  it('a k2 that was already on PATH needs no PATH line', async () => {
+    tauri.cli = installedMac({
+      symlinkPath: '/usr/local/bin/k2',
+      systemLink: { state: 'current' },
+      path: pathStatus({ newTerminalsRun: '/usr/local/bin/k2', newTerminalsFindIt: true }),
+    })
+    render(<GeneralSection />)
+    await waitFor(() => expect(row('general.cli-version').textContent).toContain("It's at /usr/local/bin/k2. New Terminal windows find it."))
+    expect(within(row('general.cli-version')).queryByRole('button', { name: 'Remove the PATH line' })).toBeNull()
+    expect(within(row('general.cli-version')).queryByRole('button', { name: 'Add the PATH line' })).toBeNull()
   })
 
   it('a failed update names the failure and offers Try again and the release page', () => {

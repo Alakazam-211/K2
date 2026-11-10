@@ -562,12 +562,37 @@ function AutoUpdateChecksRow(): React.JSX.Element {
 // other servers message every agent" and covers federated agents only;
 // people who log in can always message agents.
 
+/** What sits at a `k2` link path (k2_client::cli_install::LinkState). */
+interface CliLinkState {
+  state: 'missing' | 'current' | 'stale' | 'foreign'
+  target?: string
+  what?: string
+}
+
+/** Whether a new Terminal window finds `k2` (k2_client::cli_install::PathStatus). */
+interface CliPathStatus {
+  userBin: string
+  shell: string
+  startupFile: string | null
+  blockPresent: boolean
+  onLoginPath: boolean | null
+  newTerminalsRun: string | null
+  newTerminalsFindIt: boolean
+  optedOut: boolean
+}
+
 interface CliStatus {
   installed: boolean
   installedVersion: string | null
   bundledVersion: string | null
   updateAvailable: boolean
   packageManaged?: boolean
+  /** Where `k2` is (what a new Terminal window runs, else K2's own link). */
+  symlinkPath?: string
+  /** macOS: `/usr/local/bin/k2`, the optional admin install. */
+  systemLinkPath?: string
+  systemLink?: CliLinkState | null
+  path?: CliPathStatus | null
 }
 
 // Compare versions properly — only show update if bundled is actually newer
@@ -583,11 +608,35 @@ function compareVersions(a: string, b: string): number {
   return 0
 }
 
+/** `/Users/x/.zprofile` → `~/.zprofile`, from `userBin` (`<home>/.local/bin`). */
+function tildePath(path: string, userBin: string | undefined): string {
+  const home = userBin?.endsWith('/.local/bin') ? userBin.slice(0, -'/.local/bin'.length) : null
+  if (home && (path === home || path.startsWith(`${home}/`))) return `~${path.slice(home.length)}`
+  return path
+}
+
+/** The sentence about new Terminal windows (the PATH line only reaches new ones). */
+function cliPathSentence(status: CliStatus): string | null {
+  const p = status.path
+  if (!p) return null
+  const file = p.startupFile ? tildePath(p.startupFile, p.userBin) : null
+  if (p.newTerminalsFindIt) {
+    if (p.blockPresent && p.onLoginPath !== true && file) {
+      return `New Terminal windows will find it: K2 added a PATH line to ${file}. Windows that are already open won't.`
+    }
+    return 'New Terminal windows find it.'
+  }
+  if (!status.installed) return null
+  if (p.optedOut) return "New Terminal windows won't find it: you removed K2's PATH line."
+  if (!file) return `New Terminal windows won't find it: K2 can't set PATH for ${p.shell}. Add ${p.userBin} to your PATH.`
+  return "New Terminal windows won't find it yet."
+}
+
 function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
   const [status, setStatus] = useState<CliStatus | null>(null)
   const [readError, setReadError] = useState<string | null>(null)
   const [installError, setInstallError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState<'install' | 'path' | 'remove' | 'system' | null>(null)
 
   const checkStatus = useCallback(async (): Promise<CliStatus | null> => {
     try {
@@ -612,24 +661,55 @@ function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
     !!status.installedVersion &&
     compareVersions(status.bundledVersion, status.installedVersion) > 0
 
-  const handleInstallOrUpdate = useCallback(async () => {
+  const userBin = status?.path?.userBin
+  const run = useCallback(
+    async (kind: 'install' | 'path' | 'remove' | 'system', cmd: string, done: (next: CliStatus | null, result: unknown) => string) => {
+      setLoading(kind)
+      setInstallError(null)
+      try {
+        const result = await invoke(cmd)
+        const next = await checkStatus()
+        useToastStore.getState().addToast(done(next, result), 'success', 5000)
+      } catch (err) {
+        console.error('[cli]', err)
+        setInstallError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setLoading(null)
+      }
+    },
+    [checkStatus],
+  )
+
+  const handleInstallOrUpdate = useCallback(() => {
     const wasInstalled = !!status?.installed
-    setLoading(true)
-    setInstallError(null)
-    try {
-      await invoke('cli_install')
-      const next = await checkStatus()
+    void run('install', 'cli_install', (next, result) => {
       const v = next?.installedVersion ? ` (${next.installedVersion})` : ''
-      useToastStore
-        .getState()
-        .addToast(wasInstalled ? `Updated the k2 command${v}.` : `Installed the k2 command${v}.`, 'success', 4000)
-    } catch (err) {
-      console.error('[cli]', err)
-      setInstallError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setLoading(false)
-    }
-  }, [checkStatus, status?.installed])
+      const at = typeof result === 'string' && result ? ` at ${tildePath(result, next?.path?.userBin)}` : ''
+      if (wasInstalled) return `Updated the k2 command${v}.`
+      const tail = next?.path && !next.path.onLoginPath && next.path.blockPresent ? ' Open a new Terminal window to use it.' : ''
+      return `Installed the k2 command${v}${at}.${tail}`
+    })
+  }, [run, status?.installed])
+
+  const handleAddPathLine = useCallback(() => {
+    void run('path', 'cli_install', (next) =>
+      next?.path?.startupFile
+        ? `Added K2's PATH line to ${tildePath(next.path.startupFile, next.path.userBin)}. Open a new Terminal window to use k2.`
+        : 'Added the k2 command to your PATH. Open a new Terminal window to use it.',
+    )
+  }, [run])
+
+  const handleRemovePathLine = useCallback(() => {
+    void run('remove', 'cli_remove_path_block', (_next, result) => {
+      const files = Array.isArray(result) ? (result as string[]).map((f) => tildePath(f, userBin)) : []
+      const from = files.length ? ` from ${files.join(', ')}` : ''
+      return `Removed K2's PATH line${from}. Only the lines between its markers changed.`
+    })
+  }, [run, userBin])
+
+  const handleSystemInstall = useCallback(() => {
+    void run('system', 'cli_install_system', () => `Installed the k2 command in /usr/local/bin.`)
+  }, [run])
 
   const hint = (() => {
     const lead = 'Runs K2 from a terminal; agents use it too.'
@@ -637,10 +717,38 @@ function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
     if (!status) return `${lead} Checking…`
     if (!status.installed) return `${lead} Not installed.`
     const v = `Version ${status.installedVersion || 'unknown'} installed.`
-    if (status.packageManaged) return `${lead} ${v} It updates with K2's package.`
-    if (updateAvailable) return `${lead} ${v} ${status.bundledVersion} is ready to install.`
-    return `${lead} ${v}`
+    const where = status.symlinkPath ? ` It's at ${tildePath(status.symlinkPath, userBin)}.` : ''
+    const pathLine = cliPathSentence(status)
+    const tail = `${where}${pathLine ? ` ${pathLine}` : ''}`
+    if (status.packageManaged) return `${lead} ${v} It updates with K2's package.${tail}`
+    if (updateAvailable) return `${lead} ${v} ${status.bundledVersion} is ready to install.${tail}`
+    return `${lead} ${v}${tail}`
   })()
+
+  const p = status?.path
+  // Optional extras: the admin link (macOS) and the undo.
+  const systemOffered =
+    !!status?.installed && !!status.systemLink && (status.systemLink.state === 'missing' || status.systemLink.state === 'stale')
+  const removeOffered = !!p?.blockPresent
+  const extras =
+    systemOffered || removeOffered ? (
+      <div className="flex flex-wrap items-center gap-2">
+        {systemOffered && (
+          <Button variant="quiet" className="flex-shrink-0" onClick={handleSystemInstall} disabled={loading !== null}>
+            {loading === 'system' ? 'Installing…' : 'Also install in /usr/local/bin'}
+          </Button>
+        )}
+        {removeOffered && (
+          <Button variant="quiet" className="flex-shrink-0" onClick={handleRemovePathLine} disabled={loading !== null}>
+            {loading === 'remove' ? 'Removing…' : 'Remove the PATH line'}
+          </Button>
+        )}
+        <p className="type-hint min-w-0">
+          {systemOffered ? '/usr/local/bin asks for your password. ' : ''}
+          {removeOffered ? 'Removing the line changes only what K2 added.' : ''}
+        </p>
+      </div>
+    ) : null
 
   const below = readError ? (
     <Callout tone="error" role="alert" className="flex items-start justify-between gap-4">
@@ -650,12 +758,19 @@ function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
       </Button>
     </Callout>
   ) : installError ? (
-    <Callout tone="error" role="alert">
-      <p className="type-hint break-words">
-        Couldn&apos;t {status?.installed ? 'update' : 'install'} the k2 command: {installError}
-      </p>
-    </Callout>
-  ) : undefined
+    <>
+      <Callout tone="error" role="alert">
+        <p className="type-hint break-words">
+          Couldn&apos;t {status?.installed ? 'change' : 'install'} the k2 command: {installError}
+        </p>
+      </Callout>
+      {extras}
+    </>
+  ) : (
+    extras ?? undefined
+  )
+
+  const pathLineOffered = !!status?.installed && !!p && !p.newTerminalsFindIt && !!p.startupFile
 
   return (
     <SettingRow label="k2 command" hint={hint} settingId="general.cli-version" below={below}>
@@ -663,15 +778,20 @@ function CLIVersionRow({ primary }: { primary: boolean }): React.JSX.Element {
         <Button
           variant={primary ? 'accent' : 'default'}
           className="flex-shrink-0"
-          onClick={() => void handleInstallOrUpdate()}
-          disabled={loading}
+          onClick={handleInstallOrUpdate}
+          disabled={loading !== null}
         >
-          {loading ? 'Installing…' : 'Install'}
+          {loading === 'install' ? 'Installing…' : 'Install'}
         </Button>
       )}
       {updateAvailable && (
-        <Button className="flex-shrink-0" onClick={() => void handleInstallOrUpdate()} disabled={loading}>
-          {loading ? 'Updating…' : `Update to ${status?.bundledVersion}`}
+        <Button className="flex-shrink-0" onClick={handleInstallOrUpdate} disabled={loading !== null}>
+          {loading === 'install' ? 'Updating…' : `Update to ${status?.bundledVersion}`}
+        </Button>
+      )}
+      {pathLineOffered && !updateAvailable && (
+        <Button className="flex-shrink-0" onClick={handleAddPathLine} disabled={loading !== null}>
+          {loading === 'path' ? 'Adding…' : 'Add the PATH line'}
         </Button>
       )}
     </SettingRow>

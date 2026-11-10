@@ -247,6 +247,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
     items: [
       { noun: 'study', blurb: 'Bounded teaching pages (Pages in this window).', example: 'k2 study errors' },
       { noun: 'explain', blurb: 'What an App refusal id means, its fix and who fixes it.', example: 'k2 explain apps_manage_off' },
+      {
+        noun: 'send-feedback',
+        blurb: 'Tell Alakazam Labs, who make K2, about K2 itself: a bug or an idea (not your human: that is tickets).',
+        example: 'k2 send-feedback "<text>" --category bug',
+      },
       { noun: 'glossary', blurb: 'Define a K2 term.', example: 'k2 glossary inbox' },
       { noun: 'help', blurb: 'Daily verbs; `--advanced` for the power-user ones.', example: 'k2 help --advanced' },
       { noun: 'whats-new', blurb: 'Release notes.' },

@@ -158,6 +158,10 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/GeneralSection.tsx',
   'components/Settings/sections/mail-watch-api.ts',
   'components/Settings/sections/OwnerTimezoneRow.tsx',
+  // Send feedback to K2 (PF6): the dialog and its settings rows talk to the
+  // window's own server, like every other window-level route.
+  'components/SendFeedback/SendFeedbackDialog.tsx',
+  'components/Settings/sections/SendFeedbackRows.tsx',
   'components/Settings/sections/HeartbeatsSection.tsx',
   'components/Settings/sections/K2ConnectSection.tsx',
   'components/Settings/sections/LocalGrokBotsSection.tsx',

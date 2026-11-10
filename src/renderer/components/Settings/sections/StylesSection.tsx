@@ -1,8 +1,8 @@
 // Settings → Styles (Style System P3, prd-style-system-v1 §5 / ST5).
 //
-// Master-detail (same shell idiom as ProjectsSection): style cards on
-// the left; the selected style's palette grid, scheme control, density
-// control, and a live preview strip on the right.
+// List and detail, like Workspaces / Agents side by side: the styles on the
+// left (the one in use tagged), the shown style's settings on the right in
+// card groups: Colours, Layout or Effects, Terminals, and a live Preview.
 //
 // Interaction contract:
 // - HOVER previews are strictly attribute-level (stampStyleAttributes)
@@ -13,14 +13,17 @@
 //   then updateStyleSettings (settings-store mirror only — style is
 //   per-client view state, never daemon-canonical; multi-window sync
 //   is via localStorage `storage` events).
+// - Every save is read back from localStorage. A change that applied but
+//   didn't save says so in its row, instead of failing silently.
 
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useReducer, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
-import { osPrefersLight, stampStyleAttributes, useStyleStore } from '@/stores/style'
+import { LS_PALETTE, LS_SCHEME, LS_STYLE, osPrefersLight, stampStyleAttributes, useStyleStore } from '@/stores/style'
+import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import type { StyleSelection } from '@/lib/style-resolve'
 import { dialDefault, dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
-import { accentFillHex } from '@/lib/style-accent'
-import { TEXT_GAMMA_MAX, TEXT_GAMMA_MIN } from '@/lib/text-gamma'
+import { accentFillHex, accentStorageKey } from '@/lib/style-accent'
+import { readStoredTextGamma, TEXT_GAMMA_MAX, TEXT_GAMMA_MIN, textGammaStorageKey } from '@/lib/text-gamma'
 import {
   STYLES,
   type StyleDialMeta,
@@ -29,20 +32,21 @@ import {
   type StyleScheme,
 } from '@/styles.generated'
 import type { SettingEntry } from '../searchManifest'
-import { Button, Segmented, Slider } from '@/components/ui'
+import { SettingRow, SettingsGroup } from '../controls/SettingControls'
+import { Button, Input, Segmented, Slider, Tag, cx } from '@/components/ui'
 
 /** Registry terminal colors are 0xRRGGBB ints (Kessel's format). */
 const intToHex = (n: number): string => `#${n.toString(16).padStart(6, '0')}`
 
 export const STYLES_MANIFEST: SettingEntry[] = [
-  { id: 'styles.style-picker', section: 'styles', label: 'Style', description: 'App-wide visual style (Terminal, Glass, community styles)', keywords: ['style', 'skin', 'theme', 'appearance', 'look', 'terminal', 'square', 'glass'] },
-  { id: 'styles.palette', section: 'styles', label: 'Palette', description: 'Color palette within the selected style', keywords: ['palette', 'color', 'colors', 'theme', 'charcoal', 'paper', 'dark mode', 'light mode'] },
-  { id: 'styles.scheme', section: 'styles', label: 'Scheme', description: 'Light / Dark / Auto — Auto follows the OS appearance', keywords: ['scheme', 'light', 'dark', 'auto', 'appearance', 'mode', 'night', 'day', 'os'] },
-  { id: 'styles.auto-palettes', section: 'styles', label: 'Auto colour themes', description: 'Under Auto, the colour theme for a light system and for a dark system', keywords: ['auto', 'system', 'light', 'dark', 'swap', 'palette', 'theme', 'yellow'] },
-  { id: 'styles.accent', section: 'styles', label: 'Accent', description: 'Your own accent colour for this style, with a reset to the theme default', keywords: ['accent', 'colour', 'color', 'tint', 'highlight', 'custom', 'reset', 'picker'] },
-  { id: 'styles.density', section: 'styles', label: 'Density', description: 'Compact / Regular / Spacious gaps between panes and tiles', keywords: ['density', 'gaps', 'spacing', 'compact', 'regular', 'spacious', 'padding', 'tiles'] },
-  { id: 'styles.dials', section: 'styles', label: 'Dials', description: 'Style-specific adjustments the active style advertises (e.g. Glass frost)', keywords: ['dials', 'dial', 'knobs', 'frost', 'blur', 'adjust', 'tweak', 'slider', 'glass'] },
-  { id: 'styles.text-weight', section: 'styles', label: 'Terminal text weight (WebGL)', description: 'Per-style WebGL glyph weight. Lower = thicker. Saved per style and scheme.', keywords: ['gamma', 'weight', 'thickness', 'bold', 'thin', 'chonky', 'webgl', 'text', 'terminal'] },
+  { id: 'styles.style-picker', section: 'styles', label: 'Style', description: 'How the whole app looks: Terminal or Glass', keywords: ['style', 'skin', 'theme', 'appearance', 'look', 'terminal', 'square', 'glass', 'round', 'calm'] },
+  { id: 'styles.palette', section: 'styles', label: 'Palette', description: 'The set of colours the style uses', keywords: ['palette', 'color', 'colors', 'colour', 'colours', 'theme', 'charcoal', 'paper', 'obsidian', 'veil', 'dark mode', 'light mode'] },
+  { id: 'styles.scheme', section: 'styles', label: 'Light or dark', description: 'Light, Dark, or Auto to follow your system', keywords: ['scheme', 'light', 'dark', 'auto', 'appearance', 'mode', 'night', 'day', 'os', 'system'] },
+  { id: 'styles.auto-palettes', section: 'styles', label: 'Palettes for Auto', description: 'Under Auto, the palette for a light system and for a dark system', keywords: ['auto', 'system', 'light', 'dark', 'swap', 'palette', 'theme', 'yellow'] },
+  { id: 'styles.accent', section: 'styles', label: 'Accent colour', description: 'The colour of buttons, switches, links and focus rings, with a reset', keywords: ['accent', 'colour', 'color', 'tint', 'highlight', 'custom', 'reset', 'picker', 'hex'] },
+  { id: 'styles.density', section: 'styles', label: 'Spacing', description: 'Compact, Regular or Spacious room between panes and tiles', keywords: ['density', 'gaps', 'spacing', 'compact', 'regular', 'spacious', 'padding', 'tiles'] },
+  { id: 'styles.dials', section: 'styles', label: 'Frost', description: 'How much Glass blurs what is behind menus and popovers', keywords: ['dials', 'frost', 'blur', 'adjust', 'tweak', 'slider', 'glass', 'effects', 'translucency'] },
+  { id: 'styles.text-weight', section: 'styles', label: 'Terminal text weight', description: 'How thick text looks in terminals, saved for each style', keywords: ['gamma', 'weight', 'thickness', 'bold', 'thin', 'chonky', 'webgl', 'text', 'terminal'] },
 ]
 
 /** Retired looks stay compiled but never reach the picker. */
@@ -60,27 +64,70 @@ const SCHEME_OPTIONS: { id: 'light' | 'dark' | 'auto'; label: string }[] = [
   { id: 'auto', label: 'Auto' },
 ]
 
-/** Small shapes inside a card: square on Terminal; on Glass a third of the
- *  card's radius, so they sit concentric within its padding. */
-const SWATCH_SHAPE = 'rounded-[calc(var(--radius-box)/3)]'
+/** What a dial changes, in plain words, by `<style>.<dial>`. */
+const DIAL_HINTS: Record<string, string> = {
+  'glass.frost': 'How much menus and popovers blur what is behind them. 0 is clear glass.',
+}
 
-/** A row of colour chips sharing the card's inner width evenly. */
-function SwatchRow({ colors, className }: { colors: readonly string[]; className: string }): React.JSX.Element {
+const NOT_SAVED =
+  "This shows now, but K2 couldn't save it on this computer, so it won't last. Try the change again."
+
+/** Small shapes inside a card: square on Terminal; on Glass a fraction of the
+ *  card's radius, so they sit concentric within its padding. */
+const SWATCH_SHAPE = 'rounded-[calc(var(--radius-box)/4)]'
+
+/** Keyboard focus for list rows: an inset ring, so a scrolling list never clips it. */
+const ROW_FOCUS =
+  'outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)]'
+
+const HEX_RE = /^#?([0-9a-f]{6})$/i
+
+/** A localStorage value, or undefined when storage can't be read. */
+function readKey(key: string): string | null | undefined {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return undefined
+  }
+}
+
+/** Colour chips side by side in one outlined strip. The outline is the
+ *  control edge, so a dark chip reads on a dark card and a light one on light. */
+function SwatchStrip({ colors, className }: { colors: readonly string[]; className: string }): React.JSX.Element {
   return (
-    <div className={`flex gap-1 ${className}`}>
+    <span aria-hidden="true" className={cx('flex overflow-hidden border border-[var(--color-control-edge)]', SWATCH_SHAPE, className)}>
       {colors.map((c, i) => (
-        <span
-          key={i}
-          className={`h-5 min-w-0 flex-1 border border-[var(--color-border)] ${SWATCH_SHAPE}`}
-          style={{ backgroundColor: c }}
-        />
+        <span key={i} className="min-w-0 flex-1" style={{ backgroundColor: c }} />
       ))}
-    </div>
+    </span>
+  )
+}
+
+function CheckMark(): React.JSX.Element {
+  return (
+    <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-accent-text)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  )
+}
+
+/** A row's error line, under its controls. */
+function RowError({ id, children }: { id?: string; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <p id={id} role="alert" className="type-hint text-[var(--color-status-error-text)] leading-relaxed">
+      {children}
+    </p>
   )
 }
 
 function capitalize(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s
+}
+
+/** Which appearance a palette is for, in a word or two. */
+function schemeWords(p: StylePaletteMeta): string {
+  if (p.schemes.includes('dark') && p.schemes.includes('light')) return 'Dark or light'
+  return p.schemes.includes('light') ? 'Light' : 'Dark'
 }
 
 /** Density options: '' is every style's base (flush/compact) density,
@@ -89,7 +136,7 @@ function densityOptions(style: StyleMeta): { id: string; label: string }[] {
   return [{ id: '', label: 'Compact' }, ...style.gapPresets.map((p) => ({ id: p, label: capitalize(p) }))]
 }
 
-/** The default selection when jumping INTO a style (style card click /
+/** The default selection when jumping INTO a style (style row click /
  *  cross-style palette click): keep the user's scheme mode + density
  *  where the style can honor them, fall back where it can't. */
 function selectionForStyle(style: StyleMeta, current: StyleSelection): StyleSelection {
@@ -112,6 +159,9 @@ function schemeModeHint(sel: StyleSelection): StyleScheme {
   return sel.schemeMode === 'light' ? 'light' : 'dark'
 }
 
+/** Where a change was made, so a save that failed is reported in its row. */
+type SaveSpot = 'style' | 'palette' | 'scheme' | 'auto' | 'accent' | 'density' | 'dials' | 'text-weight'
+
 export function StylesSection(): React.JSX.Element {
   const styleId = useStyleStore((s) => s.styleId)
   const paletteId = useStyleStore((s) => s.paletteId)
@@ -128,10 +178,12 @@ export function StylesSection(): React.JSX.Element {
   const setAccent = useStyleStore((s) => s.setAccent)
   const resetAccent = useStyleStore((s) => s.resetAccent)
   const updateStyleSettings = useSettingsStore((s) => s.updateStyleSettings)
+  const openSettings = useSettingsStore((s) => s.openSettings)
+  const painter = useTerminalSettingsStore((s) => s.painter)
 
   const committed: StyleSelection = { styleId, paletteId, schemeMode, gapsPreset, autoPalettes }
 
-  // The accent belongs to the style in use, whichever card's detail is showing.
+  // The accent belongs to the style in use, whichever style's detail is showing.
   const activeStyle = STYLES.find((s) => s.id === styleId) ?? PICKER_STYLES[0]
   const activePalette = activeStyle.palettes.find((p) => p.id === resolvedPaletteId) ?? activeStyle.palettes[0]
   const accentHex = accentFillHex(accent, activePalette, resolvedScheme)
@@ -142,8 +194,15 @@ export function StylesSection(): React.JSX.Element {
   const selectedStyle = PICKER_STYLES.find((s) => s.id === selectedStyleId) ?? PICKER_STYLES[0]
   const selectedIsActive = selectedStyle.id === styleId
 
+  // A save that applied live but didn't reach storage, by where it was made.
+  const [unsaved, setUnsaved] = useState<SaveSpot | null>(null)
+  const noteSave = (spot: SaveSpot, saved: boolean): void =>
+    setUnsaved((cur) => (saved ? (cur === spot ? null : cur) : spot))
+  // Storage-derived state (is there anything to reset?) re-reads on render.
+  const [, rerender] = useReducer((n: number) => n + 1, 0)
+
   const commit = useCallback(
-    (sel: StyleSelection): void => {
+    (sel: StyleSelection, spot: SaveSpot): void => {
       applyStyle(sel) // instant: store + <html> + mirror
       void updateStyleSettings({
         id: sel.styleId,
@@ -151,6 +210,13 @@ export function StylesSection(): React.JSX.Element {
         scheme: sel.schemeMode,
         gaps: sel.gapsPreset,
       })
+      const now = useStyleStore.getState()
+      noteSave(
+        spot,
+        readKey(LS_STYLE) === now.styleId &&
+          readKey(LS_SCHEME) === now.schemeMode &&
+          readKey(LS_PALETTE) === now.resolvedPaletteId,
+      )
     },
     [applyStyle, updateStyleSettings],
   )
@@ -189,14 +255,43 @@ export function StylesSection(): React.JSX.Element {
           schemeMode: p.schemes.includes(resolvedScheme) ? baseSel.schemeMode : p.schemes[0],
         }
 
-  const handlePaletteClick = (p: StylePaletteMeta): void => commit(selectionForPalette(p))
-
-  const handleSchemeClick = (mode: 'light' | 'dark' | 'auto'): void => {
-    commit({ ...baseSel, schemeMode: mode })
+  const pickStyle = (style: StyleMeta): void => {
+    setSelectedStyleId(style.id)
+    if (style.id !== styleId) commit(selectionForStyle(style, committed), 'style')
   }
 
-  const handleDensityClick = (preset: string): void => {
-    commit({ ...baseSel, gapsPreset: preset })
+  // ── Accent ─────────────────────────────────────────────────────────
+  // The hex field holds what's typed until it's a colour; a valid one
+  // applies as you type, an invalid one says so when you leave the field.
+  const [hexDraft, setHexDraft] = useState<string | null>(null)
+  const [hexError, setHexError] = useState(false)
+
+  const chooseAccent = (hex: string): void => {
+    setAccent(hex)
+    noteSave('accent', readKey(accentStorageKey(useStyleStore.getState().styleId)) === useStyleStore.getState().accent)
+  }
+  const handleAccentReset = (): void => {
+    resetAccent()
+    setHexDraft(null)
+    setHexError(false)
+    noteSave('accent', readKey(accentStorageKey(useStyleStore.getState().styleId)) === null)
+  }
+  const handleHexChange = (raw: string): void => {
+    setHexDraft(raw)
+    const m = HEX_RE.exec(raw.trim())
+    if (m) {
+      setHexError(false)
+      chooseAccent(`#${m[1].toLowerCase()}`)
+    }
+  }
+  const finishHex = (): void => {
+    if (hexDraft === null) return
+    if (HEX_RE.test(hexDraft.trim())) {
+      setHexDraft(null)
+      setHexError(false)
+    } else {
+      setHexError(true)
+    }
   }
 
   // ── Dials — the active style's manifest-advertised knobs ──────────
@@ -209,23 +304,20 @@ export function StylesSection(): React.JSX.Element {
   const dialValue = (dial: StyleDialMeta): number => {
     const key = dialStorageKey(selectedStyle.id, dial.id)
     if (key in dialValues) return dialValues[key]
-    let raw: string | null = null
-    try {
-      raw = localStorage.getItem(key)
-    } catch {
-      // Privacy-mode storage failure → rest at the default.
-    }
-    return resolveDialValue(dial, raw)
+    return resolveDialValue(dial, readKey(key) ?? null)
   }
 
   const handleDialInput = (dial: StyleDialMeta, value: number): void => {
     const key = dialStorageKey(selectedStyle.id, dial.id)
     document.documentElement.style.setProperty(dial.token, formatDialValue(dial, value))
+    let saved = true
     try {
       localStorage.setItem(key, String(value))
     } catch {
       // Value still applies live; it just won't survive a relaunch.
+      saved = false
     }
+    noteSave('dials', saved)
     setDialValues((m) => ({ ...m, [key]: value }))
   }
 
@@ -233,70 +325,98 @@ export function StylesSection(): React.JSX.Element {
     const key = dialStorageKey(selectedStyle.id, dial.id)
     const value = dialDefault(dial)
     document.documentElement.style.setProperty(dial.token, formatDialValue(dial, value))
+    let saved = true
     try {
       localStorage.removeItem(key)
     } catch {
-      // Best-effort; the live value is already back at the default.
+      // The live value is already back at the default.
+      saved = false
     }
+    noteSave('dials', saved)
     setDialValues((m) => ({ ...m, [key]: value }))
+  }
+
+  // ── Terminal text weight ───────────────────────────────────────────
+  // Stored as the WebGL glyph gamma, where lower is thicker. The slider
+  // runs the other way, so dragging right makes text thicker.
+  const weightFromGamma = (g: number): number => Math.round((TEXT_GAMMA_MIN + TEXT_GAMMA_MAX - g) * 100) / 100
+  const textWeightCustom = readStoredTextGamma(styleId, resolvedScheme) !== null
+  const handleTextWeight = (weight: number): void => {
+    setTextGamma(weightFromGamma(weight))
+    const now = useStyleStore.getState()
+    noteSave('text-weight', readStoredTextGamma(now.styleId, now.resolvedScheme) !== null)
+  }
+  const handleTextWeightReset = (): void => {
+    resetTextGamma()
+    const now = useStyleStore.getState()
+    noteSave('text-weight', readKey(textGammaStorageKey(now.styleId, now.resolvedScheme)) === null)
+    rerender()
   }
 
   const schemeDisabled = (mode: 'light' | 'dark' | 'auto'): string | null => {
     const schemes = selectedStyle.capabilities.schemes
     if (mode === 'auto') {
-      return schemes.length < 2
-        ? `${selectedStyle.name} only supports ${schemes[0] ?? 'dark'} palettes`
-        : null
+      return schemes.length < 2 ? `${selectedStyle.name} only has ${schemes[0] ?? 'dark'} palettes` : null
     }
     return schemes.includes(mode) ? null : `${selectedStyle.name} has no ${mode} palettes`
   }
 
+  const showDensity = selectedStyle.capabilities.gaps
+  const showDials = selectedIsActive && selectedStyle.dials.length > 0
+  const layoutTitle = showDensity && showDials ? 'Layout and effects' : showDensity ? 'Layout' : 'Effects'
+  const savedHere = `Saved for ${activeStyle.name} on this computer.`
+
   return (
-    <div className="flex h-full min-h-0">
-      {/* ── Left (master): style cards ── */}
-      <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col">
-        <div className="px-3 pt-3 pb-2 border-b border-[var(--color-border)]">
-          <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
-            Styles
-          </span>
+    <div className="h-full min-h-0 flex">
+      {/* ── The styles ── */}
+      <aside
+        aria-label="Styles"
+        data-settings-id="styles.style-picker"
+        className="w-72 flex-shrink-0 min-h-0 flex flex-col border-r border-[var(--color-border)]"
+      >
+        <div className="flex-shrink-0 px-4 pt-6 pb-3">
+          <h2 className="flex items-center h-7 type-heading text-[var(--color-text-primary)]">Styles</h2>
+          <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed">
+            How K2 looks on this computer. Point at a style to try it; click to use it.
+          </p>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2" data-settings-id="styles.style-picker">
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-1 [scrollbar-gutter:stable]">
           {PICKER_STYLES.map((style) => {
             const isActive = style.id === styleId
-            const isSelected = style.id === selectedStyleId
+            const isSelected = style.id === selectedStyle.id
             const swatchPalette =
               style.palettes.find((p) => p.id === (style.defaultPalettes[resolvedScheme] ?? style.defaultPalette)) ??
               style.palettes[0]
             return (
               <button
                 key={style.id}
-                onClick={() => {
-                  setSelectedStyleId(style.id)
-                  if (!isActive) commit(selectionForStyle(style, committed))
-                }}
+                type="button"
+                data-style-row={style.id}
+                data-selected={isSelected ? '' : undefined}
+                aria-current={isSelected ? 'true' : undefined}
+                onClick={() => pickStyle(style)}
                 onMouseEnter={() => {
                   if (!isActive) preview(selectionForStyle(style, committed))
                 }}
                 onMouseLeave={endPreview}
-                className={`text-left p-3 border no-drag cursor-pointer transition-colors ${
-                  isActive
-                    ? 'border-[var(--color-accent)] bg-[var(--color-bg-elevated)]'
-                    : isSelected
-                      ? 'border-[var(--color-border-strong)] bg-[var(--color-bg-surface)]'
-                      : 'border-[var(--color-border)] bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-elevated)]'
-                }`}
+                className={cx(
+                  'relative w-full flex flex-col gap-2 px-3 py-2.5 text-left no-drag cursor-pointer transition-colors',
+                  ROW_FOCUS,
+                  isSelected ? 'bg-[var(--color-accent)]/15' : 'hover:bg-[var(--color-wash-1)]',
+                )}
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-[var(--color-text-primary)]">{style.name}</span>
-                  {isActive && (
-                    <span className="text-[9px] uppercase tracking-wider text-[var(--color-accent)]">Active</span>
-                  )}
-                </div>
-                <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">by {style.author}</div>
-                {/* Mini swatch strip — 5 chips from the style's default palette */}
+                {isSelected && (
+                  <span aria-hidden="true" className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--color-accent)]" />
+                )}
+                <span className="flex items-center gap-2 min-w-0">
+                  <span data-style-name className="type-name text-[var(--color-text-primary)] truncate flex-1">
+                    {style.name}
+                  </span>
+                  {isActive && <Tag tone="accent">In use</Tag>}
+                </span>
                 {swatchPalette && (
-                  <SwatchRow
-                    className="mt-2"
+                  <SwatchStrip
+                    className="h-4"
                     colors={[
                       swatchPalette.swatch.bg,
                       swatchPalette.swatch.surface,
@@ -310,88 +430,143 @@ export function StylesSection(): React.JSX.Element {
             )
           })}
         </div>
-      </div>
+      </aside>
 
-      {/* ── Right (detail): palettes / scheme / density / preview ── */}
-      <div className="flex-1 min-w-0 overflow-y-auto p-6">
-        <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">{selectedStyle.name}</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mb-5 max-w-xl">{selectedStyle.description}</p>
+      {/* ── The shown style ── */}
+      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]">
+        <div className="w-full max-w-[52rem] space-y-6 pb-6">
+          <header className="space-y-3">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="type-title text-[var(--color-text-primary)] truncate">{selectedStyle.name}</h2>
+                  {selectedIsActive && <Tag tone="accent">In use</Tag>}
+                </div>
+                <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed">{selectedStyle.description}</p>
+              </div>
+              {!selectedIsActive && (
+                <Button variant="accent" className="flex-shrink-0" onClick={() => pickStyle(selectedStyle)}>
+                  Use {selectedStyle.name}
+                </Button>
+              )}
+            </div>
+            {unsaved === 'style' && <RowError>{NOT_SAVED}</RowError>}
+          </header>
 
-        {/* Palette grid */}
-        <div className="mb-6" data-settings-id="styles.palette">
-          <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
-            Palette
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {selectedStyle.palettes.map((p) => {
-              const isCurrent = selectedIsActive && p.id === resolvedPaletteId
-              const supportsScheme = p.schemes.includes(resolvedScheme)
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => handlePaletteClick(p)}
-                  onMouseEnter={() => preview(selectionForPalette(p))}
-                  onMouseLeave={endPreview}
-                  title={!supportsScheme && schemeMode !== 'auto' ? `Switches the scheme to ${p.schemes[0]}` : undefined}
-                  className={`w-40 text-left p-2.5 border no-drag cursor-pointer transition-colors ${
-                    isCurrent
-                      ? 'border-[var(--color-accent)] bg-[var(--color-bg-elevated)]'
-                      : 'border-[var(--color-border)] bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-elevated)]'
-                  }`}
-                >
-                  <SwatchRow className="mb-1.5" colors={[p.swatch.bg, p.swatch.surface, p.swatch.elevated, p.swatch.accent]} />
-                  {/* ANSI-16 strip — terminal colors are what this audience judges first */}
-                  <div className={`flex mb-2 overflow-hidden border border-[var(--color-border)] ${SWATCH_SHAPE}`}>
-                    {p.terminal.palette.map((n, i) => (
-                      <span key={i} className="h-1.5 flex-1" style={{ backgroundColor: intToHex(n) }} />
-                    ))}
-                  </div>
-                  <span className="text-[11px] text-[var(--color-text-primary)]">{p.name}</span>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Scheme segmented control */}
-        <div className="mb-6" data-settings-id="styles.scheme">
-          <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
-            Scheme
-          </div>
-          {/* Manual activation: arrows only move focus, because a choice here
-              commits a style change. No value while browsing another style. */}
-          <Segmented
-            aria-label="Scheme"
-            activation="manual"
-            value={selectedIsActive ? schemeMode : null}
-            onChange={handleSchemeClick}
-            options={SCHEME_OPTIONS.map((opt) => {
-              const disabledReason = schemeDisabled(opt.id)
-              return {
-                value: opt.id,
-                label: opt.label,
-                disabled: disabledReason !== null,
-                buttonProps: {
-                  title: disabledReason ?? undefined,
-                  onMouseEnter: () => {
-                    if (!disabledReason) preview({ ...baseSel, schemeMode: opt.id })
-                  },
-                  onMouseLeave: endPreview,
-                },
+          <SettingsGroup title="Colours" hint="Changes show at once and are saved on this computer." card>
+            <SettingRow
+              settingId="styles.palette"
+              label="Palette"
+              hint={
+                schemeMode === 'auto' && selectedIsActive
+                  ? `Under Auto, this picks the palette for your system's ${osSide()} appearance. Point at one to try it.`
+                  : 'The set of colours. Point at one to try it; click to use it.'
               }
-            })}
-          />
-          {/* Auto swaps between any two of the style's colour themes. */}
-          {schemeMode === 'auto' && selectedIsActive && (
-            <div className="mt-3 flex flex-col gap-2" data-settings-id="styles.auto-palettes">
-              {AUTO_SIDES.map(({ side, label }) => (
-                <div key={side} className="flex items-center gap-3 flex-wrap">
-                  <span className="w-40 text-[11px] text-[var(--color-text-secondary)]">{label}</span>
+              below={
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-2">
+                    {selectedStyle.palettes.map((p) => {
+                      const isCurrent = selectedIsActive && p.id === resolvedPaletteId
+                      const movesScheme = !p.schemes.includes(resolvedScheme) && schemeMode !== 'auto'
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          data-palette-id={p.id}
+                          data-k2-chamfer="surface"
+                          aria-pressed={isCurrent}
+                          aria-label={`${p.name} palette, ${schemeWords(p).toLowerCase()}`}
+                          onClick={() => commit(selectionForPalette(p), 'palette')}
+                          onMouseEnter={() => preview(selectionForPalette(p))}
+                          onMouseLeave={endPreview}
+                          title={movesScheme ? `Switches to ${p.schemes[0]}` : undefined}
+                          className={cx(
+                            'k2-focus w-40 flex flex-col gap-2 p-2.5 text-left border no-drag cursor-pointer transition-colors rounded-[calc(var(--radius-box)/2)]',
+                            isCurrent
+                              ? 'border-[var(--color-accent-text)] bg-[var(--color-accent)]/10'
+                              : 'border-[var(--color-control-edge)] hover:border-[var(--color-text-muted)] hover:bg-[var(--color-wash-1)]',
+                          )}
+                        >
+                          <span aria-hidden="true" className={cx('flex flex-col overflow-hidden border border-[var(--color-control-edge)]', SWATCH_SHAPE)}>
+                            <span className="flex h-6">
+                              {[p.swatch.bg, p.swatch.surface, p.swatch.elevated, p.swatch.accent].map((c, i) => (
+                                <span key={i} className="min-w-0 flex-1" style={{ backgroundColor: c }} />
+                              ))}
+                            </span>
+                            {/* The 16 terminal colours: what this audience judges first. */}
+                            <span className="flex h-1.5">
+                              {p.terminal.palette.map((n, i) => (
+                                <span key={i} className="flex-1" style={{ backgroundColor: intToHex(n) }} />
+                              ))}
+                            </span>
+                          </span>
+                          <span className="block min-w-0">
+                            <span className="flex items-center gap-1.5 min-w-0">
+                              <span data-palette-name className="type-name text-[var(--color-text-primary)] truncate flex-1">
+                                {p.name}
+                              </span>
+                              {isCurrent && <CheckMark />}
+                            </span>
+                            <span className="block type-hint text-[var(--color-text-secondary)]">{schemeWords(p)}</span>
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {unsaved === 'palette' && <RowError>{NOT_SAVED}</RowError>}
+                </div>
+              }
+            >
+              {null}
+            </SettingRow>
+
+            <SettingRow
+              settingId="styles.scheme"
+              label="Light or dark"
+              hint="Auto follows your system's appearance."
+              below={unsaved === 'scheme' ? <RowError>{NOT_SAVED}</RowError> : undefined}
+            >
+              {/* Manual activation: arrows only move focus, because a choice here
+                  commits a style change. No value while browsing another style. */}
+              <Segmented
+                aria-label="Light or dark"
+                activation="manual"
+                value={selectedIsActive ? schemeMode : null}
+                onChange={(mode) => commit({ ...baseSel, schemeMode: mode }, 'scheme')}
+                options={SCHEME_OPTIONS.map((opt) => {
+                  const disabledReason = schemeDisabled(opt.id)
+                  return {
+                    value: opt.id,
+                    label: opt.label,
+                    disabled: disabledReason !== null,
+                    buttonProps: {
+                      title: disabledReason ?? undefined,
+                      onMouseEnter: () => {
+                        if (!disabledReason) preview({ ...baseSel, schemeMode: opt.id })
+                      },
+                      onMouseLeave: endPreview,
+                    },
+                  }
+                })}
+              />
+            </SettingRow>
+
+            {/* Auto swaps between any two of the style's palettes. */}
+            {schemeMode === 'auto' &&
+              selectedIsActive &&
+              AUTO_SIDES.map(({ side, label }, i) => (
+                <SettingRow
+                  key={side}
+                  settingId={i === 0 ? 'styles.auto-palettes' : undefined}
+                  label={label}
+                  hint={i === 0 ? 'Auto uses these two palettes.' : undefined}
+                  below={unsaved === 'auto' && i === AUTO_SIDES.length - 1 ? <RowError>{NOT_SAVED}</RowError> : undefined}
+                >
                   <Segmented
                     aria-label={label}
                     activation="manual"
                     value={autoPalettes?.[side] ?? null}
-                    onChange={(id) => commit(withAutoPick(side, id))}
+                    onChange={(id) => commit(withAutoPick(side, id), 'auto')}
                     options={selectedStyle.palettes.map((p) => ({
                       value: p.id,
                       label: p.name,
@@ -403,241 +578,262 @@ export function StylesSection(): React.JSX.Element {
                       },
                     }))}
                   />
-                </div>
+                </SettingRow>
               ))}
-            </div>
-          )}
-        </div>
 
-        {/* Accent: the theme's own, or the person's colour, for the style in use */}
-        <div className="mb-6" data-settings-id="styles.accent">
-          <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
-            Accent
-          </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <input
-              type="color"
-              aria-label="Accent colour"
-              data-testid="accent-well"
-              value={accentHex}
-              onChange={(e) => setAccent(e.target.value)}
-              className="k2-color-well h-6 w-8 p-0 border border-[var(--color-border)] bg-transparent cursor-pointer no-drag"
-            />
-            <span className="text-[11px] font-mono text-[var(--color-text-muted)]">{accentHex}</span>
-            <Button variant="quiet" disabled={accent === null} onClick={resetAccent}>
-              Reset to default
-            </Button>
-          </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-            Buttons, switches, focus rings and links use this colour. Saved for {activeStyle.name} on this machine.
-          </div>
-        </div>
-
-        {/* Density (gap presets) — only when the style declares gaps */}
-        {selectedStyle.capabilities.gaps && (
-          <div className="mb-6" data-settings-id="styles.density">
-            <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
-              Density
-            </div>
-            <Segmented
-              aria-label="Density"
-              activation="manual"
-              value={selectedIsActive ? gapsPreset : null}
-              onChange={handleDensityClick}
-              options={densityOptions(selectedStyle).map((opt) => ({
-                value: opt.id,
-                label: opt.label,
-                buttonProps: {
-                  onMouseEnter: () => preview({ ...baseSel, gapsPreset: opt.id }),
-                  onMouseLeave: endPreview,
-                },
-              }))}
-            />
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-              Gaps between panes, tiles and sections. Compact is {selectedStyle.name}&apos;s flush default.
-            </div>
-          </div>
-        )}
-
-        {/* Dials — manifest-advertised knobs; only for the ACTIVE style
-            (a dial tweaks the LIVE style, not a preview of another one) */}
-        {selectedIsActive && selectedStyle.dials.length > 0 && (
-          <div className="mb-6" data-settings-id="styles.dials">
-            <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
-              Dials
-            </div>
-            <div className="flex flex-col gap-2">
-              {selectedStyle.dials.map((dial) => {
-                const value = dialValue(dial)
-                return (
-                  <div key={dial.id} className="flex items-center gap-3">
-                    <span className="w-20 text-[11px] text-[var(--color-text-secondary)]">{dial.label}</span>
-                    <Slider
-                      min={dial.min}
-                      max={dial.max}
-                      step={dial.step ?? 1}
-                      value={value}
-                      onChange={(e) => handleDialInput(dial, Number(e.target.value))}
-                      className="w-40"
-                    />
-                    <span className="w-12 text-[11px] text-[var(--color-text-muted)] tabular-nums">
-                      {formatDialValue(dial, value)}
-                    </span>
-                    <button
-                      onClick={() => handleDialReset(dial)}
-                      className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
-                    >
-                      Reset
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-              {selectedStyle.name}&apos;s own adjustments — saved on this machine.
-            </div>
-          </div>
-        )}
-
-        {/* WebGL terminal text weight — per active style + resolved scheme.
-            Saved like dials (localStorage k2.textGamma.<style>.<scheme>).
-            Only the ACTIVE style is editable; browsing another style's
-            detail doesn't re-tune the live painter. */}
-        {selectedIsActive && (
-          <div className="mb-6" data-settings-id="styles.text-weight">
-            <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
-              Terminal text weight (WebGL)
-            </div>
-            <div className="flex items-center gap-3 flex-wrap">
-              <Slider
-                min={TEXT_GAMMA_MIN}
-                max={TEXT_GAMMA_MAX}
-                step={0.05}
-                value={textGamma}
-                onChange={(e) => setTextGamma(parseFloat(e.target.value))}
-                className="w-40"
-              />
-              <input
-                type="number"
-                min={TEXT_GAMMA_MIN}
-                max={TEXT_GAMMA_MAX}
-                step={0.05}
-                value={Number(textGamma.toFixed(2))}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value)
-                  if (Number.isFinite(v)) setTextGamma(v)
-                }}
-                className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
-              />
-              <button
-                type="button"
-                onClick={() => resetTextGamma()}
-                className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
-                title="Restore the polarity default for this style (dark ≈ 0.7, light ≈ 1.05)"
-              >
-                Reset
-              </button>
-            </div>
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-              Only affects the WebGL painter (Settings → Terminal → Painter = WebGL;
-              open a <em>new</em> tab after switching). Lower = thicker. Live — open
-              WebGL terminals repaint as you drag. Saved for {selectedStyle.name} /{' '}
-              {resolvedScheme} on this machine.
-            </div>
-          </div>
-        )}
-
-        {/* Live preview — a miniature K2 workspace on the contract tokens
-            (canvas, tab strip, tiled terminal panes using the real --term-*
-            colors), so it always shows the CURRENTLY STAMPED style,
-            including hover previews. */}
-        <div className="mb-6" data-settings-id="styles.preview">
-          <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
-            Preview
-          </div>
-          <div
-            data-k2-chamfer="surface"
-            className="border border-[var(--color-border)] max-w-xl"
-            style={{
-              backgroundColor: 'var(--color-bg-canvas)',
-              borderRadius: 'var(--radius-box)',
-              padding: 'calc(var(--inset-window) + 8px)',
-            }}
-          >
-            {/* Mini tab strip with status dots */}
-            <div
-              className="flex items-center border border-[var(--color-border)]"
-              style={{
-                backgroundColor: 'var(--color-bg-surface)',
-                borderRadius: 'var(--radius-box)',
-                // Rounded shapes can't butt together: on a rounded style the
-                // strip floats clear of the tiles, and Terminal stays flush.
-                marginBottom: 'calc(var(--gap-section) + var(--radius-box) / 2)',
-              }}
+            <SettingRow
+              settingId="styles.accent"
+              label="Accent colour"
+              hint={`Buttons, switches, links and focus rings. ${savedHere}`}
+              below={
+                hexError ? (
+                  <RowError id="styles-accent-error">
+                    Use six hex digits after the #, like {accentHex}. The accent hasn&apos;t changed.
+                  </RowError>
+                ) : unsaved === 'accent' ? (
+                  <RowError>{NOT_SAVED}</RowError>
+                ) : undefined
+              }
             >
-              {['zsh', 'claude', 'logs'].map((t, i) => (
-                <div
-                  key={t}
-                  className="relative px-3 py-1 text-[10px]"
-                  style={{ color: i === 0 ? 'var(--color-text-primary)' : 'var(--color-text-muted)' }}
+              <input
+                type="color"
+                aria-label="Accent colour"
+                data-testid="accent-well"
+                value={accentHex}
+                onChange={(e) => {
+                  setHexDraft(null)
+                  setHexError(false)
+                  chooseAccent(e.target.value)
+                }}
+                className="k2-color-well h-6 w-8 p-0 flex-shrink-0 overflow-hidden border border-[var(--color-control-edge)] bg-transparent cursor-pointer no-drag rounded-[var(--radius-field)]"
+              />
+              <Input
+                aria-label="Accent colour as hex"
+                data-testid="accent-hex"
+                spellCheck={false}
+                autoComplete="off"
+                maxLength={7}
+                value={hexDraft ?? accentHex}
+                aria-invalid={hexError || undefined}
+                aria-describedby={hexError ? 'styles-accent-error' : undefined}
+                onChange={(e) => handleHexChange(e.target.value)}
+                onBlur={finishHex}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') finishHex()
+                }}
+                className={cx('w-24 font-mono', hexError && '!border-[var(--color-status-error-text)] [--k2-ch-edge:var(--color-status-error-text)]')}
+              />
+              <Button variant="quiet" className="flex-shrink-0" disabled={accent === null} onClick={handleAccentReset}>
+                Reset
+              </Button>
+            </SettingRow>
+          </SettingsGroup>
+
+          {(showDensity || showDials) && (
+            <SettingsGroup title={layoutTitle} card>
+              {/* Density (gap presets) — only when the style declares gaps */}
+              {showDensity && (
+                <SettingRow
+                  settingId="styles.density"
+                  label="Spacing"
+                  hint={`Room between panes, tiles and sections. Compact is ${selectedStyle.name}'s default.`}
+                  below={unsaved === 'density' ? <RowError>{NOT_SAVED}</RowError> : undefined}
                 >
-                  {t}
-                  {/* Under the label on a rounded strip, clear of its curve;
-                      the tab's full width and flush on a square one. */}
-                  {i === 0 && (
-                    <span
-                      className="absolute h-0.5 rounded-[var(--radius-pill)]"
-                      style={{
-                        left: 'min(var(--radius-box), 12px)',
-                        right: 'min(var(--radius-box), 12px)',
-                        bottom: 'min(var(--radius-box), 2px)',
-                        backgroundColor: 'var(--color-accent)',
-                      }}
-                    />
-                  )}
+                  <Segmented
+                    aria-label="Spacing"
+                    activation="manual"
+                    value={selectedIsActive ? gapsPreset : null}
+                    onChange={(preset) => commit({ ...baseSel, gapsPreset: preset }, 'density')}
+                    options={densityOptions(selectedStyle).map((opt) => ({
+                      value: opt.id,
+                      label: opt.label,
+                      buttonProps: {
+                        onMouseEnter: () => preview({ ...baseSel, gapsPreset: opt.id }),
+                        onMouseLeave: endPreview,
+                      },
+                    }))}
+                  />
+                </SettingRow>
+              )}
+
+              {/* Dials — manifest-advertised knobs; only for the ACTIVE style
+                  (a dial tweaks the LIVE style, not a preview of another one) */}
+              {showDials &&
+                selectedStyle.dials.map((dial, i) => {
+                  const value = dialValue(dial)
+                  const custom = (readKey(dialStorageKey(selectedStyle.id, dial.id)) ?? null) !== null
+                  return (
+                    <SettingRow
+                      key={dial.id}
+                      settingId={i === 0 ? 'styles.dials' : undefined}
+                      label={dial.label}
+                      hint={`${DIAL_HINTS[`${selectedStyle.id}.${dial.id}`] ?? `Adjusts ${selectedStyle.name}.`} ${savedHere}`}
+                      below={unsaved === 'dials' && i === selectedStyle.dials.length - 1 ? <RowError>{NOT_SAVED}</RowError> : undefined}
+                    >
+                      <Slider
+                        aria-label={dial.label}
+                        min={dial.min}
+                        max={dial.max}
+                        step={dial.step ?? 1}
+                        value={value}
+                        onChange={(e) => handleDialInput(dial, Number(e.target.value))}
+                        className="w-40"
+                      />
+                      <span className="w-10 text-right type-hint text-[var(--color-text-secondary)] tabular-nums">
+                        {formatDialValue(dial, value)}
+                      </span>
+                      <Button
+                        variant="quiet"
+                        className="flex-shrink-0"
+                        disabled={!custom}
+                        aria-label={`Reset ${dial.label}`}
+                        onClick={() => handleDialReset(dial)}
+                      >
+                        Reset
+                      </Button>
+                    </SettingRow>
+                  )
+                })}
+            </SettingsGroup>
+          )}
+
+          {/* WebGL terminal text weight — per active style + resolved scheme.
+              Saved like dials (localStorage k2.textGamma.<style>.<scheme>).
+              Only the ACTIVE style is editable; browsing another style's
+              detail doesn't re-tune the live terminals. */}
+          {selectedIsActive && (
+            <SettingsGroup title="Terminals" card>
+              <SettingRow
+                settingId="styles.text-weight"
+                label="Text weight"
+                hint={
+                  painter === 'webgl'
+                    ? `How thick text looks in terminals. Drag right for thicker; open terminals update as you drag. Saved for ${activeStyle.name} in ${resolvedScheme} mode on this computer.`
+                    : 'Only works when terminals draw with WebGL, which is turned off. Turn it on in Terminal settings, under Terminal Painter.'
+                }
+                below={unsaved === 'text-weight' ? <RowError>{NOT_SAVED}</RowError> : undefined}
+              >
+                <Slider
+                  aria-label="Terminal text weight"
+                  min={TEXT_GAMMA_MIN}
+                  max={TEXT_GAMMA_MAX}
+                  step={0.05}
+                  value={weightFromGamma(textGamma)}
+                  disabled={painter !== 'webgl'}
+                  onChange={(e) => handleTextWeight(parseFloat(e.target.value))}
+                  className="w-40"
+                />
+                {painter === 'webgl' ? (
+                  <Button
+                    variant="quiet"
+                    className="flex-shrink-0"
+                    disabled={!textWeightCustom}
+                    aria-label="Reset text weight"
+                    onClick={handleTextWeightReset}
+                  >
+                    Reset
+                  </Button>
+                ) : (
+                  <Button variant="quiet" className="flex-shrink-0" onClick={() => openSettings?.('terminal')}>
+                    Terminal settings
+                  </Button>
+                )}
+              </SettingRow>
+            </SettingsGroup>
+          )}
+
+          {/* Live preview — a miniature K2 workspace on the contract tokens
+              (canvas, tab strip, tiled terminal panes using the real --term-*
+              colors), so it always shows the CURRENTLY STAMPED style,
+              including hover previews. */}
+          <SettingsGroup title="Preview" hint="The style in use, or the one you're pointing at." settingId="styles.preview" card>
+            <div className="p-4">
+              <div
+                data-k2-chamfer="surface"
+                aria-hidden="true"
+                className="border border-[var(--color-border)]"
+                style={{
+                  backgroundColor: 'var(--color-bg-canvas)',
+                  borderRadius: 'var(--radius-box)',
+                  padding: 'calc(var(--inset-window) + 8px)',
+                }}
+              >
+                {/* Mini tab strip with status dots */}
+                <div
+                  className="flex items-center border border-[var(--color-border)]"
+                  style={{
+                    backgroundColor: 'var(--color-bg-surface)',
+                    borderRadius: 'var(--radius-box)',
+                    // Rounded shapes can't butt together: on a rounded style the
+                    // strip floats clear of the tiles, and Terminal stays flush.
+                    marginBottom: 'calc(var(--gap-section) + var(--radius-box) / 2)',
+                  }}
+                >
+                  {['zsh', 'claude', 'logs'].map((t, i) => (
+                    <div
+                      key={t}
+                      className="relative px-3 py-1 type-hint"
+                      style={{ color: i === 0 ? 'var(--color-text-primary)' : 'var(--color-text-secondary)' }}
+                    >
+                      {t}
+                      {/* Under the label on a rounded strip, clear of its curve;
+                          the tab's full width and flush on a square one. */}
+                      {i === 0 && (
+                        <span
+                          className="absolute h-0.5 rounded-[var(--radius-pill)]"
+                          style={{
+                            left: 'min(var(--radius-box), 12px)',
+                            right: 'min(var(--radius-box), 12px)',
+                            bottom: 'min(var(--radius-box), 2px)',
+                            backgroundColor: 'var(--color-accent)',
+                          }}
+                        />
+                      )}
+                    </div>
+                  ))}
+                  <div className="ml-auto flex items-center gap-1.5 px-3">
+                    <span className="w-1.5 h-1.5 rounded-[var(--radius-badge)]" style={{ backgroundColor: 'var(--color-status-working)' }} />
+                    <span className="w-1.5 h-1.5 rounded-[var(--radius-badge)]" style={{ backgroundColor: 'var(--color-status-ok)' }} />
+                  </div>
                 </div>
-              ))}
-              <div className="ml-auto flex items-center gap-1.5 px-3">
-                <span className="w-1.5 h-1.5 rounded-[var(--radius-badge)]" style={{ backgroundColor: 'var(--color-status-working)' }} />
-                <span className="w-1.5 h-1.5 rounded-[var(--radius-badge)]" style={{ backgroundColor: 'var(--color-status-ok)' }} />
+                {/* Mini mosaic — two terminal tiles; the seam between them is
+                    the canvas, exactly like the real tiling grid */}
+                <div className="grid grid-cols-2 font-mono type-hint" style={{ gap: 'calc(var(--gap-tile) * 2)' }}>
+                  <div
+                    className="border border-[var(--color-border)] p-2 leading-relaxed"
+                    style={{ backgroundColor: 'var(--term-bg)', borderRadius: 'var(--radius-box)' }}
+                  >
+                    <div style={{ color: 'var(--term-fg)' }}>
+                      <span style={{ color: 'var(--term-ansi-10)' }}>➜</span>{' '}
+                      <span style={{ color: 'var(--term-ansi-12)' }}>~/k2</span> k2 agent list
+                    </div>
+                    <div style={{ color: 'var(--term-ansi-2)' }}>✓ appa — ready</div>
+                    <div style={{ color: 'var(--term-ansi-3)' }}>● momo — working</div>
+                  </div>
+                  <div
+                    className="border border-[var(--color-border)] p-2 leading-relaxed"
+                    style={{ backgroundColor: 'var(--term-bg)', borderRadius: 'var(--radius-box)' }}
+                  >
+                    <div style={{ color: 'var(--term-ansi-13)' }}>
+                      <span
+                        className="inline-block w-[3px] h-[10px] mr-1 align-middle rounded-[calc(var(--radius-box)/8)]"
+                        style={{ backgroundColor: 'var(--term-ansi-13)' }}
+                      />
+                      agent
+                    </div>
+                    <div style={{ color: 'var(--term-fg)' }}>Refactor complete.</div>
+                    <div>
+                      <span style={{ color: 'var(--term-fg)' }}>$ </span>
+                      <span
+                        className="inline-block w-[6px] h-[10px] align-middle rounded-[calc(var(--radius-box)/8)]"
+                        style={{ backgroundColor: 'var(--term-cursor)' }}
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
-            {/* Mini mosaic — two terminal tiles; the seam between them is
-                the canvas, exactly like the real tiling grid */}
-            <div className="grid grid-cols-2" style={{ gap: 'calc(var(--gap-tile) * 2)' }}>
-              <div
-                className="border border-[var(--color-border)] p-2 leading-relaxed"
-                style={{ backgroundColor: 'var(--term-bg)', borderRadius: 'var(--radius-box)' }}
-              >
-                <div className="text-[9px]" style={{ color: 'var(--term-fg)' }}>
-                  <span style={{ color: 'var(--term-ansi-10)' }}>➜</span>{' '}
-                  <span style={{ color: 'var(--term-ansi-12)' }}>~/k2</span> k2 agent list
-                </div>
-                <div className="text-[9px]" style={{ color: 'var(--term-ansi-2)' }}>✓ appa — ready</div>
-                <div className="text-[9px]" style={{ color: 'var(--term-ansi-3)' }}>● momo — working</div>
-              </div>
-              <div
-                className="border border-[var(--color-border)] p-2 leading-relaxed"
-                style={{ backgroundColor: 'var(--term-bg)', borderRadius: 'var(--radius-box)' }}
-              >
-                <div className="text-[9px]" style={{ color: 'var(--term-ansi-13)' }}>
-                  <span
-                    className="inline-block w-[3px] h-[10px] mr-1 align-middle rounded-[calc(var(--radius-box)/8)]"
-                    style={{ backgroundColor: 'var(--term-ansi-13)' }}
-                  />
-                  agent
-                </div>
-                <div className="text-[9px]" style={{ color: 'var(--term-fg)' }}>Refactor complete.</div>
-                <div className="text-[9px]">
-                  <span style={{ color: 'var(--term-fg)' }}>$ </span>
-                  <span
-                    className="inline-block w-[6px] h-[10px] align-middle rounded-[calc(var(--radius-box)/8)]"
-                    style={{ backgroundColor: 'var(--term-cursor)' }}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
+          </SettingsGroup>
         </div>
       </div>
     </div>

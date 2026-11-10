@@ -62,6 +62,21 @@ describe('accent override', () => {
     expect(mem.get('k2.accent.terminal')).toBe('#ff00aa')
   })
 
+  it('still applies live when storage refuses to save it', async () => {
+    const store = await freshStore()
+    const setItem = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    try {
+      store.getState().setAccent('#ff00aa')
+    } finally {
+      setItem.mockRestore()
+    }
+    expect(accentVar()).toBe('#ff00aa')
+    expect(store.getState().accent).toBe('#ff00aa')
+    expect(mem.has('k2.accent.terminal')).toBe(false)
+  })
+
   it('ignores an invalid colour', async () => {
     const store = await freshStore()
     store.getState().setAccent('not-a-colour')

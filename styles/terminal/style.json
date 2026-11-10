@@ -5,7 +5,7 @@
   "author": "Alakazam Labs",
   "version": "1.0.0",
   "schemaVersion": 1,
-  "description": "K2's square look: compact, flush, zero-radius, 1px hairline dividers, monospace everywhere. The reference implementation of the Style contract.",
+  "description": "Square and compact, like a terminal. Thin dividers, small cut corners, and a code font throughout.",
   "defaultPalette": "charcoal",
   "defaultPalettes": {
     "dark": "charcoal",

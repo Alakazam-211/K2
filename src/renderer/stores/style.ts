@@ -152,10 +152,15 @@ function readStoredAccent(styleId: string): AccentChoice | null {
 /** Stamp the style's saved accent as inline custom properties on <html>, over
  *  the palette's own values. Gardens are unaffected: the Zen root re-points
  *  each of these at a Zen token (lib/zen/zen-style-shield). */
-function stampAccentProperties(style: StyleMeta, palette: StylePaletteMeta, scheme: StyleScheme): void {
+function stampAccentProperties(
+  style: StyleMeta,
+  palette: StylePaletteMeta,
+  scheme: StyleScheme,
+  choice: AccentChoice | null = readStoredAccent(style.id),
+): void {
   const html = document.documentElement
   for (const name of ACCENT_VARS) html.style.removeProperty(name)
-  const vars = accentVarsFor(readStoredAccent(style.id), palette, scheme)
+  const vars = accentVarsFor(choice, palette, scheme)
   for (const [name, value] of Object.entries(vars)) html.style.setProperty(name, value)
 }
 
@@ -569,11 +574,12 @@ function selectionOf(s: StyleSelection): StyleSelection {
 }
 
 /** Write the accent onto <html> and the pre-paint stamp, without the rest of
- *  a style stamp (a colour drag shouldn't re-apply the window chrome). */
-function applyAccent(sel: StyleSelection): void {
+ *  a style stamp (a colour drag shouldn't re-apply the window chrome). The
+ *  choice is passed in, so it shows even when storage refused to save it. */
+function applyAccent(sel: StyleSelection, choice: AccentChoice | null): void {
   if (typeof document === 'undefined') return
   const { style, resolvedPalette, resolvedScheme } = resolveStyleSelection(sel, osPrefersLight())
-  stampAccentProperties(style, resolvedPalette, resolvedScheme)
+  stampAccentProperties(style, resolvedPalette, resolvedScheme, choice)
   writeAccentStamps(sel)
 }
 
@@ -654,7 +660,7 @@ export const useStyleStore = create<StyleState>((set, get) => ({
       // Still applies below for this session; it just won't survive a relaunch.
     }
     set({ accent: parsed })
-    applyAccent(sel)
+    applyAccent(sel, parsed)
   },
 
   resetAccent: () => {
@@ -665,7 +671,7 @@ export const useStyleStore = create<StyleState>((set, get) => ({
       // Best-effort; the live values below are already the default.
     }
     set({ accent: null })
-    applyAccent(sel)
+    applyAccent(sel, null)
   },
 }))
 

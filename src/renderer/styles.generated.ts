@@ -517,7 +517,7 @@ export const STYLES: readonly StyleMeta[] = [
     "id": "terminal",
     "name": "Terminal",
     "author": "Alakazam Labs",
-    "description": "K2's square look: compact, flush, zero-radius, 1px hairline dividers, monospace everywhere. The reference implementation of the Style contract.",
+    "description": "Square and compact, like a terminal. Thin dividers, small cut corners, and a code font throughout.",
     "defaultPalette": "charcoal",
     "defaultPalettes": {
       "dark": "charcoal",

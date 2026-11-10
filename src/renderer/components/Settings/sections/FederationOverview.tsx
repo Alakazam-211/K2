@@ -17,7 +17,7 @@ import {
   type AggregatedRemoteConnection,
 } from '@/lib/federation'
 import { Button, Callout, Surface } from '@/components/ui'
-import { ConnectionRow, HealthWord, MetaDot, SectionHeader, StateNote } from './ConnectionsParts'
+import { ConnectionRow, SectionHeader, ServerAddress, StateNote, StatusChip } from './ConnectionsParts'
 
 export function FederationOverview({
   /** Bump after pairing / connection edits so the list reloads. */
@@ -133,27 +133,31 @@ export function FederationOverview({
               <ConnectionRow
                 key={key}
                 data-agent-row={c.address}
+                // The same two lines as a server row: the agent and its
+                // server's address, then its state as a chip and the
+                // workspace here it's connected to.
                 title={
-                  <span className="truncate" title={c.address}>
-                    {c.agent || c.address}
-                    {c.host ? (
-                      <span className="text-[var(--color-text-secondary)] font-normal"> on {c.host}</span>
-                    ) : null}
-                  </span>
+                  <>
+                    <span className="truncate flex-shrink-0 max-w-[60%]" title={c.address}>
+                      {c.agent || c.address}
+                    </span>
+                    {c.host ? <ServerAddress>{c.host}</ServerAddress> : null}
+                  </>
                 }
                 meta={
                   <>
-                    <span>
-                      Connected to <span className="text-[var(--color-text-primary)]">{c.sourceWorkspace}</span>
-                    </span>
-                    {c.gone && (
-                      <>
-                        <MetaDot />
-                        <span data-gone="true">
-                          <HealthWord tone="neutral">Gone:</HealthWord> {remoteConnectionGoneNote(c.host)}
-                        </span>
-                      </>
+                    {c.gone ? (
+                      <StatusChip kind="health" tone="warn" title={remoteConnectionGoneNote(c.host)}>
+                        Gone
+                      </StatusChip>
+                    ) : (
+                      <StatusChip kind="health" tone="ok" title={`Connected to a workspace on ${hostLabel}`}>
+                        Connected
+                      </StatusChip>
                     )}
+                    <span className="ml-0.5 min-w-0 truncate">
+                      Workspace <span className="text-[var(--color-text-primary)]">{c.sourceWorkspace}</span>
+                    </span>
                   </>
                 }
                 actions={
@@ -166,7 +170,13 @@ export function FederationOverview({
                     {busy ? 'Removing…' : 'Remove'}
                   </Button>
                 }
-              />
+              >
+                {c.gone && (
+                  <div className="type-hint text-[var(--color-text-secondary)]" data-gone="true">
+                    {remoteConnectionGoneNote(c.host)}
+                  </div>
+                )}
+              </ConnectionRow>
             )
           })
         )}

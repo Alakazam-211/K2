@@ -3,9 +3,10 @@
 // they connect OUT to. (The OTHER direction — exposing THIS device's own
 // daemon — lives in Settings → K2 Connect.)
 //
-// One column: Servers, then Agents on other servers. Each saved ConnectHost
-// is a row: name, then health (from its public /boot-status), address and
-// trust; at most one button for what it needs next, and everything else in
+// Two columns on a wide pane (Servers left, Agents on other servers right,
+// each scrolling on its own); one column on a narrow one, Servers first.
+// Each saved ConnectHost is a row: name, then health (from its public
+// /boot-status), address and trust; at most one button for what it needs next, and everything else in
 // the row's menu. Add and Edit open a dialog with a "Remember password"
 // checkbox. Non-secret fields persist to ~/.k2so/connect-hosts.json (via the
 // store's connect_hosts_write); the token goes to the OS keychain ONLY when
@@ -49,6 +50,7 @@ import { IconLock } from '@/components/icons/IconLock'
 import { BookmarkIcon, GlobeIcon, LinkIcon } from '@/components/icons/K2Icons'
 import { FederationOverview } from './FederationOverview'
 import { useAddServerFocus } from '@/stores/add-server-focus'
+import { useElementWidth } from '@/hooks/useElementWidth'
 import type { SettingEntry } from '../searchManifest'
 import {
   remoteCreds,
@@ -133,6 +135,13 @@ export const CONNECTIONS_MANIFEST: SettingEntry[] = [
   },
 ]
 
+/** Settings pane width (px) from which Servers and Agents on other servers
+ *  sit side by side, each column scrolling on its own. Narrower, they stack,
+ *  Servers first, and the page scrolls. The same breakpoint as Workspaces /
+ *  Agents; the servers column gets 3/5 of the width, so a row's name,
+ *  address and chips still fit beside its buttons. Every theme alike. */
+export const CONNECTED_SERVERS_TWO_COLUMN_MIN_PX = 840
+
 /** The window's own connection, in the words and colours of a server's health. */
 function connectionHealth(status: ConnectionStatus): { tone: HealthTone; word: string } {
   switch (status) {
@@ -168,6 +177,10 @@ function hostToUrl(h: ConnectHost): string {
 }
 
 export function ConnectionsSection(): React.JSX.Element {
+  // Measure the full-width root (never the capped stacked column), so the
+  // layout follows the pane as it resizes.
+  const [rootEl, rootRef] = useState<HTMLDivElement | null>(null)
+  const twoColumn = useElementWidth(rootEl) >= CONNECTED_SERVERS_TWO_COLUMN_MIN_PX
   const hosts = useConnectHostStore((s) => s.hosts)
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const connectionStatus = useConnectHostStore((s) => s.connectionStatus)
@@ -412,132 +425,162 @@ export function ConnectionsSection(): React.JSX.Element {
     setError(null)
   }
 
-  return (
-    <div className="w-full max-w-[52rem] space-y-8 pb-6" data-connected-servers="">
-      <section>
-        <SectionHeader
-          title="Servers"
-          hint={
-            isLocalActive
-              ? 'Servers this computer can connect to. A password is saved only if you choose Remember password, and only in this computer’s keychain.'
-              : (
-                <>
-                  Servers paired with <span className="text-[var(--color-text-primary)]">{activeHostLabel}</span>. Your
-                  saved servers are in the server menu in the top bar.
-                </>
-              )
-          }
-          action={
-            isLocalActive ? (
-              <Button variant="accent" onClick={beginAdd} data-settings-id="connections.add">
-                + Add a server
-              </Button>
-            ) : undefined
-          }
-        />
-
-        {notice && (
-          <Callout
-            tone="info"
-            data-testid="connections-voice-chat-notice"
-            className="mb-3 type-hint flex items-center justify-between gap-3"
-          >
-            <span>{notice}</span>
-            <Button variant="quiet" onClick={() => setNotice(null)}>
-              OK
+  const serversColumn = (
+    <section>
+      <SectionHeader
+        title="Servers"
+        hint={
+          isLocalActive
+            ? 'Servers this computer can connect to. A password is saved only if you choose Remember password, and only in this computer’s keychain.'
+            : (
+              <>
+                Servers paired with <span className="text-[var(--color-text-primary)]">{activeHostLabel}</span>. Your
+                saved servers are in the server menu in the top bar.
+              </>
+            )
+        }
+        action={
+          isLocalActive ? (
+            <Button variant="accent" onClick={beginAdd} data-settings-id="connections.add">
+              + Add a server
             </Button>
-          </Callout>
-        )}
+          ) : undefined
+        }
+      />
 
-        {isLocalActive ? (
-          <>
-            {hosts.length > 0 && (
-              <Input
-                variant="search"
-                value={serverQuery}
-                onChange={(e) => setServerQuery(e.target.value)}
-                placeholder="Search servers"
-                aria-label="Search servers"
-                className="w-full mb-3"
-                data-settings-id="connections.search"
-              />
-            )}
+      {notice && (
+        <Callout
+          tone="info"
+          data-testid="connections-voice-chat-notice"
+          className="mb-3 type-hint flex items-center justify-between gap-3"
+        >
+          <span>{notice}</span>
+          <Button variant="quiet" onClick={() => setNotice(null)}>
+            OK
+          </Button>
+        </Callout>
+      )}
 
-            <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
-              {/* Local — always present, never editable. */}
-              <ConnectionRow
-                mark={<StatusDot tone={localHealth.tone} />}
-                title={
-                  <>
-                    <span className="truncate flex-shrink-0">This computer</span>
-                    <span className="type-hint text-[var(--color-text-secondary)] truncate ml-1">
-                      K2 server built into this app
-                    </span>
-                  </>
-                }
-                meta={
-                  <>
-                    <StatusChip kind="health" tone={HEALTH_TAG_TONE[localHealth.tone]}>
-                      {localHealth.word}
-                    </StatusChip>
-                    <StatusChip kind="active" tone="accent">
-                      Active
-                    </StatusChip>
-                  </>
-                }
-              />
-              <div className="divide-y divide-[var(--color-border)]" data-settings-id="connections.list">
-                {rows.length === 0 ? (
-                  hosts.length === 0 ? (
-                    <StateNote
-                      data-testid="connections-empty"
-                      title="No saved servers yet."
-                      hint="Add a K2 server to reach its workspaces and agents from this computer."
-                      action={
-                        <Button variant="quiet" onClick={beginAdd}>
-                          + Add a server
-                        </Button>
-                      }
-                    />
-                  ) : (
-                    <StateNote
-                      title="No matching servers."
-                      action={
-                        <Button variant="quiet" onClick={() => setServerQuery('')}>
-                          Clear search
-                        </Button>
-                      }
-                    />
-                  )
+      {isLocalActive ? (
+        <>
+          {hosts.length > 0 && (
+            <Input
+              variant="search"
+              value={serverQuery}
+              onChange={(e) => setServerQuery(e.target.value)}
+              placeholder="Search servers"
+              aria-label="Search servers"
+              className="w-full mb-3"
+              data-settings-id="connections.search"
+            />
+          )}
+
+          <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
+            {/* Local — always present, never editable. */}
+            <ConnectionRow
+              mark={<StatusDot tone={localHealth.tone} />}
+              title={
+                <>
+                  <span className="truncate flex-shrink-0">This computer</span>
+                  <span className="type-hint text-[var(--color-text-secondary)] truncate ml-1">
+                    K2 server built into this app
+                  </span>
+                </>
+              }
+              meta={
+                <>
+                  <StatusChip kind="health" tone={HEALTH_TAG_TONE[localHealth.tone]}>
+                    {localHealth.word}
+                  </StatusChip>
+                  <StatusChip kind="active" tone="accent">
+                    Active
+                  </StatusChip>
+                </>
+              }
+            />
+            <div className="divide-y divide-[var(--color-border)]" data-settings-id="connections.list">
+              {rows.length === 0 ? (
+                hosts.length === 0 ? (
+                  <StateNote
+                    data-testid="connections-empty"
+                    title="No saved servers yet."
+                    hint="Add a K2 server to reach its workspaces and agents from this computer."
+                    action={
+                      <Button variant="quiet" onClick={beginAdd}>
+                        + Add a server
+                      </Button>
+                    }
+                  />
                 ) : (
-                  rows.map((h) => (
-                    <HostTile
-                      key={h.id}
-                      host={h}
-                      isActive={false}
-                      connectionStatus={connectionStatus}
-                      activePeerSideLabel={activeHostLabel}
-                      onEdit={() => beginEdit(h)}
-                      onRemove={() => removeHost(h.id)}
-                      onFederationPeersChanged={() => setFedRefreshKey((n) => n + 1)}
-                    />
-                  ))
-                )}
-              </div>
-            </Surface>
-          </>
-        ) : (
-          <ActiveHostPeersPanel
-            hostLabel={activeHostLabel}
-            refreshKey={fedRefreshKey}
-            localHosts={Array.isArray(hosts) ? hosts : []}
-            onPeersChanged={() => setFedRefreshKey((n) => n + 1)}
-            onConnectLocal={() => pickHost('local')}
-          />
-        )}
-      </section>
+                  <StateNote
+                    title="No matching servers."
+                    action={
+                      <Button variant="quiet" onClick={() => setServerQuery('')}>
+                        Clear search
+                      </Button>
+                    }
+                  />
+                )
+              ) : (
+                rows.map((h) => (
+                  <HostTile
+                    key={h.id}
+                    host={h}
+                    isActive={false}
+                    connectionStatus={connectionStatus}
+                    activePeerSideLabel={activeHostLabel}
+                    onEdit={() => beginEdit(h)}
+                    onRemove={() => removeHost(h.id)}
+                    onFederationPeersChanged={() => setFedRefreshKey((n) => n + 1)}
+                  />
+                ))
+              )}
+            </div>
+          </Surface>
+        </>
+      ) : (
+        <ActiveHostPeersPanel
+          hostLabel={activeHostLabel}
+          refreshKey={fedRefreshKey}
+          localHosts={Array.isArray(hosts) ? hosts : []}
+          onPeersChanged={() => setFedRefreshKey((n) => n + 1)}
+          onConnectLocal={() => pickHost('local')}
+        />
+      )}
+    </section>
+  )
+  const agentsColumn = <FederationOverview refreshKey={fedRefreshKey} />
 
-      <FederationOverview refreshKey={fedRefreshKey} />
+  return (
+    <div
+      ref={rootRef}
+      data-connected-servers=""
+      data-servers-layout={twoColumn ? 'two-column' : 'stacked'}
+      className={twoColumn ? 'w-full h-full min-h-0 flex' : 'w-full'}
+    >
+      {/* The same two wrappers in both layouts, so crossing the breakpoint
+          restyles them instead of remounting the rows (and losing a row's
+          update or pairing in progress). */}
+      <div
+        data-servers-column="servers"
+        className={
+          twoColumn
+            ? 'flex-[3] min-w-0 overflow-y-auto pr-3 pb-6 [scrollbar-gutter:stable]'
+            : 'max-w-[52rem] pb-8'
+        }
+      >
+        {serversColumn}
+      </div>
+      <div
+        data-servers-column="agents"
+        className={
+          twoColumn
+            ? 'flex-[2] min-w-0 overflow-y-auto border-l border-[var(--color-border)] pl-6 pb-6 [scrollbar-gutter:stable]'
+            : 'max-w-[52rem] pb-6'
+        }
+      >
+        {agentsColumn}
+      </div>
 
       {draft && isLocalActive && (
         <ServerFormDialog

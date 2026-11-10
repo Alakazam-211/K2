@@ -1,7 +1,8 @@
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import { floatMaterial } from '@/components/ui/float-material'
 import React from 'react'
-import { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { useElementWidth } from '@/hooks/useElementWidth'
 import { listen, emit } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
@@ -143,24 +144,6 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
  *  list column is 18rem; what's left keeps a settings row (label and hint,
  *  then a 15rem field) readable. The same in every theme. */
 export const WORKSPACES_TWO_COLUMN_MIN_PX = 840
-
-/** The element's width, kept current as the Settings pane resizes; 0 until
- *  it has been measured (and in test DOMs, which have no layout). Measured
- *  before paint, so the first frame already has the right layout. Pass the
- *  element itself (a callback ref's state): the root changes with the layout. */
-function useElementWidth(el: HTMLElement | null): number {
-  const [width, setWidth] = useState(0)
-  useLayoutEffect(() => {
-    if (!el) return
-    const read = (): void => setWidth(el.clientWidth)
-    read()
-    if (typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(read)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [el])
-  return width
-}
 
 export function ProjectsSection(): React.JSX.Element {
   const [rootEl, rootRef] = useState<HTMLDivElement | null>(null)

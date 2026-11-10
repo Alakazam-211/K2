@@ -127,7 +127,7 @@ describe('sidecar thread send address', () => {
 
     await waitFor(
       () => {
-        expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/reviewer')
+        expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/reviewer')
       },
       { timeout: 2500 },
     )
@@ -158,7 +158,7 @@ describe('sidecar thread send address', () => {
     renderInPrimaryRoom(<Harness />)
     await waitFor(
       () => {
-        expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/1')
+        expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/1')
       },
       { timeout: 2500 },
     )
@@ -184,7 +184,7 @@ describe('sidecar thread send address', () => {
     expect(threadPosts()).toEqual([])
     expect(box.value).toBe('  not yet  ')
     expect(screen.getByTestId('compose-thread-addr-error').textContent).toBe(NOT_READY)
-    expect(screen.getByTestId('sidecar-session-title').textContent).toBe('agent')
+    expect(screen.getByTestId('thread-view-name').textContent).toBe('agent')
     expect(seenAddrs).not.toContain('sales')
     expect(seenAddrs).not.toContain('sales/reviewer')
   })
@@ -209,7 +209,7 @@ describe('Thread survives a tab rename (S4)', () => {
   it('test 15: session_address_changed for this pane swaps the address without a remount', async () => {
     h.sticky.current = [{ agentName: 'tab-pg-1', kind: 'sidecar', handle: 'sales/1' }]
     renderInPrimaryRoom(<Harness />)
-    await waitFor(() => expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/1'))
+    await waitFor(() => expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/1'))
     const box = screen.getByRole('textbox') as HTMLTextAreaElement
     const listsBefore = listCalls().length
 
@@ -224,7 +224,7 @@ describe('Thread survives a tab rename (S4)', () => {
         workspacePath: '/ws/sales',
       })
     })
-    await waitFor(() => expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/reviewer'))
+    await waitFor(() => expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/reviewer'))
     // Looked up again to confirm; same mounted compose box (no remount).
     await waitFor(() => expect(listCalls().length).toBeGreaterThan(listsBefore))
     expect(screen.getByRole('textbox')).toBe(box)
@@ -240,19 +240,19 @@ describe('Thread survives a tab rename (S4)', () => {
   it('a change for another pane or address is ignored', async () => {
     h.sticky.current = [{ agentName: 'tab-pg-1', kind: 'sidecar', handle: 'sales/1' }]
     renderInPrimaryRoom(<Harness />)
-    await waitFor(() => expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/1'))
+    await waitFor(() => expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/1'))
     const { publishThreadAddress } = await import('@/lib/thread-address-bus')
     act(() => {
       publishThreadAddress({ address: 'sales/other', previous: 'sales/2', paneGroupId: 'pg-2' })
     })
     await new Promise((r) => setTimeout(r, 50))
-    expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/1')
+    expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/1')
   })
 
   it('tests 16 + 18: a Thread send that 404s shows why, keeps the draft, and re-looks-up; the next send uses the new address', async () => {
     h.sticky.current = [{ agentName: 'tab-pg-1', kind: 'sidecar', handle: 'sales/1' }]
     renderInPrimaryRoom(<Harness />)
-    await waitFor(() => expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/1'))
+    await waitFor(() => expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/1'))
     h.daemonCliPost.mockImplementationOnce(async () => {
       throw new Error(JSON.stringify({ ok: false, error: { code: 'not_found', hint: "unknown overlay addr 'sales/1'" } }))
     })
@@ -262,7 +262,7 @@ describe('Thread survives a tab rename (S4)', () => {
       expect(screen.getByTestId('compose-thread-addr-error').textContent).toMatch(/address changed/),
     )
     expect(box.value).toBe('and the lint')
-    await waitFor(() => expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/reviewer'))
+    await waitFor(() => expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/reviewer'))
     // The new address clears the stale error.
     await waitFor(() => expect(screen.queryByTestId('compose-thread-addr-error')).toBeNull())
     typeAndSend('and the lint')

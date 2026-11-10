@@ -13,14 +13,8 @@ import { useLayoutEffect, useRef, type JSX, type RefObject } from 'react'
 // - how far the revealed terminal reaches from the left or top, which keeps
 //   the floats over the Thread and off the terminal.
 
-/** Marks the element the two values live on (the header's parent, or the
- *  parent of the slot it is drawn into). */
+/** Marks the element the two values live on (the header's parent). */
 export const THREAD_FLOATS_HOST_ATTR = 'data-thread-floats-host'
-/** A box of no size of its own (`display: contents`) that the floats are
- *  drawn into from elsewhere: split view's Thread column offers one as its
- *  first child, so the objects come first in the tab order. Its parent is
- *  the host. */
-export const THREAD_FLOATS_SLOT_ATTR = 'data-thread-floats-slot'
 export const THREAD_FLOAT_INSET_VAR = '--thread-float-inset'
 export const THREAD_FLOAT_LEFT_VAR = '--thread-float-left'
 export const THREAD_FLOAT_TOP_VAR = '--thread-float-top'
@@ -36,9 +30,9 @@ export const THREAD_FLOATS_GRID =
 export type ThreadFloatShape = 'round' | 'pill' | 'name' | 'note' | 'capsule'
 
 /** Where a pane's floating objects are drawn: over the Thread on its own
- *  (Thread view), over the Chatter on its own (Chatter view), or over the
- *  Thread's column in split view (else the Chatter's, splitChrome.tsx). */
-export type ThreadFloatsPlace = 'thread' | 'chatter' | 'split'
+ *  (Thread view) or over the Chatter on its own (Chatter view). Split view
+ *  has no floats: one bar across both columns (splitChrome.tsx). */
+export type ThreadFloatsPlace = 'thread' | 'chatter'
 
 /** Each floating object, by name. */
 export type ThreadFloatId =
@@ -51,22 +45,6 @@ export type ThreadFloatId =
   | 'token'
   | 'history'
   | 'refresh'
-
-/** The only objects split view's Thread column shows: the agent's picture
- *  and name, the bell and search (Rosson, 2026-11-09), and on the right, as
- *  in Thread view, restart, the pinned chat's session and Token, since split
- *  view has no top bar of its own to hold them (2026-11-10). Split view
- *  already picks what each side shows, so the view menu and the drawers'
- *  selector (terminal, Chatter, Heartbeats) stay in Thread view. An object not listed here is hidden in
- *  split view, so a new one needs no rule of its own. */
-export const SPLIT_VIEW_THREAD_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>([
-  'identity',
-  'bell',
-  'search',
-  'token',
-  'history',
-  'refresh',
-])
 
 /** The only objects Chatter view shows (2026-11-10, "look nice like the
  *  rest of our threads"): Thread view's header without what belongs to the
@@ -86,7 +64,7 @@ export const CHATTER_VIEW_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFlo
 /** Whether `id` is drawn in `place`: Thread view shows them all. */
 export function threadFloatShown(id: ThreadFloatId, place: ThreadFloatsPlace): boolean {
   if (place === 'thread') return true
-  return (place === 'chatter' ? CHATTER_VIEW_FLOATS : SPLIT_VIEW_THREAD_FLOATS).has(id)
+  return CHATTER_VIEW_FLOATS.has(id)
 }
 
 /** A floating object: chamfered in Terminal, Frost in Glass. Off, it changes
@@ -101,11 +79,9 @@ export function floatProps(floating: boolean, shape: ThreadFloatShape): Record<s
   }
 }
 
-/** The element a floating header's values live on: its parent, or past the
- *  slot it was drawn into. */
+/** The element a floating header's values live on: its parent. */
 export function threadFloatsHostOf(header: Element): HTMLElement | null {
-  const parent = header.parentElement
-  return parent?.hasAttribute(THREAD_FLOATS_SLOT_ATTR) ? parent.parentElement : parent
+  return header.parentElement
 }
 
 /** Ref for the header. While floating, publishes its height on its host. */
@@ -156,7 +132,7 @@ export function threadFloatsIn(container: HTMLElement): HTMLElement | null {
   return (
     container
       .closest(`[${THREAD_FLOATS_HOST_ATTR}]`)
-      ?.querySelector<HTMLElement>(`:scope > [data-thread-floats], :scope > [${THREAD_FLOATS_SLOT_ATTR}] > [data-thread-floats]`) ?? null
+      ?.querySelector<HTMLElement>(':scope > [data-thread-floats]') ?? null
   )
 }
 

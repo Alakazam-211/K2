@@ -15,7 +15,7 @@ import { ThreadViewIdentity } from './ThreadViewIdentity'
 import { ThreadDrawerSelector } from './ThreadDrawerSelector'
 import type { ThreadPanelKind } from './threadPanels'
 import { ThreadFloatBell } from './ThreadFloatBell'
-import { ThreadFloatSearch } from './ThreadFloatSearch'
+import { ThreadFloatSearch, type SplitBarSearchTarget } from './ThreadFloatSearch'
 import {
   THREAD_FLOATS_GRID,
   ThreadFloatScrim,
@@ -25,7 +25,13 @@ import {
   type ThreadFloatId,
   type ThreadFloatsPlace,
 } from './threadFloats'
-import { PlacedSessionHeader, SplitChromeSlotsContext, useSplitChrome, type SplitChromeSlots } from './splitChrome'
+import {
+  SPLIT_BAR_ATTR,
+  SplitSearchTargetContext,
+  splitSearchKind,
+  useSplitSearchTarget,
+  type SplitSearchOffer,
+} from './splitChrome'
 import { chatHarnessName } from './chatHarness'
 import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
@@ -100,7 +106,7 @@ export function AgentSessionChrome({
   } = useSessionViewTab(sessionKey, room.scope)
   // Reported by the TerminalPane below (its phase).
   const [terminalLive, setTerminalLive] = useState(false)
-  const split = useSplitChrome(viewTab, splitLeft, splitRight)
+  const splitSearch = useSplitSearchTarget()
   // The harness picks the Token control's provider below.
   const tokenProvider = chatHarnessName({ command, commandHint, provider })
   const [refreshing, setRefreshing] = useState(false)
@@ -169,55 +175,38 @@ export function AgentSessionChrome({
     >
       <ModeToggleSessionContext.Provider value={modeSession}>
       <div className="relative h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
-        <PlacedSessionHeader
-          placed={split.placed}
-          viewMenu={
-            <SessionViewMenu
-              value={viewTab}
-              splitLeft={splitLeft}
-              splitRight={splitRight}
-              onChange={setViewTab}
-              onSplitLeft={setSplitLeft}
-              onSplitRight={setSplitRight}
-              threadConversationId={conversationId}
-              threadScope={room.scope}
-            />
+        <SidecarSessionHeader
+          title={title}
+          addr={addr}
+          terminalRevealed={terminalRevealed}
+          onToggleTerminal={() => setTerminalRevealed(!terminalRevealed)}
+          terminalAvailable={terminalLive}
+          threadPanel={threadPanel}
+          onThreadPanel={setThreadPanel}
+          viewTab={viewTab}
+          splitLeft={splitLeft}
+          splitRight={splitRight}
+          onViewTabChange={setViewTab}
+          onSplitLeft={setSplitLeft}
+          onSplitRight={setSplitRight}
+          threadConversationId={conversationId}
+          threadScope={room.scope}
+          onRefresh={() => void handleRefresh()}
+          refreshing={refreshing}
+          splitSearch={splitBarSearch(viewTab, splitLeft, splitRight, splitSearch.host)}
+          bell={cwd ? <ThreadFloatBell cwd={cwd} floating={sessionFloatsPlace(viewTab) !== null} /> : null}
+          tokenPicker={
+            tokenProvider && !room.readOnly ? (
+              <SessionTokenPicker
+                scope={room.scope}
+                provider={tokenProvider}
+                sessionKey={agentName}
+                conversationId={conversationId}
+                resolveProjectId={() => (cwd ? roomProjectForCwd(room, cwd)?.id ?? null : null)}
+                floating={sessionFloatsPlace(viewTab) !== null}
+              />
+            ) : null
           }
-          header={(splitColumn) => (
-            <SidecarSessionHeader
-              title={title}
-              addr={addr}
-              terminalRevealed={terminalRevealed}
-              onToggleTerminal={() => setTerminalRevealed(!terminalRevealed)}
-              terminalAvailable={terminalLive}
-              threadPanel={threadPanel}
-              onThreadPanel={setThreadPanel}
-              viewTab={viewTab}
-              splitLeft={splitLeft}
-              splitRight={splitRight}
-              onViewTabChange={setViewTab}
-              onSplitLeft={setSplitLeft}
-              onSplitRight={setSplitRight}
-              threadConversationId={conversationId}
-              threadScope={room.scope}
-              onRefresh={() => void handleRefresh()}
-              refreshing={refreshing}
-              splitColumn={splitColumn}
-              bell={cwd ? <ThreadFloatBell cwd={cwd} /> : null}
-              tokenPicker={
-                tokenProvider && !room.readOnly ? (
-                  <SessionTokenPicker
-                    scope={room.scope}
-                    provider={tokenProvider}
-                    sessionKey={agentName}
-                    conversationId={conversationId}
-                    resolveProjectId={() => (cwd ? roomProjectForCwd(room, cwd)?.id ?? null : null)}
-                    floating={sessionFloatsPlace(viewTab, splitColumn) !== null}
-                  />
-                ) : null
-              }
-            />
-          )}
         />
         {refreshError ? (
           <p
@@ -231,9 +220,9 @@ export function AgentSessionChrome({
           </p>
         ) : null}
         <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
-          <SplitChromeSlotsContext.Provider value={split.slots}>
+          <SplitSearchTargetContext.Provider value={splitSearch.offer}>
             <Remount key={nonce}>{children}</Remount>
-          </SplitChromeSlotsContext.Provider>
+          </SplitSearchTargetContext.Provider>
         </div>
       </div>
       </ModeToggleSessionContext.Provider>
@@ -245,26 +234,77 @@ function Remount({ children }: { children: ReactNode }): JSX.Element {
   return <>{children}</>
 }
 
-/** The controls a session's bar draws (Terminal and Chatter views, and
- *  split view until its columns are there). Thread view's objects that have
+/** The controls Terminal view's bar draws. Thread view's objects that have
  *  no bar form (the terminal toggle, the bell, search) are not among them. */
 export const BAR_CONTROLS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>(['view', 'token', 'history', 'refresh'])
 
 /** The eye/pencil (`ModeToggle`) sits on Terminal view's bar only: where a
  *  terminal is shown. Not Thread view's floats (its slide-out terminal has
- *  no bar), not Chatter. Split view places its own. */
+ *  no bar), not Chatter. Split view's bar places its own
+ *  (`splitBarModeToggle`). */
 export function barShowsModeToggle(viewTab: SessionViewTab, place: ThreadFloatsPlace | null): boolean {
   return place === null && viewTab === 'terminal'
 }
 
-/** Where a session header floats: Thread view, Chatter view, or split
- *  view's Thread (else Chatter) column; null is a bar. */
-export function sessionFloatsPlace(viewTab: SessionViewTab, splitColumn: boolean): ThreadFloatsPlace | null {
+/** Split view's one bar across both columns (Rosson, 2026-11-10): the view
+ *  menu and side choosers, the picture and name, search (when a side is a
+ *  Thread or the Chatter), the bell, and Token, the session and restart.
+ *  Neither column has objects of its own, so each appears once. The drawers'
+ *  selector stays in Thread view: split view already picks its sides. */
+export const SPLIT_BAR_CONTROLS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>([
+  'view',
+  'identity',
+  'search',
+  'bell',
+  'token',
+  'history',
+  'refresh',
+])
+
+/** Where a session header floats: Thread view or Chatter view; null is a
+ *  bar (Terminal view, and split view's bar across both columns). */
+export function sessionFloatsPlace(viewTab: SessionViewTab): ThreadFloatsPlace | null {
   if (viewTab === 'thread') return 'thread'
   if (viewTab === 'chatter') return 'chatter'
-  if (viewTab === 'split' && splitColumn) return 'split'
   return null
 }
+
+/** Whether a session header draws `id`: what its floats' place shows, else
+ *  its bar's controls. */
+export function sessionHeaderShows(id: ThreadFloatId, viewTab: SessionViewTab): boolean {
+  const place = sessionFloatsPlace(viewTab)
+  if (place) return threadFloatShown(id, place)
+  return (viewTab === 'split' ? SPLIT_BAR_CONTROLS : BAR_CONTROLS).has(id)
+}
+
+/** The window's eye / pencil (viewer / claimer) is the terminal's: split
+ *  view's bar draws it, before Token, when a side is a terminal. */
+export function splitBarModeToggle(viewTab: SessionViewTab, left: SplitPaneView, right: SplitPaneView): boolean {
+  return viewTab === 'split' && (left === 'terminal' || right === 'terminal')
+}
+
+/** The split bar's search: the column offered (`useSplitSearchTarget`), and
+ *  what it shows. None outside split view, or with terminals only. */
+export function splitBarSearch(
+  viewTab: SessionViewTab,
+  left: SplitPaneView,
+  right: SplitPaneView,
+  host: HTMLElement | null,
+): SplitBarSearchTarget | null {
+  const kind = viewTab === 'split' ? splitSearchKind(left, right) : null
+  return kind && host ? { host, kind } : null
+}
+
+/** Split view's bar: Terminal view's bar (its height, rule and material),
+ *  laid out on a grid whose sides never shrink below their controls, so the
+ *  name in the middle shortens first. globals.css "Split view's bar" has the
+ *  rest. */
+export const SPLIT_BAR_GRID =
+  'px-3 grid grid-cols-[minmax(max-content,1fr)_minmax(0,auto)_minmax(max-content,1fr)] gap-x-2 items-center'
+/** Its three parts, each in its own column whatever is hidden. */
+export const SPLIT_BAR_LEFT_CLASS = 'col-start-1 row-start-1 self-stretch flex items-stretch'
+export const SPLIT_BAR_CENTRE_CLASS = 'col-start-2 row-start-1 min-w-0 flex justify-center'
+export const SPLIT_BAR_RIGHT_CLASS = 'col-start-3 row-start-1 flex items-center justify-end gap-1.5'
 
 export function SidecarSessionHeader({
   title,
@@ -286,7 +326,7 @@ export function SidecarSessionHeader({
   threadScope,
   threadPanel,
   onThreadPanel,
-  splitColumn = false,
+  splitSearch = null,
 }: {
   title: string
   /** The Thread's address: Thread view's header reads the picture by it. */
@@ -312,14 +352,14 @@ export function SidecarSessionHeader({
   /** Thread view's Chatter / Heartbeats panel. No `onThreadPanel`: the drawer selector has the terminal only. */
   threadPanel?: ThreadPanelKind | null
   onThreadPanel?: (next: ThreadPanelKind | null) => void
-  /** Split view: drawn into the Thread's column (`splitChrome.tsx`), as
-   *  floats, with only the objects split view keeps. */
-  splitColumn?: boolean
+  /** Split view's bar: the column its search searches (`splitBarSearch`);
+   *  null hides search there. */
+  splitSearch?: SplitBarSearchTarget | null
 }): JSX.Element {
-  const place = sessionFloatsPlace(viewTab, splitColumn)
-  const floating = place !== null
+  const floating = sessionFloatsPlace(viewTab) !== null
+  const splitBar = viewTab === 'split'
   // A bar draws its own controls; floats draw what their place shows.
-  const shows = (id: ThreadFloatId): boolean => (place === null ? BAR_CONTROLS.has(id) : threadFloatShown(id, place))
+  const shows = (id: ThreadFloatId): boolean => sessionHeaderShows(id, viewTab)
   const floatsRef = useThreadFloats(floating)
   return (
     <div
@@ -327,14 +367,26 @@ export function SidecarSessionHeader({
       className={
         floating
           ? THREAD_FLOATS_GRID
-          : 'border-b border-[var(--color-border)] flex-shrink-0 px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch'
+          : splitBar
+            ? `h-8 border-b border-[var(--color-border)] flex-shrink-0 ${SPLIT_BAR_GRID}`
+            : 'border-b border-[var(--color-border)] flex-shrink-0 px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch'
       }
       data-testid="sidecar-session-header"
       data-session-header=""
       data-thread-floats={floating ? '' : undefined}
+      {...{ [SPLIT_BAR_ATTR]: splitBar ? '' : undefined }}
     >
         {floating ? <ThreadFloatScrim /> : null}
-        <div className={floating ? 'relative z-[1] flex min-w-0 items-center gap-1.5 thread-float-group' : 'flex min-w-0 items-stretch'}>
+        <div
+          className={
+            floating
+              ? 'relative z-[1] flex min-w-0 items-center gap-1.5 thread-float-group'
+              : splitBar
+                ? SPLIT_BAR_LEFT_CLASS
+                : 'flex min-w-0 items-stretch'
+          }
+          data-split-bar-group={splitBar ? 'left' : undefined}
+        >
         {shows('view') ? (
           <SessionViewMenu
             value={viewTab}
@@ -357,12 +409,16 @@ export function SidecarSessionHeader({
             onPanel={onThreadPanel}
           />
         ) : null}
-        {shows('bell') ? bell : null}
-        {shows('search') ? <ThreadFloatSearch /> : null}
+        {floating && shows('bell') ? bell : null}
+        {floating && shows('search') ? <ThreadFloatSearch /> : null}
         </div>
         {floating ? (
           <div className="relative z-[1] min-w-0">
             {shows('identity') ? <ThreadViewIdentity name={title} addr={addr} /> : null}
+          </div>
+        ) : splitBar ? (
+          <div className={SPLIT_BAR_CENTRE_CLASS} data-split-bar-centre="">
+            {shows('identity') ? <ThreadViewIdentity name={title} addr={addr} bar /> : null}
           </div>
         ) : (
           <span
@@ -372,8 +428,20 @@ export function SidecarSessionHeader({
             {title}
           </span>
         )}
-        <div className={floating ? 'relative z-[1] flex min-w-0 items-center justify-end gap-1.5 thread-float-group' : 'flex min-w-0 items-center justify-end gap-1'}>
-        {barShowsModeToggle(viewTab, place) ? <ModeToggle /> : null}
+        <div
+          className={
+            floating
+              ? 'relative z-[1] flex min-w-0 items-center justify-end gap-1.5 thread-float-group'
+              : splitBar
+                ? SPLIT_BAR_RIGHT_CLASS
+                : 'flex min-w-0 items-center justify-end gap-1'
+          }
+          data-split-bar-group={splitBar ? 'right' : undefined}
+        >
+        {barShowsModeToggle(viewTab, sessionFloatsPlace(viewTab)) ? <ModeToggle /> : null}
+        {splitBar && shows('search') && splitSearch ? <ThreadFloatSearch bar={splitSearch} /> : null}
+        {splitBar && shows('bell') ? bell : null}
+        {splitBarModeToggle(viewTab, splitLeft, splitRight) ? <ModeToggle /> : null}
         {shows('token') ? tokenPicker : null}
         {shows('refresh') ? (
           <button
@@ -423,8 +491,7 @@ export function PinnedSessionBody({
   threadPanel,
   setThreadPanel,
   projectPath,
-  splitSlots,
-  modeToggleSession,
+  splitSearchOffer,
   children,
 }: {
   viewTab: SessionViewTab
@@ -443,17 +510,11 @@ export function PinnedSessionBody({
   setThreadPanel?: (next: ThreadPanelKind | null) => void
   /** The workspace's path, for the Heartbeats panel. */
   projectPath?: string
-  /** Split view's places for the header (`useSplitChrome`). */
-  splitSlots?: SplitChromeSlots
-  /** The session for an eye/pencil drawn inside the body (split view's bar). */
-  modeToggleSession?: ModeToggleSession
+  /** Split view: the bar's search target, offered by the columns
+   *  (`useSplitSearchTarget`). */
+  splitSearchOffer?: SplitSearchOffer
   children: ReactNode
 }): JSX.Element {
-  const body = (
-    <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
-      <SplitChromeSlotsContext.Provider value={splitSlots ?? null}>{children}</SplitChromeSlotsContext.Provider>
-    </div>
-  )
   return (
     <SessionViewChromeContext.Provider
       value={{
@@ -471,11 +532,9 @@ export function PinnedSessionBody({
         projectPath,
       }}
     >
-      {modeToggleSession ? (
-        <ModeToggleSessionContext.Provider value={modeToggleSession}>{body}</ModeToggleSessionContext.Provider>
-      ) : (
-        body
-      )}
+      <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
+        <SplitSearchTargetContext.Provider value={splitSearchOffer ?? null}>{children}</SplitSearchTargetContext.Provider>
+      </div>
     </SessionViewChromeContext.Provider>
   )
 }

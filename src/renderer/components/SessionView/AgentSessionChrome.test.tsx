@@ -66,6 +66,8 @@ const roomPresence = createStore<PresenceView>(() => ({ roster: [], supported: t
 const room = testRoom({
   tabs: { room: { dropTabAfterFailedSidecarRefresh } },
   presence: roomPresence,
+  // Split view's bar has the workspace's bell, which looks the project up.
+  projects: [],
 })
 import { useSessionViewChrome } from './sessionViewChrome'
 import { createStore } from 'zustand/vanilla'
@@ -237,14 +239,25 @@ describe('Thread view header (S2)', () => {
     expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
   })
 
-  for (const view of ['terminal', 'split']) {
-    it(`${view} view keeps the plain title`, async () => {
-      renderIn(view)
-      await waitFor(() => expect(screen.queryByTestId('sidecar-session-title')).not.toBeNull())
-      expect(screen.queryByTestId('thread-view-identity')).toBeNull()
-      expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/reviewer')
+  it('terminal view keeps the plain title', async () => {
+    renderIn('terminal')
+    await waitFor(() => expect(screen.queryByTestId('sidecar-session-title')).not.toBeNull())
+    expect(screen.queryByTestId('thread-view-identity')).toBeNull()
+    expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/reviewer')
+  })
+
+  it("split view's bar has the picture and name as one line, in its middle", async () => {
+    renderIn('split')
+    const identity = await waitFor(() => {
+      const el = screen.queryByTestId('thread-view-identity')
+      if (!el) throw new Error('no identity')
+      return el
     })
-  }
+    expect(screen.queryByTestId('sidecar-session-title')).toBeNull()
+    expect(identity.hasAttribute('data-compact')).toBe(true)
+    expect(identity.closest('[data-split-bar-centre]')).not.toBeNull()
+    expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/reviewer')
+  })
 })
 
 describe('sidecar chrome (C4/C6/C10)', () => {
@@ -263,7 +276,7 @@ describe('sidecar chrome (C4/C6/C10)', () => {
 
   it('shows the durable handle, no session dropdown, refresh stays', () => {
     renderChrome()
-    expect(screen.getByTestId('sidecar-session-title').textContent).toBe('sales/reviewer')
+    expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/reviewer')
     expect(screen.queryByLabelText('Switch pinned chat session')).toBeNull()
     expect(screen.getByLabelText('Refresh session')).not.toBeNull()
     expect(screen.queryByTestId('session-view-tabs')).toBeNull()
@@ -271,8 +284,27 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     // A new agent opens in Split view (the 0.46.10 default).
     expect(viewButtonLabel()).toBe('Split view')
     expect(viewButtonLabel()).not.toBe('View')
+    // Split view's bar: the view menu, the name, then restart, each in its
+    // own column of the bar.
+    const header = screen.getByTestId('sidecar-session-header')
+    expect(header.hasAttribute('data-split-bar')).toBe(true)
+    const name = screen.getByTestId('thread-view-identity')
+    const menu = screen.getByTestId('session-view-menu')
+    const refresh = screen.getByLabelText('Refresh session')
+    const kids = Array.from(header.children)
+    expect(kids).toHaveLength(3)
+    expect(kids[0]?.contains(menu)).toBe(true)
+    expect(kids[1]?.contains(name)).toBe(true)
+    expect(kids[2]?.contains(refresh)).toBe(true)
+    expect(header.className).toContain('grid-cols-[minmax(max-content,1fr)_minmax(0,auto)_minmax(max-content,1fr)]')
+  })
+
+  it('Terminal view: the handle as a plain title, in the bar\'s middle', () => {
+    localStorage.setItem(sessionViewTabStorageKey('local', 'conv-r'), 'terminal')
+    renderChrome()
     const header = screen.getByTestId('sidecar-session-header')
     const title = screen.getByTestId('sidecar-session-title')
+    expect(title.textContent).toBe('sales/reviewer')
     const menu = screen.getByTestId('session-view-menu')
     const refresh = screen.getByLabelText('Refresh session')
     expect(title.parentElement).toBe(header)
@@ -281,8 +313,6 @@ describe('sidecar chrome (C4/C6/C10)', () => {
     const kids = Array.from(header.children)
     expect(kids).toHaveLength(3)
     expect(kids[1]).toBe(title)
-    expect(kids[0]?.contains(menu)).toBe(true)
-    expect(kids[2]?.contains(refresh)).toBe(true)
     expect(header.className).toContain('grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]')
   })
 

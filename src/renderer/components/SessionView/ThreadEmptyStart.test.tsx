@@ -310,8 +310,8 @@ describe('ThreadOverlayColumn: the empty start', () => {
 
 describe("the header's picture and name while the Thread is empty", () => {
   const css = readFileSync(join(__dirname, '../../globals.css'), 'utf8')
-  it('hide only the identity, only while a centred Thread is under the same floats', () => {
-    const rule = /\[data-thread-floats-host\]:has\(\[data-thread-centred\]\) \[data-thread-floats\] \[data-thread-view-identity\] \{([^}]*)\}/.exec(css)
+  it('hide only the identity, only while a centred Thread is under the same floats (or split view\'s bar)', () => {
+    const rule = /\[data-thread-floats-host\]:has\(\[data-thread-centred\]\) \[data-thread-floats\] \[data-thread-view-identity\],\s*:has\(> \[data-split-bar\]\):has\(\[data-thread-centred\]\) > \[data-split-bar\] \[data-thread-view-identity\] \{([^}]*)\}/.exec(css)
     expect(rule).not.toBeNull()
     expect(rule![1]).toMatch(/opacity: 0/)
     expect(rule![1]).toMatch(/visibility: hidden/)

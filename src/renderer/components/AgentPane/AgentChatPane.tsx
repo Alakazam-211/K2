@@ -29,7 +29,18 @@ import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-
 import { chatDisplayName, resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from '@/components/SessionView/SessionViewMenu'
 import type { SplitPaneView } from '@/components/SessionView/sessionViewTab'
-import { BAR_CONTROLS, PinnedSessionBody, barShowsModeToggle, sessionFloatsPlace } from '@/components/SessionView/AgentSessionChrome'
+import {
+  PinnedSessionBody,
+  barShowsModeToggle,
+  SPLIT_BAR_CENTRE_CLASS,
+  SPLIT_BAR_GRID,
+  SPLIT_BAR_LEFT_CLASS,
+  SPLIT_BAR_RIGHT_CLASS,
+  sessionFloatsPlace,
+  sessionHeaderShows,
+  splitBarModeToggle,
+  splitBarSearch,
+} from '@/components/SessionView/AgentSessionChrome'
 import ModeToggle, { ModeToggleSessionContext, type ModeToggleSession } from '@/components/Presence/ModeToggle'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
@@ -40,9 +51,9 @@ import { useSessionViewTab } from '@/components/SessionView/useSessionViewTab'
 import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
 import { ThreadViewIdentity } from '@/components/SessionView/ThreadViewIdentity'
 import { ThreadFloatBell } from '@/components/SessionView/ThreadFloatBell'
-import { ThreadFloatSearch } from '@/components/SessionView/ThreadFloatSearch'
-import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, threadFloatShown, useThreadFloats, type ThreadFloatId } from '@/components/SessionView/threadFloats'
-import { PlacedSessionHeader, SplitChromeSlotsContext, useSplitChrome } from '@/components/SessionView/splitChrome'
+import { ThreadFloatSearch, type SplitBarSearchTarget } from '@/components/SessionView/ThreadFloatSearch'
+import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, useThreadFloats, type ThreadFloatId } from '@/components/SessionView/threadFloats'
+import { SPLIT_BAR_ATTR, SplitSearchTargetContext, useSplitSearchTarget } from '@/components/SessionView/splitChrome'
 import { ThreadDrawerSelector } from '@/components/SessionView/ThreadDrawerSelector'
 import type { ThreadPanelKind } from '@/components/SessionView/threadPanels'
 import { FolderTrustHoldPanel, useFolderTrustHold } from './FolderTrustHold'
@@ -230,9 +241,9 @@ interface ChatHeaderProps {
   onContinueNewChat: (source: ContinueNewChatSource) => void
   /** Workspace id = the pinned chat's session key (its Token picker). */
   projectId?: string
-  /** Split view: drawn into the Thread's column (`splitChrome.tsx`), as
-   *  floats, with only the objects split view keeps. */
-  splitColumn?: boolean
+  /** Split view's bar: the column its search searches (`splitBarSearch`);
+   *  null hides search there. */
+  splitSearch?: SplitBarSearchTarget | null
 }
 
 interface HistorySession {
@@ -267,7 +278,7 @@ function ChatHeader({
   pinnedProvider,
   onContinueNewChat,
   projectId,
-  splitColumn = false,
+  splitSearch = null,
 }: ChatHeaderProps): React.JSX.Element {
   const room = useRoom()
   const [historySessions, setHistorySessions] = useState<HistorySession[]>([])
@@ -371,10 +382,10 @@ function ChatHeader({
     }
   }
 
-  const place = sessionFloatsPlace(viewTab, splitColumn)
-  const floating = place !== null
+  const floating = sessionFloatsPlace(viewTab) !== null
+  const splitBar = viewTab === 'split'
   // A bar draws its own controls; floats draw what their place shows.
-  const shows = (id: ThreadFloatId): boolean => (place === null ? BAR_CONTROLS.has(id) : threadFloatShown(id, place))
+  const shows = (id: ThreadFloatId): boolean => sessionHeaderShows(id, viewTab)
   const floatsRef = useThreadFloats(floating)
 
   return (
@@ -384,10 +395,24 @@ function ChatHeader({
       data-testid="pinned-chat-header"
       data-session-header=""
       data-thread-floats={floating ? '' : undefined}
+      {...{ [SPLIT_BAR_ATTR]: splitBar ? '' : undefined }}
     >
     {floating ? <ThreadFloatScrim /> : null}
-    <div className={floating ? `relative z-[1] ${THREAD_FLOATS_GRID}` : 'px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch'}>
-      <div className={floating ? 'flex min-w-0 items-center gap-1.5 thread-float-group' : 'flex min-w-0 items-stretch'}>
+    <div
+      className={
+        floating
+          ? `relative z-[1] ${THREAD_FLOATS_GRID}`
+          : splitBar
+            ? `h-[31px] ${SPLIT_BAR_GRID}`
+            : 'px-3 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch'
+      }
+    >
+      <div
+        className={
+          floating ? 'flex min-w-0 items-center gap-1.5 thread-float-group' : splitBar ? SPLIT_BAR_LEFT_CLASS : 'flex min-w-0 items-stretch'
+        }
+        data-split-bar-group={splitBar ? 'left' : undefined}
+      >
       {shows('view') ? (
         <SessionViewMenu
           value={viewTab}
@@ -410,18 +435,34 @@ function ChatHeader({
           onPanel={onThreadPanel}
         />
       ) : null}
-      {shows('bell') && projectId ? <ThreadFloatBell projectId={projectId} /> : null}
-      {shows('search') ? <ThreadFloatSearch /> : null}
+      {floating && shows('bell') && projectId ? <ThreadFloatBell projectId={projectId} /> : null}
+      {floating && shows('search') ? <ThreadFloatSearch /> : null}
       </div>
       {floating ? (
         shows('identity') ? <ThreadViewIdentity name={displayName} addr={overlayAddr} /> : <span />
+      ) : splitBar ? (
+        <div className={SPLIT_BAR_CENTRE_CLASS} data-split-bar-centre="">
+          {shows('identity') ? <ThreadViewIdentity name={displayName} addr={overlayAddr} bar /> : null}
+        </div>
       ) : (
         <span className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center justify-center text-center">
           {displayName}
         </span>
       )}
-      <div className={floating ? 'flex min-w-0 items-center justify-end gap-1.5 thread-float-group' : 'flex min-w-0 items-center justify-end gap-1'}>
-      {barShowsModeToggle(viewTab, place) ? <ModeToggle /> : null}
+      <div
+        className={
+          floating
+            ? 'flex min-w-0 items-center justify-end gap-1.5 thread-float-group'
+            : splitBar
+              ? SPLIT_BAR_RIGHT_CLASS
+              : 'flex min-w-0 items-center justify-end gap-1'
+        }
+        data-split-bar-group={splitBar ? 'right' : undefined}
+      >
+      {barShowsModeToggle(viewTab, sessionFloatsPlace(viewTab)) ? <ModeToggle /> : null}
+      {splitBar && shows('search') && splitSearch ? <ThreadFloatSearch bar={splitSearch} /> : null}
+      {splitBar && shows('bell') && projectId ? <ThreadFloatBell projectId={projectId} floating={false} /> : null}
+      {splitBarModeToggle(viewTab, splitLeft, splitRight) ? <ModeToggle /> : null}
       {shows('token') && projectId && (
         <SessionTokenPicker
           scope={room.scope}
@@ -841,7 +882,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     threadPanel,
     setThreadPanel,
   } = useSessionViewTab(overlayConv, room.scope)
-  const split = useSplitChrome(viewTab, splitLeft, splitRight)
+  const splitSearch = useSplitSearchTarget()
   // research-remote-thread-load-v1 Fix 1: the pinned Chat's Thread answers
   // at the workspace handle, which the room's project list (the list a Home
   // row opened by) already has. Known: use it, no lookup round trip.
@@ -1209,9 +1250,10 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
   // that won't load never traps the user: the dropdown stays visible and
   // clickable, so they can switch to a different past session. The failure
   // message + Retry render in the content area BELOW the header, not over it.
-  const chatHeader = (splitColumn: boolean): React.JSX.Element => (
+  const header = (
+    <ModeToggleSessionContext.Provider value={modeSession}>
     <ChatHeader
-      splitColumn={splitColumn}
+      splitSearch={splitBarSearch(viewTab, splitLeft, splitRight, splitSearch.host)}
       displayName={displayName}
       overlayAddr={overlayAddr}
       projectPath={projectPath}
@@ -1233,25 +1275,6 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       pinnedProvider={liveProvider}
       onContinueNewChat={setContinueSource}
       projectId={projectId}
-    />
-  )
-  const header = (
-    <ModeToggleSessionContext.Provider value={modeSession}>
-    <PlacedSessionHeader
-      placed={split.placed}
-      header={chatHeader}
-      viewMenu={
-        <SessionViewMenu
-          value={viewTab}
-          splitLeft={splitLeft}
-          splitRight={splitRight}
-          onChange={setViewTab}
-          onSplitLeft={setSplitLeft}
-          onSplitRight={setSplitRight}
-          threadConversationId={canonicalSessionId}
-          threadScope={room.scope}
-        />
-      }
     />
     </ModeToggleSessionContext.Provider>
   )
@@ -1340,7 +1363,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       {continueDialog}
       <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
-        <SplitChromeSlotsContext.Provider value={split.slots}>
+        <SplitSearchTargetContext.Provider value={splitSearch.offer}>
           <EnsuringThreadBody
             viewTab={viewTab}
             splitLeft={splitLeft}
@@ -1349,7 +1372,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
             conversationId={overlayConv}
             displayName={displayName}
           />
-        </SplitChromeSlotsContext.Provider>
+        </SplitSearchTargetContext.Provider>
       </div>
       </>
     )
@@ -1362,8 +1385,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
       {header}
       <PinnedSessionBody
-        splitSlots={split.slots}
-        modeToggleSession={modeSession}
+        splitSearchOffer={splitSearch.offer}
         viewTab={viewTab}
         splitLeft={splitLeft}
         splitRight={splitRight}
@@ -1608,7 +1630,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     threadPanel,
     setThreadPanel,
   } = useSessionViewTab(overlayConv, room.scope)
-  const split = useSplitChrome(viewTab, splitLeft, splitRight)
+  const splitSearch = useSplitSearchTarget()
   const [overlayAddr, setOverlayAddr] = useState('')
   useEffect(() => {
     let cancelled = false
@@ -1897,9 +1919,10 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
   // switch to a different past session. The failure message + Retry render in
   // the content area BELOW the header, not over it. (Uses the same ChatHeader
   // as the daemon-owned path; `switchToSession` is the legacy switch handler.)
-  const chatHeader = (splitColumn: boolean): React.JSX.Element => (
+  const header = (
+    <ModeToggleSessionContext.Provider value={modeSession}>
     <ChatHeader
-      splitColumn={splitColumn}
+      splitSearch={splitBarSearch(viewTab, splitLeft, splitRight, splitSearch.host)}
       displayName={displayName}
       overlayAddr={overlayAddr}
       projectPath={projectPath}
@@ -1921,25 +1944,6 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       pinnedProvider={providerKeyForCommand(launchConfig?.command)}
       onContinueNewChat={setContinueSource}
       projectId={projectId}
-    />
-  )
-  const header = (
-    <ModeToggleSessionContext.Provider value={modeSession}>
-    <PlacedSessionHeader
-      placed={split.placed}
-      header={chatHeader}
-      viewMenu={
-        <SessionViewMenu
-          value={viewTab}
-          splitLeft={splitLeft}
-          splitRight={splitRight}
-          onChange={setViewTab}
-          onSplitLeft={setSplitLeft}
-          onSplitRight={setSplitRight}
-          threadConversationId={currentSessionId}
-          threadScope={room.scope}
-        />
-      }
     />
     </ModeToggleSessionContext.Provider>
   )
@@ -1992,8 +1996,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
       {header}
       <PinnedSessionBody
-        splitSlots={split.slots}
-        modeToggleSession={modeSession}
+        splitSearchOffer={splitSearch.offer}
         viewTab={viewTab}
         splitLeft={splitLeft}
         splitRight={splitRight}

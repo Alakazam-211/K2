@@ -46,9 +46,15 @@ vi.stubGlobal(
 import { AgentSessionChrome } from './AgentSessionChrome'
 import { SplitSessionColumns } from './SplitSessionColumns'
 import { useSessionViewChrome } from './sessionViewChrome'
+import { sessionViewSplitStorageKey } from './sessionViewTab'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { resetLlmAccountsForTests } from '@/stores/llm-accounts'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
+import { createStore } from 'zustand/vanilla'
+import type { PresenceView } from '@/stores/server-view'
+
+// The bars' eye/pencil reads who else is here: just you.
+const EMPTY_PRESENCE = createStore<PresenceView>(() => ({ roster: [], supported: true }))
 
 const PROJECT = { id: 'proj-sales', name: 'sales', path: '/ws/sales', workspaces: [] } as unknown as ProjectWithWorkspaces
 
@@ -103,7 +109,7 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 function renderTab(opts: { command?: string; readOnly?: boolean } = {}) {
-  const room = testRoom({ tabs: {}, projects: [PROJECT], readOnly: opts.readOnly })
+  const room = testRoom({ tabs: {}, presence: EMPTY_PRESENCE, projects: [PROJECT], readOnly: opts.readOnly })
   return renderInRoom(
     room,
     <AgentSessionChrome
@@ -149,40 +155,62 @@ describe('agent chat tab header Token picker', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(screen.getAllByTestId('sidecar-session-header')).toHaveLength(2)
     expect(screen.queryByTestId('chat-login-picker')).toBeNull()
-    expect(h.daemonCliGet).not.toHaveBeenCalled()
+    expect(h.daemonCliGet.mock.calls.map((c) => c[0])).not.toContain('llm/accounts/list')
   })
 
-  it('in split view it floats on the Thread column\'s right, before restart', async () => {
-    pins = []
-    const room = testRoom({ tabs: {}, projects: [PROJECT] })
-    function Columns() {
-      const chrome = useSessionViewChrome()
-      if (!chrome) return null
-      return (
-        <SplitSessionColumns
-          showSplit={chrome.viewTab === 'split'}
-          hidePty={false}
-          left={chrome.splitLeft}
-          right={chrome.splitRight}
-          terminal={<div data-testid="terminal-pane" />}
-          sharedTerminal={null}
-          renderView={() => <div data-testid="thread-column" />}
-          single={null}
-        />
+  for (const [left, right] of [
+    ['terminal', 'thread'],
+    ['thread', 'terminal'],
+    ['thread', 'chatter'],
+    ['chatter', 'terminal'],
+    ['terminal', 'chatter'],
+    ['chatter', 'thread'],
+  ] as const) {
+    it(`in split view (${left} | ${right}) Token, search and restart are each on the bar once, in neither column (the bell: splitChrome.test.tsx)`, async () => {
+      pins = []
+      localStorage.setItem(sessionViewSplitStorageKey('local', 'conv-r'), JSON.stringify({ left, right }))
+      const room = testRoom({ tabs: {}, presence: EMPTY_PRESENCE, projects: [PROJECT] })
+      function Columns() {
+        const chrome = useSessionViewChrome()
+        if (!chrome) return null
+        return (
+          <SplitSessionColumns
+            showSplit={chrome.viewTab === 'split'}
+            hidePty={false}
+            left={chrome.splitLeft}
+            right={chrome.splitRight}
+            terminal={<div data-testid="terminal-pane" />}
+            sharedTerminal={null}
+            renderView={(view) => <div data-testid={`${view}-column`} />}
+            single={null}
+          />
+        )
+      }
+      // A new agent opens in Split view.
+      renderInRoom(
+        room,
+        <AgentSessionChrome title="sales/reviewer" addr="sales/reviewer" conversationId="conv-r" agentName="tab-xyz" cwd="/ws/sales" command="claude">
+          <Columns />
+        </AgentSessionChrome>,
       )
-    }
-    // A new agent opens in Split view: Terminal left, Thread right.
-    renderInRoom(
-      room,
-      <AgentSessionChrome title="sales/reviewer" addr="sales/reviewer" conversationId="conv-r" agentName="tab-xyz" cwd="/ws/sales" command="claude">
-        <Columns />
-      </AgentSessionChrome>,
-    )
-    const thread = screen.getByTestId('session-split-right')
-    const chip = await within(thread).findByRole('button', { name: /^Claude token for this chat/ })
-    expect(chip.getAttribute('data-k2-float')).toBe('pill')
-    const refresh = within(thread).getByLabelText('Refresh session')
-    expect(chip.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(screen.getByTestId('session-split-left').contains(chip)).toBe(false)
-  })
+      const bar = screen.getByTestId('sidecar-session-header')
+      expect(bar.hasAttribute('data-split-bar')).toBe(true)
+      const chip = await within(bar).findByRole('button', { name: /^Claude token for this chat/ })
+      expect(chip.hasAttribute('data-k2-float')).toBe(false)
+      const refresh = within(bar).getByLabelText('Refresh session')
+      expect(chip.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      const once = [
+        ...screen.getAllByTestId('chat-login-picker'),
+        ...screen.getAllByLabelText('Refresh session'),
+        ...screen.getAllByTestId('thread-search-button'),
+      ]
+      expect(once).toHaveLength(3)
+      for (const el of once) {
+        expect(bar.contains(el)).toBe(true)
+        expect(screen.getByTestId('session-split-left').contains(el)).toBe(false)
+        expect(screen.getByTestId('session-split-right').contains(el)).toBe(false)
+      }
+      localStorage.clear()
+    })
+  }
 })

@@ -459,7 +459,15 @@ export function SessionTokenPicker({
         {...floatProps(floating, 'pill')}
         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-field)] type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer"
       >
-        <span>{TOKEN_LABEL}</span>
+        {/* Split view's bar, short of room, shows the key instead of the
+            word (globals.css, "Split view's bar"). Hidden everywhere else. */}
+        <span data-k2-collapse-icon="" aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="7.5" cy="15.5" r="4.5" />
+            <path d="M10.7 12.3L21 2M16 7l3 3M18.5 4.5l2 2" />
+          </svg>
+        </span>
+        <span data-k2-collapse-label="">{TOKEN_LABEL}</span>
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="flex-shrink-0">
           <path d={open ? 'M18 15l-6-6-6 6' : 'M6 9l6 6 6-6'} />
         </svg>

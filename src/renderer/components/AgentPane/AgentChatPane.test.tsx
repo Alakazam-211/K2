@@ -1315,7 +1315,7 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     localStorage.clear()
   })
 
-  it('in Split view the Thread column has the floats: the picture and name, the bell and search, and session and restart on the right; the view menu sits over the other side', async () => {
+  it('in Split view one bar spans both columns: the view menu, the picture and name, search, session and restart, each once, and nothing in the Thread column', async () => {
     localStorage.clear()
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
@@ -1328,36 +1328,59 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
       }
       return undefined
     })
-    renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" />)
-    const right = screen.getByTestId('session-split-right')
-    const floats = await waitFor(() => {
-      const el = right.querySelector<HTMLElement>('[data-testid="pinned-chat-header"]')
-      if (!el) throw new Error('no header in the Thread column')
-      return el
-    })
-    expect(floats.hasAttribute('data-thread-floats')).toBe(true)
-    expect(screen.getAllByTestId('pinned-chat-header')).toHaveLength(1)
-    expect(floats.querySelector('[data-testid="thread-view-identity"]')).not.toBeNull()
-    expect(floats.querySelector('[data-testid="thread-search-button"]')).not.toBeNull()
-    const history = screen.getByLabelText('Switch pinned chat session')
-    const refresh = screen.getByLabelText('Refresh chat session')
-    expect(floats.contains(history)).toBe(true)
-    expect(floats.contains(refresh)).toBe(true)
-    expect(history.getAttribute('data-k2-float')).toBe('pill')
-    expect(refresh.getAttribute('data-k2-float')).toBe('round')
-    expect(history.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
-    const bar = screen.getByTestId('split-view-bar')
-    expect(screen.getByTestId('session-split-left').contains(bar)).toBe(true)
-    expect(bar.querySelector('[data-testid="session-view-button"]')).not.toBeNull()
-    // Ready, the mocked terminal draws no columns: the bar comes back whole.
-    await act(async () => release())
-    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
-    await waitFor(() => expect(screen.queryByTestId('split-view-bar')).toBeNull())
-    expect(screen.getByTestId('pinned-chat-header').hasAttribute('data-thread-floats')).toBe(false)
-    expect(screen.getByLabelText('Refresh chat session')).toBeTruthy()
-    h.daemonCliPost.mockImplementation(async () => mountEnsure())
-    localStorage.clear()
+    try {
+      renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" />)
+      const right = screen.getByTestId('session-split-right')
+      const bar = screen.getByTestId('pinned-chat-header')
+      expect(bar.hasAttribute('data-split-bar')).toBe(true)
+      expect(bar.hasAttribute('data-thread-floats')).toBe(false)
+      expect(screen.getAllByTestId('pinned-chat-header')).toHaveLength(1)
+      // Above both columns, not in either.
+      expect(right.contains(bar)).toBe(false)
+      expect(screen.getByTestId('session-split-left').contains(bar)).toBe(false)
+      expect(bar.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(right.querySelector('[data-session-header], [data-thread-floats]')).toBeNull()
+      // The left group: the view menu and the side choosers.
+      const left = bar.querySelector('[data-split-bar-group="left"]')!
+      expect(left.querySelector('[data-testid="session-view-button"]')).not.toBeNull()
+      expect(left.querySelector('[data-testid="session-view-split-left"]')).not.toBeNull()
+      expect(left.querySelector('[data-testid="session-view-split-right"]')).not.toBeNull()
+      // The middle: the picture and name, one line.
+      expect(bar.querySelector('[data-split-bar-centre] [data-testid="thread-view-identity"]')?.hasAttribute('data-compact')).toBe(true)
+      // The right group: search (the Thread's), then session and restart.
+      const rightGroup = bar.querySelector('[data-split-bar-group="right"]')!
+      const search = await waitFor(() => {
+        const el = rightGroup.querySelector<HTMLElement>('[data-testid="thread-search-button"]')
+        if (!el) throw new Error('no search on the bar')
+        return el
+      })
+      expect(right.hasAttribute('data-thread-search-host')).toBe(true)
+      const history = screen.getByLabelText('Switch pinned chat session')
+      const refresh = screen.getByLabelText('Refresh chat session')
+      expect(rightGroup.contains(history)).toBe(true)
+      expect(rightGroup.contains(refresh)).toBe(true)
+      expect(history.hasAttribute('data-k2-float')).toBe(false)
+      expect(refresh.hasAttribute('data-k2-float')).toBe(false)
+      expect(search.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(history.compareDocumentPosition(refresh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      for (const label of ['Switch pinned chat session', 'Refresh chat session']) {
+        expect(screen.getAllByLabelText(label)).toHaveLength(1)
+      }
+      expect(screen.getAllByTestId('thread-search-button')).toHaveLength(1)
+      expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
+      // Ready, the mocked terminal draws no columns: the bar stays whole, with
+      // nothing to search.
+      await act(async () => release())
+      await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+      const after = screen.getByTestId('pinned-chat-header')
+      expect(after.hasAttribute('data-split-bar')).toBe(true)
+      expect(screen.getByLabelText('Refresh chat session')).toBeTruthy()
+      await waitFor(() => expect(screen.queryByTestId('thread-search-button')).toBeNull())
+    } finally {
+      release()
+      h.daemonCliPost.mockImplementation(async () => mountEnsure())
+      localStorage.clear()
+    }
   })
 
   it('a list without the handle looks the address up as before', async () => {

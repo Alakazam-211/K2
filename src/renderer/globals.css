@@ -2085,12 +2085,13 @@ html[data-style="terminal"] [data-k2-float-picture] { border: 1px solid var(--co
 
 /* An empty Thread's start (ThreadOverlayColumn, ThreadEmptyStart): the
    agent's picture and name over a lifted message box, centred. The header's
-   own picture and name step aside meanwhile (its other objects stay), and
-   come back as the box drifts down on the first message. Hiding is instant;
+   own picture and name (split view's bar's too) step aside meanwhile (its
+   other objects stay), and come back as the box drifts down on the first message. Hiding is instant;
    coming back fades. The drift is the Style's slow motion; the first message
    fades in behind the box as it lands, so the box never slides over it. */
 [data-thread-view-identity] { transition: opacity var(--motion-duration-slow) var(--motion-ease-out-soft); }
-[data-thread-floats-host]:has([data-thread-centred]) [data-thread-floats] [data-thread-view-identity] {
+[data-thread-floats-host]:has([data-thread-centred]) [data-thread-floats] [data-thread-view-identity],
+:has(> [data-split-bar]):has([data-thread-centred]) > [data-split-bar] [data-thread-view-identity] {
   opacity: 0;
   visibility: hidden;
   transition: none;
@@ -2172,14 +2173,44 @@ html:is([data-style="glass"], [data-style="glass-classic"]) [data-thread-search]
 .thread-search-input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
 .thread-search-count { font-size: var(--type-xs); padding-inline: 2px 4px; min-width: 7ch; text-align: end; }
 .thread-search-count[data-empty] { color: var(--color-text-secondary); }
-[data-thread-searching].grid,
-[data-thread-searching] > .grid { grid-template-columns: minmax(0, 1fr); }
-:is([data-thread-searching].grid, [data-thread-searching] > .grid) > :not(.thread-float-scrim):not(:has([data-thread-search])) { display: none; }
+[data-thread-floats][data-thread-searching].grid,
+[data-thread-floats][data-thread-searching] > .grid { grid-template-columns: minmax(0, 1fr); }
+:is([data-thread-floats][data-thread-searching].grid, [data-thread-floats][data-thread-searching] > .grid) > :not(.thread-float-scrim):not(:has([data-thread-search])) { display: none; }
 [data-thread-searching] .thread-float-group:has([data-thread-search]) { min-width: 0; }
 [data-thread-searching] [data-testid="thread-search"],
 [data-thread-searching] [data-thread-search] { flex: 1 1 auto; min-width: 0; }
 [data-thread-searching] .thread-search-input { flex: 1 1 auto; width: auto; min-width: 3ch; }
 [data-thread-searching="tight"] .thread-float-group > :not([data-testid="thread-search"]) { display: none; }
+
+/* Split view's bar (splitChrome.tsx): one solid bar across both columns,
+   Terminal view's bar with the view menu and side choosers on the left, the
+   agent's picture and name as the compact pill in the middle, and search, the
+   bell, Token, the session and restart on the right. Nothing floats over the
+   columns. Its objects are a size smaller than Thread view's, to sit in the
+   32px bar. Short of room, Token and the session show their icons only (the
+   name in the middle shortens first, on its own). While searching short of
+   room, the name and the right-hand objects step aside and the field takes
+   their place (`narrow`), then the view menu too (`tight`). */
+[data-split-bar] {
+  container: split-bar / inline-size;
+  --k2-float-h: 24px;
+}
+[data-split-bar] [data-k2-float="name"] { padding: 0 10px 0 2px; }
+[data-split-bar] [data-testid="thread-view-name"] { font-size: var(--type-md); }
+[data-k2-collapse-icon] { display: none; }
+@container split-bar (max-width: 840px) {
+  [data-split-bar] :is([data-k2-float-label], [data-k2-collapse-label]) { display: none; }
+  [data-split-bar] [data-k2-collapse-icon] { display: inline-flex; }
+}
+/* The window's eye / pencil, the bar's 24px. Glass has no rim round the
+   pair (styles/glass), so its circles take the full 24px. */
+[data-split-bar] [data-mode-toggle] { height: var(--k2-float-h); box-sizing: border-box; }
+[data-split-bar] [data-mode-toggle] > button { height: calc(var(--k2-float-h) - 2px); width: calc(var(--k2-float-h) - 2px); }
+html[data-style="glass"] [data-split-bar] [data-mode-toggle] > button:not([data-zen-root] *) { height: var(--k2-float-h); width: var(--k2-float-h); border-radius: var(--radius-pill); }
+[data-split-bar][data-thread-searching] :is([data-split-bar-centre], [data-split-bar-group="right"] > :not([data-testid="thread-search"])) { display: none; }
+[data-split-bar][data-thread-searching] [data-split-bar-group="right"] { grid-column: 2 / -1; min-width: 0; }
+[data-split-bar][data-thread-searching="tight"] [data-split-bar-group="left"] { display: none; }
+[data-split-bar][data-thread-searching="tight"] [data-split-bar-group="right"] { grid-column: 1 / -1; }
 
 /* The matches, painted over the drawn text (CSS Custom Highlights; the
    message's own nodes are never touched). Find colours, the same in every

@@ -9,9 +9,18 @@ const WorkspaceCompletionSoundBell = lazy(() =>
 )
 
 /** Thread view's bell: the Workspace drawer's completion bell, same setting and
- *  behaviour, as a floating object. Found by the pinned chat's project id, or a
- *  tab's cwd (a worktree's path counts). */
-export function ThreadFloatBell({ projectId, cwd }: { projectId?: string; cwd?: string }): JSX.Element | null {
+ *  behaviour, as a floating object (on split view's bar, a plain bar button).
+ *  Found by the pinned chat's project id, or a tab's cwd (a worktree's path
+ *  counts). */
+export function ThreadFloatBell({
+  projectId,
+  cwd,
+  floating = true,
+}: {
+  projectId?: string
+  cwd?: string
+  floating?: boolean
+}): JSX.Element | null {
   const project = useRoomProjects(
     useCallback(
       (projects) =>
@@ -24,7 +33,7 @@ export function ThreadFloatBell({ projectId, cwd }: { projectId?: string; cwd?: 
   if (!project) return null
   return (
     <Suspense fallback={null}>
-      <WorkspaceCompletionSoundBell project={project} floating />
+      <WorkspaceCompletionSoundBell project={project} floating={floating} />
     </Suspense>
   )
 }

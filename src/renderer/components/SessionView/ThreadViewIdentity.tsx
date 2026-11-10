@@ -54,15 +54,18 @@ export function ThreadViewPicture({
   )
 }
 
-export function ThreadViewIdentity({ name, addr }: { name: string; addr: string }): JSX.Element {
+/** `bar`: split view's bar, always the one-line pill. */
+export function ThreadViewIdentity({ name, addr, bar = false }: { name: string; addr: string; bar?: boolean }): JSX.Element {
   const room = useRoom()
   const rootRef = useRef<HTMLDivElement>(null)
-  const [compact, setCompact] = useState(false)
+  const [measuredCompact, setCompact] = useState(false)
+  const compact = bar || measuredCompact
 
   // The pane, not the window: the header's host (a column or a split pane
   // counts). The header's own height doesn't change the pane's size, so
   // switching layouts can't feed back into this measure.
   useLayoutEffect(() => {
+    if (bar) return
     const header = rootRef.current?.closest('[data-session-header]')
     const pane = header ? threadFloatsHostOf(header) : null
     if (!pane) return
@@ -75,7 +78,7 @@ export function ThreadViewIdentity({ name, addr }: { name: string; addr: string 
     const ro = new ResizeObserver(measure)
     ro.observe(pane)
     return () => ro.disconnect()
-  }, [])
+  }, [bar])
 
   const size = compact ? IDENTITY_PICTURE_COMPACT_PX : IDENTITY_PICTURE_PX
   const server = room.scope.isPrimary ? null : room.scope.label

@@ -163,6 +163,15 @@ describe('shared state and paint', () => {
     host.remove()
   })
 
+  it("in split view, lives on the column the bar searches, from inside it", () => {
+    const col = document.createElement('div')
+    col.setAttribute('data-thread-search-host', '')
+    col.innerHTML = '<div><span id="in-thread"></span></div>'
+    document.body.appendChild(col)
+    expect(threadSearchHost(col.querySelector('#in-thread'))).toBe(col)
+    col.remove()
+  })
+
   it('paints every pane’s ranges into the two highlights, and clears them', () => {
     const set = new Map<string, unknown>()
     class FakeHighlight {

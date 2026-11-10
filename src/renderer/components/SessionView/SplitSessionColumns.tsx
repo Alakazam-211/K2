@@ -1,8 +1,8 @@
 import { useMemo, useRef, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import type { SplitPaneView } from './sessionViewTab'
 import { useTerminalRevealLayout, type TerminalReveal } from './threadReveal'
-import { THREAD_FLOATS_SLOT_ATTR, useThreadFloatsClearOfTerminal } from './threadFloats'
-import { splitThreadSide, useSplitChromeSlots } from './splitChrome'
+import { useThreadFloatsClearOfTerminal } from './threadFloats'
+import { SPLIT_SEARCH_HOST_ATTR, splitSearchSide, useSplitSearchOffer } from './splitChrome'
 
 /**
  * Split columns around one terminal node. That node stays the first child
@@ -18,10 +18,12 @@ import { splitThreadSide, useSplitChromeSlots } from './splitChrome'
  * terminal's (`panel`). One drawer at a time; a swap between two open ones
  * doesn't slide.
  *
- * In split view, under a session chrome (`splitChrome.tsx`), the first Thread
- * column (else the first Chatter column) offers a slot for the chrome's
- * floating objects and the other column a place for its view menu, so
- * neither column has a bar over the Thread.
+ * In split view, the session chrome's one bar sits above both columns
+ * (`splitChrome.tsx`); nothing is drawn over them. Under a chrome, the first
+ * Thread column (else the first Chatter column) offers itself as the bar's
+ * search target. Every split column is pinned to the grid's one row: the
+ * terminal's node always comes first, and a column placed before it on the
+ * left would otherwise wrap to a second row.
  */
 export function SplitSessionColumns({
   showSplit,
@@ -94,16 +96,12 @@ export function SplitSessionColumns({
         ? 'right'
         : null
   const terminalShown = showSplit ? terminalSide !== null : !hidePty
-  const chromeSlots = useSplitChromeSlots()
-  const threadSide = chromeSlots ? splitThreadSide(showSplit ? 'split' : 'terminal', left, right) : null
-  const barSide = threadSide === null ? null : threadSide === 'left' ? 'right' : 'left'
-  // Always the first child of its column, so the column's view never moves.
-  const barSlot = (side: 'left' | 'right'): ReactNode =>
-    barSide === side ? <div ref={chromeSlots?.setBar} className="flex-shrink-0" data-testid="split-view-bar-slot" /> : null
-  const threadSlot = (side: 'left' | 'right'): ReactNode =>
-    threadSide === side ? (
-      <div ref={chromeSlots?.setThread} style={{ display: 'contents' }} {...{ [THREAD_FLOATS_SLOT_ATTR]: '' }} data-testid="split-thread-floats-slot" />
-    ) : null
+  const offerSearch = useSplitSearchOffer()
+  const searchSide = offerSearch ? splitSearchSide(showSplit ? 'split' : 'terminal', left, right) : null
+  // The column the chrome's bar searches: offered, and marked as the
+  // search's host so the Thread (or Chatter) inside finds the same search.
+  const searchTarget = (side: 'left' | 'right'): { ref?: (el: HTMLElement | null) => void } & Record<string, unknown> =>
+    searchSide === side && offerSearch ? { ref: offerSearch, [SPLIT_SEARCH_HOST_ATTR]: '' } : {}
   const terminalStyle: CSSProperties = {
     display: terminalShown || terminalRevealShown ? 'flex' : 'none',
     flexDirection: 'column',
@@ -113,6 +111,7 @@ export function SplitSessionColumns({
     ...(showSplit
       ? {
           gridColumn: terminalSide === 'right' ? 2 : 1,
+          gridRow: 1,
           ...(terminalSide === 'right'
             ? { borderLeft: '1px solid var(--color-border)' }
             : {}),
@@ -151,7 +150,6 @@ export function SplitSessionColumns({
         data-testid={terminalSide ? `session-split-${terminalSide}` : reveal ? 'session-reveal-terminal' : undefined}
         data-split-view={terminalSide ? 'terminal' : undefined}
       >
-        {terminalSide ? barSlot(terminalSide) : null}
         {terminal}
       </div>
       {panelShown ? (
@@ -166,32 +164,30 @@ export function SplitSessionColumns({
       ) : null}
       {showSplit && left !== 'terminal' ? (
         <div
+          {...searchTarget('left')}
           className="relative min-w-0 min-h-0 overflow-hidden flex flex-col"
-          style={{ gridColumn: 1 }}
+          style={{ gridColumn: 1, gridRow: 1 }}
           data-testid="session-split-left"
           data-split-view={left}
         >
-          {threadSlot('left')}
-          {barSlot('left')}
           {renderView(left)}
         </div>
       ) : null}
       {showSplit && right !== 'terminal' ? (
         <div
+          {...searchTarget('right')}
           className="relative min-w-0 min-h-0 overflow-hidden flex flex-col border-l border-[var(--color-border)]"
-          style={{ gridColumn: 2 }}
+          style={{ gridColumn: 2, gridRow: 1 }}
           data-testid="session-split-right"
           data-split-view={right}
         >
-          {threadSlot('right')}
-          {barSlot('right')}
           {renderView(right)}
         </div>
       ) : null}
       {showSplit && left === 'terminal' && right === 'terminal' ? (
         <div
           className="min-w-0 min-h-0 overflow-hidden flex flex-col border-l border-[var(--color-border)]"
-          style={{ gridColumn: 2 }}
+          style={{ gridColumn: 2, gridRow: 1 }}
           data-testid="session-split-right"
           data-split-view="terminal"
         >

@@ -1,33 +1,35 @@
-import { createContext, useContext, useMemo, useState, type JSX, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
+import { createContext, useContext, useState } from 'react'
 import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
 
-// Split view has no top bar over the Thread either. The Thread's column gets
-// Thread view's floating objects, only those split view keeps
-// (SPLIT_VIEW_THREAD_FLOATS in threadFloats.tsx); the view menu, which is how
-// a person leaves split view or picks its sides, moves to a short bar over
-// the other column. The session's chrome draws both: the columns
-// (SplitSessionColumns) offer the two places through this context, and until
-// both are there (a terminal that failed to open draws no columns) the
-// chrome keeps its usual bar, so the view menu is never lost.
+// Split view has one solid bar across both columns, at the top of the pane,
+// and nothing floats over either column (Rosson, 2026-11-10). The bar is the
+// session's own header, drawn in place (AgentSessionChrome, ChatHeader): the
+// view menu and the side choosers on the left, the agent's picture and name
+// in the middle, and search, the bell, Token, the session and restart on the
+// right. Both columns start below it, in either order.
+//
+// Search on the bar searches the Thread side, else the Chatter side. That
+// column (SplitSessionColumns) offers itself through this context and is
+// marked as the search's host (SPLIT_SEARCH_HOST_ATTR), so the pane inside
+// it and the bar's field share one search.
 
-export interface SplitChromeSlots {
-  /** The Thread's column offers its floats slot (null when it goes). */
-  setThread: (el: HTMLElement | null) => void
-  /** The other column offers the view menu's place. */
-  setBar: (el: HTMLElement | null) => void
+/** On the split bar (the header in split view). */
+export const SPLIT_BAR_ATTR = 'data-split-bar'
+/** On the column the split bar's search searches. */
+export const SPLIT_SEARCH_HOST_ATTR = 'data-thread-search-host'
+
+/** What the column offers: itself, or null when it goes. */
+export type SplitSearchOffer = (el: HTMLElement | null) => void
+
+export const SplitSearchTargetContext = createContext<SplitSearchOffer | null>(null)
+
+export function useSplitSearchOffer(): SplitSearchOffer | null {
+  return useContext(SplitSearchTargetContext)
 }
 
-export const SplitChromeSlotsContext = createContext<SplitChromeSlots | null>(null)
-
-export function useSplitChromeSlots(): SplitChromeSlots | null {
-  return useContext(SplitChromeSlotsContext)
-}
-
-/** Split view's floats column: the first Thread column, else the first
- *  Chatter column (Chatter wears the Thread's look, so it takes the
- *  Thread column's objects, SPLIT_VIEW_THREAD_FLOATS). Terminal only: none. */
-export function splitThreadSide(
+/** The side the split bar's search searches: the first Thread side, else the
+ *  first Chatter side. Terminals only: none. */
+export function splitSearchSide(
   viewTab: SessionViewTab,
   left: SplitPaneView,
   right: SplitPaneView,
@@ -40,51 +42,16 @@ export function splitThreadSide(
   return null
 }
 
-/** For the chrome: the context to provide, and the two places once split
- *  view has offered them (else null: draw the header where it is). */
-export function useSplitChrome(
-  viewTab: SessionViewTab,
-  left: SplitPaneView,
-  right: SplitPaneView,
-): { slots: SplitChromeSlots; placed: { thread: HTMLElement; bar: HTMLElement } | null } {
-  const [thread, setThread] = useState<HTMLElement | null>(null)
-  const [bar, setBar] = useState<HTMLElement | null>(null)
-  const slots = useMemo<SplitChromeSlots>(() => ({ setThread, setBar }), [])
-  const placed =
-    splitThreadSide(viewTab, left, right) && thread?.isConnected && bar?.isConnected ? { thread, bar } : null
-  return { slots, placed }
+/** What that side shows. */
+export function splitSearchKind(left: SplitPaneView, right: SplitPaneView): 'thread' | 'chatter' | null {
+  const side = splitSearchSide('split', left, right)
+  if (!side) return null
+  return (side === 'left' ? left : right) as 'thread' | 'chatter'
 }
 
-/** The session's header where it belongs: in place (`header(false)`), or in
- *  split view the Thread column's floats (`header(true)`) and the view menu's
- *  bar over the other column. */
-export function PlacedSessionHeader({
-  placed,
-  header,
-  viewMenu,
-}: {
-  placed: { thread: HTMLElement; bar: HTMLElement } | null
-  header: (splitColumn: boolean) => ReactNode
-  viewMenu: ReactNode
-}): JSX.Element {
-  if (!placed) return <>{header(false)}</>
-  return (
-    <>
-      {createPortal(header(true), placed.thread)}
-      {createPortal(<SplitViewBar>{viewMenu}</SplitViewBar>, placed.bar)}
-    </>
-  )
-}
-
-/** Split view's view menu, over the column beside the Thread's: as tall as
- *  Terminal view's bar, with nothing else on it. */
-export function SplitViewBar({ children }: { children: ReactNode }): JSX.Element {
-  return (
-    <div
-      className="h-8 flex-shrink-0 px-3 flex items-stretch min-w-0 border-b border-[var(--color-border)]"
-      data-testid="split-view-bar"
-    >
-      {children}
-    </div>
-  )
+/** For the chrome: the offer to provide to the columns, and the column the
+ *  bar's search searches once it is there (else null: no search). */
+export function useSplitSearchTarget(): { offer: SplitSearchOffer; host: HTMLElement | null } {
+  const [host, offer] = useState<HTMLElement | null>(null)
+  return { offer, host: host?.isConnected ? host : null }
 }

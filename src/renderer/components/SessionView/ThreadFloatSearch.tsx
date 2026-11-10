@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type JSX, type KeyboardEvent } from 'react'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { floatProps } from './threadFloats'
+import { SPLIT_BAR_ATTR } from './splitChrome'
 import {
   closeThreadSearch,
   currentMatchIndex,
@@ -15,8 +16,9 @@ import {
  *  forward-char) and code editors with their own find. */
 const KEEPS_FIND_KEY = '[data-terminal-container], .cm-editor, .monaco-editor, [contenteditable="true"]'
 
-/** On the floating header while the field is open and the row is short of
- *  room: `narrow` or `tight` (globals.css, "Thread view's search"). */
+/** On the floating header (or split view's bar) while the field is open and
+ *  the row is short of room: `narrow` or `tight` (globals.css, "Thread
+ *  view's search", "Split view's bar"). */
 export const THREAD_SEARCHING_ATTR = 'data-thread-searching'
 /** At or under this header width the field has the row to itself. */
 export const THREAD_SEARCH_TIGHT_PX = 380
@@ -55,14 +57,30 @@ function CloseGlyph(): JSX.Element {
 const INNER_BUTTON =
   'inline-flex items-center justify-center h-5 w-5 flex-shrink-0 rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40 disabled:pointer-events-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]'
 
+/** Split view's bar: the column it searches, and what that column shows. */
+export interface SplitBarSearchTarget {
+  host: HTMLElement
+  kind: 'thread' | 'chatter'
+}
+
+/** A plain bar button, as restart's (not a floating object). */
+const BAR_BUTTON =
+  'self-center inline-flex items-center justify-center h-5 w-5 flex-shrink-0 rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer'
+
 /** Thread view's search object, right of the bell: a round button that
  *  opens a field in the same row. The Thread below finds and highlights
- *  (useThreadSearchPane); this owns the field, the count and the keys. */
-export function ThreadFloatSearch(): JSX.Element {
+ *  (useThreadSearchPane); this owns the field, the count and the keys.
+ *
+ *  `bar`: on split view's bar, searching that column. The button is a plain
+ *  bar button, the field opens in the bar, and ⌘F / Ctrl+F opens it from
+ *  anywhere in the split pane except the terminal. */
+export function ThreadFloatSearch({ bar }: { bar?: SplitBarSearchTarget | null } = {}): JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
-  const resolveHost = useCallback(() => threadSearchHost(rootRef.current), [])
+  const barHost = bar?.host ?? null
+  const resolveHost = useCallback(() => barHost ?? threadSearchHost(rootRef.current), [barHost])
+  const what = bar?.kind === 'chatter' ? 'the Chatter' : 'this Thread'
   const s = useThreadSearchState(resolveHost)
   const mac = isMacPlatform()
   const total = s.matches.length
@@ -110,8 +128,10 @@ export function ThreadFloatSearch(): JSX.Element {
 
   // ⌘F / Ctrl+F while focus is in this pane's Thread (its list, the
   // floating objects, the message box), never in its terminal or an editor.
+  // On split view's bar: anywhere in the split pane (the bar's parent holds
+  // the bar and both columns), except the terminal.
   useEffect(() => {
-    const host = resolveHost()
+    const host = barHost ? rootRef.current?.closest(`[${SPLIT_BAR_ATTR}]`)?.parentElement : resolveHost()
     if (!host) return
     const onKey = (e: globalThis.KeyboardEvent): void => {
       if (!isThreadFindKey(e, mac)) return
@@ -123,7 +143,7 @@ export function ThreadFloatSearch(): JSX.Element {
     }
     host.addEventListener('keydown', onKey)
     return () => host.removeEventListener('keydown', onKey)
-  }, [resolveHost, mac, open])
+  }, [resolveHost, barHost, mac, open])
 
   // A click anywhere else closes it.
   useEffect(() => {
@@ -140,16 +160,23 @@ export function ThreadFloatSearch(): JSX.Element {
   // Room for the field: where the row would overflow, the name and the
   // right-hand objects step aside while searching ("narrow"); in a very
   // narrow pane the field has the row to itself ("tight"). Measured with
-  // the attribute off, before paint, so it can't flip back and forth.
+  // the attribute off, before paint, so it can't flip back and forth. On
+  // split view's bar, `narrow` hides the name and the other right-hand
+  // objects, and if the row still overflows, `tight` leaves the field alone
+  // in the bar.
+  const inBar = barHost !== null
   useLayoutEffect(() => {
-    const header = rootRef.current?.closest<HTMLElement>('[data-thread-floats]')
+    const header = rootRef.current?.closest<HTMLElement>(inBar ? `[${SPLIT_BAR_ATTR}]` : '[data-thread-floats]')
     if (!header || !s.open) return
     const fit = (): void => {
       header.removeAttribute(THREAD_SEARCHING_ATTR)
       const width = header.clientWidth
       if (width <= 0) return
       if (width <= THREAD_SEARCH_TIGHT_PX) header.setAttribute(THREAD_SEARCHING_ATTR, 'tight')
-      else if (header.scrollWidth > width + 1) header.setAttribute(THREAD_SEARCHING_ATTR, 'narrow')
+      else if (header.scrollWidth > width + 1) {
+        header.setAttribute(THREAD_SEARCHING_ATTR, 'narrow')
+        if (inBar && header.scrollWidth > width + 1) header.setAttribute(THREAD_SEARCHING_ATTR, 'tight')
+      }
     }
     fit()
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit)
@@ -158,7 +185,7 @@ export function ThreadFloatSearch(): JSX.Element {
       ro?.disconnect()
       header.removeAttribute(THREAD_SEARCHING_ATTR)
     }
-  }, [s.open])
+  }, [s.open, inBar])
 
   // Closed elsewhere (the pane left Thread view): nothing stays painted.
   useEffect(() => () => closeThreadSearch(resolveHost()), [resolveHost])
@@ -182,7 +209,7 @@ export function ThreadFloatSearch(): JSX.Element {
       {s.open ? (
         <div
           role="search"
-          aria-label="Search this Thread"
+          aria-label={`Search ${what}`}
           data-thread-search=""
           {...floatProps(true, 'pill')}
           className="gap-1 pl-2 pr-1"
@@ -193,7 +220,7 @@ export function ThreadFloatSearch(): JSX.Element {
             ref={inputRef}
             type="search"
             data-testid="thread-search-input"
-            aria-label="Search messages in this Thread"
+            aria-label={`Search messages in ${what}`}
             aria-keyshortcuts="Enter Shift+Enter Escape"
             placeholder="Search"
             autoComplete="off"
@@ -229,13 +256,13 @@ export function ThreadFloatSearch(): JSX.Element {
         <button
           ref={buttonRef}
           type="button"
-          {...floatProps(true, 'round')}
+          {...floatProps(!inBar, 'round')}
           onClick={open}
-          aria-label="Search this Thread"
+          aria-label={`Search ${what}`}
           aria-keyshortcuts={mac ? 'Meta+F' : 'Control+F'}
-          title={`Search this Thread (${shortcut})`}
+          title={`Search ${what} (${shortcut})`}
           data-testid="thread-search-button"
-          className="flex-shrink-0 no-drag cursor-pointer text-[var(--color-text-primary)]"
+          className={inBar ? BAR_BUTTON : 'flex-shrink-0 no-drag cursor-pointer text-[var(--color-text-primary)]'}
         >
           <SearchGlyph />
         </button>

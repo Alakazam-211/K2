@@ -172,7 +172,7 @@ describe('the dialog', () => {
   it('starts with the ask-your-agent hint, and the picker is Bug, Idea, Other (no Praise)', async () => {
     render(<SendFeedbackDialog />)
     await waitFor(() => expect(screen.getByTestId('send-feedback-ask-agent').textContent).toBe(
-      'Tip: in any agent\u2019s chat you can say \u201cSend this issue as feedback to K2\u201d, and the agent sends it for you.',
+      'Or ask your agent: in its chat, say \u201cSend this issue as feedback to K2\u201d and it sends the feedback to us itself, with k2 send-feedback.',
     ))
     const picker = screen.getByTestId('send-feedback-category')
     expect(Array.from(picker.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['Bug', 'Idea', 'Other'])

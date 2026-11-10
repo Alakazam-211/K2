@@ -6,6 +6,9 @@
 // meaning alone (filled square, ×, ✓, hollow square, dashed square, small
 // filled square).
 //
+// The squares' corners read `--radius-status` (globals.css): square in
+// Terminal, a full circle in Glass. Same size, colours and motion.
+//
 // These are the only drawings of agent activity in the app: rows, tabs and
 // badges all render through `AgentStatusCluster` / `AgentStatusSlot`.
 
@@ -116,19 +119,21 @@ export function StatusGlyph({ status, size = STATUS_SLOT_PX }: { status: AgentSt
     case 'needs-you':
       return (
         <svg {...common}>
-          <rect x="5" y="5" width="14" height="14" fill="currentColor" />
+          <rect data-status-shape="" x="5" y="5" width="14" height="14" fill="currentColor" />
         </svg>
       )
     case 'monitoring':
       return (
         <svg {...common}>
-          <rect x="6" y="6" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.75" />
+          <rect data-status-shape="" x="6" y="6" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.75" />
         </svg>
       )
     case 'no-update':
       return (
         <svg {...common}>
-          <rect x="6" y="6" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.25" strokeDasharray="3.5 2.5" />
+          {/* pathLength 48 (the square's perimeter): the 8 dashes stay even
+              when the corners round into a circle. */}
+          <rect data-status-shape="" x="6" y="6" width="12" height="12" pathLength={48} fill="none" stroke="currentColor" strokeWidth="2.25" strokeDasharray="3.5 2.5" />
         </svg>
       )
     case 'done':
@@ -161,6 +166,7 @@ export function LiveSquare({ live, size = LIVE_SQUARE_PX }: { live: boolean; siz
         height: size,
         flex: 'none',
         background: live ? 'var(--color-status-ok)' : 'var(--color-text-muted)',
+        borderRadius: 'var(--radius-status, 0px)',
         opacity: live ? 1 : 0.5,
       }}
     />

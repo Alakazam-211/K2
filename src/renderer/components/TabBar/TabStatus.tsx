@@ -107,6 +107,7 @@ export function TabSlotRest({ view, pinned = false }: { view: AgentStatusView; p
               width: TAB_BADGE_PX + 2,
               height: TAB_BADGE_PX + 2,
               background: 'var(--tab-bg, var(--color-bg-surface))',
+              borderRadius: 'var(--radius-status, 0px)',
             }}
           >
             {badge}
@@ -132,7 +133,7 @@ export function PinnedChatStatus({ view, icon }: { view: AgentStatusView; icon: 
         <span
           data-pinned-chat-badge=""
           className="pointer-events-none absolute flex items-center justify-center"
-          style={{ right: 2, bottom: 2, width: PINNED_BADGE_PX + 2, height: PINNED_BADGE_PX + 2, background: 'inherit' }}
+          style={{ right: 2, bottom: 2, width: PINNED_BADGE_PX + 2, height: PINNED_BADGE_PX + 2, background: 'inherit', borderRadius: 'var(--radius-status, 0px)' }}
         >
           <StatusSlot view={view} size={PINNED_BADGE_PX} />
         </span>

@@ -9,6 +9,7 @@
   --radius-selector: 0px;
   --radius-pill: 0px;
   --radius-badge: 9999px;
+  --radius-status: 0px;
   --chamfer-surface: 7px;
   --chamfer-control: 5px;
   --chamfer-chip: 3px;
@@ -145,6 +146,7 @@
   --radius-selector: 6px;
   --radius-pill: 9999px;
   --radius-badge: 9999px;
+  --radius-status: 0px;
   --chamfer-surface: 0px;
   --chamfer-control: 0px;
   --chamfer-chip: 0px;
@@ -374,6 +376,7 @@
   --radius-selector: 16px;
   --radius-pill: 999px;
   --radius-badge: 9999px;
+  --radius-status: 9999px;
   --chamfer-surface: 0px;
   --chamfer-control: 0px;
   --chamfer-chip: 0px;
@@ -1174,6 +1177,9 @@
 [data-style="glass"] :is([data-home-picker-menu], [data-focus-group-menu])[data-placement="up"]:not([data-zen-root] *) { margin-bottom: 4px; }
 [data-style="glass"] [data-picker-spacer]:not([data-zen-root] *) { display: none; }
 
+/* The working grid's cells are round here (`--radius-status`); crisp edges
+   would square off a 2px circle, so the grid draws antialiased. */
+[data-style="glass"] .agent-working:not([data-zen-root] *) { shape-rendering: auto; }
 /* People and agents are round in Glass, like the phone. Gardens keep their own look. */
 [data-style="glass"] [data-k2-avatar]:not([data-zen-root] *) { border-radius: 9999px; overflow: hidden; }
 [data-style="glass"] [data-nav-chip="machine"]:not([data-zen-root] *) {
@@ -1414,6 +1420,7 @@
   --radius-selector: 9999px;
   --radius-pill: 9999px;
   --radius-badge: 9999px;
+  --radius-status: 0px;
   --chamfer-surface: 0px;
   --chamfer-control: 0px;
   --chamfer-chip: 0px;
@@ -1768,6 +1775,7 @@
   --radius-selector: 0px;
   --radius-pill: 0px;
   --radius-badge: 9999px;
+  --radius-status: 0px;
   --chamfer-surface: 7px;
   --chamfer-control: 5px;
   --chamfer-chip: 3px;

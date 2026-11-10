@@ -1330,6 +1330,13 @@ html[data-style="terminal"] [data-limit-track] {
   fill: currentColor;
   opacity: 0.3;
 }
+/* Status marks' corners (the working grid's cells, the needs-you, monitoring
+   and no-update squares) follow `--radius-status`: 0 in Terminal, a full
+   circle in Glass (an SVG `rx` clamps to half the side). Gardens pin it to 0. */
+.agent-working rect,
+[data-status-shape] {
+  rx: var(--radius-status, 0px);
+}
 .agent-working rect.e {
   animation: agent-working-orbit 0.8s linear infinite;
 }

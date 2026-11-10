@@ -26,7 +26,7 @@ const OUT_TS_FILE = join(ROOT, 'src', 'renderer', 'styles.generated.ts')
 const DEFAULT_STYLE = 'terminal'
 
 const REQUIRED_TOKEN_SLOTS = {
-  radius: ['box', 'field', 'selector', 'pill', 'badge'],
+  radius: ['box', 'field', 'selector', 'pill', 'badge', 'status'],
   chamfer: ['surface', 'control', 'chip', 'send'],
   control: ['check', 'switch-width', 'switch-height', 'switch-knob', 'switch-sm-width', 'switch-sm-height', 'switch-sm-knob', 'slider-track', 'slider-thumb'],
   gap: ['pane', 'tile', 'section'],

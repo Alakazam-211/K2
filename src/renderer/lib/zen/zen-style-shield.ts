@@ -120,6 +120,8 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--radius-selector': 'calc(var(--zen-radius) / 2)',
   '--radius-pill': 'calc(var(--zen-radius) / 2)',
   '--radius-badge': 'calc(var(--zen-radius) / 2)',
+  // Gardens draw their own status marks; the nav's stay square inside Zen.
+  '--radius-status': '0px',
   '--font-code': zen('terminal-font-family'),
   '--chamfer-surface': '0px',
   '--chamfer-control': '0px',

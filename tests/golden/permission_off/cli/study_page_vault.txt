@@ -26,7 +26,7 @@ ASKING: YOU MAKE THE CHOICES
   Pick them on the card: --for (sites), --delivery fetch|file|env, --scope,
   --kind; fetch: --inject-dst header:<N>|query:<p>|basic (user:password).
   Prefer fetch with exact sites; file/env only when a tool must read it.
-  Bad card: k2 thread void <addr> <card-id>. Same name: saving replaces it.
+  Bad card: k2 thread withdraw <addr> <card-id>. Same name: saving replaces it.
 
 HOW YOU GET A SECRET (delivery)
   fetch   K2 makes the HTTPS call and adds the key. You never see it.

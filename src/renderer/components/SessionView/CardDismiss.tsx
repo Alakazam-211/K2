@@ -103,7 +103,7 @@ export function CardDismiss({ onDismiss }: { onDismiss: (reason?: string) => unk
       </div>
       <div className={`text-[10px] ${muted}`}>Closes the card without answering. The agent is told; nothing is decided.</div>
       {error ? (
-        <div data-testid="thread-card-dismiss-error" role="alert" className="text-[10px] text-[var(--color-danger,#c33)] leading-relaxed">
+        <div data-testid="thread-card-dismiss-error" role="alert" className="text-[10px] text-[var(--color-danger)] leading-relaxed">
           {error}
         </div>
       ) : null}

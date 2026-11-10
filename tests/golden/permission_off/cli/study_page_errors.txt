@@ -29,7 +29,7 @@ EXIT 3 — STOP LOOPING
                  (`k2 connections add`). Not "try a different username".
   card_person_only  (0.46.4) only a person answers a Thread card. You,
                  a K2 terminal or an App's server never can, your own card
-                 included: close it with `k2 thread void <addr> <id>`.
+                 included: close it with `k2 thread withdraw <addr> <id>`.
                  An App answers with the guest's own pass, never its own.
                  A guest you added, or whose password or email you set,
                  counts as you until the owner takes it over. Known, by

@@ -21,8 +21,9 @@ THREAD
                                 choice card; returns immediately
   `k2 thread secret <addr> --name NAME`
                                 secret field; you never see the value
-  `k2 thread void <addr> <card-id>`
-                                close your own card (obsolete question)
+  `k2 thread withdraw <addr> <card-id> [--why "…"]`
+                                take back your own card (obsolete question;
+                                `void` is the old name)
   `k2 thread <addr> "…" --file docs/report.pdf --file src/a.rs:12-40`
                                 attach the files you mention (≤10)
 
@@ -33,9 +34,15 @@ THREAD
 CARDS STAY OPEN WHILE PEOPLE TALK
   A person may discuss a card before answering it. Their messages
   never close it and are never its answer. Keep it open and answer
-  their questions in prose; they tap when ready. Void your own card
-  only when the question is truly obsolete (`k2 thread void`), or post
-  a new card if the options changed.
+  their questions in prose; they tap when ready. Withdraw your own card
+  only when the question is truly obsolete (`k2 thread withdraw`), or
+  post a new card if the options changed.
+
+  They may dismiss a card instead of answering it: you get
+  `[thread:<addr>] dismissed card <id> without answering: "<why>"`.
+  That means "not needed now", not yes and not no; don't ask the same
+  thing again unless something changed. A dismissed permission card is
+  not a denial: nothing was applied, and you may ask again later.
 
   A card is not an open gate forever: a choice card expires after 7
   days unless you pick a time frame that fits the decision

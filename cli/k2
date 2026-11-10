@@ -23248,22 +23248,29 @@ its time frame runs out (choice cards: 7 days unless --expires / --no-expiry; se
 cards: 7 days). Pick a time frame that fits the decision. People may discuss a card
 before answering: keep it open and answer their questions in prose;
 never treat their prose as the card's answer; talking never closes or shortens it.
-Withdraw your own card only when the question is truly obsolete
-(k2 thread withdraw <addr> <card-id> --why "…"), or post a new card if the options
-changed. A secret card: only one your own session asked for. A permission card:
-your own requests on it (the same as k2 permission cancel).
+Withdraw your own card when its question no longer matters
+(k2 thread withdraw <addr> <card-id> [--why "…"]; --why is optional, one line), or
+post a new card if the options changed. The person then sees the card as Withdrawn,
+with your reason; nobody is woken. A secret card: only one your own session asked
+for (K2's own secret cards, from a clone or a reconnect, are the person's to answer
+or dismiss). A permission card: your own requests on it (the same as k2 permission
+cancel).
 
 Closed cards stay on the Thread, marked Dismissed or Withdrawn. When the person
 dismisses your card you get a turn like an answer:
   [thread:<addr>] dismissed card <id> without answering: "<their reason>"
 It means "not needed now", not yes and not no: don't ask the same thing again unless
 something changed. A dismissed permission card is not a denial: nothing was applied,
-and you may ask again if you still need it. k2 vault file --wait on a dismissed or
-withdrawn secret card exits 5 (card_dismissed / card_withdrawn). An expired card says
-so on the Thread; ask again if you still need it.
+and you may ask again (k2 permission request …) if you still need it.
+k2 vault file NAME --wait 10m (see k2 vault file --help) on a secret card exits 5
+when it was dismissed or withdrawn (card_dismissed / card_withdrawn) and 3 when it
+expired (card_expired). An expired card says so on the Thread; ask again if you
+still need it.
 
 withdraw/dismiss exit 0 (prints "<card-id>  withdrawn|dismissed"), 2 bad usage, 3
-refused (not your card, already closed), 4 not found.
+refused, 4 not found. On 3 the error line names why: card_not_yours (not your card),
+card_not_pending (already answered, dismissed, withdrawn or expired) or
+action_card_person_only (a settings card: only the person closes it).
 
 Text (and ask prompts) render markdown: **bold**, lists, `code`, fences, links.
 

@@ -456,7 +456,7 @@ export function SettingDropdown({
         >
           <div
             data-k2-chamfer={menuBox.chamfer ? 'surface' : undefined}
-            {...floatMaterial('menu')} className="bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
+            {...floatMaterial('menu', menuBox.chamfer ? 'frost' : undefined)} className="bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl"
             style={{ '--k2-menu-origin': `${menuBox.bottom !== undefined ? 'bottom' : 'top'} ${menuBox.right !== undefined ? 'right' : 'left'}` } as React.CSSProperties}
           >
           <div className="max-h-60 overflow-y-auto">

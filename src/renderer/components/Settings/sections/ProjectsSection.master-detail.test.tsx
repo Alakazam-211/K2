@@ -134,7 +134,7 @@ describe('side by side', () => {
   it('↑/↓ in search move the selection through the list as painted', () => {
     render(<ProjectsSection />)
     fireEvent.click(row('c'))
-    const search = screen.getByRole('textbox', { name: 'Search workspaces' })
+    const search = screen.getByRole('searchbox', { name: 'Search workspaces' })
     fireEvent.keyDown(search, { key: 'ArrowDown' })
     expect(shownName()).toBe('atlas')
     fireEvent.keyDown(search, { key: 'ArrowDown' })
@@ -167,10 +167,10 @@ describe('side by side', () => {
   it('search filters the list without moving the selection', () => {
     render(<ProjectsSection />)
     fireEvent.click(row('a'))
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search workspaces' }), { target: { value: 'del' } })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search workspaces' }), { target: { value: 'del' } })
     expect(document.querySelector('[data-settings-project-id="a"]')).toBeNull()
     expect(shownName()).toBe('atlas')
-    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Search workspaces' }), { key: 'ArrowDown' })
+    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Search workspaces' }), { key: 'ArrowDown' })
     expect(shownName()).toBe('delta')
   })
 
@@ -282,7 +282,7 @@ describe('narrow panes fall back to one page at a time', () => {
   it('↑/↓ in search highlight and Enter opens, as before', () => {
     paneWidth = 600
     render(<ProjectsSection />)
-    const search = screen.getByRole('textbox', { name: 'Search workspaces' })
+    const search = screen.getByRole('searchbox', { name: 'Search workspaces' })
     fireEvent.keyDown(search, { key: 'ArrowDown' })
     fireEvent.keyDown(search, { key: 'ArrowDown' })
     expect(screen.queryByRole('tablist')).toBeNull()

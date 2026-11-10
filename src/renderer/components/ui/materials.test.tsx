@@ -3,12 +3,14 @@
 // comes from <Surface material>, Frost only from data-material="frost", and
 // neither reaches a Garden or changes Terminal.
 
-import { describe, expect, it } from 'vitest'
-import { render } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Surface } from './Surface'
+
+vi.mock('@/lib/browser-overlay', () => ({ useBrowserOverlay: () => undefined }))
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
 const overrides = readFileSync(join(repo, 'styles', 'glass', 'overrides.css'), 'utf8')
@@ -53,5 +55,40 @@ describe('Glass overrides', () => {
 
   it('sets the accent in exactly one place', () => {
     expect(overrides.match(/--glass-accent:/g)).toHaveLength(1)
+  })
+})
+
+describe('Floating chrome is Frost', () => {
+  it('the row "…" menu is a frosted floating menu', async () => {
+    const { OverflowMenu } = await import('./OverflowMenu')
+    const { getByRole } = render(<OverflowMenu label="More" items={[{ id: 'a', label: 'A', onSelect: () => {} }]} />)
+    fireEvent.click(getByRole('button', { name: 'More' }))
+    const menu = getByRole('menu')
+    expect(menu.getAttribute('data-material')).toBe('frost')
+    expect(menu.getAttribute('data-float')).toBe('menu')
+    expect(menu.hasAttribute('data-floating')).toBe(false)
+  })
+
+  it('a search field is a frosted field; a plain field is not', async () => {
+    const { Input } = await import('./Input')
+    const { getByRole } = render(
+      <>
+        <Input variant="search" aria-label="Find" />
+        <Input aria-label="Name" />
+      </>,
+    )
+    const search = getByRole('searchbox', { name: 'Find' })
+    expect(search.getAttribute('data-material')).toBe('frost')
+    expect(search.getAttribute('data-frost-shape')).toBe('field')
+    // Not the `bg-` class the "field in a tile" rule turns solid.
+    expect(search.className).not.toContain('bg-[var(--color-bg)]')
+    expect(getByRole('textbox', { name: 'Name' }).hasAttribute('data-material')).toBe(false)
+  })
+
+  it('a frosted search field keeps the control edge in Glass', () => {
+    const globals = readFileSync(join(repo, 'src', 'renderer', 'globals.css'), 'utf8')
+    expect(globals).toMatch(
+      /input\[data-k2-search\]\[data-material="frost"\]:not\(:focus\):not\(\[data-zen-root\] \*\) \{\s*border: 1px solid var\(--color-control-edge\);/,
+    )
   })
 })

@@ -447,12 +447,12 @@ export function ConnectionsSection(): React.JSX.Element {
           <>
             {hosts.length > 0 && (
               <Input
-                type="search"
+                variant="search"
                 value={serverQuery}
                 onChange={(e) => setServerQuery(e.target.value)}
                 placeholder="Search servers"
                 aria-label="Search servers"
-                className="w-full mb-3 type-control"
+                className="w-full mb-3"
                 data-settings-id="connections.search"
               />
             )}

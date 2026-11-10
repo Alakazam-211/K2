@@ -115,7 +115,10 @@ export function OverflowMenu({ items, label, triggerProps, className }: Overflow
               role="menu"
               aria-label={label}
               data-k2-chamfer="surface"
-              {...floatMaterial('menu')}
+              // Floating chrome: Frost in Glass (a see-through fill over a live
+              // blur, with the bright rim); Terminal keeps the opaque cut box.
+              {...floatMaterial('menu', 'frost')}
+              style={{ '--k2-menu-origin': 'top right' } as React.CSSProperties}
               className="bg-[var(--color-bg)] border border-[var(--color-border)] [box-shadow:var(--shadow-3)] py-1 flex flex-col"
               onKeyDown={onKeyDown}
             >

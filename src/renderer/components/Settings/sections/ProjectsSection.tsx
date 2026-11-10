@@ -765,13 +765,14 @@ export function ProjectsSection(): React.JSX.Element {
 
   const searchField = (
     <Input
+      variant="search"
       ref={searchInputRef}
       value={searchQuery}
       onChange={(e) => setSearchQuery(e.target.value)}
       onKeyDown={handleSearchKeyDown}
       placeholder="Search workspaces"
       aria-label="Search workspaces"
-      className={`${twoColumn ? 'w-full' : 'flex-1'} min-w-0 type-control`}
+      className={`${twoColumn ? 'w-full' : 'flex-1'} min-w-0`}
     />
   )
 

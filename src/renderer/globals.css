@@ -1812,6 +1812,15 @@ html[data-style="glass"] [data-material="frost"]:not([data-frost-shape], [data-f
   transform-origin: var(--k2-menu-origin, top left);
 }
 html[data-style="glass"] [data-material="frost"][class~="right-0"]:not([data-zen-root] *) { --k2-menu-origin: top right; }
+/* A search field (<Input variant="search">) is Frost in Glass, but keeps the
+   shared control edge: the frost hairline alone is under 3:1 on the page.
+   Focus takes the accent edge, as every field does. */
+html[data-style="glass"] input[data-k2-search][data-material="frost"]:not(:focus):not([data-zen-root] *) {
+  border: 1px solid var(--color-control-edge);
+}
+html[data-style="glass"] input[data-k2-search][data-material="frost"]:focus:not([data-zen-root] *) {
+  border: 1px solid var(--color-accent);
+}
 @media (prefers-reduced-motion: reduce) {
   html[data-style="glass"] [data-material="frost"]:not([data-zen-root] *) { animation: none !important; }
   html[data-style="glass"] [data-nav-control]:active:not(:disabled):not([data-zen-root] *) { scale: 1; }

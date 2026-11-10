@@ -14,10 +14,16 @@ export const FLOAT_MATERIAL: Record<FloatRole, 'tile' | 'frost'> = {
 }
 
 /** The attributes that give a floating surface its material. Does nothing
- *  outside Glass: no other style reads them. */
-export function floatMaterial(role: FloatRole): Record<string, string | undefined> {
+ *  outside Glass: no other style reads them. `material` overrides the table
+ *  for one surface: the shared row menu (OverflowMenu) and the Settings
+ *  dropdown are Frost, as floating chrome is, while the app's other menus
+ *  keep the table's choice until each is checked over busy content. */
+export function floatMaterial(
+  role: FloatRole,
+  material: 'tile' | 'frost' = FLOAT_MATERIAL[role],
+): Record<string, string | undefined> {
   const float = role === 'menu' || role === 'popover' || role === 'palette' ? role : undefined
-  if (FLOAT_MATERIAL[role] === 'frost') return { 'data-material': 'frost', 'data-float': float, 'data-floating': undefined }
+  if (material === 'frost') return { 'data-material': 'frost', 'data-float': float, 'data-floating': undefined }
   return {
     'data-material': role === 'dialog' ? 'tile' : 'raised',
     'data-float': float,

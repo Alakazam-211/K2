@@ -257,6 +257,9 @@ pub mod feedback;
 // Ticket HTML brief (prd-ticket-html-brief-v1): clean + store the
 // agent's HTML brief next to its ticket (`feedback_briefs`, 0126).
 pub mod feedback_brief;
+// The mail reader's HTML cleaner (prd-ocmail-admin-in-k2-v1 §5.4/§7.5):
+// no script, no remote content, links kept only as inert data.
+pub mod mail_html;
 // Thread survives a tab rename (TR20): one-time repair for fork tabs that
 // claimed the source workspace's conversation id before 0.45.1.
 pub mod fork_tab_repair;

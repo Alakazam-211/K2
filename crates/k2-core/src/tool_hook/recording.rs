@@ -566,7 +566,7 @@ mod tests {
         let c = conn();
         home::set_app(&c, APP, false, "Jobs", "owner", 1).unwrap();
         crate::recording::set_for_tests(false, false);
-        assert!(crate::recording::RECORDING_IN_APPS, "the pin's const is on");
+        assert!(crate::recording::in_apps(), "the pin's const is on (no test override)");
         assert!(matches!(step(&c, APP, &ManifestChat::NotDeclared, false).unwrap(), Step::Skip { .. }), "Sew 0.8.x");
         assert_eq!(step(&c, APP, &ManifestChat::NotDeclared, true).unwrap(), Step::Grandfather);
         let e = set_cap_required(&c, APP, 2).unwrap_err();

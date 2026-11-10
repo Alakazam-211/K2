@@ -53,9 +53,8 @@ mod tests {
     /// override says; the desktop consent sheet (K-g) is still off.
     #[test]
     fn the_pin_turned_recording_in_apps_on_and_the_consent_sheet_stays_off() {
-        assert!(super::RECORDING_IN_APPS);
         super::set_for_tests(false, false);
-        assert!(super::in_apps(), "a test can't turn the pin back off");
-        assert!(!super::CLIENT_CONSENT_SHEET && !super::consent_sheet());
+        assert!(super::in_apps(), "on with no test override: a test can't turn the pin back off");
+        assert!(!super::consent_sheet(), "K-g's consent sheet is still off");
     }
 }

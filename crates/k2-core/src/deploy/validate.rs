@@ -828,7 +828,7 @@ mod tests {
             r.errors.iter().map(|e| format!("{}@{}", e.code, e.at.clone().unwrap_or_default())).collect()
         };
         crate::recording::set_for_tests(false, false);
-        assert!(crate::recording::RECORDING_IN_APPS, "the pin's const is on");
+        assert!(crate::recording::in_apps(), "the pin's const is on (no test override)");
         let outside = codes(&chat.replace("CAPS", ""));
         assert_eq!(outside, vec!["cap_outside_ceiling@roles.host.room".to_string()], "the role asks outside the App's caps");
         let inside = codes(&chat.replace("CAPS", r#","voice:record""#));

@@ -7836,7 +7836,7 @@ mod tests {
     #[test]
     fn voice_record_since_the_pin_only_widens_voice_join() {
         crate::recording::set_for_tests(false, false);
-        assert!(crate::recording::RECORDING_IN_APPS, "the pin's const is on");
+        assert!(crate::recording::in_apps(), "the pin's const is on (no test override)");
         let err = parse_caps(Some(&["voice:record".into()])).unwrap_err();
         assert!(err.contains("voice:record only widens voice:join"), "{err}");
         let err = parse_caps(Some(&["voice:record".into(), "chat:post".into()])).unwrap_err();

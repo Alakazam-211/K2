@@ -167,7 +167,7 @@ mod tests {
         // The pin's const is on (K2 0.46.11): no override, and still inert
         // on a box whose Sew doesn't report voice_record_cap (0.8.x).
         k2_core::recording::set_for_tests(false, false);
-        assert!(k2_core::recording::RECORDING_IN_APPS);
+        assert!(k2_core::recording::in_apps(), "the pin's const is on (no test override)");
         assert_eq!(run(&[]), Summary::default(), "Sew 0.8.x: inert");
 
         let s = run(&flags);

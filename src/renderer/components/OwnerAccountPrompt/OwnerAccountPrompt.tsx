@@ -264,16 +264,20 @@ export default function OwnerAccountPrompt(): React.JSX.Element | null {
   // Reopened from the setup checklist after "Not now": shown while the
   // daemon still says nothing is linked.
   const forced = useOwnerAccountPromptReopenStore((s) => s.forced)
+  /** Was the flag on at the last read (so a reopen applies the pre-select once)? */
+  const forcedAtLastRead = useRef(false)
 
   const refresh = useCallback(async () => {
     if (!eligible.current) return
     const v = await fetchPromptView()
     const wantForced = useOwnerAccountPromptReopenStore.getState().forced
     if (wantForced && !v?.reopenable) useOwnerAccountPromptReopenStore.getState().clear()
+    const forcedBefore = forcedAtLastRead.current
+    forcedAtLastRead.current = wantForced && v?.reopenable === true
     setView((prev) => {
       // Keep the person's own pick across re-reads.
-      const wasShown = prev?.show === true || (wantForced && prev?.reopenable === true)
-      const nowShown = v?.show === true || (wantForced && v?.reopenable === true)
+      const wasShown = prev?.show === true || (forcedBefore && prev?.reopenable === true)
+      const nowShown = v?.show === true || forcedAtLastRead.current
       if (!wasShown && nowShown && v) setPicked(v.preselect)
       return v
     })

@@ -356,6 +356,15 @@ describe('owner account prompt: reopened from the setup checklist', () => {
     expect(useOwnerAccountPromptReopenStore.getState().forced).toBe(false)
   })
 
+  it('a reopened prompt starts on the daemon\'s pre-select', async () => {
+    h.routes['owner/account-prompt'] = { ...DISMISSED, candidates: [cand('julie'), cand('z3thon')], preselect: 'z3thon' }
+    render(<OwnerAccountPrompt />)
+    await settled()
+    act(() => useOwnerAccountPromptReopenStore.getState().reopen())
+    await screen.findByTestId('owner-account-prompt')
+    await waitFor(() => expect(radio('z3thon').checked).toBe(true))
+  })
+
   it('does not reopen once an account is linked', async () => {
     h.routes['owner/account-prompt'] = { ...DISMISSED, reason: 'linked', linked: 'julie' }
     render(<OwnerAccountPrompt />)

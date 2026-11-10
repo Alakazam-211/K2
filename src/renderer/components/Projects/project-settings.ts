@@ -46,8 +46,21 @@ export function readOnlyBannerText(role: ProjectRole | null): string | null {
   if (projectSettingsCaps(role).canDelete) return null
   return (
     'You can rename and pin this project and change its agents. ' +
-    'Only the owner or an admin can change its picture, color and dashboards, or delete it.'
+    'Only the owner or an admin can change its picture, color, dashboards and the view its agents open in, or delete it.'
   )
+}
+
+/** prd-projects-threads-v1 §4.4: why "Agents open in" can't be changed here,
+ *  or null when it can. An older daemon (no `defaultView` on the project) has
+ *  no route for it; otherwise it is owner or admin, like color (an agent on
+ *  the CLI needs "Manage K2 projects", which the daemon checks). */
+export function defaultViewLockReason(
+  caps: ProjectSettingsCaps,
+  daemonKnowsDefaultView: boolean,
+): string | null {
+  if (!daemonKnowsDefaultView) return 'Needs a newer K2 on this server.'
+  if (!caps.canEditLooks) return 'Only the owner or an admin can change this.'
+  return null
 }
 
 /** Case-insensitive name filter for the left master list (the
@@ -117,6 +130,7 @@ export const PROJECT_GROUPS_MANIFEST: SettingEntry[] = [
   { id: 'project-groups.name', section: 'project-groups', label: 'Project name', description: 'Rename a project', keywords: ['rename', 'project', 'name'] },
   { id: 'project-groups.picture', section: 'project-groups', label: 'Project picture', description: 'Upload or remove a project picture', keywords: ['icon', 'image', 'avatar', 'picture'] },
   { id: 'project-groups.color', section: 'project-groups', label: 'Project color', description: 'The color behind the project picture', keywords: ['color', 'colour', 'swatch'] },
+  { id: 'project-groups.default-view', section: 'project-groups', label: 'Agents open in', description: "The view a project's agents open in: Terminal, Thread or Chatter", keywords: ['view', 'thread', 'terminal', 'chatter', 'default', 'open', 'agents'] },
   { id: 'project-groups.pinned', section: 'project-groups', label: 'Show in Pinned', description: 'Pin a project for everyone on this server', keywords: ['pin', 'pinned', 'favorite'] },
   { id: 'project-groups.delete', section: 'project-groups', label: 'Delete project', description: 'Remove a project with its dashboards and chat', keywords: ['delete', 'remove', 'project'] },
   { id: 'project-groups.dashboards', section: 'project-groups', label: 'Dashboards', description: 'Add, rename, move and delete project dashboards', keywords: ['dashboard', 'tabs', 'layout'] },

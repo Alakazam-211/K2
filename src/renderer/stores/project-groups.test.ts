@@ -96,7 +96,11 @@ vi.mock('@/components/Projects/projects-api', async () => {
   // Home M1: the wrappers take the scope first; `primaryOnly` checks it is
   // the primary scope and forwards the old arguments.
   const { primaryOnly } = await import('@/test-utils/scope')
+  const actual = await vi.importActual<typeof import('@/components/Projects/projects-api')>(
+    '@/components/Projects/projects-api',
+  )
   return {
+    projectDefaultView: actual.projectDefaultView,
     fetchProjectGroups: primaryOnly((...a: []) => api.fetchProjectGroups(...a)),
     fetchProjectGroupShow: primaryOnly((id: string) => api.fetchProjectGroupShow(id)),
   }
@@ -534,5 +538,55 @@ describe('project-groups store event wiring', () => {
     reconnect.connected[0]!()
     await flush()
     expect(api.fetchProjectGroups).not.toHaveBeenCalled()
+  })
+  // prd-projects-threads-v1 P5: another client (or `k2 project view`, or the
+  // phone) moves a project's default. The groups-changed frame refetches the
+  // list, and every tile switch on that project made against the old default
+  // goes, so open tiles show the new default. Other projects keep theirs.
+  it('groups-changed with a moved default drops that project\'s tile switches', async () => {
+    const row = (id: string, defaultView?: string) =>
+      ({ id, name: id, color: null, memberWorkspaceIds: [], defaultView }) as never
+    useProjectGroupsStore.setState({
+      groups: [row('g1', 'thread'), row('g2', 'thread')],
+      tileViews: {
+        'local|g1|w1': { view: 'chatter', against: 'thread' },
+        'local|g1|w2': { view: 'heartbeats', against: 'thread' },
+        'local|g2|w1': { view: 'terminal', against: 'thread' },
+        'other-host|g1|w1': { view: 'chatter', against: 'thread' },
+      },
+    })
+    api.fetchProjectGroups.mockResolvedValue([row('g1', 'terminal'), row('g2', 'thread')])
+    vi.useFakeTimers()
+    try {
+      fire('groups-changed', 'g1')
+      await vi.advanceTimersByTimeAsync(300)
+    } finally {
+      vi.useRealTimers()
+    }
+    await flush()
+    expect(useProjectGroupsStore.getState().groups?.[0]).toMatchObject({ id: 'g1', defaultView: 'terminal' })
+    expect(useProjectGroupsStore.getState().tileViews).toEqual({
+      'local|g2|w1': { view: 'terminal', against: 'thread' },
+      'other-host|g1|w1': { view: 'chatter', against: 'thread' },
+    })
+  })
+
+  it('a refetch with the same default keeps tile switches (a rename is not a reset)', async () => {
+    const row = (name: string) => ({ id: 'g1', name, color: null, memberWorkspaceIds: [], defaultView: 'thread' }) as never
+    useProjectGroupsStore.setState({
+      groups: [row('Alpha')],
+      tileViews: { 'local|g1|w1': { view: 'chatter', against: 'thread' } },
+    })
+    api.fetchProjectGroups.mockResolvedValue([row('Beta')])
+    await useProjectGroupsStore.getState().fetchGroups()
+    expect(useProjectGroupsStore.getState().tileViews).toEqual({
+      'local|g1|w1': { view: 'chatter', against: 'thread' },
+    })
+  })
+
+  it('dropStaleTileViews drops a project switch made against another default', () => {
+    useProjectGroupsStore.setState({ tileViews: { 'local|g1|w1': { view: 'chatter', against: 'thread' } } })
+    useProjectGroupsStore.getState().dropStaleTileViews('g1', 'terminal')
+    expect(useProjectGroupsStore.getState().tileViews).toEqual({})
   })
 })

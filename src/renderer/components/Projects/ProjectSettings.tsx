@@ -71,20 +71,24 @@ import {
   normalizeHexColor,
   partitionPinned,
   pinProjectGroup,
+  projectDefaultView,
   removeDashboardPane,
   removeProjectGroupMember,
   renameProjectGroup,
   renameProjectGroupDashboard,
   reorderProjectGroupDashboards,
   setProjectGroupColor,
+  setProjectGroupDefaultView,
   setProjectGroupIcon,
   setProjectGroupPoc,
+  type ProjectDefaultView,
   type ProjectGroup,
   type ProjectGroupDashboard,
   type ProjectGroupHtmlDoc,
   type ProjectGroupShow,
 } from './projects-api'
 import { onWorkspaceResourcesChanged } from '@/stores/session-events'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { pickIconImage } from '@/lib/pick-remote-image'
 import ProjectGroupAvatar, { GROUP_AVATAR_COLORS, groupAvatarColor, useGroupIcon } from './ProjectGroupAvatar'
 import { loadGroupIcon, setCachedGroupIcon } from './group-icon-cache'
@@ -92,6 +96,7 @@ import IconCropDialog from '@/components/Settings/IconCropDialog'
 import {
   addableWorkspaces,
   dashboardShowsDoc,
+  defaultViewLockReason,
   filterGroupsByQuery,
   projectSettingsCaps,
   readOnlyBannerText,
@@ -100,8 +105,8 @@ import {
   type ProjectSettingsCaps,
 } from './project-settings'
 import { moveDashboardId, orderedDashboards } from './project-tabs'
-import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
-import { Button, Callout, Input, Toggle, cx } from '@/components/ui'
+import { SETTING_ROW_HINT, SettingDropdown, SettingRow } from '@/components/Settings/controls/SettingControls'
+import { Button, Callout, Input, Segmented, Toggle, cx } from '@/components/ui'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { primaryScope } from '@/kessel/server-scope'
 
@@ -762,6 +767,101 @@ function AgentsSection({
   )
 }
 
+// ── Agents open in (prd-projects-threads-v1 §4.4) ────────────────────────
+
+const DEFAULT_VIEW_OPTIONS: { value: ProjectDefaultView; label: string }[] = [
+  { value: 'terminal', label: 'Terminal' },
+  { value: 'thread', label: 'Thread' },
+  { value: 'chatter', label: 'Chatter' },
+]
+
+/** Why a save was refused, in words for this row. */
+function defaultViewErrorMessage(err: unknown): string {
+  // A refusal arrives as a DaemonHttpError carrying the code; the older
+  // JSON-in-the-message shape is read too.
+  const code = (err instanceof DaemonHttpError ? err.code : null) ?? daemonErrorInfo(err).code
+  if (code === 'forbidden') return "Couldn't change it: only the owner or an admin can."
+  if (code === 'agent_permission_off') return "Couldn't change it: this agent needs Manage K2 projects on."
+  return `Couldn't change it: ${errorMessage(err)}`
+}
+
+/** The view every agent tile in this project opens in. Daemon-owned (the
+ *  `defaultView` column), so every client and the phone agree. Optimistic
+ *  through `edit`: the choice shows at once and rolls back with an inline
+ *  error when the daemon refuses. A saved change drops this person's tile
+ *  switches against the old default; other clients drop theirs when the
+ *  groups-changed refetch shows the new default. */
+function DefaultViewRow({
+  detail,
+  caps,
+  edit,
+}: {
+  detail: ProjectGroupShow
+  caps: ProjectSettingsCaps
+  edit: GroupEdit
+}): React.JSX.Element {
+  const value = projectDefaultView(detail)
+  const lockReason = defaultViewLockReason(caps, detail.defaultView !== undefined)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const groupId = detail.id
+  const shownId = useRef(groupId)
+  shownId.current = groupId
+
+  // Another project selected: its row starts clean, and a late answer for
+  // the previous one never lands here.
+  useEffect(() => {
+    setError(null)
+    setSaving(false)
+  }, [groupId])
+
+  const change = (next: ProjectDefaultView): void => {
+    if (next === value || lockReason) return
+    setError(null)
+    setSaving(true)
+    edit({ defaultView: next }, () => setProjectGroupDefaultView(primaryScope(), groupId, next))
+      .then(() => useProjectGroupsStore.getState().dropStaleTileViews(groupId, next))
+      .catch((err) => {
+        if (shownId.current === groupId) setError(defaultViewErrorMessage(err))
+      })
+      .finally(() => {
+        if (shownId.current === groupId) setSaving(false)
+      })
+  }
+
+  const below = error ? (
+    <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
+      {error}
+    </p>
+  ) : lockReason ? (
+    <p className={SETTING_ROW_HINT} data-testid="project-default-view-locked">
+      {lockReason}
+    </p>
+  ) : undefined
+
+  return (
+    <SettingRow
+      label="Agents open in"
+      hint="Each agent in this project opens in this view. Anyone can switch one agent for themselves."
+      settingId="project-groups.default-view"
+      testId="project-default-view-row"
+      below={below}
+    >
+      <span className="type-hint text-[var(--color-text-muted)]" aria-live="polite">
+        {saving ? 'Saving…' : ''}
+      </span>
+      <Segmented
+        aria-label="Agents open in"
+        value={value}
+        options={DEFAULT_VIEW_OPTIONS}
+        activation="manual"
+        disabled={lockReason !== null}
+        onChange={change}
+      />
+    </SettingRow>
+  )
+}
+
 // ── The right panel (selected project's management) ──────────────────────
 
 /** Optimistic group edit: apply `patch` now, run the daemon call, take its
@@ -1009,6 +1109,7 @@ function ProjectSettingsDetail({
           </span>
         )}
       </Row>
+      <DefaultViewRow detail={detail} caps={caps} edit={edit} />
       <Row label="Show in Pinned" settingId="project-groups.pinned">
         <Toggle
           aria-label="Show in Pinned"

@@ -40,6 +40,7 @@ import { onAppHello, onProjectGroupsChanged } from '@/stores/session-events'
 import {
   fetchProjectGroups,
   fetchProjectGroupShow,
+  projectDefaultView,
   type ProjectDefaultView,
   type ProjectGroup,
   type ProjectGroupShow,
@@ -167,6 +168,11 @@ interface ProjectGroupsState {
   setTileView: (key: string, view: TileView, projectDefault: ProjectDefaultView) => void
   /** Drop a stale entry (its default moved). No-op when absent. */
   dropTileView: (key: string) => void
+  /** A project's default is now `projectDefault` (this client saved it, or
+   *  a list refetch shows it moved): drop every switch on that project made
+   *  against another default, so tiles reset even while no dashboard is
+   *  mounted to notice (and a default moved away and back still resets). */
+  dropStaleTileViews: (groupId: string, projectDefault: ProjectDefaultView) => void
   fetchGroups: () => Promise<void>
   /** Optimistic edit (0.46.1): patch one row of `groups` in place (rename
    *  / pin / PoC from Settings) — the daemon's answer or a rollback patch
@@ -235,6 +241,18 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       return { tileViews: next }
     })
   },
+  dropStaleTileViews: (groupId, projectDefault) => {
+    const prefix = `${activeHostKey(useConnectHostStore.getState().activeHost)}|${groupId}|`
+    set((s) => {
+      const stale = Object.keys(s.tileViews).filter(
+        (k) => k.startsWith(prefix) && s.tileViews[k].against !== projectDefault,
+      )
+      if (stale.length === 0) return {}
+      const next = { ...s.tileViews }
+      for (const k of stale) delete next[k]
+      return { tileViews: next }
+    })
+  },
   fetchGroups: async () => {
     // Capture the host so a slow response from the PREVIOUS host can
     // never land after a switch (projects-store idiom).
@@ -242,7 +260,17 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
     try {
       const groups = await fetchProjectGroups(primaryScope())
       if (activeHostKey(useConnectHostStore.getState().activeHost) !== hostKey) return
+      const before = get().groups
       set({ groups, groupsError: null })
+      // A default that moved (another client, the phone, `k2 project view`)
+      // resets that project's tile switches (prd-projects-threads-v1 §3.2).
+      if (before) {
+        for (const g of groups) {
+          const prev = before.find((b) => b.id === g.id)
+          const now = projectDefaultView(g)
+          if (prev && projectDefaultView(prev) !== now) get().dropStaleTileViews(g.id, now)
+        }
+      }
       const membersByGroupId: Record<string, string[]> = {}
       const listCarriesMembers = groups.every((g) => Array.isArray(g.memberWorkspaceIds))
       if (listCarriesMembers) {

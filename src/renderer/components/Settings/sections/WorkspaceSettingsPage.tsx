@@ -315,7 +315,7 @@ function NewAgentViewRow(): React.JSX.Element {
     <div data-settings-id="general.new-agent-view" className="divide-y divide-[var(--color-border)]">
       <SettingRow
         label="New agents open in"
-        hint="The view an agent opens in the first time you see it here. Agents you have already set a view for keep it."
+        hint="The view an agent opens in the first time you see it here. Agents you have already set a view for keep it. Projects use their own setting (Project settings → Agents open in)."
       >
         <SettingDropdown
           value={pref.view}

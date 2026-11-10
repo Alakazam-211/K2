@@ -19,6 +19,7 @@ fn runner_guard() {
     support::env::require_nextest();
 }
 
+mod card_dismiss_integration;
 mod chat_pass_integration;
 mod chat_pass_mint_integration;
 mod chat_transcript_route_gone;

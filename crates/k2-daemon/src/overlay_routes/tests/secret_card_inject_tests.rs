@@ -1303,3 +1303,54 @@ fn wait_ends_on_a_declined_card_and_limits_waiters() {
     assert_error_code(&r, "403 Forbidden", "card_declined");
     crate::vault::spawn::session_ended(&s.sid);
 }
+
+/// prd-popup-close-and-card-dismiss-v1 B5: a person dismissing the card a
+/// `k2 vault file --wait` is waiting on ends the wait with 410
+/// `card_dismissed` (the CLI's exit 5), naming who and why; a card the
+/// asking agent withdrew ends it with 410 `card_withdrawn`. Nothing saved.
+#[test]
+fn wait_ends_on_a_dismissed_or_withdrawn_card_with_its_own_code() {
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlwd");
+    let s = live_session("sess-wait-dm", &project_id);
+    let posted = post_as(&s.sid, &handle, "WAIT_DISMISS", "session", "file");
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+    let me = agent_of(&project_id, &s.sid);
+    let (v2, me2) = (vault.clone(), me.clone());
+    let waiter = std::thread::spawn(move || use_file(&v2, &me2, serde_json::json!({ "secret": "WAIT_DISMISS", "wait": "8s" })));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    assert!(!waiter.is_finished(), "still waiting for the person");
+    let d = post_json("/cli/thread/void", &HashMap::new(), serde_json::json!({ "addr": handle, "id": id, "reason": "Using SSO now" }));
+    assert_eq!(d.status, "200 OK", "{}", d.body);
+    let r = waiter.join().expect("join");
+    assert_error_code(&r, "410 Gone", "card_dismissed");
+    let hint = json_body(&r)["error"]["hint"].as_str().expect("hint").to_string();
+    assert!(hint.contains(&id) && hint.contains("\"Using SSO now\"") && hint.contains("nothing was saved"), "{hint}");
+    assert_eq!(vault.request_get(&id).expect("req").status, "void");
+
+    // Withdrawn by the asking agent (its passport and session).
+    let posted = post_json(
+        "/cli/thread/secret",
+        &params_of(&[
+            (crate::caller_workspace::PRINCIPAL_BOUND_KEY, "1"),
+            ("project_id", project_id.as_str()),
+            ("from", handle.as_str()),
+            ("cell_session_id", s.sid.as_str()),
+        ]),
+        serde_json::json!({ "addr": handle, "name": "WAIT_WITHDRAW", "scope": "session", "delivery": "file", "from": handle }),
+    );
+    assert_eq!(posted.status, "200 OK", "{}", posted.body);
+    let wid = json_body(&posted)["id"].as_str().expect("id").to_string();
+    let w = post_json(
+        "/cli/thread/void",
+        &params_of(&[(crate::caller_workspace::PRINCIPAL_BOUND_KEY, "1"), ("project_id", project_id.as_str()), ("from", handle.as_str())]),
+        serde_json::json!({ "addr": handle, "id": wid, "why": "Found it in the repo" }),
+    );
+    assert_eq!(w.status, "200 OK", "{}", w.body);
+    assert_eq!(json_body(&w)["closedAs"], "withdrawn", "{}", w.body);
+    let r = use_file(&vault, &me, serde_json::json!({ "secret": "WAIT_WITHDRAW", "wait": "1s", "waitCard": wid }));
+    assert_error_code(&r, "410 Gone", "card_withdrawn");
+    crate::vault::spawn::session_ended(&s.sid);
+}

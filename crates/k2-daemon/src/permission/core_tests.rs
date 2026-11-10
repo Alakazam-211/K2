@@ -519,6 +519,92 @@ fn the_agent_withdraws_its_request_and_gets_no_turn() {
     assert_eq!(s, "404 Not Found");
 }
 
+// ── dismiss and withdraw (prd-popup-close-and-card-dismiss-v1 B6) ───
+
+fn close_as(author: &str, ws: &Ws, card: &str, reason: Option<&str>, params: &[(&str, &str)]) -> (String, Value) {
+    let mut b = json!({ "addr": ws.handle, "id": card });
+    if let Some(r) = reason {
+        b["reason"] = json!(r);
+    }
+    let p: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let r = crate::overlay_routes::dispatch_post_as("/cli/thread/void", &p, b.to_string().as_bytes(), author);
+    (r.status.to_string(), serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{e}: {}", r.body)))
+}
+
+#[test]
+fn a_dismissed_permission_card_grants_nothing_is_no_denial_and_is_audited() {
+    let home = crate::test_support::TempHome::new();
+    let ws = seed("pcdm");
+    let member = login(&home, "pcdmm", k2_core::connect_users::Role::Member);
+    let v = ask_ok(&ws, "test.switch", json!({}));
+    let id = v["id"].as_str().unwrap().to_string();
+    let card = card_of(&v);
+
+    // A Member below the Admin floor: refused, nothing changes.
+    let (s, a) = close_as(&member, &ws, &card, None, &[]);
+    assert_eq!((s.as_str(), &a["error"]["code"], &a["error"]["required"]), ("403 Forbidden", &json!("action_card_person_only"), &json!("admin")), "{a}");
+    assert_eq!(row(&id).state, RequestState::Pending);
+    assert_eq!(doc(&ws, &card)["choice"]["status"], "pending");
+
+    let (s, a) = close_as("owner", &ws, &card, Some("Not needed now"), &[]);
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!((&a["status"], &a["closedAs"]), (&json!("voided"), &json!("dismissed")), "{a}");
+    assert_eq!(testkit::applied(&ws.id, "test.switch"), 0, "a dismiss applies nothing");
+    let r = row(&id);
+    assert_eq!(r.state.as_str(), "dismissed", "a real terminal state, never denied: {r:?}");
+    assert_eq!((r.answered_by.as_deref(), r.reason.as_deref()), (Some("owner"), Some("Not needed now")));
+    let d = doc(&ws, &card);
+    assert_eq!((&d["choice"]["status"], &d["choice"]["closedAs"], &d["choice"]["closeReason"]), (&json!("voided"), &json!("dismissed"), &json!("Not needed now")), "{d}");
+    assert_eq!(d["choice"]["action"]["view"]["state"], "dismissed", "{d}");
+
+    // The agent is told, and told it is not a denial.
+    let line = inject::sent_to(&ws.handle).last().cloned().expect("a turn");
+    assert_eq!(
+        line,
+        format!("[permission:{id}] dismissed by owner: \"Not needed now.\" Nothing was applied, and it is not a denial: ask again if you still need it.")
+    );
+    // The audit says dismissed, not denied.
+    let audit = std::fs::read_to_string(home.path().join(".k2/auth-audit.jsonl")).expect("audit file");
+    let lines: Vec<&str> = audit.lines().filter(|l| l.contains(&id) && l.contains("permission-answer")).collect();
+    assert_eq!(lines.len(), 1, "one answer audit line: {audit}");
+    assert!(lines[0].contains(&format!("{id} test.switch dismissed via=owner-token")), "{}", lines[0]);
+    assert!(!audit.lines().any(|l| l.contains(&id) && l.contains(" denied ")), "never audited as denied: {audit}");
+
+    // No re-ask block: the agent may ask again at once.
+    let again = ask_ok(&ws, "test.switch", json!({}));
+    assert_ne!(again["id"], json!(id));
+    // `k2 permission status` reads it headless.
+    let (s, st) = call(&agent(&ws), routes::STATUS, json!({ "id": id }));
+    assert_eq!(s, "200 OK", "{st}");
+    assert_eq!((&st["state"], &st["reason"]), (&json!("dismissed"), &json!("Not needed now")), "{st}");
+}
+
+#[test]
+fn the_asking_agent_withdraws_its_permission_card_from_the_thread() {
+    let ws = seed("pcwd");
+    let other = seed("pcwx");
+    let v = ask_ok(&ws, "test.switch", json!({}));
+    let id = v["id"].as_str().unwrap().to_string();
+    let card = card_of(&v);
+    fn passport(w: &Ws) -> Vec<(&'static str, &str)> {
+        vec![(crate::caller_workspace::PRINCIPAL_BOUND_KEY, "1"), ("project_id", w.id.as_str()), ("from", w.handle.as_str())]
+    }
+    // Another workspace's agent can't.
+    let (s, a) = close_as("owner", &ws, &card, None, &passport(&other));
+    assert_eq!(s, "403 Forbidden", "{a}");
+    assert_eq!(row(&id).state, RequestState::Pending);
+
+    let before = inject::sent_to(&ws.handle).len();
+    let (s, a) = close_as("owner", &ws, &card, Some("Ran it on the minis instead"), &passport(&ws));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(a["closedAs"], "withdrawn", "{a}");
+    assert_eq!(row(&id).state, RequestState::Cancelled);
+    let d = doc(&ws, &card);
+    assert_eq!((&d["choice"]["status"], &d["choice"]["closedAs"], &d["choice"]["closeReason"]), (&json!("voided"), &json!("withdrawn"), &json!("Ran it on the minis instead")), "{d}");
+    assert_eq!(inject::sent_to(&ws.handle).len(), before, "a withdraw sends the agent no turn");
+    assert_eq!(testkit::applied(&ws.id, "test.switch"), 0);
+}
+
 #[test]
 fn turning_the_switch_off_closes_open_requests_with_one_turn_each() {
     let ws = seed("pcso");

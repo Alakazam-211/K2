@@ -9749,4 +9749,8 @@ mod tests {
     // 0.46.9: the delivery journal, the one log line, the take-check notices.
     #[path = "delivery_journal_tests.rs"]
     mod journal;
+
+    // 0.46.11: dismissed and withdrawn cards (prd-popup-close-and-card-dismiss-v1).
+    #[path = "card_dismiss_tests.rs"]
+    mod card_dismiss;
 }

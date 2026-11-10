@@ -1020,11 +1020,52 @@ async fn async_main() {
     // arrives via the provision/migration step, which a client-box migration
     // skipped (internal migration-runbook lesson L-cli). Linux-only, never
     // clobbers a symlink, non-fatal.
-    match k2_core::cli_stage::stage_cli() {
-        Ok(Some(path)) => log_debug!("[daemon] k2 CLI staged: {}", path.display()),
-        Ok(None) => {}
-        Err(e) => log_debug!("[daemon] WARN: stage k2 CLI: {e}"),
-    }
+    let staged_cli = match k2_core::cli_stage::stage_cli() {
+        Ok(Some(path)) => {
+            log_debug!("[daemon] k2 CLI staged: {}", path.display());
+            Some(path)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            log_debug!("[daemon] WARN: stage k2 CLI: {e}");
+            None
+        }
+    };
+
+    // 0.46.11 — `k2` in the person's own Terminal, no admin, no Settings
+    // trip. macOS: link ~/.local/bin/k2 at this bundle's CLI (and
+    // /usr/local/bin/k2 when writable) and add one marked PATH block to
+    // the shell's startup file when new windows wouldn't find it. Linux:
+    // the PATH block when the copy above went to ~/.local/bin. Off the
+    // boot path: it probes the login shell. The app runs the same heal as
+    // a backstop (k2_client::cli_install).
+    #[cfg(unix)]
+    std::thread::spawn(move || {
+        if let Some(staged) = staged_cli.as_deref() {
+            match k2_core::cli_install::boot_path_for_staged(staged) {
+                Some(Ok(k2_core::cli_install::PathOutcome::BlockAdded { file })) => {
+                    log_debug!("[daemon] k2 CLI: added the K2 PATH line to {}", file.display())
+                }
+                Some(Ok(k2_core::cli_install::PathOutcome::Skipped { reason })) => {
+                    log_debug!("[daemon] k2 CLI: PATH line not added: {reason}")
+                }
+                Some(Err(e)) => log_debug!("[daemon] WARN: k2 CLI PATH line: {e}"),
+                _ => {}
+            }
+        }
+        let Ok(exe) = std::env::current_exe() else { return };
+        match k2_core::cli_install::boot_heal(&exe) {
+            Some(Ok(report)) => {
+                for line in report.log_lines() {
+                    log_debug!("[daemon] k2 CLI: {line}");
+                }
+            }
+            Some(Err(e)) => log_debug!("[daemon] WARN: k2 CLI heal: {e}"),
+            None => {}
+        }
+    });
+    #[cfg(not(unix))]
+    let _ = staged_cli;
 
     if lan {
         log_debug!(

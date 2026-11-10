@@ -997,14 +997,32 @@ pub fn run() {
             // Browser Tab (S1): registry for child browser webviews.
             crate::commands::browser_webviews::init(&app.handle().clone());
 
-            if crate::commands::settings::cli_symlink_needs_heal() {
-                std::thread::spawn(|| {
-                    match crate::commands::settings::cli_heal_silent() {
-                        Ok(true) => eprintln!("[boot] CLI heal: k2 + k2so symlinks (re)linked silently"),
-                        Ok(false) => eprintln!("[boot] CLI heal deferred: /usr/local/bin needs admin — install from Settings → Install CLI"),
-                        Err(e) => eprintln!("[boot] CLI heal skipped: {e}"),
+            // 0.46.11 — macOS: `~/.local/bin/k2` + one marked PATH line, no
+            // admin (k2_client::cli_install). The daemon runs the same heal
+            // at its boot; this is the backstop. Off the main thread: it
+            // probes the login shell. A dev build (`target/…`) does nothing.
+            #[cfg(all(not(windows), not(target_os = "linux")))]
+            std::thread::spawn(|| {
+                let Ok(exe) = std::env::current_exe() else { return };
+                match k2_client::cli_install::boot_heal(&exe) {
+                    Some(Ok(report)) => {
+                        for line in report.log_lines() {
+                            eprintln!("[boot] CLI: {line}");
+                        }
                     }
-                });
+                    Some(Err(e)) => eprintln!("[boot] CLI heal skipped: {e}"),
+                    None => {}
+                }
+            });
+            #[cfg(any(windows, target_os = "linux"))]
+            {
+                if crate::commands::settings::cli_symlink_needs_heal() {
+                    std::thread::spawn(|| match crate::commands::settings::cli_heal_silent() {
+                        Ok(true) => eprintln!("[boot] CLI heal: k2 (+ k2so) installed for this user"),
+                        Ok(false) => eprintln!("[boot] CLI heal: a K2 CLI is already installed"),
+                        Err(e) => eprintln!("[boot] CLI heal skipped: {e}"),
+                    });
+                }
             }
 
             // 0.40.0 — retire com.k2so.* LaunchAgents (the daemon plist
@@ -1536,6 +1554,8 @@ pub fn run() {
             commands::settings::cli_install_status,
             commands::settings::cli_install,
             commands::settings::cli_uninstall,
+            commands::settings::cli_install_system,
+            commands::settings::cli_remove_path_block,
             commands::settings::set_document_edited,
             commands::settings::set_board_file_unsaved,
             commands::settings::board_file_quit_now,

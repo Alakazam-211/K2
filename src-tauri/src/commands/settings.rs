@@ -63,14 +63,26 @@ fn find_cli_script_named(name: &str) -> Option<PathBuf> {
 
     // Production Windows (NSIS/MSI): resources land next to the exe or under
     // resources/ / cli/ (layout varies by Tauri version / bundler).
-    for p in [
+    // Linux .deb / .rpm / AppImage: the exe is `<prefix>/bin/k2` and the
+    // resources `<prefix>/lib/K2/_up_/cli/`.
+    //
+    // 0.46.11: only a script counts. On the .deb the exe ITSELF is
+    // `/usr/bin/k2` (the GUI), so `exe_dir/k2` used to "find" the GUI
+    // binary as the CLI.
+    let usr_lib = exe_dir.parent().map(|prefix| prefix.join("lib"));
+    let mut candidates = vec![
         exe_dir.join("cli").join(name),
         exe_dir.join(name),
         exe_dir.join("resources").join("cli").join(name),
         exe_dir.join("resources").join(name),
         exe_dir.join("_up_").join("cli").join(name),
-    ] {
-        if p.exists() {
+    ];
+    if let Some(lib) = usr_lib {
+        candidates.push(lib.join("K2").join("_up_").join("cli").join(name));
+        candidates.push(lib.join("k2").join("_up_").join("cli").join(name));
+    }
+    for p in candidates {
+        if p != exe_path && is_script(&p) {
             return Some(p);
         }
     }
@@ -92,6 +104,16 @@ fn find_cli_script_named(name: &str) -> Option<PathBuf> {
 
 fn find_cli_script() -> Option<PathBuf> {
     find_cli_script_named("k2")
+}
+
+/// A file that starts with `#!` (the bundled `k2` / `k2so` are bash
+/// scripts; a binary that shares the name is not one).
+fn is_script(p: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 2];
+    fs::File::open(p)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok_and(|_| &head == b"#!")
 }
 
 /// macOS install path for the `k2` symlink.
@@ -123,16 +145,15 @@ fn linux_cli_search_paths(home: Option<&Path>) -> Vec<PathBuf> {
     paths
 }
 
+/// The first of `paths` that is the K2 CLI script (a `#!` file with a
+/// version line, links followed). 0.46.11: the .deb puts the GUI binary at
+/// `/usr/bin/k2`, which used to read as "installed by the package" and
+/// left the person with a `k2` that opens the app.
 #[cfg(any(target_os = "linux", test))]
-fn first_existing_cli(paths: &[PathBuf]) -> Option<PathBuf> {
+fn first_k2_cli(paths: &[PathBuf]) -> Option<PathBuf> {
     paths
         .iter()
-        .find(|p| {
-            p.exists()
-                || fs::symlink_metadata(p)
-                    .map(|m| m.file_type().is_symlink())
-                    .unwrap_or(false)
-        })
+        .find(|p| is_script(p) && read_cli_version(p).is_some())
         .cloned()
 }
 
@@ -166,7 +187,7 @@ fn linux_home() -> Option<PathBuf> {
 #[cfg(target_os = "linux")]
 fn linux_installed_cli() -> Option<PathBuf> {
     let home = linux_home();
-    first_existing_cli(&linux_cli_search_paths(home.as_deref()))
+    first_k2_cli(&linux_cli_search_paths(home.as_deref()))
 }
 
 #[cfg(target_os = "linux")]
@@ -289,17 +310,20 @@ fn windows_cli_uninstall() -> Result<(), String> {
     Ok(())
 }
 
-/// True when the on-PATH CLI install should be (re)created at boot.
-///
-/// **macOS:** `/usr/local/bin/k2` missing, broken, or pointing at a different
-/// bundle (K2SO→K2 rename left a dangling target → CLI Version reads `v?`).
+/// True when the on-PATH CLI install should be (re)created at boot
+/// (Windows and Linux; macOS runs `k2_client::cli_install::boot_heal`,
+/// which also runs in the daemon).
 ///
 /// **Windows:** `%LOCALAPPDATA%\K2\bin\k2.cmd` missing or its copied script
 /// is gone. Silent heal only (no admin); Install CLI in Settings remains
 /// the explicit path when PATH wasn't updated yet.
 ///
+/// **Linux:** no K2 CLI script at `/usr/local/bin`, `/usr/bin` or
+/// `~/.local/bin`.
+///
 /// Returns false when there's no bundled CLI, or the running app is in a
 /// transient location (DMG mount / Gatekeeper translocation).
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) fn cli_symlink_needs_heal() -> bool {
     let Some(bundled) = find_cli_script() else {
         return false;
@@ -324,39 +348,7 @@ pub(crate) fn cli_symlink_needs_heal() -> bool {
     {
         // A distro package or an earlier daemon stage already put `k2` on
         // PATH. Do not add `/usr/local/bin/k2` in front of `/usr/bin/k2`.
-        return linux_installed_cli().is_none();
-    }
-    #[cfg(all(not(windows), not(target_os = "linux")))]
-    {
-        let new_cli = Path::new(CLI_SYMLINK_PATH);
-        match fs::read_link(new_cli) {
-            // It's a symlink. Heal only if its target is gone, or it points at a
-            // GENUINELY different bundle. Compare CANONICALIZED paths: macOS
-            // firmlinks (`/Applications` ↔ `/System/Volumes/Data/Applications`)
-            // and realpath resolution make two equivalent paths compare unequal,
-            // which used to re-trigger a (false) heal — and an admin prompt —
-            // on every single launch. Canonicalizing both sides makes the check
-            // idempotent: a correctly-installed symlink reports no heal needed.
-            Ok(target) => symlink_target_needs_heal(&target, &bundled),
-            // Not a symlink: heal if absent, or a legacy k2so symlink exists
-            // (pre-0.40 install that still needs its `k2` sibling).
-            Err(_) => !new_cli.exists() || Path::new(CLI_LEGACY_SYMLINK_PATH).is_symlink(),
-        }
-    }
-}
-
-/// Decide whether an existing `/usr/local/bin/k2` symlink (pointing at
-/// `target`) needs healing given the currently-running app's `bundled` CLI
-/// path. Pure + testable. Canonicalizes BOTH sides so macOS firmlink /
-/// realpath-equivalent paths (`/Applications` vs
-/// `/System/Volumes/Data/Applications`) don't compare unequal and loop a false
-/// heal every launch (#56). A target that fails to canonicalize is broken
-/// (its file is gone) → heal.
-#[cfg(any(all(unix, not(target_os = "linux")), all(test, unix)))]
-fn symlink_target_needs_heal(target: &Path, bundled: &Path) -> bool {
-    match (dunce::canonicalize(&target), dunce::canonicalize(&bundled)) {
-        (Ok(t), Ok(b)) => t != b,
-        _ => true,
+        linux_installed_cli().is_none()
     }
 }
 
@@ -386,8 +378,68 @@ fn version_is_newer(bundled: Option<&str>, installed: Option<&str>) -> bool {
     }
 }
 
+/// PATH facts for Settings (macOS and Linux): which startup file K2's line
+/// goes in, whether it is there, and whether a new Terminal window finds
+/// `k2`. Probes the login shell, so callers run off the main thread.
+#[cfg(unix)]
+fn path_status() -> Option<k2_client::cli_install::PathStatus> {
+    use k2_client::cli_install as ci;
+    let home = k2_client::paths::home_dir()?;
+    let shell = ci::user_shell();
+    let login = k2_client::process::login_shell_path(&shell);
+    let zdot = ci::zdotdir();
+    Some(ci::path_status_at(&home, &shell, zdot.as_deref(), login.as_deref()))
+}
+
+/// The explicit (Settings) PATH line on Linux, once the CLI copy is at
+/// `~/.local/bin/k2`. Any other place is already on PATH.
+#[cfg(target_os = "linux")]
+fn linux_path_line(dest: &Path) -> Result<(), String> {
+    use k2_client::cli_install as ci;
+    let Some(home) = linux_home() else { return Ok(()) };
+    if dest != ci::user_bin_dir(&home).join("k2") {
+        return Ok(());
+    }
+    let shell = ci::user_shell();
+    let login = k2_client::process::login_shell_path(&shell);
+    let zdot = ci::zdotdir();
+    let outcome = ci::ensure_path_block(&home, &shell, zdot.as_deref(), login.as_deref(), true)?;
+    eprintln!("[cli] PATH line: {outcome:?}");
+    Ok(())
+}
+
+/// macOS: the no-admin install (`~/.local/bin/k2`, `/usr/local/bin/k2`
+/// when writable, the PATH line). `force_path`: Settings' explicit install.
+#[cfg(all(not(windows), not(target_os = "linux")))]
+fn mac_heal(force_path: bool) -> Result<k2_client::cli_install::HealReport, String> {
+    use k2_client::cli_install as ci;
+    let cli = find_cli_script().ok_or_else(|| "CLI script not found in app bundle".to_string())?;
+    let shim = find_cli_script_named("k2so");
+    ensure_cli_executable(&cli, &shim);
+    let shell = ci::user_shell();
+    let login = k2_client::process::login_shell_path(&shell);
+    let zdot = ci::zdotdir();
+    ci::heal(&ci::HealInput {
+        cli: &cli,
+        legacy_shim: shim.as_deref(),
+        system_bin: Some(Path::new(ci::SYSTEM_BIN)),
+        shell: &shell,
+        zdotdir: zdot.as_deref(),
+        login_path: login.as_deref(),
+        force_path,
+    })
+}
+
+/// Where `k2` is installed and whether a new Terminal window finds it.
+/// Probes the login shell (a second or two), so it runs off the main thread.
 #[tauri::command]
-pub fn cli_install_status() -> Result<serde_json::Value, String> {
+pub async fn cli_install_status() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(cli_install_status_now)
+        .await
+        .map_err(|e| format!("read the k2 command's status: {e}"))?
+}
+
+fn cli_install_status_now() -> Result<serde_json::Value, String> {
     #[cfg(windows)]
     {
         let cmd = windows_cli_cmd_path().ok();
@@ -438,46 +490,62 @@ pub fn cli_install_status() -> Result<serde_json::Value, String> {
             "bundledVersion": bundled_version,
             "installedVersion": installed_version,
             "updateAvailable": update_available,
+            "path": path_status(),
         }));
     }
     #[cfg(all(not(windows), not(target_os = "linux")))]
     {
-        let symlink_path = Path::new(CLI_SYMLINK_PATH);
-        let installed = symlink_path.exists() || symlink_path.is_symlink();
-        let target = if installed {
-            fs::read_link(symlink_path)
-                .ok()
-                .map(|p| p.to_string_lossy().to_string())
-        } else {
-            None
-        };
+        use k2_client::cli_install as ci;
         let bundled = find_cli_script();
         let bundled_path = bundled.as_ref().map(|p| p.to_string_lossy().to_string());
-
-        // Read version from bundled CLI (current app version)
         let bundled_version = bundled.as_ref().and_then(|p| read_cli_version(p));
 
-        // Read version from installed CLI (what's on PATH)
-        let installed_version = if installed {
-            // Read from the actual target, not the symlink
-            let actual_path =
-                fs::read_link(symlink_path).unwrap_or_else(|_| symlink_path.to_path_buf());
-            read_cli_version(&actual_path)
-        } else {
-            None
-        };
+        let user_link_path = k2_client::paths::home_dir().map(|h| ci::user_bin_dir(&h).join("k2"));
+        let system_link_path = Path::new(CLI_SYMLINK_PATH);
+        let state_of = |link: &Path| bundled.as_deref().map(|b| ci::link_state(link, b));
+        let user_link = user_link_path.as_deref().and_then(state_of);
+        let system_link = state_of(system_link_path);
+        let path = path_status();
 
+        // What a new Terminal window runs, else one of K2's own links.
+        let installed_at: Option<PathBuf> = path
+            .as_ref()
+            .and_then(|p| p.new_terminals_run.clone())
+            .or_else(|| {
+                (user_link == Some(ci::LinkState::Current)).then(|| user_link_path.clone()).flatten()
+            })
+            .or_else(|| {
+                (system_link == Some(ci::LinkState::Current)).then(|| system_link_path.to_path_buf())
+            });
+        let installed = installed_at.is_some();
+        let target = installed_at
+            .as_ref()
+            .and_then(|p| fs::read_link(p).ok())
+            .map(|p| p.to_string_lossy().to_string());
+        let installed_version = installed_at.as_ref().and_then(|p| {
+            let actual = dunce::canonicalize(p).unwrap_or_else(|_| p.clone());
+            read_cli_version(&actual)
+        });
         let update_available =
             version_is_newer(bundled_version.as_deref(), installed_version.as_deref());
 
         Ok(serde_json::json!({
             "installed": installed,
-            "symlinkPath": CLI_SYMLINK_PATH,
+            "symlinkPath": installed_at
+                .as_ref()
+                .or(user_link_path.as_ref())
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
             "target": target,
             "bundledPath": bundled_path,
             "bundledVersion": bundled_version,
             "installedVersion": installed_version,
             "updateAvailable": update_available,
+            "userLinkPath": user_link_path.as_ref().map(|p| p.display().to_string()),
+            "userLink": user_link,
+            "systemLinkPath": CLI_SYMLINK_PATH,
+            "systemLink": system_link,
+            "path": path,
         }))
     }
 }
@@ -497,85 +565,64 @@ fn ensure_cli_executable(cli_script: &Path, legacy_shim: &Option<PathBuf>) {
     }
 }
 
-/// Try to (re)create the `k2` (+ `k2so` alias) symlinks in /usr/local/bin
-/// WITHOUT any admin prompt. Works only when /usr/local/bin already exists and
-/// is user-writable (Intel Homebrew, or a chowned prefix). Returns true iff the
-/// `k2` symlink was created. NEVER spawns osascript — callers that run at boot
-/// (the auto-heal) must not throw a password dialog.
-///
-/// On Windows, performs the user-local `%LOCALAPPDATA%\K2` install (no admin).
-#[cfg(not(target_os = "linux"))]
-fn try_direct_cli_symlink(cli_script: &Path, legacy_shim: &Option<PathBuf>) -> bool {
-    #[cfg(windows)]
-    {
-        return windows_cli_install(cli_script, legacy_shim).is_ok();
-    }
-    #[cfg(not(windows))]
-    {
-        let symlink_path = Path::new(CLI_SYMLINK_PATH);
-        // Can't create the parent dir without admin — defer silently.
-        match symlink_path.parent() {
-            Some(bin_dir) if bin_dir.exists() => {}
-            _ => return false,
-        }
-        let _ = fs::remove_file(symlink_path);
-        #[cfg(unix)]
-        {
-            if std::os::unix::fs::symlink(cli_script, symlink_path).is_ok() {
-                if let Some(shim) = legacy_shim {
-                    let legacy_path = Path::new(CLI_LEGACY_SYMLINK_PATH);
-                    let _ = fs::remove_file(legacy_path);
-                    let _ = std::os::unix::fs::symlink(shim, legacy_path);
-                }
-                return true;
-            }
-        }
-        false
-    }
-}
-
-/// Boot-time CLI heal — SILENT, never prompts. Tries the direct (non-admin)
-/// install; if macOS /usr/local/bin needs admin to write, returns `Ok(false)`
-/// and leaves the user to install from Settings → Install CLI (the ONE place
-/// an admin prompt is allowed). This is why a routine app update no longer
-/// fires a surprise "enter your password" dialog on every launch (#56 /
-/// 0.40.10): the only password prompt is now a deliberate user click in
-/// Settings. Windows heal never needs admin.
+/// Boot-time CLI heal on Windows and Linux — SILENT, never prompts.
+/// Windows: the user-local `%LOCALAPPDATA%\K2` install (no admin). Linux:
+/// a copy at `~/.local/bin/k2` when no K2 CLI is on the search path, plus
+/// the PATH line when the login PATH lacks `~/.local/bin`. macOS runs
+/// `k2_client::cli_install::boot_heal` instead (`~/.local/bin/k2` + the
+/// PATH line, never an admin prompt; #56 / 0.40.10 / 0.46.11).
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) fn cli_heal_silent() -> Result<bool, String> {
     let cli_script =
         find_cli_script().ok_or_else(|| "CLI script not found in app bundle".to_string())?;
     let legacy_shim = find_cli_script_named("k2so");
     ensure_cli_executable(&cli_script, &legacy_shim);
+    #[cfg(windows)]
+    {
+        return Ok(windows_cli_install(&cli_script, &legacy_shim).is_ok());
+    }
     #[cfg(target_os = "linux")]
     {
         if linux_installed_cli().is_some() {
             return Ok(false);
         }
-        linux_write_cli(&linux_user_cli_dest()?, &cli_script, &legacy_shim)?;
-        return Ok(true);
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        Ok(try_direct_cli_symlink(&cli_script, &legacy_shim))
+        let dest = linux_user_cli_dest()?;
+        linux_write_cli(&dest, &cli_script, &legacy_shim)?;
+        if let Some(Err(e)) = k2_client::cli_install::boot_path_for_staged(&dest) {
+            eprintln!("[boot] CLI PATH line: {e}");
+        }
+        Ok(true)
     }
 }
 
+/// Install `k2` with no admin prompt: macOS links `~/.local/bin/k2` (and
+/// `/usr/local/bin/k2` when that folder is writable) and adds the PATH
+/// line; Linux copies to `~/.local/bin/k2` (or refreshes the copy it
+/// finds) and adds the PATH line; Windows copies to `%LOCALAPPDATA%\K2`.
 #[tauri::command]
-pub fn cli_install() -> Result<String, String> {
-    let cli_script =
-        find_cli_script().ok_or_else(|| "CLI script not found in app bundle".to_string())?;
-    // The k2so deprecation shim ships alongside; best-effort (an old
-    // bundle without it just skips the legacy alias).
-    let legacy_shim = find_cli_script_named("k2so");
-    ensure_cli_executable(&cli_script, &legacy_shim);
+pub async fn cli_install() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(cli_install_now)
+        .await
+        .map_err(|e| format!("install the k2 command: {e}"))?
+}
 
+fn cli_install_now() -> Result<String, String> {
     #[cfg(windows)]
     {
+        let cli_script =
+            find_cli_script().ok_or_else(|| "CLI script not found in app bundle".to_string())?;
+        // The k2so deprecation shim ships alongside; best-effort (an old
+        // bundle without it just skips the legacy alias).
+        let legacy_shim = find_cli_script_named("k2so");
         return windows_cli_install(&cli_script, &legacy_shim);
     }
 
     #[cfg(target_os = "linux")]
     {
+        let cli_script =
+            find_cli_script().ok_or_else(|| "CLI script not found in app bundle".to_string())?;
+        let legacy_shim = find_cli_script_named("k2so");
+        ensure_cli_executable(&cli_script, &legacy_shim);
         if let Some(found) = linux_installed_cli() {
             if cli_is_distro_package(&found) {
                 return Ok(found.display().to_string());
@@ -586,21 +633,77 @@ pub fn cli_install() -> Result<String, String> {
             if !is_link {
                 linux_write_cli(&found, &cli_script, &legacy_shim)?;
             }
+            linux_path_line(&found)?;
             return Ok(found.display().to_string());
         }
         let dest = linux_user_cli_dest()?;
         linux_write_cli(&dest, &cli_script, &legacy_shim)?;
+        linux_path_line(&dest)?;
         return Ok(dest.display().to_string());
     }
 
     #[cfg(all(not(windows), not(target_os = "linux")))]
     {
-        let symlink_path = Path::new(CLI_SYMLINK_PATH);
+        use k2_client::cli_install::LinkOutcome;
+        let report = mac_heal(true)?;
+        for line in report.log_lines() {
+            eprintln!("[cli] {line}");
+        }
+        if report.user_link.is_ours() {
+            return Ok(report.user_link_path.display().to_string());
+        }
+        if report.system_link.as_ref().is_some_and(|l| l.is_ours()) {
+            return Ok(CLI_SYMLINK_PATH.to_string());
+        }
+        let why = match &report.user_link {
+            LinkOutcome::Foreign { what } => format!("it is {what}, so K2 left it alone"),
+            LinkOutcome::NotWritable { reason } => reason.clone(),
+            other => format!("{other:?}"),
+        };
+        Err(format!(
+            "Couldn't put k2 at {}: {why}. Move that file aside, or use Install in /usr/local/bin.",
+            report.user_link_path.display()
+        ))
+    }
+}
 
-        // Check if /usr/local/bin exists and is writable
+/// macOS, optional: also link `/usr/local/bin/k2` (+ the k2so alias), with
+/// one admin prompt when the folder needs it. Never over a `k2` that isn't
+/// K2's. The ONLY admin prompt path; only from an explicit Settings click.
+#[tauri::command]
+pub async fn cli_install_system() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(cli_install_system_now)
+        .await
+        .map_err(|e| format!("install the k2 command in /usr/local/bin: {e}"))?
+}
+
+fn cli_install_system_now() -> Result<String, String> {
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        return Err("Installing in /usr/local/bin is a macOS option.".to_string());
+    }
+    #[cfg(all(not(windows), not(target_os = "linux")))]
+    {
+        use k2_client::cli_install as ci;
+        let cli_script =
+            find_cli_script().ok_or_else(|| "CLI script not found in app bundle".to_string())?;
+        let legacy_shim = find_cli_script_named("k2so");
+        ensure_cli_executable(&cli_script, &legacy_shim);
+        let symlink_path = Path::new(CLI_SYMLINK_PATH);
+        if let ci::LinkState::Foreign { what } = ci::link_state(symlink_path, &cli_script) {
+            return Err(format!("{CLI_SYMLINK_PATH} is {what}, not K2's, so K2 left it alone."));
+        }
+        // The alias only over nothing or K2's own link.
+        let legacy_shim = legacy_shim.filter(|shim| {
+            !matches!(
+                ci::link_state(Path::new(CLI_LEGACY_SYMLINK_PATH), shim),
+                ci::LinkState::Foreign { .. }
+            )
+        });
+
         let bin_dir = symlink_path.parent().unwrap();
         if !bin_dir.exists() {
-            // Try to create /usr/local/bin via osascript (prompts for password)
+            // Create /usr/local/bin via osascript (prompts for password)
             let output = k2_client::bg_proc::command("osascript")
                 .args([
                     "-e",
@@ -620,15 +723,15 @@ pub fn cli_install() -> Result<String, String> {
             }
         }
 
-        // Try direct symlinks first (works if user owns /usr/local/bin) — no prompt.
-        // 0.40.0: install BOTH `k2` (the CLI) and `k2so` (deprecation shim).
-        if try_direct_cli_symlink(&cli_script, &legacy_shim) {
+        // No prompt when the folder is writable (Intel Homebrew, a chowned prefix).
+        if ci::ensure_link(symlink_path, &cli_script, false).is_ours() {
+            if let Some(shim) = &legacy_shim {
+                let _ = ci::ensure_link(Path::new(CLI_LEGACY_SYMLINK_PATH), shim, false);
+            }
             return Ok(CLI_SYMLINK_PATH.to_string());
         }
 
-        // Fall back to osascript with admin privileges — both links in ONE
-        // prompt. This is the ONLY admin prompt path; it only runs from an
-        // explicit Settings → Install CLI click, never the boot auto-heal.
+        // osascript with admin privileges — both links in ONE prompt.
         let legacy_ln = legacy_shim
             .as_ref()
             .map(|shim| format!(" && ln -sf '{}' '{}'", shim.display(), CLI_LEGACY_SYMLINK_PATH))
@@ -652,6 +755,26 @@ pub fn cli_install() -> Result<String, String> {
         }
 
         Ok(CLI_SYMLINK_PATH.to_string())
+    }
+}
+
+/// Remove K2's PATH line: only the lines between the `# >>> K2 CLI >>>`
+/// markers, from every startup file that has them. The boot heal then
+/// leaves it out until the person installs from Settings again. Returns the
+/// files changed.
+#[tauri::command]
+pub fn cli_remove_path_block() -> Result<Vec<String>, String> {
+    #[cfg(unix)]
+    {
+        use k2_client::cli_install as ci;
+        let home = k2_client::paths::home_dir().ok_or_else(|| "HOME is not set".to_string())?;
+        let zdot = ci::zdotdir();
+        let changed = ci::remove_path_block_at(&home, zdot.as_deref())?;
+        Ok(changed.iter().map(|p| p.display().to_string()).collect())
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(Vec::new())
     }
 }
 
@@ -681,8 +804,20 @@ pub fn cli_uninstall() -> Result<(), String> {
     }
     #[cfg(all(not(windows), not(target_os = "linux")))]
     {
+        use k2_client::cli_install as ci;
+        let is_k2_link = |p: &Path| fs::read_link(p).is_ok_and(|t| ci::is_k2_cli_target(&t));
+        // ~/.local/bin: only K2's own links.
+        if let Some(home) = k2_client::paths::home_dir() {
+            for name in [ci::CLI_NAME, ci::LEGACY_NAME] {
+                let link = ci::user_bin_dir(&home).join(name);
+                if is_k2_link(&link) {
+                    fs::remove_file(&link).map_err(|e| format!("remove {}: {e}", link.display()))?;
+                }
+            }
+        }
+
         let symlink_path = Path::new(CLI_SYMLINK_PATH);
-        if !symlink_path.exists() && !symlink_path.is_symlink() {
+        if !is_k2_link(symlink_path) {
             return Ok(());
         }
 
@@ -863,11 +998,9 @@ pub fn set_document_edited(app: AppHandle, edited: bool) -> Result<(), String> {
 #[cfg(test)]
 mod cli_heal_tests {
     use super::{
-        cli_is_distro_package, copy_cli_script, first_existing_cli, linux_cli_search_paths,
+        cli_is_distro_package, copy_cli_script, first_k2_cli, is_script, linux_cli_search_paths,
         read_cli_version, version_is_newer,
     };
-    #[cfg(unix)]
-    use super::symlink_target_needs_heal;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -881,63 +1014,6 @@ mod cli_heal_tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    // The heal is the macOS /usr/local/bin symlink; Windows copies the CLI.
-    #[cfg(unix)]
-    #[test]
-    fn no_heal_when_target_equals_bundled() {
-        let d = scratch();
-        let cli = d.join("k2");
-        fs::write(&cli, "#!/bin/sh\n").unwrap();
-        // Symlink points at exactly the bundled path → no heal.
-        assert!(!symlink_target_needs_heal(&cli, &cli));
-        let _ = fs::remove_dir_all(&d);
-    }
-
-    // The heal is the macOS /usr/local/bin symlink; Windows copies the CLI.
-    #[cfg(unix)]
-    #[test]
-    fn no_heal_when_paths_are_symlink_equivalent() {
-        // The macOS firmlink case: target reaches the SAME real file by a
-        // different (symlinked) path. canonicalize() must collapse them so we
-        // don't loop a false heal (+ admin prompt) every launch.
-        let d = scratch();
-        let real = d.join("real");
-        fs::create_dir_all(&real).unwrap();
-        let cli = real.join("k2");
-        fs::write(&cli, "#!/bin/sh\n").unwrap();
-        let link = d.join("link");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        // target via the symlinked dir; bundled via the real dir.
-        let target = link.join("k2");
-        assert!(!symlink_target_needs_heal(&target, &cli));
-        let _ = fs::remove_dir_all(&d);
-    }
-
-    // The heal is the macOS /usr/local/bin symlink; Windows copies the CLI.
-    #[cfg(unix)]
-    #[test]
-    fn heal_when_target_is_broken() {
-        let d = scratch();
-        let bundled = d.join("k2");
-        fs::write(&bundled, "#!/bin/sh\n").unwrap();
-        let gone = d.join("deleted-app-k2"); // never created
-        assert!(symlink_target_needs_heal(&gone, &bundled));
-        let _ = fs::remove_dir_all(&d);
-    }
-
-    // The heal is the macOS /usr/local/bin symlink; Windows copies the CLI.
-    #[cfg(unix)]
-    #[test]
-    fn heal_when_target_points_at_different_file() {
-        let d = scratch();
-        let bundled = d.join("new-k2");
-        fs::write(&bundled, "new\n").unwrap();
-        let other = d.join("old-k2");
-        fs::write(&other, "old\n").unwrap();
-        assert!(symlink_target_needs_heal(&other, &bundled));
-        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -956,12 +1032,12 @@ mod cli_heal_tests {
     }
 
     #[test]
-    fn first_existing_cli_skips_absent_and_distro_is_usr_bin_only() {
+    fn first_k2_cli_skips_absent_and_distro_is_usr_bin_only() {
         let d = scratch();
         let absent = d.join("missing");
         let present = d.join("k2");
-        fs::write(&present, "K2_CLI_VERSION=\"0.41.2\"\n").unwrap();
-        let found = first_existing_cli(&[absent, present.clone()]).unwrap();
+        fs::write(&present, "#!/bin/bash\nK2_CLI_VERSION=\"0.41.2\"\n").unwrap();
+        let found = first_k2_cli(&[absent, present.clone()]).unwrap();
         assert_eq!(found, present);
         assert_eq!(read_cli_version(&found).as_deref(), Some("0.41.2"));
         assert!(!cli_is_distro_package(&found));
@@ -973,6 +1049,25 @@ mod cli_heal_tests {
         assert!(version_is_newer(Some("0.41.3"), Some("0.41.2")));
         assert!(!version_is_newer(Some("0.41.2"), Some("0.41.2")));
         assert!(!version_is_newer(Some("0.41.3"), None));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_gui_binary_named_k2_is_not_the_cli() {
+        // 0.46.11: the .deb installs the GUI at /usr/bin/k2. It must not
+        // read as an installed CLI (Settings said "installed, updates with
+        // the package" and `k2` in a terminal opened the app).
+        let d = scratch();
+        let gui = d.join("usr-bin-k2");
+        fs::write(&gui, b"\x7fELF\x02\x01\x01\x00\x00").unwrap();
+        let no_version = d.join("other-k2");
+        fs::write(&no_version, "#!/bin/sh\necho hi\n").unwrap();
+        let cli = d.join("local-bin-k2");
+        fs::write(&cli, "#!/bin/bash\nK2_CLI_VERSION=\"0.46.11\"\n").unwrap();
+        assert!(!is_script(&gui));
+        assert!(is_script(&no_version));
+        assert_eq!(first_k2_cli(&[gui.clone(), no_version.clone(), cli.clone()]), Some(cli));
+        assert_eq!(first_k2_cli(&[gui, no_version]), None);
         let _ = fs::remove_dir_all(&d);
     }
 

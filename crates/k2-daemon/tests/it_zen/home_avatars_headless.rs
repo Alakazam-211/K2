@@ -30,8 +30,8 @@ use serde_json::Value as J;
 
 static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+fn lock() -> k2_core::test_env::SerialGuard {
+    k2_core::test_env::serial(&TEST_LOCK)
 }
 
 const OWNER_TOKEN: &str = "owner-token-home-avatars";

@@ -16,5 +16,10 @@ fn runner_guard() {
 }
 
 mod home_avatars_core;
+mod home_avatars_headless;
+mod home_two_daemons_integration;
 mod zen_columns;
 mod zen_core;
+mod zen_headless_integration;
+mod zen_widget_shot_integration;
+mod zen_widgets_headless;

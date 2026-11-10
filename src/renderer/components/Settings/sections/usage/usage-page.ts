@@ -15,7 +15,7 @@ export const USAGE_RANGES: ReadonlyArray<{ id: UsageRange; label: string }> = [
   { id: '7d', label: '7 days' },
   { id: '30d', label: '30 days' },
   { id: '90d', label: '90 days' },
-  { id: 'all', label: 'All' },
+  { id: 'all', label: 'All time' },
 ]
 
 export const DEFAULT_RANGE: UsageRange = '30d'
@@ -179,7 +179,10 @@ export function fmtUsd(usd: number): string {
 }
 
 /** The label every cost figure carries (§2.3, Q2). */
-export const COST_LABEL = 'Estimated cost at API prices. Not your bill.'
+export const COST_LABEL = 'An estimate at API list prices, not your bill.'
+
+/** The footnote's line on cost. */
+export const COST_FOOTNOTE = 'Estimated cost uses API list prices; it isn’t your bill.'
 
 /** Where a cost came from, in words; empty when there is none. */
 export function costSourceText(source: string): string {
@@ -213,20 +216,27 @@ export function unpricedNote(cost: UsageCost | undefined): string | null {
 
 /** The units footnote (§2.1), one short line. */
 export const UNITS_FOOTNOTE =
-  'Input excludes cached tokens, which are counted separately. Output includes reasoning. A request is one model call (for Grok, one prompt).'
+  'Input leaves out tokens read from or written to the cache. Output includes reasoning. A request is one call to a model (one prompt for Grok).'
+
+/** Plain names for the token kinds, used by the totals, the chart and the
+ *  breakdown alike. */
+export const MEASURE_LABEL: Record<ChartMeasure, string> = {
+  input: 'Input',
+  cache_read: 'Read from cache',
+  cache_write: 'Written to cache',
+  output: 'Output',
+  requests: 'Requests',
+  cost: 'Estimated cost',
+}
 
 // ── Chart: one stacked series per harness ────────────────────────────
 
 export type ChartMeasure = 'input' | 'output' | 'cache_read' | 'cache_write' | 'requests' | 'cost'
 
-export const CHART_MEASURES: ReadonlyArray<{ id: ChartMeasure; label: string }> = [
-  { id: 'output', label: 'Output' },
-  { id: 'input', label: 'Input' },
-  { id: 'cache_read', label: 'Cache read' },
-  { id: 'cache_write', label: 'Cache write' },
-  { id: 'requests', label: 'Requests' },
-  { id: 'cost', label: 'Est. cost' },
-]
+/** The totals in page order; each one can be charted. */
+export const CHART_MEASURES: ReadonlyArray<{ id: ChartMeasure; label: string }> = (
+  ['input', 'cache_read', 'cache_write', 'output', 'requests', 'cost'] as const
+).map((id) => ({ id, label: MEASURE_LABEL[id] }))
 
 export function measureValue(t: Partial<TokenTotals> & Partial<UsageDay>, m: ChartMeasure): number {
   const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
@@ -258,10 +268,19 @@ export function harnessRank(h: string): number {
   return i === -1 ? HARNESS_ORDER.length : i
 }
 
-/** CSS colour for a harness series (tokens set on the page root). */
+/** CSS colour for a harness series: the theme's chart tokens, slot by
+ *  harness (Claude 1, Codex 2, Grok 3), so a filter never repaints one. */
 export function harnessColor(h: string): string {
   const i = (HARNESS_ORDER as readonly string[]).indexOf(h)
-  return `var(--usage-series-${i === -1 ? 'other' : h})`
+  return `var(--color-chart-${i === -1 ? 'other' : i + 1}, var(--color-accent))`
+}
+
+/** "Nov 2" for an axis; "Mon, Nov 2" for a tooltip. From `YYYY-MM-DD`. */
+export function fmtDay(day: string, long = false): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day)
+  if (!m) return day
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  return d.toLocaleDateString('en-US', long ? { weekday: 'short', month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric' })
 }
 
 /** The local calendar day `YYYY-MM-DD` of an instant in `tz`. */
@@ -332,12 +351,15 @@ export interface UsageChartGeometry {
 }
 
 export const USAGE_CHART_WIDTH = 640
-export const USAGE_CHART_HEIGHT = 180
-const PLOT_LEFT = 52
+export const USAGE_CHART_HEIGHT = 200
+/** Room for the y-axis labels, in px (the chart draws at its real width). */
+const PLOT_LEFT = 48
 const PLOT_TOP = 8
-const PLOT_BOTTOM_PAD = 4
+const PLOT_BOTTOM_PAD = 1
 /** 2px surface gap between stacked segments (dataviz spacer). */
 const SEGMENT_GAP = 2
+/** Columns never grow past this; the rest of the slot is air. */
+const MAX_BAR = 24
 
 /** 1, 2, 5 × 10^k at or above `v`. */
 export function niceCeil(v: number): number {
@@ -355,6 +377,7 @@ export function usageChart(
   series: ReadonlyArray<{ harness: string; days: ReadonlyArray<UsageDay> | null | undefined }>,
   measure: ChartMeasure,
   slots: readonly string[],
+  width: number = USAGE_CHART_WIDTH,
 ): UsageChartGeometry {
   const order = [...series].sort((a, b) => harnessRank(a.harness) - harnessRank(b.harness) || a.harness.localeCompare(b.harness))
   const byHarness = order.map((s) => {
@@ -367,9 +390,9 @@ export function usageChart(
   const max = niceCeil(peak)
   const plotBottom = USAGE_CHART_HEIGHT - PLOT_BOTTOM_PAD
   const plotH = plotBottom - PLOT_TOP
-  const plotW = USAGE_CHART_WIDTH - PLOT_LEFT
+  const plotW = Math.max(1, width - PLOT_LEFT)
   const slotW = slots.length > 0 ? plotW / slots.length : plotW
-  const barW = Math.max(1, slotW * (slots.length > 60 ? 0.9 : 0.7))
+  const barW = Math.min(MAX_BAR, Math.max(1, slotW * (slots.length > 60 ? 0.8 : 0.65)))
   const columns: ChartColumn[] = slots.map((day, i) => {
     const slotX = PLOT_LEFT + i * slotW
     const x = slotX + (slotW - barW) / 2
@@ -390,7 +413,7 @@ export function usageChart(
   const ticks = [0, 0.5, 1].map((f) => ({ value: max * f, y: plotBottom - f * plotH }))
   const harnesses = byHarness.filter((h) => [...h.m.values()].some((v) => v > 0)).map((h) => h.harness)
   return {
-    width: USAGE_CHART_WIDTH,
+    width,
     height: USAGE_CHART_HEIGHT,
     plotLeft: PLOT_LEFT,
     plotTop: PLOT_TOP,

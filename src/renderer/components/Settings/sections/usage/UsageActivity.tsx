@@ -12,7 +12,10 @@ import { onTokenUsageChanged } from '@/stores/session-events'
 import type { ServerScope } from '@/kessel/server-scope'
 import { workspaceUsageLabel, type UsageNameProject } from '../workspaceUsageLabel'
 import { freshTurns, parseUsageTurnsPage, turnCursor, type UsageTurn } from '../usageTurnsPage'
-import { COST_LABEL, costSourceText, fmtExact, fmtUsd, harnessLabel, turnsParams, type UsageFilters, type UsageRange } from './usage-page'
+import { COST_LABEL, costSourceText, fmtCompact, fmtUsd, harnessLabel, turnsParams, type UsageFilters, type UsageRange } from './usage-page'
+import { Button } from '@/components/ui'
+import { SettingsGroup } from '../../controls/SettingControls'
+import { RetryButton, SeriesKey } from './UsageChart'
 
 export const ACTIVITY_PAGE = 50
 /** Most gap pages fetched for one live update before giving up (a remount
@@ -81,6 +84,7 @@ export function UsageActivity({
   const [error, setError] = useState<string | null>(null)
   const [moreError, setMoreError] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
+  const [attempt, setAttempt] = useState(0)
   const rowsRef = useRef<UsageTurn[]>([])
   rowsRef.current = rows
   // Every request builder for the current filters; a filter change bumps
@@ -118,7 +122,7 @@ export function UsageActivity({
         if (gen.current === mine) setLoading(false)
       }
     })()
-  }, [scope, scopeKey, params])
+  }, [scope, scopeKey, params, attempt])
 
   const loadMore = useCallback(async () => {
     if (cursor === null || loadingMore) return
@@ -162,91 +166,120 @@ export function UsageActivity({
     })
   }, [scope, params])
 
+  const retry = useCallback(() => setAttempt((n) => n + 1), [])
+
   return (
-    <section className="mt-8" data-testid="usage-activity">
-      <h3 className="type-heading text-[var(--color-text-primary)] mb-1">Activity</h3>
-      <p className="type-hint text-[var(--color-text-muted)] mb-2">
-        Every request for the range and filters above, newest first. Updates automatically.
-      </p>
-      <div data-settings-card="" className="border border-[var(--color-border)] max-h-[60vh] overflow-auto">
+    <section data-testid="usage-activity">
+      <SettingsGroup
+        title="Activity"
+        hint="Every request in this range, newest first. New ones appear as they happen."
+        card
+      >
         {loading ? (
-          <p className="type-hint text-[var(--color-text-muted)] p-3">Loading…</p>
-        ) : error ? (
-          <p className="type-row text-amber-400 p-3" role="alert" data-testid="usage-activity-error">
-            The activity log could not load: {error}
+          <p role="status" className="px-4 py-6 type-hint text-[var(--color-text-secondary)]">
+            Loading requests…
           </p>
+        ) : error ? (
+          <div className="px-4 py-4 flex items-start justify-between gap-6" role="alert">
+            <div className="min-w-0">
+              <p className="type-row text-[var(--color-text-primary)] flex items-center gap-2">
+                <span aria-hidden="true" className="inline-block h-2 w-2 rounded-[var(--radius-status)] bg-[var(--color-status-error)]" />
+                The request log couldn’t load
+              </p>
+              <p className="type-hint text-[var(--color-text-secondary)] mt-0.5" data-testid="usage-activity-error">
+                {error}
+              </p>
+            </div>
+            <RetryButton onClick={retry} />
+          </div>
         ) : rows.length === 0 ? (
-          <p className="type-hint text-[var(--color-text-muted)] p-3">No requests in this range.</p>
+          <p className="px-4 py-6 type-hint text-[var(--color-text-secondary)]">No requests in this range.</p>
         ) : (
-          <ul className="divide-y divide-[var(--color-border)]" data-testid="usage-activity-rows">
-            {rows.map((row) => {
-              const ws = row.workspace ?? (row.outside ? '' : row.workspace_path)
-              const label = workspaceUsageLabel({ path: ws ?? '', outside: row.outside }, projects)
-              const absolute = row.recorded_ms != null ? new Date(row.recorded_ms).toLocaleString() : row.recorded_at
-              const login = row.account_id ? loginLabel(row.account_id) : null
-              const costTitle = `${COST_LABEL}${row.cost_source ? ` Source: ${costSourceText(row.cost_source)}.` : ''}`
-              return (
-                <li key={row.rowid} className="px-3 py-2 type-row" data-testid={`usage-activity-row-${row.rowid}`}>
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="font-medium text-[var(--color-text-primary)] truncate" title={row.outside ? undefined : row.workspace_path}>
-                      {label.name}
+          <>
+            <ul className="max-h-[32rem] overflow-y-auto divide-y divide-[var(--color-border)]" data-testid="usage-activity-rows">
+              {rows.map((row) => {
+                const ws = row.workspace ?? (row.outside ? '' : row.workspace_path)
+                const label = workspaceUsageLabel({ path: ws ?? '', outside: row.outside }, projects)
+                const absolute = row.recorded_ms != null ? new Date(row.recorded_ms).toLocaleString() : row.recorded_at
+                const login = row.account_id ? loginLabel(row.account_id) : null
+                const costTitle = `${COST_LABEL}${row.cost_source ? ` Source: ${costSourceText(row.cost_source)}.` : ''}`
+                const when = relTime(row.recorded_ms, now)
+                const open = canOpenChat(row)
+                const body = (
+                  <>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2 min-w-0">
+                        <SeriesKey harness={row.harness} />
+                        <span className="type-name text-[var(--color-text-primary)] truncate" title={row.outside ? undefined : row.workspace_path}>
+                          {label.name}
+                        </span>
+                      </span>
+                      <span className="block type-hint text-[var(--color-text-secondary)] mt-0.5 truncate">
+                        {harnessLabel(row.harness)} · {row.model || 'unknown model'}
+                        {login ? ` · ${login}` : ''}
+                      </span>
+                      <span className="block type-hint text-[var(--color-text-muted)] mt-0.5 tabular-nums truncate">
+                        Input {fmtCompact(row.input_tokens)} · Output {fmtCompact(row.output_tokens)} · Read from cache{' '}
+                        {fmtCompact(row.cache_read_tokens)} · Written to cache {fmtCompact(row.cache_write_tokens)}
+                      </span>
                     </span>
-                    <span className="type-hint text-[var(--color-text-muted)] shrink-0 tabular-nums" title={absolute}>
-                      {relTime(row.recorded_ms, now)}
-                    </span>
-                  </div>
-                  <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
-                    {harnessLabel(row.harness)} · {row.model || 'unknown'}
-                    {login ? ` · ${login}` : ''}
-                  </div>
-                  <div className="flex items-baseline justify-between gap-2 type-hint text-[var(--color-text-muted)] mt-0.5 tabular-nums">
-                    <span>
-                      input {fmtExact(row.input_tokens)} · output {fmtExact(row.output_tokens)} · cache read {fmtExact(row.cache_read_tokens)} · cache write{' '}
-                      {fmtExact(row.cache_write_tokens)}
+                    <span className="flex-shrink-0 text-right">
+                      <span className="block type-hint text-[var(--color-text-secondary)] tabular-nums" title={absolute}>
+                        {when}
+                      </span>
                       {row.cost_source ? (
-                        <span title={costTitle} data-testid={`usage-activity-cost-${row.rowid}`}>
-                          {' · '}
-                          {row.cost_source === 'unpriced' || row.cost_usd == null ? 'unpriced' : `est. ${fmtUsd(row.cost_usd)}`}
+                        <span className="block type-hint text-[var(--color-text-secondary)] mt-0.5 tabular-nums" title={costTitle} data-testid={`usage-activity-cost-${row.rowid}`}>
+                          {row.cost_source === 'unpriced' || row.cost_usd == null ? 'No price' : `≈ ${fmtUsd(row.cost_usd)}`}
                         </span>
                       ) : null}
                     </span>
-                    {canOpenChat(row) ? (
+                    {open ? (
+                      <span aria-hidden="true" className="flex-shrink-0 self-center type-row text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)]">
+                        ›
+                      </span>
+                    ) : null}
+                  </>
+                )
+                return (
+                  <li key={row.rowid} data-testid={`usage-activity-row-${row.rowid}`}>
+                    {open ? (
                       <button
                         type="button"
-                        className="shrink-0 text-[var(--color-accent)] hover:underline"
+                        data-k2-focus=""
                         data-testid={`usage-activity-open-${row.rowid}`}
+                        aria-label={`Open the chat in ${label.name} from ${when}`}
                         onClick={() => onOpenChat(row)}
+                        className="group relative w-full flex items-start gap-4 px-4 py-2.5 text-left no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-wash-1)]"
                       >
-                        Open chat
+                        {body}
                       </button>
-                    ) : null}
-                  </div>
-                </li>
-              )
-            })}
-            <li className="px-3 py-2 text-center">
+                    ) : (
+                      <div className="w-full flex items-start gap-4 px-4 py-2.5">{body}</div>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+            <div className="px-4 py-2.5 flex items-center justify-between gap-4">
               {moreError ? (
-                <p className="type-hint text-amber-400 mb-1" role="alert" data-testid="usage-activity-more-error">
+                <p className="type-hint text-[var(--color-text-primary)] flex items-center gap-2" role="alert" data-testid="usage-activity-more-error">
+                  <span aria-hidden="true" className="inline-block h-2 w-2 rounded-[var(--radius-status)] bg-[var(--color-status-error)]" />
                   {moreError}
                 </p>
-              ) : null}
-              {cursor !== null ? (
-                <button
-                  type="button"
-                  onClick={() => void loadMore()}
-                  disabled={loadingMore}
-                  data-testid="usage-activity-more"
-                  className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                >
-                  {loadingMore ? 'Loading…' : 'Load older'}
-                </button>
               ) : (
-                <span className="type-hint text-[var(--color-text-muted)]">End of log</span>
+                <span className="type-hint text-[var(--color-text-secondary)]">
+                  {cursor !== null ? `Showing the newest ${rows.length}` : rows.length === 1 ? 'The only request' : `All ${rows.length} requests`}
+                </span>
               )}
-            </li>
-          </ul>
+              {cursor !== null ? (
+                <Button onClick={() => void loadMore()} disabled={loadingMore} data-testid="usage-activity-more">
+                  {loadingMore ? 'Loading…' : 'Load older'}
+                </Button>
+              ) : null}
+            </div>
+          </>
         )}
-      </div>
+      </SettingsGroup>
     </section>
   )
 }

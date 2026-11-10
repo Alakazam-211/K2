@@ -1,23 +1,27 @@
 // Settings → Language Models → Usage (page id `token-usage`), Usage v2.
 //
-// Top to bottom (review-usage-page-v1 Phase 2, Rosson 2026-10-16):
-//   - Header: "Usage on <server>"; when a Home room on another server is
-//     focused, a switch to that room's server.
-//   - A slim limits strip (each tool's default login) linking to Subs /
-//     Tokens, where every login's bars live.
-//   - Tokens: range (Today / 7d / 30d / 90d / All), headline tiles (input,
-//     cache read, cache write, output, requests, estimated cost), a day chart
-//     with one series per harness, and Workspace / Model / Login / Harness
-//     breakdowns. Clicking a row narrows the whole page; "This workspace"
-//     is a preset. One units footnote.
+// One page in the Settings family (like Workspaces / Agents): a title with
+// one line under it, then card groups at one content width.
+//   - Plan limits: each tool's default login, linking to Subs / Tokens.
+//   - One filter bar: the range (Today … All time) and, when a workspace is
+//     open, All workspaces / This workspace. Rows picked in the breakdown
+//     narrow the page too and show as removable chips under the bar.
+//   - Totals: Input, Read from cache, Written to cache, Output, Requests and
+//     Estimated cost. Each tile is a button: the one picked is charted.
+//   - By day: the picked total per day, one stacked series per provider in
+//     the theme's chart colours, with hover totals and a table view.
+//   - Breakdown by Workspace / Model / Login / Provider. A row narrows the
+//     whole page.
 //   - Activity: the live request log, following the page's filters.
+//   - One plain footnote on the units.
+// A range with nothing in it shows one empty card with the next step.
 //
 // The daemon owns every count, day (bucketed in this computer's zone, `tz`)
 // and cost (`/cli/usage/tokens`, `/cli/usage/turns`); this page picks
 // filters and draws. Owner and Admin only: a 403 says so instead of the
 // page (by status, B25). Filters reset on a server switch (B24); totals and
 // the log refetch on `token_usage_changed` (B14); a failed chart or log
-// says so in place (B23).
+// says so in place with a retry (B23).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
@@ -34,25 +38,29 @@ import type { SettingEntry } from '../searchManifest'
 import { workspaceUsageLabel, type UsageNameProject } from './workspaceUsageLabel'
 import { parseUsageReport, type TokenTotals, type UsageReport } from './usageReport'
 import type { UsageTurn } from './usageTurnsPage'
-import { UsageChart, type ChartSeries } from './usage/UsageChart'
+import { ChartLegend, RetryButton, SeriesKey, UsageChart, type ChartSeries } from './usage/UsageChart'
 import { UsageActivity } from './usage/UsageActivity'
 import { UsageLimitsStrip } from './usage/UsageLimitsStrip'
 import {
   BREAKDOWN_TABS,
+  CHART_MEASURES,
+  COST_FOOTNOTE,
   COST_LABEL,
   DEFAULT_RANGE,
+  MEASURE_LABEL,
   NO_FILTERS,
   UNITS_FOOTNOTE,
   USAGE_RANGES,
   browserTimeZone,
   costFigure,
-  costSourceText,
   daySlots,
   filterForGroup,
   fmtCompact,
   fmtExact,
   harnessLabel,
+  harnessRank,
   hasFilters,
+  measureValue,
   tokensParams,
   unpricedNote,
   type BreakdownTab,
@@ -60,34 +68,18 @@ import {
   type UsageFilters,
   type UsageRange,
 } from './usage/usage-page'
-import { Segmented } from '@/components/ui'
+import { Button, Segmented, Surface } from '@/components/ui'
+import { SettingsGroup } from '../controls/SettingControls'
 
 export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
   {
     id: 'token-usage.machine',
     section: 'token-usage',
     label: 'Usage',
-    description: 'Token counts and estimated cost on this server, by workspace, model, login and provider',
+    description: 'Tokens your agents used and their estimated cost, by day, workspace, model, login and provider',
     keywords: ['token usage', 'tokens', 'usage', 'llm', 'llms', 'language models', 'claude', 'codex', 'grok', 'cache', 'input', 'output', 'cost', 'requests', 'limits'],
   },
 ]
-
-/** Harness series colours (dataviz categorical slots 1, 2, 3 and 7,
- *  validated for both schemes). Colour follows the harness, never rank. */
-const SERIES_CSS = `
-[data-usage-page] {
-  --usage-series-claude: #3987e5;
-  --usage-series-codex: #d95926;
-  --usage-series-grok: #199e70;
-  --usage-series-other: #9085e9;
-}
-html[data-scheme="light"] [data-usage-page] {
-  --usage-series-claude: #2a78d6;
-  --usage-series-codex: #eb6834;
-  --usage-series-grok: #1baf7a;
-  --usage-series-other: #6250d6;
-}
-`
 
 /** The page's numbers came back as a refusal for this login's role. */
 export const ROLE_GATE_TEXT = 'Only this server’s owner and admins can see usage.'
@@ -141,143 +133,273 @@ export function breakdownRows(report: UsageReport, tab: BreakdownTab, projects: 
   }
 }
 
-function Tile({ label, value, title, sub, testId }: { label: string; value: string; title?: string; sub?: React.ReactNode; testId: string }): React.JSX.Element {
+/** The page's content width, the same as Workspaces / Agents and General. */
+const CONTENT_WIDTH = 'max-w-[52rem]'
+
+/** A small error mark: a status dot (round only where dots are round). */
+function ErrorDot(): React.JSX.Element {
+  return <span aria-hidden="true" className="inline-block h-2 w-2 flex-shrink-0 rounded-[var(--radius-status)] bg-[var(--color-status-error)]" />
+}
+
+/** One total. A button: pressing it charts this total below. */
+function Tile({
+  measure,
+  value,
+  sub,
+  on,
+  onPick,
+  title,
+}: {
+  measure: ChartMeasure
+  value: React.ReactNode
+  sub: React.ReactNode
+  on: boolean
+  onPick: (() => void) | null
+  title?: string
+}): React.JSX.Element {
+  const label = MEASURE_LABEL[measure]
+  const testId = `usage-tile-${measure.replace('_', '-')}`
+  const inner = (
+    <>
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-0 rounded-[var(--radius-box)] transition-colors ${
+          on ? 'bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]' : onPick ? 'group-hover:bg-[var(--color-wash-1)]' : ''
+        }`}
+      />
+      <span className="relative block type-hint text-[var(--color-text-secondary)] truncate">{label}</span>
+      <span className="relative block type-title text-[var(--color-text-primary)] tabular-nums mt-1 truncate">{value}</span>
+      <span className="relative block type-hint text-[var(--color-text-muted)] tabular-nums mt-0.5 truncate">{sub}</span>
+    </>
+  )
+  const box = 'group relative min-w-0 text-left border border-[var(--color-border)] bg-[var(--color-bg-surface)] rounded-[var(--radius-box)] px-3 py-2.5'
+  if (!onPick) {
+    return (
+      <div data-k2-chamfer="surface" data-material="tile" className={box} data-testid={testId}>
+        {inner}
+      </div>
+    )
+  }
   return (
-    <div data-settings-card="" className="border border-[var(--color-border)] px-3 py-2 min-w-0" data-testid={testId} title={title}>
-      <div className="type-hint text-[var(--color-text-muted)]">{label}</div>
-      <div className="type-title text-[var(--color-text-primary)] tabular-nums">{value}</div>
-      {sub ? <div className="type-hint text-[var(--color-text-muted)]">{sub}</div> : null}
+    <button
+      type="button"
+      aria-pressed={on}
+      aria-label={`${label}: ${typeof value === 'string' ? value : ''}. Chart it by day`}
+      data-k2-chamfer="surface"
+      data-material="tile"
+      data-testid={testId}
+      title={title}
+      onClick={onPick}
+      className={`k2-focus no-drag cursor-pointer transition-colors ${box}`}
+      style={on ? { borderColor: 'var(--color-accent)' } : undefined}
+    >
+      {inner}
+    </button>
+  )
+}
+
+function Tiles({
+  total,
+  measure,
+  onMeasure,
+}: {
+  /** Null while the first answer is on its way: the tiles hold their place. */
+  total: TokenTotals | null
+  measure: ChartMeasure
+  onMeasure: (m: ChartMeasure) => void
+}): React.JSX.Element {
+  const placeholder = <span className="inline-block h-[1em] w-16 align-middle bg-[var(--color-wash-2)] rounded-[var(--radius-field)]" />
+  const cost = total?.cost
+  const unpriced = unpricedNote(cost)
+  const tokens = (n: number): string => `${fmtExact(n)} tokens`
+  const measures = CHART_MEASURES.filter((m) => m.id !== 'cost' || total === null || cost)
+  return (
+    <div
+      role="group"
+      aria-label="Totals for this range"
+      aria-busy={total === null}
+      className="grid grid-cols-2 @xl:grid-cols-3 gap-3"
+      data-testid="usage-tiles"
+    >
+      {measures.map(({ id }) => {
+        if (!total) return <Tile key={id} measure={id} value={placeholder} sub={' '} on={false} onPick={null} />
+        if (id === 'cost') {
+          return (
+            <Tile
+              key={id}
+              measure={id}
+              value={costFigure(cost)}
+              title={COST_LABEL}
+              sub={
+                unpriced ? (
+                  <span data-testid="usage-tile-cost-unpriced">{unpriced}</span>
+                ) : (
+                  <span>{cost?.source === 'provider' ? 'As reported, not your bill' : 'At list prices, not your bill'}</span>
+                )
+              }
+              on={measure === id}
+              onPick={() => onMeasure(id)}
+            />
+          )
+        }
+        const n = measureValue(total, id)
+        return (
+          <Tile
+            key={id}
+            measure={id}
+            value={fmtCompact(n)}
+            title={fmtExact(n)}
+            sub={id === 'requests' ? `${fmtExact(n)} calls` : tokens(n)}
+            on={measure === id}
+            onPick={() => onMeasure(id)}
+          />
+        )
+      })}
     </div>
   )
 }
 
-function Tiles({ total }: { total: TokenTotals }): React.JSX.Element {
-  const cost = total.cost
-  const unpriced = unpricedNote(cost)
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-4" data-testid="usage-tiles">
-      <Tile testId="usage-tile-input" label="Input (uncached)" value={fmtCompact(total.input_tokens)} title={fmtExact(total.input_tokens)} />
-      <Tile testId="usage-tile-cache-read" label="Cache read" value={fmtCompact(total.cache_read_tokens)} title={fmtExact(total.cache_read_tokens)} />
-      <Tile testId="usage-tile-cache-write" label="Cache write" value={fmtCompact(total.cache_write_tokens)} title={fmtExact(total.cache_write_tokens)} />
-      <Tile testId="usage-tile-output" label="Output" value={fmtCompact(total.output_tokens)} title={fmtExact(total.output_tokens)} />
-      <Tile testId="usage-tile-requests" label="Requests" value={fmtCompact(total.requests)} title={fmtExact(total.requests)} />
-      {cost ? (
-        <Tile
-          testId="usage-tile-cost"
-          label="Est. cost"
-          value={costFigure(cost)}
-          title={COST_LABEL}
-          sub={
-            <>
-              <span>estimate, not your bill</span>
-              {costSourceText(cost.source) && cost.source !== 'unpriced' ? <span> · {costSourceText(cost.source)}</span> : null}
-              {unpriced ? <span className="text-amber-400" data-testid="usage-tile-cost-unpriced"> · {unpriced}</span> : null}
-            </>
-          }
-        />
-      ) : null}
-    </div>
-  )
-}
+/** The breakdown's number columns, in the totals' order. */
+const BREAKDOWN_COLUMNS: ChartMeasure[] = ['requests', 'input', 'cache_read', 'cache_write', 'output', 'cost']
+const BREAKDOWN_GRID = 'grid grid-cols-[minmax(0,1fr)_repeat(6,5.25rem)] gap-x-3 items-center'
 
 function Breakdown({
   report,
   tab,
   onTab,
   projects,
+  measure,
   onPick,
 }: {
   report: UsageReport
   tab: BreakdownTab
   onTab: (t: BreakdownTab) => void
   projects: readonly UsageNameProject[]
+  measure: ChartMeasure
   onPick: (key: string) => void
 }): React.JSX.Element {
   const rows = breakdownRows(report, tab, projects)
   const withCost = rows.some((r) => r.totals.cost)
+  const columns = BREAKDOWN_COLUMNS.filter((c) => c !== 'cost' || withCost)
+  const tabLabel = BREAKDOWN_TABS.find((t) => t.id === tab)?.label ?? ''
+  const harnessOf = (key: string): string | null =>
+    tab === 'harness' ? key : tab === 'model' && key.indexOf('/') > 0 ? key.slice(0, key.indexOf('/')) : null
+  const cell = (row: BreakdownRow, c: ChartMeasure): string => (c === 'cost' ? costFigure(row.totals.cost) : fmtCompact(measureValue(row.totals, c)))
+  const exact = (row: BreakdownRow, c: ChartMeasure): string => (c === 'cost' ? COST_LABEL : fmtExact(measureValue(row.totals, c)))
   return (
-    <div className="mt-2" data-testid="usage-breakdown">
-      <div className="flex gap-1 mb-2" role="tablist" aria-label="Breakdown">
-        {BREAKDOWN_TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            data-testid={`usage-tab-${t.id}`}
-            onClick={() => onTab(t.id)}
-            className={`px-2 py-0.5 type-control border ${
-              tab === t.id
-                ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      {rows.length === 0 ? (
-        <p className="type-hint text-[var(--color-text-muted)]">Nothing in this range.</p>
-      ) : (
-        <table className="w-full type-row border-collapse" role="tabpanel">
-          <thead>
-            <tr className="text-left text-[var(--color-text-muted)]">
-              <th className="py-1 pr-3 font-medium">{BREAKDOWN_TABS.find((t) => t.id === tab)?.label}</th>
-              <th className="py-1 pr-3 font-medium text-right">Requests</th>
-              <th className="py-1 pr-3 font-medium text-right">Input</th>
-              <th className="py-1 pr-3 font-medium text-right">Output</th>
-              <th className="py-1 pr-3 font-medium text-right">Cache read</th>
-              <th className="py-1 pr-3 font-medium text-right">Cache write</th>
-              {withCost ? (
-                <th className="py-1 font-medium text-right" title={COST_LABEL}>
-                  Est. cost
-                </th>
-              ) : null}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.key} className="border-t border-[var(--color-border)]" data-testid={`usage-breakdown-row-${row.key || 'outside'}`}>
-                <td className="py-1.5 pr-3 align-top">
+    <section data-testid="usage-breakdown">
+      <SettingsGroup
+        title="Breakdown"
+        hint="Pick a row to show only that one across the page."
+        card
+        action={
+          <Segmented
+            aria-label="Break down by"
+            value={tab}
+            onChange={onTab}
+            options={BREAKDOWN_TABS.map((t) => ({ value: t.id, label: t.label, buttonProps: { 'data-testid': `usage-tab-${t.id}` } }))}
+          />
+        }
+      >
+        {rows.length === 0 ? (
+          <p className="px-4 py-6 type-hint text-[var(--color-text-secondary)]">Nothing to break down in this range.</p>
+        ) : (
+          <div data-testid="usage-breakdown-rows">
+            <div className={`${BREAKDOWN_GRID} px-4 pt-3 pb-2 type-hint text-[var(--color-text-secondary)]`}>
+              <span>{tabLabel}</span>
+              {columns.map((c) => (
+                <span
+                  key={c}
+                  className={`text-right leading-tight ${c === measure ? 'text-[var(--color-text-primary)]' : ''}`}
+                  title={c === 'cost' ? COST_LABEL : undefined}
+                >
+                  {c === 'cost' ? 'Est. cost' : MEASURE_LABEL[c]}
+                </span>
+              ))}
+            </div>
+            {rows.map((row) => {
+              const harness = harnessOf(row.key)
+              return (
+                <div key={row.key} className="border-t border-[var(--color-border)]" data-testid={`usage-breakdown-row-${row.key || 'outside'}`}>
                   <button
                     type="button"
-                    className="text-left text-[var(--color-text-primary)] hover:underline"
+                    data-k2-focus=""
+                    aria-label={`Show only ${row.label}, ${fmtExact(row.totals.requests)} requests`}
                     title={`Show only ${row.label}`}
                     onClick={() => onPick(row.key)}
+                    className={`${BREAKDOWN_GRID} relative w-full px-4 py-2.5 text-left no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-wash-1)]`}
                   >
-                    {row.label}
+                    <span className="min-w-0 flex items-center gap-2">
+                      {harness ? <SeriesKey harness={harness} /> : null}
+                      <span className="min-w-0">
+                        <span className="block type-name text-[var(--color-text-primary)] truncate">{row.label}</span>
+                        {row.sub ? (
+                          <span className="block type-hint text-[var(--color-text-secondary)] truncate [direction:rtl] text-left" title={row.sub}>
+                            <bdi>{row.sub}</bdi>
+                          </span>
+                        ) : null}
+                      </span>
+                    </span>
+                    {columns.map((c) => (
+                      <span
+                       
+                        key={c}
+                        title={exact(row, c)}
+                        className={`text-right type-row tabular-nums ${c === measure ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}
+                      >
+                        {cell(row, c)}
+                      </span>
+                    ))}
                   </button>
-                  {row.sub ? <div className="type-hint text-[var(--color-text-muted)] break-all">{row.sub}</div> : null}
-                </td>
-                <td className="py-1.5 pr-3 text-right tabular-nums">{fmtExact(row.totals.requests)}</td>
-                <td className="py-1.5 pr-3 text-right tabular-nums">{fmtExact(row.totals.input_tokens)}</td>
-                <td className="py-1.5 pr-3 text-right tabular-nums">{fmtExact(row.totals.output_tokens)}</td>
-                <td className="py-1.5 pr-3 text-right tabular-nums">{fmtExact(row.totals.cache_read_tokens)}</td>
-                <td className="py-1.5 pr-3 text-right tabular-nums">{fmtExact(row.totals.cache_write_tokens)}</td>
-                {withCost ? (
-                  <td className="py-1.5 text-right tabular-nums" title={COST_LABEL}>
-                    {costFigure(row.totals.cost)}
-                  </td>
-                ) : null}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </SettingsGroup>
+    </section>
   )
 }
 
+/** A filter picked from the breakdown, with its own remove button. */
 function FilterChip({ label, onClear, testId }: { label: string; onClear: () => void; testId: string }): React.JSX.Element {
   return (
-    <span className="inline-flex items-center gap-1 border border-[var(--color-accent)] px-1.5 py-0.5 type-hint text-[var(--color-text-primary)]" data-testid={testId}>
+    <span
+      data-k2-chamfer="chip"
+      className="inline-flex items-center gap-1 border border-[var(--color-control-edge)] bg-[var(--color-bg-elevated)] rounded-[var(--radius-pill)] pl-2.5 pr-1 py-0.5 type-hint text-[var(--color-text-primary)]"
+      data-testid={testId}
+    >
       {label}
-      <button type="button" aria-label={`Clear ${label}`} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]" onClick={onClear}>
-        ×
+      <button
+        type="button"
+        aria-label={`Clear ${label}`}
+        className="k2-focus inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-pill)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)] no-drag cursor-pointer"
+        onClick={onClear}
+      >
+        <span aria-hidden="true">×</span>
       </button>
     </span>
   )
 }
+
+/** "in the last 7 days" etc., for the empty state. */
+function rangePhrase(range: UsageRange): string {
+  switch (range) {
+    case 'today':
+      return 'today'
+    case '7d':
+      return 'in the last 7 days'
+    case '30d':
+      return 'in the last 30 days'
+    case '90d':
+      return 'in the last 90 days'
+    case 'all':
+      return 'yet'
+  }
+}
+
+/** The next wider range, for the empty state's button. */
+const WIDER: Record<UsageRange, UsageRange | null> = { today: '7d', '7d': '30d', '30d': '90d', '90d': 'all', all: null }
 
 export function TokenUsageSection(): React.JSX.Element {
   const hostKey = useConnectHostStore((s) => activeHostKey(s.activeHost))
@@ -403,23 +525,39 @@ export function TokenUsageSection(): React.JSX.Element {
   const roleGated = report.status === 403
   const thisWorkspace = isWindow && openCwd !== '' ? openCwd : null
   const thisWorkspaceOn = thisWorkspace !== null && filters.workspace !== null && findUsageWorkspace(projects, filters.workspace)?.cwd === thisWorkspace
+  const scope: 'all' | 'this' | null = thisWorkspaceOn ? 'this' : filters.workspace === null && !filters.outside ? 'all' : null
 
+  // Picked filters, as removable chips. The open workspace shows as "This
+  // workspace" in the bar instead.
   const chips: Array<{ id: string; label: string; clear: Partial<UsageFilters> }> = []
   if (filters.outside) chips.push({ id: 'outside', label: 'Outside workspaces', clear: { outside: false } })
-  if (filters.workspace) {
+  if (filters.workspace && !thisWorkspaceOn) {
     chips.push({ id: 'workspace', label: workspaceUsageLabel({ path: filters.workspace, outside: false }, nameProjects).name, clear: { workspace: null } })
   }
   if (filters.harness) chips.push({ id: 'harness', label: harnessLabel(filters.harness), clear: { harness: null } })
   if (filters.model) chips.push({ id: 'model', label: filters.model, clear: { model: null } })
   if (filters.account) chips.push({ id: 'account', label: loginLabel(filters.account) ?? filters.account, clear: { account: null } })
 
+  const filtered = hasFilters(filters)
+  const nothing = report_ !== null && report_.total.requests === 0
+  const wider = WIDER[range]
+  const retry = (): void => setRev((r) => r + 1)
+  const legend = useMemo(
+    () => (series.data ?? []).map((s) => s.harness).sort((a, b) => harnessRank(a) - harnessRank(b) || a.localeCompare(b)),
+    [series.data],
+  )
+
   return (
-    <div className="max-w-4xl" data-usage-page="">
-      <style>{SERIES_CSS}</style>
-      <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
-        <h2 className="type-title text-[var(--color-text-primary)]" data-testid="usage-title">
-          Usage on {serverName}
-        </h2>
+    <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6 @container`} data-usage-page="">
+      <header className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="type-title text-[var(--color-text-primary)]" data-testid="usage-title">
+            Usage
+          </h2>
+          <p className="type-hint text-[var(--color-text-secondary)] mt-1" data-testid="usage-subtitle">
+            Tokens your agents used on {serverName}, counted from Claude, Codex and Grok chats. Days follow your time zone ({tz}).
+          </p>
+        </div>
         {roomTarget ? (
           <Segmented
             aria-label="Server"
@@ -427,108 +565,144 @@ export function TokenUsageSection(): React.JSX.Element {
             onChange={(next) => setOnRoom(next === 'room')}
             options={[
               { value: 'window', label: windowName === 'this computer' ? 'This computer' : windowName, buttonProps: { 'data-testid': 'usage-server-window' } },
-              {
-                value: 'room',
-                label: `${roomTarget.label} (focused room)`,
-                buttonProps: { 'data-testid': 'usage-server-room' },
-              },
+              { value: 'room', label: `${roomTarget.label} (focused room)`, buttonProps: { 'data-testid': 'usage-server-room' } },
             ]}
           />
         ) : null}
-      </div>
-      <p className="type-hint text-[var(--color-text-muted)] mb-4">
-        Tokens counted from Claude, Codex and Grok chats, in your time zone ({tz}).
-      </p>
+      </header>
 
       {roleGated ? (
-        <p className="type-row text-[var(--color-text-muted)]" data-testid="usage-role-gate">
-          {ROLE_GATE_TEXT}
-        </p>
+        <Surface chamfer material="tile" className="px-4 py-4">
+          <p className="type-row text-[var(--color-text-primary)]" data-testid="usage-role-gate">
+            {ROLE_GATE_TEXT}
+          </p>
+          <p className="type-hint text-[var(--color-text-secondary)] mt-0.5">Ask an owner or admin if you need these numbers.</p>
+        </Surface>
       ) : (
         <>
           <UsageLimitsStrip target={target} canLink={isWindow} />
 
-          <section data-testid="usage-tokens">
-            <div className="flex flex-wrap items-center gap-2 mb-3">
-              <h3 className="type-heading text-[var(--color-text-primary)] mr-2">Tokens</h3>
-              <Segmented
-                aria-label="Range"
-                value={range}
-                onChange={setRange}
-                options={USAGE_RANGES.map((r) => ({
-                  value: r.id,
-                  label: r.label,
-                  buttonProps: { 'data-testid': `usage-range-${r.id}` },
-                }))}
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5 mb-3" data-testid="usage-filters">
-              {thisWorkspace ? (
-                <button
-                  type="button"
-                  aria-pressed={thisWorkspaceOn}
-                  data-testid="usage-this-workspace"
-                  onClick={() =>
-                    setFilters(thisWorkspaceOn ? { ...filters, workspace: null } : { ...filters, workspace: thisWorkspace, outside: false })
-                  }
-                  className={`px-1.5 py-0.5 type-control border ${
-                    thisWorkspaceOn ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]' : 'border-[var(--color-border)] text-[var(--color-text-muted)]'
-                  }`}
-                >
-                  This workspace
-                </button>
-              ) : null}
-              {chips.map((c) => (
-                <FilterChip key={c.id} testId={`usage-filter-${c.id}`} label={c.label} onClear={() => setFilters({ ...filters, ...c.clear })} />
-              ))}
-              {hasFilters(filters) ? (
-                <button type="button" className="type-hint text-[var(--color-text-muted)] hover:underline" data-testid="usage-clear-filters" onClick={() => setFilters(NO_FILTERS)}>
-                  Clear filters
-                </button>
+          <section className="space-y-6" data-testid="usage-tokens" aria-busy={report.loading}>
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3" data-testid="usage-filters">
+                <Segmented
+                  aria-label="Range"
+                  value={range}
+                  onChange={setRange}
+                  options={USAGE_RANGES.map((r) => ({ value: r.id, label: r.label, buttonProps: { 'data-testid': `usage-range-${r.id}` } }))}
+                />
+                {thisWorkspace ? (
+                  <Segmented
+                    aria-label="Workspaces"
+                    value={scope}
+                    onChange={(next) =>
+                      setFilters(next === 'this' ? { ...filters, workspace: thisWorkspace, outside: false } : { ...filters, workspace: null, outside: false })
+                    }
+                    options={[
+                      { value: 'all', label: 'All workspaces', buttonProps: { 'data-testid': 'usage-all-workspaces' } },
+                      { value: 'this', label: 'This workspace', buttonProps: { 'data-testid': 'usage-this-workspace', title: thisWorkspace } },
+                    ]}
+                  />
+                ) : null}
+              </div>
+              {chips.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2" data-testid="usage-chips">
+                  <span className="type-hint text-[var(--color-text-secondary)]">Showing only</span>
+                  {chips.map((c) => (
+                    <FilterChip key={c.id} testId={`usage-filter-${c.id}`} label={c.label} onClear={() => setFilters({ ...filters, ...c.clear })} />
+                  ))}
+                  <Button variant="quiet" data-testid="usage-clear-filters" onClick={() => setFilters(NO_FILTERS)}>
+                    Show everything
+                  </Button>
+                </div>
               ) : null}
             </div>
 
             {report.error && report.data === null ? (
-              <p className="type-row text-amber-400 mb-3" role="alert" data-testid="usage-tokens-error">
-                The token counts could not load: {report.error}
-              </p>
-            ) : report_ === null ? (
-              <p className="type-row text-[var(--color-text-muted)]">Loading…</p>
+              <Surface chamfer material="tile" className="px-4 py-4 flex items-start justify-between gap-6" role="alert">
+                <div className="min-w-0">
+                  <p className="type-row text-[var(--color-text-primary)] flex items-center gap-2">
+                    <ErrorDot />
+                    Usage couldn’t load
+                  </p>
+                  <p className="type-hint text-[var(--color-text-secondary)] mt-0.5" data-testid="usage-tokens-error">
+                    {report.error}
+                  </p>
+                </div>
+                <RetryButton onClick={retry} />
+              </Surface>
+            ) : nothing ? (
+              <Surface chamfer material="tile" className="px-6 py-10 text-center" data-testid="usage-empty">
+                <p className="type-heading text-[var(--color-text-primary)]">
+                  {filtered ? 'Nothing matches these filters' : `No usage ${rangePhrase(range)}`}
+                </p>
+                <p className="type-hint text-[var(--color-text-secondary)] mt-1 mx-auto max-w-[48ch]">
+                  {filtered
+                    ? `No requests ${rangePhrase(range)} match what you picked.`
+                    : `Agents on ${serverName} haven’t used any tokens ${rangePhrase(range)}. A wider range may show earlier use.`}
+                </p>
+                <div className="mt-4 flex justify-center gap-2">
+                  {filtered ? (
+                    <Button variant="accent" onClick={() => setFilters(NO_FILTERS)}>
+                      Show everything
+                    </Button>
+                  ) : null}
+                  {wider ? (
+                    <Button variant={filtered ? 'default' : 'accent'} data-testid="usage-empty-wider" onClick={() => setRange(wider)}>
+                      {wider === 'all' ? 'Show all time' : `Show the last ${USAGE_RANGES.find((r) => r.id === wider)?.label}`}
+                    </Button>
+                  ) : null}
+                </div>
+              </Surface>
             ) : (
               <>
-                <Tiles total={report_.total} />
-                <UsageChart
-                  series={series.data ?? []}
-                  slots={slots}
-                  measure={measure}
-                  onMeasure={setMeasure}
-                  error={series.error}
-                  loading={series.loading && series.data === null}
-                />
-                <Breakdown
-                  report={report_}
-                  tab={tab}
-                  onTab={setTab}
-                  projects={nameProjects}
-                  onPick={(key) => setFilters(filterForGroup(tab, key, filters))}
-                />
+                <Tiles total={report_?.total ?? null} measure={measure} onMeasure={setMeasure} />
+                <SettingsGroup
+                  title={range === 'today' ? `${MEASURE_LABEL[measure]} today` : `${MEASURE_LABEL[measure]} by day`}
+                  hint="Pick a total above to chart it. Hover a day for its numbers."
+                  card
+                  action={<ChartLegend harnesses={legend} />}
+                >
+                  <UsageChart
+                    series={series.data ?? []}
+                    slots={slots}
+                    measure={measure}
+                    error={series.error}
+                    loading={report_ === null || (series.loading && series.data === null)}
+                    onRetry={retry}
+                  />
+                </SettingsGroup>
+                {report_ ? (
+                  <Breakdown
+                    report={report_}
+                    tab={tab}
+                    onTab={setTab}
+                    projects={nameProjects}
+                    measure={measure}
+                    onPick={(key) => setFilters(filterForGroup(tab, key, filters))}
+                  />
+                ) : null}
               </>
             )}
-            <p className="mt-3 type-hint text-[var(--color-text-muted)]" data-testid="usage-footnote">
-              {UNITS_FOOTNOTE} {COST_LABEL}
-            </p>
           </section>
 
-          <UsageActivity
-            scope={target.scope}
-            scopeKey={scopeKey}
-            filters={filters}
-            range={range}
-            projects={nameProjects}
-            loginLabel={loginLabel}
-            canOpenChat={canOpenChat}
-            onOpenChat={onOpenChat}
-          />
+          {/* Nothing in the range: the empty card above says so once. */}
+          {nothing ? null : (
+            <UsageActivity
+              scope={target.scope}
+              scopeKey={scopeKey}
+              filters={filters}
+              range={range}
+              projects={nameProjects}
+              loginLabel={loginLabel}
+              canOpenChat={canOpenChat}
+              onOpenChat={onOpenChat}
+            />
+          )}
+
+          <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed max-w-[75ch]" data-testid="usage-footnote">
+            {UNITS_FOOTNOTE} {COST_FOOTNOTE}
+          </p>
         </>
       )}
     </div>

@@ -238,36 +238,66 @@ async function renderPage(): Promise<void> {
 describe('Usage page sections', () => {
   it('names the server and shows the limits strip, tiles with cost labels, chart, breakdown, footnote and activity', async () => {
     await renderPage()
-    expect(screen.getByTestId('usage-title').textContent).toBe('Usage on this computer')
+    expect(screen.getByTestId('usage-title').textContent).toBe('Usage')
+    expect(screen.getByTestId('usage-subtitle').textContent).toContain('Tokens your agents used on this computer')
     const strip = await screen.findByTestId('usage-limits-strip')
-    expect(strip.textContent).toContain('Claude62%· resets 3h')
+    expect(within(strip).getByTestId('usage-limits-strip-claude').textContent).toBe('ClaudeResets in 3h62%')
+    expect(within(strip).getByRole('meter', { name: 'Claude limit used' }).getAttribute('aria-valuenow')).toBe('62')
     fireEvent.click(screen.getByTestId('usage-limits-strip-link'))
     await waitFor(() => expect(h.openSettings).toHaveBeenCalledWith('llm-tokens'))
 
-    expect(screen.getByTestId('usage-tile-input').textContent).toBe('Input (uncached)32')
-    expect(screen.getByTestId('usage-tile-cache-read').textContent).toBe('Cache read320')
-    expect(screen.getByTestId('usage-tile-requests').textContent).toBe('Requests32')
+    // Plain names for the token kinds; the exact count under the short one.
+    expect(screen.getByTestId('usage-tile-input').textContent).toBe('Input3232 tokens')
+    expect(screen.getByTestId('usage-tile-cache-read').textContent).toBe('Read from cache320320 tokens')
+    expect(screen.getByTestId('usage-tile-cache-write').textContent).toBe('Written to cache3232 tokens')
+    expect(screen.getByTestId('usage-tile-requests').textContent).toBe('Requests3232 calls')
     const cost = screen.getByTestId('usage-tile-cost')
+    expect(cost.textContent).toContain('Estimated cost')
     expect(cost.textContent).toContain('$0.32')
-    expect(cost.textContent).toContain('estimate, not your bill')
-    expect(cost.textContent).toContain('provider and list prices')
-    expect(screen.getByTestId('usage-tile-cost-unpriced').textContent).toContain('1 request unpriced')
-    expect(cost.getAttribute('title')).toBe('Estimated cost at API prices. Not your bill.')
+    expect(screen.getByTestId('usage-tile-cost-unpriced').textContent).toBe('1 request unpriced')
+    expect(cost.getAttribute('title')).toBe('An estimate at API list prices, not your bill.')
 
     await waitFor(() => expect(screen.getByTestId('usage-chart-legend').textContent).toBe('ClaudeCodex'))
     expect(screen.getByTestId('usage-breakdown-row-/w/k2').textContent).toContain('K2')
     expect(screen.getByTestId('usage-breakdown-row-outside').textContent).toContain('Outside workspaces')
     expect(screen.getByTestId('usage-footnote').textContent).toBe(
-      'Input excludes cached tokens, which are counted separately. Output includes reasoning. A request is one model call (for Grok, one prompt). Estimated cost at API prices. Not your bill.',
+      'Input leaves out tokens read from or written to the cache. Output includes reasoning. A request is one call to a model (one prompt for Grok). Estimated cost uses API list prices; it isn’t your bill.',
     )
     const rows = within(screen.getByTestId('usage-activity-rows')).getAllByTestId(/^usage-activity-row-/)
     expect(rows.map((r) => r.getAttribute('data-testid'))).toEqual(['usage-activity-row-3', 'usage-activity-row-2', 'usage-activity-row-1'])
     expect(rows[0].textContent).toContain('K2')
     expect(rows[0].textContent).toContain('Claude · claude-opus-5-5 · work')
-    expect(screen.getByTestId('usage-activity-cost-3').textContent).toBe(' · est. $0.0012')
+    expect(rows[0].textContent).toContain('Input 10 · Output 20 · Read from cache 300 · Written to cache 4')
+    expect(screen.getByTestId('usage-activity-cost-3').textContent).toBe('≈ $0.0012')
     expect(screen.getByTestId('usage-activity-cost-3').getAttribute('title')).toBe(
-      'Estimated cost at API prices. Not your bill. Source: list prices.',
+      'An estimate at API list prices, not your bill. Source: list prices.',
     )
+  })
+
+  it('a total is a button: picking one charts it and marks it chosen', async () => {
+    await renderPage()
+    expect(screen.getByTestId('usage-tile-output').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('heading', { name: 'Output by day' })).toBeTruthy()
+    fireEvent.click(screen.getByTestId('usage-tile-requests'))
+    expect(screen.getByTestId('usage-tile-requests').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('usage-tile-output').getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByRole('heading', { name: 'Requests by day' })).toBeTruthy()
+  })
+
+  it('a range with nothing in it shows one empty card that offers a wider range', async () => {
+    h.answer = (route, params) => {
+      if (route === 'usage/tokens') return { ...report(params), total: totals(0), days: [], groups: [] }
+      if (route === 'usage/turns') return { rows: [], next_cursor: null, has_more: false }
+      return defaultAnswer(route, params)
+    }
+    render(<TokenUsageSection />)
+    const empty = await screen.findByTestId('usage-empty')
+    expect(empty.textContent).toContain('No usage in the last 30 days')
+    expect(screen.queryByTestId('usage-tiles')).toBeNull()
+    expect(screen.queryByTestId('usage-chart')).toBeNull()
+    fireEvent.click(screen.getByTestId('usage-empty-wider'))
+    await waitFor(() => expect(screen.getByTestId('usage-empty').textContent).toContain('No usage in the last 90 days'))
+    expect(screen.getByTestId('usage-range-90d').getAttribute('aria-checked')).toBe('true')
   })
 
   it('sends tz, since and group_by, and no workspace for All workspaces (B1, B4)', async () => {
@@ -291,20 +321,23 @@ describe('Usage page sections', () => {
 
   it('clicking a breakdown row filters the whole page; the chip clears it; This workspace is a preset', async () => {
     await renderPage()
-    fireEvent.click(within(screen.getByTestId('usage-breakdown-row-/w/k2')).getByRole('button', { name: 'K2' }))
+    fireEvent.click(within(screen.getByTestId('usage-breakdown-row-/w/k2')).getByRole('button', { name: /^Show only K2/ }))
     await waitFor(() => expect(lastTokensCall().workspace).toBe('/w/k2'))
     await waitFor(() => expect(calls('usage/turns').at(-1)?.workspace).toBe('/w/k2'))
-    expect(screen.getByTestId('usage-filter-workspace').textContent).toContain('K2')
-    expect(screen.getByTestId('usage-this-workspace').getAttribute('aria-pressed')).toBe('true')
-    fireEvent.click(screen.getByRole('button', { name: 'Clear K2' }))
+    // The open workspace shows as "This workspace" in the bar, not as a chip.
+    expect(screen.getByTestId('usage-this-workspace').getAttribute('aria-checked')).toBe('true')
+    expect(screen.queryByTestId('usage-filter-workspace')).toBeNull()
+    fireEvent.click(screen.getByTestId('usage-all-workspaces'))
     await waitFor(() => expect(lastTokensCall().workspace).toBeUndefined())
+    expect(screen.getByTestId('usage-all-workspaces').getAttribute('aria-checked')).toBe('true')
 
     fireEvent.click(screen.getByTestId('usage-this-workspace'))
     await waitFor(() => expect(lastTokensCall().workspace).toBe('/w/k2'))
 
     fireEvent.click(screen.getByTestId('usage-tab-harness'))
     await screen.findByTestId('usage-breakdown-row-codex')
-    fireEvent.click(within(screen.getByTestId('usage-breakdown-row-codex')).getByRole('button', { name: 'Codex' }))
+    fireEvent.click(within(screen.getByTestId('usage-breakdown-row-codex')).getByRole('button', { name: /^Show only Codex/ }))
+    expect((await screen.findByTestId('usage-filter-harness')).textContent).toContain('Codex')
     await waitFor(() => expect(lastTokensCall()).toMatchObject({ workspace: '/w/k2', harness: 'codex', group_by: 'harness' }))
     // With a harness filter the report's own days are the one series: no per-harness GETs.
     const before = calls('usage/tokens').filter((p) => p.cost === '0').length
@@ -321,7 +354,7 @@ describe('Usage page sections', () => {
     act(() => {
       useConnectHostStore.setState({ activeHost: { id: 'r1', label: 'Rosson', hostname: 'rosson.k2.dev', port: 443, secure: true, token: 'tok' } as never })
     })
-    await waitFor(() => expect(screen.getByTestId('usage-title').textContent).toBe('Usage on rosson.k2.dev'))
+    await waitFor(() => expect(screen.getByTestId('usage-subtitle').textContent).toContain('used on rosson.k2.dev'))
     await waitFor(() => expect(lastTokensCall().workspace).toBeUndefined())
     expect(screen.queryByTestId('usage-filter-workspace')).toBeNull()
   })
@@ -347,7 +380,12 @@ describe('who may see it', () => {
       return defaultAnswer(route, params)
     }
     render(<TokenUsageSection />)
-    expect((await screen.findByTestId('usage-tokens-error')).textContent).toBe('The token counts could not load: ledger busy')
+    expect((await screen.findByTestId('usage-tokens-error')).textContent).toBe('ledger busy')
+    expect(screen.getByText('Usage couldn’t load')).toBeTruthy()
+    // Try again asks once more.
+    const before = calls('usage/tokens').length
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(calls('usage/tokens').length).toBeGreaterThan(before))
     expect(screen.queryByTestId('usage-role-gate')).toBeNull()
     await screen.findByTestId('usage-activity-rows')
   })
@@ -358,7 +396,8 @@ describe('who may see it', () => {
       return defaultAnswer(route, params)
     }
     await renderPage()
-    expect((await screen.findByTestId('usage-chart-error')).textContent).toBe('The chart could not load: codex rows unreadable')
+    expect((await screen.findByTestId('usage-chart-error')).textContent).toBe('codex rows unreadable. The totals and breakdown are still current.')
+    expect(screen.getByText('The chart couldn’t load')).toBeTruthy()
     expect(screen.getByTestId('usage-tiles')).toBeTruthy()
     expect(screen.getByTestId('usage-breakdown')).toBeTruthy()
   })
@@ -391,10 +430,10 @@ describe('live and activity', () => {
     turnsPages = [(p) => (p?.before === older ? { rows: [turn(0, T - 7_200_000, { session_id: '', cost_source: 'unpriced', cost_usd: null })], next_cursor: null, has_more: false } : undefined)]
     fireEvent.click(screen.getByTestId('usage-activity-more'))
     await screen.findByTestId('usage-activity-row-0')
-    expect(screen.getByTestId('usage-activity-cost-0').textContent).toBe(' · unpriced')
+    expect(screen.getByTestId('usage-activity-cost-0').textContent).toBe('No price')
     expect(screen.queryByTestId('usage-activity-open-0')).toBeNull()
     expect(screen.queryByTestId('usage-activity-more')).toBeNull()
-    expect(screen.getByText('End of log')).toBeTruthy()
+    expect(screen.getByText('All 4 requests')).toBeTruthy()
   })
 
   it('a row with a session in a known workspace links to its chat', async () => {
@@ -413,7 +452,7 @@ describe('a focused Home room on another server', () => {
     await renderPage()
     expect(h.calls.every((c) => c.scope === primaryScope())).toBe(true)
     fireEvent.click(screen.getByTestId('usage-server-room'))
-    await waitFor(() => expect(screen.getByTestId('usage-title').textContent).toBe('Usage on acme.k2.dev'))
+    await waitFor(() => expect(screen.getByTestId('usage-subtitle').textContent).toContain('used on acme.k2.dev'))
     await waitFor(() => expect(h.calls.some((c) => c.scope === roomScope && c.route === 'usage/tokens')).toBe(true))
     await waitFor(() => expect(h.calls.some((c) => c.scope === roomScope && c.route === 'usage/turns')).toBe(true))
     await screen.findByTestId('usage-activity-row-3')

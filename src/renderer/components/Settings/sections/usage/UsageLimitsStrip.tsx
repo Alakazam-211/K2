@@ -1,15 +1,34 @@
-// Usage v2 (Rosson 2026-10-16) — the Usage page's slim limits strip:
-// "Claude 62% · resets 3h · Codex 18% …" for each tool's default login,
-// linking to Settings → Language Models → Subs / Tokens, where every
-// login's bars live. Owner / Admin only (the route's floor); a refusal or an
-// older daemon simply leaves the strip out.
+// Usage v2 (Rosson 2026-10-16) — the Usage page's plan limits: one row per
+// tool for its default login ("Claude · 58% · resets in 3d"), linking to
+// Settings → Language Models → Subs / Tokens, where every login's bars live.
+// Owner / Admin only (the route's floor); a refusal or an older daemon
+// simply leaves the card out.
 
 import React, { useEffect, useState } from 'react'
-import { limitTone, limitToneColor } from '@/lib/subscription-usage'
+import { limitTone, type LimitTone } from '@/lib/subscription-usage'
 import { limitsStrip } from '@/lib/usage-limits'
 import { openSettingsPage } from '@/lib/open-settings-page'
 import { useUsageLimitsStore, watchUsageLimits } from '@/stores/usage-limits'
 import type { UsageTarget } from '@/stores/subscription-usage'
+import { Button } from '@/components/ui'
+import { SettingRow, SettingsGroup } from '../../controls/SettingControls'
+
+/** The meter's fill: the accent while there's room, then the warning and
+ *  error tokens. The words beside it say the same. */
+const TONE_FILL: Record<LimitTone, string> = {
+  ok: 'var(--color-accent)',
+  warn: 'var(--color-status-warn)',
+  over: 'var(--color-status-error)',
+}
+
+/** "resets 3h" → "Resets in 3h"; other notes read as they are. */
+function noteText(note: string): string {
+  if (note.startsWith('resets ')) {
+    const when = note.slice('resets '.length)
+    return when === 'now' ? 'Resets now' : `Resets in ${when}`
+  }
+  return note ? note[0].toUpperCase() + note.slice(1) : ''
+}
 
 export function UsageLimitsStrip({
   target,
@@ -30,37 +49,49 @@ export function UsageLimitsStrip({
   const items = limitsStrip(entry?.doc ?? null, now)
   if (!entry?.doc || items.length === 0) return null
   return (
-    <div
-      className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-1 border border-[var(--color-border)] px-3 py-2 type-hint"
-      data-testid="usage-limits-strip"
-    >
-      <span className="text-[var(--color-text-muted)]">Limits</span>
-      {items.map((item) => (
-        <span key={item.tool} className="inline-flex items-center gap-1" data-testid={`usage-limits-strip-${item.tool}`}>
-          <span className="text-[var(--color-text-primary)]">{item.display}</span>
-          {item.percent !== null ? (
-            <span className="tabular-nums" style={{ color: limitTone(item.percent) === 'ok' ? undefined : limitToneColor(limitTone(item.percent)) }}>
-              {item.percent}%
-            </span>
-          ) : null}
-          {item.note ? <span className="text-[var(--color-text-muted)]">· {item.note}</span> : null}
-          {item.warn ? (
-            <span className="text-amber-400" aria-label="needs attention">
-              ⚠
-            </span>
-          ) : null}
-        </span>
-      ))}
-      {canLink ? (
-        <button
-          type="button"
-          className="ml-auto text-[var(--color-accent)] hover:underline"
-          data-testid="usage-limits-strip-link"
-          onClick={() => void openSettingsPage('llm-tokens')}
-        >
-          See every login in Subs / Tokens →
-        </button>
-      ) : null}
+    <div data-testid="usage-limits-strip">
+      <SettingsGroup
+        title="Plan limits"
+        hint="How much of each tool’s current limit its default login has used."
+        card
+        action={
+          canLink ? (
+            <Button variant="quiet" data-testid="usage-limits-strip-link" onClick={() => void openSettingsPage('llm-tokens')}>
+              See every login
+            </Button>
+          ) : undefined
+        }
+      >
+        {items.map((item) => {
+          const tone = item.percent !== null ? limitTone(item.percent) : 'ok'
+          const hint = item.warn ? (
+            <span className="text-[var(--color-status-warn-text)]">{noteText(item.note) || 'Needs attention'}</span>
+          ) : (
+            noteText(item.note)
+          )
+          return (
+            <SettingRow key={item.tool} label={item.display} hint={hint || undefined} testId={`usage-limits-strip-${item.tool}`}>
+              {item.percent !== null ? (
+                <span className="flex items-center gap-3">
+                  <span
+                    role="meter"
+                    aria-label={`${item.display} limit used`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={item.percent}
+                    className="relative block h-1.5 w-40 overflow-hidden rounded-[var(--radius-pill)] bg-[var(--color-wash-2)]"
+                  >
+                    <span className="absolute inset-y-0 left-0" style={{ width: `${Math.min(100, item.percent)}%`, background: TONE_FILL[tone] }} />
+                  </span>
+                  <span className="w-12 text-right type-row tabular-nums text-[var(--color-text-primary)]">{item.percent}%</span>
+                </span>
+              ) : (
+                <span className="type-hint text-[var(--color-text-secondary)]">No reading</span>
+              )}
+            </SettingRow>
+          )
+        })}
+      </SettingsGroup>
     </div>
   )
 }

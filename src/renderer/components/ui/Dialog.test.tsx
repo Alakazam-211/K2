@@ -111,6 +111,30 @@ describe('DialogFrame onCancel', () => {
     expect(top).toHaveBeenCalledTimes(2)
   })
 
+  it('held (a change in flight): Esc and presses do nothing, and stay off the dialog under it', () => {
+    const under = vi.fn()
+    const top = vi.fn()
+    const view = render(<One id="a" onCancel={under} />)
+    const both = (held: boolean): React.JSX.Element => (
+      <>
+        <One id="a" onCancel={under} />
+        <DialogScrim data-testid="scrim-b" />
+        <DialogFrame onCancel={top} cancelHeld={held}>Saving…</DialogFrame>
+      </>
+    )
+    view.rerender(both(true))
+    expect((screen.getAllByRole('button', { name: 'Close (Esc)' }).at(-1) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    fireEvent.pointerDown(screen.getByTestId('scrim-b'))
+    expect(top).not.toHaveBeenCalled()
+    expect(under).not.toHaveBeenCalled()
+    // Released: it is still the top dialog.
+    view.rerender(both(false))
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(top).toHaveBeenCalledTimes(1)
+    expect(under).not.toHaveBeenCalled()
+  })
+
   it('without onCancel the frame has no × and ignores Esc and presses', () => {
     render(
       <>

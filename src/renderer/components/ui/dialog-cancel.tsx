@@ -88,25 +88,28 @@ export interface DialogCancelProps {
 }
 
 /** Makes `onCancel` the popup's Esc and press-outside answer while it is
- *  mounted (and while `onCancel` is given: pass `undefined` to hold the
- *  popup open, e.g. while its change runs). Returns the props for the
- *  popup's box. */
-export function useDialogCancel(onCancel: (() => void) | undefined): DialogCancelProps {
-  const latest = useRef(onCancel)
-  latest.current = onCancel
+ *  mounted with `onCancel` given. `held` (a change in flight): the popup
+ *  stays on the stack, so Esc and presses outside still belong to it, but
+ *  they do nothing until it is released. Returns the props for the popup's
+ *  box. */
+export function useDialogCancel(onCancel: (() => void) | undefined, held = false): DialogCancelProps {
+  const latest = useRef<(() => void) | undefined>(undefined)
+  latest.current = held ? undefined : onCancel
   const id = useRef(0)
   if (id.current === 0) id.current = nextId++
-  const enabled = onCancel !== undefined
+  // Registered once while open: holding and releasing keeps its place on
+  // the stack (a confirm opened over it stays on top).
+  const active = onCancel !== undefined || held
 
   useLayoutEffect(() => {
-    if (!enabled) return
+    if (!active) return
     const entry: Entry = { id: id.current, cancel: () => latest.current?.() }
     stack.push(entry)
     return () => {
       const at = stack.indexOf(entry)
       if (at >= 0) stack.splice(at, 1)
     }
-  }, [enabled])
+  }, [active])
 
   const onPointerDownCapture = useCallback((e: React.PointerEvent) => {
     const marks = pressedInside.get(e.nativeEvent) ?? new Set<number>()
@@ -134,7 +137,7 @@ export function DialogCloseButton({ size = 14, tone = 'app', className, ...rest 
       title="Close (Esc)"
       data-k2-dialog-close=""
       className={cx(
-        'k2-focus no-drag flex h-6 w-6 flex-shrink-0 cursor-pointer items-center justify-center transition-colors',
+        'k2-focus no-drag flex h-6 w-6 flex-shrink-0 cursor-pointer items-center justify-center transition-colors disabled:cursor-default disabled:opacity-50',
         tone === 'zen'
           ? 'text-[var(--zen-text-muted)] hover:text-[var(--zen-text)]'
           : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]',

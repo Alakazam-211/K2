@@ -9,10 +9,7 @@
 //! Isolation: `TempHome::short()`; never the real `~/.k2` or `/run/sew`.
 //! One test function: the occupancy store is process-wide.
 
-#![cfg(unix)]
-
-#[path = "support/fake_sew.rs"]
-mod fake_sew;
+use crate::support::fake_sew;
 
 use std::time::{Duration, Instant};
 

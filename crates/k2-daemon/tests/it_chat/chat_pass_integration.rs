@@ -117,7 +117,7 @@ fn login(username: &str, role: Role) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn chat_jwks_is_public_cacheable_and_served_while_v1_is_dark_and_during_readiness() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     k2_core::test_isolation::assert_no_prod_env();
     let _env = Env::set();
     let d = test_harness::start(OWNER_TOKEN).await;
@@ -171,7 +171,7 @@ async fn chat_jwks_is_public_cacheable_and_served_while_v1_is_dark_and_during_re
 
 #[tokio::test(flavor = "multi_thread")]
 async fn owner_key_routes_gate_method_ingress_role_and_person() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     k2_core::test_isolation::assert_no_prod_env();
     let env = Env::set();
     let d = test_harness::start(OWNER_TOKEN).await;

@@ -152,7 +152,7 @@ fn assert_role_required(r: &Resp, what: &str) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reviewer_login_reaches_voice_one_agent_and_one_garden_and_nothing_else() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     with_temp_home(|| {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let port = d.port;
@@ -322,7 +322,7 @@ async fn a_reviewer_login_reaches_voice_one_agent_and_one_garden_and_nothing_els
 /// Chat only (§7), without a sign-out.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_member_socket_closes_when_the_login_becomes_voice_chat_only() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     with_temp_home(|| {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let port = d.port;
@@ -364,7 +364,7 @@ async fn a_member_socket_closes_when_the_login_becomes_voice_chat_only() {
 /// carries. With no token the default compat view carries the same list.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn boot_status_gives_a_voice_chat_session_the_full_view_and_every_feature() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     with_temp_home(|| {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let r = post(d.port, "/cli/users/add", OWNER_TOKEN, json!({"username": "bsrev", "password": PW, "mustChangePassword": false, "role": "voice_chat"}));

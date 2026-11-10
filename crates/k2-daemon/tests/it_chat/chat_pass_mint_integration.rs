@@ -19,8 +19,7 @@ use k2_daemon::chat_pass::{self, verify_with_jwks};
 use k2_daemon::test_harness;
 use serde_json::{json, Value};
 
-#[path = "support/sew_ready.rs"]
-mod sew_ready;
+use crate::support::sew_ready;
 
 static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 const OWNER_TOKEN: &str = "owner-token-chat-pass-k7";
@@ -201,7 +200,7 @@ fn recorder() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn app_session_owner_token_and_connect_logins_get_their_own_passes() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     let (env, d) = boot().await;
 
     // App session with a chat grant → k2:principal, skn_ sid.
@@ -291,7 +290,7 @@ async fn app_session_owner_token_and_connect_logins_get_their_own_passes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn pass_route_belts_method_bearer_browser_tunnel_csrf_and_skin_host() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     let (env, d) = boot().await;
     let (_pid, raw, _tid) = guest("ada", true);
 
@@ -371,7 +370,7 @@ async fn pass_route_belts_method_bearer_browser_tunnel_csrf_and_skin_host() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn chat_only_principal_logs_in_thread_dark_and_mints() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     let (env, d) = boot().await;
     let p = k2_core::skin::add_principal("cleo").expect("principal");
     k2_core::skin::set_principal_password("cleo", Some("s3cret-horse-battery")).expect("pw");
@@ -394,7 +393,7 @@ async fn chat_only_principal_logs_in_thread_dark_and_mints() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn owner_handoff_needs_a_person_and_redeems_once_for_k2_owner() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     let (env, d) = boot().await;
     let auth = format!("Bearer {OWNER_TOKEN}");
     // The owner token alone is not a person.
@@ -444,7 +443,7 @@ async fn owner_handoff_needs_a_person_and_redeems_once_for_k2_owner() {
 /// `k2:connect` member.
 #[tokio::test(flavor = "multi_thread")]
 async fn owner_linked_connect_login_mints_k2_owner_with_its_cu_sid() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     let (env, d) = boot().await;
     k2_core::tool_hook::allow_target_off_linux_for_tests(true);
     k2_core::tool_hook::set_target("chat", true, Some("/tmp/k2-mint-sew.sock"), Some("/tmp/k2-mint-sew.token"), "owner-token")
@@ -484,7 +483,7 @@ async fn owner_linked_connect_login_mints_k2_owner_with_its_cu_sid() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn revocations_reach_sew_as_ops() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     let (env, d) = boot().await;
     recorder();
     // Connect logout → {k2_sid: cu_…} equal to the minted sid.

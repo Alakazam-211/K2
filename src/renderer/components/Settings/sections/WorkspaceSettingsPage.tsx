@@ -40,7 +40,7 @@ const SLIDER_VALUE = 'w-12 text-right type-hint tabular-nums text-[var(--color-t
 export const WORKSPACE_SETTINGS_GROUP = 'Workspace settings'
 
 export const WORKSPACE_SETTINGS_MANIFEST: SettingEntry[] = [
-  { id: 'projects.workspace-settings', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Workspace settings', description: 'Settings for every workspace: the Active bar, the completion sound, auto-select, the view new agents open in, and the Canonical Agent Flow guide', keywords: ['workspace', 'workspaces', 'settings', 'general', 'defaults', 'all workspaces', 'agents'] },
+  { id: 'projects.workspace-settings', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Workspace settings', description: 'Settings for every workspace: the Active bar, the completion sound, auto-select, the view new agents open in, and how agents get their instructions', keywords: ['workspace', 'workspaces', 'settings', 'general', 'defaults', 'all workspaces', 'agents'] },
   { id: 'general.active-window-hours', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Active Bar window', description: 'How long workspaces stay Active after activity', keywords: ['active', 'bar', 'window', 'hours', 'tenure', 'workspace', 'recent', 'sidebar'] },
   { id: 'general.completion-sound', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Completion sound', description: 'Play a sound when an agent finishes unwatched', keywords: ['sound', 'chime', 'audio', 'notification', 'agent', 'done', 'finished', 'complete', 'unseen', 'orange', 'amber', 'dot'] },
   { id: 'general.completion-sound-choice', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Completion sound choice', description: 'Which sound plays when an agent finishes, with a Preview button', keywords: ['sound', 'chime', 'ping', 'ding', 'pop', 'tick', 'audio', 'preview', 'choose', 'notification'] },
@@ -51,7 +51,7 @@ export const WORKSPACE_SETTINGS_MANIFEST: SettingEntry[] = [
   // Graduated out of Experimental in 0.46.3 (Rosson 2026-10-21). Desktop
   // only: the hosted web client is single-server (MS56).
   ...(webFeatures.multiHost
-    ? [{ id: 'general.remote-rooms-preview', section: 'projects' as const, group: WORKSPACE_SETTINGS_GROUP, label: "Open other servers' agents in Home (don't switch servers)", description: 'On: clicking an agent on Home that lives on another server opens it right here. Off: it switches this window to that server', keywords: ['home', 'remote', 'room', 'rooms', 'server', 'servers', 'other', 'multi', 'switch', 'open', 'agent', 'agents', 'here'] }]
+    ? [{ id: 'general.remote-rooms-preview', section: 'projects' as const, group: WORKSPACE_SETTINGS_GROUP, label: "Open other servers' agents in Home", description: 'On: clicking an agent on Home that lives on another server opens it right here. Off: it switches this window to that server', keywords: ['home', 'remote', 'room', 'rooms', 'server', 'servers', 'other', 'multi', 'switch', 'open', 'agent', 'agents', 'here'] }]
     : []),
 ]
 
@@ -67,9 +67,9 @@ export function WorkspaceSettingsPage(): React.JSX.Element {
       <div>
         <h2 className="type-title text-[var(--color-text-primary)]">Workspace settings</h2>
         <p className={SETTING_ROW_HINT}>
-          How every workspace behaves: the sidebar Active bar,
-          the sound when an agent finishes out of view, what gets focus when
-          you switch, and the view new agents open in.
+          How every workspace behaves: the Active bar in the sidebar, the
+          sound when an agent finishes, where the cursor goes when you switch,
+          and how new agents open.
         </p>
       </div>
       <SettingsGroup title="Every workspace" card>
@@ -124,7 +124,7 @@ function ActiveWindowHoursRow(): React.JSX.Element {
     <SettingRow
       settingId="general.active-window-hours"
       label="Keep workspaces Active for"
-      hint="How long a workspace stays in the sidebar's Active section after you last interacted with it. Minimum 1 hour."
+      hint="How long a workspace stays in the sidebar's Active section after you last use it. At least 1 hour."
     >
       <Input
         type="number"
@@ -223,7 +223,7 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
     <SettingRow
       settingId="general.workspace-switch-focus"
       label="When moving between workspaces, auto-select"
-      hint="Switching workspaces, opening Home, and ⌘1–⌘9 focus the terminal or the agent message box (the Thread's when it is open) so you can type immediately."
+      hint="Where the cursor goes when you switch workspaces, open Home or press ⌘1–⌘9, so you can type right away."
     >
       <SettingDropdown
         value={value}

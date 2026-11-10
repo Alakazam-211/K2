@@ -63,7 +63,7 @@ describe('Agent tab: Allow this agent to operate compute nodes', () => {
     render(<Harness />)
     const sw = await enabledSwitch()
     expect(sw.getAttribute('aria-checked')).toBe('false')
-    expect(screen.getByText(/Root actions still wait for you/)).toBeTruthy()
+    expect(screen.getByText(/Changes that need full control of a machine still ask you/)).toBeTruthy()
     fireEvent.click(sw)
     await waitFor(() => expect(m.setWorkspaceComputeOperate).toHaveBeenCalledWith('/w/it', true))
     expect(m.setWorkspaceComputeOperate).toHaveBeenCalledTimes(1)

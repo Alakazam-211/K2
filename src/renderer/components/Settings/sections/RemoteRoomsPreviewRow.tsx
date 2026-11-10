@@ -11,7 +11,7 @@ import { useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
 // 2026-10-21): it lives in Workspace settings (Workspaces / Agents, 0.46.5), desktop only. Per computer,
 // never the daemon: localStorage `k2.homeRemoteRooms.v1` (what each value
 // means, and the one-time graduation reset: lib/remote-rooms-preview).
-export const REMOTE_ROOMS_LABEL = "Open other servers' agents in Home (don't switch servers)"
+export const REMOTE_ROOMS_LABEL = "Open other servers' agents in Home"
 
 export function RemoteRoomsPreviewRow(): React.JSX.Element {
   const enabled = useRemoteRoomsPreviewStore((s) => s.enabled)

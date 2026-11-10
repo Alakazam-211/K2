@@ -78,7 +78,7 @@ describe('AgentHandoffAcceptFrom', () => {
     // K2's themed menu, not a native select; the prompt is a placeholder, not an option.
     const pick = screen.getByTestId('handoff-accept-pick')
     expect(pick.tagName).toBe('BUTTON')
-    expect(pick.textContent).toBe('Pick an agent on this server')
+    expect(pick.textContent).toBe('An agent on this server')
     expect((screen.getByTestId('handoff-accept-pick-add') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(pick)
     const options = [...screen.getByTestId('setting-dropdown-menu').querySelectorAll('button')]

@@ -1068,8 +1068,8 @@ export function WorkspaceApiKeysPanel({
           <div className="flex-1 min-w-0">
             <div className="type-row text-[var(--color-text-primary)]">No keys reach this workspace yet</div>
             <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed max-w-[75ch]">
-              A key you give this workspace shows here. Create one in Settings &rarr; API Keys, or run{' '}
-              <code>k2 api-key create --workspaces &apos;{workspaceSlug}&apos;</code>.
+              A key you give this workspace, or every workspace, shows here. Create a key opens API Keys,
+              where you choose what it can reach.
             </p>
           </div>
           <Button variant="quiet" className="flex-shrink-0" onClick={openGlobal}>Create a key</Button>

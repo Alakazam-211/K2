@@ -146,7 +146,7 @@ describe('side by side', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }))
     expect(screen.getByTestId('worktrees-empty').textContent).toContain('New Worktree')
     const keys = await screen.findByTestId('workspace-api-keys-empty')
-    expect(keys.textContent).toContain('Create one in Settings')
+    expect(keys.textContent).toContain('Create a key opens API Keys')
     expect(within(keys).getByRole('button', { name: 'Create a key' })).toBeTruthy()
   })
 
@@ -216,10 +216,15 @@ describe('side by side', () => {
     expect(document.querySelector('[data-settings-project-id="b"]')).toBeNull()
     expect(shownName()).toBe('delta')
     expect(selectedRowIds()).toEqual(['d'])
-    // Nothing matches: the pane keeps the last one, the list says so.
+    // Nothing matches: the list says so and the pane shows no workspace.
     fireEvent.change(search, { target: { value: 'zzz' } })
-    expect(shownName()).toBe('delta')
     expect(screen.getByTestId('workspaces-no-match')).toBeTruthy()
+    expect(screen.getByTestId('workspaces-none-selected').textContent).toContain('No workspace selected')
+    expect(screen.queryByRole('tablist', { name: 'Workspace settings' })).toBeNull()
+    // Clearing the search brings the last one back.
+    fireEvent.change(search, { target: { value: '' } })
+    expect(shownName()).toBe('delta')
+    expect(screen.queryByTestId('workspaces-none-selected')).toBeNull()
   })
 
   it('the New workspace footer is solid, so the list scrolls under it', () => {

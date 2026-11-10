@@ -178,7 +178,7 @@ function Notes({
       )}
       {note && <p className="type-hint text-[var(--color-text-muted)] mt-0.5">{note}</p>}
       {error && (
-        <p className="type-hint text-red-400 mt-0.5" role="alert">
+        <p className="type-hint text-[var(--color-status-error-soft)] mt-0.5" role="alert">
           {error}
         </p>
       )}
@@ -225,9 +225,8 @@ export function WorkspaceLlmTokens({ scope, projectId }: { scope: ServerScope; p
   return (
     <div data-settings-id="projects.llm-logins" data-testid="workspace-llm-tokens" className="divide-y divide-[var(--color-border)]">
       <p className="px-4 py-3 type-hint text-[var(--color-text-secondary)] leading-relaxed">
-        Server default uses this server&apos;s default token (Settings → Language Models → Subs / Tokens). Pick a subscription or API token to
-        use this token for this workspace&apos;s agents and sidecars instead. Resumed chats keep the token they
-        started on.
+        The subscription or API token this workspace&apos;s agents use. Server default follows Subs / Tokens.
+        A chat you resume keeps the token it started with.
       </p>
       {!doc && <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">Loading tokens…</p>}
       {doc && tools.map((t) => <WorkspaceTokenRow key={t.tool} scope={scope} doc={doc} tool={t} projectId={projectId} />)}

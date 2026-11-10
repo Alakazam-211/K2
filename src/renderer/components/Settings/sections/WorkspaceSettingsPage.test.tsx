@@ -98,7 +98,7 @@ describe('Workspaces / Agents: the Workspace settings entry', () => {
     expect(screen.queryByTestId('workspace-settings-page')).toBeNull()
   })
 
-  it('opens a page with every moved row and the Canonical Agent Flow guide', () => {
+  it('opens a page with every moved row and the guide to how agents get their instructions', () => {
     render(<ProjectsSection />)
     fireEvent.click(entry())
     const page = screen.getByTestId('workspace-settings-page')
@@ -116,7 +116,7 @@ describe('Workspaces / Agents: the Workspace settings entry', () => {
     const values = Array.from(page.querySelectorAll<HTMLElement>('[data-slider-value]'))
     expect(values).toHaveLength(2)
     expect(values[0].className).toBe(values[1].className)
-    const guide = within(page).getByRole('heading', { name: 'Canonical Agent Flow' })
+    const guide = within(page).getByRole('heading', { name: 'How agents get their instructions' })
     expect(guide.tagName).toBe('H3')
     expect(guide.className).toContain('type-heading')
   })

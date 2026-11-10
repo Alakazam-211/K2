@@ -97,7 +97,7 @@ export function AgentContextDiagram(): React.JSX.Element {
           <StageTitle>What K2 builds</StageTitle>
           <Box kind="built" title="AGENTS.md" path=".k2/AGENTS.md" note="The one source every tool reads from" />
           <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-snug">
-            One file from what you&rsquo;ve turned on. Pi, Hermes, Codex and 28+ other tools read it directly.
+            One file from what you&rsquo;ve turned on. Most AI tools read it as it is.
           </p>
         </div>
 
@@ -114,7 +114,7 @@ export function AgentContextDiagram(): React.JSX.Element {
       <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
         <div className="type-name text-[var(--color-text-primary)]">Skills load when needed</div>
         <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 mb-2">
-          These live in <span className="font-mono">.k2/skills/</span> and aren&rsquo;t built into AGENTS.md.
+          An agent opens these when a task calls for one. They aren&rsquo;t part of the shared file.
         </p>
         <div className="grid grid-cols-2 gap-1.5">
           {LOADABLE_SKILLS.map((s) => (
@@ -128,8 +128,8 @@ export function AgentContextDiagram(): React.JSX.Element {
       </div>
 
       <p className="mt-3 pt-3 border-t border-[var(--color-border)] type-hint text-[var(--color-text-secondary)] leading-snug">
-        Generate writes <span className="font-mono">AGENTS.md</span> in the project folder. <span className="font-mono">CLAUDE.md</span>,{' '}
-        <span className="font-mono">GEMINI.md</span> and the other links appear only when the workspace&rsquo;s Canonical Agent checkbox is on.
+        K2 always writes a copy in the project folder. The links for the other tools appear only
+        when the workspace&rsquo;s Canonical Agent box is ticked.
       </p>
     </Surface>
   )

@@ -21,10 +21,10 @@ import { Surface } from '@/components/ui'
 // that page; deep-link id `agent-skills` still redirects via the settings
 // store.
 export const AGENT_SKILLS_MANIFEST: SettingEntry[] = [
-  { id: 'agent-skills.canonical-flow', section: 'projects', group: 'Workspace settings', label: 'Canonical Agent Flow', description: 'How the context stack (ROLE + PROJECT + optional layers) generates .k2/AGENTS.md and mirrors out to harness files', keywords: ['canonical', 'agent', 'agents.md', 'harness', 'mirror', 'fan-out', 'ROLE.md', 'context stack', 'help'] },
-  { id: 'agent-skills.workspace-manager', section: 'projects', group: 'Workspace settings', label: 'Workspace Manager skill', description: 'Opt-in loadable role skill — manager guidance (not auto-stacked into AGENTS.md)', keywords: ['manager', 'skill', 'role', 'triage', 'delegate'] },
-  { id: 'agent-skills.k2-agent', section: 'projects', group: 'Workspace settings', label: 'K2 Agent skill', description: 'Opt-in loadable role skill — planner guidance (not auto-stacked into AGENTS.md)', keywords: ['k2', 'agent', 'planner', 'prd', 'skill', 'role'] },
-  { id: 'agent-skills.k2-canonical-agent', section: 'projects', group: 'Workspace settings', label: 'K2 Canonical Agent skill', description: 'Opt-in skill — unify the workspace harness files safely (merge + mirror)', keywords: ['canonical', 'unify', 'harness', 'merge', 'mirror', 'skill'] },
+  { id: 'agent-skills.canonical-flow', section: 'projects', group: 'Workspace settings', label: 'How agents get their instructions', description: 'K2 joins each workspace\'s role, project notes and extra layers into one file every AI tool reads', keywords: ['canonical', 'canonical agent flow', 'agent', 'agents.md', 'harness', 'mirror', 'fan-out', 'ROLE.md', 'context stack', 'instructions', 'help'] },
+  { id: 'agent-skills.workspace-manager', section: 'projects', group: 'Workspace settings', label: 'Workspace Manager skill', description: 'A skill you can turn on: what a manager agent needs to know', keywords: ['manager', 'skill', 'role', 'triage', 'delegate'] },
+  { id: 'agent-skills.k2-agent', section: 'projects', group: 'Workspace settings', label: 'K2 Agent skill', description: 'A skill you can turn on: what a planning agent needs to know', keywords: ['k2', 'agent', 'planner', 'prd', 'skill', 'role'] },
+  { id: 'agent-skills.k2-canonical-agent', section: 'projects', group: 'Workspace settings', label: 'K2 Canonical Agent skill', description: 'A skill you can turn on: brings a workspace\'s AI tool files together safely', keywords: ['canonical', 'unify', 'harness', 'merge', 'mirror', 'skill'] },
 ]
 
 // The three opt-in skills of this PRD (canonical-agents §2), surfaced as
@@ -35,19 +35,19 @@ const OPT_IN_SKILLS: { dir: string; label: string; blurb: string }[] = [
     dir: 'workspace-manager',
     label: 'Workspace Manager',
     blurb:
-      'What a manager agent needs to know: standing orders, the k2 commands, and how to hand off and review work. The agent folds it into its role (ROLE.md). Turn it on from a manager workspace.',
+      'What a manager agent needs to know: its standing orders, the k2 commands, and how to hand off and review work. Turn it on from a manager workspace.',
   },
   {
     dir: 'k2-agent',
     label: 'K2 Agent',
     blurb:
-      'What a planning agent needs to know: PRDs, milestones and technical plans. The agent folds it into its role (ROLE.md). Turn it on from a K2 Agent workspace.',
+      'What a planning agent needs to know: how to write specs, milestones and technical plans. Turn it on from a K2 Agent workspace.',
   },
   {
     dir: 'k2-canonical-agent',
     label: 'K2 Canonical Agent',
     blurb:
-      'Brings a workspace’s tool files together safely: it checks each one, merges what’s in them into ROLE.md and PROJECT.md, builds .k2/AGENTS.md and links the tool files to it. Backed up first and fully undoable. Available to every workspace.',
+      'Brings a workspace’s AI tool files together: it merges what they say into the role and project notes, then points every tool at the one shared file. It backs up first and can undo it all. Every workspace has it.',
   },
 ]
 
@@ -61,22 +61,16 @@ export function AgentSkillsSection(): React.JSX.Element {
     <section className="w-full" data-settings-id="agent-skills.canonical-flow">
       {/* A group on the Workspace settings page, so a group heading, not a
           page title. */}
-      <h3 className="type-heading text-[var(--color-text-primary)] mb-1">Canonical Agent Flow</h3>
+      <h3 className="type-heading text-[var(--color-text-primary)] mb-1">How agents get their instructions</h3>
       <div className="type-hint text-[var(--color-text-secondary)] mb-4 space-y-2 leading-relaxed max-w-[75ch]">
         <p>
-          Each AI tool reads its instructions from a different file. K2 keeps one set for each
-          workspace: the agent&rsquo;s role (<code>AGENT.md</code>), the project notes
-          (<code>PROJECT.md</code>) and any extra layers you add, such as the wiki index.
+          Each AI tool looks for its instructions in a different place. K2 keeps one set for each
+          workspace: the agent&rsquo;s role, notes about the project, and any extra layers you add.
+          You write them once, on a workspace&rsquo;s Context tab.
         </p>
         <p>
-          K2 joins them into one file, <code>.k2/AGENTS.md</code>, which most tools read directly.
-          Tools that look elsewhere (<code>CLAUDE.md</code>, <code>GEMINI.md</code>,{' '}
-          <code>.cursor/rules</code>) get a link to it that you can&rsquo;t edit by mistake, so every
-          tool reads the same instructions.
-        </p>
-        <p>
-          Change them on a workspace&rsquo;s Context tab, or with <code>k2 agent context</code>. You
-          write them once.
+          K2 joins them into one file that most tools read as it is. Tools that look somewhere else
+          get a read-only link to it, so every tool follows the same instructions.
         </p>
       </div>
 
@@ -87,18 +81,16 @@ export function AgentSkillsSection(): React.JSX.Element {
       <Surface chamfer material="tile" className="px-4 py-3 mb-4 type-hint leading-relaxed text-[var(--color-text-secondary)]">
         <div className="type-name text-[var(--color-text-primary)] mb-1">Two ways to set it up</div>
         <p className="mb-1.5 max-w-[75ch]">
-          <span className="text-[var(--color-text-primary)]">With the K2 Canonical Agent (best for an existing project).</span>{' '}
-          Run it from a workspace&rsquo;s Context tab. It reads the files your tools already have, merges
-          them into <code>AGENT.md</code> and <code>PROJECT.md</code>, builds <code>.k2/AGENTS.md</code> and
-          links the tool files to it. It backs everything up first and can undo every change, so
-          nothing is lost.
+          <span className="text-[var(--color-text-primary)]">For an existing project, run the K2 Canonical Agent.</span>{' '}
+          Start it from a workspace&rsquo;s Context tab. It reads the instructions your tools already
+          have, merges them into the role and project notes, and links each tool to the shared file.
+          It backs everything up first and can undo every change.
         </p>
         <p className="max-w-[75ch]">
-          <span className="text-[var(--color-text-primary)]">With the Canonical Agent checkbox (best for a new project).</span>{' '}
-          Tick it on the workspace and K2 keeps the tool files linked to <code>.k2/AGENTS.md</code> for
-          you. It&rsquo;s hands-off, but it{' '}
-          <span className="text-[var(--color-status-warn-amber-soft)]">can overwrite what&rsquo;s already in those files</span>, so
-          for an existing project use the agent instead.
+          <span className="text-[var(--color-text-primary)]">For a new project, tick the Canonical Agent box.</span>{' '}
+          K2 then keeps every tool linked for you, but it{' '}
+          <span className="text-[var(--color-status-warn-amber-soft)]">can overwrite what those tools&rsquo; files already say</span>,
+          so use the agent for an existing project.
         </p>
       </Surface>
 

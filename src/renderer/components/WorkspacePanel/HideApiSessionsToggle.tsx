@@ -4,7 +4,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { useRoom } from '@/components/Room/RoomContext'
 import { Toggle } from '@/components/ui'
-import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow } from '@/components/Settings/controls/SettingControls'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveError, SaveNote, SettingSwitchRow, useSaveStatus } from '@/components/Settings/controls/SettingControls'
 
 /** Per-workspace hide-sessions: do not auto-surface API tabs. */
 export function HideApiSessionsToggle({
@@ -16,6 +16,7 @@ export function HideApiSessionsToggle({
   // hides or re-hydrates are the room's.
   const room = useRoom()
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
   const enabled = (project.hideApiSessions ?? 0) === 1
 
   const toggle = useCallback(async (): Promise<void> => {
@@ -43,35 +44,36 @@ export function HideApiSessionsToggle({
       } else {
         void room.tabs.room.hydrateApiSandboxSessions()
       }
+      save.saved()
     } catch (err) {
       console.error('[hide-api-sessions] write failed', err)
+      save.failed(err)
     } finally {
       setBusy(false)
     }
-  }, [room, busy, enabled, project.id, project.path])
+  }, [room, busy, enabled, project.id, project.path, save])
 
+  const hint = enabled
+    ? 'API sessions stay off the tab strip. Open one from Chat history → API.'
+    : 'API sessions open as tabs. Closing a tab hides it; the session keeps running.'
   return (
     <SettingSwitchRow
       control={
-        <Toggle
-          checked={enabled}
-          onChange={() => void toggle()}
-          disabled={busy}
-          aria-label="Hide sessions"
-          title={
-            enabled
-              ? 'API sessions stay off the tab strip. Open them from Chat history → API.'
-              : 'API sessions appear as tabs. Closing a tab minimizes it (does not kill the session).'
-          }
-        />
+        <>
+          <SaveNote state={save.state} />
+          <Toggle
+            checked={enabled}
+            onChange={() => void toggle()}
+            disabled={busy}
+            aria-label="Hide API sessions"
+            title={hint}
+          />
+        </>
       }
     >
-      <div className={SETTING_ROW_LABEL}>Hide sessions</div>
-      <div className={SETTING_ROW_HINT}>
-        {enabled
-          ? 'API sessions stay off the tab strip. Open them from Chat history → API.'
-          : 'API sessions appear as tabs. Closing a tab minimizes it (does not kill the session).'}
-      </div>
+      <div className={SETTING_ROW_LABEL}>Hide API sessions</div>
+      <div className={SETTING_ROW_HINT}>{hint}</div>
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }

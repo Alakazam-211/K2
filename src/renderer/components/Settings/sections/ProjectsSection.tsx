@@ -69,7 +69,7 @@ import { workspaceGrantSlug } from './api-keys-api'
 import { setSqlDbAgentAccess, setWorkspaceDbUpgrade } from './data-api'
 import { primaryScope } from '@/kessel/server-scope'
 import { RemoteInstructToggle } from '../shared/RemoteInstructToggle'
-import { Button, Callout, Input, OverflowMenu, Spinner, Surface, Toggle } from '@/components/ui'
+import { Button, Callout, Input, OverflowMenu, Spinner, Surface, Tag, Toggle } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 import { computeErrorMessage, setWorkspaceComputeManage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
 import { metaChordLabel } from '@/lib/shortcut-label'
@@ -112,10 +112,10 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.worktrees', section: 'projects', label: 'Worktrees', description: 'The git worktrees this workspace has open, and ones on disk you can reopen', keywords: ['worktree', 'git', 'branch'] },
   { id: 'projects.relations', section: 'projects', label: 'Connections', description: 'The workspaces and servers this agent can reach', keywords: ['relations', 'connected', 'connections', 'cross-workspace', 'links', 'federation'] },
   { id: 'projects.cursor-migrate', section: 'projects', label: 'Chat migrations', description: 'Bring Cursor chats into K2', keywords: ['cursor', 'migrate', 'session', 'import'] },
-  { id: 'projects.default-model', section: 'projects', label: 'Default model', description: 'The model new sessions in this workspace use', keywords: ['default model', 'opus', 'sonnet', 'workspace model'] },
-  { id: 'projects.llm-logins', section: 'projects', label: 'LLM tokens', description: 'Use a specific Claude / Codex / Grok / Gemini subscription or API token for this workspace\'s agents instead of the server default', keywords: ['token', 'tokens', 'subscription', 'api token', 'api key', 'server default', 'login', 'account', 'pin'] },
+  { id: 'projects.default-model', section: 'projects', label: 'Default model', description: 'The model new chats in this workspace start with', keywords: ['default model', 'opus', 'sonnet', 'workspace model'] },
+  { id: 'projects.llm-logins', section: 'projects', label: 'LLM tokens', description: 'The subscription or API token this workspace\'s agents use for Claude, Codex, Grok or Gemini', keywords: ['token', 'tokens', 'subscription', 'api token', 'api key', 'server default', 'login', 'account', 'pin'] },
   { id: 'projects.tabs', section: 'projects', label: 'Tabs: Show the Design tab, Show the Mobile tab', description: 'Keep the Design and Mobile tabs pinned next to Chat and Inbox for this workspace. You can always open them from the + menu', keywords: ['tabs', 'pinned', 'design', 'mobile', 'phone', 'simulator', 'design mode', 'remove', 'bring back', 'show'] },
-  { id: 'projects.force-model-on-resume', section: 'projects', label: 'Force model on resume', description: 'Also use the default model when a session resumes', keywords: ['resume', 'model', 'force'] },
+  { id: 'projects.force-model-on-resume', section: 'projects', label: 'Use the default model when a chat resumes', description: 'A chat you resume switches to this workspace\'s default model', keywords: ['resume', 'model', 'force', 'force model on resume'] },
   { id: 'projects.db-agent-create', section: 'projects', label: 'Let this agent create databases', description: 'It can make new databases; it can always use the ones this workspace owns or was granted', keywords: ['allow this agent to create databases', 'db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
   { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Build and run Apps', description: 'Apps (beta) for this agent: build and run its Apps, manage them end to end, manage their users, and what its Apps may use. The owner turns them on; an admin only off. Loosening the wall always asks you', keywords: ['agents_can_manage_skin', 'agents_can_manage_apps_full', 'app_cores', 'cores', 'apps', 'app', 'build', 'run', 'manage', 'end to end', 'database', 'files', 'rooms', 'thread', 'mail', 'sew', 'passport', 'agent', 'guests', 'roles', 'k2 app access'] },
   { id: 'projects.agents-can-manage-app-users', section: 'projects', label: 'Let this agent manage its Apps\u2019 users', description: 'Its own Apps only: add and remove App users and test guests, passwords, email, names, unlock, roles and its own room, invites, the guests-rooms grant in its own room, App keys that manage users. Users it makes are tied to it. Never a box login. The owner turns it on and off', keywords: ['agents_can_manage_app_users', 'app_users', 'app users', 'test guests', 'users', 'guests', 'passwords', 'invites', 'guests-rooms', 'k2 app access --users'] },
@@ -127,7 +127,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-upgrade-postgres', section: 'projects', label: 'Let this agent manage Postgres versions', description: 'It can create databases on a chosen Postgres version, move them to a newer one and roll back. Deleting the old copy stays with you', keywords: ['allow this agent to manage postgres versions', 'agents_can_upgrade_postgres', 'db_upgrade', 'postgres', 'postgresql', 'pg', 'pg 17', 'version', 'major', 'upgrade', 'database', 'rollback', 'k2 db upgrade', 'live', 'dual-run', 'agent'] },
   { id: 'projects.agents-can-request-permissions', section: 'projects', label: 'Let this agent ask for permission', description: 'Beta: it can post a card in its Thread asking you or an admin to change a setting; nothing changes until someone allows it', keywords: ['can ask for permission cards', 'agents_can_request_permissions', 'permission_cards', 'permission cards', 'permission', 'card', 'ask', 'request', 'approve', 'beta', 'k2 permission', 'agent'] },
   { id: 'projects.agents-can-refresh-chat', section: 'projects', label: 'Let this agent refresh its pinned chat', description: 'It can start a fresh pinned chat when its chat goes stale; the old chat stays in Chat history. Off: it asks you first', keywords: ['can refresh its own pinned chat', 'agents_can_refresh_chat', 'chat_refresh', 'refresh', 'pinned chat', 'new chat', 'k2 agent refresh', 'chat.refresh', 'stale'] },
-  { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Let this agent operate compute nodes', description: 'It can pause, drain, resume, update and restart your compute machines without asking; root actions still wait for you', keywords: ['allow this agent to operate compute nodes', 'agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
+  { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Let this agent operate compute nodes', description: 'It can pause, resume, update and restart your compute machines without asking; changes that need full control of a machine still ask you', keywords: ['allow this agent to operate compute nodes', 'agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Let this agent manage K2 projects', description: 'It can create, rename and delete K2 projects and change their members. Off: it can still read them and post in its project chat', keywords: ['manage k2 projects', 'agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Let this agent manage Gardens and data sources', description: 'It can approve and pause data sources, turn on triggers and edit Gardens without asking; every act is logged', keywords: ['manage gardens and data sources', 'agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
   { id: 'projects.mail-agent-send', section: 'projects', label: 'Let this agent send email', description: 'Whether this agent can send email: never, after you approve each one, or on its own', keywords: ['mail_agent_send', 'agent send', 'sending', 'send', 'email', 'mail', 'gmail', 'linked', 'gated', 'approval', 'outbound'] },
@@ -1040,6 +1040,13 @@ export function ProjectsSection(): React.JSX.Element {
               <WorkspaceSettingsPage />
             </div>
           </div>
+        ) : noMatches && searching ? (
+          // A search that matches nothing hides the last workspace too, so
+          // the pane never shows settings for one the list doesn't.
+          <div className="flex-1 min-w-0 min-h-0 p-6" data-testid="workspaces-none-selected">
+            <div className="type-heading text-[var(--color-text-primary)]">No workspace selected</div>
+            <p className={SETTING_ROW_HINT}>Nothing matches the search. Pick a workspace from the list, or clear the search.</p>
+          </div>
         ) : shownProject ? (
           // overflow-hidden: only the tab body scrolls. `relative` holds the
           // editors that take over this column.
@@ -1229,6 +1236,7 @@ function WorktreeFoldersOnDisk({
   >([])
   const [loading, setLoading] = useState(true)
   const [reopening, setReopening] = useState<string | null>(null)
+  const [reopenError, setReopenError] = useState<{ path: string; message: string } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -1259,6 +1267,7 @@ function WorktreeFoldersOnDisk({
 
   const handleReopen = async (wt: { path: string; branch: string }): Promise<void> => {
     setReopening(wt.path)
+    setReopenError(null)
     try {
       // POST body is camelCase: the daemon's ReopenWorktreeBody reads
       // projectPath/worktreePath/branch. (The pre-migration invoke passed a
@@ -1274,6 +1283,8 @@ function WorktreeFoldersOnDisk({
       await fetchProjects()
     } catch (err) {
       console.error('Reopen worktree failed:', err)
+      const raw = err instanceof Error ? err.message : String(err)
+      setReopenError({ path: wt.path, message: raw.replace(/[.\s]+$/, '') || 'K2 couldn\u2019t reach this server' })
     } finally {
       setReopening(null)
     }
@@ -1303,18 +1314,23 @@ function WorktreeFoldersOnDisk({
           : activeWorktreePaths.has(wt.path)
 
         return (
-          <div key={wt.path} className="flex items-center gap-3 px-4 py-2.5">
+          <div key={wt.path} className="flex items-center justify-between gap-6 px-4 py-3">
             <div className="flex-1 min-w-0">
-              <span className="type-row text-[var(--color-text-primary)] truncate block">{wt.branch}</span>
-              <span className="type-hint text-[var(--color-text-secondary)] truncate block" title={wt.path}>
-                {wt.path.length > 50 ? '...' + wt.path.slice(-47) : wt.path}
-              </span>
+              <div className={`${SETTING_ROW_LABEL} truncate`}>{wt.branch}</div>
+              <div className={`${SETTING_ROW_HINT} truncate`} title={wt.path}>
+                {wt.path.length > 50 ? '…' + wt.path.slice(-47) : wt.path}
+              </div>
+              {reopenError?.path === wt.path && (
+                <p role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1">
+                  Couldn&rsquo;t reopen it: {reopenError.message}. Nothing changed; try again.
+                </p>
+              )}
             </div>
             {isActive ? (
-              <span className="type-hint text-[var(--color-status-ok-soft)] flex-shrink-0">(active)</span>
+              <Tag tone="ok" className="flex-shrink-0">Open</Tag>
             ) : (
               <Button variant="quiet" className="flex-shrink-0" onClick={() => handleReopen(wt)} disabled={reopening === wt.path}>
-                {reopening === wt.path ? 'Reopening...' : 'Reopen'}
+                {reopening === wt.path ? 'Reopening…' : 'Reopen'}
               </Button>
             )}
           </div>
@@ -1827,14 +1843,14 @@ function ProjectDetail({
               <>
                 <SettingsGroup title="Worktrees" card settingId="projects.worktrees">
                   {project.workspaces.map((ws) => (
-                    // No leading icon: the name starts on the card's text edge,
-                    // like every row above and below it.
-                    <div key={ws.id} className="flex items-center gap-3 px-4 py-2.5" data-worktree-row="">
-                      <span className="type-row text-[var(--color-text-primary)] flex-1 truncate">{ws.name}</span>
-                      {ws.branch && (
-                        <span className="type-hint text-[var(--color-text-secondary)] truncate max-w-[12rem]">{ws.branch}</span>
-                      )}
-                      <span className="type-hint text-[var(--color-text-secondary)]">{ws.type}</span>
+                    // The card's row anatomy: the name, and under it what it is
+                    // and its branch, on the card's text edge like every row.
+                    <div key={ws.id} className="px-4 py-3 min-w-0" data-worktree-row="">
+                      <div className={`${SETTING_ROW_LABEL} truncate`}>{ws.name}</div>
+                      <div className={`${SETTING_ROW_HINT} truncate`}>
+                        {ws.type === 'worktree' ? 'Worktree' : 'The main folder'}
+                        {ws.branch ? `, on branch ${ws.branch}` : ''}
+                      </div>
                     </div>
                   ))}
                   {project.workspaces.length === 0 && (
@@ -1966,7 +1982,7 @@ function WorkspaceHostSessionCapPanel({ projectPath }: { projectPath: string }):
         project: projectPath,
         fields: { host_session_cell_cap: value },
       })
-      setHint(value === 'default' ? 'Using the server default.' : `Set to ${value}.`)
+      setHint(value === 'default' ? 'Saved. The server’s limit applies.' : `Saved: up to ${value} at once.`)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -1978,14 +1994,8 @@ function WorkspaceHostSessionCapPanel({ projectPath }: { projectPath: string }):
   return (
     <SettingRow
       settingId="projects.host-session-cell-cap"
-      label="Concurrent API sessions"
-      hint={
-        <>
-          How many API sessions can run at once in this workspace, from 1 to 512. Default 15, unless this
-          server sets its own. Now:{' '}
-          {raw === undefined ? '…' : raw === null ? 'server default' : `${raw} at once`}.
-        </>
-      }
+      label="API sessions at once"
+      hint="How many API sessions can run at the same time in this workspace, from 1 to 512. Left empty, the server’s limit applies."
       below={
         error ? (
           <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>
@@ -1998,18 +2008,18 @@ function WorkspaceHostSessionCapPanel({ projectPath }: { projectPath: string }):
         type="number"
         min={1}
         max={512}
-        placeholder="Default (15)"
+        placeholder="Server limit"
         value={draft}
         disabled={busy || raw === undefined}
         onChange={(e) => setDraft(e.target.value)}
-        aria-label="Concurrent API sessions"
+        aria-label="API sessions at once"
         className="w-28 type-control"
       />
       <Button variant="quiet" disabled={busy || raw === undefined || !draft.trim()} onClick={() => void save(draft.trim())}>
         Save
       </Button>
       <Button variant="quiet" disabled={busy || raw === undefined || raw === null} onClick={() => void save('default')}>
-        Use default
+        Use server limit
       </Button>
     </SettingRow>
   )
@@ -2548,7 +2558,7 @@ export function AgentsOperateComputeToggle({
             !canFlip
               ? 'Checking that you are the owner or an admin of this server'
               : enabled
-                ? 'This workspace\'s agent may operate your compute machines; root actions still wait for you'
+                ? 'This agent can pause, resume, update and restart your compute machines'
                 : 'This workspace\'s agent cannot operate compute machines'
           }
         />
@@ -2561,7 +2571,7 @@ export function AgentsOperateComputeToggle({
             <AskedChip row="projects.agents-can-operate-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
-            It can pause, drain, resume, update and restart your compute machines without asking. Root actions still wait for you.
+            It can pause, resume, update and restart your compute machines without asking. Changes that need full control of a machine still ask you.
           </div>
           {error ? (
             <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-operate-error">
@@ -3413,8 +3423,10 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
   const [offerMove, setOfferMove] = useState<string | null>(null)
   const [moveNote, setMoveNote] = useState('')
   const [moving, setMoving] = useState(false)
+  const save = useSaveStatus()
 
   const handleChange = async (presetId: string): Promise<void> => {
+    const before = selected
     setSelected(presetId)
     setMoveNote('')
     try {
@@ -3427,8 +3439,11 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
       useProjectsStore.setState({ projects: updated })
       const chosen = presetId ? resolvePreset(presetId) : globalPreset
       setOfferMove(harnessOfCommand(chosen?.command))
+      save.saved()
     } catch (err) {
       console.error('[default-agent-selector] Update failed:', err)
+      setSelected(before)
+      save.failed(err)
     }
   }
 
@@ -3447,16 +3462,17 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
 
   return (
     <SettingRow
-      label="Default agent"
-      hint={`${metaChordLabel('Shift+Meta+T') ? `The agent ${metaChordLabel('Shift+Meta+T')} launches` : 'The default agent'} for this workspace. Edit with AI uses Default AI Agent in Providers / Models.`}
+      label={<span className="inline-flex items-center gap-2">Default agent<SaveNote state={save.state} /></span>}
+      hint={`New chats in this workspace start with this agent${metaChordLabel('Shift+Meta+T') ? `, and so does ${metaChordLabel('Shift+Meta+T')}` : ''}. Edit with AI follows Providers / Models instead.`}
       field
       below={
-        offerMove || moveNote ? (
+        offerMove || moveNote || typeof save.state === 'object' ? (
           <div className="space-y-2">
+            <SaveError state={save.state} />
             {offerMove && (
               <div className="flex items-center justify-between gap-4" data-testid="default-agent-move-pinned">
                 <span className="type-hint text-[var(--color-text-secondary)] leading-relaxed">
-                  Also move the pinned chat to {harnessLabel(offerMove)}? New chats use it already; the pinned chat (heartbeats, Threads, messages) keeps its current agent until moved.
+                  Move the pinned chat to {harnessLabel(offerMove)} too? New chats use it now. The pinned chat, which gets heartbeats and messages, stays on its current agent until you move it.
                 </span>
                 <div className="flex gap-2 flex-shrink-0">
                   <Button variant="accent" disabled={moving} onClick={() => { void handleMove(offerMove) }}>
@@ -3542,6 +3558,7 @@ function DefaultModelControls({
   const agentPreset = selectedAgent ? resolvePreset(selectedAgent) : undefined
   const suggestions = modelSuggestionsForAgent(agentPreset?.command ?? selectedAgent ?? '')
 
+  const save = useSaveStatus()
   const persist = async (nextModel: string, nextForce: boolean): Promise<void> => {
     const stored = nextModel.trim()
     const forceVal = stored && nextForce ? 1 : 0
@@ -3559,8 +3576,12 @@ function DefaultModelControls({
           : p,
       )
       useProjectsStore.setState({ projects: updated })
+      save.saved()
     } catch (err) {
       console.error('[default-model] Update failed:', err)
+      setModel(project.defaultModel ?? '')
+      setForce((project.forceModelOnResume ?? 0) !== 0)
+      save.failed(err)
     }
   }
 
@@ -3607,12 +3628,15 @@ function DefaultModelControls({
   return (
     <>
       <SettingRow
-        label="Default model"
+        label={<span className="inline-flex items-center gap-2">Default model<SaveNote state={save.state} /></span>}
         settingId="projects.default-model"
-        hint="The model new sessions in this workspace use. A running chat can't switch models. An API call that sets its own model overrides this."
+        hint="The model new chats in this workspace start with. A running chat keeps its model, and an API call that names a model uses that one."
         field
         below={
-          showCustomField ? (
+          showCustomField || typeof save.state === 'object' ? (
+            <div className="space-y-2">
+            <SaveError state={save.state} />
+            {showCustomField && (
             <div className="flex items-center justify-end gap-2">
               <span className="type-hint text-[var(--color-text-secondary)]">Custom model ID</span>
               <Input
@@ -3634,6 +3658,8 @@ function DefaultModelControls({
                 className={`${SETTING_FIELD_WIDTH} type-control`}
               />
             </div>
+            )}
+            </div>
           ) : undefined
         }
       >
@@ -3646,14 +3672,14 @@ function DefaultModelControls({
         />
       </SettingRow>
       <SettingRow
-        label="Force this model when resuming a session"
-        hint={empty ? 'Choose a default model first.' : 'Also uses the default model when a chat resumes.'}
+        label="Use it when a chat resumes too"
+        hint={empty ? 'Pick a default model first.' : 'A chat you resume switches to the default model.'}
         settingId="projects.force-model-on-resume"
       >
         <Toggle
           checked={force && !empty}
           disabled={empty}
-          aria-label="Force this model when resuming a session"
+          aria-label="Use the default model when a chat resumes"
           onChange={handleForce}
         />
       </SettingRow>
@@ -4300,7 +4326,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
               setRemoteError(null)
             }}
           >
-            + Add connection
+            Add connection
           </Button>
         }
       >
@@ -4651,8 +4677,8 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
       settingId="projects.agents"
       badge={skillRows.length > 0 ? <span className="type-badge tabular-nums text-[var(--color-text-secondary)]">{skillRows.length}</span> : undefined}
       action={
-        <Button variant="quiet" onClick={() => setShowCreate(!showCreate)}>
-          {showCreate ? 'Cancel' : '+ New skill'}
+        <Button variant={showCreate ? 'quiet' : 'accent'} onClick={() => setShowCreate(!showCreate)}>
+          {showCreate ? 'Cancel' : 'New skill'}
         </Button>
       }
     >

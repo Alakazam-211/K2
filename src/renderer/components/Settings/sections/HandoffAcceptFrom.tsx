@@ -149,7 +149,7 @@ export function AgentHandoffAcceptFrom({
               fullWidth
               ariaLabel="Add an agent on this server"
               triggerData={{ 'data-testid': 'handoff-accept-pick' }}
-              placeholder={others.length === 0 ? 'No other agents on this server' : 'Pick an agent on this server'}
+              placeholder={others.length === 0 ? 'No other agents on this server' : 'An agent on this server'}
               disabled={others.length === 0}
               value={pick}
               options={others.map((p) => ({ value: `ws:${p.id}`, label: p.handle || p.name }))}
@@ -165,7 +165,7 @@ export function AgentHandoffAcceptFrom({
               className={`${SETTING_FIELD_WIDTH} min-w-0 type-control`}
               aria-label="Add an agent on another server, or a team"
               data-testid="handoff-accept-typed"
-              placeholder="Agent address, like name::server"
+              placeholder="Address from another server"
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
             />
@@ -179,7 +179,8 @@ export function AgentHandoffAcceptFrom({
             </Button>
           </div>
           <div className={`type-hint ${muted}`}>
-            For an agent on another server, type its address. For a team, type team: and the team&rsquo;s ID.
+            An agent&rsquo;s address is under Handle on its Agent tab. For a whole team, type{' '}
+            <code>team:</code> and the team&rsquo;s ID.
           </div>
         </>
       )}

@@ -720,6 +720,110 @@ describe('panels', () => {
     expect(screen.queryByRole('button', { name: 'Bind' })).toBeNull()
   })
 
+  // Sew 0.9.0 recording in Apps (K-c; vs-live B22).
+  const REC_FLAGS = { appRecording: true, voiceRecordCap: true, recordingRequired: true, mgmtRecordingReads: true }
+  const REC_POLICIES = {
+    ok: true,
+    flags: REC_FLAGS,
+    policies: [{ key: 'recording.enabled', want: true, seen: true, setBy: 'owner', delivered: true }],
+    locks: [],
+    k5SpaceId: null,
+  }
+  function recView(app: string, over: Json = {}): Json {
+    return {
+      ok: true,
+      app: { serviceId: app, name: app, appId: app },
+      flags: REC_FLAGS,
+      homeClient: false,
+      recording: {},
+      sent: null,
+      delivered: true,
+      orgAudioMaxDays: 30,
+      spaces: [{ spaceId: '5101', governance: 'app', startLevel: null, required: null, locked: false }],
+      rollout: null,
+      ...over,
+    }
+  }
+  function recGets(over: Record<string, unknown> = {}): void {
+    gets({
+      'sew/status': running(),
+      'sew/recording/policies': REC_POLICIES,
+      'sew/home': { ok: true, homeClient: 'hearth', apps: [{ app: 'jobs', delivered: true }] },
+      'sew/app-spaces': { ok: true, spaces: [{ app: 'jobs', spaceId: '5101', members: { added: 1, held: 0, pending: 0 } }] },
+      'app/recording': (p?: Json) => (p?.app === 'hearth' ? recView('hearth', { homeClient: true, spaces: [] }) : recView('jobs', { delivered: false })),
+      ...over,
+    })
+  }
+
+  it('Recording tab hidden without flags; row shows delivered', async () => {
+    gets({ 'sew/status': running(), 'sew/recording/policies': { ...REC_POLICIES, flags: { ...REC_FLAGS, appRecording: false } } })
+    await renderReady('Running')
+    fireEvent.click(screen.getByRole('button', { name: 'Recording' }))
+    expect((await screen.findByTestId('sew-recording-unavailable')).textContent).toContain("This server's chat can't record in Apps yet")
+    expect(screen.queryByTestId('sew-recording-policies')).toBeNull()
+    expect(screen.queryAllByTestId('sew-recording-app')).toHaveLength(0)
+    expect(h.daemonCliGet.mock.calls.map((c) => c[0])).toEqual(['sew/status', 'sew/recording/policies'])
+    cleanup()
+
+    recGets()
+    await renderReady('Running')
+    fireEvent.click(screen.getByRole('button', { name: 'Recording' }))
+    await waitFor(() => expect(screen.getAllByTestId('sew-recording-app')).toHaveLength(2))
+    expect(screen.queryByTestId('sew-recording-unavailable')).toBeNull()
+    expect(screen.getByTestId('sew-recording-policy').textContent).toContain('recording.enabled')
+    const [jobs, hearth] = screen.getAllByTestId('sew-recording-app')
+    expect(jobs.textContent).toContain('jobs')
+    expect(screen.getByTestId('sew-recording-delivered').textContent).toBe('Sending to Sew')
+    expect(hearth.textContent).toContain('Not for the home client')
+    cleanup()
+
+    recGets({ 'app/recording': (p?: Json) => recView(String(p?.app), p?.app === 'hearth' ? { homeClient: true } : {}) })
+    await renderReady('Running')
+    fireEvent.click(screen.getByRole('button', { name: 'Recording' }))
+    await waitFor(() => expect(screen.getByTestId('sew-recording-delivered').textContent).toBe('Delivered'))
+  })
+
+  it('Recording: an Admin sees required and server reads read-only; the owner turns server reads on with a confirm', async () => {
+    recGets({ 'sew/status': running({ you: { ...YOU_OWNER, isOwner: false } }) })
+    await renderReady('Running')
+    fireEvent.click(screen.getByRole('button', { name: 'Recording' }))
+    await waitFor(() => expect(screen.getAllByTestId('sew-recording-app')).toHaveLength(2))
+    expect(screen.getAllByText('Only the owner turns this on')).toHaveLength(2)
+    expect((screen.getByRole('switch', { name: "Let the App's server read transcripts" }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Lock against recording' })).toBeNull()
+    cleanup()
+
+    let sets = 0
+    recGets()
+    posts({
+      'app/recording/set': () => {
+        sets += 1
+        if (sets === 1) {
+          return new DaemonHttpError('needs the owner', 403, 'vault_confirm_required', {
+            code: 'vault_confirm_required',
+            serviceId: 'jobs',
+            action: 'app-recording-owner',
+          })
+        }
+        return recView('jobs', { recording: { server_read: true } })
+      },
+      'vault/confirm/start': { methods: ['local-auth'] },
+      'vault/confirm/finish': { token: 'k2vc_rec' },
+    })
+    await renderReady('Running')
+    fireEvent.click(screen.getByRole('button', { name: 'Recording' }))
+    await waitFor(() => expect(screen.getAllByTestId('sew-recording-app')).toHaveLength(2))
+    expect(screen.queryByText('Only the owner turns this on')).toBeNull()
+    fireEvent.click(screen.getByRole('switch', { name: "Let the App's server read transcripts" }))
+    await waitFor(() =>
+      expect(postBodies('app/recording/set')).toEqual([
+        { app: 'jobs', serverRead: true },
+        { app: 'jobs', serverRead: true, confirmToken: 'k2vc_rec' },
+      ]),
+    )
+    expect(postBodies('vault/confirm/start')).toEqual([{ action: 'app-recording-owner', secretId: 'jobs' }])
+  })
+
   it('S30/S31 stubs render their note and make no calls', async () => {
     gets({ 'sew/status': running() })
     await renderReady('Running')

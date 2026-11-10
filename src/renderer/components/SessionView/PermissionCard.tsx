@@ -281,6 +281,7 @@ type CardConfirmAction =
   | 'apps-chat-key'
   | 'sew-space-governance'
   | 'sew-recording-enable'
+  | 'apps-recording'
 
 /** The password-reset card's Allow, by the mode the agent asked for. */
 const REVEAL_ALLOW_LABEL: Record<RevealMode, string> = {
@@ -305,7 +306,8 @@ function confirmActionOf(action: string | undefined): CardConfirmAction | null {
     action === 'vault-share-service' ||
     action === 'apps-chat-key' ||
     action === 'sew-space-governance' ||
-    action === 'sew-recording-enable'
+    action === 'sew-recording-enable' ||
+    action === 'apps-recording'
     ? action
     : null
 }

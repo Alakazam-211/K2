@@ -566,10 +566,158 @@ export async function unbindSewAppSpace(app: string, spaceId: string, removeAppM
   )
 }
 
+// ── recording in Apps (Sew 0.9.0, K2 0.46.11) ─────────────────────────────
+//
+// Display only: the daemon owns every rule (who may widen, the lock, the
+// org's keep days) and answers a widening with a confirm request.
+
+export interface SewRecordingFlags {
+  appRecording: boolean
+  voiceRecordCap: boolean
+  recordingRequired: boolean
+  mgmtRecordingReads: boolean
+}
+
+export interface SewRecordingPolicy {
+  key: string
+  /** What K2 was asked for (null: never set here). */
+  want: unknown
+  /** What Sew last showed. */
+  seen: unknown
+  setBy: string | null
+  delivered: boolean
+}
+
+export interface SewRecordingLock {
+  spaceId: string
+  lockedBy: string
+  lockedAt: number
+}
+
+export interface SewRecordingPolicies {
+  flags: SewRecordingFlags
+  policies: SewRecordingPolicy[]
+  locks: SewRecordingLock[]
+  k5SpaceId: string | null
+}
+
+export interface AppRecordingSpace {
+  spaceId: string
+  governance: string
+  /** null = the App's rule. */
+  startLevel: string | null
+  required: boolean | null
+  locked: boolean
+}
+
+export interface AppRecordingView {
+  app: { serviceId: string; name: string }
+  homeClient: boolean
+  startLevel: string
+  required: boolean
+  serverRead: boolean
+  /** null = the org's `recording.audio_max_days`. */
+  audioMaxDays: number | null
+  delivered: boolean
+  orgAudioMaxDays: number | null
+  spaces: AppRecordingSpace[]
+}
+
+const rec = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {})
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)
+
+export function recordingFlagsOf(v: unknown): SewRecordingFlags {
+  const f = rec(v)
+  return {
+    appRecording: f.appRecording === true,
+    voiceRecordCap: f.voiceRecordCap === true,
+    recordingRequired: f.recordingRequired === true,
+    mgmtRecordingReads: f.mgmtRecordingReads === true,
+  }
+}
+
+/** `GET /cli/sew/recording/policies`. */
+export async function fetchSewRecordingPolicies(): Promise<SewRecordingPolicies> {
+  const b = rec(await daemonCliGet<unknown>(primaryScope(), 'sew/recording/policies'))
+  const policies = (Array.isArray(b.policies) ? b.policies : []).map((p) => {
+    const r = rec(p)
+    return { key: String(r.key ?? ''), want: r.want ?? null, seen: r.seen ?? null, setBy: text(r.setBy), delivered: r.delivered === true }
+  })
+  const locks = (Array.isArray(b.locks) ? b.locks : []).map((l) => {
+    const r = rec(l)
+    return { spaceId: String(r.spaceId ?? ''), lockedBy: String(r.lockedBy ?? ''), lockedAt: num(r.lockedAt) ?? 0 }
+  })
+  return { flags: recordingFlagsOf(b.flags), policies, locks, k5SpaceId: text(b.k5SpaceId) }
+}
+
+/** The Apps with Sew settings rows here (`GET /cli/sew/home`), the home client too. */
+export async function fetchSewHomeAppIds(): Promise<string[]> {
+  const b = rec(await daemonCliGet<unknown>(primaryScope(), 'sew/home'))
+  const ids = (Array.isArray(b.apps) ? b.apps : []).map((a) => text(rec(a).app)).filter((x): x is string => x !== null)
+  const home = text(b.homeClient)
+  return home && !ids.includes(home) ? [...ids, home] : ids
+}
+
+/** `GET /cli/app/recording?app=`. */
+export async function fetchAppRecording(app: string): Promise<AppRecordingView> {
+  const b = rec(await daemonCliGet<unknown>(primaryScope(), 'app/recording', { app }))
+  const a = rec(b.app)
+  const r = rec(b.recording)
+  const spaces = (Array.isArray(b.spaces) ? b.spaces : []).map((s) => {
+    const x = rec(s)
+    return {
+      spaceId: String(x.spaceId ?? ''),
+      governance: text(x.governance) ?? 'sew',
+      startLevel: text(x.startLevel),
+      required: typeof x.required === 'boolean' ? x.required : null,
+      locked: x.locked === true,
+    }
+  })
+  return {
+    app: { serviceId: text(a.serviceId) ?? app, name: text(a.name) ?? app },
+    homeClient: b.homeClient === true,
+    startLevel: text(r.start_level) ?? 'none',
+    required: r.required === true,
+    serverRead: r.server_read === true,
+    audioMaxDays: num(r.audio_max_days),
+    delivered: b.delivered !== false,
+    orgAudioMaxDays: num(b.orgAudioMaxDays),
+    spaces,
+  }
+}
+
+export interface AppRecordingChange {
+  startLevel?: 'none' | 'admin' | 'moderator' | 'member'
+  /** null = back to the org's keep days. */
+  audioMaxDays?: number | null
+  required?: boolean
+  serverRead?: boolean
+}
+
+/** `POST /cli/app/recording/set`; a widening answers `vault_confirm_required`
+ *  with the confirm `action` and the App's `serviceId`. */
+export async function setAppRecording(app: string, change: AppRecordingChange, confirmToken?: string): Promise<unknown> {
+  return daemonCliPost(primaryScope(), 'app/recording/set', { app, ...change, ...(confirmToken ? { confirmToken } : {}) })
+}
+
+/** `POST /cli/sew/app-spaces/recording-lock` (the owner, in person). */
+export async function setSpaceRecordingLock(spaceId: string, lock: boolean, confirmToken?: string): Promise<unknown> {
+  return daemonCliPost(primaryScope(), 'sew/app-spaces/recording-lock', { spaceId, lock, ...(confirmToken ? { confirmToken } : {}) })
+}
+
 // ── person confirm (vault) ────────────────────────────────────────────────
 
-/** The person-only steps and their vault confirm actions. */
-export type SewConfirmAction = 'sew-recovery-key' | 'sew-purge' | 'chat-owner-handoff'
+/** The person-only steps and their vault confirm actions. The recording
+ *  ones are bound to the App's service id (`app-recording*`) or the Space
+ *  (`recording-lock`). */
+export type SewConfirmAction =
+  | 'sew-recovery-key'
+  | 'sew-purge'
+  | 'chat-owner-handoff'
+  | 'app-recording'
+  | 'app-recording-owner'
+  | 'recording-lock'
 
 /** `secretId` per action: the install id (or `none`) for the S29 steps;
  *  none for the owner handoff (the daemon takes it unbound). */

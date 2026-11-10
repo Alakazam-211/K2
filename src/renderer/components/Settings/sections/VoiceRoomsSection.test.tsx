@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   status: vi.fn(),
   setCount: vi.fn(),
   rename: vi.fn(),
+  setRequired: vi.fn(),
   changed: [] as Array<() => void>,
 }))
 
@@ -36,6 +37,7 @@ vi.mock('@/lib/voice/voice-api', () => ({
   fetchVoiceStatus: (...a: unknown[]) => h.status(...a),
   setVoiceRoomCount: (...a: unknown[]) => h.setCount(...a),
   renameVoiceRoom: (...a: unknown[]) => h.rename(...a),
+  setVoiceRecordingRequired: (...a: unknown[]) => h.setRequired(...a),
 }))
 
 import { VoiceRoomsSection } from './VoiceRoomsSection'
@@ -53,7 +55,8 @@ const rooms = (canManage: boolean) => ({
 })
 
 beforeEach(() => {
-  for (const f of [h.rooms, h.status, h.setCount, h.rename]) f.mockReset()
+  for (const f of [h.rooms, h.status, h.setCount, h.rename, h.setRequired]) f.mockReset()
+  h.setRequired.mockResolvedValue(undefined)
   h.changed.length = 0
   h.setCount.mockResolvedValue(undefined)
   h.rename.mockResolvedValue(undefined)
@@ -110,6 +113,24 @@ describe('VoiceRoomsSection', () => {
     await waitFor(() => expect(h.rooms).toHaveBeenCalledTimes(2))
     unmount()
     expect(h.changed).toHaveLength(0)
+  })
+
+  it('"Require recording" stays hidden until K2 answers consent prompts (consentSheet), then the owner sets it', async () => {
+    const recording = { spaceId: '4001', startLevel: null, required: null, locked: false, canRequire: true, consentSheet: false }
+    h.rooms.mockResolvedValue(rooms(true))
+    h.status.mockResolvedValue({ hosting: { state: 'ok', line: null, detail: null }, count: 2, mediaTier: null, recording })
+    render(<VoiceRoomsSection />)
+    await waitFor(() => expect(screen.getByTestId('voice-rooms-count').textContent).toBe('2'))
+    expect(screen.queryByTestId('voice-rooms-require-recording')).toBeNull()
+    expect(screen.queryByText(/Require recording/)).toBeNull()
+    cleanup()
+
+    h.status.mockResolvedValue({ hosting: { state: 'ok', line: null, detail: null }, count: 2, mediaTier: null, recording: { ...recording, consentSheet: true } })
+    render(<VoiceRoomsSection />)
+    const sw = await screen.findByTestId('voice-rooms-require-recording')
+    expect(screen.getByText(/Require recording when two or more people are in a room/)).toBeTruthy()
+    fireEvent.click(sw)
+    await waitFor(() => expect(h.setRequired).toHaveBeenCalledWith({ hostKey: 'sewlab.k2.dev', id: 'p' }, true))
   })
 
   it('shows why the server cannot host (§4.5)', async () => {

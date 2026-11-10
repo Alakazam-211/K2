@@ -966,6 +966,10 @@ if [ "${1:-}" = "hostchat" ]; then
         *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
+# `k2 app recording … --help` (0.46.11) only prints help.
+if [ "${1:-}" = "app" ] && { [ "${2:-}" = "recording" ] || [ "${2:-}" = "recordings" ]; }; then
+    for _a in "${@:3}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+fi
 # `k2 sources` / `k2 sources --help` only print help.
 if [ "${1:-}" = "sources" ] || [ "${1:-}" = "source" ]; then
     case "${2:-}" in
@@ -8509,6 +8513,12 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app set <app> [--account-deletion request|immediate] [--deletion-grace <days>] [--client-logs-days <days>]
                                         How "Delete my account" works in the App (request by
                                         default, 30-day grace) and how long client logs stay
+  k2 app recording <app> [set [--start-level L] [--audio-max-days N|org] [--required on|off] [--server-read on|off]]
+                                        Recording in the App's calls (Sew 0.9.0). All off by default;
+                                        each person still consents. --required on and --server-read on
+                                        are the owner's only (an agent asks: k2 permission request
+                                        apps.recording app=<app> server-read=on --why "…").
+                                        k2 app recording --help, k2 study app-recording
   k2 app account-deletion <app> | complete|cancel <app> <request|user>
                                         Pending account deletions: list, complete now, undo
   k2 app user show <username> --app <app> [--json]
@@ -12092,6 +12102,99 @@ Posts: one per 10 s, 200 a day, 2000 characters, none while the agent
 is still on that person's last one. ROLLBACK: before taking a box below 0.46.10, set its
 voice_chat logins to member and disable them, or remove them; an older
 K2 can't read the role and refuses every login until it rolls forward.
+
+K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
+}
+
+_study_page_app_recording() {
+    cat <<'EOF'
+k2 study app-recording — Recording in an App's calls (Sew 0.9.0, K2 0.46.11)
+
+ALL OFF BY DEFAULT. Nobody can start a recording in an App's Spaces,
+nothing is required, and no App's server reads anything, until a person
+turns it on. The server's chat needs Sew 0.9.0 (else sew_feature_missing).
+
+CONSENT. Each person in a call answers their own notice; a recording never
+records someone who said no. They join without being recorded, or, with
+the server's recording.require_consent_to_join on, they don't join. The
+notice says when recording is required and which Apps' servers may read it.
+
+THE SETTINGS (per App)
+  start_level     the lowest chat level that may start a recording in the
+                  App's Spaces: none (the default: nobody), admin,
+                  moderator or member. A person's chat pass also needs the
+                  voice:record cap (a role cap, k2 study app-chat); K2 gave
+                  it once to every role that had voice:join.
+  required        on: every call with two or more people is recorded, and
+                  nobody can stop it there. Each person still consents.
+  audio_max_days  how long audio is kept, never above the server's
+                  recording.audio_max_days (above_org_audio_max_days).
+  server_read     on: the App's own server may read its recordings (below).
+
+READ AND CHANGE (<app>: its id or name, k2 app list)
+  k2 app recording <app> [--json]   what K2 wants, whether Sew has it
+                                    (delivered), the App's Spaces and locks.
+                                    The owner, an Admin or you may look.
+  k2 app recording <app> set [--start-level L] [--audio-max-days N|org]
+                             [--required on|off] [--server-read on|off]
+  Down or off: the owner, an Admin, or you, the App's own agent, with its
+  App switch "…and manage them end to end" on (k2 app access <workspace>).
+  Up (a higher start level, longer keep days): the owner or an Admin, in
+  person; you get person_only. required on and server_read on: the
+  server's OWNER ONLY; you (and an Admin) get owner_only, and with cards
+  on the refusal ends with the line to ask.
+
+ASK THE OWNER (the apps.recording card; permission cards must be on for
+your workspace; how cards work: k2 study permissions). The key is
+server-read, with a dash; one card may ask for both:
+  k2 permission request apps.recording app=<app> server-read=on --why "…"
+  k2 permission request apps.recording app=<app> required=on server-read=on --why "…"
+  The owner's card names the App, its Spaces and what it reads; the owner
+  answers with a fresh confirm. An Admin's Allow doesn't count: the card
+  stays open. Ask once and wait; don't ask again while it is open.
+
+THE APP SERVER'S READS (need server_read on; each read is logged, and
+each person's notice names the App as a reader). SDK verbs:
+  recordings.list         the App's recordings in one of its Spaces
+  recordings.get          one recording: who started it, who consented
+  recordings.transcript   its transcript, a page at a time
+  recordings.events       a live feed of changes: started, stopped,
+                          transcript_ready, audio_expired, deleted (no content)
+  With server_read off: 403 recording_server_read_off (Sew is never
+  asked). An App that only takes part in a Space it doesn't govern: 409
+  app_not_governing. Audio downloads are never an App's or an agent's.
+  Stop the reads yourself: k2 app recording <app> set --server-read off
+
+A SPACE'S OWN RULE, AND THE LOCK
+  k2 hostchat app-space recording <app> <space-id> [--start-level L|inherit]
+                                  [--required on|off|inherit]
+  k2 hostchat app-space recording-lock <space-id> on|off
+  The Space's rule: down (none, off, inherit) you may set yourself; up is
+  a person's (person_only). A locked Space takes nothing up (space_locked).
+  The lock is for a Space that holds CUI or FCI: nobody records there,
+  whatever the App, the Space's rule or the policies say. Only the
+  server's owner sets or lifts it, in person; there is no card for it.
+  You get person_only (an Admin owner_only): ask in your Thread instead,
+  k2 thread <your handle> "Please lock Space <id> against recording: <why>"
+
+SERVER POLICIES  k2 hostchat recording policy [set KEY VALUE]:
+  recording.enabled, recording.dm_enabled, recording.require_consent_to_join,
+  recording.required (off|multi_person), recording.audio_max_days. The
+  owner or an Admin, in person; recording.required the owner only.
+
+K5 ROOMS (this server's own voice rooms): k2 voice settings. Its "require
+recording" switch stays hidden in Settings and is refused
+(client_consent_missing) until K2's desktop app answers consent prompts.
+
+THE RECORDINGS THEMSELVES (holds, exports, deleting one): Sew's own admin,
+which the owner opens with k2 hostchat open. Uninstalling an App never
+deletes its recordings.
+
+REFUSALS  sew_feature_missing (k2 hostchat upgrade) · home_client_cannot_govern
+(the home client takes no recording settings) · above_org_audio_max_days ·
+owner_only · person_only · space_locked · space_unbound (the Space is bound
+to no App: k2 hostchat app-spaces) · app_mismatch (another App's Space).
 
 K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
@@ -17902,6 +18005,190 @@ print("  account deletion   %s, grace %s days%s" % (d.get("mode"), d.get("graceD
 print("  client logs kept   %s days%s" % (c.get("keepDays"), "" if c.get("set") else " (the default)"))'
 }
 
+# ── Recording in Apps (Sew 0.9.0, K2 0.46.11) ─────────────────────────────
+# k2 app recording <app> [set …], k2 hostchat app-space recording[-lock],
+# k2 hostchat recording policy, k2 voice settings. The daemon decides who
+# may change what; a widening answers vault_confirm_required (an App's own
+# settings) or owner_confirm_required (Chat Hosting's), and a terminal
+# outside K2 then gets the person's confirm and sends the change again.
+
+# Did the last answer ask for a person confirm this terminal can give?
+_rec_needs_confirm() {
+    [ "$_CP_STATUS" = "403" ] || return 1
+    [[ "$_CP_BODY" == *'"vault_confirm_required"'* || "$_CP_BODY" == *'"owner_confirm_required"'* ]] || return 1
+    ! _compute_in_session
+}
+
+# _rec_send_confirmed PATH BODY ACTION SECRET-ID LABEL: the person's confirm
+# (Touch ID or the vault password), then the same body with confirmToken.
+_rec_send_confirmed() {
+    local path="$1" body="$2" tok raw
+    tok="$(_vault_confirm_token "$3" "$4" "$5")" || exit 3
+    body="$(printf '%s' "$body" | K2_RC_TOK="$tok" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b["confirmToken"]=os.environ["K2_RC_TOK"]; print(json.dumps(b))')"
+    tok=""
+    raw="$(_compute_send POST "$path" "$body" tcp)"
+    _compute_split "$raw"
+}
+
+# on|off|inherit → a JSON bool or null; empty stays empty (not named).
+_rec_switch_json() {
+    case "$1" in
+        "") ;;
+        on|true|yes) echo true ;;
+        off|false|no) echo false ;;
+        inherit) [ "${2:-}" = inherit ] && echo null || return 1 ;;
+        *) return 1 ;;
+    esac
+}
+
+_app_recording_usage() {
+    cat <<'EOF'
+usage: k2 app recording <app> [--json]
+       k2 app recording <app> set [--start-level none|admin|moderator|member]
+                                  [--audio-max-days N|org] [--required on|off]
+                                  [--server-read on|off] [--json]
+Recording in an App's calls, on this server's chat (Sew 0.9.0 or later).
+No flags: what K2 wants for the App, whether Sew has it yet (delivered),
+the Spaces the App is bound to, and the lock on each. The owner, an Admin
+or the App's own agent may look. <app> is the App's id or name (k2 app list).
+Each flag is optional; name one or more.
+
+Every setting starts off: nobody may start a recording, nothing is
+required, and the App's own server reads nothing. Each person in a call
+still answers their own consent notice; a recording never records someone
+who said no.
+  --start-level L       the lowest chat level that may start a recording in
+                        the App's Spaces: none (nobody, the default), admin,
+                        moderator or member
+  --audio-max-days N    keep recorded audio N days (1 to 3650; 30 or 30d),
+                        never more than this server's own limit
+                        (recording.audio_max_days, k2 hostchat recording
+                        policy: above it is above_org_audio_max_days);
+                        org = the server's limit
+  --required on|off     on: every call with two or more people in the App's
+                        Spaces is recorded, and nobody can stop it there. Each
+                        person still consents for themselves.
+  --server-read on|off  on: the App's own server may read its recordings'
+                        details, transcripts and changes (the SDK's
+                        recordings.list, get, transcript, events). Each
+                        consent notice names the App as a reader; every read
+                        is logged.
+Who: turning a setting down or off: the owner, an Admin, or the App's own
+agent with its App switch "…and manage them end to end" on (switch 2:
+k2 app access <workspace> shows it; the owner turns it on with --manage on).
+A higher start level or longer keep days: the owner or an Admin, in
+person, with a confirm (Touch ID or the vault password) from a terminal
+outside K2; an agent gets person_only. --required on and --server-read on:
+the server's owner only, in person; anyone else gets owner_only. With
+permission cards on for its workspace, the agent's refusal ends with the
+line to ask the owner on a card (the card's key is server-read, with a dash):
+  k2 permission request apps.recording app=<app> server-read=on --why "…"
+  k2 permission request apps.recording app=<app> required=on server-read=on --why "…"
+Not for the home client (the App that sees every Space): it takes no
+recording settings (home_client_cannot_govern). A server whose chat can't
+record in Apps yet answers sew_feature_missing (k2 hostchat upgrade).
+A Space's own rule, and the owner's no-recording lock for CUI/FCI Spaces:
+k2 hostchat app-space recording --help. Uninstalling an App never deletes
+its recordings. More: k2 study app-recording.
+Exit codes: 0 ok, 2 bad usage, 3 refused.
+EOF
+}
+
+cmd_app_recording() {
+    local app="" set_mode=0 level="" days="" required="" server_read="" json_out=0 days_named=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            set) set_mode=1; shift ;;
+            --start-level) level="${2:-}"; shift 2 || { echo "usage: --start-level none|admin|moderator|member" >&2; exit 2; } ;;
+            --start-level=*) level="${1#*=}"; shift ;;
+            --audio-max-days) days="${2:-}"; days_named=1; shift 2 || { echo "usage: --audio-max-days N|org" >&2; exit 2; } ;;
+            --audio-max-days=*) days="${1#*=}"; days_named=1; shift ;;
+            --required) required="${2:-}"; shift 2 || { echo "usage: --required on|off" >&2; exit 2; } ;;
+            --required=*) required="${1#*=}"; shift ;;
+            --server-read) server_read="${2:-}"; shift 2 || { echo "usage: --server-read on|off" >&2; exit 2; } ;;
+            --server-read=*) server_read="${1#*=}"; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_recording_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app recording --help)" >&2; exit 2 ;;
+            *) [ -z "$app" ] && app="$1" || { echo "usage: one App only (k2 app recording --help)" >&2; exit 2; }; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { _app_recording_usage >&2; exit 2; }
+    local any=0
+    { [ -n "$level" ] || [ "$days_named" = 1 ] || [ -n "$required" ] || [ -n "$server_read" ]; } && any=1
+    if [ "$set_mode" = 0 ] && [ "$any" = 1 ]; then
+        echo "usage: to change a setting: k2 app recording $app set --start-level … (k2 app recording --help)" >&2; exit 2
+    fi
+    if [ "$set_mode" = 1 ] && [ "$any" = 0 ]; then
+        echo "usage: name a change: k2 app recording $app set [--start-level L] [--audio-max-days N|org] [--required on|off] [--server-read on|off]" >&2; exit 2
+    fi
+    if [ "$set_mode" = 0 ]; then
+        _compute_call GET /cli/app/recording "app=$(urlencode "$app")"
+    else
+        case "$level" in ""|none|admin|moderator|member) ;; *) echo "usage: --start-level takes none, admin, moderator or member" >&2; exit 2 ;; esac
+        local days_j=""
+        if [ "$days_named" = 1 ]; then
+            days="${days%d}"
+            if [ "$days" = org ]; then days_j=null
+            elif [[ "$days" =~ ^[0-9]+$ ]] && [ "$((10#$days))" -ge 1 ] && [ "$((10#$days))" -le 3650 ]; then days_j="$((10#$days))"
+            else echo "usage: --audio-max-days takes a number of days (1 to 3650) or org (the server's limit)" >&2; exit 2
+            fi
+        fi
+        local req_j srv_j
+        req_j="$(_rec_switch_json "$required")" || { echo "usage: --required takes on or off" >&2; exit 2; }
+        srv_j="$(_rec_switch_json "$server_read")" || { echo "usage: --server-read takes on or off" >&2; exit 2; }
+        local body
+        body="$(_compute_json K2_CJ_app="$app" K2_CJ_startLevel="$level" K2_CJ_audioMaxDays_j="$days_j" K2_CJ_required_j="$req_j" K2_CJ_serverRead_j="$srv_j")"
+        _app_rt_post /cli/app/recording/set "$body"
+        if _rec_needs_confirm; then
+            local action svc
+            action="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or {}).get("action") or "")')"
+            svc="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or {}).get("serviceId") or "")')"
+            [ -n "$action" ] && [ -n "$svc" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            _rec_send_confirmed /cli/app/recording/set "$body" "$action" "$svc" "Recording settings for $app"
+        fi
+        [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    fi
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | K2_RC_SET="$set_mode" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+a = v.get("app") or {}
+f = v.get("flags") or {}
+r = v.get("recording") or {}
+yn = lambda b: "yes" if b else "no"
+onoff = lambda b: "on" if b else "off"
+name = a.get("name") or a.get("serviceId")
+if os.environ.get("K2_RC_SET") == "1":
+    print("%s: %s" % (name, "saved" if v.get("changed") else "nothing changed (already so)"))
+print("App %s (%s): recording" % (name, a.get("serviceId")))
+print("  Sew flags      record in Apps %s · voice:record cap %s · required %s · server reads %s" % (
+    yn(f.get("appRecording")), yn(f.get("voiceRecordCap")), yn(f.get("recordingRequired")), yn(f.get("mgmtRecordingReads"))))
+if not f.get("appRecording"):
+    print("  This server'"'"'s chat can'"'"'t record in Apps yet (it needs Sew 0.9.0: k2 hostchat upgrade).")
+if v.get("homeClient"):
+    print("  Not for the home client: this App sees every Space a person is in, so it takes no recording settings.")
+    sys.exit(0)
+lvl = r.get("start_level") or "none"
+print("  start level    %s%s" % (lvl, " (nobody starts a recording)" if lvl == "none" else " and above may start a recording"))
+print("  required       %s" % onoff(r.get("required")))
+print("  server reads   %s" % onoff(r.get("server_read")))
+org = v.get("orgAudioMaxDays")
+d = r.get("audio_max_days")
+print("  audio kept     %s" % (("%s days" % d) if d is not None else ("the server'"'"'s limit (%s days)" % org if org is not None else "the server'"'"'s limit")))
+print("  delivered      %s" % ("yes" if v.get("delivered") else "not yet: K2 is sending it to Sew"))
+sp = v.get("spaces") or []
+if not sp:
+    print("  Spaces         none bound (k2 hostchat app-space bind <app> <space-id>)")
+for s in sp:
+    if s.get("locked"):
+        rule = "LOCKED: no recording (CUI/FCI; the owner lifts it)"
+    else:
+        req = s.get("required")
+        rule = "start level %s, required %s" % (s.get("startLevel") or "inherit", "inherit" if req is None else onoff(req))
+    print("  Space %s: governed by %s; %s" % (s.get("spaceId"), s.get("governance") or "sew", rule))'
+}
+
 # k2 app account-deletion <app> | complete <app> <request|user> | cancel <app> <request|user>
 _app_account_deletion_usage() {
     cat <<'EOF'
@@ -18862,6 +19149,8 @@ cmd_app() {
         invite-settings) shift; cmd_app_invite_settings "$@" ;;
         # 0.46.9: account deletion mode and grace, client log retention.
         set) shift; cmd_app_set "$@" ;;
+        # 0.46.11: recording in an App's calls (Sew 0.9.0).
+        recording|recordings) shift; cmd_app_recording "$@" ;;
         account-deletion|account-deletions) shift; cmd_app_account_deletion "$@" ;;
         profile)
             shift
@@ -47736,7 +48025,7 @@ cmd_schema() {
       "args": [{"name": "group", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
-    {"name": "hostchat", "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|restart|reconfigure|app-url|ship|mirror|app-spaces|app-space|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|on-behalf|log> ...", "description": "Chat / Voice Hosting on this box: the chat and voice server (powered by Sew), over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Chat / Voice Hosting (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge and recovery-key, Sew's launch key, are the owner's; --drop-prev the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output (any subcommand)."}]},
+    {"name": "hostchat", "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|restart|reconfigure|app-url|ship|mirror|app-spaces|app-space|recording|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|on-behalf|log> ...", "description": "Chat / Voice Hosting on this box: the chat and voice server (powered by Sew), over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Chat / Voice Hosting (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge and recovery-key, Sew's launch key, are the owner's; --drop-prev the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output (any subcommand)."}]},
     {"name": "hostchat enable", "usage": "k2 hostchat enable [--tarball FILE] [--recovery-key-file FILE] [--identity k2|standalone] [--voice [--voice-url wss://HOST] [--media-tarball FILE] [--node-ip IP]] [--no-wait] [--json]", "description": "Install and start Chat / Voice Hosting (POST /cli/sew/server/enable), then wait on GET /cli/sew/status. With no --tarball the daemon downloads the pinned release from github.com/Alakazam-211/sew-releases (or reuses ~/.k2/cache/sew) and installs it only if its sha256 matches K2's pin; --tarball and --media-tarball are for a box without internet. --identity is fixed for the life of the install (default k2; standalone = Sew's own password logins); changing it means k2 hostchat purge then enable. --voice also installs voice once chat runs (TURN over TLS on 5349 with a turn-<label>.k2.dev certificate from K2 Connect).", "args": [], "flags": [{"name": "--identity", "arg": "k2|standalone", "description": "Identity provider (explicit; fixed per install)."}, {"name": "--voice-url", "arg": "wss://HOST", "description": "voice.public_url: an origin on this box's k2.dev label or a bound custom domain (e.g. an App that proxies /rtc). Default wss://voice.<label>.k2.dev."}, {"name": "--media-tarball", "arg": "FILE", "description": "The sew-media release tarball (sha256 must be this build's pin)."}, {"name": "--no-wait", "arg": null, "description": "Return once the install started."}]},
     {"name": "hostchat recording", "usage": "k2 hostchat recording <status|preflight|enable|disable|uninstall> [--json]", "description": "Sew's call recorder (Sew 0.9.0+, app_recording): status (installed, enabled, version, org policies, Sew's flags), preflight (8 GiB of RAM, the fit rule on a shared box, voice installed, disk above the disk guard's reserve; each failed check names its fix), enable [--recorder-tarball FILE] [--transcriber-tarball FILE] [--model-file FILE] [--no-wait] (installs the recorder, the transcriber and the speech model, then turns the org policy recording.enabled on; an Owner or Admin in person, with Touch ID or the vault password; an agent asks on the sew.recording-enable card), disable (recording off; the recorder and every recording are kept), uninstall [--yes] (removes the recorder; never deletes recordings).", "args": [], "flags": [{"name": "--yes", "arg": null, "description": "uninstall only: confirm without a prompt (required with no terminal). Also -y."}, {"name": "--no-wait", "arg": null, "description": "enable only: return while the install runs."}]},
     {"name": "hostchat media", "usage": "k2 hostchat media <preflight|install|url|status|renew|tier|probe|uninstall> ...", "description": "Voice: preflight (ports TCP 7881, UDP 7882, TCP 5349, loopback 7880; with the voice tunnel preview: the tunnel tier checks instead), install [--url wss://HOST] [--node-ip IP] [--tarball FILE] (the URL goes to sew media install), url <wss://HOST> (change voice.public_url later: re-runs sew media install --reconfigure with the new URL, then restarts sew), status, renew (the TURN certificate), tier tunnel|direct (tunnel is a preview: k2 settings set voiceTunnelPreview true, or K2_VOICE_TUNNEL=1: TURN through the tunnel on a second frpc, relay-only, no public port; or direct; restarts sew-media), probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail (record a call test from outside), uninstall [--yes] (live calls end: asks on a terminal, needs --yes without one; Sew's voice already gone still cleans up K2's TURN DNS, label and key). K2 opens no firewall.", "args": [], "flags": [{"name": "--yes", "arg": null, "description": "uninstall only: confirm without a prompt (required with no terminal). Also -y."}]},
@@ -47747,6 +48036,9 @@ cmd_schema() {
     {"name": "hostchat mirror", "usage": "k2 hostchat mirror dir <path> | none [--json]", "description": "Sew's keyring mirror (POST /cli/sew/server/mirror → engine sew config keys.mirror.*, then a restart). Never the K2 vault, ~/.k2 or a system path. Manage Chat / Voice Hosting.", "args": [], "flags": []},
     {"name": "hostchat app-space", "usage": "k2 hostchat app-spaces [--json] | k2 hostchat app-space bind <app-id> <space-id> | unbind <app-id> <space-id> [--remove-app-members] | governance <app-id> <space-id> app|sew [--json]", "description": "Which Sew Space belongs to which App (K31; GET /cli/sew/app-spaces, POST /cli/sew/app-spaces/{bind,unbind}); app-spaces also shows who governs each Space (sew or app). Members come ONLY from that App's user grants (an App grant plus a chat member grant); Connect owners and admins are never added by role. bind binds Sew's side first; unbind keeps everyone by default (K2 stops managing the Space, and Sew resets governance to sew), and --remove-app-members removes only the members K2 added (never people added by hand). Manage Chat / Voice Hosting.", "args": [], "flags": []},
     {"name": "hostchat app-space governance", "usage": "k2 hostchat app-space governance <app-id> <space-id> app|sew [--json]", "description": "Who governs an App's Space (POST /cli/sew/app-spaces/governance; Sew 0.6.0+). app: the App decides who sees which channel (its manifest's chat block and its own chat.channels / chat.setChannels calls); the App's service owner owns the Space and box users (the owner, admins) leave it first. sew: back to Sew's own roles. The owner or an admin, in person (a vault confirm from a terminal outside K2); Manage Chat / Voice Hosting alone is not enough, and an agent asks on a permission card (k2 permission request sew.space-governance app=<app> space=<id> to=app|sew --why \"...\") when cards are on. Needs the Space bound to that App and the App's chat key (chat_key_required); a Sew without app_governed_spaces answers sew_feature_missing. Binding never switches it; an unbind resets it to sew.", "args": [{"name": "app-id", "required": true}, {"name": "space-id", "required": true}, {"name": "governance", "required": true, "description": "app or sew"}], "flags": []},
+    {"name": "hostchat app-space recording", "usage": "k2 hostchat app-space recording <app> <space-id> [--start-level none|admin|moderator|member|inherit] [--required on|off|inherit] [--json]", "description": "A bound Space's own recording rule (POST /cli/sew/app-spaces/recording; Sew 0.9.0); no flags: show it. inherit = the App's rule (k2 app recording). Down (start level none, required off, inherit): the owner, an admin or the App's own agent. A start level above none: the owner or an admin in person; --required on: the owner only, in person (a confirm from a terminal outside K2; an agent gets person_only). Refused: space_locked (the CUI/FCI lock), space_unbound, app_mismatch, sew_feature_missing.", "args": [{"name": "app", "required": true}, {"name": "space-id", "required": true}], "flags": []},
+    {"name": "hostchat app-space recording-lock", "usage": "k2 hostchat app-space recording-lock <space-id> on|off [--json]", "description": "The no-recording lock for a Space that holds CUI or FCI (POST /cli/sew/app-spaces/recording-lock): on, nobody records there whatever its App or the server's policies say, even after an unbind. The server's owner only, in person with a confirm, both ways; an agent gets person_only, an admin owner_only.", "args": [{"name": "space-id", "required": true}, {"name": "lock", "required": true, "description": "on or off"}], "flags": []},
+    {"name": "hostchat recording policy", "usage": "k2 hostchat recording policy [--json] | k2 hostchat recording policy set KEY VALUE [KEY VALUE ...] [--json]", "description": "The server's recording policies (GET /cli/sew/recording/policies, POST /cli/sew/recording/policy; Sew 0.9.0): recording.enabled, recording.dm_enabled, recording.require_consent_to_join (on|off), recording.required (off|multi_person), recording.audio_max_days (1 to 3650). Shows what K2 asked for, what Sew shows, delivered, and the locked Spaces. set: the owner or an admin in person with a confirm (recording.required: the owner only); an agent gets person_only.", "args": [], "flags": []},
     {"name": "hostchat pass-keys", "usage": "k2 hostchat pass-keys [rotate|drop-previous] [--json]", "description": "K2's chat-pass signing keys (Sew checks every pass against K2's published keys): each key's kid and state (next, current, retiring). rotate publishes a new key, switches to it and keeps the old one published a while; drop-previous drops a retiring key early. Sessions never end on a rotation. The owner or an admin; the emergency wipe stays person-only.", "args": [], "flags": []},
     {"name": "hostchat open", "usage": "k2 hostchat open [--print]", "description": "Open Sew's web app as its install owner: a person confirms (Touch ID or the vault password, from a terminal outside K2), K2 mints a one-time 60 s code (POST /cli/sew/owner-handoff) and opens <app-url>/k2/owner-handoff#code=… (the code rides in the fragment). --print prints the link instead. Needs k2 hostchat app-url set first. Agents never get install-owner.", "args": [], "flags": [{"name": "--print", "arg": null, "description": "Print the link instead of opening it."}]},
     {"name": "hostchat meet", "usage": "k2 hostchat meet bind <app-id> | unbind [--json]", "description": "The reserved meet.<box>.k2.dev label (K-M2): bind points it at an installed App's front port, box-level with the tunnel token (K2 Connect needed; one App at a time; POST /cli/sew/meet/bind). Restart the App once so K2_APP_ORIGINS includes it. unbind deletes the label. Manage Chat / Voice Hosting.", "args": [], "flags": []},
@@ -47756,7 +48048,8 @@ cmd_schema() {
     {"name": "hostchat on-behalf", "usage": "k2 hostchat on-behalf [list] [--state pending|approved|declined|all] [--limit N] | approve <act_…|msg_…> [--note \"…\"] | decline <act_…|msg_…> [--note \"…\"] [--json]", "description": "Posts an assistant made on your behalf. They are the assistant's own posts and never wait for you; each carries whether you have reviewed it (pending, approved or declined, who and when). approve needs your confirm (Touch ID or the vault password, from a terminal outside K2); decline needs none. GET /cli/sew/on-behalf, POST /cli/sew/on-behalf/review.", "args": [], "flags": []},
     {"name": "hostchat deliveries", "usage": "k2 hostchat deliveries [list] [<workspace>] | set <workspace> [--quiet-hours …] [--tz …] [--batch …] | reset <workspace> [--json]", "description": "Every chat agent's delivery hub: running, cursor, held, delivered and missed counts, prefs and follows. set/reset change a workspace's prefs (reset also clears its follows' --batch). Manage Chat / Voice Hosting (agents) or owner/admin; audited (GET /cli/sew/admin/deliveries, POST /set, /reset).", "args": [], "flags": []},
     {"name": "hostchat log", "usage": "k2 hostchat log [--limit N] [--json]", "description": "Chat administration record: access grants and changes, community management and on-behalf reviews (no message text). GET /cli/sew/admin/log.", "args": [], "flags": []},
-    {"name": "voice", "usage": "k2 voice <rooms|status|repair|set rooms <0-10>|rename|close|join|leave|kick|mute|unmute|deafen|undeafen> ... [--now] [--json]", "description": "Voice rooms on this server (a preview; Linux servers with Pro host them; people talk from the K2 app). rooms: the rooms and who is in each (anyone, agents too). status: hosting state and why, the K5 Space, members, sync holds, the voice lane (owner/Admin; agents read it). repair: check the K5 Space with Sew and fix it (make it and its rooms again if Sew lost them, re-link rooms, re-add members, retry refused changes; safe to run twice; owner/Admin, or an agent with Manage Chat / Voice Hosting). set rooms, rename, close: owner/Admin (rooms close from the top; --now gives a 10 s notice, then calls end). join/leave: your own login only (the CLI has no audio; agents and the bare owner token never join). kick|mute|unmute|deafen|undeafen <room> <person>: from the owner's or an Admin's own login. GET /cli/voice/rooms, /cli/voice/status; POST /cli/voice/settings, /rooms/rename, /rooms/close, /join, /session/leave, /moderate, /repair. Exit 2 = bad usage, 3 = refused or unavailable. k2 study voice-rooms.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON (any subcommand)."}, {"name": "--now", "arg": null, "description": "set rooms / close: close now (a 10 s notice, then calls end)."}]},
+    {"name": "voice", "usage": "k2 voice <rooms|status|repair|set rooms <0-10>|settings|rename|close|join|leave|kick|mute|unmute|deafen|undeafen> ... [--now] [--json]", "description": "Voice rooms on this server (a preview; Linux servers with Pro host them; people talk from the K2 app). rooms: the rooms and who is in each (anyone, agents too). status: hosting state and why, the K5 Space, members, sync holds, the voice lane (owner/Admin; agents read it). repair: check the K5 Space with Sew and fix it (make it and its rooms again if Sew lost them, re-link rooms, re-add members, retry refused changes; safe to run twice; owner/Admin, or an agent with Manage Chat / Voice Hosting). set rooms, rename, close: owner/Admin (rooms close from the top; --now gives a 10 s notice, then calls end). join/leave: your own login only (the CLI has no audio; agents and the bare owner token never join). kick|mute|unmute|deafen|undeafen <room> <person>: from the owner's or an Admin's own login. GET /cli/voice/rooms, /cli/voice/status; POST /cli/voice/settings, /rooms/rename, /rooms/close, /join, /session/leave, /moderate, /repair. Exit 2 = bad usage, 3 = refused or unavailable. k2 study voice-rooms.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON (any subcommand)."}, {"name": "--now", "arg": null, "description": "set rooms / close: close now (a 10 s notice, then calls end)."}]},
+    {"name": "voice settings", "usage": "k2 voice settings [--start-level none|moderator|member|inherit] [--require-recording on|off|inherit] [--json]", "description": "Recording in the K5 rooms (Sew 0.9.0; POST /cli/voice/recording/settings, read through GET /cli/voice/status .recording); no flags: show it. --start-level: owner/Admin. --require-recording: the owner only, and refused (client_consent_missing) until K2's desktop app can answer a recording consent prompt. inherit = the server's own rule. Each person still consents.", "args": [], "flags": []},
     {"name": "chat", "usage": "k2 chat <spaces|channels|messages|read|unread|mark-read|ack|wait|whoami|send|post|reply|dm|edit|delete|outbox|follow|unfollow|prefs|deliveries|access|channel|space|role|ban|unban|timeout|mute> ...", "description": "Chat inside Spaces, for agents (Chat / Voice Hosting, powered by Sew; runs as the agent's own Sew member; id + locked tool, so a K2 terminal sends its passport). Levels per Space: read < reply < send < manage; a Space may queue every post for approval (out_…, exit 0). Server admin is k2 hostchat. Exit 0 ok (incl. queued), 1 error, 2 usage or wait timeout, 3 not allowed here.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON (any subcommand)."}]},
     {"name": "chat send", "usage": "k2 chat send|post <space>/<channel> \"text\"|- [--on-behalf-of <user>] [--key K] [--json]", "description": "Post to a channel (POST /cli/sew/chat/send). Prints msg_… when posted or out_… when queued for approval. --on-behalf-of <user>: you speak for the person you assist; the post is yours, goes out at once (unless the Space holds every post) and they can review it later. --key: idempotency key; re-run with the same key after an error so nothing double-posts. - reads the text from stdin.", "args": [], "flags": []},
     {"name": "chat reply", "usage": "k2 chat reply <msg_…> \"text\"|- [--broadcast] [--on-behalf-of <user>] [--key K] [--json]", "description": "Reply under a message (replying to a reply answers in the same chain). --broadcast also shows it in the channel; fine at level reply.", "args": [], "flags": []},
@@ -48925,6 +49218,44 @@ cmd_schema() {
         {"name": "--uploads", "arg": "on|off", "description": "Whether its users may upload files (and start recordings)."},
         {"name": "--max", "arg": "N", "description": "People the App may have in chat through the key (default 500, at most 10,000)."},
         {"name": "--revoke", "arg": null, "description": "Turn the key off now and end the App's chat sessions."}
+      ]
+    },
+    {
+      "name": "app recording",
+      "usage": "k2 app recording <app> [--json] | k2 app recording <app> set [--start-level none|admin|moderator|member] [--audio-max-days N|org] [--required on|off] [--server-read on|off] [--json]",
+      "description": "Recording in an App's calls (Sew 0.9.0; GET /cli/app/recording, POST /cli/app/recording/set). All off by default and each person still consents for themselves. No flags: what K2 wants, whether Sew has it (delivered), the App's Spaces and their locks. Down or off: the owner, an Admin or the App's own agent. A higher start level or longer keep days (never above the server's recording.audio_max_days): the owner or an Admin in person, with a confirm. --required on and --server-read on: the owner only, in person; an agent asks on a card (k2 permission request apps.recording app=<app> server-read=on --why \"...\"). Refused: the home client (home_client_cannot_govern), a Sew without app_recording (sew_feature_missing). k2 study app-recording.",
+      "args": [
+        {
+          "name": "app",
+          "required": true
+        }
+      ],
+      "flags": [
+        {
+          "name": "--start-level",
+          "arg": "none|admin|moderator|member",
+          "description": "The lowest chat level that may start a recording (none = nobody, the default)."
+        },
+        {
+          "name": "--audio-max-days",
+          "arg": "N|org",
+          "description": "Keep audio N days (1 to 3650, at most the server's limit); org = the server's limit."
+        },
+        {
+          "name": "--required",
+          "arg": "on|off",
+          "description": "Record every call with two or more people (on: the owner only)."
+        },
+        {
+          "name": "--server-read",
+          "arg": "on|off",
+          "description": "Let the App's own server read its recordings and transcripts (on: the owner only)."
+        },
+        {
+          "name": "--json",
+          "arg": null,
+          "description": "The daemon's JSON."
+        }
       ]
     },
     {
@@ -50482,7 +50813,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs heartbeats mail-watch folder-trust email-notifications box-move board chat-refresh desktop send-feedback"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs heartbeats mail-watch folder-trust email-notifications box-move board chat-refresh desktop send-feedback"
 
 _study_usage() {
     cat <<'EOF'
@@ -50500,7 +50831,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
   app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  auth-pages  app-profile
-  app-account-deletion  app-transfers
+  app-account-deletion  app-transfers  app-recording
   app-chat  chat-voice  chat-voice-rooms  voice-rooms  tauri  tauri-voice  app-errors
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
   publish-visibility  publish-dev  compute  compute-shared  ci  vault
@@ -50546,6 +50877,7 @@ _study_title() {
         app-account-deletion) echo "A person deletes their own App account: store rules, modes, what stays" ;;
         app-transfers) echo "Big files that survive the app in the background" ;;
         app-chat) echo "Chat, voice and calls in your App (Chat / Voice Hosting)" ;;
+        app-recording) echo "Recording in an App's calls: consent, required, server reads, the lock" ;;
         chat-voice) echo "Voice rooms and channels in your App: the setup" ;;
         chat-voice-rooms) echo "Rooms and channels in your App Space" ;;
         voice-rooms) echo "Voice rooms on this server (preview)" ;;
@@ -50672,6 +51004,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   app-account-deletion  Delete my account from inside an App: the store rules, request or immediate, what stays
   app-transfers       Big uploads and downloads that survive a phone app in the background
   app-chat            Chat, voice and calls in your App: caps, guests.setChat, chat.member/whois
+  app-recording       Recording in an App's calls: all off, consent, required, server reads, the card, the lock
   chat-voice          Voice rooms and channels in your App: the order, who does each step, pitfalls
   chat-voice-rooms    Your App Space: static rooms, per-project channels, who's in, joining, limits
   voice-rooms         This server's own voice rooms (preview): k2 voice, who may change or join
@@ -50755,6 +51088,7 @@ _study_page() {
         app-account-deletion) _study_page_app_account_deletion ;;
         app-transfers) _study_page_app_transfers ;;
         app-chat) _study_page_app_chat ;;
+        app-recording) _study_page_app_recording ;;
         chat-voice) _study_page_chat_voice ;;
         chat-voice-rooms) _study_page_chat_voice_rooms ;;
         voice-rooms) _study_page_voice_rooms ;;
@@ -73197,6 +73531,18 @@ server can't host, and lets the owner or an Admin change them. Read
                                       stops them hearing, until unmute/undeafen.
                                       <person> is a login name or owner as
                                       k2 voice rooms shows it (--json: memberId)
+  k2 voice settings [--start-level none|moderator|member|inherit]
+                    [--require-recording on|off|inherit]
+                                      recording in the K5 rooms (Sew 0.9.0); no flags:
+                                      show it. --start-level: the lowest level that may
+                                      start a recording (none = nobody, the default;
+                                      owner/Admin). --require-recording on: every call
+                                      with two or more people is recorded (the owner
+                                      only). It is refused (client_consent_missing)
+                                      until K2's desktop app can answer a recording
+                                      consent prompt. Each person still consents for
+                                      themselves. inherit = the server's own rule
+                                      (k2 hostchat recording policy)
 
 Agents: read only (rooms, status). Every change, join, consent and
 moderation refuses an agent's passport (owner_or_admin_only,
@@ -73340,6 +73686,21 @@ elif verb == "leave":
            "in_another_room": "you are in another room now; that call goes on"}
     w = v.get("why") or ""
     print("nothing to leave: that call already ended (%s) [%s]" % (why.get(w, w), w) if v.get("already") else "left")
+elif verb == "settings":
+    rec = v.get("recording") if isinstance(v.get("recording"), dict) else v
+    fl = rec.get("flags") or {}
+    if "changed" in v:
+        print("K5 rooms recording: %s" % ("saved" if v.get("changed") else "nothing changed (already so)"))
+    if not fl.get("appRecording"):
+        print("This server'"'"'s chat can'"'"'t record in rooms yet (it needs Sew 0.9.0: k2 hostchat upgrade).")
+    req = rec.get("required")
+    print("K5 rooms Space:     %s" % (rec.get("spaceId") or "not made yet"))
+    print("start level:        %s" % (rec.get("startLevel") or "inherit (the server'"'"'s rule)"))
+    print("require recording:  %s" % ("inherit (the server'"'"'s rule)" if req is None else ("on" if req else "off")))
+    if rec.get("locked"):
+        print("LOCKED: no recording in the K5 rooms (CUI/FCI); only the owner lifts it, in person")
+    if not rec.get("consentSheet"):
+        print("--require-recording waits for K2'"'"'s desktop app to answer recording consent prompts (client_consent_missing until then)")
 elif verb == "consent":
     if v.get("consent"):
         print("recording %s: you said yes; it records you" % v.get("recordingId"))
@@ -73354,13 +73715,15 @@ cmd_voice() {
     if [ $# -eq 0 ]; then _voice_usage; return 0; fi
     local sub="$1"; shift
     case "$sub" in -h|--help|help) _voice_usage; return 0 ;; esac
-    local as_json=0 now=0 call="" notice="" pos=()
+    local as_json=0 now=0 call="" notice="" rec_req="" rec_level="" pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; shift ;;
             --now) now=1; shift ;;
             --call) call="${2:?--call <callId>}"; shift 2 ;;
             --notice) notice="${2:?--notice <version>}"; shift 2 ;;
+            --require-recording) rec_req="${2:?--require-recording on|off|inherit}"; shift 2 ;;
+            --start-level) rec_level="${2:?--start-level none|moderator|member|inherit}"; shift 2 ;;
             -h|--help) _voice_usage; return 0 ;;
             -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 voice --help)\"}" >&2; exit 2 ;;
             *) pos+=("$1"); shift ;;
@@ -73374,7 +73737,25 @@ cmd_voice() {
     if [ -n "$notice" ] && [ "$sub" != "consent" ]; then
         _voice_bad "--notice only applies to k2 voice consent"
     fi
+    if { [ -n "$rec_req" ] || [ -n "$rec_level" ]; } && [ "$sub" != "settings" ]; then
+        _voice_bad "--require-recording and --start-level only apply to k2 voice settings"
+    fi
     case "$sub" in
+        settings)
+            # Sew 0.9.0: the K5 rooms' recording. Read through voice/status.
+            [ "$n" -eq 0 ] || _voice_bad "k2 voice settings [--start-level none|moderator|member|inherit] [--require-recording on|off|inherit]"
+            if [ -z "$rec_req" ] && [ -z "$rec_level" ]; then
+                _hostchat_call GET /cli/voice/status ""
+            else
+                local rq_j lv_j
+                rq_j="$(_rec_switch_json "$rec_req" inherit)" || _voice_bad "--require-recording is on, off or inherit"
+                case "$rec_level" in
+                    ""|none|moderator|member|inherit) lv_j="$(_rec_level_json "$rec_level")" ;;
+                    *) _voice_bad "--start-level is none, moderator, member or inherit (the K5 rooms have no admin level)" ;;
+                esac
+                _hostchat_call POST /cli/voice/recording/settings "$(_compute_json K2_CJ_required_j="$rq_j" K2_CJ_startLevel_j="$lv_j")"
+            fi
+            _voice_print settings "$as_json" ;;
         rooms|list)
             [ "$n" -eq 0 ] || _voice_bad "k2 voice rooms takes no arguments"
             _hostchat_call GET /cli/voice/rooms ""
@@ -73497,11 +73878,20 @@ Server:
                                              for the plain rollback, with voice on. An agent asks the owner on
                                              a card instead:
                                                k2 permission request sew.rollback-data-loss --why "<why>")
+                                            (K2 0.46.11, Sew 0.9.0: that upgrade changes how Sew stores
+                                             chat (3 schema migrations: 990001, 990002, 990011), so after
+                                             it the plain rollback is refused. Going back needs this
+                                             --accept-data-loss rollback, by the owner in person; K2 runs
+                                             Sew's rollback with --accept-data-loss-since=<the backup
+                                             taken just before the upgrade>)
   k2 hostchat upgrade [--tarball FILE] [--media-tarball FILE] [--dry-run] [--no-wait] [--json]
                                             (no flags: downloads the pin, as enable does; --tarball and
                                              --media-tarball (the sew-media release, used when voice is on)
                                              are for a box without internet;
-                                             waits for the result; exit 3 unless it is done)
+                                             waits for the result; exit 3 unless it is done.
+                                             To Sew 0.9.0 (K2 0.46.11): no new config, recording stays off
+                                             until someone turns it on; the way back is
+                                             k2 hostchat rollback --accept-data-loss, never the plain one)
   k2 hostchat upgrade --accept-binary SHA256 [--tarball FILE] [...]
                                             (the owner, from a terminal outside K2, with a confirm: upgrade
                                              FROM a /usr/local/bin/sew K2 doesn't know, only if its sha256 is
@@ -73557,6 +73947,15 @@ App Spaces (members: the App's users who also have chat; never Connect owners/ad
           terminal outside K2. An agent is refused (person_only); with permission cards on it asks
           on a card: k2 permission request sew.space-governance app=<app> space=<space-id> to=app|sew.
           The <app> must be the one the Space is bound to. app-spaces shows each Space's governance.
+  k2 hostchat app-space recording <app> <space-id> [--start-level L|inherit] [--required on|off|inherit] [--json]
+          a bound Space's own recording rule (Sew 0.9.0); no flags: show it.
+  k2 hostchat app-space recording-lock <space-id> on|off [--json]
+          the owner's no-recording lock for a Space that holds CUI or FCI (in person, both ways).
+Recording in Apps (Sew 0.9.0; all off by default, and each person still consents):
+  k2 hostchat recording policy [--json]                     the server's recording policies, the locks
+  k2 hostchat recording policy set KEY VALUE [--json]       change one (the owner or an admin, in person)
+          Every key and who may change what: k2 hostchat recording --help. An App's own settings:
+          k2 app recording <app>. Recordings are never deleted by uninstalling an App.
 Home client (each App session sees only its own App's Spaces once Sew has app_scoped_sessions):
   k2 hostchat home [--json]                     the settings, Sew's feature flags, whether Sew has them
   k2 hostchat home client <app>|none            the App whose sessions see every Space (Hearth).
@@ -74150,6 +74549,7 @@ cmd_hostchat() {
         log) _hostchat_log "$@"; return ;;
         deliveries|delivery) _hostchat_deliveries "$@"; return ;;
         app-space|app-spaces) _hostchat_app_space "$sub" "$@"; return ;;
+        recording) _hostchat_recording "$@"; return ;;
         home) _hostchat_home "$@"; return ;;
         pass-keys) _hostchat_pass_keys "$@"; return ;;
         agents|agent)
@@ -74438,6 +74838,8 @@ _hostchat_app_space() {
     local noun="$1"; shift
     local sub="${1:-}"
     case "$sub" in
+        recording) shift; _hostchat_app_space_recording "$@"; return ;;
+        recording-lock) shift; _hostchat_app_space_lock "$@"; return ;;
         bind|unbind|list|governance) shift ;;
         *) sub="list" ;;
     esac
@@ -74481,6 +74883,255 @@ _hostchat_app_space() {
             _hostchat_call POST /cli/sew/app-spaces/governance "$(_compute_json K2_CJ_app="${pos[0]}" K2_CJ_spaceId="${pos[1]}" K2_CJ_governance="${pos[2]}" K2_CJ_confirmToken="$gtok")" $gvia
             _hostchat_print app-space-governance "$as_json" ;;
     esac
+}
+
+# Recording in Apps (Sew 0.9.0, K2 0.46.11): a bound Space's own rule, the
+# owner's CUI/FCI lock, the server's recording policies.
+_hostchat_recording_usage() {
+    cat <<'EOF'
+Recording in Apps (needs Sew 0.9.0; every setting starts off, and each person in a call
+still answers their own consent notice):
+  k2 hostchat app-space recording <app> <space-id> [--json]
+          the Space's own rule: its start level and required (inherit = the App's rule,
+          k2 app recording <app>), and whether it is locked.
+  k2 hostchat app-space recording <app> <space-id> [--start-level none|admin|moderator|member|inherit]
+                                                   [--required on|off|inherit] [--json]
+          change it (each flag optional). Down (start level none, required off, inherit):
+          the owner, an admin, or the App's own agent (its "…and manage them end to end"
+          switch; Manage Chat / Voice Hosting isn't needed). Up (a start level above
+          none): the owner or an admin, in person. --required on: the owner only, in
+          person. In person = from a terminal outside K2, with a confirm (Touch ID or the
+          vault password); an agent is refused (person_only). A locked Space takes no
+          change up (space_locked). Refused too: space_unbound (bound to no App) and
+          app_mismatch (another App's Space).
+  k2 hostchat app-space recording-lock <space-id> on|off [--json]
+          the no-recording lock for a Space that holds CUI or FCI: on, nobody records
+          there, whatever its App or the server's policies say, even after an unbind.
+          The server's owner only, in person, both ways. An agent gets person_only (there
+          is no card: ask your human in your Thread), an admin owner_only.
+  k2 hostchat recording policy [--json]
+          the server's recording policies: what K2 asked for, what Sew shows, whether
+          Sew has it (delivered), the locked Spaces.
+  k2 hostchat recording policy set KEY VALUE [KEY VALUE …] [--json]
+          recording.enabled on|off           recordings at all on this server
+          recording.dm_enabled on|off        recordings in direct messages
+          recording.require_consent_to_join on|off
+                                             someone who says no to the notice can't join
+                                             (off: they join without being recorded)
+          recording.required off|multi_person
+                                             every call with two or more people is recorded
+          recording.audio_max_days N         the longest any App keeps audio (1 to 3650)
+          The owner or an admin, in person; recording.required the owner only.
+An App's own settings (who starts recordings, keep days, required, its server's
+transcript reads): k2 app recording <app> --help. Recordings themselves (holds,
+exports): Sew's own admin, k2 hostchat open (the owner). Uninstalling an App never
+deletes its recordings (k2 hostchat uninstall keeps them too; only purge deletes
+chat data). More: k2 study app-recording.
+Exit codes: 0 ok, 2 bad usage, 3 refused (sew_feature_missing: k2 hostchat upgrade).
+EOF
+}
+
+# A level for a Space: none|admin|moderator|member, or inherit (null).
+_rec_level_json() {
+    case "$1" in
+        "") ;;
+        none|admin|moderator|member) python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1" ;;
+        inherit) echo null ;;
+        *) return 1 ;;
+    esac
+}
+
+_hostchat_app_space_recording() {
+    local as_json=0 level="" required="" pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --start-level) level="${2:-}"; shift 2 || { echo '{"error":"usage","hint":"--start-level none|admin|moderator|member|inherit"}' >&2; exit 2; } ;;
+            --start-level=*) level="${1#*=}"; shift ;;
+            --required) required="${2:-}"; shift 2 || { echo '{"error":"usage","hint":"--required on|off|inherit"}' >&2; exit 2; } ;;
+            --required=*) required="${1#*=}"; shift ;;
+            -h|--help) _hostchat_recording_usage; return 0 ;;
+            -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 hostchat app-space recording --help)\"}" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    local app="${pos[0]:-}" space="${pos[1]:-}"
+    if [ -z "$app" ] || [ -z "$space" ] || [ -n "${pos[2]:-}" ]; then
+        echo '{"error":"usage","hint":"k2 hostchat app-space recording <app> <space-id> [--start-level none|admin|moderator|member|inherit] [--required on|off|inherit]"}' >&2; exit 2
+    fi
+    local level_j req_j
+    level_j="$(_rec_level_json "$level")" || { echo '{"error":"usage","hint":"--start-level is none, admin, moderator, member or inherit"}' >&2; exit 2; }
+    req_j="$(_rec_switch_json "$required" inherit)" || { echo '{"error":"usage","hint":"--required is on, off or inherit"}' >&2; exit 2; }
+    if [ -z "$level" ] && [ -z "$required" ]; then
+        # No change named: show the Space's rule from the App's view.
+        _compute_call GET /cli/app/recording "app=$(urlencode "$app")"
+        if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+        printf '%s' "$_CP_BODY" | K2_RC_SPACE="$space" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+want = os.environ["K2_RC_SPACE"]
+a = v.get("app") or {}
+s = next((x for x in v.get("spaces") or [] if str(x.get("spaceId")) == want), None)
+if s is None:
+    print(json.dumps({"error": "space_unbound", "hint": "Space %s is not bound to %s (k2 hostchat app-spaces)" % (want, a.get("name"))}), file=sys.stderr)
+    sys.exit(3)
+req = s.get("required")
+print("Space %s (App %s, governed by %s)" % (want, a.get("name"), s.get("governance") or "sew"))
+if s.get("locked"):
+    print("  LOCKED: no recording here (CUI/FCI). Only the server'"'"'s owner lifts it, in person.")
+print("  start level  %s" % (s.get("startLevel") or "inherit (the App'"'"'s rule)"))
+print("  required     %s" % ("inherit (the App'"'"'s rule)" if req is None else ("on" if req else "off")))'
+        return 0
+    fi
+    local body
+    body="$(_compute_json K2_CJ_app="$app" K2_CJ_spaceId="$space" K2_CJ_startLevel_j="$level_j" K2_CJ_required_j="$req_j")"
+    _app_rt_post /cli/sew/app-spaces/recording "$body"
+    if _rec_needs_confirm; then
+        # The confirm is bound to <the App's service id>:<space id>.
+        _compute_call GET /cli/app/recording "app=$(urlencode "$app")"
+        local svc
+        svc="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("app") or {}).get("serviceId") or "")')"
+        [ -n "$svc" ] || { echo '{"error":"not_found","hint":"K2 found no App by that name (k2 app list)"}' >&2; exit 3; }
+        _rec_send_confirmed /cli/sew/app-spaces/recording "$body" recording-space "$svc:$space" "Recording in Space $space"
+    fi
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+req = v.get("required")
+print("Space %s (App %s): %s" % (v.get("spaceId"), v.get("app"), "saved" if v.get("changed") else "nothing changed (already so)"))
+print("  start level  %s" % (v.get("startLevel") or "inherit"))
+print("  required     %s" % ("inherit" if req is None else ("on" if req else "off")))
+if v.get("locked"):
+    print("  LOCKED: no recording here (CUI/FCI); the rule above waits until the owner lifts the lock")'
+}
+
+_hostchat_app_space_lock() {
+    local as_json=0 pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            -h|--help) _hostchat_recording_usage; return 0 ;;
+            -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 hostchat app-space recording-lock <space-id> on|off)\"}" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    local space="${pos[0]:-}" lock_b=""
+    case "${pos[1]:-}" in on|true|yes) lock_b=1 ;; off|false|no) lock_b=0 ;; esac
+    if [ -z "$space" ] || [ -z "$lock_b" ] || [ -n "${pos[2]:-}" ]; then
+        echo '{"error":"usage","hint":"k2 hostchat app-space recording-lock <space-id> on|off"}' >&2; exit 2
+    fi
+    local body
+    body="$(_compute_json K2_CJ_spaceId="$space" K2_CJ_lock_b="$lock_b")"
+    _app_rt_post /cli/sew/app-spaces/recording-lock "$body"
+    if _rec_needs_confirm; then
+        _rec_send_confirmed /cli/sew/app-spaces/recording-lock "$body" recording-lock "$space" "Recording lock ${pos[1]} for Space $space"
+    fi
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("Space %s: recording lock %s%s" % (v.get("spaceId"), "on" if v.get("locked") else "off", "" if v.get("changed") else " (already so)"))
+if v.get("hint"):
+    print("  " + v["hint"])'
+}
+
+# k2 hostchat recording <sub>: `policy` here. The recorder's own install
+# (status, preflight, enable, disable, uninstall) is another build's.
+_hostchat_recording() {
+    local sub="${1:-}"
+    case "$sub" in
+        policy|policies) shift; _hostchat_recording_policy "$@" ;;
+        -h|--help|help|"") _hostchat_recording_usage ;;
+        *) echo "{\"error\":\"usage\",\"hint\":\"k2 hostchat recording $sub isn't in this build; here: k2 hostchat recording policy [set KEY VALUE] (k2 hostchat recording --help)\"}" >&2; exit 2 ;;
+    esac
+}
+
+_hostchat_recording_policy() {
+    local as_json=0 set_mode=0 pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            -h|--help) _hostchat_recording_usage; return 0 ;;
+            set) [ "$set_mode" = 0 ] && [ ${#pos[@]} -eq 0 ] && { set_mode=1; shift; continue; }; pos+=("$1"); shift ;;
+            -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 hostchat recording policy [set KEY VALUE])\"}" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    if [ "$set_mode" = 0 ]; then
+        [ ${#pos[@]} -eq 0 ] || { echo '{"error":"usage","hint":"k2 hostchat recording policy [--json] | k2 hostchat recording policy set KEY VALUE"}' >&2; exit 2; }
+        _hostchat_call GET /cli/sew/recording/policies ""
+    else
+        local n=${#pos[@]}
+        if [ "$n" -eq 0 ] || [ $((n % 2)) -ne 0 ]; then
+            echo '{"error":"usage","hint":"k2 hostchat recording policy set KEY VALUE [KEY VALUE …] (k2 hostchat recording --help lists the keys)"}' >&2; exit 2
+        fi
+        local changes
+        changes="$(python3 -c '
+import json, sys
+args = sys.argv[1:]
+out = {}
+bools = ("recording.enabled", "recording.dm_enabled", "recording.require_consent_to_join")
+def bad(h):
+    print(json.dumps({"error": "usage", "hint": h}), file=sys.stderr); sys.exit(2)
+for k, v in zip(args[0::2], args[1::2]):
+    if not k.startswith("recording."):
+        k = "recording." + k
+    if k in bools:
+        if v in ("on", "true", "yes"): out[k] = True
+        elif v in ("off", "false", "no"): out[k] = False
+        else: bad("%s is on or off" % k)
+    elif k == "recording.required":
+        if v not in ("off", "multi_person"): bad("recording.required is off or multi_person")
+        out[k] = v
+    elif k == "recording.audio_max_days":
+        d = v[:-1] if v.endswith("d") else v
+        if not d.isdigit() or not 1 <= int(d) <= 3650: bad("recording.audio_max_days is a number of days, 1 to 3650")
+        out[k] = int(d)
+    else:
+        bad("unknown policy %s: recording.enabled, recording.dm_enabled, recording.require_consent_to_join, recording.required, recording.audio_max_days" % k)
+print(json.dumps({"changes": out}))
+' "${pos[@]}")" || exit 2
+        _app_rt_post /cli/sew/recording/policy "$changes"
+        if _rec_needs_confirm; then
+            local id; id="$(_hostchat_install_id)"
+            _rec_send_confirmed /cli/sew/recording/policy "$changes" recording-policy "$id" "Change this server's recording policies"
+        fi
+        [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    fi
+    if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | K2_RC_SET="$set_mode" python3 -c '
+import json, os, sys, time
+v = json.load(sys.stdin)
+show = lambda x: "-" if x is None else ("on" if x is True else "off" if x is False else str(x))
+if os.environ.get("K2_RC_SET") == "1":
+    ch = v.get("changed") or []
+    print("saved: %s" % ", ".join(ch) if ch else "nothing changed (already so)")
+f = v.get("flags")
+if isinstance(f, dict):
+    yn = lambda b: "yes" if b else "no"
+    print("Sew flags: record in Apps %s · voice:record cap %s · required %s · server reads %s" % (
+        yn(f.get("appRecording")), yn(f.get("voiceRecordCap")), yn(f.get("recordingRequired")), yn(f.get("mgmtRecordingReads"))))
+    if not f.get("appRecording"):
+        print("  This server'"'"'s chat can'"'"'t record in Apps yet (it needs Sew 0.9.0: k2 hostchat upgrade).")
+print("%-36s %-14s %-14s %s" % ("policy", "K2 asked", "Sew shows", ""))
+for p in v.get("policies") or []:
+    note = ""
+    if p.get("want") is not None:
+        note = "delivered" if p.get("delivered") else "not yet delivered"
+        if p.get("setBy"):
+            note += " (by %s)" % p["setBy"]
+    print("%-36s %-14s %-14s %s" % (p.get("key"), show(p.get("want")), show(p.get("seen")), note))
+locks = v.get("locks")
+if isinstance(locks, list):
+    if not locks:
+        print("locked Spaces: none")
+    for l in locks:
+        print("locked Space %s (no recording, CUI/FCI) by %s, %s" % (l.get("spaceId"), l.get("lockedBy"), time.strftime("%Y-%m-%d %H:%M", time.localtime(l.get("lockedAt") or 0))))
+if v.get("k5SpaceId"):
+    print("K5 rooms Space: %s (k2 voice settings)" % v["k5SpaceId"])'
 }
 
 # k2 hostchat home [client <app-id>|none] | home app <app-id> --hidden on|off
@@ -97017,7 +97668,8 @@ case "${1:-help}" in
             # (their pages say --help; it printed the whole family before).
             # 0.46.9: `k2 app doctor` (--store has its own page), `k2 app set`
             # and `k2 app account-deletion`; `k2 app auth` (the sign-in door).
-            init|links|push|pairing|login|doctor|set|account-deletion|account-deletions|auth)
+            # 0.46.11: `k2 app recording` (Sew 0.9.0 recording in Apps).
+            init|links|push|pairing|login|doctor|set|account-deletion|account-deletions|auth|recording|recordings)
                 shift; cmd_app "$@"
                 ;;
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.

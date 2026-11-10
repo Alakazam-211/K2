@@ -17,7 +17,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
   app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  auth-pages  app-profile
-  app-account-deletion  app-transfers
+  app-account-deletion  app-transfers  app-recording
   app-chat  chat-voice  chat-voice-rooms  voice-rooms  tauri  tauri-voice  app-errors
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
   publish-visibility  publish-dev  compute  compute-shared  ci  vault

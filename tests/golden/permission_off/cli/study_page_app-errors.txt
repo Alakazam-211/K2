@@ -131,6 +131,9 @@ ACCESS (who may do what: switches, owners, workspaces)
       fix: List them: k2 app test-guests <app-id>
   owner_only (exit 3)
       fix: Ask the owner. The refusal names where they do it.
+  person_only (exit 3)
+      fix: Ask the owner or an admin in your Thread to run the command the
+      refusal names, from a terminal outside K2.
   parent_switch_off (exit 3)
       fix: The owner turns both on: k2 app access <workspace> --build on
       --manage on (the owner's own terminal, outside K2).
@@ -402,6 +405,10 @@ PAIRING (pairing a phone with an App)
       (pairing.start, profile.deleteAccount).
 
 CHAT (an App's chat key, the Spaces it governs, an agent's chat account)
+  above_org_audio_max_days (exit 2)
+      fix: Ask for that many days or fewer (k2 app recording <app> shows
+      orgAudioMaxDays), or the owner raises the server's: k2 hostchat
+      recording policy set recording.audio_max_days N
   agent_subject (exit 3)
       fix: Leave the agent out of chat.setChannels. To put an agent in a
       channel, list it in the manifest's chat block (agents: [...]).

@@ -145,6 +145,36 @@ export interface VoiceStatus {
   count: number | null
   /** The media mode (§3.3): tunnel, or the direct fallback. */
   mediaTier: 'tunnel' | 'direct' | null
+  /** Sew 0.9.0: the K5 rooms' recording (`recording`), when the daemon has it. */
+  recording?: VoiceRecordingSettings
+}
+
+/** `GET /cli/voice/status` `.recording` (voice/routes.rs `recording_view`). */
+export interface VoiceRecordingSettings {
+  spaceId: string | null
+  /** null = the server's rule. */
+  startLevel: string | null
+  required: boolean | null
+  locked: boolean
+  /** Sew can require recording (`recording_required`). */
+  canRequire: boolean
+  /** K2's desktop answers consent prompts: until then "require recording"
+   *  stays hidden (Rosson's answer 6). */
+  consentSheet: boolean
+}
+
+function parseRecording(v: unknown): VoiceRecordingSettings | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const r = v as Record<string, unknown>
+  const flags = r.flags && typeof r.flags === 'object' ? (r.flags as Record<string, unknown>) : {}
+  return {
+    spaceId: str(r.spaceId),
+    startLevel: str(r.startLevel),
+    required: typeof r.required === 'boolean' ? r.required : null,
+    locked: r.locked === true,
+    canRequire: flags.recordingRequired === true,
+    consentSheet: r.consentSheet === true,
+  }
 }
 
 export function parseVoiceStatus(body: unknown): VoiceStatus {
@@ -153,10 +183,12 @@ export function parseVoiceStatus(body: unknown): VoiceStatus {
   const count = b.count
   const media = b.media && typeof b.media === 'object' ? (b.media as Record<string, unknown>) : {}
   const tier = str(media.tier)
+  const recording = parseRecording(b.recording)
   return {
     hosting: parseHosting(b.hosting),
     count: typeof count === 'number' && Number.isInteger(count) && count >= 0 && count <= 10 ? count : null,
     mediaTier: tier === 'tunnel' || tier === 'direct' ? tier : null,
+    ...(recording ? { recording } : {}),
   }
 }
 

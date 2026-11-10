@@ -7,6 +7,11 @@
 // daemon says who may change rooms (`canManage`), the page never guesses a
 // role. Plus this computer's own call preference (join muted).
 //
+// Sew 0.9.0: "Require recording when two or more people are in a room"
+// shows only once the daemon says K2's desktop answers consent prompts
+// (`recording.consentSheet`; Rosson's answer 6). The daemon refuses the
+// switch until then anyway (`client_consent_missing`).
+//
 // Shown in the nav only with the window's server's `voice_rooms_preview` on.
 // A server that can't host (not Linux, not Pro…) shows the daemon's line. It
 // reads on open, after each change and on `voice_rooms_changed`; no polling.
@@ -14,10 +19,10 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { Button, Callout, Checkbox } from '@/components/ui'
+import { Button, Callout, Checkbox, Toggle } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { errorMessage } from '@/lib/daemon-http-error'
-import { fetchVoiceRooms, fetchVoiceStatus, renameVoiceRoom, setVoiceRoomCount } from '@/lib/voice/voice-api'
+import { fetchVoiceRooms, fetchVoiceStatus, renameVoiceRoom, setVoiceRecordingRequired, setVoiceRoomCount } from '@/lib/voice/voice-api'
 import { hostingStateText, type VoiceRoomsList, type VoiceStatus } from '@/lib/voice/voice-wire'
 import { onVoiceRoomsChanged } from '@/stores/session-events'
 import { useVoice, voice } from '@/stores/voice'
@@ -98,6 +103,21 @@ export function VoiceRoomsSection(): React.JSX.Element {
       setBusy(false)
     }
   }
+
+  const requireRecording = async (on: boolean): Promise<void> => {
+    setBusy(true)
+    try {
+      await setVoiceRecordingRequired(primaryScope(), on)
+      await load()
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const recording = status?.recording
+  const showRequire = manage && recording?.consentSheet === true && recording.canRequire
 
   const rename = async (roomId: string): Promise<void> => {
     const name = (names[roomId] ?? '').trim()
@@ -206,6 +226,20 @@ export function VoiceRoomsSection(): React.JSX.Element {
             </div>
           ) : null}
         </section>
+      ) : null}
+
+      {showRequire && recording ? (
+        <label className="flex items-center gap-2 type-row text-[var(--color-text-secondary)]">
+          <Toggle
+            data-testid="voice-rooms-require-recording"
+            aria-label="Require recording when two or more people are in a room"
+            checked={recording.required === true}
+            disabled={busy || recording.locked}
+            onChange={(on) => void requireRecording(on)}
+            size="sm"
+          />
+          Require recording when two or more people are in a room. Each person still answers their own consent notice.
+        </label>
       ) : null}
 
       {rooms ? (

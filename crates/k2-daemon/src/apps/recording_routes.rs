@@ -280,6 +280,17 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<J> {
     }
     let class = classify(&before, &c, org_days);
     if !class.owner_on.is_empty() {
+        if !owner(who) && who.passport().is_none() {
+            return Err(no(
+                k2_core::deploy::codes::OWNER_ONLY,
+                403,
+                format!(
+                    "only the server's owner, in person, turns on {} for an App (each person's consent notice names it); \
+                     an admin can turn it off, never on",
+                    class.owner_on.join(" and ")
+                ),
+            ));
+        }
         if !owner(who) {
             let r = no(
                 k2_core::deploy::codes::OWNER_ONLY,

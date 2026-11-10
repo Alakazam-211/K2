@@ -78,6 +78,7 @@ import {
   type SewStatus,
 } from './sew-api'
 import { OnceSecret, SewStatusChip, TypeToConfirm, muted, secondary, typedMatches, usePersonConfirm } from './sew-ui'
+import { RecordingPanel } from './SewRecordingPanel'
 import { SewAgentsPanelStub, SewApprovalsPanelStub, SewDeliveriesPanelStub } from './SewStubs'
 
 export const SEW_MANIFEST: SettingEntry[] = [
@@ -90,6 +91,7 @@ export const SEW_MANIFEST: SettingEntry[] = [
   { id: 'sew.public-url', section: 'sew', label: 'Sew public URL', description: "Where Sew's web app lives (setup links)", keywords: ['sew', 'chat', 'public url', 'host', 'setup link'] },
   { id: 'sew.open-as-owner', section: 'sew', label: 'Open Sew as owner', description: "Open Sew's web app as its install owner (person confirm)", keywords: ['sew', 'chat', 'owner', 'handoff', 'open', 'app url'] },
   { id: 'sew.app-spaces', section: 'sew', label: 'App Spaces', description: "Each App's Sew Spaces; members come from App user grants", keywords: ['sew', 'chat', 'space', 'app', 'members', 'hearth'] },
+  { id: 'sew.recording', section: 'sew', label: 'Recording in Apps', description: "Who may record in each App's calls, its server's transcript reads, the no-recording lock", keywords: ['sew', 'chat', 'voice', 'recording', 'record', 'transcript', 'consent', 'cui', 'fci'] },
   { id: 'sew.uninstall', section: 'sew', label: 'Disable or uninstall Chat / Voice Hosting', description: 'Disable, uninstall or purge chat and voice hosting', keywords: ['sew', 'chat', 'disable', 'uninstall', 'purge', 'delete'] },
 ]
 
@@ -100,6 +102,7 @@ type Selection =
   | 'offbox'
   | 'public-url'
   | 'app-spaces'
+  | 'recording'
   | 'agents'
   | 'approvals'
   | 'deliveries'
@@ -1175,6 +1178,7 @@ const NAV: { id: Selection; label: string; liveOnly: boolean }[] = [
   { id: 'offbox', label: 'Off-box copies', liveOnly: true },
   { id: 'public-url', label: 'Public URL', liveOnly: true },
   { id: 'app-spaces', label: 'App Spaces', liveOnly: true },
+  { id: 'recording', label: 'Recording', liveOnly: true },
   { id: 'agents', label: 'Agents', liveOnly: false },
   { id: 'approvals', label: 'Approvals', liveOnly: false },
   { id: 'deliveries', label: 'Deliveries', liveOnly: false },
@@ -1318,6 +1322,7 @@ export function SewSection(): React.JSX.Element {
           {selection === 'offbox' ? <OffboxPanel {...props} /> : null}
           {selection === 'public-url' ? <PublicUrlPanel {...props} /> : null}
           {selection === 'app-spaces' ? <AppSpacesPanel {...props} /> : null}
+          {selection === 'recording' ? <RecordingPanel sample={sample} canMutate={canMutate} isOwner={youOf(status).isOwner} /> : null}
           {selection === 'agents' ? <SewAgentsPanelStub /> : null}
           {selection === 'approvals' ? <SewApprovalsPanelStub /> : null}
           {selection === 'deliveries' ? <SewDeliveriesPanelStub /> : null}

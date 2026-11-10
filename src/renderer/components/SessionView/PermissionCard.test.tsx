@@ -164,6 +164,7 @@ describe('PermissionCard: a confirm action (§17.11.3, §17.4)', () => {
   it.each([
     ['apps-chat-key', 'pr_key'],
     ['sew-space-governance', 'pr_gov'],
+    ['apps-recording', 'pr_rec'],
   ])('the %s card takes its own confirm, bound to the request', async (action, id) => {
     const actions = actionsMock()
     const view = { ...CONFIRM_VIEW, proof: { kind: 'confirm', action, secretId: id } }

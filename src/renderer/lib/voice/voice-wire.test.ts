@@ -83,6 +83,18 @@ describe('parseVoiceStatus (voice/routes.rs status_view)', () => {
   it('a count out of 0–10 is null', () => {
     expect(parseVoiceStatus({ count: 11 }).count).toBeNull()
   })
+  it('reads the K5 rooms recording (Sew 0.9.0), absent when the daemon has none', () => {
+    expect(parseVoiceStatus({ count: 1 }).recording).toBeUndefined()
+    const flags = { appRecording: true, voiceRecordCap: true, recordingRequired: true, mgmtRecordingReads: false }
+    expect(parseVoiceStatus({ count: 1, recording: { spaceId: '4001', startLevel: 'member', required: null, locked: false, flags, consentSheet: false } }).recording).toEqual({
+      spaceId: '4001',
+      startLevel: 'member',
+      required: null,
+      locked: false,
+      canRequire: true,
+      consentSheet: false,
+    })
+  })
 })
 
 describe('parseJoinAnswer (voice/bff.rs join)', () => {

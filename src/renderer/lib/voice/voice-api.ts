@@ -105,6 +105,13 @@ export async function setVoiceRoomCount(scope: ServerScope, count: number, now: 
   await daemonCliPost(scope, 'voice/settings', now ? { count, now: true } : { count })
 }
 
+/** Settings (Sew 0.9.0): `POST /cli/voice/recording/settings {required?}`,
+ *  the K5 rooms' "require recording" (the owner; refused
+ *  `client_consent_missing` until K2's desktop answers consent prompts). */
+export async function setVoiceRecordingRequired(scope: ServerScope, required: boolean | null): Promise<void> {
+  await daemonCliPost(scope, 'voice/recording/settings', { required })
+}
+
 /** Settings (§3.2, owner/Admin): `POST /cli/voice/rooms/rename {room, name}`;
  *  `room` is the slug. */
 export async function renameVoiceRoom(scope: ServerScope, roomId: string, name: string): Promise<void> {

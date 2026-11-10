@@ -910,6 +910,20 @@ sf_noargs_rc=$?
 set -e
 assert_eq "send-feedback with no text is a usage error (exit 2, no daemon)" "$sf_noargs_rc" "2"
 assert_contains "schema lists send-feedback" "$("$K2" --schema)" '"name": "send-feedback"'
+echo "== k2 study app-recording (Sew 0.9.0 recording in Apps, 0.46.11) =="
+rec_out="$("$K2" study app-recording)"
+for needle in "ALL OFF BY DEFAULT" "Each person in a call answers their own notice" "k2 app recording <app> set" \
+    "k2 permission request apps.recording app=<app> server-read=on" "OWNER ONLY" "An Admin's Allow doesn't count" \
+    "recordings.list" "recordings.get" "recordings.transcript" "recordings.events" "recording_server_read_off" \
+    "k2 hostchat app-space recording-lock <space-id> on|off" "CUI or FCI" "client_consent_missing" "k2 hostchat open" \
+    "Uninstalling an App never" "home_client_cannot_govern"; do
+    assert_contains "app-recording names $needle" "$rec_out" "$needle"
+done
+rec_lines="$(printf '%s\n' "$rec_out" | wc -l | tr -d ' ')"
+if [ "$rec_lines" -le 90 ]; then echo "  PASS: app-recording is bounded ($rec_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-recording is $rec_lines lines (max 90)" >&2; fail=$((fail + 1)); fi
+assert_contains "catalog: app-recording row" "$("$K2" study)" "  app-recording       Recording in an App's calls"
+assert_contains "usage lists app-recording" "$("$K2" study --help)" "app-transfers  app-recording"
+assert_contains "catalog --json: app-recording" "$("$K2" study --json)" '"id":"app-recording"'
 
 echo "== --help exit 0; bad flag exit 2 =="
 set +e

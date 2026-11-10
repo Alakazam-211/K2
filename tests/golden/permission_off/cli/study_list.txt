@@ -39,6 +39,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   app-account-deletion  Delete my account from inside an App: the store rules, request or immediate, what stays
   app-transfers       Big uploads and downloads that survive a phone app in the background
   app-chat            Chat, voice and calls in your App: caps, guests.setChat, chat.member/whois
+  app-recording       Recording in an App's calls: all off, consent, required, server reads, the card, the lock
   chat-voice          Voice rooms and channels in your App: the order, who does each step, pitfalls
   chat-voice-rooms    Your App Space: static rooms, per-project channels, who's in, joining, limits
   voice-rooms         This server's own voice rooms (preview): k2 voice, who may change or join

@@ -14,6 +14,11 @@ name = "sim_live_ios"
 path = "tests/sim_live_ios.rs"
 required-features = ["sim-live-ios"]
 
+[[test]]
+name = "sim_live_ios_p4"
+path = "tests/sim_live_ios_p4.rs"
+required-features = ["sim-live-ios"]
+
 [features]
 # Enables db::shared()'s automatic in-memory-DB fallback for downstream
 # crates' test binaries. Without this, cfg(test) in k2so-core is only
@@ -42,7 +47,8 @@ sandbox-microvm = []
 # cloud/self-update daemons stay as they are. Not a GitHub Release asset.
 airgap = []
 
-# Mobile dev, iOS lane: the live Simulator test (tests/sim_live_ios.rs).
+# Mobile dev, iOS lane: the live Simulator tests (tests/sim_live_ios.rs,
+# and tests/sim_live_ios_p4.rs for the helper's H.264 units, protocol 4).
 # Needs a Mac with Xcode; without this feature the test doesn't compile,
 # with it a missing Xcode fails loudly (vs-live M-A18). Not a runtime feature.
 sim-live-ios = []

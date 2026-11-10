@@ -25,6 +25,7 @@ use k2_root_proto::engine::{tmpfiles_conf, user_unit, verify_engine_build, TMPFI
 use k2_root_proto::keys::trusted_keys;
 use k2_root_proto::paths::{HELPER_DIR, RUNUSER, STATE_DIR, SYSTEMCTL, SYSTEMD_SYSTEM_DIR, USERADD};
 use k2_root_proto::sig::decode_payload;
+use k2_root_proto::verbs::NftDb;
 
 use crate::caller::{self, Caller};
 use crate::ctx::{Ctx, Fail, HResult, KindStr};
@@ -918,15 +919,23 @@ fn nft_list(ctx: &Ctx) -> Option<String> {
 fn nft_json(ctx: &Ctx, uid: Option<u32>) -> J {
     let listed = nft_list(ctx);
     let current = match (&listed, uid) {
-        (Some(t), Some(u)) => {
-            t.contains(&format!("chain {NFT_CHAIN}")) && t.contains(&format!("meta skuid {u} "))
-        }
+        (Some(t), Some(u)) => table_current(t, u),
         _ => false,
     };
-    json!({"table": listed.is_some(), "current": current})
+    // 0.46.11: `perApp` = the v6 table (each App only its own database
+    // ports); `current` stays true for v5 too, so an old daemon keeps
+    // seeing its table as current.
+    let per_app = current && listed.as_deref().is_some_and(|t| t.contains(&format!("chain {NFT_CHAIN_PER_APP}")));
+    json!({"table": listed.is_some(), "current": current, "perApp": per_app})
 }
 
-pub fn nft_apply(ctx: &Ctx, gw: PortRange, px: PortRange, db: PortRange) -> HResult<J> {
+/// v5 (band) or v6 (per-App database ports) for this App user.
+fn table_current(t: &str, uid: u32) -> bool {
+    (t.contains(&format!("chain {NFT_CHAIN} ")) || t.contains(&format!("chain {NFT_CHAIN_PER_APP} ")))
+        && t.contains(&format!("meta skuid {uid} "))
+}
+
+pub fn nft_apply(ctx: &Ctx, gw: PortRange, px: PortRange, db: NftDb) -> HResult<J> {
     let pw = app_user(ctx)?;
     let apps = load_nft_apps(ctx)?;
     let rules = app_rules(ctx, pw.uid, &apps, gw);
@@ -936,6 +945,7 @@ pub fn nft_apply(ctx: &Ctx, gw: PortRange, px: PortRange, db: PortRange) -> HRes
     ctx.run_ok(NFT, &["-f", "-"], Some(text.as_bytes()))?;
     let mut v = nft_json(ctx, Some(pw.uid));
     v["ranges"] = json!({"gateway": gw.token(), "proxy": px.token(), "db": db.token()});
+    v["perAppDb"] = json!(db == NftDb::PerApp);
     v["appRules"] = json!(rules.len());
     Ok(v)
 }
@@ -950,6 +960,10 @@ pub struct NftApps {
     pub apps: std::collections::BTreeMap<String, u16>,
     #[serde(default, rename = "boxPorts", skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub box_ports: std::collections::BTreeMap<String, Vec<u16>>,
+    /// App id → its database ports (0.46.11, protocol 15; absent in older
+    /// files): what the `per-app` table admits it to.
+    #[serde(default, rename = "dbPorts", skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub db_ports: std::collections::BTreeMap<String, Vec<u16>>,
 }
 
 fn load_nft_apps(ctx: &Ctx) -> HResult<NftApps> {
@@ -978,9 +992,17 @@ fn app_rules(ctx: &Ctx, uid: u32, s: &NftApps, gw: PortRange) -> Vec<AppRule> {
         let mut box_ports: Vec<u16> = s.box_ports.get(id.as_str()).cloned().unwrap_or_default();
         box_ports.retain(|p| k2_root_proto::apps::box_port_ok(*p));
         box_ports.truncate(k2_root_proto::apps::MAX_BOX_SERVICES);
+        // None = never sent (an older daemon's rule): the per-App table
+        // keeps such an App on the band until the daemon re-sends it.
+        let db_ports: Option<Vec<u16>> = s.db_ports.get(id.as_str()).map(|v| {
+            let mut v = v.clone();
+            v.retain(|p| k2_root_proto::pg_major::in_band(*p));
+            v.truncate(k2_root_proto::apps::MAX_DB_PORTS);
+            v
+        });
         for (cg, level) in app_cgroups(uid, &id) {
             if ctx.p(&format!("{CGROUP_ROOT}/{cg}")).is_dir() {
-                out.push(AppRule { cgroup: cg, level, gw_port: *port, box_ports: box_ports.clone() });
+                out.push(AppRule { cgroup: cg, level, gw_port: *port, box_ports: box_ports.clone(), db_ports: db_ports.clone() });
             }
         }
     }
@@ -988,7 +1010,7 @@ fn app_rules(ctx: &Ctx, uid: u32, s: &NftApps, gw: PortRange) -> Vec<AppRule> {
 }
 
 fn nft_table_current(ctx: &Ctx, uid: u32) -> bool {
-    nft_list(ctx).is_some_and(|t| t.contains(&format!("chain {NFT_CHAIN}")) && t.contains(&format!("meta skuid {uid} ")))
+    nft_list(ctx).is_some_and(|t| table_current(&t, uid))
 }
 
 fn reload_app_rules(ctx: &Ctx, uid: u32, s: &NftApps) -> HResult<usize> {
@@ -996,7 +1018,8 @@ fn reload_app_rules(ctx: &Ctx, uid: u32, s: &NftApps) -> HResult<usize> {
         return Err(Fail::state("box_not_prepared: the k2app nftables table is missing or old (apps nft apply)"));
     }
     let rules = app_rules(ctx, uid, s, GATEWAY_PORTS);
-    ctx.run_ok(NFT, &["-f", "-"], Some(nft_apps_script(&rules).as_bytes()))?;
+    let per_app = nft_list(ctx).is_some_and(|t| t.contains(&format!("chain {NFT_CHAIN_PER_APP} ")));
+    ctx.run_ok(NFT, &["-f", "-"], Some(nft_apps_script(&rules, per_app).as_bytes()))?;
     Ok(rules.len())
 }
 
@@ -1004,7 +1027,10 @@ fn reload_app_rules(ctx: &Ctx, uid: u32, s: &NftApps) -> HResult<usize> {
 /// gateway port and its box services' host ports (the list replaces the
 /// previous one) and reload the per-App chain. A port another App holds
 /// is refused.
-pub fn nft_app(ctx: &Ctx, id: &AppId, gw: u16, box_ports: &[u16]) -> HResult<J> {
+///
+/// `db_ports` (protocol 15, `--db`): the App's database ports, replacing
+/// the recorded ones; `None` leaves them as recorded.
+pub fn nft_app(ctx: &Ctx, id: &AppId, gw: u16, box_ports: &[u16], db_ports: Option<&[u16]>) -> HResult<J> {
     let pw = app_user(ctx)?;
     let mut s = load_nft_apps(ctx)?;
     if let Some((other, _)) = s.apps.iter().find(|(a, p)| **p == gw && a.as_str() != id.as_str()) {
@@ -1013,7 +1039,19 @@ pub fn nft_app(ctx: &Ctx, id: &AppId, gw: u16, box_ports: &[u16]) -> HResult<J> 
     if box_ports.len() > k2_root_proto::apps::MAX_BOX_SERVICES || !box_ports.iter().all(|p| k2_root_proto::apps::box_port_ok(*p)) {
         return Err(Fail::state("refused: a box service port is on the deny-list"));
     }
+    if let Some(d) = db_ports {
+        if d.len() > k2_root_proto::apps::MAX_DB_PORTS || !d.iter().all(|p| k2_root_proto::pg_major::in_band(*p)) {
+            return Err(Fail::state("refused: a database port outside K2's Postgres band"));
+        }
+    }
     let mut changed = s.apps.insert(id.as_str().to_string(), gw) != Some(gw);
+    if let Some(d) = db_ports {
+        // Kept even when empty: "no database" is not "never sent".
+        if s.db_ports.get(id.as_str()).map(Vec::as_slice) != Some(d) {
+            changed = true;
+            s.db_ports.insert(id.as_str().to_string(), d.to_vec());
+        }
+    }
     let before = s.box_ports.get(id.as_str()).cloned().unwrap_or_default();
     if before != box_ports {
         changed = true;
@@ -1031,13 +1069,14 @@ pub fn nft_app(ctx: &Ctx, id: &AppId, gw: u16, box_ports: &[u16]) -> HResult<J> 
         .iter()
         .filter(|(cg, _)| ctx.p(&format!("{CGROUP_ROOT}/{cg}")).is_dir())
         .count();
-    Ok(json!({"app": id.as_str(), "gwPort": gw, "boxPorts": box_ports, "changed": changed, "rules": n, "cgroupsNow": matched}))
+    let dbp = s.db_ports.get(id.as_str()).cloned().unwrap_or_default();
+    Ok(json!({"app": id.as_str(), "gwPort": gw, "boxPorts": box_ports, "dbPorts": dbp, "changed": changed, "rules": n, "cgroupsNow": matched}))
 }
 
 pub fn nft_app_remove(ctx: &Ctx, id: &AppId) -> HResult<J> {
     let pw = app_user(ctx)?;
     let mut s = load_nft_apps(ctx)?;
-    let had_box = s.box_ports.remove(id.as_str()).is_some();
+    let had_box = s.box_ports.remove(id.as_str()).is_some() | s.db_ports.remove(id.as_str()).is_some();
     let changed = s.apps.remove(id.as_str()).is_some() || had_box;
     if changed {
         save_nft_apps(ctx, &s)?;
@@ -2182,5 +2221,6 @@ pub fn status(ctx: &Ctx) -> HResult<J> {
         "engineTmpfiles": exists(ctx, TMPFILES_FILE),
         "nftApps": load_nft_apps(ctx).map(|s| json!(s.apps)).unwrap_or(json!(null)),
         "nftBoxPorts": load_nft_apps(ctx).map(|s| json!(s.box_ports)).unwrap_or(json!(null)),
+        "nftDbPorts": load_nft_apps(ctx).map(|s| json!(s.db_ports)).unwrap_or(json!(null)),
     }))
 }

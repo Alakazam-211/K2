@@ -363,10 +363,19 @@ fn hba_apply(ctx: &Ctx, m: PgMajor, edit: impl Fn(&str) -> Result<Option<String>
 ///
 /// With `--cluster <M>` (protocol 9): that major's own `psql` against its
 /// cluster's port over the socket, never pg_wrapper's pick (V1, V39).
-pub fn psql(ctx: &Ctx, db: &DbName, flags: PsqlFlags, cluster: Option<PgMajor>, sql: &[u8]) -> HResult<()> {
-    let (prog, conn) = match cluster {
-        Some(m) => crate::pg_major::psql_args(ctx, m)?,
-        None => (PSQL.to_string(), Vec::new()),
+pub fn psql(
+    ctx: &Ctx,
+    db: &DbName,
+    flags: PsqlFlags,
+    cluster: Option<PgMajor>,
+    name: Option<&k2_root_proto::pg_named::ClusterName>,
+    sql: &[u8],
+) -> HResult<()> {
+    let (prog, conn) = match (cluster, name) {
+        // Protocol 15: a named cluster this helper made, never another.
+        (Some(m), Some(n)) => crate::pg_major::psql_args_named(ctx, m, n)?,
+        (Some(m), None) => crate::pg_major::psql_args(ctx, m)?,
+        (None, _) => (PSQL.to_string(), Vec::new()),
     };
     // search_path pinned to pg_catalog for every superuser session, with or
     // without --cluster (review #2 F1): the daemon's boot seal, K2 helper

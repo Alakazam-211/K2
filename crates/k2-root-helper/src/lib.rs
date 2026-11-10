@@ -52,14 +52,14 @@ use ctx::{Ctx, Fail, HResult};
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=14 arch=x86_64;"
+    " proto=15 arch=x86_64;"
 );
 #[cfg(target_arch = "aarch64")]
 #[used]
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=14 arch=aarch64;"
+    " proto=15 arch=aarch64;"
 );
 
 /// Present only in a `test-keys` build; release signing refuses it.
@@ -192,11 +192,13 @@ fn dispatch(
         Verb::PgSystemctl { op, now, unit } => pg::systemctl(ctx, *op, *now, unit).map(|_| None)?,
         Verb::PgDaemonReload => pg::daemon_reload(ctx).map(|_| None)?,
         Verb::PgInstallRamFence => Some(pg::install_ram_fence(ctx)?),
-        Verb::PgPsql { db, flags, cluster } => pg::psql(ctx, db, *flags, *cluster, stdin).map(|_| None)?,
+        Verb::PgPsql { db, flags, cluster, name } => pg::psql(ctx, db, *flags, *cluster, name.as_ref(), stdin).map(|_| None)?,
         Verb::PgHbaApp { add, id } => Some(pg::hba_app(ctx, *add, id)?),
         Verb::PgClusters => Some(pg_major::clusters(ctx)?),
         Verb::PgAddMajor { major, dry_run } => Some(pg_major::add_major(ctx, *major, *dry_run)?),
         Verb::PgEnsureCluster { major, port } => Some(pg_major::ensure_cluster(ctx, *major, *port)?),
+        Verb::PgEnsureNamed { major, name, port, wal_archive } => Some(pg_major::ensure_named(ctx, *major, name, *port, *wal_archive)?),
+        Verb::PgNamedSystemctl { op, major, name } => Some(pg_major::systemctl_named(ctx, *op, *major, name)?),
         Verb::PgStartConf { major, auto } => Some(pg_major::start_conf(ctx, *major, *auto)?),
         Verb::PgInstallSlice => Some(pg_major::install_slice(ctx)?),
         Verb::PgCopyRoles { from, to, dry_run } => Some(pg_major::copy_roles(ctx, *from, *to, *dry_run, stdin)?),
@@ -233,7 +235,7 @@ fn dispatch(
         Verb::AppsReservePorts(on) => Some(apps::reserve_ports(ctx, *on)?),
         Verb::AppsNftApply { gw, px, db } => Some(apps::nft_apply(ctx, *gw, *px, *db)?),
         Verb::AppsNftRemove => Some(apps::nft_remove(ctx)?),
-        Verb::AppsNftApp { id, gw, box_ports } => Some(apps::nft_app(ctx, id, *gw, box_ports)?),
+        Verb::AppsNftApp { id, gw, box_ports, db_ports } => Some(apps::nft_app(ctx, id, *gw, box_ports, db_ports.as_deref())?),
         Verb::AppsNftAppRemove(id) => Some(apps::nft_app_remove(ctx, id)?),
         Verb::AppsInstallEngine => Some(apps::install_engine(ctx, stdin)?),
         Verb::AppsLogs { id, deployment, lines } => Some(apps::logs(ctx, id, deployment, *lines)?),

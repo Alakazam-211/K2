@@ -130,6 +130,10 @@ pub const DB_PORTS: PortRange = PortRange {
     hi: crate::pg_major::BAND.1,
 };
 
+/// Most database ports one App's rule names (`apps nft app … --db`,
+/// protocol 15): its workspace's K2 clusters.
+pub const MAX_DB_PORTS: usize = 8;
+
 // ── box services (0.46.0): owner-approved forwards to host loopback ────
 
 /// Most box services one App holds (allowed + pending).
@@ -210,6 +214,12 @@ pub const NFT_TABLE: &str = "k2app";
 /// connections too; v5, 0.46.3: Postgres is K2's band 5432–5449, so a box
 /// on v4 re-applies and Apps reach a database moved to another major).
 pub const NFT_CHAIN: &str = "k2app_v5";
+/// v6 (0.46.11, protocol 15, `apps nft apply … per-app`): v5 without the
+/// band-wide Postgres accept. Each App reaches only the database ports its
+/// own rule names (`AppRule::db_ports`), so no App dials a cluster that
+/// holds none of its workspace's databases, nor one K2 didn't make (a
+/// hand-made staging cluster in the band).
+pub const NFT_CHAIN_PER_APP: &str = "k2app_v6";
 /// The per-App chain (`apps nft app`): one accept per App for its own
 /// gateway port, matched on the App's cgroup.
 pub const NFT_APPS_CHAIN: &str = "k2app_apps";
@@ -1219,6 +1229,13 @@ pub struct AppRule {
     /// [`box_port_ok`]); revoking one re-renders the chain, so it closes at
     /// once for new connections.
     pub box_ports: Vec<u16>,
+    /// The App's database ports (protocol 15): in the band only, at most
+    /// [`MAX_DB_PORTS`]. Only the `per-app` table needs them; the band
+    /// table accepts the whole band for every App anyway. `None` = never
+    /// sent (a rule an older daemon recorded): the whole band, so an App
+    /// keeps its database across the switch to `per-app` until the daemon
+    /// re-sends its rule with `--db` (every App start and boot).
+    pub db_ports: Option<Vec<u16>>,
 }
 
 /// The cgroup paths an App's sockets can live in: its container slice
@@ -1237,7 +1254,7 @@ pub fn app_cgroups(uid: u32, id: &AppId) -> [(String, u32); 2] {
     ]
 }
 
-fn app_rule_line(r: &AppRule) -> String {
+fn app_rule_line(r: &AppRule, per_app: bool) -> String {
     let mut ports = vec![r.gw_port];
     ports.extend(proxy_port_for_gateway(r.gw_port));
     for p in &r.box_ports {
@@ -1245,11 +1262,17 @@ fn app_rule_line(r: &AppRule) -> String {
             ports.push(*p);
         }
     }
-    let ports = if ports.len() == 1 {
-        ports[0].to_string()
-    } else {
-        format!("{{ {} }}", ports.iter().map(u16::to_string).collect::<Vec<_>>().join(", "))
-    };
+    for p in r.db_ports.iter().flatten().take(MAX_DB_PORTS) {
+        if crate::pg_major::in_band(*p) && !ports.contains(p) {
+            ports.push(*p);
+        }
+    }
+    let mut toks: Vec<String> = ports.iter().map(u16::to_string).collect();
+    // Only the per-App table needs it: the band table admits the band.
+    if per_app && r.db_ports.is_none() {
+        toks.push(DB_PORTS.nft());
+    }
+    let ports = if toks.len() == 1 { toks[0].clone() } else { format!("{{ {} }}", toks.join(", ")) };
     format!(
         "socket cgroupv2 level {} \"{}\" oifname \"lo\" tcp dport {ports} accept",
         r.level, r.cgroup
@@ -1270,11 +1293,21 @@ fn app_rule_line(r: &AppRule) -> String {
 /// through the App's own proxy on loopback, S15). The leading `table` +
 /// `delete table` make `nft -f` replace it atomically. `gw` and `px` are
 /// the ranges per-App ports sit in; nothing accepts either as a whole.
-pub fn nft_ruleset(uid: u32, process_uid: Option<u32>, gw: PortRange, px: PortRange, db: PortRange, apps: &[AppRule]) -> String {
+///
+/// `db`: [`crate::verbs::NftDb::Band`] renders [`NFT_CHAIN`] with the
+/// band-wide Postgres accept (every App UID reaches every cluster in it);
+/// [`crate::verbs::NftDb::PerApp`] renders [`NFT_CHAIN_PER_APP`] without
+/// it, so each App reaches only its rule's database ports.
+pub fn nft_ruleset(uid: u32, process_uid: Option<u32>, gw: PortRange, px: PortRange, db: crate::verbs::NftDb, apps: &[AppRule]) -> String {
     let _ = (gw, px);
-    let app_lines: String = apps.iter().map(|r| format!("\t\t{}\n", app_rule_line(r))).collect();
+    let (chain, db_line) = match db {
+        crate::verbs::NftDb::Band(r) => (NFT_CHAIN, format!("\t\toifname \"lo\" tcp dport {} accept\n", r.nft())),
+        crate::verbs::NftDb::PerApp => (NFT_CHAIN_PER_APP, String::new()),
+    };
+    let per_app = db == crate::verbs::NftDb::PerApp;
+    let app_lines: String = apps.iter().map(|r| format!("\t\t{}\n", app_rule_line(r, per_app))).collect();
     let proc_line = process_uid
-        .map(|pu| format!("\t\tmeta skuid {pu} jump {NFT_CHAIN}\n"))
+        .map(|pu| format!("\t\tmeta skuid {pu} jump {chain}\n"))
         .unwrap_or_default();
     format!(
         "table inet {t}\n\
@@ -1290,7 +1323,7 @@ pub fn nft_ruleset(uid: u32, process_uid: Option<u32>, gw: PortRange, px: PortRa
          \t}}\n\
          \tchain {c} {{\n\
          \t\tjump {a}\n\
-         \t\toifname \"lo\" tcp dport {db} accept\n\
+         {db_line}\
          \t\tct direction reply accept\n\
          \t\tct state related accept\n\
          \t\toifname \"lo\" meta l4proto tcp counter reject with tcp reset\n\
@@ -1302,17 +1335,17 @@ pub fn nft_ruleset(uid: u32, process_uid: Option<u32>, gw: PortRange, px: PortRa
          \t}}\n\
          }}\n",
         t = NFT_TABLE,
-        c = NFT_CHAIN,
+        c = chain,
         a = NFT_APPS_CHAIN,
-        db = db.nft(),
     )
 }
 
 /// Replace only the per-App chain (`apps nft app` / `app-remove`).
-pub fn nft_apps_script(apps: &[AppRule]) -> String {
+/// `per_app` = the table loaded is `k2app_v6`.
+pub fn nft_apps_script(apps: &[AppRule], per_app: bool) -> String {
     let mut s = format!("flush chain inet {NFT_TABLE} {NFT_APPS_CHAIN}\n");
     for r in apps {
-        s.push_str(&format!("add rule inet {NFT_TABLE} {NFT_APPS_CHAIN} {}\n", app_rule_line(r)));
+        s.push_str(&format!("add rule inet {NFT_TABLE} {NFT_APPS_CHAIN} {}\n", app_rule_line(r, per_app)));
     }
     s
 }
@@ -1574,8 +1607,8 @@ mod tests {
             let gw = crate::engine::gateway_port(slot).unwrap();
             assert!(proxy_port_for_gateway(gw).is_some(), "slot {slot}");
         }
-        let r = AppRule { cgroup: "x".into(), level: 2, gw_port: 38_899, box_ports: vec![] };
-        assert!(app_rule_line(&r).ends_with("tcp dport 38899 accept"), "no proxy port past the range");
+        let r = AppRule { cgroup: "x".into(), level: 2, gw_port: 38_899, box_ports: vec![], db_ports: Some(vec![]) };
+        assert!(app_rule_line(&r, false).ends_with("tcp dport 38899 accept"), "no proxy port past the range");
     }
 
     #[test]
@@ -1738,25 +1771,25 @@ mod tests {
     /// service, even from a doctored state file, forwards into it.
     #[test]
     fn a_second_cluster_is_reachable_by_apps_and_never_a_box_service() {
-        let r = nft_ruleset(997, None, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
+        let r = nft_ruleset(997, None, GATEWAY_PORTS, PROXY_PORTS, crate::verbs::NftDb::Band(DB_PORTS), &[]);
         assert!(r.contains("oifname \"lo\" tcp dport 5432-5449 accept"), "{r}");
         assert!((DB_PORTS.lo..=DB_PORTS.hi).contains(&5433));
         assert!(box_port_refusal(5433).is_some_and(|w| w.contains("Postgres")));
-        let doctored = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_601, box_ports: vec![5433, 5449, 5432] };
-        let sc = nft_apps_script(&[doctored]);
+        let doctored = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_601, box_ports: vec![5433, 5449, 5432], db_ports: Some(vec![]) };
+        let sc = nft_apps_script(&[doctored], false);
         assert!(!sc.contains("5433") && !sc.contains("5449") && !sc.contains("5432"), "{sc}");
     }
 
     #[test]
     fn box_ports_join_the_apps_own_rule() {
-        let rule = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_601, box_ports: vec![8470, 7880, 22, 8470, 38_650] };
-        let sc = nft_apps_script(&[rule]);
+        let rule = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_601, box_ports: vec![8470, 7880, 22, 8470, 38_650], db_ports: Some(vec![]) };
+        let sc = nft_apps_script(&[rule], false);
         // Refused ports never reach nft, even from a doctored state file.
         assert!(sc.contains("tcp dport { 38601, 38901, 8470, 7880 } accept"), "{sc}");
         assert!(!sc.contains(" 22") && !sc.contains("38650"), "{sc}");
         // Past the proxy range the gateway port stands alone (no braces).
-        let lone = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_899, box_ports: vec![] };
-        assert!(nft_apps_script(&[lone]).contains("tcp dport 38899 accept"));
+        let lone = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_899, box_ports: vec![], db_ports: Some(vec![]) };
+        assert!(nft_apps_script(&[lone], false).contains("tcp dport 38899 accept"));
     }
 
     #[test]
@@ -1765,8 +1798,8 @@ mod tests {
         let cg = app_cgroups(997, &jobs);
         assert_eq!(cg[0].0, "user.slice/user-997.slice/user@997.service/k2apps.slice/k2apps-acme_skin.slice");
         assert_eq!(cg[1].0, "k2apps.slice/k2app-process@acme-skin.service");
-        let rule = AppRule { cgroup: cg[0].0.clone(), level: cg[0].1, gw_port: 38_601, box_ports: vec![] };
-        let r = nft_ruleset(997, Some(998), GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, std::slice::from_ref(&rule));
+        let rule = AppRule { cgroup: cg[0].0.clone(), level: cg[0].1, gw_port: 38_601, box_ports: vec![], db_ports: Some(vec![]) };
+        let r = nft_ruleset(997, Some(998), GATEWAY_PORTS, PROXY_PORTS, crate::verbs::NftDb::Band(DB_PORTS), std::slice::from_ref(&rule));
         assert!(r.contains("meta skuid 998 jump k2app_v5"), "process Apps' user gets the same chain");
         assert!(r.starts_with("table inet k2app\ndelete table inet k2app\n"));
         assert!(r.contains("meta skuid 997 jump k2app_v5"));
@@ -1793,10 +1826,50 @@ mod tests {
         let local = r.find("fib daddr type local counter drop").unwrap();
         assert!(jump < db && db < reply && reply < related && related < reset && reset < local, "{r}");
         assert!(r.trim_end().ends_with("counter drop\n\t}\n}"));
-        let empty = nft_ruleset(997, None, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
+        let empty = nft_ruleset(997, None, GATEWAY_PORTS, PROXY_PORTS, crate::verbs::NftDb::Band(DB_PORTS), &[]);
         assert_eq!(empty.matches("meta skuid").count(), 1);
         assert!(empty.contains("\tchain k2app_apps {\n\t}\n"));
-        let sc = nft_apps_script(&[rule]);
+        let sc = nft_apps_script(&[rule], false);
         assert!(sc.starts_with("flush chain inet k2app k2app_apps\nadd rule inet k2app k2app_apps socket cgroupv2 level 5 "));
+    }
+
+    /// prd-named-pg-clusters-v1 §9a (0.46.11): the per-App table has no
+    /// band-wide Postgres accept; each App reaches only its rule's database
+    /// ports, so a hand-made staging cluster in the band (akzm's `17/k2db`
+    /// on 5433) is out of every App's reach.
+    #[test]
+    fn per_app_table_admits_only_each_apps_database_ports() {
+        let jobs = AppId::parse("feedback").unwrap();
+        let cg = app_cgroups(997, &jobs);
+        let rule = AppRule { cgroup: cg[1].0.clone(), level: cg[1].1, gw_port: 38_601, box_ports: vec![8470], db_ports: Some(vec![5432, 5434, 5434, 5460, 22]) };
+        let other = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_602, box_ports: vec![], db_ports: Some(vec![]) };
+        let r = nft_ruleset(997, Some(998), GATEWAY_PORTS, PROXY_PORTS, crate::verbs::NftDb::PerApp, &[rule.clone(), other]);
+        assert!(r.contains("chain k2app_v6 {"), "{r}");
+        assert!(r.contains("meta skuid 997 jump k2app_v6") && r.contains("meta skuid 998 jump k2app_v6"), "{r}");
+        assert!(!r.contains("k2app_v5"), "{r}");
+        assert!(!r.contains("5432-5449"), "no band-wide accept: {r}");
+        assert!(!r.contains("5433"), "{r}");
+        assert!(
+            r.contains(&format!("socket cgroupv2 level 2 \"{}\" oifname \"lo\" tcp dport {{ 38601, 38901, 8470, 5432, 5434 }} accept", cg[1].0)),
+            "{r}"
+        );
+        assert!(!r.contains("5460") && !r.contains(" 22,") && !r.contains(" 22 "), "out-of-band ports never reach nft: {r}");
+        assert!(r.contains("\"c\" oifname \"lo\" tcp dport { 38602, 38902 } accept"), "{r}");
+        // The rest of the chain is v5's, in the same order.
+        let jump = r.find("jump k2app_apps").unwrap();
+        let reply = r.find("ct direction reply accept").unwrap();
+        let reset = r.find("reject with tcp reset").unwrap();
+        assert!(jump < reply && reply < reset, "{r}");
+        // At most MAX_DB_PORTS ports per App, even from a doctored state.
+        let many = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_899, box_ports: vec![], db_ports: Some((5432..=5449).collect()) };
+        let sc = nft_apps_script(&[many], true);
+        assert!(sc.contains("5439") && !sc.contains("5440"), "{sc}");
+        // A rule an older daemon recorded (no --db yet): the whole band.
+        let legacy = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_601, box_ports: vec![8470], db_ports: None };
+        assert!(nft_apps_script(&[legacy.clone()], true).contains("tcp dport { 38601, 38901, 8470, 5432-5449 } accept"));
+        assert!(nft_apps_script(&[legacy], false).contains("tcp dport { 38601, 38901, 8470 } accept"), "the band table needs no per-App band");
+        // The band table still admits the band (old daemons).
+        let band = nft_ruleset(997, None, GATEWAY_PORTS, PROXY_PORTS, crate::verbs::NftDb::Band(DB_PORTS), &[rule]);
+        assert!(band.contains("chain k2app_v5 {") && band.contains("oifname \"lo\" tcp dport 5432-5449 accept"), "{band}");
     }
 }

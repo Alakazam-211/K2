@@ -291,7 +291,7 @@ fn status_reports_files_and_the_socket_state() {
 fn version_announces_the_front_namespace_from_protocol_8() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 14, "front came in 8; 14 is 0.46.10's one bump");
+    assert_eq!(v["protocol"], 15, "front came in 8; 15 is 0.46.11's one bump");
     assert_eq!(v["namespaces"]["front80"], true, "the :80 front came in 12");
     assert_eq!(v["protocol"], k2_root_proto::version::PROTOCOL);
     assert!(v["protocol"].as_u64().expect("number") >= u64::from(k2_root_proto::version::FRONT_MIN_PROTOCOL));

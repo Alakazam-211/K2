@@ -223,8 +223,11 @@ pub fn clusters(ctx: &Ctx) -> HResult<J> {
         .ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().next().and_then(|n| n.parse().ok()))
         .unwrap_or(0);
+    let mut listed: Vec<J> = rows.iter().map(|r| cluster_json(ctx, r)).collect();
+    // Protocol 15: which non-`main` rows are named clusters this helper made.
+    mark_named(ctx, &rows, &mut listed);
     Ok(json!({
-        "clusters": rows.iter().map(|r| cluster_json(ctx, r)).collect::<Vec<_>>(),
+        "clusters": listed,
         "installed": installed_majors(ctx),
         "codename": code,
         "distroMajor": code.as_deref().and_then(distro_major),
@@ -1202,4 +1205,311 @@ pub fn drop_db(ctx: &Ctx, m: PgMajor, db: &DbName) -> HResult<J> {
         sql_at(ctx, m, row.port, "postgres", &format!("DROP DATABASE IF EXISTS \"{}\" WITH (FORCE);\n", db.as_str()))?;
     }
     Ok(json!({"major": m.get(), "dropped": had}))
+}
+
+// ── named clusters (protocol 15, `namespaces.pgnamed`) ──────────────────
+//
+// prd-named-pg-clusters-v1: `<M>/<name>` beside `<M>/main`, for one
+// database that needs a cluster to itself. The helper keeps the list of the
+// clusters IT created (`pg_named::NAMED_STATE`, root-owned, written only
+// right after its own `pg_createcluster`); every named verb answers only for
+// a pair in that list that matches what runs. A cluster made by hand
+// (akzm's `17/k2db`) can never enter the list: create refuses any name in
+// use on any major.
+
+use k2_root_proto::pg_named::{self as named, ClusterName, NamedRec, NamedState};
+use k2_root_proto::paths::STATE_DIR;
+
+pub(crate) fn named_state(ctx: &Ctx) -> HResult<NamedState> {
+    match read_small(ctx, named::NAMED_STATE, named::NAMED_STATE_CAP)? {
+        None => Ok(NamedState::default()),
+        Some(b) => serde_json::from_slice(&b).map_err(|_| Fail::state("pg-named.json unreadable; nothing changed")),
+    }
+}
+
+fn save_named_state(ctx: &Ctx, s: &NamedState) -> HResult<()> {
+    let bytes = serde_json::to_vec_pretty(s).map_err(|_| Fail::io("encode pg-named.json"))?;
+    let d = subdir(ctx, STATE_DIR)?;
+    put(ctx, &d, split_dyn(named::NAMED_STATE).1, &bytes).map(|_| ())
+}
+
+/// Is `name` in use anywhere: a `pg_lsclusters` row on any major, or a
+/// data or config dir under any major's version dir (a leftover, or a
+/// cluster postgresql-common doesn't list)?
+fn name_in_use(ctx: &Ctx, rows: &[ClusterRow], name: &str) -> HResult<bool> {
+    if rows.iter().any(|r| r.name == name) {
+        return Ok(true);
+    }
+    for root in ["/var/lib/postgresql", "/etc/postgresql"] {
+        let d = match ctx.dir(root) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(Fail::io_err("open", e)),
+        };
+        for v in d.entries().map_err(|e| Fail::io_err("list", e))? {
+            let v = v.to_string_lossy().to_string();
+            if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) && present(ctx, &format!("{root}/{v}/{name}")) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// No link on the way to a named cluster's dirs (review #1 L5, as
+/// [`no_links_above`]).
+fn no_links_above_named(ctx: &Ctx, m: PgMajor) -> HResult<()> {
+    no_links_above(ctx, m)
+}
+
+/// `SELECT system_identifier FROM pg_control_system()` of the cluster on
+/// `port` (digits, or a refusal).
+fn system_id(ctx: &Ctx, m: PgMajor, port: u16) -> HResult<String> {
+    let id = sql_at(ctx, m, port, "postgres", "SELECT system_identifier FROM pg_catalog.pg_control_system();\n")?;
+    let id = id.trim().to_string();
+    if !named::system_id_ok(&id) {
+        return Err(Fail::state("not_k2_cluster: the cluster answered no system identifier"));
+    }
+    Ok(id)
+}
+
+/// The recorded named cluster `m/name` and its live row: recorded, listed,
+/// data dir and port as recorded. Anything else is `not_k2_cluster` (it is
+/// not one this helper made, or it changed under it).
+pub(crate) fn named_of(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<(ClusterRow, NamedRec)> {
+    let st = named_state(ctx)?;
+    let rec = st
+        .get(m.get(), name.as_str())
+        .cloned()
+        .ok_or_else(|| Fail::state("not_k2_cluster: that cluster isn't one the root helper made; nothing changed"))?;
+    let row = lsclusters(ctx)?
+        .into_iter()
+        .find(|r| r.major == m.get() && r.name == name.as_str())
+        .ok_or_else(|| Fail::state("not_k2_cluster: the recorded cluster isn't listed by pg_lsclusters; nothing changed"))?;
+    if row.data_dir != rec.data_dir || row.port != rec.port {
+        return Err(Fail::state("not_k2_cluster: the cluster's data dir or port isn't the one recorded; nothing changed"));
+    }
+    // A running cluster also answers the system identifier recorded at
+    // creation: a cluster made by hand under a recorded name never counts.
+    if row.online() && system_id(ctx, m, row.port)? != rec.system_id {
+        return Err(Fail::state("not_k2_cluster: the cluster's system identifier isn't the one recorded; nothing changed"));
+    }
+    Ok((row, rec))
+}
+
+fn named_verified(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<(ClusterRow, NamedRec)> {
+    named_of(ctx, m, name)
+}
+
+fn named_wait_online(ctx: &Ctx, m: PgMajor, name: &str) -> HResult<ClusterRow> {
+    for i in 0..START_WAIT_TRIES {
+        if let Some(r) = lsclusters(ctx)?.into_iter().find(|r| r.major == m.get() && r.name == name) {
+            if r.online() {
+                return Ok(r);
+            }
+        }
+        if i + 1 < START_WAIT_TRIES && ctx.real_owners {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+    Err(Fail::io(format!("{} did not come online", named::unit(m.get(), name))))
+}
+
+/// The WAL spool of a named cluster: postgres-owned 0700, made by postgres
+/// itself (as `MOVES_DIR`, review #1 L4).
+fn wal_spool(ctx: &Ctx, m: PgMajor, name: &str) -> HResult<String> {
+    let d = named::wal_spool(m.get(), name);
+    as_postgres(ctx, MKDIR, &["-p", "-m", "0700", "--", &d], None)?;
+    let st = as_postgres(ctx, STAT, &["-c", "%F %U", "--", &d], None)?;
+    if String::from_utf8_lossy(&st.stdout).trim() != "directory postgres" {
+        return Err(Fail::state("wal_spool_refused: the WAL spool is not a postgres-owned directory"));
+    }
+    as_postgres(ctx, CHMOD, &["0700", "--", &d], None)?;
+    Ok(d)
+}
+
+fn spool_bytes(ctx: &Ctx, m: u32, name: &str) -> u64 {
+    as_postgres(ctx, DU, &["-sb", "--", &named::wal_spool(m, name)], None)
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().next().and_then(|n| n.parse().ok()))
+        .unwrap_or(0)
+}
+
+fn named_json(ctx: &Ctx, r: &ClusterRow, rec: &NamedRec) -> J {
+    let mut v = cluster_json(ctx, r);
+    v["unit"] = json!(named::unit(r.major, &r.name));
+    v["startConf"] = json!(read_small(ctx, &format!("{}/start.conf", named::etc_dir(r.major, &r.name)), 4096)
+        .ok()
+        .flatten()
+        .and_then(|t| String::from_utf8_lossy(&t).lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with('#')).map(str::to_string)));
+    v["inSlice"] = json!(present(ctx, &named::slice_dropin(r.major, &r.name)));
+    v["k2Named"] = json!(true);
+    v["systemId"] = json!(rec.system_id);
+    v["walArchive"] = json!(rec.wal_archive);
+    if rec.wal_archive {
+        v["walSpool"] = json!(named::wal_spool(r.major, &r.name));
+        v["walSpoolBytes"] = json!(spool_bytes(ctx, r.major, &r.name));
+    }
+    v
+}
+
+/// `pg clusters`' named part: each non-`main` row gets `k2Named` (and,
+/// when true, its record's facts).
+pub(crate) fn mark_named(ctx: &Ctx, rows: &[ClusterRow], out: &mut [J]) {
+    for (r, v) in rows.iter().zip(out.iter_mut()) {
+        if r.name == CLUSTER_NAME {
+            continue;
+        }
+        let verified = PgMajor::new(r.major)
+            .zip(ClusterName::parse(&r.name))
+            .and_then(|(m, n)| named_verified(ctx, m, &n).ok());
+        match verified {
+            Some((row, rec)) => *v = named_json(ctx, &row, &rec),
+            None => v["k2Named"] = json!(false),
+        }
+    }
+}
+
+/// `pg ensure-cluster <M>/<name> [<port>] [--wal-archive]`.
+pub fn ensure_named(ctx: &Ctx, m: PgMajor, name: &ClusterName, port: Option<u16>, wal_archive: bool) -> HResult<J> {
+    let n = name.as_str();
+    let mut st = named_state(ctx)?;
+    // Already ours: answer it again (the daemon re-records after a crash).
+    if st.get(m.get(), n).is_some() {
+        let (row, rec) = named_verified(ctx, m, name)?;
+        if port.is_some_and(|p| p != rec.port) {
+            return Err(Fail::state(format!("port_mismatch: {}/{n} already runs on {}", m.get(), rec.port)));
+        }
+        if wal_archive != rec.wal_archive {
+            return Err(Fail::state("archive_mismatch: the cluster was made with another --wal-archive; nothing changed"));
+        }
+        let mut v = named_json(ctx, &row, &rec);
+        v["created"] = json!(false);
+        v["started"] = json!(false);
+        return Ok(v);
+    }
+    if st.clusters.len() >= named::MAX_NAMED {
+        return Err(Fail::state("named_full: this box already has the most named clusters K2 makes"));
+    }
+    let rows = lsclusters(ctx)?;
+    // §2: one name space per box. akzm's `17/k2db` lands here.
+    if name_in_use(ctx, &rows, n)? {
+        return Err(Fail::state(format!(
+            "name_taken: a cluster or a data/config dir named {n} already exists on this box (any major); K2 never takes one over; nothing changed"
+        )));
+    }
+    no_links_above_named(ctx, m)?;
+    let mut busy = listening(ctx)?;
+    busy.extend(sew_band_ports(ctx));
+    let port = match port {
+        Some(p) => {
+            if p == PRIMARY_PORT || !in_band(p) {
+                return Err(Fail::state("port_refused: a named cluster takes a band port other than 5432"));
+            }
+            if rows.iter().any(|r| r.port == p) || st.clusters.iter().any(|r| r.port == p) {
+                return Err(Fail::state("port_taken: another cluster is configured on that port"));
+            }
+            if busy.contains(&p) {
+                return Err(Fail::state("port_taken: something already listens on that port, or Sew's config names it"));
+            }
+            p
+        }
+        None => {
+            let mut taken: Vec<u16> = rows.iter().map(|r| r.port).collect();
+            taken.extend(busy);
+            taken.extend(st.clusters.iter().map(|r| r.port));
+            taken.push(PRIMARY_PORT);
+            next_port(&taken).ok_or_else(|| Fail::state("band_full: no free port in K2's band 5432-5449"))?
+        }
+    };
+    if !major_installed(ctx, m) {
+        add_major(ctx, m, false)?;
+    }
+    let (data, etc) = (named::data_dir(m.get(), n), named::etc_dir(m.get(), n));
+    if present(ctx, &data) || present(ctx, &etc) {
+        return Err(Fail::state("name_taken: a data or config dir for that name exists; nothing changed"));
+    }
+    no_links_above_named(ctx, m)?;
+    put_at(ctx, CREATECLUSTER_DROPIN, createcluster_dropin().as_bytes())?;
+    let (mt, pt) = (m.token(), port.to_string());
+    ctx.run_ok(
+        PG_CREATECLUSTER,
+        &[&mt, n, "-p", &pt, "--start-conf", "auto", "--", "--auth-local=peer", "--auth-host=scram-sha-256"],
+        None,
+    )?;
+    for d in [&data, &etc] {
+        if !real_dir(ctx, d) {
+            return Err(Fail::state(format!(
+                "cluster_layout_refused: {d} is not a real directory after pg_createcluster; the cluster is left stopped for the owner"
+            )));
+        }
+    }
+    no_links_above_named(ctx, m)?;
+    let d = ctx
+        .dir(&format!("{etc}/conf.d"))
+        .map_err(|e| Fail::io_err("open the cluster's conf.d", e))?;
+    put(ctx, &d, CLUSTER_CONF_FILE, cluster_conf().as_bytes())?;
+    put(ctx, &d, k2_root_proto::paths::PG_CONFD_FILE, pg_guc_conf().as_bytes())?;
+    if wal_archive {
+        wal_spool(ctx, m, n)?;
+        put(ctx, &d, named::WAL_ARCHIVE_CONF_FILE, named::wal_archive_conf(m.get(), n).as_bytes())?;
+    }
+    install_slice(ctx)?;
+    if put_at(ctx, &named::slice_dropin(m.get(), n), slice_dropin().as_bytes())? {
+        ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
+    }
+    let unit = named::unit(m.get(), n);
+    ctx.run_ok(SYSTEMCTL, &["start", &unit], None)?;
+    let row = named_wait_online(ctx, m, n)?;
+    if row.port != port || row.data_dir != data {
+        return Err(Fail::state("cluster_layout_refused: the new cluster answers another port or data dir; not recorded"));
+    }
+    let rec = NamedRec {
+        major: m.get(),
+        name: n.to_string(),
+        port,
+        data_dir: data,
+        system_id: system_id(ctx, m, port)?,
+        wal_archive,
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+    };
+    st.clusters.push(rec.clone());
+    save_named_state(ctx, &st)?;
+    let mut v = named_json(ctx, &row, &rec);
+    v["created"] = json!(true);
+    v["started"] = json!(true);
+    Ok(v)
+}
+
+/// `pg psql --cluster <M>/<name>`: that major's psql on the recorded port.
+pub fn psql_args_named(ctx: &Ctx, m: PgMajor, name: &ClusterName) -> HResult<(String, Vec<String>)> {
+    let (row, _) = named_of(ctx, m, name)?;
+    Ok((m.bin("psql"), vec!["-h".into(), PG_SOCKET_DIR.into(), "-p".into(), row.port.to_string()]))
+}
+
+/// `pg systemctl start|restart|stop|is-active <M>/<name>`.
+pub fn systemctl_named(ctx: &Ctx, op: k2_root_proto::verbs::PgOp, m: PgMajor, name: &ClusterName) -> HResult<J> {
+    use k2_root_proto::verbs::PgOp;
+    named_of(ctx, m, name)?;
+    let unit = named::unit(m.get(), name.as_str());
+    let verb = match op {
+        PgOp::Start => "start",
+        PgOp::Restart => "restart",
+        PgOp::Stop => "stop",
+        PgOp::IsActive => "is-active",
+        PgOp::Enable | PgOp::Disable => return Err(Fail::state("refused: a named cluster's boot setting is its start.conf")),
+    };
+    if op == PgOp::IsActive {
+        let out = ctx
+            .exec
+            .run(SYSTEMCTL, &["is-active".to_string(), unit.clone()], None)
+            .map_err(|e| Fail::io(format!("systemctl: {}", e.kind_str())))?;
+        return Ok(json!({"unit": unit, "active": String::from_utf8_lossy(&out.stdout).trim()}));
+    }
+    ctx.run_ok(SYSTEMCTL, &[verb, &unit], None)?;
+    let row = if op == PgOp::Stop { None } else { Some(named_wait_online(ctx, m, name.as_str())?) };
+    Ok(json!({"unit": unit, "op": verb, "online": row.as_ref().map(ClusterRow::online).unwrap_or(false)}))
 }

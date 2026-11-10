@@ -225,7 +225,7 @@ fn nft_covers_process_apps_once_their_user_exists() {
         .into_iter()
         .filter(|(p, a, _)| p == NFT && a == &vec!["-f".to_string(), "-".to_string()])
         .collect();
-    let want = nft_ruleset(APP_UID, Some(PROC_UID), GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
+    let want = nft_ruleset(APP_UID, Some(PROC_UID), GATEWAY_PORTS, PROXY_PORTS, k2_root_proto::verbs::NftDb::Band(DB_PORTS), &[]);
     assert_eq!(fed[0].2.as_deref(), Some(want.as_bytes()));
     assert!(want.contains("meta skuid 995 jump k2app_v5"));
 }
@@ -696,16 +696,22 @@ fn reserve_ports_refuses_a_planted_link() {
 fn nft_apply_feeds_the_canned_ruleset_for_the_looked_up_uid() {
     let t = box_root();
     with_app_user(&t);
-    t.as_agent(); // tightening: open
+    // 0.46.11: the band form admits every App to every cluster in it, so
+    // on a box already on `per-app` it loosens: the daemon's only.
+    t.as_agent();
+    let o = t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"]);
+    assert_eq!(o.code, exit::NOT_DAEMON);
+    t.as_daemon();
     let o = t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"]);
     ok(&o);
+    t.as_agent();
     let fed: Vec<_> = t
         .calls()
         .into_iter()
         .filter(|(p, a, _)| p == NFT && a == &vec!["-f".to_string(), "-".to_string()])
         .collect();
     assert_eq!(fed.len(), 1);
-    let want = nft_ruleset(APP_UID, None, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
+    let want = nft_ruleset(APP_UID, None, GATEWAY_PORTS, PROXY_PORTS, k2_root_proto::verbs::NftDb::Band(DB_PORTS), &[]);
     assert_eq!(fed[0].2.as_deref(), Some(want.as_bytes()));
     assert!(want.contains("meta skuid 996 jump k2app_v5"));
 
@@ -1612,13 +1618,14 @@ fn nft_app_admits_only_the_apps_own_port_by_cgroup_and_is_daemon_only() {
     let o = t.call(&["apps", "nft", "app", "jobs", "38600"]);
     assert_eq!(o.code, exit::STATE);
     assert!(o.stderr.contains("belongs to App acme"), "{}", o.stderr);
-    // A full re-apply keeps the per-App rules (boot, drift).
-    t.as_agent();
+    // A full re-apply keeps the per-App rules (boot, drift). The band
+    // table is the daemon's since 0.46.11.
     ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"]));
     let full = nft_scripts(&t).pop().unwrap();
     assert!(full.contains("k2apps-acme_skin.slice\" oifname \"lo\" tcp dport { 38601, 38901 } accept"));
     assert!(!full.contains("38600-38899"), "never the whole gateway range");
     // Agents can't add or remove rules.
+    t.as_agent();
     assert_eq!(t.call(&["apps", "nft", "app", "jobs", "38602"]).code, exit::NOT_DAEMON);
     assert_eq!(t.call(&["apps", "nft", "app-remove", "acme"]).code, exit::NOT_DAEMON);
 }
@@ -1790,10 +1797,8 @@ fn nft_app_box_ports_join_the_apps_rule_and_a_new_list_replaces_the_old() {
     assert!(sc.contains("tcp dport { 38602, 38902, 8470 } accept"), "{sc}");
     assert!(!sc.contains("7880"), "{sc}");
     // A full re-apply keeps them (boot, drift).
-    t.as_agent();
     ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"]));
     assert!(nft_scripts(&t).pop().unwrap().contains("tcp dport { 38602, 38902, 8470 } accept"));
-    t.as_daemon();
     // None: back to the gateway and proxy only; app-remove forgets them.
     ok(&t.call(&["apps", "nft", "app", "hearth", "38602"]));
     assert!(nft_scripts(&t).pop().unwrap().contains("tcp dport { 38602, 38902 } accept"));
@@ -1805,4 +1810,58 @@ fn nft_app_box_ports_join_the_apps_rule_and_a_new_list_replaces_the_old() {
     for bad in ["22", "5432", "38601", "2019"] {
         assert_ne!(t.call(&["apps", "nft", "app", "hearth", "38602", bad]).code, 0, "{bad}");
     }
+}
+
+/// prd-named-pg-clusters-v1 §9a (0.46.11, protocol 15): `--db` records the
+/// App's database ports; the per-App table (`k2app_v6`) has no band-wide
+/// accept, so an App reaches only its own clusters, never a hand-made one
+/// in the band (akzm's `17/k2db` on 5433).
+#[test]
+fn per_app_table_admits_each_app_only_its_database_ports() {
+    let t = box_root();
+    with_app_user(&t);
+    current_table(&t);
+    container_cgroup(&t, "feedback");
+    container_cgroup(&t, "notes");
+    let o = t.call(&["apps", "nft", "app", "feedback", "38601", "8470", "--db", "5434"]);
+    ok(&o);
+    assert_eq!(json(&o)["dbPorts"], serde_json::json!([5434]));
+    ok(&t.call(&["apps", "nft", "app", "notes", "38602", "--db", "5432"]));
+    let st = json(&t.call(&["apps", "status"]));
+    assert_eq!(st["nftDbPorts"], serde_json::json!({"feedback": [5434], "notes": [5432]}));
+    // A rule an older daemon recorded (no --db): on the per-App table it
+    // keeps the band until the daemon re-sends it.
+    container_cgroup(&t, "legacy");
+    ok(&t.call(&["apps", "nft", "app", "legacy", "38603"]));
+    // An agent may re-apply the per-App table (it renders from state).
+    t.as_agent();
+    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "per-app"]));
+    let full = nft_scripts(&t).pop().unwrap();
+    assert!(full.contains("chain k2app_v6 {") && full.contains("meta skuid 996 jump k2app_v6"), "{full}");
+    assert!(!full.contains("oifname \"lo\" tcp dport 5432-5449 accept") && !full.contains("5433"), "no band-wide accept, never 5433: {full}");
+    assert!(full.contains("k2apps-feedback.slice\" oifname \"lo\" tcp dport { 38601, 38901, 8470, 5434 } accept"), "{full}");
+    assert!(full.contains("k2apps-notes.slice\" oifname \"lo\" tcp dport { 38602, 38902, 5432 } accept"), "{full}");
+    assert!(full.contains("k2apps-legacy.slice\" oifname \"lo\" tcp dport { 38603, 38903, 5432-5449 } accept"), "{full}");
+    t.as_daemon();
+    // No --db (an old daemon): the recorded ports stay.
+    ok(&t.call(&["apps", "nft", "app", "feedback", "38601", "8470"]));
+    assert!(nft_scripts(&t).pop().unwrap().contains("tcp dport { 38601, 38901, 8470, 5434 } accept"));
+    // `--db` with no port clears them; app-remove forgets them.
+    ok(&t.call(&["apps", "nft", "app", "notes", "38602", "--db"]));
+    assert!(nft_scripts(&t).pop().unwrap().contains("k2apps-notes.slice\" oifname \"lo\" tcp dport { 38602, 38902 } accept"));
+    ok(&t.call(&["apps", "nft", "app-remove", "feedback"]));
+    assert_eq!(json(&t.call(&["apps", "status"]))["nftDbPorts"], serde_json::json!({"notes": []}));
+    // Out-of-band and repeated ports never parse; a doctored state file
+    // never opens one either.
+    for bad in ["5460", "22", "5432,5433", "5432-5449", "none"] {
+        assert_ne!(t.call(&["apps", "nft", "app", "notes", "38602", "--db", bad]).code, 0, "{bad}");
+    }
+    std::fs::write(
+        t.p(NFT_APPS_STATE),
+        r#"{"apps":{"notes":38602},"dbPorts":{"notes":[5460,22,5433]}}"#,
+    )
+    .unwrap();
+    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "per-app"]));
+    let full = nft_scripts(&t).pop().unwrap();
+    assert!(full.contains("tcp dport { 38602, 38902, 5433 } accept") && !full.contains("5460") && !full.contains(" 22"), "{full}");
 }

@@ -92,7 +92,7 @@ fn version_answers_the_current_protocol_with_the_sew_namespace_and_pin() {
     let v = json(&o);
     // 7 brought `engine sew`; 8 is 0.46.1's helper changes (protocols are
     // additive, so the Sew namespace is still here).
-    assert_eq!(v["protocol"], 14, "13 was 0.46.9's one bump; 14 is 0.46.10's (additive)");
+    assert_eq!(v["protocol"], 15, "14 was 0.46.10's one bump; 15 is 0.46.11's (additive)");
     assert_eq!(v["namespaces"]["sewtunnelclear"], true, "the tunnel move's clears (0.46.10)");
     assert_eq!(v["namespaces"]["sewboxbackup"], true, "box-backup (0.46.9)");
     assert_eq!(v["namespaces"]["sewreconf"], true, "install reconfigure (0.46.6)");

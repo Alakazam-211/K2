@@ -104,6 +104,18 @@
 //!   `namespaces.sewtunnelclear`, [`SEW_TUNNEL_CLEAR_MIN_PROTOCOL`]. Another
 //!   0.46.10 lane that needs a helper change joins 14 here with its own
 //!   namespace flag; never 15 before 14 ships.
+//! - 15 = every root-helper change 0.46.11 makes, in one bump, shared by
+//!   every lane (the ONE place to add to it; 14 shipped in 0.46.10): named
+//!   Postgres clusters (`prd-named-pg-clusters-v1`, [`crate::pg_named`]):
+//!   `pg ensure-cluster <M>/<name> [<port>] [--wal-archive]`, `pg psql
+//!   --cluster <M>/<name>`, `pg systemctl start|restart|stop|is-active
+//!   <M>/<name>`, `pg clusters` rows' `k2Named` / `systemId` /
+//!   `walSpoolBytes`; and per-App database ports in the `k2app` table
+//!   (`apps nft apply … per-app` renders `k2app_v6`, `apps nft app … --db
+//!   <ports>|none`), whose band form becomes daemon-only. All under
+//!   `namespaces.pgnamed`, [`PGNAMED_MIN_PROTOCOL`]. Another 0.46.11 lane
+//!   that needs a helper change joins 15 here with its own namespace flag;
+//!   never 16 before 15 ships.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -112,7 +124,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 14;
+pub const PROTOCOL: u32 = 15;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -151,6 +163,11 @@ pub const SEW_TUNNEL_MIN_PROTOCOL: u32 = 12;
 /// `namespaces.sewtunnelclear == true`: a 13 helper refuses either key, so
 /// the daemon asks for the update before it sends anything.
 pub const SEW_TUNNEL_CLEAR_MIN_PROTOCOL: u32 = 14;
+/// Named Postgres clusters and per-App database ports (0.46.11,
+/// prd-named-pg-clusters-v1). Gated on this AND `namespaces.pgnamed ==
+/// true`: a 14 helper refuses `<M>/<name>`, `per-app` and `--db` on argv,
+/// so the daemon asks for the update before it sends any of them.
+pub const PGNAMED_MIN_PROTOCOL: u32 = 15;
 /// `engine sew mirror-dir` (0.46.8, SW-8 keyring mirror folder). Gated on
 /// this AND `namespaces.sewmirror == true`.
 pub const SEW_MIRROR_DIR_MIN_PROTOCOL: u32 = 12;
@@ -337,7 +354,8 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 14, "protocol 14 = 0.46.10's one bump (the tunnel move's clears); 13 = 0.46.9's (Sew box-backup facts)");
+        assert_eq!(PROTOCOL, 15, "protocol 15 = 0.46.11's one bump (named clusters, per-App db ports); 14 = 0.46.10's (the tunnel move's clears)");
+        assert_eq!(PGNAMED_MIN_PROTOCOL, 15, "named clusters join 0.46.11's one bump");
         assert_eq!(SEW_TUNNEL_CLEAR_MIN_PROTOCOL, 14, "the tunnel move's clears join 0.46.10's one bump");
         assert_eq!(SEW_BOX_BACKUP_MIN_PROTOCOL, 13, "box-backup joins 0.46.9's one bump");
         assert!(

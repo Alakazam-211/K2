@@ -600,9 +600,12 @@ pub enum Verb {
     PgSystemctl { op: PgOp, now: bool, unit: PgUnit },
     PgDaemonReload,
     PgInstallRamFence,
-    /// `pg psql [--cluster <M>] -d <db> …`: `--cluster` (protocol 9) runs
-    /// that major's own `psql` against its cluster's port as postgres.
-    PgPsql { db: DbName, flags: PsqlFlags, cluster: Option<PgMajor> },
+    /// `pg psql [--cluster <M>[-<name>]] -d <db> …`: `--cluster` (protocol
+    /// 9) runs that major's own `psql` against its cluster's port as
+    /// postgres. `<M>-<name>` (protocol 15, `namespaces.pgnamed`) is a named
+    /// cluster the helper made ([`crate::pg_named`]); `name` is `None` for
+    /// `<M>/main`, and never set without `cluster`.
+    PgPsql { db: DbName, flags: PsqlFlags, cluster: Option<PgMajor>, name: Option<ClusterName> },
     /// `pg hba-app add|remove <app-id>` (protocol 6, AR17/AR38): one canned
     /// `host app_<id> app_<id> 127.0.0.1/32 scram-sha-256` line in a
     /// K2-owned block at the top of each cluster's `pg_hba.conf`, then a
@@ -628,6 +631,19 @@ pub enum Verb {
     /// `port`, `dataDir`, `running`, `startConf`, `unit`). An existing
     /// cluster on another port than the one asked for is a refusal.
     PgEnsureCluster { major: PgMajor, port: Option<u16> },
+    // pg, protocol 15 (`namespaces.pgnamed`, see `crate::pg_named`)
+    /// `pg ensure-cluster <M>-<name> [<port>] [--wal-archive]`: a named
+    /// cluster, created when the name is free on every major (no
+    /// `pg_lsclusters` row, no data or config dir) on `<port>` or the first
+    /// free band port (never 5432); K2's cluster conf, RAM fence and slice,
+    /// with `--wal-archive` the canned archive conf and its spool; started,
+    /// then recorded in [`crate::pg_named::NAMED_STATE`]. A name already
+    /// recorded and matching what runs answers it again (`created:false`);
+    /// any other existing name refuses (`name_taken`).
+    PgEnsureNamed { major: PgMajor, name: ClusterName, port: Option<u16>, wal_archive: bool },
+    /// `pg systemctl start|restart|stop|is-active <M>-<name>`: a named
+    /// cluster the helper made (recorded and matching), never any other.
+    PgNamedSystemctl { op: PgOp, major: PgMajor, name: ClusterName },
     /// `pg start-conf <M> auto|manual` (`clusters tidy` sets an empty
     /// cluster `manual`; never a drop).
     PgStartConf { major: PgMajor, auto: bool },
@@ -712,7 +728,12 @@ pub enum Verb {
     AppsDelegate(bool),
     AppsIoCost(bool),
     AppsReservePorts(bool),
-    AppsNftApply { gw: PortRange, px: PortRange, db: PortRange },
+    /// `apps nft apply <gw> <px> <db>|per-app`: the `k2app` table. A band
+    /// (`5432-5449`) renders `k2app_v5`, which admits every App UID to every
+    /// cluster in it; `per-app` (protocol 15, `namespaces.pgnamed`) renders
+    /// `k2app_v6`: no band-wide accept, each App reaches only the database
+    /// ports its own rule names (`apps nft app … --db`).
+    AppsNftApply { gw: PortRange, px: PortRange, db: NftDb },
     AppsNftRemove,
     /// `apps nft app <id> <gw-port> [<box-port>…]`: the App's own gateway
     /// port, matched on its cgroups (slice 3), plus its owner-approved box
@@ -721,7 +742,12 @@ pub enum Verb {
     /// The list replaces the App's previous one (none = no box services).
     /// Re-run after each App start (nft resolves a cgroup path to an inode
     /// when the rule loads).
-    AppsNftApp { id: AppId, gw: u16, box_ports: Vec<u16> },
+    ///
+    /// `--db [<port>…]` (protocol 15, last): the App's database ports (its
+    /// workspace's K2 clusters, in the band, at most
+    /// [`crate::apps::MAX_DB_PORTS`]), kept for the `per-app` table. `None`
+    /// = no `--db`: the ports recorded before stay.
+    AppsNftApp { id: AppId, gw: u16, box_ports: Vec<u16>, db_ports: Option<Vec<u16>> },
     AppsNftAppRemove(AppId),
     /// Install (or update) `k2-app-engine` from a signed payload on stdin,
     /// its user unit for `k2app` and the socket dir (slice 3, S11).
@@ -818,6 +844,41 @@ pub enum Verb {
 
 use crate::apps::{bounded, AppId, IoMax, OciRuntime, PortRange, BUDGET_MEM_MIB, BUDGET_TASKS, CORES_MIN_MIB};
 use crate::pg_major::{port_token, tag_ok, PgMajor};
+use crate::pg_named::ClusterName;
+
+/// The database part of `apps nft apply`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NftDb {
+    /// Every App UID reaches the whole range (`k2app_v5`).
+    Band(PortRange),
+    /// Only each App's own database ports (`k2app_v6`, protocol 15).
+    PerApp,
+}
+
+pub const NFT_DB_PER_APP: &str = "per-app";
+
+impl NftDb {
+    pub fn token(&self) -> String {
+        match self {
+            Self::Band(r) => r.token(),
+            Self::PerApp => NFT_DB_PER_APP.into(),
+        }
+    }
+}
+
+/// The ports after `--db` in `apps nft app`: canonical band ports, no
+/// repeats, at most [`crate::apps::MAX_DB_PORTS`] (none = no database).
+pub fn parse_db_ports(ts: &[&str]) -> Option<Vec<u16>> {
+    let mut v = Vec::new();
+    for p in ts {
+        let n: u16 = p.parse().ok()?;
+        if n.to_string() != *p || !crate::pg_major::in_band(n) || v.contains(&n) {
+            return None;
+        }
+        v.push(n);
+    }
+    (v.len() <= crate::apps::MAX_DB_PORTS).then_some(v)
+}
 
 const REFUSED: &str = "refused arguments";
 
@@ -953,12 +1014,20 @@ fn parse_psql(rest: &[&str]) -> Option<Verb> {
     let mut db: Option<DbName> = None;
     let mut flags = PsqlFlags::default();
     let mut cluster: Option<PgMajor> = None;
+    let mut name: Option<ClusterName> = None;
     let mut i = 0;
     while i < rest.len() {
         match rest[i] {
             // Only first, so the canonical argv stays one spelling.
             "--cluster" if i == 0 => {
-                cluster = Some(PgMajor::parse(rest.get(1)?)?);
+                let t = rest.get(1)?;
+                match crate::pg_named::parse_ref(t) {
+                    Some((m, n)) => {
+                        cluster = Some(m);
+                        name = Some(n);
+                    }
+                    None => cluster = Some(PgMajor::parse(t)?),
+                }
                 i += 2;
             }
             "-d" => {
@@ -991,7 +1060,7 @@ fn parse_psql(rest: &[&str]) -> Option<Verb> {
             _ => return None,
         }
     }
-    Some(Verb::PgPsql { db: db?, flags, cluster })
+    Some(Verb::PgPsql { db: db?, flags, cluster, name })
 }
 
 impl Verb {
@@ -1006,6 +1075,9 @@ impl Verb {
             6 + crate::apps::MAX_DEVICES
         } else if args.starts_with(&["pg", "psql", "--cluster"]) {
             9
+        } else if args.starts_with(&["apps", "nft", "app"]) {
+            // id, gateway, every box service, then `--db <port>…` (15).
+            5 + crate::apps::MAX_BOX_SERVICES + 1 + crate::apps::MAX_DB_PORTS
         } else {
             8
         };
@@ -1043,6 +1115,14 @@ impl Verb {
             ["mail", "restore-data"] => Verb::MailRestoreData,
 
             ["pg", "systemctl", "daemon-reload"] => Verb::PgDaemonReload,
+            ["pg", "systemctl", op, r] if crate::pg_named::parse_ref(r).is_some() => {
+                let op = pg_op(op).ok_or(REFUSED)?;
+                if !matches!(op, PgOp::Start | PgOp::Restart | PgOp::Stop | PgOp::IsActive) {
+                    return Err(REFUSED);
+                }
+                let (major, name) = crate::pg_named::parse_ref(r).ok_or(REFUSED)?;
+                Verb::PgNamedSystemctl { op, major, name }
+            }
             ["pg", "systemctl", op, unit] => {
                 let op = pg_op(op).ok_or(REFUSED)?;
                 Verb::PgSystemctl {
@@ -1075,6 +1155,20 @@ impl Verb {
             ["pg", "clusters"] => Verb::PgClusters,
             ["pg", "add-major", m] => Verb::PgAddMajor { major: major(m)?, dry_run: false },
             ["pg", "add-major", m, "--dry-run"] => Verb::PgAddMajor { major: major(m)?, dry_run: true },
+            ["pg", "ensure-cluster", r, rest @ ..] if crate::pg_named::parse_ref(r).is_some() => {
+                let (major, name) = crate::pg_named::parse_ref(r).ok_or(REFUSED)?;
+                let (port, wal_archive) = match rest {
+                    [] => (None, false),
+                    ["--wal-archive"] => (None, true),
+                    [p] => (Some(port_token(p).ok_or(REFUSED)?), false),
+                    [p, "--wal-archive"] => (Some(port_token(p).ok_or(REFUSED)?), true),
+                    _ => return Err(REFUSED),
+                };
+                if port == Some(crate::pg_major::PRIMARY_PORT) {
+                    return Err(REFUSED);
+                }
+                Verb::PgEnsureNamed { major, name, port, wal_archive }
+            }
             ["pg", "ensure-cluster", m] => Verb::PgEnsureCluster { major: major(m)?, port: None },
             ["pg", "ensure-cluster", m, p] => Verb::PgEnsureCluster {
                 major: major(m)?,
@@ -1182,7 +1276,7 @@ impl Verb {
             ["apps", "nft", "apply", gw, px, db] => Verb::AppsNftApply {
                 gw: PortRange::parse(gw).ok_or(REFUSED)?,
                 px: PortRange::parse(px).ok_or(REFUSED)?,
-                db: PortRange::parse(db).ok_or(REFUSED)?,
+                db: if *db == NFT_DB_PER_APP { NftDb::PerApp } else { NftDb::Band(PortRange::parse(db).ok_or(REFUSED)?) },
             },
             ["apps", "nft", "remove"] => Verb::AppsNftRemove,
             ["apps", "nft", "app", id, port, rest @ ..] => {
@@ -1190,6 +1284,10 @@ impl Verb {
                 if !(crate::apps::GATEWAY_PORTS.lo..=crate::apps::GATEWAY_PORTS.hi).contains(&gw) {
                     return Err(REFUSED);
                 }
+                let (rest, db_ports) = match rest.iter().position(|t| *t == "--db") {
+                    Some(i) => (&rest[..i], Some(parse_db_ports(&rest[i + 1..]).ok_or(REFUSED)?)),
+                    None => (rest, None),
+                };
                 if rest.len() > crate::apps::MAX_BOX_SERVICES {
                     return Err(REFUSED);
                 }
@@ -1202,7 +1300,7 @@ impl Verb {
                     }
                     box_ports.push(p);
                 }
-                Verb::AppsNftApp { id: AppId::parse(id).ok_or(REFUSED)?, gw, box_ports }
+                Verb::AppsNftApp { id: AppId::parse(id).ok_or(REFUSED)?, gw, box_ports, db_ports }
             }
             ["apps", "nft", "app-remove", id] => Verb::AppsNftAppRemove(AppId::parse(id).ok_or(REFUSED)?),
             ["apps", "install-engine"] => Verb::AppsInstallEngine,
@@ -1344,11 +1442,14 @@ impl Verb {
                 v
             }
             Verb::PgInstallRamFence => s(&["pg", "install-ram-fence"]),
-            Verb::PgPsql { db, flags, cluster } => {
+            Verb::PgPsql { db, flags, cluster, name } => {
                 let mut v = s(&["pg", "psql"]);
                 if let Some(m) = cluster {
                     v.push("--cluster".into());
-                    v.push(m.token());
+                    v.push(match name {
+                        Some(n) => crate::pg_named::ref_token(*m, n),
+                        None => m.token(),
+                    });
                 }
                 v.push("-d".into());
                 v.push(db.as_str().into());
@@ -1384,6 +1485,19 @@ impl Verb {
                     v.push(p.to_string());
                 }
                 v
+            }
+            Verb::PgEnsureNamed { major, name, port, wal_archive } => {
+                let mut v = s(&["pg", "ensure-cluster", &crate::pg_named::ref_token(*major, name)]);
+                if let Some(p) = port {
+                    v.push(p.to_string());
+                }
+                if *wal_archive {
+                    v.push("--wal-archive".into());
+                }
+                v
+            }
+            Verb::PgNamedSystemctl { op, major, name } => {
+                s(&["pg", "systemctl", pg_op_name(*op), &crate::pg_named::ref_token(*major, name)])
             }
             Verb::PgStartConf { major, auto } => {
                 s(&["pg", "start-conf", &major.token(), if *auto { "auto" } else { "manual" }])
@@ -1449,9 +1563,13 @@ impl Verb {
                 s(&["apps", "nft", "apply", &gw.token(), &px.token(), &db.token()])
             }
             Verb::AppsNftRemove => s(&["apps", "nft", "remove"]),
-            Verb::AppsNftApp { id, gw, box_ports } => {
+            Verb::AppsNftApp { id, gw, box_ports, db_ports } => {
                 let mut v = vec!["apps".to_string(), "nft".into(), "app".into(), id.as_str().into(), gw.to_string()];
                 v.extend(box_ports.iter().map(u16::to_string));
+                if let Some(d) = db_ports {
+                    v.push("--db".into());
+                    v.extend(d.iter().map(u16::to_string));
+                }
                 v
             }
             Verb::AppsNftAppRemove(id) => s(&["apps", "nft", "app-remove", id.as_str()]),
@@ -1545,6 +1663,10 @@ impl Verb {
             // the daemon's call (the owner's or the toggle's, PRD §12).
             Verb::PgAddMajor { dry_run: false, .. }
             | Verb::PgEnsureCluster { .. }
+            // A named cluster and its unit: the daemon's call (the owner's
+            // or the Postgres-versions switch's, prd-named-pg-clusters-v1 §6).
+            | Verb::PgEnsureNamed { .. }
+            | Verb::PgNamedSystemctl { .. }
             | Verb::PgStartConf { auto: false, .. }
             | Verb::PgCopyRoles { .. }
             | Verb::PgMoveDump { .. }
@@ -1644,10 +1766,13 @@ impl Verb {
             // Re-applying the canonical ranges is a tightening anyone may
             // ask for (boot, drift). Other ranges could open more loopback
             // ports to Apps: the daemon's call.
+            // 0.46.11 (protocol 15): only the per-App table is a tightening
+            // anyone may re-apply (it renders from the helper's own state).
+            // The band form admits every App to every cluster in the band,
+            // so on a box already on `per-app` it loosens: the daemon's
+            // call, like any other range.
             Verb::AppsNftApply { gw, px, db } => {
-                if (*gw, *px, *db)
-                    == (crate::apps::GATEWAY_PORTS, crate::apps::PROXY_PORTS, crate::apps::DB_PORTS)
-                {
+                if (*gw, *px, *db) == (crate::apps::GATEWAY_PORTS, crate::apps::PROXY_PORTS, NftDb::PerApp) {
                     Open
                 } else {
                     Daemon
@@ -1731,7 +1856,10 @@ impl Verb {
             // DB names are validated ids; keep them out of the audit verb
             // field anyway (the db goes in its own field).
             Verb::PgPsql { cluster: None, .. } => "pg psql".to_string(),
-            Verb::PgPsql { cluster: Some(m), .. } => format!("pg psql --cluster {}", m.token()),
+            Verb::PgPsql { cluster: Some(m), name: None, .. } => format!("pg psql --cluster {}", m.token()),
+            Verb::PgPsql { cluster: Some(m), name: Some(n), .. } => {
+                format!("pg psql --cluster {}", crate::pg_named::ref_token(*m, n))
+            }
             // The db and tag go in their own fields.
             Verb::PgMoveDump { from, to, schema_only, .. } => {
                 format!("pg move-dump {} {}{}", from.token(), to.token(), if *schema_only { " --schema-only" } else { "" })
@@ -1808,6 +1936,17 @@ pub fn catalog() -> Vec<Verb> {
                 unaligned: true,
             },
             cluster: None,
+            name: None,
+        },
+        Verb::PgPsql {
+            db: db.clone(),
+            flags: PsqlFlags {
+                on_error_stop: true,
+                tuples_only: true,
+                unaligned: true,
+            },
+            cluster: Some(m17),
+            name: None,
         },
         Verb::PgPsql {
             db,
@@ -1817,12 +1956,19 @@ pub fn catalog() -> Vec<Verb> {
                 unaligned: true,
             },
             cluster: Some(m17),
+            name: Some(ClusterName::parse("feedback").expect("name")),
         },
         Verb::PgClusters,
         Verb::PgAddMajor { major: m17, dry_run: false },
         Verb::PgAddMajor { major: m17, dry_run: true },
         Verb::PgEnsureCluster { major: m17, port: Some(5433) },
         Verb::PgEnsureCluster { major: m17, port: None },
+        Verb::PgEnsureNamed { major: m17, name: ClusterName::parse("feedback").expect("name"), port: Some(5434), wal_archive: true },
+        Verb::PgEnsureNamed { major: m17, name: ClusterName::parse("feedback").expect("name"), port: None, wal_archive: false },
+        Verb::PgEnsureNamed { major: m17, name: ClusterName::parse("feedback").expect("name"), port: None, wal_archive: true },
+        Verb::PgEnsureNamed { major: m17, name: ClusterName::parse("feedback").expect("name"), port: Some(5434), wal_archive: false },
+        Verb::PgNamedSystemctl { op: PgOp::Restart, major: m17, name: ClusterName::parse("feedback").expect("name") },
+        Verb::PgNamedSystemctl { op: PgOp::IsActive, major: m17, name: ClusterName::parse("feedback").expect("name") },
         Verb::PgStartConf { major: m16, auto: true },
         Verb::PgStartConf { major: m16, auto: false },
         Verb::PgInstallSlice,
@@ -1872,18 +2018,37 @@ pub fn catalog() -> Vec<Verb> {
         Verb::AppsNftApply {
             gw: crate::apps::GATEWAY_PORTS,
             px: crate::apps::PROXY_PORTS,
-            db: crate::apps::DB_PORTS,
+            db: NftDb::Band(crate::apps::DB_PORTS),
+        },
+        Verb::AppsNftApply {
+            gw: crate::apps::GATEWAY_PORTS,
+            px: crate::apps::PROXY_PORTS,
+            db: NftDb::PerApp,
         },
         Verb::AppsNftRemove,
         Verb::AppsNftApp {
             id: AppId::parse("acme-skin").expect("id"),
             gw: 38_601,
             box_ports: vec![],
+            db_ports: None,
         },
         Verb::AppsNftApp {
             id: AppId::parse("hearth").expect("id"),
             gw: 38_602,
             box_ports: vec![8470, 7880],
+            db_ports: None,
+        },
+        Verb::AppsNftApp {
+            id: AppId::parse("feedback").expect("id"),
+            gw: 38_603,
+            box_ports: vec![8470, 7880, 8001, 8002, 8003, 8004, 8005, 8006],
+            db_ports: Some(vec![5432, 5434]),
+        },
+        Verb::AppsNftApp {
+            id: AppId::parse("notes").expect("id"),
+            gw: 38_604,
+            box_ports: vec![],
+            db_ports: Some(vec![]),
         },
         Verb::AppsNftAppRemove(AppId::parse("acme-skin").expect("id")),
         Verb::AppsInstallEngine,
@@ -2225,7 +2390,8 @@ mod tests {
             &["apps", "delegate", "on"],
             &["apps", "io-cost", "on"],
             &["apps", "reserve-ports", "on"],
-            &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"],
+            // 0.46.11: the per-App table renders from the helper's state.
+            &["apps", "nft", "apply", "38600-38899", "38900-38999", "per-app"],
             &["apps", "packages", "install"],
             &["apps", "packages", "install-youki"],
             &["apps", "runtime", "crun"],
@@ -2253,13 +2419,19 @@ mod tests {
             &["apps", "unprep"],
             &["apps", "nft", "app", "jobs", "38600"],
             &["apps", "nft", "app", "hearth", "38602", "8470", "7880"],
+            &["apps", "nft", "app", "hearth", "38602", "8470", "--db", "5432", "5434"],
+            &["apps", "nft", "app", "jobs", "38600", "--db"],
             &["apps", "nft", "app-remove", "jobs"],
             &["apps", "install-engine"],
             &["apps", "logs", "jobs", "d-0123456789ab", "200"],
             &["apps", "podman", "install"],
             &["apps", "podman", "uninstall"],
+            // 0.46.11: the band admits every App to every cluster in it,
+            // which loosens a box already on `per-app`.
+            &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"],
             // Non-canonical ranges could widen what Apps reach.
             &["apps", "nft", "apply", "1024-2047", "38900-38999", "5432"],
+            &["apps", "nft", "apply", "1024-2047", "38900-38999", "per-app"],
             &["apps", "nft", "apply", "38600-38899", "6379", "5432"],
             &["apps", "nft", "apply", "38600-38899", "38900-38999", "5433"],
             // The pre-0.46.3 single port is no longer the canonical band.
@@ -2410,6 +2582,19 @@ mod tests {
             &["apps", "nft", "app", "jobs", "38600", "08470"],
             &["apps", "nft", "app", "jobs", "38600", "8470", "8470"],
             &["apps", "nft", "app", "jobs", "38600", "2001", "2002", "2003", "2004", "2005", "2006", "2007", "2008", "2009"],
+            // --db (15): band ports only, canonical, no repeats, last, ≤ 8.
+            &["apps", "nft", "app", "jobs", "38600", "--db", ""],
+            &["apps", "nft", "app", "jobs", "38600", "--db", "5460"],
+            &["apps", "nft", "app", "jobs", "38600", "--db", "5431"],
+            &["apps", "nft", "app", "jobs", "38600", "--db", "05432"],
+            &["apps", "nft", "app", "jobs", "38600", "--db", "5432", "5432"],
+            &["apps", "nft", "app", "jobs", "38600", "--db", "5432-5449"],
+            &["apps", "nft", "app", "jobs", "38600", "--db", "5432,5433"],
+            &["apps", "nft", "app", "jobs", "38600", "--db", "5432", "5433", "5434", "5435", "5436", "5437", "5438", "5439", "5440"],
+            &["apps", "nft", "app", "jobs", "38600", "--db", "5432", "8470"],
+            &["apps", "nft", "app", "jobs", "38600", "--db", "5432", "--db", "5433"],
+            &["apps", "nft", "app", "jobs", "38600", "--db", "all"],
+            &["apps", "nft", "app", "jobs", "38600", "--db", "none"],
             &["apps", "nft", "app", "user.slice/x", "38600"],
             &["apps", "nft", "app-remove"],
             &["apps", "nft", "app-remove", "*"],
@@ -2966,6 +3151,63 @@ mod tests {
             &["engine", "sew", ""],
         ];
         for r in rejects {
+            assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");
+        }
+    }
+
+    /// Named clusters (protocol 15): the canonical forms parse and are the
+    /// daemon's; `<M>` alone stays `<M>/main`; nothing else gets through.
+    #[test]
+    fn named_cluster_verbs() {
+        for a in [
+            &["pg", "ensure-cluster", "17-feedback"][..],
+            &["pg", "ensure-cluster", "17-feedback", "5434"],
+            &["pg", "ensure-cluster", "17-feedback", "--wal-archive"],
+            &["pg", "ensure-cluster", "17-feedback", "5434", "--wal-archive"],
+            &["pg", "systemctl", "restart", "17-feedback"],
+            &["pg", "systemctl", "start", "17-feedback"],
+            &["pg", "systemctl", "stop", "17-feedback"],
+            &["pg", "systemctl", "is-active", "17-feedback"],
+            &["pg", "psql", "--cluster", "17-feedback", "-d", "feedback", "-v", "ON_ERROR_STOP=1", "-tA"],
+        ] {
+            let v = Verb::parse(a).unwrap_or_else(|e| panic!("{a:?}: {e}"));
+            assert_eq!(v.class(), Class::Daemon, "{a:?}");
+            assert_eq!(v.argv(), a.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "round trip");
+        }
+        // `<M>` alone is still `<M>/main`.
+        assert!(matches!(Verb::parse(&["pg", "ensure-cluster", "17"]), Ok(Verb::PgEnsureCluster { .. })));
+        assert!(matches!(
+            Verb::parse(&["pg", "psql", "--cluster", "17", "-d", "x"]),
+            Ok(Verb::PgPsql { name: None, cluster: Some(_), .. })
+        ));
+        assert!(Verb::parse(&["pg", "psql", "--cluster", "17-feedback", "-d", "x"]).unwrap().audit_name().ends_with("--cluster 17-feedback"));
+        for r in [
+            &["pg", "ensure-cluster", "17-main"][..],
+            &["pg", "ensure-cluster", "17/feedback"],
+            &["pg", "ensure-cluster", "17-k2-db"],
+            &["pg", "ensure-cluster", "17-K2db"],
+            &["pg", "ensure-cluster", "17-"],
+            &["pg", "ensure-cluster", "-feedback"],
+            &["pg", "ensure-cluster", "15-feedback"],
+            &["pg", "ensure-cluster", "17-feedback", "5432"],
+            &["pg", "ensure-cluster", "17-feedback", "5460"],
+            &["pg", "ensure-cluster", "17-feedback", "05434"],
+            &["pg", "ensure-cluster", "17-feedback", "--wal-archive", "5434"],
+            &["pg", "ensure-cluster", "17-feedback", "5434", "--wal-archive", "x"],
+            &["pg", "ensure-cluster", "17-feedback", "--archive-command", "rm"],
+            &["pg", "ensure-cluster", "17-../main"],
+            &["pg", "systemctl", "enable", "17-feedback"],
+            &["pg", "systemctl", "disable", "17-feedback"],
+            &["pg", "systemctl", "restart", "17-main"],
+            &["pg", "systemctl", "restart", "17/feedback"],
+            &["pg", "systemctl", "restart", "postgresql@17-k2db"],
+            &["pg", "systemctl", "restart", "postgresql@17-feedback"],
+            &["pg", "systemctl", "restart", "--now", "17-feedback"],
+            &["pg", "psql", "--cluster", "17-main", "-d", "x"],
+            &["pg", "psql", "--cluster", "17/feedback", "-d", "x"],
+            &["pg", "psql", "--cluster", "17-Feedback", "-d", "x"],
+            &["pg", "psql", "-d", "x", "--cluster", "17-feedback"],
+        ] {
             assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");
         }
     }

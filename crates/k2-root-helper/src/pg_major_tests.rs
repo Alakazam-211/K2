@@ -62,6 +62,11 @@ struct World {
     answers: Vec<(String, String)>,
     /// pgdual tests: psql fails (exit 3, this stderr) on SQL with the needle
     fail_on: Option<(String, String)>,
+    /// Named clusters (protocol 15): (major, name, port, online), data dir
+    /// `/var/lib/postgresql/<M>/<name>`.
+    named: Vec<(u32, String, u16, bool)>,
+    /// port → `pg_control_system().system_identifier`
+    sysid: HashMap<u16, String>,
 }
 
 type W = Rc<RefCell<World>>;
@@ -140,7 +145,18 @@ fn pg_box() -> (T, W) {
                     )
                 })
                 .collect();
-            out(0, &s)
+            let named: String = ww
+                .borrow()
+                .named
+                .iter()
+                .map(|(m, n, p, on)| {
+                    format!(
+                        "{m}  {n}    {p} {} postgres /var/lib/postgresql/{m}/{n} /var/log/postgresql/postgresql-{m}-{n}.log\n",
+                        if *on { "online" } else { "down" }
+                    )
+                })
+                .collect();
+            out(0, &(s + &named))
         }),
     );
     let ww = w.clone();
@@ -162,6 +178,14 @@ fn pg_box() -> (T, W) {
         Rc::new(move |a| {
             let m: u32 = a[0].parse().unwrap();
             let p: u16 = arg_after(a, "-p").unwrap().parse().unwrap();
+            if a[1] != "main" {
+                let n = a[1].clone();
+                ww.borrow_mut().named.push((m, n.clone(), p, false));
+                ww.borrow_mut().dbs.insert(p, vec!["postgres".into()]);
+                mkdirs(&r, &[format!("/etc/postgresql/{m}/{n}/conf.d").as_str(), format!("/var/lib/postgresql/{m}/{n}").as_str()]);
+                std::fs::write(under(&r, &format!("/etc/postgresql/{m}/{n}/start.conf")), "auto\n").unwrap();
+                return out(0, "");
+            }
             ww.borrow_mut().clusters.push((m, p, false));
             ww.borrow_mut().dbs.insert(p, vec!["postgres".into()]);
             mkdirs(&r, &[format!("/etc/postgresql/{m}/main/conf.d").as_str(), format!("/var/lib/postgresql/{m}/main").as_str()]);
@@ -173,12 +197,24 @@ fn pg_box() -> (T, W) {
     log.programs.insert(
         SYSTEMCTL.into(),
         Rc::new(move |a| {
-            if a.first().map(String::as_str) == Some("start") {
-                let unit = &a[1];
-                let m: u32 = unit.trim_start_matches("postgresql@").trim_end_matches("-main").parse().unwrap();
-                for c in ww.borrow_mut().clusters.iter_mut().filter(|c| c.0 == m) {
-                    c.2 = true;
+            let op = a.first().map(String::as_str);
+            if matches!(op, Some("start" | "restart" | "stop")) && a.get(1).is_some_and(|u| u.starts_with("postgresql@")) {
+                let unit = a[1].trim_start_matches("postgresql@").trim_end_matches(".service");
+                let (m, n) = unit.split_once('-').unwrap();
+                let m: u32 = m.parse().unwrap();
+                let on = op != Some("stop");
+                if n == "main" {
+                    for c in ww.borrow_mut().clusters.iter_mut().filter(|c| c.0 == m) {
+                        c.2 = on;
+                    }
+                } else {
+                    for c in ww.borrow_mut().named.iter_mut().filter(|c| c.0 == m && c.1 == n) {
+                        c.3 = on;
+                    }
                 }
+            }
+            if op == Some("is-active") {
+                return out(0, "active\n");
             }
             out(0, "")
         }),
@@ -279,6 +315,10 @@ fn pg_box() -> (T, W) {
                     }
                     if let Some((_, a)) = w.answers.iter().find(|(n, _)| sql.contains(n.as_str())) {
                         return out(0, &a.clone());
+                    }
+                    if sql.contains("pg_control_system()") {
+                        let id = w.sysid.get(&port).cloned().unwrap_or_else(|| format!("73{port}0000000000000"));
+                        return out(0, &format!("{id}\n"));
                     }
                     if sql.starts_with("SHOW server_version_num") {
                         let d = if port == 5432 { "160015" } else { "170011" };
@@ -1188,7 +1228,7 @@ fn psql_cluster_runs_that_majors_psql_on_its_port() {
 fn version_announces_pgmajor_on_protocol_9() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 14, "pgmajor came in 9; 14 is 0.46.10's one bump (additive)");
+    assert_eq!(v["protocol"], 15, "pgmajor came in 9; 15 is 0.46.11's one bump (additive)");
     assert_eq!(v["namespaces"]["pgmajor"], true);
     assert_eq!(v["namespaces"]["pg"], true, "protocols are additive");
     assert!(PROTOCOL >= k2_root_proto::version::PGMAJOR_MIN_PROTOCOL);
@@ -1519,8 +1559,247 @@ fn schema_only_dump_force_kept_off_force_back_and_quiesce_repl() {
 fn version_announces_pgdual_on_protocol_10() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 14, "pgdual came in 10 (additive)");
+    assert_eq!(v["protocol"], 15, "pgdual came in 10 (additive)");
     assert_eq!(v["namespaces"]["pgdual"], true);
     assert_eq!(v["namespaces"]["creds"], true);
     assert_eq!(k2_root_proto::version::PGDUAL_MIN_PROTOCOL, 10);
+}
+
+// ── named clusters (protocol 15, prd-named-pg-clusters-v1) ──────────────
+
+/// akzm's shape: 16/main on 5432, a hand-made PG17 `17/k2db` on 5433 (its
+/// own conf, hba and data), 17's binaries installed.
+fn akzm_box() -> (T, W) {
+    let (t, w) = pg_box();
+    bins(&t.root, 17);
+    mkdirs(&t.root, &["/etc/postgresql/17/k2db/conf.d", "/var/lib/postgresql/17/k2db/global", "/var/lib/postgresql/17/k2db/base/1"]);
+    for (f, body) in [
+        ("/etc/postgresql/17/k2db/postgresql.conf", "port = 5433\nwal_level = logical\n"),
+        ("/etc/postgresql/17/k2db/pg_hba.conf", "local all postgres peer\nhost all all 127.0.0.1/32 scram-sha-256\n"),
+        ("/etc/postgresql/17/k2db/start.conf", "auto\n"),
+        ("/etc/postgresql/17/k2db/conf.d/staging.conf", "max_connections = 200\n"),
+        ("/var/lib/postgresql/17/k2db/PG_VERSION", "17\n"),
+        ("/var/lib/postgresql/17/k2db/global/pg_control", "staging-control"),
+        ("/var/lib/postgresql/17/k2db/base/1/1259", "staging-rows"),
+        ("/etc/postgresql/16/main/pg_hba.conf", "local all postgres peer\n"),
+    ] {
+        std::fs::write(t.p(f), body).unwrap();
+    }
+    {
+        let mut b = w.borrow_mut();
+        b.named.push((17, "k2db".into(), 5433, true));
+        b.listening.push(5433);
+        b.dbs.insert(5433, vec!["postgres".into(), "k2x_mirror".into()]);
+        b.sysid.insert(5433, "7299999999999999999".into());
+    }
+    (t, w)
+}
+
+/// Every file under a tree, path → bytes (sorted): the "unchanged" proof.
+fn tree(root: &Path) -> Vec<(String, Vec<u8>)> {
+    fn walk(base: &Path, p: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+        let mut es: Vec<_> = std::fs::read_dir(p).unwrap().map(|e| e.unwrap().path()).collect();
+        es.sort();
+        for e in es {
+            let m = std::fs::symlink_metadata(&e).unwrap();
+            let rel = e.strip_prefix(base).unwrap().display().to_string();
+            if m.is_dir() {
+                out.push((format!("{rel}/"), vec![]));
+                walk(base, &e, out);
+            } else {
+                out.push((rel, std::fs::read(&e).unwrap()));
+            }
+        }
+    }
+    let mut v = Vec::new();
+    walk(root, root, &mut v);
+    v
+}
+
+fn k2db_trees(t: &T) -> (Vec<(String, Vec<u8>)>, Vec<(String, Vec<u8>)>) {
+    (tree(&t.p("/etc/postgresql/17/k2db")), tree(&t.p("/var/lib/postgresql/17/k2db")))
+}
+
+/// No exec, no SQL and no file of the run ever names `k2db`, except the
+/// read-only `pg_lsclusters` listing itself.
+fn k2db_untouched(t: &T, w: &W, before: &(Vec<(String, Vec<u8>)>, Vec<(String, Vec<u8>)>)) {
+    assert_eq!(&k2db_trees(t), before, "every file of 17/k2db is byte-identical");
+    for c in t.non_query_calls() {
+        assert!(!c.contains("k2db") && !c.contains("17-k2db"), "{c}");
+    }
+    for (port, sql) in &w.borrow().sql {
+        assert_ne!(*port, 5433, "no SQL ever reached 17/k2db: {sql}");
+    }
+    for c in &w.borrow().postgres_calls {
+        assert!(!c.contains("k2db") && !c.contains(" 5433"), "{c}");
+    }
+    assert_eq!(w.borrow().named.iter().find(|c| c.1 == "k2db"), Some(&(17, "k2db".to_string(), 5433, true)), "still running, same port");
+}
+
+#[test]
+fn foreign_named_cluster_is_never_touched() {
+    let (t, w) = akzm_box();
+    let before = k2db_trees(&t);
+    // The name is taken (on any major): never taken over.
+    for args in [&["pg", "ensure-cluster", "17-k2db"][..], &["pg", "ensure-cluster", "16-k2db"], &["pg", "ensure-cluster", "18-k2db", "--wal-archive"]] {
+        let o = t.call(args);
+        assert_eq!(o.code, exit::STATE, "{args:?}");
+        assert!(o.stderr.starts_with("name_taken"), "{args:?}: {}", o.stderr);
+    }
+    // Its port is taken.
+    let o = t.call(&["pg", "ensure-cluster", "17-feedback", "5433"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("port_taken"), "{}", o.stderr);
+    assert!(!t.p("/etc/postgresql/17/feedback").exists());
+    // Every named verb refuses it: it isn't one the helper made.
+    for args in [
+        &["pg", "psql", "--cluster", "17-k2db", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tA"][..],
+        &["pg", "psql", "--cluster", "17-k2db", "-d", "k2x_mirror"],
+        &["pg", "systemctl", "restart", "17-k2db"],
+        &["pg", "systemctl", "stop", "17-k2db"],
+        &["pg", "systemctl", "is-active", "17-k2db"],
+    ] {
+        let o = t.call_in(args, b"SELECT 1;\n");
+        assert_eq!(o.code, exit::STATE, "{args:?}");
+        assert!(o.stderr.starts_with("not_k2_cluster"), "{args:?}: {}", o.stderr);
+    }
+    // The `<M>`-only verbs never see it either.
+    ok(&t.call(&["pg", "install-ram-fence"]));
+    assert!(!t.p("/etc/postgresql/17/k2db/conf.d/99-k2-ram.conf").exists());
+    // `pg clusters` lists it, not as K2's.
+    let v = json(&t.call(&["pg", "clusters"]));
+    let k2db = v["clusters"].as_array().unwrap().iter().find(|c| c["name"] == "k2db").unwrap().clone();
+    assert_eq!(k2db["k2Named"], false, "{k2db}");
+    assert_eq!(k2db["port"], 5433);
+    k2db_untouched(&t, &w, &before);
+    // Now make 17/feedback beside it: the first free band port, 5434.
+    let v = json(&t.call(&["pg", "ensure-cluster", "17-feedback", "--wal-archive"]));
+    assert_eq!(v["port"], 5434, "{v}");
+    assert_eq!(v["created"], true);
+    let calls = t.non_query_calls();
+    assert!(calls.contains(&format!(
+        "{PG_CREATECLUSTER} 17 feedback -p 5434 --start-conf auto -- --auth-local=peer --auth-host=scram-sha-256"
+    )), "{calls:?}");
+    // And everything named works on it, never on 17/k2db.
+    ok(&t.call_in(&["pg", "psql", "--cluster", "17-feedback", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tA"], b"SELECT 1;\n"));
+    ok(&t.call(&["pg", "systemctl", "restart", "17-feedback"]));
+    ok(&t.call(&["pg", "hba-app", "add", "jobs"]));
+    ok(&t.call(&["pg", "install-ram-fence"]));
+    let v = json(&t.call(&["pg", "clusters"]));
+    let rows = v["clusters"].as_array().unwrap();
+    assert_eq!(rows.iter().find(|c| c["name"] == "k2db").unwrap()["k2Named"], false);
+    assert_eq!(rows.iter().find(|c| c["name"] == "feedback").unwrap()["k2Named"], true);
+    k2db_untouched(&t, &w, &before);
+    never_destructive(&t);
+}
+
+/// A forged record (a hand-made cluster put in the list, or the list
+/// edited) never makes a cluster K2's: its system identifier differs.
+#[test]
+fn a_forged_record_never_makes_a_cluster_k2s() {
+    let (t, w) = akzm_box();
+    let before = k2db_trees(&t);
+    mkdirs(&t.root, &["/var/lib/k2-root-helper"]);
+    std::fs::write(
+        t.p(k2_root_proto::pg_named::NAMED_STATE),
+        r#"{"clusters":[{"major":17,"name":"k2db","port":5433,"dataDir":"/var/lib/postgresql/17/k2db","systemId":"7300000000000000001","walArchive":false,"createdAt":1}]}"#,
+    )
+    .unwrap();
+    let v = json(&t.call(&["pg", "clusters"]));
+    assert_eq!(v["clusters"].as_array().unwrap().iter().find(|c| c["name"] == "k2db").unwrap()["k2Named"], false);
+    for args in [&["pg", "psql", "--cluster", "17-k2db", "-d", "postgres"][..], &["pg", "systemctl", "restart", "17-k2db"], &["pg", "ensure-cluster", "17-k2db"]] {
+        let o = t.call_in(args, b"SELECT 1;\n");
+        assert_eq!(o.code, exit::STATE, "{args:?}");
+        assert!(o.stderr.starts_with("not_k2_cluster"), "{args:?}: {}", o.stderr);
+    }
+    // The only SQL that reached 5433 is the identity read itself.
+    w.borrow_mut().sql.retain(|(_, s)| !s.contains("pg_control_system()"));
+    assert_eq!(&k2db_trees(&t), &before);
+    assert!(w.borrow().sql.iter().all(|(p, _)| *p != 5433));
+}
+
+#[test]
+fn ensure_named_writes_k2_conf_slice_archive_and_its_record() {
+    let (t, w) = akzm_box();
+    let v = json(&t.call(&["pg", "ensure-cluster", "17-feedback", "5434", "--wal-archive"]));
+    for (k, want) in [
+        ("major", json!(17)),
+        ("name", json!("feedback")),
+        ("port", json!(5434)),
+        ("dataDir", json!("/var/lib/postgresql/17/feedback")),
+        ("unit", json!("postgresql@17-feedback.service")),
+        ("startConf", json!("auto")),
+        ("inSlice", json!(true)),
+        ("k2Named", json!(true)),
+        ("walArchive", json!(true)),
+        ("walSpool", json!("/var/lib/postgresql/k2-wal/17-feedback")),
+        ("systemId", json!("7354340000000000000")),
+        ("created", json!(true)),
+    ] {
+        assert_eq!(v[k], want, "{k}: {v}");
+    }
+    let confd = "/etc/postgresql/17/feedback/conf.d";
+    assert_eq!(std::fs::read_to_string(t.p(&format!("{confd}/98-k2-cluster.conf"))).unwrap(), k2_root_proto::pg_major::cluster_conf());
+    assert_eq!(std::fs::read_to_string(t.p(&format!("{confd}/99-k2-ram.conf"))).unwrap(), k2_root_proto::templates::pg_guc_conf());
+    assert_eq!(
+        std::fs::read_to_string(t.p(&format!("{confd}/97-k2-wal-archive.conf"))).unwrap(),
+        k2_root_proto::pg_named::wal_archive_conf(17, "feedback")
+    );
+    assert_eq!(
+        std::fs::read_to_string(t.p("/etc/systemd/system/postgresql@17-feedback.service.d/k2-slice.conf")).unwrap(),
+        k2_root_proto::pg_major::slice_dropin()
+    );
+    assert!(t.non_query_calls().contains(&format!("{SYSTEMCTL} start postgresql@17-feedback.service")));
+    // The spool was made by postgres itself, 0700.
+    assert!(w.borrow().postgres_calls.iter().any(|c| c == "/usr/bin/mkdir -p -m 0700 -- /var/lib/postgresql/k2-wal/17-feedback"), "{:?}", w.borrow().postgres_calls);
+    let st: k2_root_proto::pg_named::NamedState =
+        serde_json::from_slice(&std::fs::read(t.p(k2_root_proto::pg_named::NAMED_STATE)).unwrap()).unwrap();
+    assert_eq!(st.clusters.len(), 1);
+    assert!(st.get(17, "feedback").is_some_and(|r| r.port == 5434 && r.wal_archive));
+    // Again: the same answer, nothing created.
+    let n = t.non_query_calls().len();
+    let v = json(&t.call(&["pg", "ensure-cluster", "17-feedback", "5434", "--wal-archive"]));
+    assert_eq!(v["created"], false);
+    assert!(!t.non_query_calls()[n..].iter().any(|c| c.contains("pg_createcluster") || c.contains(" start ")));
+    // Asked differently: refused, nothing changed.
+    let o = t.call(&["pg", "ensure-cluster", "17-feedback", "5435"]);
+    assert!(o.stderr.starts_with("port_mismatch"), "{}", o.stderr);
+    let o = t.call(&["pg", "ensure-cluster", "17-feedback"]);
+    assert!(o.stderr.starts_with("archive_mismatch"), "{}", o.stderr);
+    // A second named cluster takes the next port; 5432 is never one.
+    let v = json(&t.call(&["pg", "ensure-cluster", "16-audit"]));
+    assert_eq!(v["port"], 5435);
+    assert!(!t.p("/etc/postgresql/16/audit/conf.d/97-k2-wal-archive.conf").exists());
+    assert!(t.call(&["pg", "ensure-cluster", "16-x2", "5432"]).code != 0);
+    // The name space is the box's: `feedback` is taken on every major now.
+    assert!(t.call(&["pg", "ensure-cluster", "16-feedback"]).stderr.starts_with("name_taken"));
+    never_destructive(&t);
+}
+
+#[test]
+fn named_verbs_are_the_daemons() {
+    let (t, _w) = akzm_box();
+    ok(&t.call(&["pg", "ensure-cluster", "17-feedback"]));
+    t.as_agent();
+    for args in [
+        &["pg", "ensure-cluster", "17-feedback"][..],
+        &["pg", "ensure-cluster", "17-other"],
+        &["pg", "systemctl", "restart", "17-feedback"],
+        &["pg", "systemctl", "is-active", "17-feedback"],
+        &["pg", "psql", "--cluster", "17-feedback", "-d", "postgres"],
+    ] {
+        assert_eq!(t.call(args).code, exit::NOT_DAEMON, "{args:?}");
+    }
+    // `pg clusters` stays open (read-only).
+    t.as_agent();
+    ok(&t.call(&["pg", "clusters"]));
+}
+
+#[test]
+fn version_announces_pgnamed_on_protocol_15() {
+    let t = box_root();
+    let v: serde_json::Value = serde_json::from_slice(&t.call(&["helper", "version"]).stdout).unwrap();
+    assert_eq!(v["protocol"], 15);
+    assert_eq!(v["namespaces"]["pgnamed"], true);
+    assert_eq!(v["namespaces"]["pgmajor"], true, "protocols are additive");
 }

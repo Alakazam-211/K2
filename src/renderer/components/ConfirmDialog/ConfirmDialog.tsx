@@ -29,16 +29,12 @@ export default function ConfirmDialog(): React.JSX.Element | null {
     close()
   }, [close])
 
-  // Keyboard handling
+  // Enter confirms. Esc, the × and a press outside cancel (DialogFrame onCancel).
   useEffect(() => {
     if (!isOpen) return
 
     const handleKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        handleCancel()
-      } else if (e.key === 'Enter') {
+      if (e.key === 'Enter') {
         e.preventDefault()
         e.stopPropagation()
         handleConfirm()
@@ -47,22 +43,18 @@ export default function ConfirmDialog(): React.JSX.Element | null {
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [isOpen, handleCancel, handleConfirm])
+  }, [isOpen, handleConfirm])
 
   if (!isOpen) return null
 
   return (
     <>
       {/* Semi-transparent backdrop */}
-      <DialogScrim
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          handleCancel()
-        }}
-      />
+      <DialogScrim />
 
       {/* Dialog */}
       <DialogFrame
+        onCancel={handleCancel}
         style={{
           minWidth: 340,
           maxWidth: 480,
@@ -76,7 +68,9 @@ export default function ConfirmDialog(): React.JSX.Element | null {
             fontSize: '14px',
             fontWeight: 600,
             color: 'var(--color-text-primary)',
-            marginBottom: 8
+            marginBottom: 8,
+            // Room for the frame's ×.
+            paddingRight: 16
           }}
         >
           {title}

@@ -5,12 +5,12 @@
 //
 //   Home, Agents, Projects, Tickets, Wiki, Server, Admin, Run, Drawer,
 //   Clock, Mug, Help, Pin, PinOff, Palette, Board, Smartphone, SmartphoneOff,
-//   Pencil, Trash, ArrowUp, Feedback, OrgChart, Mail
+//   Pencil, Trash, ArrowUp, Feedback, OrgChart, Mail, Close
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `library`,
 //     `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`,
 //     `circle-help`, `pin`, `pin-off`, `palette`, `presentation`,
 //     `smartphone`, `pencil`, `trash-2`, `arrow-up`, `message-square`, `mail`,
-//     `list-todo` (Checklist); SmartphoneOff is
+//     `list-todo` (Checklist), `x` (Close); SmartphoneOff is
 //     `smartphone` plus the bell's 2,2 → 22,22 slash),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
@@ -932,7 +932,7 @@ export function DownloadIcon(props: K2IconProps = {}): React.JSX.Element {
   )
 }
 
-/** Close: Lucide `x`, squared. */
+/** Close a dialog or sheet (its ×): Lucide `x`, squared. */
 export function CloseIcon(props: K2IconProps = {}): React.JSX.Element {
   return (
     <svg {...iconProps('x', props)}>

@@ -2,6 +2,7 @@ import { useRef } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { cx } from './cx'
+import { DialogCloseButton, useDialogCancel } from './dialog-cancel'
 import { Surface } from './Surface'
 
 export interface DialogScrimProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -9,7 +10,8 @@ export interface DialogScrimProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 /** Modal backdrop — paints the palette's scrim slot. Presentational only:
- *  callers keep their own open/close state, focus and key handling.
+ *  a press on it is a press outside the frame, so `DialogFrame onCancel`
+ *  (or `useDialogCancel`) cancels on it; give it no close handler.
  *  Claims the whole window in the Browser overlay arbiter while mounted, so
  *  a native Browser page freezes under the scrim instead of painting over
  *  the dialog. */
@@ -33,6 +35,15 @@ export interface DialogFrameProps extends React.HTMLAttributes<HTMLDivElement> {
    *  with its top edge at `DIALOG_TOP`, so a set of dialogs of different
    *  heights all open in the same place and a growing one grows downward. */
   placement?: 'center' | 'top'
+  /** The dialog's no-op answer (Cancel, Not now): given, the frame shows a ×
+   *  ("Close (Esc)") in its top-right corner, and Esc or a press outside it
+   *  (its scrim, or anywhere else) calls this once, for the top dialog only.
+   *  Cancel must change nothing. Leave it out to hold the dialog open (a
+   *  change in flight). See `dialog-cancel.tsx`. */
+  onCancel?: () => void
+  /** `inline`: the caller puts `<DialogCloseButton>` in its own header, so
+   *  the frame draws no corner ×. Esc and a press outside still cancel. */
+  closeButton?: 'corner' | 'inline'
 }
 
 /** Where a `placement="top"` dialog's top edge sits; the frame's children
@@ -43,9 +54,18 @@ const DIALOG_TOP = 'clamp(1.25rem, 6vh, 4rem)'
 /** Centered modal frame: surface + border + radius.box + dialog elevation
  *  (ring + shadow.5), exactly the historical ConfirmDialog treatment.
  *  Claims its own box over the Browser page (a frame without a scrim). */
-export function DialogFrame({ zIndex = 99999, placement = 'center', className, style, ...rest }: DialogFrameProps): React.JSX.Element {
+export function DialogFrame({
+  zIndex = 99999,
+  placement = 'center',
+  className,
+  style,
+  onCancel,
+  closeButton = 'corner',
+  ...rest
+}: DialogFrameProps): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   useBrowserOverlay({ active: true, ref, kind: 'modal' })
+  const cancel = useDialogCancel(onCancel)
   return (
     <div
       ref={ref}
@@ -57,8 +77,12 @@ export function DialogFrame({ zIndex = 99999, placement = 'center', className, s
           : 'no-drag fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2'
       }
       style={placement === 'top' ? ({ zIndex, top: DIALOG_TOP, '--dialog-top': DIALOG_TOP } as React.CSSProperties) : { zIndex }}
+      onPointerDownCapture={onCancel ? cancel.onPointerDownCapture : undefined}
     >
       <Surface elevation={5} chamfer className={className} style={style} {...floatMaterial('dialog')} {...rest} />
+      {onCancel && closeButton === 'corner' && (
+        <DialogCloseButton className="absolute top-2 right-2" onClick={onCancel} data-testid="dialog-close" />
+      )}
     </div>
   )
 }

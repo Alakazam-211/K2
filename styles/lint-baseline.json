@@ -179,7 +179,6 @@
     "src/renderer/components/Settings/sections/HeartbeatsSection.tsx": 1,
     "src/renderer/components/Settings/sections/PeopleSection.tsx": 1,
     "src/renderer/components/Settings/sections/ProjectsSection.tsx": 1,
-    "src/renderer/components/Settings/sections/StylesSection.tsx": 1,
     "src/renderer/components/Settings/sections/ZenGardensAccessPage.tsx": 2,
     "src/renderer/components/Settings/sections/usage/UsageChart.tsx": 1,
     "src/renderer/components/Settings/shared/LlmLoginPicker.tsx": 1,

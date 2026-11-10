@@ -256,7 +256,7 @@ export function PhonePairing({
   return (
     <div className="space-y-3" data-phone-pairing={mode}>
       {loadError && (
-        <p className="m-0 text-[11px] text-[var(--color-status-error-soft)]" data-pair-error="">
+        <p className="m-0 type-hint text-[var(--color-status-error-soft)]" data-pair-error="">
           {loadError.hint}
         </p>
       )}
@@ -265,13 +265,13 @@ export function PhonePairing({
         <div className="border border-[var(--color-border)] p-3 space-y-2" data-pair-success="" role="status">
           <div className="flex items-center gap-2">
             <CheckMark />
-            <p className="m-0 text-[12px] text-[var(--color-text-primary)]" data-pair-success-text="">
+            <p className="m-0 type-row text-[var(--color-text-primary)]" data-pair-success-text="">
               Paired {outcome.deviceName} as <span className="font-mono">{outcome.user}</span>
             </p>
           </div>
           <button
             type="button"
-            className="px-3 py-1.5 text-[11px] border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer"
+            className="px-3 py-1.5 type-control border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer"
             onClick={() => setOutcome(null)}
           >
             Done
@@ -281,7 +281,7 @@ export function PhonePairing({
 
       {(outcome?.kind === 'expired' || outcome?.kind === 'void') && (
         <div className="border border-[var(--color-border)] p-3 space-y-2" data-pair-expired={outcome.kind} role="status">
-          <p className="m-0 text-[11px] text-[var(--color-text-secondary)]">
+          <p className="m-0 type-hint text-[var(--color-text-secondary)]">
             {outcome.kind === 'expired'
               ? 'This code expired before a phone used it.'
               : 'This code can no longer be used: a newer code replaced it, or the login changed.'}
@@ -289,7 +289,7 @@ export function PhonePairing({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="px-3 py-1.5 text-[11px] border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer disabled:opacity-50"
+              className="px-3 py-1.5 type-control border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer disabled:opacity-50"
               disabled={busy}
               onClick={() => {
                 // A login types its password again for every code.
@@ -301,7 +301,7 @@ export function PhonePairing({
             </button>
             <button
               type="button"
-              className="underline text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+              className="underline type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
               onClick={() => setOutcome(null)}
             >
               Close
@@ -313,7 +313,7 @@ export function PhonePairing({
       {pairAs && !code && !outcome && (
         <div className="space-y-2" data-pair-as="">
           {choices ? (
-            <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
+            <div className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)]">
               Pairs as
               <SettingDropdown
                 compact
@@ -327,22 +327,22 @@ export function PhonePairing({
               />
             </div>
           ) : pairAs.user ? (
-            <p className="m-0 text-[11px] text-[var(--color-text-secondary)]">
+            <p className="m-0 type-hint text-[var(--color-text-secondary)]">
               A new code pairs as <span className="font-mono">{pairAs.user}</span>.
             </p>
           ) : null}
           {!pairAs.user && pairAs.error && (
-            <p className="m-0 text-[11px] text-[var(--color-text-muted)]" data-pair-as-missing="">
+            <p className="m-0 type-hint text-[var(--color-text-muted)]" data-pair-as-missing="">
               {pairAs.error.hint}
             </p>
           )}
           {target !== '' && needsPassword && (
-            <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)]">
+            <label className="flex items-center gap-2 type-hint text-[var(--color-text-muted)]">
               Your password
               <input
                 type="password"
                 autoComplete="current-password"
-                className="flex-1 min-w-0 bg-transparent border border-[var(--color-border)] px-2 py-1 text-[11px]"
+                className="flex-1 min-w-0 bg-transparent border border-[var(--color-border)] px-2 py-1 type-control"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
@@ -351,7 +351,7 @@ export function PhonePairing({
           {(target !== '' || choices) && (
             <button
               type="button"
-              className="px-3 py-1.5 text-[11px] border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer disabled:opacity-50"
+              className="px-3 py-1.5 type-control border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer disabled:opacity-50"
               disabled={!canPair}
               onClick={() => void pair()}
             >
@@ -362,29 +362,29 @@ export function PhonePairing({
       )}
 
       {codeError && (
-        <p className="m-0 text-[11px] text-[var(--color-status-error-soft)]" role="alert" data-pair-code-error="">
+        <p className="m-0 type-hint text-[var(--color-status-error-soft)]" role="alert" data-pair-code-error="">
           {codeError.hint}
         </p>
       )}
 
       {code && (
         <div className="border border-[var(--color-border)] p-3 space-y-2" data-pair-code="">
-          <p className="m-0 text-[11px] text-[var(--color-text-secondary)]">
+          <p className="m-0 type-hint text-[var(--color-text-secondary)]">
             Scan with the phone&apos;s camera, or type the code on the K2 app&apos;s Pair screen. Pairs as{' '}
             <span className="font-mono">{code.user}</span>.
           </p>
           {code.pairUrl && <PairQr url={code.pairUrl} />}
-          <p className="m-0 font-mono text-[14px] tracking-wider select-all" data-pair-code-text="">
+          <p className="m-0 font-mono text-[length:var(--type-xl)] tracking-wider select-all" data-pair-code-text="">
             {code.code}
           </p>
           {code.pairUrl ? (
-            <p className="m-0 font-mono text-[10px] break-all text-[var(--color-text-muted)] select-all">{code.pairUrl}</p>
+            <p className="m-0 font-mono type-hint break-all text-[var(--color-text-muted)] select-all">{code.pairUrl}</p>
           ) : (
-            <p className="m-0 text-[10px] text-[var(--color-text-muted)]">
+            <p className="m-0 type-hint text-[var(--color-text-muted)]">
               This server has no public address, so there is no link or QR: type the code in the app.
             </p>
           )}
-          <div className="flex items-center justify-between text-[10px] text-[var(--color-text-muted)]">
+          <div className="flex items-center justify-between type-hint text-[var(--color-text-muted)]">
             <span data-pair-countdown="">Works once, for {fmtLeft(left)}</span>
             <button
               type="button"
@@ -401,7 +401,7 @@ export function PhonePairing({
       )}
 
       {view && view.devices.length === 0 && (
-        <p className="m-0 text-[11px] text-[var(--color-text-muted)]" data-pair-empty="">
+        <p className="m-0 type-hint text-[var(--color-text-muted)]" data-pair-empty="">
           No paired phones.
         </p>
       )}
@@ -417,18 +417,18 @@ export function PhonePairing({
               data-pair-new={highlight === d.id ? '' : undefined}
             >
               <div className="flex-1 min-w-0">
-                <div className="text-[11px] text-[var(--color-text-primary)] truncate">
+                <div className="type-hint text-[var(--color-text-primary)] truncate">
                   {d.name}
                   {d.current ? ' (this phone)' : ''}
                   {highlight === d.id ? ' · just paired' : ''}
                 </div>
-                <div className="text-[10px] text-[var(--color-text-muted)] truncate">
+                <div className="type-hint text-[var(--color-text-muted)] truncate">
                   {mode === 'all' ? `${d.username} · ` : ''}paired {fmtWhen(d.createdAt)} · ends if unused {fmtWhen(d.expiresAt)}
                 </div>
               </div>
               <button
                 type="button"
-                className="px-2 py-1 text-[10px] border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer disabled:opacity-50"
+                className="px-2 py-1 type-control border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer disabled:opacity-50"
                 disabled={revoking === d.id}
                 onClick={() => void revoke(d.id)}
               >

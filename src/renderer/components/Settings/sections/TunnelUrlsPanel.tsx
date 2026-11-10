@@ -36,7 +36,7 @@ import {
 function InfoRow({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
   return (
     <div className="flex items-baseline gap-2 mt-1 first:mt-0">
-      <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0 w-16">
+      <span className="type-section uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0 w-16">
         {label}
       </span>
       {children}
@@ -68,7 +68,7 @@ export function TunnelUrlsPanel({ canManage = false }: { canManage?: boolean } =
     <div className="space-y-3">
       {/* ── Tunnel status ── */}
       {status === null ? (
-        <p className="text-[10px] text-[var(--color-text-muted)]">
+        <p className="type-hint text-[var(--color-text-muted)]">
           Checking tunnel status…
         </p>
       ) : !running ? (
@@ -77,7 +77,7 @@ export function TunnelUrlsPanel({ canManage = false }: { canManage?: boolean } =
             className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)]"
             style={{ backgroundColor: 'var(--color-neutral)' }}
           />
-          <span className="text-[11px] text-[var(--color-text-muted)]">
+          <span className="type-hint text-[var(--color-text-muted)]">
             K2 Connect tunnel isn&apos;t running
           </span>
         </div>
@@ -89,33 +89,33 @@ export function TunnelUrlsPanel({ canManage = false }: { canManage?: boolean } =
                 href={publicUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="text-[11px] font-mono text-[var(--color-accent)] hover:underline truncate no-drag cursor-pointer"
+                className="type-hint font-mono text-[var(--color-accent)] hover:underline truncate no-drag cursor-pointer"
               >
                 {publicUrl}
               </a>
             ) : (
-              <span className="text-[11px] text-[var(--color-text-muted)]">
+              <span className="type-hint text-[var(--color-text-muted)]">
                 (assigned by server)
               </span>
             )}
           </InfoRow>
           {status.subdomain && (
             <InfoRow label="Subdomain">
-              <span className="text-[11px] font-mono text-[var(--color-text-primary)] truncate">
+              <span className="type-hint font-mono text-[var(--color-text-primary)] truncate">
                 {status.subdomain}
               </span>
             </InfoRow>
           )}
           {typeof status.local_port === 'number' && (
             <InfoRow label="Local port">
-              <span className="text-[11px] font-mono tabular-nums text-[var(--color-text-primary)]">
+              <span className="type-hint font-mono tabular-nums text-[var(--color-text-primary)]">
                 {status.local_port}
               </span>
             </InfoRow>
           )}
           {status.server_addr && (
             <InfoRow label="Relay">
-              <span className="text-[11px] font-mono text-[var(--color-text-primary)] truncate">
+              <span className="type-hint font-mono text-[var(--color-text-primary)] truncate">
                 {status.server_addr}
               </span>
             </InfoRow>
@@ -125,20 +125,20 @@ export function TunnelUrlsPanel({ canManage = false }: { canManage?: boolean } =
 
       {/* ── Nested subdomain table (full, server-wide) ── */}
       <div className="pt-2 border-t border-[var(--color-border)]">
-        <span className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
+        <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
           Nested URLs
         </span>
         {subs === undefined ? (
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-1">Loading…</p>
+          <p className="type-hint text-[var(--color-text-muted)] mt-1">Loading…</p>
         ) : subs === null ? (
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
-            Not available on this daemon.
+          <p className="type-hint text-[var(--color-text-muted)] mt-1">
+            Not available on this server.
           </p>
         ) : rows.length === 0 ? (
           manage ? (
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-1">No nested URLs yet.</p>
+            <p className="type-hint text-[var(--color-text-muted)] mt-1">No nested URLs yet.</p>
           ) : (
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
+            <p className="type-hint text-[var(--color-text-muted)] mt-1">
               No nested URLs —{' '}
               <span className="font-mono">
                 k2 publish subdomain create &lt;label&gt; --target localhost:&lt;port&gt;
@@ -147,7 +147,7 @@ export function TunnelUrlsPanel({ canManage = false }: { canManage?: boolean } =
           )
         ) : (
           <div className="mt-1.5">
-            <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] gap-x-3 text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] pb-1 border-b border-[var(--color-border)]">
+            <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] gap-x-3 type-section uppercase tracking-wider text-[var(--color-text-muted)] pb-1 border-b border-[var(--color-border)]">
               <span>URL</span>
               <span>Target</span>
               <span>Workspace</span>
@@ -164,20 +164,20 @@ export function TunnelUrlsPanel({ canManage = false }: { canManage?: boolean } =
                       href={url}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-[11px] font-mono text-[var(--color-accent)] hover:underline truncate no-drag cursor-pointer"
+                      className="type-hint font-mono text-[var(--color-accent)] hover:underline truncate no-drag cursor-pointer"
                     >
                       {url}
                     </a>
                   ) : (
-                    <span className="text-[11px] font-mono text-[var(--color-text-primary)] truncate">
+                    <span className="type-hint font-mono text-[var(--color-text-primary)] truncate">
                       {label}
                     </span>
                   )}
-                  <span className="text-[11px] font-mono text-[var(--color-text-secondary)] truncate">
+                  <span className="type-hint font-mono text-[var(--color-text-secondary)] truncate">
                     {info.target}
                   </span>
                   <span
-                    className={`text-[11px] truncate ${info.projectId ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-muted)]'}`}
+                    className={`type-hint truncate ${info.projectId ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-muted)]'}`}
                     title={info.projectId ?? 'Not attributed to a workspace — adopt with: k2 publish subdomain claim <label>'}
                   >
                     {workspaceName(info.projectId)}

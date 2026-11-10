@@ -89,7 +89,6 @@ import {
   type UpdateCheckResult,
 } from './update-host'
 import { useToastStore } from '@/stores/toast'
-import { thisMachine, thisMachineLower } from '@/lib/desktop-words'
 import { Checkbox } from '@/components/ui'
 
 // Shared small-button styles for the per-host tile controls — matching the
@@ -97,30 +96,30 @@ import { Checkbox } from '@/components/ui'
 // elevated, accent for primary, red for destructive). Real buttons, not the
 // pre-#661 text links.
 const BTN_SECONDARY =
-  'px-2 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
+  'px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
 const BTN_ACCENT =
-  'px-2 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
+  'px-2 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
 const BTN_DANGER =
-  'px-2 py-1 text-[11px] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
+  'px-2 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
 // Orange/amber, mirroring the remote Restart/Update buttons on the General
 // settings tab (GeneralSection.tsx RestartHostRow/UpdateHostRow) so the
 // per-host Restart + Sign-in read as the same "remote host" action color.
 // Same amber tokens as General; only the spacing (px-2 py-1) and disabled
 // cursor match this file's sibling BTN_* consts.
 const BTN_ORANGE =
-  'px-2 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
+  'px-2 py-1 type-control text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default'
 
 export const CONNECTIONS_MANIFEST: SettingEntry[] = [
-  { id: 'connections.add', section: 'connections', label: 'Add a Server', description: 'Save a remote K2 daemon to connect to', keywords: ['server', 'remote', 'connect', 'host', 'add', 'k2 connect', 'address book'] },
-  { id: 'connections.remember-password', section: 'connections', label: 'Remember Password', description: 'Store a server token in your OS keychain', keywords: ['token', 'password', 'keychain', 'remember', 'credentials'] },
-  { id: 'connections.list', section: 'connections', label: 'Saved Servers', description: 'Edit or remove saved K2 servers', keywords: ['servers', 'hosts', 'edit', 'remove', 'list', 'search', 'filter'] },
+  { id: 'connections.add', section: 'connections', label: 'Add a server', description: 'Save another K2 server to connect to', keywords: ['server', 'remote', 'connect', 'host', 'add', 'k2 connect', 'address book'] },
+  { id: 'connections.remember-password', section: 'connections', label: 'Remember password', description: 'Keep a server’s password in this computer’s keychain', keywords: ['token', 'password', 'keychain', 'remember', 'credentials'] },
+  { id: 'connections.list', section: 'connections', label: 'Saved servers', description: 'Edit or remove saved K2 servers', keywords: ['servers', 'hosts', 'edit', 'remove', 'list', 'search', 'filter'] },
   {
     id: 'connections.pair-federated-peer',
     section: 'connections',
-    label: 'Pair as federated peer',
+    label: 'Pair a server',
     description:
-      'Establish mutual federation trust between the active host (This Mac or a signed-in server) and another saved server so cross-server agents can connect — including cloud-to-cloud',
-    keywords: ['federation', 'peer', 'pair', 'federated', 'cross-server', 'trust', 'agents', 'cloud'],
+      'Let this computer, or a server you’re signed in to, trust another saved server so their agents can connect',
+    keywords: ['federation', 'peer', 'pair', 'federated', 'federated peer', 'cross-server', 'trust', 'agents', 'cloud'],
   },
 ]
 
@@ -168,7 +167,7 @@ export function ConnectionsSection(): React.JSX.Element {
   // Device address book = per-CLIENT (this Mac). Federation peer list =
   // per ACTIVE daemon. Right pane (FederationOverview) is always host-aware.
   const isLocalActive = activeHost === 'local'
-  const activeHostLabel = isLocalActive ? thisMachine() : activeHost.label || activeHost.hostname
+  const activeHostLabel = isLocalActive ? 'This computer' : activeHost.label || activeHost.hostname
 
   const [draft, setDraft] = useState<DraftHost | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -235,7 +234,7 @@ export function ConnectionsSection(): React.JSX.Element {
   const save = async (): Promise<void> => {
     if (!draft) return
     if (!draft.label.trim()) {
-      setError('Label is required')
+      setError('Enter a name for this server.')
       return
     }
     const parsed = parseServerUrl(draft.url)
@@ -245,7 +244,7 @@ export function ConnectionsSection(): React.JSX.Element {
     }
     const username = draft.username.trim()
     if (!isValidUsername(username)) {
-      setError('Username must be 2+ chars: lowercase letters, numbers, _ or -.')
+      setError('Username must be at least 2 characters: lowercase letters, numbers, _ or -.')
       return
     }
     const passwordEntered = draft.password // do NOT trim — passwords may have edge whitespace
@@ -268,7 +267,7 @@ export function ConnectionsSection(): React.JSX.Element {
         hosts.some((h) => h.id === draft.id && homeHostKey(h) === homeHostKey(parsed))
       if (dup && !editKeepsKey) {
         setError(
-          `${duplicateSavedHostMessage(dup)} Edit that tile (or remove it) instead of adding a duplicate.`,
+          `${duplicateSavedHostMessage(dup)} Edit or remove that server instead.`,
         )
         return
       }
@@ -390,7 +389,7 @@ export function ConnectionsSection(): React.JSX.Element {
   }
 
   const inputCls =
-    'w-full px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
+    'w-full px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 
   return (
     <div className="w-full h-full min-h-0 flex flex-col">
@@ -398,16 +397,15 @@ export function ConnectionsSection(): React.JSX.Element {
           | right = external agents on the active daemon. */}
       <div className="flex flex-1 min-h-0">
       <div className="flex-1 min-w-0 overflow-y-auto pr-3 [scrollbar-gutter:stable]">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Servers</h2>
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-4">
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Servers</h2>
+      <p className="type-hint text-[var(--color-text-muted)] mb-4">
         {isLocalActive
-          ? `K2 servers ${thisMachineLower()} connects to. Passwords stay in the OS keychain only when “Remember password” is on. Peer trust on each tile is relative to ${thisMachine()}.`
+          ? 'Servers this computer can connect to. A password is saved only if you choose Remember password, and only in this computer’s keychain.'
           : (
             <>
-              Federated peers of{' '}
+              Servers paired with{' '}
               <span className="text-[var(--color-text-secondary)]">{activeHostLabel}</span>
-              {' '}(this cloud’s server graph). {thisMachine()}’s address book stays in the
-              top-bar switcher; use “Pair from {thisMachineLower()}” below to add a new peer.
+              . Your saved servers are in the server menu in the top bar.
             </>
           )}
       </p>
@@ -415,7 +413,7 @@ export function ConnectionsSection(): React.JSX.Element {
       {notice && (
         <div
           data-testid="connections-voice-chat-notice"
-          className="mb-3 px-3 py-2 border border-[var(--color-border)] text-[11px] text-[var(--color-text-secondary)] flex items-center justify-between gap-2"
+          className="mb-3 px-3 py-2 border border-[var(--color-border)] type-hint text-[var(--color-text-secondary)] flex items-center justify-between gap-2"
         >
           <span>{notice}</span>
           <button type="button" className={BTN_SECONDARY} onClick={() => setNotice(null)}>
@@ -427,12 +425,12 @@ export function ConnectionsSection(): React.JSX.Element {
       <>
       {draft ? (
         <div ref={formRef} className="mb-3 px-3 py-3 border border-[var(--color-border)] space-y-2" data-settings-id="connections.add">
-          <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">
+          <div className="type-section uppercase tracking-wide text-[var(--color-text-muted)]">
             {draft.id ? 'Edit server' : 'Add server'}
           </div>
           {rotation ? (
             <>
-              <div className="text-[10px] text-[var(--color-text-muted)] font-mono">
+              <div className="type-hint text-[var(--color-text-muted)] font-mono">
                 {rotation.host.username}@{hostToUrl(rotation.host).replace(/^https?:\/\//, '')}
               </div>
               <PasswordRotationStep
@@ -445,10 +443,10 @@ export function ConnectionsSection(): React.JSX.Element {
             </>
           ) : (
           <>
-          <input ref={labelRef} className={inputCls} placeholder="Label (e.g. My Mac Mini)" value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
+          <input ref={labelRef} className={inputCls} placeholder="Name (e.g. Mac mini)" value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
           <input
             className={inputCls}
-            placeholder="K2 Server URL (e.g. http://192.168.1.50:60710)"
+            placeholder="Server URL (e.g. http://192.168.1.50:60710)"
             value={draft.url}
             onChange={(e) => setDraft({ ...draft, url: e.target.value })}
           />
@@ -467,23 +465,23 @@ export function ConnectionsSection(): React.JSX.Element {
             value={draft.password}
             onChange={(e) => setDraft({ ...draft, password: e.target.value })}
           />
-          <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer select-none" data-settings-id="connections.remember-password">
+          <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer select-none" data-settings-id="connections.remember-password">
             <Checkbox
               checked={draft.remember}
               onChange={(e) => setDraft({ ...draft, remember: e.target.checked })}
             />
-            Remember password (OS keychain)
+            Remember password on this computer
           </label>
-          {error && <div className="text-[10px] text-[var(--color-status-error-soft)]">{error}</div>}
+          {error && <div className="type-hint text-[var(--color-status-error-soft)]">{error}</div>}
           <div className="flex gap-2 pt-1">
             <button
               onClick={() => void save()}
               disabled={busy}
-              className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+              className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
             >
               {busy ? 'Verifying…' : 'Save'}
             </button>
-            <button onClick={() => { setDraft(null); setError(null) }} className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer">
+            <button onClick={() => { setDraft(null); setError(null) }} className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer">
               Cancel
             </button>
           </div>
@@ -491,7 +489,7 @@ export function ConnectionsSection(): React.JSX.Element {
           )}
         </div>
       ) : (
-        <button onClick={beginAdd} className="mb-3 px-3 py-1.5 text-[11px] text-[var(--color-accent)] border border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/10 no-drag cursor-pointer">
+        <button onClick={beginAdd} className="mb-3 px-3 py-1.5 type-control text-[var(--color-accent)] border border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/10 no-drag cursor-pointer">
           + Add a server
         </button>
       )}
@@ -513,10 +511,10 @@ export function ConnectionsSection(): React.JSX.Element {
           style={{ backgroundColor: statusColor(connectionStatus) }}
         />
         <div className="flex flex-col min-w-0">
-          <span className="text-xs text-[var(--color-text-primary)]">Local</span>
-          <span className="text-[10px] text-[var(--color-text-muted)]">{thisMachine()} · bundled daemon</span>
+          <span className="type-row text-[var(--color-text-primary)]">This computer</span>
+          <span className="type-hint text-[var(--color-text-muted)]">K2 server built into this app</span>
         </div>
-        <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">Active</span>
+        <span className="ml-auto type-hint text-[var(--color-text-muted)]">Active</span>
       </div>
 
       {/* Saved hosts — sorted alphabetically by display label (case-insensitive). */}
@@ -536,7 +534,7 @@ export function ConnectionsSection(): React.JSX.Element {
             )
           if (rows.length === 0) {
             return (
-              <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">
+              <div className="type-hint text-[var(--color-text-muted)] px-3 py-2">
                 {hosts.length === 0
                   ? 'No saved servers yet.'
                   : 'No matching servers.'}
@@ -634,7 +632,7 @@ function ActiveHostPeersPanel({
       await autoPairWithHost(h.hostname, { repair: true })
       setPairMsg({
         ok: true,
-        text: `Paired ${hostLabel} ↔ ${h.label || h.hostname}.`,
+        text: `Paired ${hostLabel} with ${h.label || h.hostname}.`,
       })
       onPeersChanged()
       await reload()
@@ -662,27 +660,27 @@ function ActiveHostPeersPanel({
           style={{ backgroundColor: '#3fb950' }}
         />
         <div className="flex flex-col min-w-0">
-          <span className="text-xs text-[var(--color-text-primary)] truncate">{hostLabel}</span>
-          <span className="text-[10px] text-[var(--color-text-muted)]">Active remote · federation peers</span>
+          <span className="type-row text-[var(--color-text-primary)] truncate">{hostLabel}</span>
+          <span className="type-hint text-[var(--color-text-muted)]">Active</span>
         </div>
         <button onClick={onConnectLocal} className={`ml-auto ${BTN_SECONDARY}`}>
-          {thisMachine()}
+          Switch to this computer
         </button>
       </div>
 
-      <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] mb-2 px-1">
+      <div className="type-badge uppercase tracking-wide text-[var(--color-text-muted)] mb-2 px-1">
         Peers of {hostLabel}
       </div>
       {loading ? (
-        <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">Loading peers…</div>
+        <div className="type-hint text-[var(--color-text-muted)] px-3 py-2">Loading peers…</div>
       ) : !available ? (
-        <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2 leading-relaxed">
-          Federation peers are unavailable on this host (federation off, not owner/admin, or unreachable).
-          Enable federation under {isAirgap() ? 'Servers → Policies' : 'Tunnel → Policies'} while signed into this server.
+        <div className="type-hint text-[var(--color-text-muted)] px-3 py-2 leading-relaxed">
+          Can&apos;t list this server&apos;s paired servers. Federation may be off, you may not be an owner or admin, or the server may be unreachable.
+          To turn federation on, open {isAirgap() ? 'Servers → Policies' : 'Tunnel → Policies'} while signed in to this server.
         </div>
       ) : peers.length === 0 ? (
-        <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">
-          No federated peers yet. Pair a server from {thisMachineLower()} below.
+        <div className="type-hint text-[var(--color-text-muted)] px-3 py-2">
+          No paired servers yet. Pair one below.
         </div>
       ) : (
         <div className="space-y-2 mb-4">
@@ -692,12 +690,12 @@ function ActiveHostPeersPanel({
               className="px-3 py-2 border border-[var(--color-border)] space-y-1"
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-[var(--color-text-primary)] font-medium truncate">
+                <span className="type-name text-[var(--color-text-primary)] truncate">
                   {p.label || p.subdomain || p.fingerprint.slice(0, 12)}
                 </span>
                 {p.repair_recommended && (
                   <span
-                    className="text-[9px] uppercase tracking-wider font-semibold flex-shrink-0 ml-auto"
+                    className="type-badge uppercase tracking-wider flex-shrink-0 ml-auto"
                     style={{ color: 'var(--color-status-warn-amber-bright)' }}
                     title={REPAIR_RECOMMENDED_HINT}
                   >
@@ -705,19 +703,19 @@ function ActiveHostPeersPanel({
                   </span>
                 )}
                 <span
-                  className="text-[9px] uppercase tracking-wider font-semibold flex-shrink-0"
+                  className="type-badge uppercase tracking-wider flex-shrink-0"
                   style={{ color: trustColor(p.trust) }}
                 >
                   {p.trust}
                 </span>
               </div>
-              <div className="text-[10px] text-[var(--color-text-muted)] font-mono truncate">
+              <div className="type-hint text-[var(--color-text-muted)] font-mono truncate">
                 {p.base_url || p.baseUrl
                   ? (p.base_url || p.baseUrl)
                   : federatedPeerHost(p) || p.fingerprint.slice(0, 24) + '…'}
               </div>
               {p.repair_recommended && (
-                <div className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+                <div className="type-hint text-[var(--color-text-muted)] leading-relaxed">
                   {REPAIR_RECOMMENDED_HINT}
                 </div>
               )}
@@ -727,16 +725,15 @@ function ActiveHostPeersPanel({
       )}
 
       <div className="border-t border-[var(--color-border)] pt-3 mt-2">
-        <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] mb-1 px-1">
-          Pair from {thisMachineLower()}
+        <div className="type-badge uppercase tracking-wide text-[var(--color-text-muted)] mb-1 px-1">
+          Pair from this computer
         </div>
-        <p className="text-[10px] text-[var(--color-text-muted)] mb-2 px-1 leading-relaxed">
-          Mutual trust between {hostLabel} and another server you&apos;re signed into on this client.
-          Does not probe offline hosts for settings — Pair only.
+        <p className="type-hint text-[var(--color-text-muted)] mb-2 px-1 leading-relaxed">
+          Lets {hostLabel} and a server you&apos;re signed in to on this computer trust each other, so their agents can be connected.
         </p>
         {pairableLocal.length === 0 ? (
-          <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">
-            No signed-in servers on {thisMachineLower()}. Switch to {thisMachine()} to add/sign in, then return here to pair.
+          <div className="type-hint text-[var(--color-text-muted)] px-3 py-2">
+            No servers signed in on this computer. Switch to This computer, sign in to a server, then come back here to pair.
           </div>
         ) : (
           <div className="space-y-2">
@@ -746,10 +743,10 @@ function ActiveHostPeersPanel({
                 className="flex items-center justify-between gap-2 px-3 py-2 border border-[var(--color-border)]"
               >
                 <div className="min-w-0">
-                  <div className="text-xs text-[var(--color-text-primary)] truncate">
+                  <div className="type-row text-[var(--color-text-primary)] truncate">
                     {h.label || h.hostname}
                   </div>
-                  <div className="text-[10px] text-[var(--color-text-muted)] font-mono truncate">
+                  <div className="type-hint text-[var(--color-text-muted)] font-mono truncate">
                     {h.secure ? h.hostname : savedHostBaseUrl(h)}
                   </div>
                 </div>
@@ -767,7 +764,7 @@ function ActiveHostPeersPanel({
         )}
         {pairMsg && (
           <div
-            className={`mt-2 text-[10px] px-1 ${
+            className={`mt-2 type-hint px-1 ${
               pairMsg.ok ? 'text-[var(--color-status-ok-soft)]' : 'text-[var(--color-status-error-soft)]'
             }`}
           >
@@ -809,6 +806,7 @@ function HostTile({
   onFederationPeersChanged?: () => void
 }): React.JSX.Element {
   const label = host.label || host.hostname
+  const peerSide = activePeerSideLabel === 'This computer' ? 'this computer' : activePeerSideLabel
   const voiceOnly = hostIsVoiceChatOnly(host)
   const creds = remoteCreds(host)
   const signedOut = creds.token.length === 0
@@ -924,7 +922,7 @@ function HostTile({
       setPeerPaired('yes')
       setPairMsg({
         ok: true,
-        text: `Paired ${activePeerSideLabel} ↔ ${label} — available in workspace Federated Connections.`,
+        text: `Paired with ${label}. Add its agents from a workspace’s Connections tab.`,
       })
       onFederationPeersChanged?.()
     } catch (e) {
@@ -1010,8 +1008,8 @@ function HostTile({
             const observed = status?.version
             setHostCurrent(observed)
             setUpdateError(
-              `${label} is back on v${observed ?? 'an unexpected version'} — update did not take` +
-                ` (expected v${expected}). Try again or SSH install-daemon.sh --version ${expected}.`,
+              `The update didn’t finish: ${label} is on v${observed ?? 'an unexpected version'}, expected v${expected}.` +
+                ` Try again, or run install-daemon.sh --version ${expected} on the server.`,
             )
             void reviveRemoteSession(host.id, { force: true })
             void refreshFederation()
@@ -1055,8 +1053,8 @@ function HostTile({
       setPhaseText(null)
       setUpdateError(
         expected
-          ? `${label} did not come back on v${expected} within the wait window — try “Check for updates”, or SSH install-daemon.sh.`
-          : `${label} is still unreachable — try “Check for updates”, or relaunch K2 if it persists.`,
+          ? `${label} hasn’t come back on v${expected}. Try Check for updates, or run install-daemon.sh on the server.`
+          : `${label} still isn’t responding. Try Check for updates, or relaunch K2.`,
       )
     } finally {
       if (aliveRef.current) setReconnecting(false)
@@ -1078,7 +1076,7 @@ function HostTile({
       setRestartMsg({
         ok: false,
         text: isForbiddenError(m)
-          ? `You don't have permission to restart ${label}. Only the host owner or an admin can.`
+          ? `Only ${label}’s owner or an admin can restart it.`
           : `Couldn't restart ${label}: ${m}`,
       })
     } finally {
@@ -1177,7 +1175,7 @@ function HostTile({
       case 'apply-failed':
         return refused(outcome.err)
       case 'timed-out':
-        return fail(`Timed out waiting for the update on ${label}.`)
+        return fail(`Timed out waiting for the update on ${label}. Use Check for updates to see whether it finished.`)
     }
   }
 
@@ -1242,11 +1240,11 @@ function HostTile({
           style={{ backgroundColor: isActive ? statusColor(connectionStatus) : 'var(--color-neutral)' }}
         />
         <div className="flex flex-col min-w-0">
-          <span className="text-xs text-[var(--color-text-primary)] truncate flex items-center gap-1.5">
+          <span className="type-row text-[var(--color-text-primary)] truncate flex items-center gap-1.5">
             <span className="truncate">{host.label}</span>
             {voiceOnly && <VoiceChatOnlyChip />}
           </span>
-          <span className="text-[10px] text-[var(--color-text-muted)] truncate flex items-center gap-1">
+          <span className="type-hint text-[var(--color-text-muted)] truncate flex items-center gap-1">
             {host.secure && <IconLock className="w-2.5 h-2.5 flex-shrink-0" />}
             {host.secure && host.port === 443 ? host.hostname : `${host.hostname}:${host.port}`}
             {host.remember ? ' · saved' : ''}
@@ -1254,24 +1252,24 @@ function HostTile({
         </div>
         <div className="ml-auto flex items-center gap-2">
           <span
-            className={`text-[9px] px-1.5 py-0.5 border whitespace-nowrap no-drag ${fedClass}`}
-            title="Whether cross-server federation is enabled on this server"
+            className={`type-hint px-1.5 py-0.5 border whitespace-nowrap no-drag ${fedClass}`}
+            title="Whether this server can connect to agents on other servers"
           >
             {federationBadgeText(federation)}
           </span>
           {!signedOut && !isActive && peerPaired === 'yes' && (
             <span
-              className="text-[9px] px-1.5 py-0.5 border whitespace-nowrap no-drag border-emerald-500/40 text-emerald-300 bg-emerald-500/10"
-              title={`${activePeerSideLabel} already has a Trusted federation pin for this server`}
+              className="type-hint px-1.5 py-0.5 border whitespace-nowrap no-drag border-emerald-500/40 text-emerald-300 bg-emerald-500/10"
+              title={`${activePeerSideLabel} trusts this server`}
             >
-              Peer: trusted
+              Paired
             </span>
           )}
           {/* "Active" badge only — switching to a host happens from the
               server switcher, not here. The tile is for managing the host in
               place (Sign in / Restart / updates / Pair). */}
           {isActive && (
-            <span className="text-[10px] text-[var(--color-text-muted)]">Active</span>
+            <span className="type-hint text-[var(--color-text-muted)]">Active</span>
           )}
           <button onClick={onEdit} className={BTN_SECONDARY}>
             Edit
@@ -1288,7 +1286,7 @@ function HostTile({
           in one bottom-right row, plus Update when one's available. */}
       {signedOut ? (
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-[var(--color-text-muted)]">Sign in to manage this server</span>
+          <span className="type-hint text-[var(--color-text-muted)]">Sign in to manage this server</span>
           <button onClick={() => signInForManagement(host)} className={BTN_ACCENT}>
             Sign in
           </button>
@@ -1298,7 +1296,7 @@ function HostTile({
         // this login can't restart, update or pair it. Its rooms are in the
         // headset; Sign out and Remove are all there is to do here.
         <div className="flex items-center justify-between gap-2" data-testid="connections-voice-chat-only">
-          <span className="text-[10px] text-[var(--color-text-muted)]">{VOICE_CHAT_LINE}</span>
+          <span className="type-hint text-[var(--color-text-muted)]">{VOICE_CHAT_LINE}</span>
           <button
             type="button"
             onClick={() => void signOutOfHost(host)}
@@ -1331,9 +1329,9 @@ function HostTile({
                 onClick={() => void doPairPeer()}
                 disabled={pairBusy || reconnecting}
                 className={BTN_SECONDARY}
-                title={`Already paired with ${activePeerSideLabel} — click to re-check mutual trust`}
+                title={`${activePeerSideLabel} is already paired with this server. Check the pairing and repair it if needed.`}
               >
-                {pairBusy ? 'Pairing…' : 'Re-pair peer'}
+                {pairBusy ? 'Pairing…' : 'Check pairing'}
               </button>
             ) : (
               <button
@@ -1344,11 +1342,11 @@ function HostTile({
                 data-settings-id="connections.pair-federated-peer"
                 title={
                   federation === 'off'
-                    ? `Enable federation on this server (and on ${activePeerSideLabel}) first`
-                    : `Establish mutual federation trust between ${activePeerSideLabel} and this server`
+                    ? `Turn on federation on this server and on ${peerSide} first`
+                    : `Let ${peerSide} and this server trust each other, so their agents can be connected`
                 }
               >
-                {pairBusy ? 'Pairing…' : peerPaired === 'checking' ? 'Checking peer…' : 'Pair as federated peer'}
+                {pairBusy ? 'Pairing…' : peerPaired === 'checking' ? 'Checking…' : 'Pair'}
               </button>
             ))}
           {/* Home M2: sign out of a server this window is not on. Its Home
@@ -1386,7 +1384,7 @@ function HostTile({
           the in-app banner (recoveryStatusText — single source). */}
       {isActive && activeRecovery.kind !== 'connected' && (
         <div
-          className={`text-[10px] text-right ${
+          className={`type-hint text-right ${
             activeRecovery.kind === 'signin-required'
               ? 'text-[var(--color-status-error-soft)]'
               : 'text-[var(--color-text-muted)]'
@@ -1401,23 +1399,23 @@ function HostTile({
           "Starting update for <server>…" phase text, and update errors.
           Fail loud, never silent. */}
       {restartMsg && (
-        <div className={`text-[10px] text-right ${restartMsg.ok ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-status-error-soft)]'}`}>
+        <div className={`type-hint text-right ${restartMsg.ok ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-status-error-soft)]'}`}>
           {restartMsg.text}
         </div>
       )}
       {pairMsg && (
         <div
-          className={`text-[10px] text-right ${pairMsg.ok ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-status-error-soft)]'}`}
+          className={`type-hint text-right ${pairMsg.ok ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-status-error-soft)]'}`}
         >
           {pairMsg.text}
         </div>
       )}
-      {checkError && <div className="text-[10px] text-right text-[var(--color-status-error-soft)]">{checkError}</div>}
+      {checkError && <div className="type-hint text-right text-[var(--color-status-error-soft)]">{checkError}</div>}
       {summary && !checkError && (
-        <div className="text-[10px] text-right text-[var(--color-text-muted)]">{summary.text}</div>
+        <div className="type-hint text-right text-[var(--color-text-muted)]">{summary.text}</div>
       )}
-      {phaseText && <div className="text-[10px] text-right text-[var(--color-text-muted)]">{phaseText}</div>}
-      {updateError && <div className="text-[10px] text-right text-[var(--color-status-error-soft)]">{updateError}</div>}
+      {phaseText && <div className="type-hint text-right text-[var(--color-text-muted)]">{phaseText}</div>}
+      {updateError && <div className="type-hint text-right text-[var(--color-status-error-soft)]">{updateError}</div>}
     </div>
   )
 }

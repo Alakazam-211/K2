@@ -97,11 +97,11 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <p className="text-xs text-[var(--color-status-error-soft)]">Failed to open pack: {error}</p>
+        <p className="type-row text-[var(--color-status-error-soft)]">Failed to open pack: {error}</p>
         <button
           type="button"
           onClick={onClose}
-          className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag"
+          className="type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag"
         >
           &larr; Back to Catalog
         </button>
@@ -111,7 +111,7 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
 
   if (!ready || !agentCommand) {
     return (
-      <div className="flex items-center justify-center h-64 text-xs text-[var(--color-text-muted)]">
+      <div className="flex items-center justify-center h-64 type-hint text-[var(--color-text-muted)]">
         {error ? null : !agentCommand ? 'Resolving agent…' : 'Opening pack editor…'}
       </div>
     )
@@ -138,7 +138,7 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
       onManualRefresh={handleManualRefresh}
       preview={
         <div className="h-full flex flex-col">
-          <div className="flex-shrink-0 px-3 py-1.5 border-b border-[var(--color-border)] text-[10px] text-[var(--color-text-muted)]">
+          <div className="flex-shrink-0 px-3 py-1.5 border-b border-[var(--color-border)] type-hint text-[var(--color-text-muted)]">
             {activePath.endsWith('pack.toml') ? 'pack.toml' : 'layer.md'}
           </div>
           <div className="flex-1 min-h-0 overflow-hidden">

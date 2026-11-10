@@ -33,7 +33,7 @@ export const EMAIL_NOTIFICATIONS_MANIFEST: SettingEntry[] = [
 const muted = 'text-[var(--color-text-muted)]'
 
 function Title({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">{children}</h3>
+  return <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider mb-2">{children}</h3>
 }
 
 function fmt(unix: number | null | undefined): string {
@@ -43,7 +43,7 @@ function fmt(unix: number | null | undefined): string {
 function Chip({ text, tone }: { text: string; tone: 'ok' | 'warn' | 'error' | 'muted' }): React.JSX.Element {
   const color = { ok: 'var(--color-status-ok)', warn: 'var(--color-status-warn)', error: 'var(--color-status-error-soft)', muted: 'var(--color-text-muted)' }[tone]
   return (
-    <span className="text-[10px] px-1.5 py-0.5 border" style={{ color, borderColor: color }}>
+    <span className="type-hint px-1.5 py-0.5 border" style={{ color, borderColor: color }}>
       {text}
     </span>
   )
@@ -73,23 +73,23 @@ function SenderRow({ s, api, onResumed }: { s: NotifySender; api: EmailNotifyApi
   const tone = s.state === 'ready' ? 'ok' : s.state === 'retired' || s.state === 'off' ? 'muted' : 'warn'
   return (
     <div className="py-2 border-b border-[var(--color-border)]" data-testid={`notify-sender-${s.id}`}>
-      <div className="flex items-center gap-2 text-xs">
+      <div className="flex items-center gap-2 type-row">
         <span className="font-medium">{s.address}</span>
         <Chip text={s.state} tone={tone} />
         {s.paused && <Chip text="paused" tone="error" />}
         <span className={muted}>{ownerText(s)}</span>
         <span className={`${muted} ml-auto`}>{s.path}</span>
       </div>
-      {s.envelope && <div className={`text-[11px] ${muted}`}>sends through {s.envelope}</div>}
+      {s.envelope && <div className={`type-hint ${muted}`}>sends through {s.envelope}</div>}
       {s.paused && (
-        <div className="mt-1 text-[11px]">
+        <div className="mt-1 type-hint">
           <span>Paused {fmt(s.paused.pausedAt)}: {pauseText(s.paused)}. Its sends answer email_paused until you resume it.</span>
           <div className="flex items-center gap-2 mt-1">
             {askPassword && (
               <input
                 type="password"
                 aria-label="Vault password"
-                className="text-xs px-2 py-1 bg-transparent border border-[var(--color-border)]"
+                className="type-control px-2 py-1 bg-transparent border border-[var(--color-border)]"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Vault password"
@@ -97,7 +97,7 @@ function SenderRow({ s, api, onResumed }: { s: NotifySender; api: EmailNotifyApi
             )}
             <button
               type="button"
-              className="text-xs px-2 py-1 border border-[var(--color-border)]"
+              className="type-control px-2 py-1 border border-[var(--color-border)]"
               disabled={busy || (askPassword && !password)}
               onClick={() => void resume(askPassword ? password : undefined)}
             >
@@ -106,7 +106,7 @@ function SenderRow({ s, api, onResumed }: { s: NotifySender; api: EmailNotifyApi
           </div>
         </div>
       )}
-      {error && <div className="text-[11px] text-[var(--color-status-error-soft)] mt-1">{error}</div>}
+      {error && <div className="type-hint text-[var(--color-status-error-soft)] mt-1">{error}</div>}
     </div>
   )
 }
@@ -176,17 +176,17 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
 
   if (error && !status) {
     return (
-      <div className="text-xs" data-testid="email-notifications-error">
+      <div className="type-row" data-testid="email-notifications-error">
         <p className="mb-2">Email Notifications couldn't load: {error}</p>
         <p className={muted}>The owner and Admins see this page. From a terminal: k2 notifications email --help.</p>
       </div>
     )
   }
-  if (!status) return <div className={`text-xs ${muted}`}>Loading…</div>
+  if (!status) return <div className={`type-row ${muted}`}>Loading…</div>
 
   const others = status.senders.filter((s) => s.id !== status.systemSender?.id)
   return (
-    <div className="max-w-3xl text-xs space-y-6" data-testid="email-notifications">
+    <div className="max-w-3xl type-row space-y-6" data-testid="email-notifications">
       <div>
         <Title>Email Notifications</Title>
         <div className="flex flex-wrap gap-3">
@@ -230,7 +230,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
               <span className={muted}>{a.sender ?? '(sender removed)'}</span>
               {a.offReason && <span className={muted}>({a.offReason})</span>}
               {a.on && (
-                <button type="button" className="ml-auto text-xs px-2 py-1 border border-[var(--color-border)]" onClick={() => void turnOff(a.workspace)}>
+                <button type="button" className="ml-auto type-control px-2 py-1 border border-[var(--color-border)]" onClick={() => void turnOff(a.workspace)}>
                   Turn off
                 </button>
               )}
@@ -245,15 +245,15 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
         <div className="flex gap-2 mb-2">
           <input
             aria-label="Address"
-            className="text-xs px-2 py-1 bg-transparent border border-[var(--color-border)] flex-1"
+            className="type-control px-2 py-1 bg-transparent border border-[var(--color-border)] flex-1"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="someone@example.com"
           />
-          <button type="button" className="text-xs px-2 py-1 border border-[var(--color-border)]" onClick={() => void find()}>
+          <button type="button" className="type-control px-2 py-1 border border-[var(--color-border)]" onClick={() => void find()}>
             Find
           </button>
-          <button type="button" className="text-xs px-2 py-1 border border-[var(--color-border)]" disabled={!search.trim()} onClick={() => void unsuppress()}>
+          <button type="button" className="type-control px-2 py-1 border border-[var(--color-border)]" disabled={!search.trim()} onClick={() => void unsuppress()}>
             Remove
           </button>
         </div>

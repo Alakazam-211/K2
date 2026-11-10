@@ -228,7 +228,7 @@ describe('agent access is not set on this page (Rosson 2026-10-11)', () => {
     vi.mocked(getAccountAccessToken).mockResolvedValue(null)
     render(<MachinesPart list={list([NODE])} onChanged={onChanged} />)
     expect(screen.getByTestId('compute-agents-note').textContent).toContain(
-      'Which agents can use these machines is set per agent: Settings → Workspaces → <agent> → Agent → Allow',
+      'Which agents can use these machines is set per agent: Settings → Workspaces / Agents → <agent> → Agent → Allow',
     )
     expect(screen.queryByText('Agents that can use compute')).toBeNull()
   })

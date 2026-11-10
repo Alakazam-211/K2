@@ -135,16 +135,16 @@ export function MultiplayerSection({ scope = primaryScope() }: { scope?: ServerS
   return (
     <div className="max-w-2xl space-y-4" data-settings-id="multiplayer.cores" data-testid="multiplayer-section">
       <div>
-        <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Multiplayer</h2>
-        <p className={`text-[11px] ${muted} mt-1 leading-relaxed`}>{MULTIPLAYER_INTRO}</p>
+        <h2 className="type-title text-[var(--color-text-primary)]">Multiplayer</h2>
+        <p className={`type-hint ${muted} mt-1 leading-relaxed`}>{MULTIPLAYER_INTRO}</p>
         {data && !data.canChange ? (
-          <p className={`text-[11px] ${muted} mt-1`} data-testid="multiplayer-member-line">
+          <p className={`type-hint ${muted} mt-1`} data-testid="multiplayer-member-line">
             {MULTIPLAYER_MEMBER_LINE}
           </p>
         ) : null}
       </div>
       {loadError ? (
-        <div role="alert" className="text-[11px] text-[var(--color-status-error-soft)]">
+        <div role="alert" className="type-hint text-[var(--color-status-error-soft)]">
           {loadError}
         </div>
       ) : null}
@@ -172,7 +172,7 @@ export function MultiplayerSection({ scope = primaryScope() }: { scope?: ServerS
         </div>
       ) : null}
       {later.length > 0 ? (
-        <p className={`text-[11px] ${muted}`} data-testid="multiplayer-later">
+        <p className={`type-hint ${muted}`} data-testid="multiplayer-later">
           Coming later: {later.join(', ')}.
         </p>
       ) : null}
@@ -204,10 +204,10 @@ function PreviewRow({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">{BOARD_FILE_PREVIEW_LABEL}</div>
-          <div className={`text-[10px] ${muted} mt-0.5 leading-relaxed`}>{BOARD_FILE_PREVIEW_LINE}</div>
+          <div className="type-name text-[var(--color-text-primary)]">{BOARD_FILE_PREVIEW_LABEL}</div>
+          <div className={`type-hint ${muted} mt-0.5 leading-relaxed`}>{BOARD_FILE_PREVIEW_LINE}</div>
           {error ? (
-            <div role="alert" className="text-[10px] text-[var(--color-status-error-soft)] mt-1">
+            <div role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1">
               {error}
             </div>
           ) : null}
@@ -243,36 +243,36 @@ function CoreRow({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)] flex items-center gap-2">
+          <div className="type-name text-[var(--color-text-primary)] flex items-center gap-2">
             <span>{core.name}</span>
             {core.status === 'beta' ? (
-              <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+              <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
                 Beta
               </span>
             ) : null}
           </div>
-          <div className={`text-[10px] ${muted} mt-0.5 leading-relaxed`}>{core.description}</div>
+          <div className={`type-hint ${muted} mt-0.5 leading-relaxed`}>{core.description}</div>
           {core.on ? (
-            <div className={`text-[10px] ${muted} mt-1`}>
+            <div className={`type-hint ${muted} mt-1`}>
               {core.view === 'garden' ? MULTIPLAYER_GARDEN_BETA_LINE : MULTIPLAYER_BETA_LINE}
             </div>
           ) : null}
           {core.on && core.open.files > 0 ? (
-            <div className="text-[10px] text-[var(--color-text-secondary)] mt-1" data-testid={`multiplayer-open-${core.id}`}>
+            <div className="type-hint text-[var(--color-text-secondary)] mt-1" data-testid={`multiplayer-open-${core.id}`}>
               {openNowLine(core.open)}
             </div>
           ) : null}
           {failed.map((f) => (
             <div
               key={f.path}
-              className="text-[10px] text-[var(--color-status-warn-amber-soft)] mt-1"
+              className="type-hint text-[var(--color-status-warn-amber-soft)] mt-1"
               data-testid={`multiplayer-failed-${core.id}`}
             >
               {failedWriteBackLine(core, f)}
             </div>
           ))}
           {error ? (
-            <div role="alert" className="text-[10px] text-[var(--color-status-error-soft)] mt-1">
+            <div role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1">
               {error}
             </div>
           ) : null}

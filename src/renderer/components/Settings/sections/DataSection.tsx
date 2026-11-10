@@ -84,7 +84,7 @@ type Selection = { kind: 'server' } | { kind: 'db'; id: string }
 
 function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
-    <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+    <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
       {children}
     </h3>
   )
@@ -213,14 +213,14 @@ function AccessPanel({
       <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
         <div className="px-3 py-2 space-y-1.5">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+            <span className="type-section uppercase tracking-wide text-[var(--color-text-muted)]">
               Owner
             </span>
-            <span className="text-xs text-[var(--color-text-primary)] truncate">
+            <span className="type-row text-[var(--color-text-primary)] truncate">
               {db.owner.workspace ?? projectName(db.owner.projectId)}
             </span>
             <span className="flex-1" />
-            <span className="text-[10px] text-[var(--color-text-muted)]">
+            <span className="type-hint text-[var(--color-text-muted)]">
               {LEVEL_LABEL.write} · manage
             </span>
           </div>
@@ -228,7 +228,7 @@ function AccessPanel({
         {db.grants.map((g) => (
           <div key={g.projectId} className="px-3 py-2 space-y-1.5">
             <div className="flex items-center gap-2 min-w-0">
-              <span className="text-xs text-[var(--color-text-primary)] truncate flex-1">
+              <span className="type-row text-[var(--color-text-primary)] truncate flex-1">
                 {g.workspace ?? projectName(g.projectId)}
               </span>
               <SettingDropdown
@@ -246,13 +246,13 @@ function AccessPanel({
                 type="button"
                 disabled={!canMutate || pending === g.projectId}
                 onClick={() => void removeGrant(g.projectId)}
-                className="px-2 py-0.5 text-[10px] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                className="px-2 py-0.5 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
               >
                 Remove
               </button>
             </div>
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] text-[var(--color-text-secondary)]">Allow manage</span>
+              <span className="type-hint text-[var(--color-text-secondary)]">Allow manage</span>
               <Toggle
                 checked={g.canManage}
                 disabled={!canMutate || pending === g.projectId}
@@ -283,7 +283,7 @@ function AccessPanel({
               type="button"
               disabled={!canMutate || !newProject || pending === 'add'}
               onClick={() => void addGrant()}
-              className="px-2 py-0.5 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+              className="px-2 py-0.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
             >
               Grant
             </button>
@@ -291,7 +291,7 @@ function AccessPanel({
         )}
       </div>
       {error && (
-        <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p>
+        <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
       )}
     </div>
   )
@@ -340,7 +340,7 @@ function BindPanel({
   return (
     <div className="space-y-2" data-settings-id="data.bind">
       <SectionTitle>Bind role</SectionTitle>
-      <p className="text-[11px] text-[var(--color-text-muted)]">
+      <p className="type-hint text-[var(--color-text-muted)]">
         Postgres role the workspace assistant uses. Default is{' '}
         <span className="font-mono">ws_&lt;id&gt;_agent</span>. Does not mint RLS at spawn.
       </p>
@@ -351,20 +351,20 @@ function BindPanel({
           disabled={!canMutate || busy}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="ws_<workspace>_agent"
-          className="flex-1 min-w-0 px-2 py-1.5 text-xs font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
+          className="flex-1 min-w-0 px-2 py-1.5 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
         />
         <button
           type="button"
           disabled={!canMutate || busy || !draft.trim()}
           onClick={() => void save()}
-          className="px-2.5 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+          className="px-2.5 py-1 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
         >
           {busy ? 'Saving…' : 'Bind'}
         </button>
       </div>
       {note && (
         <p
-          className={`text-[10px] ${
+          className={`type-hint ${
             note === 'Saved.'
               ? 'text-[var(--color-text-muted)]'
               : 'text-[var(--color-status-error-soft)]'
@@ -425,8 +425,8 @@ function ServerPanel({
   return (
     <div className="grid gap-6 grid-cols-[minmax(0,42rem)]">
       <div className="min-w-0" data-settings-id="data.server">
-        <h2 className="text-base font-medium text-[var(--color-text-primary)]">Database sidecar</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+        <h2 className="type-title text-[var(--color-text-primary)]">Database sidecar</h2>
+        <p className="type-hint text-[var(--color-text-muted)] mt-1">
           K2 supervises Postgres on this box (one Postgres per major, loopback only). Agents mint
           a per-workspace database with <span className="font-mono">k2 db create</span>; documents
           live as JSONB in the same DB. Files stay in the workspace filesystem.
@@ -441,13 +441,13 @@ function ServerPanel({
               className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0"
               style={{ backgroundColor: stateColor(status.state) }}
             />
-            <span className="text-xs text-[var(--color-text-primary)]">{status.state}</span>
+            <span className="type-row text-[var(--color-text-primary)]">{status.state}</span>
             <span className="flex-1" />
             {clustersLine(status) ? (
-              <span className="text-[10px] text-[var(--color-text-muted)]">{clustersLine(status)}</span>
+              <span className="type-hint text-[var(--color-text-muted)]">{clustersLine(status)}</span>
             ) : (
               status.installedMajor != null && (
-                <span className="text-[10px] text-[var(--color-text-muted)]">
+                <span className="type-hint text-[var(--color-text-muted)]">
                   PG {status.installedMajor}
                 </span>
               )
@@ -455,24 +455,24 @@ function ServerPanel({
           </div>
           {listenLine && (
             <div className="flex items-center gap-3 px-3 py-2">
-              <span className="text-[11px] text-[var(--color-text-secondary)] w-24 flex-shrink-0">
+              <span className="type-hint text-[var(--color-text-secondary)] w-24 flex-shrink-0">
                 Listen
               </span>
-              <span className="text-xs font-mono text-[var(--color-text-primary)]">
+              <span className="type-row font-mono text-[var(--color-text-primary)]">
                 {listenLine}
               </span>
             </div>
           )}
           {status.publishHint && (
             <div className="px-3 py-2">
-              <p className="text-[11px] text-[var(--color-text-muted)] break-words font-mono">
+              <p className="type-hint text-[var(--color-text-muted)] break-words font-mono">
                 {status.publishHint}
               </p>
             </div>
           )}
           {status.lastError && (
             <div className="px-3 py-2">
-              <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">
+              <p className="type-hint text-[var(--color-status-error-soft)] break-words">
                 {status.lastError}
               </p>
             </div>
@@ -483,7 +483,7 @@ function ServerPanel({
       {(notInstalled || stopped) && (
         <div className="space-y-2">
           <SectionTitle>{notInstalled ? 'Enable' : 'Resume'}</SectionTitle>
-          <p className="text-[11px] text-[var(--color-text-muted)]">
+          <p className="type-hint text-[var(--color-text-muted)]">
             Bake first with <span className="font-mono">provision-k2-server.sh --bake --with-db</span>
             . Enable is catalog + start — the daemon never apt-gets.
           </p>
@@ -491,7 +491,7 @@ function ServerPanel({
             type="button"
             disabled={!canMutate || busy}
             onClick={() => void doEnable()}
-            className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {busy ? 'Starting…' : 'Enable database sidecar'}
           </button>
@@ -505,8 +505,8 @@ function ServerPanel({
           <SectionTitle>Danger zone</SectionTitle>
           <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2 flex items-center gap-3">
             <div className="flex-1 min-w-0">
-              <p className="text-xs text-[var(--color-text-primary)]">Disable</p>
-              <p className="text-[10px] text-[var(--color-text-muted)]">
+              <p className="type-row text-[var(--color-text-primary)]">Disable</p>
+              <p className="type-hint text-[var(--color-text-muted)]">
                 Stops the unit, keeps PGDATA.
               </p>
             </div>
@@ -514,7 +514,7 @@ function ServerPanel({
               type="button"
               disabled={!canMutate || busy}
               onClick={() => void doDisable()}
-              className="px-2.5 py-1 text-[10px] font-medium text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+              className="px-2.5 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
             >
               Disable
             </button>
@@ -523,7 +523,7 @@ function ServerPanel({
       )}
 
       {error && (
-        <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p>
+        <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
       )}
     </div>
   )
@@ -568,10 +568,10 @@ function LiveMovesPanel({ canMutate }: { canMutate: boolean }): React.JSX.Elemen
   )
 
   if (!live || (live.runs.length === 0 && live.notLogical.length === 0)) {
-    return error ? <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p> : null
+    return error ? <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p> : null
   }
   const btn =
-    'px-2.5 py-1 text-[10px] font-medium border border-[var(--color-border)] hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0'
+    'px-2.5 py-1 type-control border border-[var(--color-border)] hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0'
   return (
     <div className="space-y-2" data-settings-id="data.live" data-testid="data-live-moves">
       <SectionTitle>Live moves</SectionTitle>
@@ -579,11 +579,11 @@ function LiveMovesPanel({ canMutate }: { canMutate: boolean }): React.JSX.Elemen
         {live.runs.map((r) => (
           <div key={r.db} className="px-3 py-2 flex items-center gap-3" data-testid={`data-live-${r.db}`}>
             <div className="flex-1 min-w-0">
-              <p className="text-xs text-[var(--color-text-primary)] font-mono">
+              <p className="type-row text-[var(--color-text-primary)] font-mono">
                 {r.db} · PG {r.from} → {r.to} · {r.state}
               </p>
-              <p className="text-[10px] text-[var(--color-text-muted)]">{liveLine(r)}</p>
-              {r.lastError ? <p className="text-[10px] text-[var(--color-status-error-soft)] break-words">{r.lastError}</p> : null}
+              <p className="type-hint text-[var(--color-text-muted)]">{liveLine(r)}</p>
+              {r.lastError ? <p className="type-hint text-[var(--color-status-error-soft)] break-words">{r.lastError}</p> : null}
             </div>
             {r.state === 'streaming' ? (
               confirm === `switch:${r.db}` ? (
@@ -606,8 +606,8 @@ function LiveMovesPanel({ canMutate }: { canMutate: boolean }): React.JSX.Elemen
         {live.notLogical.map((m) => (
           <div key={m} className="px-3 py-2 flex items-center gap-3" data-testid={`data-live-prepare-${m}`}>
             <div className="flex-1 min-w-0">
-              <p className="text-xs text-[var(--color-text-primary)]">Postgres {m} can&apos;t move live yet</p>
-              <p className="text-[10px] text-[var(--color-text-muted)]">
+              <p className="type-row text-[var(--color-text-primary)]">Postgres {m} can&apos;t move live yet</p>
+              <p className="type-hint text-[var(--color-text-muted)]">
                 One restart allows it: every database on Postgres {m} pauses for about 5–15 s (a 60 s notice first).
               </p>
             </div>
@@ -623,7 +623,7 @@ function LiveMovesPanel({ canMutate }: { canMutate: boolean }): React.JSX.Elemen
           </div>
         ))}
       </div>
-      {error ? <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p> : null}
+      {error ? <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p> : null}
     </div>
   )
 }
@@ -640,15 +640,15 @@ function DatabasePanel({
   return (
     <div className="grid gap-6 grid-cols-[minmax(0,44rem)]">
       <div className="min-w-0" data-settings-id="data.databases">
-        <h2 className="text-base font-medium text-[var(--color-text-primary)] font-mono truncate">
+        <h2 className="type-title text-[var(--color-text-primary)] font-mono truncate">
           {db.name}
         </h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+        <p className="type-hint text-[var(--color-text-muted)] mt-1">
           {dbTypeLabel(db)} · owner {db.ownerWorkspace ?? db.ownerProjectId} · {db.status}
           {db.cap ? ` · cap ${db.cap.used}/${db.cap.cap === 0 ? '∞' : db.cap.cap}` : ''}
         </p>
         {db.bindRole && (
-          <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5 font-mono">
+          <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 font-mono">
             bind {db.bindRole}
           </p>
         )}
@@ -777,13 +777,13 @@ export function DataSection(): React.JSX.Element {
   if (statusError) {
     return (
       <div className="p-6 space-y-2">
-        <p className="text-[11px] text-[var(--color-status-error-soft)]">
+        <p className="type-hint text-[var(--color-status-error-soft)]">
           Couldn&rsquo;t read the database sidecar status: {statusError}
         </p>
         <button
           type="button"
           onClick={bump}
-          className="px-2.5 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+          className="px-2.5 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
         >
           Retry
         </button>
@@ -791,7 +791,7 @@ export function DataSection(): React.JSX.Element {
     )
   }
   if (status === null) {
-    return <p className="p-6 text-xs text-[var(--color-text-muted)]">Loading…</p>
+    return <p className="p-6 type-hint text-[var(--color-text-muted)]">Loading…</p>
   }
 
   const displayStatus = sample ? { ...SAMPLE_STATUS, ...status, supported: false } : status
@@ -801,7 +801,7 @@ export function DataSection(): React.JSX.Element {
   return (
     <div className="flex flex-col h-full min-h-0">
       {sample && (
-        <div className="flex-shrink-0 px-4 py-2 text-[10px] font-bold tracking-wide text-center text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_18%,transparent)] border-b border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)]">
+        <div className="flex-shrink-0 px-4 py-2 type-hint tracking-wide text-center text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_18%,transparent)] border-b border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)]">
           {MAC_BANNER}
         </div>
       )}
@@ -822,11 +822,11 @@ export function DataSection(): React.JSX.Element {
                 className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0"
                 style={{ backgroundColor: stateColor(displayStatus.state) }}
               />
-              <span className="text-xs font-medium text-[var(--color-text-primary)]">
+              <span className="type-name text-[var(--color-text-primary)]">
                 Database sidecar
               </span>
             </div>
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 truncate">
+            <p className="type-hint text-[var(--color-text-muted)] mt-0.5 truncate">
               {displayStatus.state}
               {displayStatus.installedMajor != null ? ` · PG ${displayStatus.installedMajor}` : ''}
             </p>
@@ -837,13 +837,13 @@ export function DataSection(): React.JSX.Element {
           </div>
           <div className="flex-1 overflow-y-auto px-1 py-1">
             {databases === null ? (
-              <p className="px-2 py-1 text-[11px] text-[var(--color-text-muted)]">Loading…</p>
+              <p className="px-2 py-1 type-hint text-[var(--color-text-muted)]">Loading…</p>
             ) : listError ? (
-              <p className="px-2 py-1 text-[11px] text-[var(--color-status-error-soft)] break-words">
+              <p className="px-2 py-1 type-hint text-[var(--color-status-error-soft)] break-words">
                 {listError}
               </p>
             ) : databases.length === 0 ? (
-              <p className="px-2 py-1 text-[11px] text-[var(--color-text-muted)] italic">
+              <p className="px-2 py-1 type-hint text-[var(--color-text-muted)] italic">
                 No databases yet.
               </p>
             ) : (
@@ -860,8 +860,8 @@ export function DataSection(): React.JSX.Element {
                         : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
                     }`}
                   >
-                    <span className="text-xs font-mono truncate w-full">{d.name}</span>
-                    <span className="text-[10px] text-[var(--color-text-muted)] truncate w-full">
+                    <span className="type-row font-mono truncate w-full">{d.name}</span>
+                    <span className="type-hint text-[var(--color-text-muted)] truncate w-full">
                       {dbTypeLabel(d)} · {d.ownerWorkspace ?? 'workspace'} · {d.status}
                       {d.cap ? ` · ${d.cap.used}/${d.cap.cap === 0 ? '∞' : d.cap.cap}` : ''}
                       {dbMajorChip(displayStatus, d.id) ? ` · ${dbMajorChip(displayStatus, d.id)}` : ''}
@@ -873,7 +873,7 @@ export function DataSection(): React.JSX.Element {
           </div>
 
           <div className="border-t border-[var(--color-border)] px-2 py-2 space-y-1.5">
-            <p className="text-[10px] text-[var(--color-text-muted)] px-1">Create database</p>
+            <p className="type-hint text-[var(--color-text-muted)] px-1">Create database</p>
             <SettingDropdown
               value={createWs}
               placeholder="Workspace…"
@@ -886,12 +886,12 @@ export function DataSection(): React.JSX.Element {
               type="button"
               disabled={!canMutate || !createWs || createBusy}
               onClick={() => void submitCreate()}
-              className="w-full px-2 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full px-2 py-1 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {createBusy ? 'Creating…' : 'Create'}
             </button>
             {createError && (
-              <p className="text-[10px] text-[var(--color-status-error-soft)] break-words px-1">
+              <p className="type-hint text-[var(--color-status-error-soft)] break-words px-1">
                 {createError}
               </p>
             )}

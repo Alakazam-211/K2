@@ -166,14 +166,14 @@ export function YourAccountRow(): React.JSX.Element | null {
       data-testid="your-account-row"
     >
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">Your account</span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5" data-testid="your-account-hint">
-          The Connect login you use on your phone or laptop. {OWNER_LINK_EXPLAINER}
+        <span className="type-row text-[var(--color-text-secondary)]">Your account</span>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5" data-testid="your-account-hint">
+          The login you use on your phone or laptop. {OWNER_LINK_EXPLAINER}
           {many ? ' More than one login is marked as yours; they stay until you pick a different one.' : ''}
           {readOnly ? ' Only the owner, on the server’s own computer, can change it.' : ''}
         </p>
         {owner.error && (
-          <p role="alert" className="text-[10px] text-[var(--color-status-error-soft)] mt-0.5">
+          <p role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-0.5">
             {owner.error}
           </p>
         )}

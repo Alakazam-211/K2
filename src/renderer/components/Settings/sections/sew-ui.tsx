@@ -15,7 +15,7 @@ export function SewStatusChip({ state }: { state: string }): React.JSX.Element {
   return (
     <span
       data-testid="sew-state-chip"
-      className="text-[10px] font-semibold px-1.5 py-0.5 uppercase tracking-wide"
+      className="type-badge px-1.5 py-0.5 uppercase tracking-wide"
       style={{ color, backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)` }}
     >
       {label}
@@ -39,7 +39,7 @@ export function TypeToConfirm({
   label: string
 }): React.JSX.Element {
   return (
-    <label className={`block text-[11px] ${muted}`}>
+    <label className={`block type-hint ${muted}`}>
       {label}
       <input
         aria-label={label}
@@ -47,7 +47,7 @@ export function TypeToConfirm({
         disabled={disabled}
         placeholder={expect}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full font-mono border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs text-[var(--color-text-primary)]"
+        className="mt-1 w-full font-mono border border-[var(--color-border)] bg-transparent px-2 py-1 type-control text-[var(--color-text-primary)]"
       />
     </label>
   )
@@ -87,10 +87,10 @@ export function OnceSecret({
   }, [])
   return (
     <div role="dialog" aria-label={heading} className="border border-[var(--color-border)] p-3 space-y-2" data-testid="sew-once-secret">
-      <p className="text-xs font-medium text-[var(--color-text-primary)]">{heading}</p>
-      <p className={`text-[11px] ${secondary}`}>{warning}</p>
+      <p className="type-name text-[var(--color-text-primary)]">{heading}</p>
+      <p className={`type-hint ${secondary}`}>{warning}</p>
       <div className="flex items-center gap-2">
-        <code data-testid="sew-once-secret-value" className="select-all font-mono text-xs break-all text-[var(--color-text-primary)]">
+        <code data-testid="sew-once-secret-value" className="select-all font-mono type-hint break-all text-[var(--color-text-primary)]">
           {secret}
         </code>
         <Button
@@ -105,7 +105,7 @@ export function OnceSecret({
         </Button>
       </div>
       {needsAck ? (
-        <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
+        <label className={`flex items-center gap-2 type-hint ${secondary}`}>
           <Checkbox checked={stored} onChange={(e) => setStored(e.target.checked)} aria-label="I stored it off this machine" />
           I stored it off this machine
         </label>
@@ -210,8 +210,8 @@ export function usePersonConfirm(): {
   }
 
   let ui: React.JSX.Element | null = null
-  if (state.step === 'starting') ui = <p className={`text-[11px] ${muted}`}>Asking for your confirm…</p>
-  if (state.step === 'mac') ui = <p className={`text-[11px] ${muted}`}>Confirm on your Mac.</p>
+  if (state.step === 'starting') ui = <p className={`type-hint ${muted}`}>Asking for your confirm…</p>
+  if (state.step === 'mac') ui = <p className={`type-hint ${muted}`}>Confirm on your Mac.</p>
   if (state.step === 'password') {
     const method = state.method
     ui = (
@@ -223,7 +223,7 @@ export function usePersonConfirm(): {
           void submit(method)
         }}
       >
-        <label className={`text-[11px] ${muted}`}>
+        <label className={`type-hint ${muted}`}>
           {method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
           <input
             ref={pwRef}
@@ -231,7 +231,7 @@ export function usePersonConfirm(): {
             autoComplete="current-password"
             aria-label="Confirm password"
             onChange={(e) => setHasPw(e.currentTarget.value !== '')}
-            className="mt-1 w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs"
+            className="mt-1 w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control"
           />
         </label>
         <div className="flex gap-1.5">

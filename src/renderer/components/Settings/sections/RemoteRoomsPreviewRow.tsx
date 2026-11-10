@@ -21,8 +21,8 @@ export function RemoteRoomsPreviewRow(): React.JSX.Element {
       data-settings-id="general.remote-rooms-preview"
     >
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">{REMOTE_ROOMS_LABEL}</span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+        <span className="type-row text-[var(--color-text-secondary)]">{REMOTE_ROOMS_LABEL}</span>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
           Clicking an agent on Home that lives on another server opens it right
           here. Off: it switches this window to that server.
         </p>

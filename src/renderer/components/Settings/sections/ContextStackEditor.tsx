@@ -445,10 +445,10 @@ export function ContextStackEditor({
       <div className="w-[min(36%,calc(20rem+30px))] min-w-[calc(15.5rem+30px)] max-w-[calc(24rem+30px)] flex-shrink-0 border-r border-[var(--color-border)] min-h-0 flex flex-col bg-[var(--color-bg)]">
         <div className="flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable]">
           <div className="px-2.5 py-1.5 border-b border-[var(--color-border)]">
-            <div className="text-[10px] font-medium text-[var(--color-text-primary)]">
+            <div className="type-hint text-[var(--color-text-primary)]">
               Context stack
             </div>
-            <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5 leading-snug">
+            <p className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-snug">
               Composes into{' '}
               <span className="font-mono">.k2/AGENTS.md</span>
               {softWarn && stack?.composedBytes
@@ -458,7 +458,7 @@ export function ContextStackEditor({
           </div>
 
           {error && !loading && (
-            <div className="mx-2 my-1.5 text-[10px] leading-snug px-2 py-1.5 border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_8%,transparent)] text-[var(--color-status-error-soft)]">
+            <div className="mx-2 my-1.5 type-hint leading-snug px-2 py-1.5 border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_8%,transparent)] text-[var(--color-status-error-soft)]">
               {error}
               <button
                 type="button"
@@ -471,13 +471,13 @@ export function ContextStackEditor({
           )}
 
           {wikiSeeded === false && (
-            <div className="mx-2 my-1.5 flex items-center justify-between gap-2 text-[10px] leading-snug px-2 py-1.5 border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/40 text-[var(--color-text-secondary)]">
+            <div className="mx-2 my-1.5 flex items-center justify-between gap-2 type-hint leading-snug px-2 py-1.5 border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/40 text-[var(--color-text-secondary)]">
               <span>Wiki not seeded</span>
               <button
                 type="button"
                 onClick={() => void handleSeedWiki()}
                 disabled={seedingWiki}
-                className="flex-shrink-0 px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 no-drag cursor-pointer disabled:opacity-50"
+                className="flex-shrink-0 px-2 py-0.5 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 no-drag cursor-pointer disabled:opacity-50"
               >
                 {seedingWiki ? '…' : 'Seed'}
               </button>
@@ -485,13 +485,13 @@ export function ContextStackEditor({
           )}
 
           {loading && !stack ? (
-            <div className="px-2.5 py-3 text-[10px] text-[var(--color-text-muted)]">
+            <div className="px-2.5 py-3 type-hint text-[var(--color-text-muted)]">
               Loading stack…
             </div>
           ) : (
             <>
               <div className="px-2.5 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)]/40">
-                <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)]">
                   System (default on)
                 </div>
               </div>
@@ -507,12 +507,12 @@ export function ContextStackEditor({
               ))}
 
               <div className="px-2.5 py-1.5 border-t border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)]/40">
-                <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)]">
                   Optional
                 </div>
               </div>
               {layers.length === 0 ? (
-                <div className="px-2.5 py-2.5 text-[10px] text-[var(--color-text-muted)] italic">
+                <div className="px-2.5 py-2.5 type-hint text-[var(--color-text-muted)] italic">
                   No optional layers yet.
                 </div>
               ) : (
@@ -540,7 +540,7 @@ export function ContextStackEditor({
               type="button"
               onClick={() => void handleAddFile()}
               disabled={adding}
-              className="px-2 py-1 text-[10px] font-medium text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-50"
+              className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-50"
             >
               {adding ? 'Adding…' : 'Add file…'}
             </button>
@@ -560,7 +560,7 @@ export function ContextStackEditor({
                   ? `${availableDefaultsCount} catalog item${availableDefaultsCount === 1 ? '' : 's'} available`
                   : 'Browse context catalog'
               }
-              className="px-2 py-1 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/20 no-drag cursor-pointer disabled:opacity-50"
+              className="px-2 py-1 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/20 no-drag cursor-pointer disabled:opacity-50"
             >
               Browse catalog
             </button>
@@ -577,7 +577,7 @@ export function ContextStackEditor({
       {/* ── RIGHT: full-height FileViewer (same system as AI File Editor) ── */}
       <div className="flex-1 min-w-0 min-h-0 flex flex-col">
         <div className="flex-shrink-0 h-8 px-2.5 border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)]/40 flex items-center justify-between gap-2">
-          <div className="text-[10px] text-[var(--color-text-muted)] truncate min-w-0">
+          <div className="type-hint text-[var(--color-text-muted)] truncate min-w-0">
             {selectedMeta ? (
               <>
                 <span className="text-[var(--color-text-primary)] font-medium">
@@ -593,13 +593,13 @@ export function ContextStackEditor({
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
             {(selectedMeta?.isWiki || selectedMeta?.isTooling) && (
-              <span className="text-[9px] text-[var(--color-text-muted)] italic">view only</span>
+              <span className="type-hint text-[var(--color-text-muted)] italic">view only</span>
             )}
             {selectedMeta?.canEdit && onEdit && (
               <button
                 type="button"
                 onClick={handleEdit}
-                className="px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 no-drag cursor-pointer"
+                className="px-2 py-0.5 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 no-drag cursor-pointer"
               >
                 Edit with AI
               </button>
@@ -609,19 +609,19 @@ export function ContextStackEditor({
 
         <div className="flex-1 min-h-0 relative">
           {!selected && (
-            <div className="absolute inset-0 flex items-center justify-center text-[11px] text-[var(--color-text-muted)]">
+            <div className="absolute inset-0 flex items-center justify-center type-hint text-[var(--color-text-muted)]">
               Select a context layer to read it here
             </div>
           )}
           {selectedMeta?.isTooling && (
             <div className="absolute inset-0 overflow-y-auto p-4 [scrollbar-gutter:stable]">
-              <p className="text-[10px] text-[var(--color-text-muted)] leading-snug mb-3">
+              <p className="type-hint text-[var(--color-text-muted)] leading-snug mb-3">
                 Generated block inlined into{' '}
                 <span className="font-mono text-[var(--color-text-secondary)]">AGENTS.md</span>
                 {' '}as <span className="font-mono">## Tooling</span> when this layer is on.
                 There is no file to edit.
               </p>
-              <div className="prose prose-invert prose-sm max-w-none text-[12px] text-[var(--color-text-secondary)]">
+              <div className="prose prose-invert prose-sm max-w-none type-row text-[var(--color-text-secondary)]">
                 <Markdown remarkPlugins={[remarkGfm]}>
                   {selectedMeta.preview?.trim() || FALLBACK_TOOLING_PREVIEW}
                 </Markdown>
@@ -629,7 +629,7 @@ export function ContextStackEditor({
             </div>
           )}
           {selectedMeta && !selectedMeta.isTooling && !viewerAbsPath && (
-            <div className="absolute inset-0 flex items-center justify-center text-[11px] text-[var(--color-status-error-soft)]">
+            <div className="absolute inset-0 flex items-center justify-center type-hint text-[var(--color-status-error-soft)]">
               No file path for this layer
             </div>
           )}
@@ -804,11 +804,11 @@ function BrowseDefaultsModal({
             <div className="min-w-0">
               <h2
                 id="context-catalog-title"
-                className="text-[14px] font-semibold text-[var(--color-text-primary)]"
+                className="type-title text-[var(--color-text-primary)]"
               >
                 Context catalog
               </h2>
-              <p className="text-[11px] text-[var(--color-text-muted)] mt-1 leading-snug">
+              <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-snug">
                 Packs and live layers available on this machine for always-on
                 context. Start with <span className="text-[var(--color-accent)]">Recommended</span>{' '}
                 for a nice K2 experience.
@@ -817,7 +817,7 @@ function BrowseDefaultsModal({
             <button
               type="button"
               onClick={onClose}
-              className="flex-shrink-0 px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer"
+              className="flex-shrink-0 px-2 py-0.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer"
               aria-label="Close"
             >
               Esc
@@ -832,7 +832,7 @@ function BrowseDefaultsModal({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search catalog…"
               aria-label="Search context catalog"
-              className="w-full px-3 py-2 text-[12px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)]/50 no-drag"
+              className="w-full px-3 py-2 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)]/50 no-drag"
             />
             {query.trim() ? (
               <button
@@ -841,7 +841,7 @@ function BrowseDefaultsModal({
                   setQuery('')
                   searchRef.current?.focus()
                 }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] no-drag cursor-pointer px-1.5 py-0.5"
+                className="absolute right-2 top-1/2 -translate-y-1/2 type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] no-drag cursor-pointer px-1.5 py-0.5"
               >
                 Clear
               </button>
@@ -863,7 +863,7 @@ function BrowseDefaultsModal({
                   role="tab"
                   aria-selected={active}
                   onClick={() => setFilter(f.id)}
-                  className={`px-2.5 py-1 text-[10px] font-medium no-drag cursor-pointer border transition-colors ${
+                  className={`px-2.5 py-1 type-control no-drag cursor-pointer border transition-colors ${
                     active
                       ? 'text-[var(--color-accent)] bg-[var(--color-accent)]/15 border-[var(--color-accent)]/40'
                       : 'text-[var(--color-text-secondary)] border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)]'
@@ -877,13 +877,13 @@ function BrowseDefaultsModal({
           </div>
 
           {showSeedBanner && (
-            <div className="flex items-center justify-between gap-2 text-[10px] leading-snug px-2.5 py-1.5 border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/50 text-[var(--color-text-secondary)]">
+            <div className="flex items-center justify-between gap-2 type-hint leading-snug px-2.5 py-1.5 border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/50 text-[var(--color-text-secondary)]">
               <span>Wiki files aren’t seeded yet — seed before adding wiki layers.</span>
               <button
                 type="button"
                 onClick={onSeedWiki}
                 disabled={seedingWiki}
-                className="flex-shrink-0 px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 no-drag cursor-pointer disabled:opacity-50"
+                className="flex-shrink-0 px-2 py-0.5 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 no-drag cursor-pointer disabled:opacity-50"
               >
                 {seedingWiki ? 'Seeding…' : 'Seed wiki'}
               </button>
@@ -893,11 +893,11 @@ function BrowseDefaultsModal({
 
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
           {catalog.length === 0 ? (
-            <div className="px-5 py-10 text-[12px] text-[var(--color-text-muted)] italic text-center">
+            <div className="px-5 py-10 type-hint text-[var(--color-text-muted)] italic text-center">
               No catalog items available.
             </div>
           ) : filtered.length === 0 ? (
-            <div className="px-5 py-10 text-[12px] text-[var(--color-text-muted)] text-center">
+            <div className="px-5 py-10 type-hint text-[var(--color-text-muted)] text-center">
               {query.trim()
                 ? `No catalog items match “${query.trim()}”.`
                 : 'No items in this filter.'}
@@ -925,22 +925,22 @@ function BrowseDefaultsModal({
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-baseline gap-2 min-w-0 flex-wrap">
-                        <span className="text-[13px] font-medium text-[var(--color-text-primary)]">
+                        <span className="type-heading text-[var(--color-text-primary)]">
                           {p.label}
                         </span>
                         {recommended ? (
-                          <span className="px-1.5 py-0.5 text-[9px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/12 border border-[var(--color-accent)]/30">
+                          <span className="px-1.5 py-0.5 type-hint text-[var(--color-accent)] bg-[var(--color-accent)]/12 border border-[var(--color-accent)]/30">
                             Recommended
                           </span>
                         ) : null}
                         {metaBits.length > 0 ? (
-                          <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums">
+                          <span className="type-hint text-[var(--color-text-muted)] tabular-nums">
                             {metaBits.join(' · ')}
                           </span>
                         ) : null}
                       </div>
                       {p.description ? (
-                        <p className="text-[11px] text-[var(--color-text-secondary)] mt-1 leading-snug">
+                        <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-snug">
                           {p.description}
                         </p>
                       ) : null}
@@ -949,7 +949,7 @@ function BrowseDefaultsModal({
                           {displayTags.map((tag) => (
                             <span
                               key={tag}
-                              className="px-1.5 py-0.5 text-[9px] text-[var(--color-text-muted)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/40"
+                              className="px-1.5 py-0.5 type-hint text-[var(--color-text-muted)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/40"
                             >
                               {tag}
                             </span>
@@ -957,7 +957,7 @@ function BrowseDefaultsModal({
                         </div>
                       ) : null}
                       <div
-                        className="text-[10px] font-mono text-[var(--color-text-muted)] mt-1.5 truncate"
+                        className="type-hint font-mono text-[var(--color-text-muted)] mt-1.5 truncate"
                         title={p.path}
                       >
                         {p.path}
@@ -965,12 +965,12 @@ function BrowseDefaultsModal({
                     </div>
                     <div className="flex-shrink-0 pt-0.5">
                       {inStack ? (
-                        <span className="inline-block px-2.5 py-1 text-[11px] text-[var(--color-text-muted)] border border-[var(--color-border)]">
+                        <span className="inline-block px-2.5 py-1 type-hint text-[var(--color-text-muted)] border border-[var(--color-border)]">
                           In stack
                         </span>
                       ) : blockedByWiki ? (
                         <span
-                          className="inline-block px-2.5 py-1 text-[11px] text-[var(--color-text-muted)] border border-[var(--color-border)]"
+                          className="inline-block px-2.5 py-1 type-hint text-[var(--color-text-muted)] border border-[var(--color-border)]"
                           title="Seed the wiki first"
                         >
                           Needs wiki
@@ -980,7 +980,7 @@ function BrowseDefaultsModal({
                           type="button"
                           onClick={() => onAdd(p)}
                           disabled={!canAdd}
-                          className="px-3 py-1.5 text-[11px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/20 no-drag cursor-pointer disabled:opacity-50"
+                          className="px-3 py-1.5 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/20 no-drag cursor-pointer disabled:opacity-50"
                         >
                           {adding ? '…' : 'Add'}
                         </button>
@@ -994,7 +994,7 @@ function BrowseDefaultsModal({
         </div>
 
         <div className="flex-shrink-0 px-5 py-3 border-t border-[var(--color-border)] flex items-center justify-between gap-3">
-          <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums">
+          <span className="type-hint text-[var(--color-text-muted)] tabular-nums">
             {query.trim() || filter !== 'all'
               ? `${filtered.length} match${filtered.length === 1 ? '' : 'es'}`
               : `${catalog.length} catalog item${catalog.length === 1 ? '' : 's'}`}
@@ -1003,7 +1003,7 @@ function BrowseDefaultsModal({
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1.5 text-[11px] font-medium text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer"
+            className="px-3 py-1.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer"
           >
             Done
           </button>
@@ -1058,16 +1058,16 @@ function SystemRow({
       />
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-1.5 min-w-0">
-          <span className="text-[11px] font-medium text-[var(--color-text-primary)] flex-shrink-0">
+          <span className="type-name text-[var(--color-text-primary)] flex-shrink-0">
             {layer.label}
           </span>
           {layer.generated ? (
-            <span className="text-[9px] text-[var(--color-text-muted)] italic truncate">
+            <span className="type-hint text-[var(--color-text-muted)] italic truncate">
               generated
             </span>
           ) : (
             <span
-              className={`text-[9px] font-mono truncate ${
+              className={`type-hint font-mono truncate ${
                 missing
                   ? 'text-[var(--color-status-error-soft)]'
                   : 'text-[var(--color-text-muted)]'
@@ -1140,11 +1140,11 @@ function OptionalRow({
 
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-1.5 min-w-0">
-          <span className="text-[11px] font-medium text-[var(--color-text-primary)] flex-shrink-0 truncate max-w-[40%]">
+          <span className="type-name text-[var(--color-text-primary)] flex-shrink-0 truncate max-w-[40%]">
             {label}
           </span>
           <span
-            className={`text-[9px] font-mono truncate ${
+            className={`type-hint font-mono truncate ${
               missing
                 ? 'text-[var(--color-status-error-soft)]'
                 : 'text-[var(--color-text-muted)]'
@@ -1162,7 +1162,7 @@ function OptionalRow({
           type="button"
           onClick={onUp}
           disabled={busy || isFirst}
-          className="w-5 h-5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30 no-drag cursor-pointer disabled:cursor-not-allowed"
+          className="w-5 h-5 type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30 no-drag cursor-pointer disabled:cursor-not-allowed"
           title="Move up"
           aria-label="Move up"
         >
@@ -1172,7 +1172,7 @@ function OptionalRow({
           type="button"
           onClick={onDown}
           disabled={busy || isLast}
-          className="w-5 h-5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30 no-drag cursor-pointer disabled:cursor-not-allowed"
+          className="w-5 h-5 type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30 no-drag cursor-pointer disabled:cursor-not-allowed"
           title="Move down"
           aria-label="Move down"
         >
@@ -1182,7 +1182,7 @@ function OptionalRow({
           type="button"
           onClick={onRemove}
           disabled={busy}
-          className="px-1.5 h-5 text-[10px] text-[var(--color-status-error-soft)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] disabled:opacity-30 no-drag cursor-pointer disabled:cursor-not-allowed"
+          className="px-1.5 h-5 type-control text-[var(--color-status-error-soft)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] disabled:opacity-30 no-drag cursor-pointer disabled:cursor-not-allowed"
           title="Remove from stack (file stays on disk)"
         >
           ✕

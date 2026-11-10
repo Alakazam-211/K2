@@ -67,7 +67,7 @@ export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
     id: 'token-usage.machine',
     section: 'token-usage',
     label: 'Usage',
-    description: 'Token counts and estimated cost on this server, by workspace, model, login, and harness',
+    description: 'Token counts and estimated cost on this server, by workspace, model, login and provider',
     keywords: ['token usage', 'tokens', 'usage', 'llm', 'llms', 'language models', 'claude', 'codex', 'grok', 'cache', 'input', 'output', 'cost', 'requests', 'limits'],
   },
 ]
@@ -90,7 +90,7 @@ html[data-scheme="light"] [data-usage-page] {
 `
 
 /** The page's numbers came back as a refusal for this login's role. */
-export const ROLE_GATE_TEXT = 'Usage is visible to the server Owner and Admins.'
+export const ROLE_GATE_TEXT = 'Only this server’s owner and admins can see usage.'
 
 interface Loaded<T> {
   data: T | null
@@ -144,9 +144,9 @@ export function breakdownRows(report: UsageReport, tab: BreakdownTab, projects: 
 function Tile({ label, value, title, sub, testId }: { label: string; value: string; title?: string; sub?: React.ReactNode; testId: string }): React.JSX.Element {
   return (
     <div data-settings-card="" className="border border-[var(--color-border)] px-3 py-2 min-w-0" data-testid={testId} title={title}>
-      <div className="text-[11px] text-[var(--color-text-muted)]">{label}</div>
-      <div className="text-base text-[var(--color-text-primary)] tabular-nums">{value}</div>
-      {sub ? <div className="text-[10px] text-[var(--color-text-muted)]">{sub}</div> : null}
+      <div className="type-hint text-[var(--color-text-muted)]">{label}</div>
+      <div className="type-title text-[var(--color-text-primary)] tabular-nums">{value}</div>
+      {sub ? <div className="type-hint text-[var(--color-text-muted)]">{sub}</div> : null}
     </div>
   )
 }
@@ -206,7 +206,7 @@ function Breakdown({
             aria-selected={tab === t.id}
             data-testid={`usage-tab-${t.id}`}
             onClick={() => onTab(t.id)}
-            className={`px-2 py-0.5 text-[11px] border ${
+            className={`px-2 py-0.5 type-control border ${
               tab === t.id
                 ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
                 : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
@@ -217,9 +217,9 @@ function Breakdown({
         ))}
       </div>
       {rows.length === 0 ? (
-        <p className="text-xs text-[var(--color-text-muted)]">Nothing in this range.</p>
+        <p className="type-hint text-[var(--color-text-muted)]">Nothing in this range.</p>
       ) : (
-        <table className="w-full text-xs border-collapse" role="tabpanel">
+        <table className="w-full type-row border-collapse" role="tabpanel">
           <thead>
             <tr className="text-left text-[var(--color-text-muted)]">
               <th className="py-1 pr-3 font-medium">{BREAKDOWN_TABS.find((t) => t.id === tab)?.label}</th>
@@ -247,7 +247,7 @@ function Breakdown({
                   >
                     {row.label}
                   </button>
-                  {row.sub ? <div className="text-[11px] text-[var(--color-text-muted)] break-all">{row.sub}</div> : null}
+                  {row.sub ? <div className="type-hint text-[var(--color-text-muted)] break-all">{row.sub}</div> : null}
                 </td>
                 <td className="py-1.5 pr-3 text-right tabular-nums">{fmtExact(row.totals.requests)}</td>
                 <td className="py-1.5 pr-3 text-right tabular-nums">{fmtExact(row.totals.input_tokens)}</td>
@@ -270,7 +270,7 @@ function Breakdown({
 
 function FilterChip({ label, onClear, testId }: { label: string; onClear: () => void; testId: string }): React.JSX.Element {
   return (
-    <span className="inline-flex items-center gap-1 border border-[var(--color-accent)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-primary)]" data-testid={testId}>
+    <span className="inline-flex items-center gap-1 border border-[var(--color-accent)] px-1.5 py-0.5 type-hint text-[var(--color-text-primary)]" data-testid={testId}>
       {label}
       <button type="button" aria-label={`Clear ${label}`} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]" onClick={onClear}>
         ×
@@ -417,7 +417,7 @@ export function TokenUsageSection(): React.JSX.Element {
     <div className="max-w-4xl" data-usage-page="">
       <style>{SERIES_CSS}</style>
       <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
-        <h2 className="text-base font-medium text-[var(--color-text-primary)]" data-testid="usage-title">
+        <h2 className="type-title text-[var(--color-text-primary)]" data-testid="usage-title">
           Usage on {serverName}
         </h2>
         {roomTarget ? (
@@ -426,7 +426,7 @@ export function TokenUsageSection(): React.JSX.Element {
             value={onRoom ? 'room' : 'window'}
             onChange={(next) => setOnRoom(next === 'room')}
             options={[
-              { value: 'window', label: windowName, buttonProps: { 'data-testid': 'usage-server-window' } },
+              { value: 'window', label: windowName === 'this computer' ? 'This computer' : windowName, buttonProps: { 'data-testid': 'usage-server-window' } },
               {
                 value: 'room',
                 label: `${roomTarget.label} (focused room)`,
@@ -436,12 +436,12 @@ export function TokenUsageSection(): React.JSX.Element {
           />
         ) : null}
       </div>
-      <p className="text-xs text-[var(--color-text-muted)] mb-4">
-        Tokens counted from the Claude, Codex, and Grok transcripts on this server, in your time zone ({tz}).
+      <p className="type-hint text-[var(--color-text-muted)] mb-4">
+        Tokens counted from Claude, Codex and Grok chats, in your time zone ({tz}).
       </p>
 
       {roleGated ? (
-        <p className="text-sm text-[var(--color-text-muted)]" data-testid="usage-role-gate">
+        <p className="type-row text-[var(--color-text-muted)]" data-testid="usage-role-gate">
           {ROLE_GATE_TEXT}
         </p>
       ) : (
@@ -450,7 +450,7 @@ export function TokenUsageSection(): React.JSX.Element {
 
           <section data-testid="usage-tokens">
             <div className="flex flex-wrap items-center gap-2 mb-3">
-              <h3 className="text-sm font-medium text-[var(--color-text-primary)] mr-2">Tokens</h3>
+              <h3 className="type-heading text-[var(--color-text-primary)] mr-2">Tokens</h3>
               <Segmented
                 aria-label="Range"
                 value={range}
@@ -471,7 +471,7 @@ export function TokenUsageSection(): React.JSX.Element {
                   onClick={() =>
                     setFilters(thisWorkspaceOn ? { ...filters, workspace: null } : { ...filters, workspace: thisWorkspace, outside: false })
                   }
-                  className={`px-1.5 py-0.5 text-[11px] border ${
+                  className={`px-1.5 py-0.5 type-control border ${
                     thisWorkspaceOn ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]' : 'border-[var(--color-border)] text-[var(--color-text-muted)]'
                   }`}
                 >
@@ -482,18 +482,18 @@ export function TokenUsageSection(): React.JSX.Element {
                 <FilterChip key={c.id} testId={`usage-filter-${c.id}`} label={c.label} onClear={() => setFilters({ ...filters, ...c.clear })} />
               ))}
               {hasFilters(filters) ? (
-                <button type="button" className="text-[11px] text-[var(--color-text-muted)] hover:underline" data-testid="usage-clear-filters" onClick={() => setFilters(NO_FILTERS)}>
+                <button type="button" className="type-hint text-[var(--color-text-muted)] hover:underline" data-testid="usage-clear-filters" onClick={() => setFilters(NO_FILTERS)}>
                   Clear filters
                 </button>
               ) : null}
             </div>
 
             {report.error && report.data === null ? (
-              <p className="text-xs text-amber-400 mb-3" role="alert" data-testid="usage-tokens-error">
+              <p className="type-row text-amber-400 mb-3" role="alert" data-testid="usage-tokens-error">
                 The token counts could not load: {report.error}
               </p>
             ) : report_ === null ? (
-              <p className="text-sm text-[var(--color-text-muted)]">Loading…</p>
+              <p className="type-row text-[var(--color-text-muted)]">Loading…</p>
             ) : (
               <>
                 <Tiles total={report_.total} />
@@ -514,7 +514,7 @@ export function TokenUsageSection(): React.JSX.Element {
                 />
               </>
             )}
-            <p className="mt-3 text-[11px] text-[var(--color-text-muted)]" data-testid="usage-footnote">
+            <p className="mt-3 type-hint text-[var(--color-text-muted)]" data-testid="usage-footnote">
               {UNITS_FOOTNOTE} {COST_LABEL}
             </p>
           </section>

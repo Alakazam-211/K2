@@ -134,12 +134,12 @@ function NameserverCopyRow({ ns }: { ns: string }): React.JSX.Element {
   }
   return (
     <div className="flex items-center justify-between gap-2 py-0.5">
-      <span className="text-[11px] font-mono text-[var(--color-text-primary)] select-all">{ns}</span>
+      <span className="type-hint font-mono text-[var(--color-text-primary)] select-all">{ns}</span>
       <button
         type="button"
         onClick={copy}
         aria-label={`Copy ${ns}`}
-        className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] text-[var(--color-text-primary)] no-drag cursor-pointer"
+        className="px-2 py-0.5 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] no-drag cursor-pointer"
       >
         {copied ? 'Copied' : 'Copy'}
       </button>
@@ -163,20 +163,20 @@ export function PendingNameservers({
       className="mt-1 ml-2 px-2 py-2 border border-[var(--color-border)]"
       data-testid={`pending-ns-${domain.apex}`}
     >
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-1 leading-relaxed">
+      <p className="type-hint text-[var(--color-text-muted)] mb-1 leading-relaxed">
         Point this domain&apos;s nameservers to these at your registrar. DNS records
         can&apos;t be changed until k2.dev sees them. This server checks with k2.dev
         by itself and updates here when it does.
       </p>
       {ns.length === 0 ? (
-        <p className="text-[10px] text-[var(--color-text-muted)]">
+        <p className="type-hint text-[var(--color-text-muted)]">
           k2.dev didn&apos;t list nameservers. See your k2.dev dashboard.
         </p>
       ) : (
         ns.map((n) => <NameserverCopyRow key={n} ns={n} />)
       )}
       {domain.created && (
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
+        <p className="type-hint text-[var(--color-text-muted)] mt-1">
           Auto-added to your k2.dev account
         </p>
       )}
@@ -184,7 +184,7 @@ export function PendingNameservers({
         type="button"
         onClick={() => onCheckAgain(domain.apex)}
         disabled={busy}
-        className="mt-2 px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
+        className="mt-2 px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
       >
         Check again
       </button>
@@ -438,8 +438,8 @@ export function DomainsSection(): React.JSX.Element {
 
   return (
     <div className="max-w-2xl p-6">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Domains</h2>
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-4 leading-relaxed">
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Domains</h2>
+      <p className="type-hint text-[var(--color-text-muted)] mb-4 leading-relaxed">
         Names this machine answers for. Adding an apex does not steal NS at the
         registrar — it attaches the name to this server for inventory, certs, and
         (only if K2 hosts the zone) DNS writes. Tunnel names like foo.k2.dev stay
@@ -450,8 +450,8 @@ export function DomainsSection(): React.JSX.Element {
         className="mb-4 px-3 py-3 border border-[var(--color-border)]"
         data-settings-id="domains.add"
       >
-        <div className="text-xs text-[var(--color-text-primary)]">Add domain</div>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 mb-2">
+        <div className="type-row text-[var(--color-text-primary)]">Add domain</div>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5 mb-2">
           Apex only (example.com). Then add hostnames such as mail.example.com.
         </p>
         <div className="flex gap-2">
@@ -459,7 +459,7 @@ export function DomainsSection(): React.JSX.Element {
             value={apex}
             onChange={(e) => setApex(e.target.value)}
             placeholder="example.com"
-            className="flex-1 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+            className="flex-1 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
             onKeyDown={(e) => {
               if (e.key === 'Enter') void addApex()
             }}
@@ -468,7 +468,7 @@ export function DomainsSection(): React.JSX.Element {
             type="button"
             onClick={() => void addApex()}
             disabled={busy || !apex.trim()}
-            className="px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
+            className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
           >
             Attach
           </button>
@@ -479,12 +479,12 @@ export function DomainsSection(): React.JSX.Element {
         className="mb-4 px-3 py-3 border border-[var(--color-border)]"
         data-settings-id="domains.inventory"
       >
-        <div className="text-xs text-[var(--color-text-primary)] mb-2">Attached</div>
+        <div className="type-row text-[var(--color-text-primary)] mb-2">Attached</div>
         {error && (
-          <p className="text-[10px] text-[var(--color-status-error)] mb-2">{error}</p>
+          <p className="type-hint text-[var(--color-status-error)] mb-2">{error}</p>
         )}
         {domains.length === 0 && !error && (
-          <p className="text-[10px] text-[var(--color-text-muted)]">
+          <p className="type-hint text-[var(--color-text-muted)]">
             No custom domains on this server yet. Attach an apex to inventory names
             and certs. This is not a nameserver cutover.
           </p>
@@ -493,8 +493,8 @@ export function DomainsSection(): React.JSX.Element {
           <div key={d.apex} className="mb-3 last:mb-0">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <div className="text-xs font-mono text-[var(--color-text-primary)]">{d.apex}</div>
-                <div className="text-[10px] text-[var(--color-text-muted)]">
+                <div className="type-row font-mono text-[var(--color-text-primary)]">{d.apex}</div>
+                <div className="type-hint text-[var(--color-text-muted)]">
                   {dnsLabel(d)}
                   {d.zoneId ? ` · zone ${d.zoneId}` : ''}
                 </div>
@@ -502,7 +502,7 @@ export function DomainsSection(): React.JSX.Element {
               <button
                 type="button"
                 onClick={() => void removeApex(d.apex)}
-                className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+                className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
               >
                 Remove
               </button>
@@ -512,7 +512,7 @@ export function DomainsSection(): React.JSX.Element {
                 className="mt-1 ml-2 px-2 py-2 border border-[var(--color-border)]"
                 data-testid={`zone-missing-${d.apex}`}
               >
-                <p className="text-[10px] text-[var(--color-status-error)] leading-relaxed">
+                <p className="type-hint text-[var(--color-status-error)] leading-relaxed">
                   {ZONE_MISSING_COPY}
                 </p>
                 {!isPendingNs(d) && (
@@ -520,7 +520,7 @@ export function DomainsSection(): React.JSX.Element {
                     type="button"
                     onClick={() => void checkAgain(d.apex)}
                     disabled={busy}
-                    className="mt-2 px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
+                    className="mt-2 px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
                   >
                     Check again
                   </button>
@@ -536,19 +536,19 @@ export function DomainsSection(): React.JSX.Element {
             )}
             <div className="mt-1 ml-2">
               {d.names.length === 0 && (
-                <div className="text-[10px] text-[var(--color-text-muted)]">No hostnames yet</div>
+                <div className="type-hint text-[var(--color-text-muted)]">No hostnames yet</div>
               )}
               {d.names.map((n) => (
                 <div key={n.hostname} className="flex items-center justify-between gap-2 py-0.5">
-                  <span className="text-[11px] font-mono text-[var(--color-text-secondary)]">
+                  <span className="type-hint font-mono text-[var(--color-text-secondary)]">
                     {n.hostname}
-                    <span className="ml-2 text-[10px] text-[var(--color-text-muted)]">
+                    <span className="ml-2 type-hint text-[var(--color-text-muted)]">
                       {n.role} · cert {certLabel(n.cert)}
                     </span>
                     {n.app && (
                       <span
                         data-testid={`app-state-${n.hostname}`}
-                        className={`ml-2 px-1 text-[10px] border border-[var(--color-border)] ${
+                        className={`ml-2 px-1 type-hint border border-[var(--color-border)] ${
                           n.app.notServedYet
                             ? 'text-[var(--color-text-muted)]'
                             : 'text-[var(--color-accent)]'
@@ -560,13 +560,13 @@ export function DomainsSection(): React.JSX.Element {
                     {n.app && (n.app.viaRelay || (n.app.notServedYet && n.app.recordsPath === 'connect')) && (
                       <span
                         data-testid={`app-path-b-${n.hostname}`}
-                        className="ml-2 px-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-muted)]"
+                        className="ml-2 px-1 type-hint border border-[var(--color-border)] text-[var(--color-text-muted)]"
                       >
                         Through K2 Connect (Pro)
                       </span>
                     )}
                     {n.app && n.app.notServedYet && (
-                      <span className="block mt-0.5 text-[10px] text-[var(--color-text-muted)] whitespace-normal">
+                      <span className="block mt-0.5 type-hint text-[var(--color-text-muted)] whitespace-normal">
                         {n.app.words}
                         {n.app.lastError ? ` — ${n.app.lastError}` : ''}
                         {n.app.records && n.app.records.length > 0 ? (
@@ -612,7 +612,7 @@ export function DomainsSection(): React.JSX.Element {
                       </span>
                     )}
                     {n.app?.warning && (
-                      <span className="block mt-0.5 text-[10px] text-[var(--color-status-error)]">
+                      <span className="block mt-0.5 type-hint text-[var(--color-status-error)]">
                         {n.app.warning}
                       </span>
                     )}
@@ -622,7 +622,7 @@ export function DomainsSection(): React.JSX.Element {
                       <button
                         type="button"
                         onClick={() => void checkAppName(n.app!.app, n.hostname)}
-                        className="text-[10px] text-[var(--color-accent)] no-drag cursor-pointer"
+                        className="type-hint text-[var(--color-accent)] no-drag cursor-pointer"
                       >
                         Check now
                       </button>
@@ -630,21 +630,21 @@ export function DomainsSection(): React.JSX.Element {
                     <button
                       type="button"
                       onClick={() => void issue(n.hostname)}
-                      className="text-[10px] text-[var(--color-accent)] no-drag cursor-pointer"
+                      className="type-hint text-[var(--color-accent)] no-drag cursor-pointer"
                     >
                       Issue
                     </button>
                     <button
                       type="button"
                       onClick={() => void renew(n.hostname)}
-                      className="text-[10px] text-[var(--color-accent)] no-drag cursor-pointer"
+                      className="type-hint text-[var(--color-accent)] no-drag cursor-pointer"
                     >
                       Renew
                     </button>
                     <button
                       type="button"
                       onClick={() => void removeName(n.hostname)}
-                      className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+                      className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
                     >
                       Remove
                     </button>
@@ -657,8 +657,8 @@ export function DomainsSection(): React.JSX.Element {
       </div>
 
       <div className="px-3 py-3 border border-[var(--color-border)]">
-        <div className="text-xs text-[var(--color-text-primary)]">Add hostname</div>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 mb-2">
+        <div className="type-row text-[var(--color-text-primary)]">Add hostname</div>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5 mb-2">
           Must be an attached apex or a label under one.
         </p>
         <div className="flex gap-2">
@@ -666,7 +666,7 @@ export function DomainsSection(): React.JSX.Element {
             value={hostname}
             onChange={(e) => setHostname(e.target.value)}
             placeholder="mail.example.com"
-            className="flex-1 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+            className="flex-1 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
             onKeyDown={(e) => {
               if (e.key === 'Enter') void addName()
             }}
@@ -695,7 +695,7 @@ export function DomainsSection(): React.JSX.Element {
             type="button"
             onClick={() => void addName()}
             disabled={busy || !hostname.trim()}
-            className="px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
+            className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
           >
             Add
           </button>
@@ -703,8 +703,8 @@ export function DomainsSection(): React.JSX.Element {
       </div>
 
       <div className="mt-4 px-3 py-3 border border-[var(--color-border)]">
-        <div className="text-xs text-[var(--color-text-primary)]">ACME override</div>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 mb-2">
+        <div className="type-row text-[var(--color-text-primary)]">ACME override</div>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5 mb-2">
           Optional email and directory URL (ZeroSSL / staging). Default is Let&apos;s Encrypt.
         </p>
         <div className="flex gap-2 mb-2">
@@ -712,49 +712,49 @@ export function DomainsSection(): React.JSX.Element {
             value={acmeEmail}
             onChange={(e) => setAcmeEmail(e.target.value)}
             placeholder="acme@example.com"
-            className="flex-1 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)]"
+            className="flex-1 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)]"
           />
           <input
             value={acmeDir}
             onChange={(e) => setAcmeDir(e.target.value)}
             placeholder="https://acme-v02.api.letsencrypt.org/directory"
-            className="flex-1 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)]"
+            className="flex-1 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)]"
           />
           <button
             type="button"
             onClick={() => void saveAcme()}
-            className="px-2 py-1 text-xs border border-[var(--color-border)] no-drag cursor-pointer"
+            className="px-2 py-1 type-control border border-[var(--color-border)] no-drag cursor-pointer"
           >
             Save
           </button>
         </div>
-        <div className="text-xs text-[var(--color-text-primary)] mt-3">Upload PEM</div>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 mb-2">
+        <div className="type-row text-[var(--color-text-primary)] mt-3">Upload PEM</div>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5 mb-2">
           Owner only. Replaces the on-box key for one attached hostname.
         </p>
         <input
           value={uploadHost}
           onChange={(e) => setUploadHost(e.target.value)}
           placeholder="mail.example.com"
-          className="w-full mb-2 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)]"
+          className="w-full mb-2 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)]"
         />
         <textarea
           value={uploadCert}
           onChange={(e) => setUploadCert(e.target.value)}
           placeholder="-----BEGIN CERTIFICATE-----"
-          className="w-full mb-2 px-2 py-1 text-[10px] font-mono h-16 bg-[var(--color-bg)] border border-[var(--color-border)]"
+          className="w-full mb-2 px-2 py-1 type-control font-mono h-16 bg-[var(--color-bg)] border border-[var(--color-border)]"
         />
         <textarea
           value={uploadKey}
           onChange={(e) => setUploadKey(e.target.value)}
           placeholder="-----BEGIN PRIVATE KEY-----"
-          className="w-full mb-2 px-2 py-1 text-[10px] font-mono h-16 bg-[var(--color-bg)] border border-[var(--color-border)]"
+          className="w-full mb-2 px-2 py-1 type-control font-mono h-16 bg-[var(--color-bg)] border border-[var(--color-border)]"
         />
         <button
           type="button"
           onClick={() => void uploadPem()}
           disabled={busy || !uploadHost.trim() || !uploadCert.trim() || !uploadKey.trim()}
-          className="px-2 py-1 text-xs border border-[var(--color-border)] disabled:opacity-40 no-drag cursor-pointer"
+          className="px-2 py-1 type-control border border-[var(--color-border)] disabled:opacity-40 no-drag cursor-pointer"
         >
           Upload
         </button>
@@ -867,13 +867,13 @@ export function FirewallPanel(): React.JSX.Element {
   const sshOnly = (st?.ssh.allowFrom ?? []).length > 0
   return (
     <div className="mt-6" data-testid="firewall-panel">
-      <h3 className="text-xs font-semibold text-[var(--color-text-primary)] mb-1">Firewall</h3>
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-2 leading-relaxed">
+      <h3 className="type-heading text-[var(--color-text-primary)] mb-1">Firewall</h3>
+      <p className="type-hint text-[var(--color-text-muted)] mb-2 leading-relaxed">
         Public ports on this server, worked out from what K2 runs. {st?.applies ?? ''}
       </p>
-      {error && <p className="text-[10px] text-red-400 mb-2">{error}</p>}
+      {error && <p className="type-hint text-red-400 mb-2">{error}</p>}
       {st?.view.box.behindNat && (
-        <p className="text-[10px] text-[var(--color-text-muted)] mb-2">
+        <p className="type-hint text-[var(--color-text-muted)] mb-2">
           This server is on a home or office connection: your own domains use K2 Connect (Pro).
         </p>
       )}
@@ -884,11 +884,11 @@ export function FirewallPanel(): React.JSX.Element {
             className="flex items-center justify-between gap-2 px-2 py-1 border-b border-[var(--color-border)] last:border-b-0"
             data-testid={`fw-row-${r.port}-${r.proto}`}
           >
-            <span className="text-[11px] font-mono w-20">
+            <span className="type-hint font-mono w-20">
               {r.port}/{r.proto}
             </span>
-            <span className="text-[10px] w-32 text-[var(--color-text-muted)]">{firewallSourceLabel(r.source)}</span>
-            <span className="text-[10px] flex-1 truncate" title={r.why}>
+            <span className="type-hint w-32 text-[var(--color-text-muted)]">{firewallSourceLabel(r.source)}</span>
+            <span className="type-hint flex-1 truncate" title={r.why}>
               {r.why}
               {r.allowFrom && r.allowFrom[0] !== 'any' ? ` · only ${r.allowFrom.join(', ')}` : ''}
             </span>
@@ -897,23 +897,23 @@ export function FirewallPanel(): React.JSX.Element {
                 type="button"
                 disabled={busy}
                 onClick={() => void act('/cli/firewall/close', { port: `${r.port}/${r.proto}` })}
-                className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
+                className="px-2 py-0.5 type-control border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
               >
                 Remove
               </button>
             ) : (
-              <span className="text-[10px] text-[var(--color-text-muted)] w-14 text-right">read-only</span>
+              <span className="type-hint text-[var(--color-text-muted)] w-14 text-right">read-only</span>
             )}
           </div>
         ))}
       </div>
       <div className="mt-2 flex items-center gap-2">
-        <span className="text-[10px] w-20">SSH from</span>
+        <span className="type-hint w-20">SSH from</span>
         <button
           type="button"
           disabled={busy || !sshOnly}
           onClick={() => void act('/cli/firewall/ssh', { any: true })}
-          className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
+          className="px-2 py-0.5 type-control border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
         >
           Anyone
         </button>
@@ -921,30 +921,30 @@ export function FirewallPanel(): React.JSX.Element {
           value={sshFrom}
           onChange={(e) => setSshFrom(e.target.value)}
           placeholder={sshOnly ? (st?.ssh.allowFrom ?? []).join(', ') : '198.51.100.0/24'}
-          className="flex-1 px-2 py-0.5 text-[10px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)]"
+          className="flex-1 px-2 py-0.5 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)]"
         />
         <button
           type="button"
           disabled={busy || !sshFrom.trim()}
           onClick={() => void act('/cli/firewall/ssh', { allow: sshFrom.split(',').map((s) => s.trim()).filter(Boolean) })}
-          className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
+          className="px-2 py-0.5 type-control border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
         >
           Only these
         </button>
       </div>
       <div className="mt-2 flex items-center gap-2">
-        <span className="text-[10px] w-20">Add a port</span>
+        <span className="type-hint w-20">Add a port</span>
         <input
           value={port}
           onChange={(e) => setPort(e.target.value)}
           placeholder="6000/udp"
-          className="w-24 px-2 py-0.5 text-[10px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)]"
+          className="w-24 px-2 py-0.5 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)]"
         />
         <input
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           placeholder="what it's for"
-          className="flex-1 px-2 py-0.5 text-[10px] bg-[var(--color-bg)] border border-[var(--color-border)]"
+          className="flex-1 px-2 py-0.5 type-control bg-[var(--color-bg)] border border-[var(--color-border)]"
         />
         <button
           type="button"
@@ -954,14 +954,14 @@ export function FirewallPanel(): React.JSX.Element {
             setPort('')
             setLabel('')
           }}
-          className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
+          className="px-2 py-0.5 type-control border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
         >
           Add
         </button>
       </div>
       {st?.front?.http && (st.front.enabled || (st.front.http.relayNames ?? 0) > 0) && (
         <div className="mt-2 flex items-center gap-2" data-testid="fw-http">
-          <span className="text-[10px] flex-1">
+          <span className="type-hint flex-1">
             Redirect http:// to https: {st.front.http.on ? 'on' : 'off'}
             {st.front.enabled && st.front.http.on && !st.front.http.serving ? ' (not holding port 80 yet)' : ''}
           </span>
@@ -973,14 +973,14 @@ export function FirewallPanel(): React.JSX.Element {
                 on: !(st.front?.http?.on && (st.front.http.serving || !st.front.enabled)),
               })
             }
-            className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
+            className="px-2 py-0.5 type-control border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
           >
             {st.front.http.on && (st.front.http.serving || !st.front.enabled) ? 'Turn off' : 'Turn on'}
           </button>
         </div>
       )}
       {st && (
-        <p className="mt-2 text-[10px] text-[var(--color-text-muted)]" data-testid="fw-guard">
+        <p className="mt-2 type-hint text-[var(--color-text-muted)]" data-testid="fw-guard">
           App guard {st.guard.settings.enabled ? 'on' : 'off'}: {st.guard.settings.connsPerIp} connections and{' '}
           {st.guard.settings.writesPerMin} writes a minute per visitor · refused {st.guard.counters.perIpRefused} ·
           limited {st.guard.counters.guardLimited}

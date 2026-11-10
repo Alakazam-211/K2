@@ -25,6 +25,18 @@
   --spacing: calc(0.25rem * var(--density-scale, 1));
 }
 
+/* Type roles. A role is one size token and one weight. The table is at the
+   top of components/Settings/controls/SettingControls.tsx. The var(--tw-*)
+   fallbacks let a leading-* or a state-only font-* still win, in any order. */
+@utility type-title { font-size: var(--type-xl); font-weight: var(--tw-font-weight, 500); line-height: var(--tw-leading, 1.3); }
+@utility type-heading { font-size: var(--type-lg); font-weight: var(--tw-font-weight, 500); line-height: var(--tw-leading, 1.35); }
+@utility type-section { font-size: var(--type-xs); font-weight: var(--tw-font-weight, 600); line-height: var(--tw-leading, 1.4); }
+@utility type-row { font-size: var(--type-md); font-weight: var(--tw-font-weight, 400); line-height: var(--tw-leading, 1.4); }
+@utility type-name { font-size: var(--type-md); font-weight: var(--tw-font-weight, 500); line-height: var(--tw-leading, 1.4); }
+@utility type-hint { font-size: var(--type-sm); font-weight: var(--tw-font-weight, 400); line-height: var(--tw-leading, 1.45); }
+@utility type-control { font-size: var(--type-md); font-weight: var(--tw-font-weight, 400); line-height: var(--tw-leading, 1.35); }
+@utility type-badge { font-size: var(--type-micro); font-weight: var(--tw-font-weight, 600); line-height: var(--tw-leading, 1.35); }
+
 /* ── Bundled coding fonts ─────────────────────────────────────────── */
 @font-face { font-family: 'MesloLGM Nerd Font'; src: url('./fonts/MesloLGMNerdFontMono-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
 @font-face { font-family: 'MesloLGM Nerd Font'; src: url('./fonts/MesloLGMNerdFontMono-Bold.ttf') format('truetype'); font-weight: 700; font-style: normal; font-display: swap; }

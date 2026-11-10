@@ -16,10 +16,9 @@ import {
   type AggregatedRemoteConnection,
 } from '@/lib/federation'
 import { SettingsGroup } from '../controls/SettingControls'
-import { thisMachine } from '@/lib/desktop-words'
 
 const BTN_DANGER =
-  'px-2 py-1 text-[11px] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default flex-shrink-0'
+  'px-2 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default flex-shrink-0'
 
 export function FederationOverview({
   /** Bump after pairing / connection edits so the list reloads. */
@@ -30,7 +29,7 @@ export function FederationOverview({
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const isLocal = activeHost === 'local'
   const hostKey = isLocal ? 'local' : activeHost.id
-  const hostLabel = isLocal ? thisMachine() : activeHost.label || activeHost.hostname
+  const hostLabel = isLocal ? 'this computer' : activeHost.label || activeHost.hostname
 
   const [loading, setLoading] = useState(true)
   const [conns, setConns] = useState<AggregatedRemoteConnection[]>([])
@@ -75,25 +74,23 @@ export function FederationOverview({
 
   return (
     <div data-settings-id="connections.federation-overview">
-      <SettingsGroup title="External agents">
-        <p className="text-[10px] text-[var(--color-text-muted)] mb-2 leading-relaxed">
-          Remote agents permitted to speak with workspaces on{' '}
+      <SettingsGroup title="Agents on other servers">
+        <p className="type-hint text-[var(--color-text-muted)] mb-2 leading-relaxed">
+          Agents on other servers connected to workspaces on{' '}
           <span className="text-[var(--color-text-secondary)]">{hostLabel}</span>
-          {' '}(<code className="text-[9px]">agent::host</code> links). Pairing a server
-          (tile → Peer) is separate — that only establishes server trust. Remove drops
-          this link only (not server pairing).
+          . Removing one here doesn&apos;t unpair its server.
         </p>
         {error && (
-          <div className="mb-2 text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_25%,transparent)]">
+          <div className="mb-2 type-hint text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_25%,transparent)]">
             {error}
           </div>
         )}
         {loading ? (
-          <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">Loading…</div>
+          <div className="type-hint text-[var(--color-text-muted)] px-3 py-2">Loading…</div>
         ) : conns.length === 0 ? (
-          <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
-            No external agent links yet. Add connections from a workspace (Access / Connected
-            workspaces) after servers are paired if needed.
+          <div className="type-hint text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
+            No agents connected yet. Pair a server, then add agents from a workspace&apos;s
+            Connections tab.
           </div>
         ) : (
           <div className="space-y-2">
@@ -107,8 +104,7 @@ export function FederationOverview({
                 >
                   <span className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)] bg-[var(--color-accent)]" />
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="text-xs text-[var(--color-text-primary)] truncate" title={c.address}>
-                      External agent{' '}
+                    <span className="type-row text-[var(--color-text-primary)] truncate" title={c.address}>
                       <span className="font-medium">{c.agent || c.address}</span>
                       {c.host ? (
                         <span className="text-[var(--color-text-muted)] font-normal">
@@ -116,12 +112,12 @@ export function FederationOverview({
                         </span>
                       ) : null}
                     </span>
-                    <span className="text-[10px] text-[var(--color-text-muted)] truncate">
-                      may speak with workspace{' '}
+                    <span className="type-hint text-[var(--color-text-muted)] truncate">
+                      Connected to{' '}
                       <span className="text-[var(--color-text-secondary)]">{c.sourceWorkspace}</span>
                     </span>
                     {c.gone && (
-                      <span className="text-[10px] text-[var(--color-text-muted)]" data-gone="true">
+                      <span className="type-hint text-[var(--color-text-muted)]" data-gone="true">
                         Gone: {remoteConnectionGoneNote(c.host)}
                       </span>
                     )}
@@ -131,7 +127,7 @@ export function FederationOverview({
                     className={BTN_DANGER}
                     disabled={busy || removingKey !== null}
                     onClick={() => void handleRemove(c)}
-                    title="Remove this agent↔workspace link (does not unpair the server)"
+                    title="Remove this connection. The server stays paired."
                   >
                     {busy ? 'Removing…' : 'Remove'}
                   </button>

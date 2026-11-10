@@ -54,8 +54,8 @@ function TryPanel({ name }: { name: string }): React.JSX.Element {
       live = false
     }
   }, [name])
-  if (error) return <p className={`text-[11px] ${danger}`}>{error}</p>
-  if (!r) return <p className={`text-[11px] ${muted}`}>Trying…</p>
+  if (error) return <p className={`type-hint ${danger}`}>{error}</p>
+  if (!r) return <p className={`type-hint ${muted}`}>Trying…</p>
   return (
     <div className="space-y-1">
       <TrySummary r={r} />
@@ -140,26 +140,26 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
     <div className="max-w-4xl space-y-3" data-settings-id="data-sources.list" data-testid="sources-section">
       <div>
         {embedded ? (
-          <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">External Data</h3>
+          <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">External Data</h3>
         ) : (
-          <h2 className="text-base font-medium text-[var(--color-text-primary)]">External Data</h2>
+          <h2 className="type-title text-[var(--color-text-primary)]">External Data</h2>
         )}
-        <p className={`text-[11px] ${muted} mt-1 max-w-2xl`}>
+        <p className={`type-hint ${muted} mt-1 max-w-2xl`}>
           {embedded && only
             ? 'Checks this server runs that cards here read. They keep running when no window is open.'
             : 'Checks this server runs for Garden cards and agents. They keep running when no window is open.'}
         </p>
-        <p className={`text-[11px] ${muted}`} data-testid="sources-runs-on">
+        <p className={`type-hint ${muted}`} data-testid="sources-runs-on">
           Runs on {scope.label}
           {scope.isRemote ? ' · always on' : ''}
         </p>
         {macHere && (
-          <p className={`text-[11px] ${muted}`} data-testid="sources-mac-hint">
+          <p className={`type-hint ${muted}`} data-testid="sources-mac-hint">
             Checks run only while this Mac is awake. To keep them running, put them on an always-on server.
           </p>
         )}
         {legacy && (
-          <p className="text-[11px] text-[var(--color-status-warn)]" data-testid="sources-legacy-token">
+          <p className="type-hint text-[var(--color-status-warn)]" data-testid="sources-legacy-token">
             This server is saved with an old host token, so it treats you as its owner. Sign in to it again with your Connect
             login (Settings → Network → Connected Servers).
           </p>
@@ -168,7 +168,7 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
 
       {pendingCount > 0 && (
         <div className="flex items-center gap-2 border border-[var(--color-border)] px-2 py-1.5" data-testid="sources-pending-banner">
-          <span className="text-[11px] text-[var(--color-text-primary)]">
+          <span className="type-hint text-[var(--color-text-primary)]">
             {pendingCount} waiting for approval
             {pendingTriggers > 0 && ` (${pendingTriggers} trigger${pendingTriggers === 1 ? '' : 's'})`}
           </span>
@@ -179,12 +179,12 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
       )}
 
       {shownRows && shownRows.length === 0 && rows && rows.length > 0 && (
-        <p className={`text-[11px] ${muted}`} data-testid="sources-none-here">
+        <p className={`type-hint ${muted}`} data-testid="sources-none-here">
           No sources on this server are used here.
         </p>
       )}
       {rows && rows.length === 0 && (
-        <p className={`text-[11px] ${muted}`}>
+        <p className={`type-hint ${muted}`}>
           No sources yet. An agent can propose one: <code>k2 sources try</code> then <code>k2 sources propose</code> (see{' '}
           <code>k2 study data-sources</code>).
         </p>
@@ -224,7 +224,7 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
                 />
               )}
               {review === row.name && !reviewRow && (
-                <p className={`text-[11px] ${muted}`}>Only an Owner or Admin on this server can review proposals.</p>
+                <p className={`type-hint ${muted}`}>Only an Owner or Admin on this server can review proposals.</p>
               )}
               {panel === 'triggers' && <DataSourceTriggers scope={scope} source={row.name} rev={rev} />}
               {panel === 'simulate' && (
@@ -245,20 +245,20 @@ export function DataSourcesSection({ only = null, embedded = false }: DataSource
       </div>
 
       {status && (
-        <p className={`text-[11px] ${muted}`} data-testid="sources-poller">
+        <p className={`type-hint ${muted}`} data-testid="sources-poller">
           {pollerLine(status)}
         </p>
       )}
       {(status?.parkedOrigins ?? []).map((p) => (
-        <p key={p.origin} className={`text-[10px] ${muted}`}>
+        <p key={p.origin} className={`type-hint ${muted}`}>
           Holding checks to {p.origin} ({p.reason.replace('_', ' ')}) until{' '}
           {new Date(p.untilAt * 1000).toISOString().slice(11, 16)} UTC
         </p>
       ))}
 
-      {note && <p className={`text-[11px] ${muted}`}>{note}</p>}
+      {note && <p className={`type-hint ${muted}`}>{note}</p>}
       {error && (
-        <p className={`text-[11px] ${danger}`} role="alert" data-testid="sources-error">
+        <p className={`type-hint ${danger}`} role="alert" data-testid="sources-error">
           {error}
         </p>
       )}

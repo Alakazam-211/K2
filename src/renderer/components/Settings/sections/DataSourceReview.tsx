@@ -79,7 +79,7 @@ function Choice<T extends string>({
   testid: string
 }): React.JSX.Element {
   return (
-    <fieldset className="text-[11px]" data-testid={testid}>
+    <fieldset className="type-hint" data-testid={testid}>
       <legend className={muted}>{label}</legend>
       {options.map((o) => (
         <label key={o.value} className="flex items-center gap-1.5 text-[var(--color-text-secondary)]">
@@ -188,7 +188,7 @@ export function DataSourceReview({
 
   return (
     <div className="space-y-2 border border-[var(--color-border)] p-2" data-testid="sources-review">
-      <div className="text-[11px] space-y-0.5">
+      <div className="type-hint space-y-0.5">
         <p className="text-[var(--color-text-primary)]">
           <strong>{pending.label}</strong> <span className={muted}>({pending.name})</span>
         </p>
@@ -197,7 +197,7 @@ export function DataSourceReview({
           {pending.origins.join(', ')}
         </p>
         {lines.map((l) => (
-          <p key={l} className="font-mono text-[10px] text-[var(--color-text-secondary)] break-all">
+          <p key={l} className="font-mono type-hint text-[var(--color-text-secondary)] break-all">
             {l}
           </p>
         ))}
@@ -256,7 +256,7 @@ export function DataSourceReview({
       </div>
 
       {!secretBound && (
-        <div className="text-[11px] space-y-1">
+        <div className="type-hint space-y-1">
           <span className={`${muted} inline-flex items-center`}>
             Secret
             <SettingDropdown
@@ -288,7 +288,7 @@ export function DataSourceReview({
           {secret && <p className={muted}>K2 sends it only to {origin}. Agents never see it.</p>}
         </div>
       )}
-      {secretBound && <p className={`text-[11px] ${muted}`}>Its address is the vault secret {pending.urlSecret}.</p>}
+      {secretBound && <p className={`type-hint ${muted}`}>Its address is the vault secret {pending.urlSecret}.</p>}
 
       {phase.step === 'confirm' && pending.id && (
         <ConfirmStep
@@ -301,7 +301,7 @@ export function DataSourceReview({
         />
       )}
       {phase.step === 'root' && (
-        <div className="space-y-1 text-[11px]" data-testid="sources-review-rootkey">
+        <div className="space-y-1 type-hint" data-testid="sources-review-rootkey">
           <p className="text-[var(--color-status-warn)]">{phase.hint.hint}</p>
           <div className="flex gap-1.5">
             <button type="button" className={btn} onClick={() => void approve(phase.token, true)} data-testid="sources-review-use-anyway">
@@ -327,11 +327,11 @@ export function DataSourceReview({
           <button type="button" className={btn} onClick={onClose}>
             Close
           </button>
-          {ownerOnly && <span className={`text-[10px] ${muted} self-center`}>Owner only</span>}
+          {ownerOnly && <span className={`type-hint ${muted} self-center`}>Owner only</span>}
         </div>
       )}
       {error && (
-        <p className={`text-[11px] ${danger}`} role="alert">
+        <p className={`type-hint ${danger}`} role="alert">
           {error}
         </p>
       )}

@@ -102,11 +102,11 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.worktrees', section: 'projects', label: 'Worktree Folders', description: 'Enable/disable per-agent git worktrees', keywords: ['worktree', 'git', 'branch'] },
   { id: 'projects.relations', section: 'projects', label: 'Connections', description: 'Local and federated connections for this workspace', keywords: ['relations', 'connected', 'connections', 'cross-workspace', 'links', 'federation'] },
   { id: 'projects.cursor-migrate', section: 'projects', label: 'Cursor Session Migration', description: 'Port Cursor IDE sessions into K2', keywords: ['cursor', 'migrate', 'session', 'import'] },
-  { id: 'projects.default-model', section: 'projects', label: 'Default model', description: 'Per-workspace default LLM model for new sessions', keywords: ['default model', 'opus', 'sonnet', 'workspace model'] },
+  { id: 'projects.default-model', section: 'projects', label: 'Default model', description: 'The model new sessions in this workspace use', keywords: ['default model', 'opus', 'sonnet', 'workspace model'] },
   { id: 'projects.llm-logins', section: 'projects', label: 'LLM tokens', description: 'Use a specific Claude / Codex / Grok / Gemini subscription or API token for this workspace\'s agents instead of the server default', keywords: ['token', 'tokens', 'subscription', 'api token', 'api key', 'server default', 'login', 'account', 'pin'] },
-  { id: 'projects.tabs', section: 'projects', label: 'Tabs: Show the Design tab, Show the Mobile tab', description: 'Keep the Design and Mobile tabs pinned next to Chat and Inbox for this workspace. + → Design and + → Mobile work either way', keywords: ['tabs', 'pinned', 'design', 'mobile', 'phone', 'simulator', 'design mode', 'remove', 'bring back', 'show'] },
-  { id: 'projects.force-model-on-resume', section: 'projects', label: 'Force model on resume', description: 'Pass workspace default model when resuming a session', keywords: ['resume', 'model', 'force'] },
-  { id: 'projects.db-agent-create', section: 'projects', label: 'Allow this agent to create databases', description: 'Per-workspace passport for k2 db create (create-only; existing DBs stay usable)', keywords: ['db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
+  { id: 'projects.tabs', section: 'projects', label: 'Tabs: Show the Design tab, Show the Mobile tab', description: 'Keep the Design and Mobile tabs pinned next to Chat and Inbox for this workspace. You can always open them from the + menu', keywords: ['tabs', 'pinned', 'design', 'mobile', 'phone', 'simulator', 'design mode', 'remove', 'bring back', 'show'] },
+  { id: 'projects.force-model-on-resume', section: 'projects', label: 'Force model on resume', description: 'Also use the default model when a session resumes', keywords: ['resume', 'model', 'force'] },
+  { id: 'projects.db-agent-create', section: 'projects', label: 'Allow this agent to create databases', description: 'Lets this agent create new databases (k2 db create). It can always use the ones it has', keywords: ['db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
   { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Build and run Apps', description: 'Apps (beta) for this agent: Build and run Apps, Manage its Apps end to end (budgets, quotas, egress hosts, box services, keys), Let this agent manage its Apps\' users (App users, test guests, passwords, rooms), and what its Apps may use (Database, Files and rooms, Thread, Mail, Chat / Voice Hosting). The owner turns them on; an admin only off. Loosening the wall always asks you', keywords: ['agents_can_manage_skin', 'agents_can_manage_apps_full', 'app_cores', 'cores', 'apps', 'app', 'build', 'run', 'manage', 'end to end', 'database', 'files', 'rooms', 'thread', 'mail', 'sew', 'passport', 'agent', 'guests', 'roles', 'k2 app access'] },
   { id: 'projects.agents-can-manage-app-users', section: 'projects', label: 'Let this agent manage its Apps\u2019 users', description: 'Its own Apps only: add and remove App users and test guests, passwords, email, names, unlock, roles and its own room, invites, the guests-rooms grant in its own room, App keys that manage users. Users it makes are tied to it. Never a box login. The owner turns it on and off', keywords: ['agents_can_manage_app_users', 'app_users', 'app users', 'test guests', 'users', 'guests', 'passwords', 'invites', 'guests-rooms', 'k2 app access --users'] },
   { id: 'projects.agents-can-manage-agents', section: 'projects', label: 'Allow hiring and managing agents', description: 'Lets this workspace\'s main agent open and stop sidecars (k2 sidecar); later also hire and retire agents', keywords: ['agents_can_manage_agents', 'sidecar', 'hire', 'agent', 'passport', 'manage agents'] },
@@ -116,12 +116,12 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-manage-compute', section: 'projects', label: 'Allow managing compute nodes', description: 'Lets this workspace\'s agent add and confirm compute machines, rename, pause, drain, resume, retire and route them, and grant or revoke them for any workspace (k2 compute node, k2 compute grant); every act is logged and adding or confirming a machine sends you an inbox note. Turning the preview on or off and removing a machine stay yours. Only the owner can switch it', keywords: ['agents_can_manage_compute', 'compute_manage', 'manage', 'compute', 'compute nodes', 'node', 'machines', 'enroll', 'confirm', 'grant', 'revoke', 'retire', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-upgrade-postgres', section: 'projects', label: 'Allow this agent to manage Postgres versions', description: 'Move this agent\'s databases (and its Apps\' databases) to a newer Postgres, create on a chosen version, and roll back (k2 db upgrade, k2 db create --major); live moves (k2 db upgrade --live) come to agents once proven; every act is logged. Deleting the old copy stays with you. The owner turns it on; the owner or an Admin may turn it off', keywords: ['agents_can_upgrade_postgres', 'db_upgrade', 'postgres', 'postgresql', 'pg', 'pg 17', 'version', 'major', 'upgrade', 'database', 'rollback', 'k2 db upgrade', 'live', 'dual-run', 'agent'] },
   { id: 'projects.agents-can-request-permissions', section: 'projects', label: 'Can ask for permission cards', description: 'Beta: lets this agent ask you or an admin for a setting change with a card in its Thread (k2 permission request); nothing changes until someone allows it. Shown while Permission cards is on for the server (Settings → Access → Permission Cards). The owner or an admin switches it', keywords: ['agents_can_request_permissions', 'permission_cards', 'permission cards', 'permission', 'card', 'ask', 'request', 'approve', 'beta', 'k2 permission', 'agent'] },
-  { id: 'projects.agents-can-refresh-chat', section: 'projects', label: 'Can refresh its own pinned chat', description: 'Lets this agent start a new pinned chat on the same harness when its chat goes stale, with a note for itself (k2 agent refresh). The old chat stays in Chat history and the Thread carries on. Off: it asks you on a card. The owner or an admin switches it', keywords: ['agents_can_refresh_chat', 'chat_refresh', 'refresh', 'pinned chat', 'new chat', 'k2 agent refresh', 'chat.refresh', 'stale'] },
+  { id: 'projects.agents-can-refresh-chat', section: 'projects', label: 'Can refresh its own pinned chat', description: 'Lets this agent start a new pinned chat with the same agent when its chat goes stale, with a note for itself (k2 agent refresh). The old chat stays in Chat history and the Thread carries on. Off: it asks you on a card. The owner or an admin switches it', keywords: ['agents_can_refresh_chat', 'chat_refresh', 'refresh', 'pinned chat', 'new chat', 'k2 agent refresh', 'chat.refresh', 'stale'] },
   { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Allow this agent to operate compute nodes', description: 'Lets this workspace\'s agent pause, drain, resume, narrow, update and restart services on your compute machines without asking each time; root actions still wait for you (k2 compute operate)', keywords: ['agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Manage K2 projects', description: 'Lets this workspace\'s agent create, rename and delete K2 projects and add or remove their members (k2 project); on by default. Off: it can still read projects and post in its project chat', keywords: ['agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Manage Gardens and data sources', description: 'Lets this workspace\'s agent approve data sources, bind secrets it may already use, pause, pin, enable triggers and edit Gardens and widgets with no confirm (k2 sources, k2 zen); every act is logged. Off: it proposes and you approve', keywords: ['agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
   { id: 'projects.mail-agent-send', section: 'projects', label: 'Let this agent send email', description: 'Per-workspace agent send mode (off, approval, on) for hosted and linked inboxes; same as k2 mail sending', keywords: ['mail_agent_send', 'agent send', 'sending', 'send', 'email', 'mail', 'gmail', 'linked', 'gated', 'approval', 'outbound'] },
-  { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this host', description: 'Per-workspace passport for k2 hostmail enable/disable and domain list/add/check (uninstall, domain remove, OAuth, access stay owner)', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
+  { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this server', description: 'Lets this workspace’s agents run k2 hostmail enable/disable and domain list/add/check. Uninstall, domain remove, OAuth and access stay with the owner', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
 ]
 
 export function ProjectsSection(): React.JSX.Element {
@@ -529,7 +529,7 @@ export function ProjectsSection(): React.JSX.Element {
           iconUrl={p.iconUrl}
           size={20}
         />
-        <span className="text-xs truncate flex-1">{p.name}</span>
+        <span className="type-row truncate flex-1">{p.name}</span>
         <button
           onClick={async (e) => {
             e.stopPropagation()
@@ -587,7 +587,7 @@ export function ProjectsSection(): React.JSX.Element {
               <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
-            <span className="text-xs truncate flex-1">Workspace settings</span>
+            <span className="type-row truncate flex-1">Workspace settings</span>
             <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
@@ -596,7 +596,7 @@ export function ProjectsSection(): React.JSX.Element {
 
         {/* Focus groups toggle */}
         <div className="px-3 pt-3 pb-2 border-b border-[var(--color-border)] flex items-center justify-between">
-          <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+          <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
             Focus Groups
           </span>
           <Toggle
@@ -616,7 +616,7 @@ export function ProjectsSection(): React.JSX.Element {
                 await reorderFocusGroups(sorted.map((g) => g.id))
               }
             }}
-            className="flex-1 px-1.5 py-1 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-white/[0.03] hover:bg-white/[0.06] transition-colors no-drag cursor-pointer"
+            className="flex-1 px-1.5 py-1 type-control whitespace-nowrap text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-white/[0.03] hover:bg-white/[0.06] transition-colors no-drag cursor-pointer"
             title="Sort focus groups A-Z"
           >
             A→Z Groups
@@ -626,7 +626,7 @@ export function ProjectsSection(): React.JSX.Element {
               const sorted = [...projects].sort((a, b) => a.name.localeCompare(b.name))
               await reorderProjects(sorted.map((p) => p.id))
             }}
-            className="flex-1 px-1.5 py-1 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-white/[0.03] hover:bg-white/[0.06] transition-colors no-drag cursor-pointer"
+            className="flex-1 px-1.5 py-1 type-control whitespace-nowrap text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-white/[0.03] hover:bg-white/[0.06] transition-colors no-drag cursor-pointer"
             title="Sort workspaces A-Z within groups"
           >
             A→Z Workspaces
@@ -642,7 +642,7 @@ export function ProjectsSection(): React.JSX.Element {
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={handleSearchKeyDown}
             placeholder="Search workspaces..."
-            className="w-full px-2 py-1.5 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag"
+            className="w-full px-2 py-1.5 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag"
           />
         </div>
 
@@ -655,7 +655,7 @@ export function ProjectsSection(): React.JSX.Element {
           {pinnedProjects.length > 0 && (
             <div className="mb-1 pb-1 border-b border-[var(--color-border)]">
               <div className="px-2 pt-1 pb-1">
-                <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+                <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
                   Pinned
                 </span>
               </div>
@@ -729,19 +729,19 @@ export function ProjectsSection(): React.JSX.Element {
                           }}
                           onBlur={handleGroupRenameConfirm}
                           onClick={(e) => e.stopPropagation()}
-                          className="text-[11px] font-medium text-[var(--color-text-primary)] flex-1 bg-transparent border-b border-[var(--color-accent)] outline-none px-0 py-0"
+                          className="type-control text-[var(--color-text-primary)] flex-1 bg-transparent border-b border-[var(--color-accent)] outline-none px-0 py-0"
                         />
                       ) : (
-                        <span className="text-[11px] font-medium text-[var(--color-text-secondary)] flex-1 truncate">
+                        <span className="type-hint text-[var(--color-text-secondary)] flex-1 truncate">
                           {group.name}
                         </span>
                       )}
                       {isDragOver ? (
-                        <span className="text-[9px] text-[var(--color-accent)] flex-shrink-0 font-medium">
+                        <span className="type-hint text-[var(--color-accent)] flex-shrink-0 ">
                           Drop here
                         </span>
                       ) : (
-                        <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
+                        <span className="type-hint text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
                           {groupProjects.length}
                         </span>
                       )}
@@ -762,7 +762,7 @@ export function ProjectsSection(): React.JSX.Element {
                         )}
                         {groupProjects.length === 0 && (
                           <div
-                            className={`px-2 py-2 text-center text-[10px] text-[var(--color-text-muted)] italic transition-colors ${
+                            className={`px-2 py-2 text-center type-hint text-[var(--color-text-muted)] italic transition-colors ${
                               isDragOver ? 'bg-[var(--color-accent)]/5' : ''
                             }`}
                           >
@@ -782,7 +782,7 @@ export function ProjectsSection(): React.JSX.Element {
                 <div className="mt-1">
                   <div
                     data-focus-group-id="__ungrouped__"
-                    className={`flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium select-none transition-all duration-150 ${
+                    className={`flex items-center gap-1.5 px-2 py-1 type-hint select-none transition-all duration-150 ${
                       dragOverGroupId === '__ungrouped__'
                         ? 'text-[var(--color-accent)] bg-[var(--color-accent)]/15 ring-1 ring-inset ring-[var(--color-accent)] scale-[1.02]'
                         : 'text-[var(--color-text-muted)]'
@@ -815,7 +815,7 @@ export function ProjectsSection(): React.JSX.Element {
                     onChange={(e) => setNewGroupName(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') handleCreateGroup() }}
                     placeholder="+ New group"
-                    className="flex-1 px-2 py-1 text-[11px] bg-transparent border border-transparent text-[var(--color-text-muted)] outline-none focus:border-[var(--color-border)] focus:text-[var(--color-text-primary)] no-drag"
+                    className="flex-1 px-2 py-1 type-control bg-transparent border border-transparent text-[var(--color-text-muted)] outline-none focus:border-[var(--color-border)] focus:text-[var(--color-text-primary)] no-drag"
                   />
                 </div>
               </div>
@@ -824,7 +824,7 @@ export function ProjectsSection(): React.JSX.Element {
             /* Simple flat list when focus groups disabled */
             <div className="space-y-0.5">
               <div className="px-2 pt-1 pb-1">
-                <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+                <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
                   Workspaces
                 </span>
               </div>
@@ -840,7 +840,7 @@ export function ProjectsSection(): React.JSX.Element {
               </div>
               {projects.length === 0 && (
                 <div className="px-2 py-6 text-center">
-                  <span className="text-xs text-[var(--color-text-muted)]">No workspaces</span>
+                  <span className="type-row text-[var(--color-text-muted)]">No workspaces</span>
                 </div>
               )}
             </div>
@@ -850,7 +850,7 @@ export function ProjectsSection(): React.JSX.Element {
         {/* + New Workspace button */}
         <div className="px-2 py-2 border-t border-[var(--color-border)]">
           <button
-            className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-white/[0.04] hover:bg-white/[0.08] transition-colors no-drag cursor-pointer"
+            className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 type-control text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-white/[0.04] hover:bg-white/[0.08] transition-colors no-drag cursor-pointer"
             onClick={async () => {
               // Host-aware: local → native OS dialog; remote → in-app
               // RemoteFolderPicker over the host's fs. Single chokepoint
@@ -866,7 +866,7 @@ export function ProjectsSection(): React.JSX.Element {
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
             </svg>
-            New Workspace
+            New workspace
           </button>
         </div>
       </div>
@@ -887,7 +887,7 @@ export function ProjectsSection(): React.JSX.Element {
           />
         ) : (
           <div className="flex items-center justify-center h-full">
-            <span className="text-xs text-[var(--color-text-muted)]">
+            <span className="type-row text-[var(--color-text-muted)]">
               Select a workspace to view its settings
             </span>
           </div>
@@ -964,10 +964,10 @@ function WorktreeFoldersOnDisk({
   if (loading) {
     return (
       <div className="space-y-2">
-        <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+        <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
           Worktree Folders on Disk
         </h3>
-        <p className="text-[10px] text-[var(--color-text-muted)]">Loading...</p>
+        <p className="type-hint text-[var(--color-text-muted)]">Loading...</p>
       </div>
     )
   }
@@ -978,9 +978,9 @@ function WorktreeFoldersOnDisk({
 
   return (
     <div className="space-y-2">
-      <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
+      <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
         Worktree Folders on Disk
-        <span className="text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{nonBare.length}</span>
+        <span className="type-badge tabular-nums px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{nonBare.length}</span>
       </h3>
       <div className="border border-[var(--color-border)]">
         {nonBare.map((wt, i) => {
@@ -1010,20 +1010,20 @@ function WorktreeFoldersOnDisk({
                 )}
               </svg>
               <div className="flex-1 min-w-0">
-                <span className="text-xs text-[var(--color-text-primary)] truncate block">
+                <span className="type-row text-[var(--color-text-primary)] truncate block">
                   {wt.branch}
                 </span>
-                <span className="text-[10px] text-[var(--color-text-muted)] truncate block" title={wt.path}>
+                <span className="type-hint text-[var(--color-text-muted)] truncate block" title={wt.path}>
                   {wt.path.length > 50 ? '...' + wt.path.slice(-47) : wt.path}
                 </span>
               </div>
               {isActive ? (
-                <span className="text-[10px] text-[var(--color-status-ok-soft)] flex-shrink-0">(active)</span>
+                <span className="type-hint text-[var(--color-status-ok-soft)] flex-shrink-0">(active)</span>
               ) : (
                 <button
                   onClick={() => handleReopen(wt)}
                   disabled={reopening === wt.path}
-                  className="px-2 py-0.5 text-[10px] text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                  className="px-2 py-0.5 type-control text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
                 >
                   {reopening === wt.path ? 'Reopening...' : 'Reopen'}
                 </button>
@@ -1330,8 +1330,8 @@ function ProjectDetail({
       <div className="flex-shrink-0 space-y-4 pb-3 pr-1 w-full">
         <div className="flex items-start justify-between gap-3 w-full">
           <div className="min-w-0">
-            <h2 className="text-base font-medium text-[var(--color-text-primary)]">{project.name}</h2>
-            <p className="text-[11px] text-[var(--color-text-muted)] mt-1 break-all">{project.path}</p>
+            <h2 className="type-title text-[var(--color-text-primary)]">{project.name}</h2>
+            <p className="type-hint text-[var(--color-text-muted)] mt-1 break-all">{project.path}</p>
           </div>
           <button
             onClick={() => {
@@ -1341,9 +1341,9 @@ function ProjectDetail({
               }
               useSettingsStore.getState().closeSettings()
             }}
-            className="flex-shrink-0 px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
+            className="flex-shrink-0 px-3 py-1.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
           >
-            Open Workspace
+            Open workspace
           </button>
         </div>
 
@@ -1361,7 +1361,7 @@ function ProjectDetail({
                 type="button"
                 aria-selected={active}
                 onClick={() => selectSettingsTab(tab.id)}
-                className={`px-3 py-2 text-[11px] font-medium transition-colors no-drag cursor-pointer border-b-2 -mb-px ${
+                className={`px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px ${
                   active
                     ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
                     : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
@@ -1404,7 +1404,7 @@ function ProjectDetail({
                 <AgentDisplayNameField
                   scope={primaryScope()}
                   projectPath={project.path}
-                  helpText="Shown in the nav and Agent tab. Does not change the handle or federated address."
+                  helpText="The name K2 shows for this agent. Doesn't change the handle or address."
                 />
                 <AgentHandleField scope={primaryScope()} projectPath={project.path} projectHandle={project.handle} />
               </div>
@@ -1412,11 +1412,11 @@ function ProjectDetail({
               {/* Focus Group */}
               {focusGroupsEnabled && (
                 <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)]">
-                  <span className="text-xs text-[var(--color-text-secondary)]">Focus Group</span>
+                  <span className="type-row text-[var(--color-text-secondary)]">Focus group</span>
                   <SettingDropdown
                     value={project.focusGroupId ?? ''}
                     options={[
-                      { value: '', label: 'No Group' },
+                      { value: '', label: 'No group' },
                       ...focusGroups.map((g) => ({ value: g.id, label: g.name })),
                     ]}
                     onChange={async (v) => {
@@ -1488,9 +1488,9 @@ function ProjectDetail({
                     projectPath: project.path,
                   })
                 }
-                className="px-3 py-1 text-xs text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] no-drag cursor-pointer"
+                className="px-3 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] no-drag cursor-pointer"
               >
-                Remove Workspace
+                Remove workspace
               </button>
             </div>
           </PermissionAsksProvider>
@@ -1576,17 +1576,17 @@ function ProjectDetail({
                     <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
                     </svg>
-                    <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate">{ws.name}</span>
+                    <span className="type-row text-[var(--color-text-primary)] flex-1 truncate">{ws.name}</span>
                     {ws.branch && (
-                      <span className="text-[10px] text-[var(--color-text-muted)] truncate max-w-[120px]">{ws.branch}</span>
+                      <span className="type-hint text-[var(--color-text-muted)] truncate max-w-[120px]">{ws.branch}</span>
                     )}
-                    <span className="text-[10px] text-[var(--color-text-muted)]">{ws.type}</span>
+                    <span className="type-hint text-[var(--color-text-muted)]">{ws.type}</span>
                   </div>
                 ))}
               </div>
             </div>
             {project.workspaces.length === 0 && (
-              <p className="text-[10px] text-[var(--color-text-muted)] py-1">No registered worktrees for this workspace.</p>
+              <p className="type-hint text-[var(--color-text-muted)] py-1">No registered worktrees for this workspace.</p>
             )}
             <WorktreeFoldersOnDisk project={project} fetchProjects={fetchProjects} />
           </SettingsGroup>
@@ -1659,7 +1659,7 @@ function WorkspaceHostSessionCapPanel({ projectPath }: { projectPath: string }):
         project: projectPath,
         fields: { host_session_cell_cap: value },
       })
-      setHint(value === 'default' ? 'Cleared → inherit daemon default (15 or env).' : `Set to ${value}.`)
+      setHint(value === 'default' ? 'Using the server default.' : `Set to ${value}.`)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -1671,14 +1671,12 @@ function WorkspaceHostSessionCapPanel({ projectPath }: { projectPath: string }):
   return (
     <div className="space-y-3 max-w-3xl" data-settings-id="projects.host-session-cell-cap">
       <div>
-        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
-          Concurrent host sessions
+        <h3 className="type-heading text-[var(--color-text-primary)]">
+          Concurrent API sessions
         </h3>
-        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
-          Max simultaneous live <code className="text-[10px]">/v1</code> host-session cells for this
-          workspace (not total historical list rows). Default{' '}
-          <strong className="font-medium text-[var(--color-text-secondary)]">15</strong> (or{' '}
-          <code className="text-[10px]">K2_SANDBOX_WORKSPACE_CELL_CAP</code>). Max 512.
+        <p className="type-hint text-[var(--color-text-muted)] mt-1">
+          How many API sessions can run at once in this workspace, from 1 to 512. Default{' '}
+          <strong className="font-medium text-[var(--color-text-secondary)]">15</strong>, unless this server sets a different default.
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -1686,17 +1684,17 @@ function WorkspaceHostSessionCapPanel({ projectPath }: { projectPath: string }):
           type="number"
           min={1}
           max={512}
-          placeholder="default (15)"
+          placeholder="Default (15)"
           value={draft}
           disabled={busy || raw === undefined}
           onChange={(e) => setDraft(e.target.value)}
-          className="w-28 px-2 py-1 text-[12px] border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)]"
+          className="w-28 px-2 py-1 type-control border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)]"
         />
         <button
           type="button"
           disabled={busy || raw === undefined || !draft.trim()}
           onClick={() => void save(draft.trim())}
-          className="px-2 py-1 text-[11px] border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
+          className="px-2 py-1 type-control border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
         >
           Save
         </button>
@@ -1704,23 +1702,23 @@ function WorkspaceHostSessionCapPanel({ projectPath }: { projectPath: string }):
           type="button"
           disabled={busy || raw === undefined || raw === null}
           onClick={() => void save('default')}
-          className="px-2 py-1 text-[11px] border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
+          className="px-2 py-1 type-control border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
         >
           Use default
         </button>
       </div>
-      <p className="text-[10px] text-[var(--color-text-muted)]">
+      <p className="type-hint text-[var(--color-text-muted)]">
         Current:{' '}
         {raw === undefined
           ? '…'
           : raw === null
-            ? 'inherit daemon default (15 or env)'
-            : `${raw} concurrent`}
+            ? 'server default'
+            : `${raw} at once`}
         {' · '}
-        CLI: <code className="text-[10px]">k2 workspace api-host-session-cap get|set</code>
+        CLI: <code className="type-hint">k2 workspace api-host-session-cap get|set</code>
       </p>
-      {error && <p className="text-[11px] text-[var(--color-status-error-soft)]">{error}</p>}
-      {hint && !error && <p className="text-[11px] text-[var(--color-status-ok-soft)]">{hint}</p>}
+      {error && <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>}
+      {hint && !error && <p className="type-hint text-[var(--color-status-ok-soft)]">{hint}</p>}
     </div>
   )
 }
@@ -1770,7 +1768,7 @@ function ShowHeartbeatSessionsToggle({ projectPath }: { projectPath: string }): 
 
   if (enabled === null) {
     return (
-      <div className="text-[10px] text-[var(--color-text-muted)]">Loading…</div>
+      <div className="type-hint text-[var(--color-text-muted)]">Loading…</div>
     )
   }
 
@@ -1781,17 +1779,17 @@ function ShowHeartbeatSessionsToggle({ projectPath }: { projectPath: string }): 
           checked={enabled}
           onChange={toggle}
           disabled={busy}
-          title={enabled ? 'Heartbeat fires open background tabs' : 'Heartbeat fires run silently'}
+          title={enabled ? 'Heartbeats open background tabs' : 'Heartbeats run in the background'}
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Show heartbeat sessions in tabs
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
             {enabled
-              ? 'Each heartbeat fire opens a background tab in this window. Tabs persist until you close them. Audit the agent\'s work as it happens.'
-              : 'Heartbeat fires run silently in the daemon (recommended). Audit them on demand from the sidebar Heartbeats panel.'}
+              ? 'Each heartbeat opens a background tab in this window until you close it, so you can follow the agent\'s work.'
+              : 'Heartbeats run in the background (recommended). See them any time in the sidebar Heartbeats panel.'}
           </div>
         </div>
       </div>
@@ -1810,7 +1808,7 @@ function permissionRowClass(compact: boolean): string {
 }
 
 function permissionDescClass(compact: boolean): string {
-  return compact ? 'hidden' : 'text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed'
+  return compact ? 'hidden' : 'type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed'
 }
 
 // ── DNS K1 Per-workspace DNS-manage opt-in ─────────────────────────
@@ -1869,20 +1867,19 @@ export function DnsManageToggle({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Allow agents to manage DNS for this workspace
             <AskedChip row="projects.dns-manage-enabled" />
           </div>
           <div className={permissionDescClass(compact)}>
             {enabled
               ? 'Agents in this workspace may create, update, and delete DNS records.'
-              : 'Off (recommended): agents in this workspace cannot mutate DNS. Turn on to grant DNS management for this workspace only.'}
+              : 'Off (recommended): agents in this workspace can\'t change DNS. Turn on for this workspace only.'}
           </div>
           {!enabled && globalAllow && !readOnly && (
-            <div className="text-[10px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
+            <div className="type-hint text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
               Currently allowed anyway: the global &ldquo;Allow agents to manage DNS
-              records&rdquo; switch (Settings → K2 Connect) opts in every workspace,
-              overriding this toggle.
+              records&rdquo; (Settings → Tunnel) is on for every workspace.
             </div>
           )}
         </div>
@@ -1956,7 +1953,7 @@ export function AgentsManageAgentsToggle({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Allow hiring and managing agents
             <AskedChip row="projects.agents-can-manage-agents" />
           </div>
@@ -2034,7 +2031,7 @@ export function AgentsManageVaultToggle({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Allow managing server-wide secrets
             <AskedChip row="projects.agents-can-manage-vault" />
           </div>
@@ -2127,7 +2124,7 @@ export function AgentsUseComputeToggle({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Allow compute nodes
             <AskedChip row="projects.agents-can-use-compute" />
           </div>
@@ -2138,12 +2135,12 @@ export function AgentsUseComputeToggle({
             removes its access to every machine; running jobs finish.
           </div>
           {result ? (
-            <div className="text-[10px] text-[var(--color-text-secondary)] mt-1" data-testid="agents-compute-result">
+            <div className="type-hint text-[var(--color-text-secondary)] mt-1" data-testid="agents-compute-result">
               {result}
             </div>
           ) : null}
           {error ? (
-            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-error">
+            <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-error">
               {error}
             </div>
           ) : null}
@@ -2245,9 +2242,9 @@ export function AgentsOperateComputeToggle({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Allow this agent to operate compute nodes{' '}
-            <span className="text-[10px] font-normal text-[var(--color-text-muted)]">Beta</span>
+            <span className="type-hint text-[var(--color-text-muted)]">Beta</span>
             <AskedChip row="projects.agents-can-operate-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
@@ -2258,7 +2255,7 @@ export function AgentsOperateComputeToggle({
             it can&rsquo;t operate your compute machines or propose changes to them.
           </div>
           {error ? (
-            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-operate-error">
+            <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-operate-error">
               {error}
             </div>
           ) : null}
@@ -2362,9 +2359,9 @@ export function AgentsManageComputeToggle({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Allow managing compute nodes{' '}
-            <span className="text-[10px] font-normal text-[var(--color-text-muted)]">Beta</span>
+            <span className="type-hint text-[var(--color-text-muted)]">Beta</span>
             <AskedChip row="projects.agents-can-manage-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
@@ -2375,7 +2372,7 @@ export function AgentsManageComputeToggle({
             machine stay yours. Only you (the owner) can switch this.
           </div>
           {error ? (
-            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-manage-error">
+            <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-manage-error">
               {error}
             </div>
           ) : null}
@@ -2481,7 +2478,7 @@ export function AgentsManagePostgresToggle({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Allow this agent to manage Postgres versions
           </div>
           <div className={permissionDescClass(compact)}>
@@ -2490,7 +2487,7 @@ export function AgentsManagePostgresToggle({
             proven; for now they are yours. Deleting the old copy stays with you.
           </div>
           {error ? (
-            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agents-db-upgrade-error">
+            <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agents-db-upgrade-error">
               {error}
             </div>
           ) : null}
@@ -2570,7 +2567,7 @@ export function AgentsManageProjectsToggle({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Manage K2 projects
             <AskedChip row="projects.agents-can-manage-projects" />
           </div>
@@ -2652,14 +2649,14 @@ export function AgentsRefreshChatToggle({
           className="mt-0.5"
         />
         <div className="min-w-0">
-          <div className="text-xs text-[var(--color-text-secondary)]">Can refresh its own pinned chat</div>
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
-            Lets this agent start a new pinned chat on the same harness when its chat goes stale, with a note for itself
+          <div className="type-row text-[var(--color-text-secondary)]">Can refresh its own pinned chat</div>
+          <p className="type-hint text-[var(--color-text-muted)] mt-1">
+            Lets this agent start a new pinned chat with the same agent when its chat goes stale, with a note for itself
             (<code>k2 agent refresh</code>). The new chat gets only a summary and that note, and what it&apos;s doing at that moment
             stops. The old chat stays in Chat history, and the Thread, messages and heartbeats on the pinned chat carry on in the
             new chat. Off, it asks you on a card when permission cards are on.
           </p>
-          {error && <p className="text-[10px] text-red-400 mt-1">{error}</p>}
+          {error && <p className="type-hint text-red-400 mt-1">{error}</p>}
         </div>
       </div>
     </div>
@@ -2727,12 +2724,12 @@ export function AgentsManageGardensToggle({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             {label}
             <AskedChip row="projects.agents-can-manage-gardens" />
           </div>
           {accessOn ? (
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed" data-garden-access-copy="">
+            <div className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed" data-garden-access-copy="">
               Lets this workspace&rsquo;s agent approve data sources (its own and others&rsquo;), pause and
               pin them and turn on triggers without asking you (k2 sources). It binds only a secret it can
               already use: its own workspace&rsquo;s, or a server-wide one if &ldquo;Allow managing
@@ -2741,7 +2738,7 @@ export function AgentsManageGardensToggle({
               list in Settings &rarr; Gardens.
             </div>
           ) : (
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
             Lets this workspace&rsquo;s agent approve data sources (its own and others&rsquo;), pause and
             pin them, turn on triggers and edit your Gardens and widgets without asking you (k2 sources,
             k2 zen). It binds only a secret it can already use: its own workspace&rsquo;s, or a
@@ -2812,19 +2809,19 @@ export function MailManageToggle({
           data-settings-id="projects.mail-manage-enabled"
           title={
             enabled
-              ? 'This agent may manage hosted mail on this host'
+              ? 'This agent may manage hosted mail on this server'
               : 'This agent cannot manage hosted mail'
           }
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
-            Allow agents to manage hosted mail on this host
+          <div className="type-name text-[var(--color-text-primary)]">
+            Allow agents to manage hosted mail on this server
             <AskedChip row="projects.mail-manage-enabled" />
           </div>
           <div className={permissionDescClass(compact)}>
             {enabled
-              ? 'This agent may run k2 hostmail enable/disable and domain list/add/check on this host. You (the owner) can always manage hosted mail. Uninstall, domain remove, OAuth, and access stay owner-managed.'
+              ? 'This agent may run k2 hostmail enable/disable and domain list/add/check on this server. You (the owner) can always manage hosted mail. Uninstall, domain remove, OAuth, and access stay owner-managed.'
               : 'Off (recommended): hosted-mail enable/disable and domain mutations stay owner-managed. Turn on to let this workspace\'s agent drive k2 hostmail enable/disable and domain list/add/check. Uninstall, domain remove, OAuth, and access stay owner. You (the owner) can always manage hosted mail.'}
           </div>
         </div>
@@ -2893,13 +2890,12 @@ export function DbAgentCreateToggle({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Allow this agent to create databases
             <AskedChip row="projects.db-agent-create" />
           </div>
           <div className={permissionDescClass(compact)}>
-            Existing databases this workspace owns or is granted are usable without this toggle;
-            it only gates <span className="font-mono">k2 db create</span>.
+            Lets this agent create new databases (<span className="font-mono">k2 db create</span>). It can always use databases this workspace owns or has been granted.
           </div>
         </div>
       </div>
@@ -2964,7 +2960,7 @@ export function AgentsCreateConnectionsToggle({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Allow agents to create connections for this workspace
             <AskedChip row="projects.agents-can-create-connections" />
           </div>
@@ -2974,10 +2970,10 @@ export function AgentsCreateConnectionsToggle({
               : "Off (recommended): agents in this workspace cannot add or remove connections. Turn on to grant connection management for this workspace only. You (the owner) can always manage connections."}
           </div>
           {!enabled && globalAllow && !readOnly && (
-            <div className="text-[10px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
+            <div className="type-hint text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
               Currently allowed anyway: the global &ldquo;Allow agents to create
-              connections&rdquo; switch (Settings → K2 Connect) opts in every
-              workspace, overriding this toggle.
+              connections&rdquo; (Settings → Tunnel) is on for every
+              workspace.
             </div>
           )}
         </div>
@@ -3029,16 +3025,16 @@ function AgentKebabMenu({ onSettings, onDelete }: { onSettings: () => void; onDe
         <div {...floatMaterial('menu')} className="absolute right-0 top-full mt-1 z-50 bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg min-w-[140px]">
           <button
             onClick={() => { setOpen(false); onSettings() }}
-            className="w-full text-left px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
+            className="w-full text-left px-3 py-1.5 type-control text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
           >
             Settings
           </button>
           {onDelete && (
             <button
               onClick={() => { setOpen(false); onDelete() }}
-              className="w-full text-left px-3 py-1.5 text-[11px] text-[var(--color-status-error-soft)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] hover:text-[var(--color-status-error-bright)] transition-colors no-drag cursor-pointer"
+              className="w-full text-left px-3 py-1.5 type-control text-[var(--color-status-error-soft)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] hover:text-[var(--color-status-error-bright)] transition-colors no-drag cursor-pointer"
             >
-              Delete Agent
+              Delete agent
             </button>
           )}
         </div>
@@ -3123,9 +3119,9 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
     <div className="py-2 border-t border-[var(--color-border)]">
       <div className="flex items-center justify-between">
         <div>
-          <span className="text-xs text-[var(--color-text-secondary)]">Default Agent</span>
-          <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">
-            {metaChordLabel('Shift+Meta+T') ? `The agent ${metaChordLabel('Shift+Meta+T')} launches` : 'The default agent'} for this workspace. Edit-with-AI uses Settings → Default AI Agent.
+          <span className="type-row text-[var(--color-text-secondary)]">Default agent</span>
+          <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
+            {metaChordLabel('Shift+Meta+T') ? `The agent ${metaChordLabel('Shift+Meta+T')} launches` : 'The default agent'} for this workspace. Edit with AI uses Default AI Agent in Providers / Models.
           </p>
         </div>
         <SettingDropdown
@@ -3140,15 +3136,15 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
       </div>
       {offerMove && (
         <div className="flex items-center justify-between gap-2 mt-2" data-testid="default-agent-move-pinned">
-          <span className="text-[10px] text-[var(--color-text-secondary)]">
-            Also move the pinned chat to {harnessLabel(offerMove)}? New chats use it already; the pinned chat (heartbeats, Threads, messages) keeps its harness until moved.
+          <span className="type-hint text-[var(--color-text-secondary)]">
+            Also move the pinned chat to {harnessLabel(offerMove)}? New chats use it already; the pinned chat (heartbeats, Threads, messages) keeps its current agent until moved.
           </span>
           <div className="flex gap-1 flex-shrink-0">
             <button
               type="button"
               disabled={moving}
               onClick={() => { void handleMove(offerMove) }}
-              className="px-2 py-0.5 text-[10px] rounded-[var(--radius-field)] bg-[var(--color-accent)] text-white disabled:opacity-50 cursor-pointer no-drag"
+              className="px-2 py-0.5 type-control rounded-[var(--radius-field)] bg-[var(--color-accent)] text-white disabled:opacity-50 cursor-pointer no-drag"
             >
               {moving ? 'Moving…' : 'Move'}
             </button>
@@ -3156,7 +3152,7 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
               type="button"
               disabled={moving}
               onClick={() => setOfferMove(null)}
-              className="px-2 py-0.5 text-[10px] rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] cursor-pointer no-drag"
+              className="px-2 py-0.5 type-control rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] cursor-pointer no-drag"
             >
               Not now
             </button>
@@ -3164,7 +3160,7 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
         </div>
       )}
       {moveNote && (
-        <p className="text-[9px] text-[var(--color-text-muted)] mt-1" data-testid="default-agent-move-note">{moveNote}</p>
+        <p className="type-hint text-[var(--color-text-muted)] mt-1" data-testid="default-agent-move-note">{moveNote}</p>
       )}
     </div>
   )
@@ -3276,16 +3272,16 @@ function DefaultModelControls({
     <div className="py-2 border-t border-[var(--color-border)]" data-settings-id="projects.default-model">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <span className="text-xs text-[var(--color-text-secondary)]">Default model</span>
-          <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-            New sessions of this workspace’s agent use this model. Check the box to also pass it on resume (new process). A live chat cannot change model. API `model` on a host-session overrides this for that call, including resume.
+          <span className="type-row text-[var(--color-text-secondary)]">Default model</span>
+          <p className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
+            The model new sessions in this workspace use. A running chat can&apos;t switch models. An API call that sets its own model overrides this.
           </p>
         </div>
         {model ? (
           <button
             type="button"
             onClick={handleClear}
-            className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer flex-shrink-0"
+            className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer flex-shrink-0"
           >
             Clear
           </button>
@@ -3297,7 +3293,7 @@ function DefaultModelControls({
             key={id}
             type="button"
             onClick={() => handleChip(id)}
-            className={`px-2 py-0.5 text-[10px] no-drag cursor-pointer border ${
+            className={`px-2 py-0.5 type-control no-drag cursor-pointer border ${
               model === id
                 ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)] border-[var(--color-accent)]'
                 : 'text-[var(--color-text-secondary)] border-[var(--color-border)] hover:text-[var(--color-text-primary)]'
@@ -3321,12 +3317,12 @@ function DefaultModelControls({
           onKeyDown={(e) => {
             if (e.key === 'Enter') handleCustomSubmit()
           }}
-          placeholder="custom id"
-          className="px-2 py-0.5 text-[10px] w-28 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] no-drag"
+          placeholder="Custom ID"
+          className="px-2 py-0.5 type-hint w-28 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] no-drag"
         />
       </div>
       <label
-        className={`flex items-center gap-2 mt-2 text-[10px] no-drag ${
+        className={`flex items-center gap-2 mt-2 type-hint no-drag ${
           empty ? 'text-[var(--color-text-muted)] opacity-60' : 'text-[var(--color-text-secondary)] cursor-pointer'
         }`}
         data-settings-id="projects.force-model-on-resume"
@@ -3432,24 +3428,24 @@ function ContextLayerFileEditor({
       preview={
         <div className="h-full flex flex-col">
           <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] flex-shrink-0">
-            <div className="text-xs text-[var(--color-text-muted)] truncate">
+            <div className="type-hint text-[var(--color-text-muted)] truncate">
               <span className="font-medium text-[var(--color-text-primary)]">{label}</span>
               <span className="mx-2">&middot;</span>
-              <span className="font-mono text-[10px]">{filePath}</span>
+              <span className="font-mono type-hint">{filePath}</span>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               {previewMode === 'preview' && (
                 <div className="flex items-center gap-0.5">
                   <button
                     onClick={() => setPreviewScale((s) => Math.max(50, s - 10))}
-                    className="w-5 h-5 flex items-center justify-center text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] no-drag cursor-pointer"
+                    className="w-5 h-5 flex items-center justify-center type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] no-drag cursor-pointer"
                   >
                     −
                   </button>
-                  <span className="text-[9px] tabular-nums text-[var(--color-text-muted)] w-7 text-center">{previewScale}%</span>
+                  <span className="type-hint tabular-nums text-[var(--color-text-muted)] w-7 text-center">{previewScale}%</span>
                   <button
                     onClick={() => setPreviewScale((s) => Math.min(200, s + 10))}
-                    className="w-5 h-5 flex items-center justify-center text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] no-drag cursor-pointer"
+                    className="w-5 h-5 flex items-center justify-center type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] no-drag cursor-pointer"
                   >
                     +
                   </button>
@@ -3458,7 +3454,7 @@ function ContextLayerFileEditor({
               <div className="flex border border-[var(--color-border)]">
                 <button
                   onClick={() => setPreviewMode('preview')}
-                  className={`px-2 py-0.5 text-[10px] no-drag cursor-pointer ${
+                  className={`px-2 py-0.5 type-control no-drag cursor-pointer ${
                     previewMode === 'preview'
                       ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                       : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
@@ -3468,7 +3464,7 @@ function ContextLayerFileEditor({
                 </button>
                 <button
                   onClick={() => setPreviewMode('edit')}
-                  className={`px-2 py-0.5 text-[10px] no-drag cursor-pointer ${
+                  className={`px-2 py-0.5 type-control no-drag cursor-pointer ${
                     previewMode === 'edit'
                       ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                       : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
@@ -3540,11 +3536,11 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
   const systemPrompt = useMemo(() => [
     `You're helping the user edit the workspace knowledge for "${projectName}".`,
     ``,
-    `File: .k2so/PROJECT.md (source)`,
+    `File: .k2/PROJECT.md (source)`,
     `Path: ${filePath}`,
     ``,
     `This is the SOURCE. K2 compiles it (plus the agent's ROLE.md) into the`,
-    `canonical .k2so/skills/<name>/SKILL.md on save. Mirroring this content out`,
+    `canonical .k2/skills/<name>/SKILL.md on save. Mirroring this content out`,
     `into the CLI harness files (CLAUDE.md, GEMINI.md, .cursor/rules, AGENTS.md,`,
     `etc.) is OPT-IN per workspace — it only happens if harness fan-out is`,
     `enabled or the user runs the K2 Canonical Agent. Edit here once regardless.`,
@@ -3584,14 +3580,14 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
       command={terminalCommand}
       args={terminalArgs}
       title={`Workspace Knowledge: ${projectName}`}
-      instructions="Editing .k2so/PROJECT.md — the source for workspace knowledge. K2 compiles this into the canonical SKILL.md. When harness fan-out is enabled (opt-in), it also mirrors out to CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules, .goosehints, etc. Regen runs automatically when you close this editor."
+      instructions="Editing .k2/PROJECT.md — the source for workspace knowledge. K2 compiles this into the canonical SKILL.md. When harness fan-out is enabled (opt-in), it also mirrors out to CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules, .goosehints, etc. Regen runs automatically when you close this editor."
       warningText="This is the source file for the workspace's shared knowledge. When harness fan-out is enabled, edits mirror into every chosen CLI LLM harness on save."
       onFileChange={handleFileChange}
       onClose={handleClose}
       preview={
         <div className="h-full flex flex-col">
           <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] flex-shrink-0">
-            <div className="text-xs text-[var(--color-text-muted)]">
+            <div className="type-hint text-[var(--color-text-muted)]">
               <span className="font-medium text-[var(--color-text-primary)]">PROJECT.md</span>
               <span className="mx-2">&middot;</span>
               <span>Source — compiled into every agent's SKILL.md</span>
@@ -3601,14 +3597,14 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
                 <div className="flex items-center gap-0.5">
                   <button
                     onClick={() => setPreviewScale((s) => Math.max(50, s - 10))}
-                    className="w-5 h-5 flex items-center justify-center text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] no-drag cursor-pointer"
+                    className="w-5 h-5 flex items-center justify-center type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] no-drag cursor-pointer"
                   >
                     −
                   </button>
-                  <span className="text-[9px] tabular-nums text-[var(--color-text-muted)] w-7 text-center">{previewScale}%</span>
+                  <span className="type-hint tabular-nums text-[var(--color-text-muted)] w-7 text-center">{previewScale}%</span>
                   <button
                     onClick={() => setPreviewScale((s) => Math.min(200, s + 10))}
-                    className="w-5 h-5 flex items-center justify-center text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] no-drag cursor-pointer"
+                    className="w-5 h-5 flex items-center justify-center type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] no-drag cursor-pointer"
                   >
                     +
                   </button>
@@ -3619,7 +3615,7 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
                   <button
                     key={mode}
                     onClick={() => setPreviewMode(mode)}
-                    className={`px-2 py-1 text-[10px] font-medium transition-colors no-drag cursor-pointer ${
+                    className={`px-2 py-1 type-control transition-colors no-drag cursor-pointer ${
                       previewMode === mode
                         ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                         : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)]'
@@ -3732,7 +3728,7 @@ function CustomAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { 
         <button
           onClick={handleOpenPersona}
           disabled={!ready}
-          className="px-3 py-1.5 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer disabled:opacity-50 flex-shrink-0 self-end whitespace-nowrap"
+          className="px-3 py-1.5 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer disabled:opacity-50 flex-shrink-0 self-end whitespace-nowrap"
         >
           Manage Persona
         </button>
@@ -3780,7 +3776,7 @@ function K2SOAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { pr
         <button
           onClick={() => onOpenEditor(agentName)}
           disabled={!ready}
-          className="px-3 py-1.5 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer disabled:opacity-50 flex-shrink-0 self-end whitespace-nowrap"
+          className="px-3 py-1.5 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer disabled:opacity-50 flex-shrink-0 self-end whitespace-nowrap"
         >
           Manage Persona
         </button>
@@ -3890,7 +3886,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
   const handleAddFederated = useCallback(
     async (target: string): Promise<string | null> => {
       if (!sourcePath) {
-        throw new Error('This workspace has no resolved path on the active server.')
+        throw new Error('K2 can’t find this workspace on this server. Switch to the server it’s on and try again.')
       }
       setRemoteError(null)
       const { reverseWarning } = await addRemoteConnection(sourcePath, target)
@@ -3904,7 +3900,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
     async (address: string) => {
       if (!sourcePath) {
         setRemoteError(
-          'This workspace has no resolved path on the active server — cannot remove the remote connection.',
+          'K2 can’t find this workspace on this server. Switch to the server it’s on and try again.',
         )
         return
       }
@@ -3915,7 +3911,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         console.error('[connected-workspaces] Remote disconnect failed:', e)
-        setRemoteError(msg || 'Failed to remove remote connection')
+        setRemoteError(msg || 'Couldn’t remove the connection. Try again.')
       }
     },
     [sourcePath, fetchRelations],
@@ -3925,7 +3921,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
     async (address: string) => {
       if (!sourcePath) {
         setRemoteError(
-          'This workspace has no resolved path on the active server — cannot re-add the remote connection.',
+          'K2 can’t find this workspace on this server. Switch to the server it’s on and try again.',
         )
         return
       }
@@ -3956,8 +3952,8 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
       <div>
         <div className="flex items-center justify-between mb-2">
           <div>
-            <h3 className="text-xs font-medium text-[var(--color-text-primary)]">Connections</h3>
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+            <h3 className="type-heading text-[var(--color-text-primary)]">Connections</h3>
+            <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
               Agents this agent can message: on this server and on paired servers.
             </p>
           </div>
@@ -3971,7 +3967,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
             }}
             title="Add connection"
             aria-expanded={showAdd}
-            className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
+            className="w-6 h-6 flex items-center justify-center type-control leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
           >
             +
           </button>
@@ -3992,13 +3988,13 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
       {/* ── Local Connections ─────────────────────────────────────── */}
       <div>
         <div className="mb-2">
-          <h4 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">On this server</h4>
+          <h4 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">On this server</h4>
         </div>
 
         {loading ? (
-          <div className="text-[10px] text-[var(--color-text-muted)]">Loading…</div>
+          <div className="type-hint text-[var(--color-text-muted)]">Loading…</div>
         ) : relations.length === 0 ? (
-          <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
+          <div className="type-hint text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
             No local connections yet.
           </div>
         ) : (
@@ -4014,14 +4010,14 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
                     className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]"
                     style={{ backgroundColor: target?.color || 'var(--color-neutral)' }}
                   />
-                  <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate">
+                  <span className="type-row text-[var(--color-text-primary)] flex-1 truncate">
                     {target?.name || 'Unknown workspace'}
                   </span>
                   <button
                     type="button"
                     onClick={() => void handleRemoveLocal(rel.id)}
                     className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer flex-shrink-0"
-                    title="Remove local connection"
+                    title="Remove connection"
                   >
                     <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
                       <line x1="1" y1="1" x2="7" y2="7" />
@@ -4034,14 +4030,14 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
           </div>
         )}
         {localError && (
-          <div className="mt-1 px-3 py-2 text-[10px] text-[var(--color-status-error-soft)] border border-[var(--color-border)]">
+          <div className="mt-1 px-3 py-2 type-hint text-[var(--color-status-error-soft)] border border-[var(--color-border)]">
             {localError}
           </div>
         )}
 
         {!loading && incoming.length > 0 && (
           <>
-            <h4 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mt-3">
+            <h4 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider mt-3">
               Connected to this workspace
             </h4>
             <div className="border border-[var(--color-border)]">
@@ -4056,7 +4052,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
                       className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)]"
                       style={{ backgroundColor: source?.color || 'var(--color-neutral)' }}
                     />
-                    <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate">
+                    <span className="type-row text-[var(--color-text-primary)] flex-1 truncate">
                       {source?.name || 'Unknown workspace'}
                     </span>
                   </div>
@@ -4070,12 +4066,12 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
       {/* ── Federated Connections ────────────────────────────────── */}
       <div>
         <div className="mb-2">
-          <h4 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">On paired servers</h4>
+          <h4 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">On paired servers</h4>
         </div>
 
         {loading ? null : remoteConns.length === 0 ? (
-          <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
-            No federated connections yet.
+          <div className="type-hint text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
+            No connections on paired servers yet.
           </div>
         ) : (
           <div className="border border-[var(--color-border)]">
@@ -4092,7 +4088,7 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
           </div>
         )}
         {remoteError && (
-          <div className="mt-1 px-3 py-2 text-[10px] text-[var(--color-status-error-soft)] border border-[var(--color-border)]">
+          <div className="mt-1 px-3 py-2 type-hint text-[var(--color-status-error-soft)] border border-[var(--color-border)]">
             {remoteError}
           </div>
         )}
@@ -4150,14 +4146,14 @@ function ProjectAgentsPanel({ projectPath, onOpenEditor }: { projectPath: string
       {/* Manager section */}
       {manager && (
         <div>
-          <h3 className="text-[10px] font-semibold text-[var(--color-accent)] uppercase tracking-wider mb-1">
+          <h3 className="type-section text-[var(--color-accent)] uppercase tracking-wider mb-1">
             Workspace Manager
           </h3>
           <div className="border border-[var(--color-accent)]/30">
             <div className="px-3 py-2 space-y-2">
               <div className="flex items-center">
-                <span className="text-xs font-medium text-[var(--color-text-primary)] flex-shrink-0">{manager.name}</span>
-                <span className="text-[9px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-1.5 py-0.5 ml-1.5 flex-shrink-0">
+                <span className="type-name text-[var(--color-text-primary)] flex-shrink-0">{manager.name}</span>
+                <span className="type-hint text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-1.5 py-0.5 ml-1.5 flex-shrink-0">
                   MANAGER
                 </span>
                 {/* Phase 2.5b followup: only the workspace inbox count
@@ -4167,13 +4163,13 @@ function ProjectAgentsPanel({ projectPath, onOpenEditor }: { projectPath: string
                     invariant + Phase 2.5b skill consolidation. Work
                     now lives on the workspace inbox primitive, not
                     per-agent work queues. */}
-                <div className="flex items-center justify-end gap-1.5 text-[10px] flex-1 ml-2">
+                <div className="flex items-center justify-end gap-1.5 type-hint flex-1 ml-2">
                   {wsInboxCount > 0 && (
                     <span className="text-[var(--color-accent)]" title="Items in workspace inbox">{wsInboxCount} inbox</span>
                   )}
                 </div>
               </div>
-              <p className="text-[10px] text-[var(--color-text-muted)] truncate">{manager.role}</p>
+              <p className="type-hint text-[var(--color-text-muted)] truncate">{manager.role}</p>
               {/* 0.37.4: friendly display label, separate from the
                   internal agent identity (directory basename / AGENT.md
                   `name:`) so the inbox tab can show something more
@@ -4189,7 +4185,7 @@ function ProjectAgentsPanel({ projectPath, onOpenEditor }: { projectPath: string
                 trailing={
                   <button
                     onClick={() => onOpenEditor(manager.name)}
-                    className="px-3 py-1.5 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer flex-shrink-0 self-end whitespace-nowrap"
+                    className="px-3 py-1.5 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer flex-shrink-0 self-end whitespace-nowrap"
                     title="Manage workspace manager persona"
                   >
                     Manage Persona
@@ -4297,7 +4293,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
   const handleDelete = useCallback(async (name: string) => {
     const confirmed = await useConfirmDialogStore.getState().confirm({
       title: `Remove Skill "${name}"?`,
-      message: 'The skill folder (.k2so/skills/' + name + '/) will be moved to the recycle bin. You can restore it within ~30 days if you change your mind.',
+      message: 'The skill folder (.k2/skills/' + name + '/) will be moved to the recycle bin. You can restore it within ~30 days if you change your mind.',
       confirmLabel: 'Remove',
       destructive: true,
     })
@@ -4323,17 +4319,17 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
       <div className="flex items-center justify-between">
         <div className="flex-1 min-w-0 mr-3">
           <div className="flex items-center">
-            <span className="text-xs font-medium text-[var(--color-text-primary)] flex-shrink-0">{skill.name}</span>
+            <span className="type-name text-[var(--color-text-primary)] flex-shrink-0">{skill.name}</span>
           </div>
           {skill.title && skill.title !== skill.name && (
-            <p className="text-[10px] text-[var(--color-text-muted)] truncate mt-0.5">{skill.title}</p>
+            <p className="type-hint text-[var(--color-text-muted)] truncate mt-0.5">{skill.title}</p>
           )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           <button
             onClick={() => onOpenEditor(skill.name)}
-            className="px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer"
-            title="Edit .k2so/skills/{skill.name}/SKILL.md"
+            className="px-2 py-0.5 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer"
+            title="Edit .k2/skills/{skill.name}/SKILL.md"
           >
             Edit
           </button>
@@ -4357,12 +4353,12 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
       <div className="flex items-center justify-between mb-1">
         <span className="flex items-center gap-1.5">
           {skillRows.length > 0 && (
-            <span className="text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{skillRows.length}</span>
+            <span className="type-badge tabular-nums px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{skillRows.length}</span>
           )}
         </span>
         <button
           onClick={() => setShowCreate(!showCreate)}
-          className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
+          className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
         >
           {showCreate ? 'Cancel' : '+ New Skill'}
         </button>
@@ -4380,7 +4376,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
             placeholder="Skill name (e.g. backend-eng)"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            className="w-full bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-xs text-[var(--color-text-primary)] px-2 py-1.5 outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-text-muted)]"
+            className="w-full bg-[var(--color-bg-elevated)] border border-[var(--color-border)] type-control text-[var(--color-text-primary)] px-2 py-1.5 outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-text-muted)]"
             onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
           />
           {skills.length > 0 && (
@@ -4398,7 +4394,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
           <button
             onClick={handleCreate}
             disabled={creating || !newName.trim()}
-            className="px-3 py-1 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer disabled:opacity-50"
+            className="px-3 py-1 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer disabled:opacity-50"
           >
             {creating ? 'Creating...' : 'Create Skill'}
           </button>
@@ -4413,9 +4409,9 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
           shows the workspace inbox count, which is the relevant unit
           of work. */}
       {loading ? (
-        <p className="text-[10px] text-[var(--color-text-muted)]">Loading skills...</p>
+        <p className="type-hint text-[var(--color-text-muted)]">Loading skills...</p>
       ) : skillRows.length === 0 && !showCreate ? (
-        <p className="text-[10px] text-[var(--color-text-muted)]">
+        <p className="type-hint text-[var(--color-text-muted)]">
           No skills yet. Create one to give your agent a specialized capability profile.
         </p>
       ) : (
@@ -4509,12 +4505,12 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
 
   return (
     <div className="space-y-2">
-      <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
+      <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
         Cursor IDE Conversations
-        <span className="text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{sessions.length}</span>
+        <span className="type-badge tabular-nums px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{sessions.length}</span>
       </h3>
 
-      <p className="text-[10px] text-[var(--color-text-muted)]">
+      <p className="type-hint text-[var(--color-text-muted)]">
         Migrate conversations from the Cursor IDE to CLI format so they can be resumed in K2 terminals.
       </p>
 
@@ -4529,7 +4525,7 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
           return (
             <div
               key={session.composerId}
-              className={`flex items-center gap-2 px-3 py-1.5 text-xs ${
+              className={`flex items-center gap-2 px-3 py-1.5 type-row ${
                 i < sessions.length - 1 ? 'border-b border-[var(--color-border)]' : ''
               }`}
             >
@@ -4537,23 +4533,23 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
               <span className={`flex-1 truncate ${isMigrated ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-primary)]'}`}>
                 {session.name || 'Untitled'}
               </span>
-              <span className="text-[10px] text-[var(--color-text-muted)] flex-shrink-0">
+              <span className="type-hint text-[var(--color-text-muted)] flex-shrink-0">
                 {dateStr}
               </span>
               {isCurrentlyMigrating ? (
-                <span className="text-[10px] text-[var(--color-accent)] flex-shrink-0 animate-pulse">
+                <span className="type-hint text-[var(--color-accent)] flex-shrink-0 animate-pulse">
                   migrating...
                 </span>
               ) : isMigrated ? (
-                <span className="text-[10px] text-[var(--color-status-ok-soft)] flex-shrink-0">
+                <span className="type-hint text-[var(--color-status-ok-soft)] flex-shrink-0">
                   migrated
                 </span>
               ) : !session.migratable ? (
-                <span className="text-[10px] text-[var(--color-text-muted)] flex-shrink-0 opacity-50">
+                <span className="type-hint text-[var(--color-text-muted)] flex-shrink-0 opacity-50">
                   chat only
                 </span>
               ) : (
-                <span className="text-[10px] text-[var(--color-text-muted)] flex-shrink-0">
+                <span className="type-hint text-[var(--color-text-muted)] flex-shrink-0">
                   pending
                 </span>
               )}
@@ -4564,12 +4560,12 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
 
       {/* Error */}
       {error && (
-        <p className="text-[10px] text-[var(--color-status-error-soft)]">{error}</p>
+        <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>
       )}
 
       {/* Status + button */}
       <div className="flex items-center justify-between">
-        <span className="text-[10px] text-[var(--color-text-muted)]">
+        <span className="type-hint text-[var(--color-text-muted)]">
           {migratedSessions.length > 0 && (
             <span className="text-[var(--color-status-ok-soft)]">{migratedSessions.length} migrated</span>
           )}
@@ -4589,7 +4585,7 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
           <button
             onClick={handleMigrateAll}
             disabled={migrating}
-            className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 no-drag"
+            className="px-3 py-1.5 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 no-drag"
           >
             {migrating
               ? `Migrating ${migratingIds.size}...`
@@ -4665,11 +4661,11 @@ function MailAgentSendControl({
     <div className="border border-[var(--color-border)] p-3" data-settings-id="projects.mail-agent-send">
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Let this agent send email
             <AskedChip row="projects.mail-agent-send" />
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
             Covers hosted K2 mailboxes and linked inboxes (Gmail, Outlook, IMAP). The inbox
             level (send) picks which inbox; this picks whether the agent may send at all.
             Approval queues hosted mailboxes only: a linked inbox needs On. Same as{' '}
@@ -4677,13 +4673,13 @@ function MailAgentSendControl({
             {inherited && mode !== null ? ' Using the server default.' : ''}
           </div>
           <div
-            className="text-[10px] text-[var(--color-status-warn)] mt-1 leading-relaxed"
+            className="type-hint text-[var(--color-status-warn)] mt-1 leading-relaxed"
             data-testid="mail-agent-send-on-warning"
           >
             With sending on, an agent that reads a malicious email can be talked into sending any mail it can read, with its attachments, and any workspace file that doesn&apos;t look like a secret, to any address: up to 20 messages an hour and 100 a day per mailbox, at 25 MiB each. Nobody is asked or told at send time; the outbox records it afterwards. The secret check catches mistakes, not intent. The DMARC check only slows forged senders, and an attacker&apos;s own domain passes it. Use approval for any agent that reads mail from outside.
           </div>
           {error && (
-            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1">{error}</div>
+            <div className="type-hint text-[var(--color-status-error-soft)] mt-1">{error}</div>
           )}
         </div>
         <SettingDropdown

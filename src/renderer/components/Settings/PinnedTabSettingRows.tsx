@@ -32,11 +32,11 @@ export const patchWindowProjects: PatchProjects = (fn) =>
 const COPY: Record<PinnedTabKind, { label: string; on: string; noPhone?: string }> = {
   design: {
     label: 'Show the Design tab',
-    on: 'Keeps the Design tab pinned next to Chat and Inbox. + → Design works either way.',
+    on: 'Keeps the Design tab pinned next to Chat and Inbox. You can always open it from the + menu.',
   },
   mobile: {
     label: 'Show the Mobile tab',
-    on: "Keeps this workspace's phone pinned next to Chat and Inbox. + → Mobile works either way.",
+    on: "Keeps this workspace's phone pinned next to Chat and Inbox. You can always open it from the + menu.",
     noPhone: "This server can't run a phone, so there is no Mobile tab here.",
   },
 }
@@ -84,12 +84,12 @@ export function PinnedTabSettingRow({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">{copy.label}</div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
+          <div className="type-name text-[var(--color-text-primary)]">{copy.label}</div>
+          <div className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
             {unavailable ? copy.noPhone : copy.on}
           </div>
           {error ? (
-            <div role="alert" className="text-[10px] text-[var(--color-danger,#c33)] mt-1">
+            <div role="alert" className="type-hint text-[var(--color-danger,#c33)] mt-1">
               {error}
             </div>
           ) : null}

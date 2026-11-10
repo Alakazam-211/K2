@@ -87,7 +87,7 @@ export function RoleSkillEditor({
       preview={
         <div className="h-full flex flex-col">
           <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] flex-shrink-0">
-            <div className="text-xs text-[var(--color-text-muted)]">
+            <div className="type-hint text-[var(--color-text-muted)]">
               <span className="font-medium text-[var(--color-text-primary)]">AGENT.md</span>
               <span className="mx-2">&middot;</span>
               <span>Canonical agent source · {label}</span>
@@ -97,7 +97,7 @@ export function RoleSkillEditor({
                 <button
                   key={mode}
                   onClick={() => setPreviewMode(mode)}
-                  className={`px-2 py-1 text-[10px] font-medium transition-colors no-drag cursor-pointer ${
+                  className={`px-2 py-1 type-control transition-colors no-drag cursor-pointer ${
                     previewMode === mode
                       ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                       : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)]'

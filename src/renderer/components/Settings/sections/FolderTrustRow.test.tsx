@@ -36,9 +36,9 @@ beforeEach(() => {
 
 describe('folderTrustLine', () => {
   it('says each state in plain words', () => {
-    expect(folderTrustLine(status({ state: 'clean' }))).toBe('Clean, no risky settings')
+    expect(folderTrustLine(status({ state: 'clean' }))).toBe('No risky settings found in this folder')
     expect(folderTrustLine(status({}))).toBe('Trusted this version by rosson on 10-24')
-    expect(folderTrustLine(status({ state: 'always' }))).toBe('Always by rosson on 10-24')
+    expect(folderTrustLine(status({ state: 'always' }))).toBe('Always trusted by rosson on 10-24')
     expect(folderTrustLine(status({ state: 'denied' }))).toBe('Not trusted by rosson on 10-24: K2 starts no programs here')
     expect(folderTrustLine(status({ state: 'pending', decided_by: null }))).toBe('Waiting for you: choose here or on the card in Thread')
     expect(folderTrustLine(status({ state: 'trusted', decided_by: 'upgrade' }))).toBe(
@@ -64,7 +64,7 @@ describe('FolderTrustRow', () => {
   it('has no Reset for a clean folder and shows a refusal', async () => {
     daemonCliGet.mockResolvedValueOnce(status({ state: 'clean', findings: [] }))
     render(<FolderTrustRow scope={scope} projectPath="/w/sales" />)
-    await waitFor(() => expect(screen.getByTestId('folder-trust-line').textContent).toBe('Clean, no risky settings'))
+    await waitFor(() => expect(screen.getByTestId('folder-trust-line').textContent).toBe('No risky settings found in this folder'))
     expect(screen.queryByRole('button', { name: 'Reset' })).toBeNull()
     cleanup()
     daemonCliGet.mockRejectedValueOnce(new Error('only this server’s owner answers a settings card'))
@@ -107,7 +107,7 @@ describe('FolderTrustRow choices', () => {
     render(<FolderTrustRow scope={scope} projectPath="/w/sales" />)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Always trust this folder' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Always trust this folder' }))
-    await waitFor(() => expect(screen.getByTestId('folder-trust-line').textContent).toBe('Always by rosson on 10-24'))
+    await waitFor(() => expect(screen.getByTestId('folder-trust-line').textContent).toBe('Always trusted by rosson on 10-24'))
     expect(daemonCliPost).toHaveBeenCalledWith(scope, 'folder-trust/decide', {
       path: '/w/sales',
       decision: 'always',
@@ -137,7 +137,7 @@ describe('FolderTrustRow choices', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Trust it' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Trust it' }))
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(message))
-    expect(screen.getByTestId('folder-trust-line').textContent).toBe('Always by baden on 10-24')
+    expect(screen.getByTestId('folder-trust-line').textContent).toBe('Always trusted by baden on 10-24')
     expect(screen.queryByTestId('folder-trust-choices')).toBeNull()
   })
 
@@ -165,7 +165,7 @@ describe('FolderTrustRow choices', () => {
     await waitFor(() => expect(screen.getByTestId('folder-trust-choices')).toBeTruthy())
     daemonCliGet.mockResolvedValueOnce(status({ state: 'always', decided_by: 'baden' }))
     window.dispatchEvent(new Event('focus'))
-    await waitFor(() => expect(screen.getByTestId('folder-trust-line').textContent).toBe('Always by baden on 10-24'))
+    await waitFor(() => expect(screen.getByTestId('folder-trust-line').textContent).toBe('Always trusted by baden on 10-24'))
     expect(screen.queryByTestId('folder-trust-choices')).toBeNull()
     expect(daemonCliGet).toHaveBeenCalledTimes(2)
   })

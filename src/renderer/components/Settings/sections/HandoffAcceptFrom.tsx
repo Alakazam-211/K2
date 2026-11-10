@@ -16,10 +16,10 @@ import { handoffApi, requestVaultTab, type AcceptFromEntry } from './handoff-api
 import { SettingDropdown } from '../controls/SettingControls'
 
 const btn =
-  'px-2 py-0.5 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
+  'px-2 py-0.5 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
 const muted = 'text-[var(--color-text-muted)]'
 const input =
-  'px-2 py-0.5 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] min-w-0'
+  'px-2 py-0.5 type-hint bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] min-w-0'
 
 /** A typed sender: `agent::host`, `agent@host`, `team:<id>` or `ws:<id>`. */
 export function typedSenderOk(s: string): boolean {
@@ -107,11 +107,11 @@ export function AgentHandoffAcceptFrom({
       data-settings-id="projects.handoff-accept-from"
     >
       <div className="flex items-center gap-2">
-        <div className="text-xs font-medium text-[var(--color-text-primary)]">Secrets from other agents</div>
+        <div className="type-name text-[var(--color-text-primary)]">Secrets from other agents</div>
         {pending !== null && pending > 0 && (
           <button
             type="button"
-            className={`text-[10px] underline ${muted} hover:text-[var(--color-text-primary)] cursor-pointer no-drag`}
+            className={`type-hint underline ${muted} hover:text-[var(--color-text-primary)] cursor-pointer no-drag`}
             data-testid="handoff-pending-review"
             onClick={() => {
               requestVaultTab('incoming')
@@ -122,21 +122,21 @@ export function AgentHandoffAcceptFrom({
           </button>
         )}
       </div>
-      <div className={`text-[11px] ${muted}`}>
+      <div className={`type-hint ${muted}`}>
         Secrets from these senders go straight into this agent&rsquo;s vault. Anything else waits for you (Settings →
         Vault → Incoming). A secret a person gave, or one that would replace a secret this agent has, always waits.
       </div>
       {entries !== null && entries.length === 0 && (
-        <div className={`text-[11px] ${muted}`} data-testid="handoff-accept-empty">
+        <div className={`type-hint ${muted}`} data-testid="handoff-accept-empty">
           No one yet: every secret sent to this agent waits for you.
         </div>
       )}
       {entries !== null && entries.length > 0 && (
         <ul className="space-y-1">
           {entries.map((e) => (
-            <li key={e.sender} className="flex items-center gap-2 text-[11px]" data-testid="handoff-accept-entry" data-sender={e.sender}>
+            <li key={e.sender} className="flex items-center gap-2 type-hint" data-testid="handoff-accept-entry" data-sender={e.sender}>
               <span className="text-[var(--color-text-primary)]">{nameOf(e.sender)}</span>
-              <span className={`text-[10px] ${muted}`}>added by {e.addedBy}</span>
+              <span className={`type-hint ${muted}`}>added by {e.addedBy}</span>
               {!readOnly && (
                 <button
                   type="button"
@@ -189,7 +189,7 @@ export function AgentHandoffAcceptFrom({
         </div>
       )}
       {error && (
-        <div className="text-[11px] text-[var(--color-danger,#e5484d)]" role="alert">
+        <div className="type-hint text-[var(--color-danger,#e5484d)]" role="alert">
           {error}
         </div>
       )}

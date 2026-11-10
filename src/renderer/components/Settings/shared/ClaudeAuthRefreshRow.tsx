@@ -94,13 +94,13 @@ export function ClaudeAuthRefreshRow({
     statusIndicator = (
       <div className="flex items-center gap-1.5 mr-3">
         {statusDot(color)}
-        <span className="text-[10px] text-[var(--color-text-muted)] whitespace-nowrap">{text}</span>
+        <span className="type-hint text-[var(--color-text-muted)] whitespace-nowrap">{text}</span>
         {(authState === 'expiring' || authState === 'expired') && (
           <button
             type="button"
             onClick={() => void handleRefreshNow()}
             disabled={refreshing}
-            className="text-[10px] text-[var(--color-accent)] hover:underline cursor-pointer no-drag disabled:opacity-50"
+            className="type-hint text-[var(--color-accent)] hover:underline cursor-pointer no-drag disabled:opacity-50"
           >
             {refreshing ? '...' : 'Refresh'}
           </button>
@@ -129,10 +129,10 @@ export function ClaudeAuthRefreshRow({
   return (
     <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
+        <span className="type-row text-[var(--color-text-secondary)]">
           Auto-refresh Claude credentials
         </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
           Background scheduler keeps your Claude session alive
         </p>
       </div>

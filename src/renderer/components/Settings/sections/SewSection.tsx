@@ -123,7 +123,7 @@ function mib(n: number | null | undefined): string {
 
 function Row({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
   return (
-    <div className="flex items-start gap-3 py-1 text-xs">
+    <div className="flex items-start gap-3 py-1 type-row">
       <span className={`w-36 flex-shrink-0 ${muted}`}>{label}</span>
       <span className="flex-1 min-w-0 text-[var(--color-text-primary)] break-words">{children}</span>
     </div>
@@ -131,7 +131,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }):
 }
 
 function Title({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return <h3 className="text-sm font-medium text-[var(--color-text-primary)]">{children}</h3>
+  return <h3 className="type-heading text-[var(--color-text-primary)]">{children}</h3>
 }
 
 interface PanelProps {
@@ -210,7 +210,7 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
   return (
     <div className="space-y-3 border border-[var(--color-border)] p-3" data-settings-id="sew.enable" data-testid="sew-enable-wizard">
       {status.state === 'not-installed' ? (
-        <p className={`text-[11px] ${secondary}`}>
+        <p className={`type-hint ${secondary}`}>
           Chat / Voice Hosting gives this box team chat and voice calls, powered by Sew, Alakazam&apos;s team chat. It runs beside K2, with its own
           database and encrypted storage.
         </p>
@@ -218,16 +218,16 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
       {!released ? <Callout tone="warn">{status.notice ?? 'This K2 build pins no published Sew release yet.'}</Callout> : null}
       <div className="space-y-1">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-[var(--color-text-primary)]">Preflight</span>
+          <span className="type-name text-[var(--color-text-primary)]">Preflight</span>
           <Button disabled={sample || !released} onClick={() => void runPreflight()}>
             Re-run preflight
           </Button>
         </div>
         {preflightError ? <Callout tone="error">{preflightError}</Callout> : null}
-        {checks === null && !preflightError ? <p className={`text-[11px] ${muted}`}>Checking…</p> : null}
+        {checks === null && !preflightError ? <p className={`type-hint ${muted}`}>Checking…</p> : null}
         <ul className="space-y-0.5" data-testid="sew-preflight">
           {(checks ?? []).map((c) => (
-            <li key={c.id} className="text-[11px] flex gap-2" data-testid={`sew-check-${c.id}`} data-status={c.status}>
+            <li key={c.id} className="type-hint flex gap-2" data-testid={`sew-check-${c.id}`} data-status={c.status}>
               <span
                 aria-label={c.status}
                 className={
@@ -249,12 +249,12 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
       </div>
 
       <fieldset className="space-y-1" disabled={!canMutate}>
-        <legend className="text-xs font-medium text-[var(--color-text-primary)]">Identity</legend>
-        <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
+        <legend className="type-name text-[var(--color-text-primary)]">Identity</legend>
+        <label className={`flex items-center gap-2 type-hint ${secondary}`}>
           <Radio name="sew-identity" checked={identity === 'k2'} onChange={() => setIdentity('k2')} aria-label="K2 logins" />
           K2 logins (people sign in with their K2 account)
         </label>
-        <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
+        <label className={`flex items-center gap-2 type-hint ${secondary}`}>
           <Radio
             name="sew-identity"
             checked={identity === 'standalone'}
@@ -263,32 +263,32 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
           />
           Sew&apos;s own logins (setup links)
         </label>
-        <p className={`text-[10px] ${muted}`}>Fixed for the life of this install. Changing it later means purge, then enable.</p>
+        <p className={`type-hint ${muted}`}>Fixed for the life of this install. Changing it later means purge, then enable.</p>
       </fieldset>
 
       <fieldset className="space-y-1" disabled={!canMutate}>
-        <label className={`flex items-center gap-2 text-xs ${secondary}`}>
+        <label className={`flex items-center gap-2 type-row ${secondary}`}>
           <Checkbox checked={voiceOn} onChange={(e) => setVoiceOn(e.target.checked)} aria-label="Also set up voice" />
           Also set up voice
         </label>
         {voiceOn ? (
           <div className="pl-5 space-y-1">
-            <input aria-label="Voice URL" placeholder="wss://voice.<box>.k2.dev (default)" value={voiceUrl} onChange={(e) => setVoiceUrl(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
-            <input aria-label="Node IP" placeholder="node IP (optional)" value={nodeIp} onChange={(e) => setNodeIp(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
-            <input aria-label="Voice tarball path" placeholder="/path/to/sew-media.tar.gz (only for a box without internet)" value={mediaTarball} onChange={(e) => setMediaTarball(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
+            <input aria-label="Voice URL" placeholder="wss://voice.<box>.k2.dev (default)" value={voiceUrl} onChange={(e) => setVoiceUrl(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-row font-mono" />
+            <input aria-label="Node IP" placeholder="node IP (optional)" value={nodeIp} onChange={(e) => setNodeIp(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
+            <input aria-label="Voice tarball path" placeholder="/path/to/sew-media.tar.gz (only for a box without internet)" value={mediaTarball} onChange={(e) => setMediaTarball(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
           </div>
         ) : null}
       </fieldset>
 
       <div className="space-y-1">
-        <button type="button" className={`text-[10px] underline ${muted}`} onClick={() => setAdvanced((v) => !v)}>
+        <button type="button" className={`type-hint underline ${muted}`} onClick={() => setAdvanced((v) => !v)}>
           {advanced ? 'Hide advanced' : 'Advanced'}
         </button>
         {showSource ? (
-          <input aria-label="Release tarball path" placeholder="/absolute/path/to/sew.tar.gz (only for a box without internet)" value={tarball} disabled={!canMutate} onChange={(e) => setTarball(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
+          <input aria-label="Release tarball path" placeholder="/absolute/path/to/sew.tar.gz (only for a box without internet)" value={tarball} disabled={!canMutate} onChange={(e) => setTarball(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
         ) : null}
         {showRecovery ? (
-          <input aria-label="Recovery key file" placeholder="/absolute/path/to/recovery-key" value={recoveryFile} disabled={!canMutate} onChange={(e) => setRecoveryFile(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
+          <input aria-label="Recovery key file" placeholder="/absolute/path/to/recovery-key" value={recoveryFile} disabled={!canMutate} onChange={(e) => setRecoveryFile(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
         ) : null}
       </div>
 
@@ -311,7 +311,7 @@ function Progress({ status }: { status: SewStatus }): React.JSX.Element | null {
         const current = p.current === s.id
         const failed = current && status.state === 'error'
         return (
-          <li key={s.id} className="text-[11px] flex gap-2" data-testid={`sew-step-${s.id}`} data-step={failed ? 'failed' : done ? 'done' : current ? 'current' : 'todo'}>
+          <li key={s.id} className="type-hint flex gap-2" data-testid={`sew-step-${s.id}`} data-step={failed ? 'failed' : done ? 'done' : current ? 'current' : 'todo'}>
             <span className={failed ? 'text-[var(--color-status-error-soft)]' : done ? 'text-[var(--color-status-ok)]' : muted}>
               {failed ? '✕' : done ? '✓' : current ? '…' : '·'}
             </span>
@@ -358,9 +358,9 @@ function RecoveryKey({ status, sample, reload }: PanelProps): React.JSX.Element 
 
   return (
     <div className="space-y-2" data-settings-id="sew.recovery-key">
-      <div className="text-xs font-medium text-[var(--color-text-primary)]">Keys</div>
+      <div className="type-name text-[var(--color-text-primary)]">Keys</div>
       {status.recoveryKeyInVault ? (
-        <div className="text-xs text-[var(--color-text-secondary)]" data-testid="sew-recovery-in-vault">
+        <div className="type-row text-[var(--color-text-secondary)]" data-testid="sew-recovery-in-vault">
           The recovery key is in the K2 vault as {status.recoveryKeyVaultName ?? 'sew-recovery-key'} (Settings → Vault → K2&rsquo;s own secrets). You don&rsquo;t need to copy it.
         </div>
       ) : status.recoveryKeySaved === false && isLive(status.state) ? (
@@ -459,11 +459,11 @@ function OpenAsOwner({ status, sample, canMutate, reload }: PanelProps): React.J
 
   return (
     <div className="space-y-2" data-settings-id="sew.open-as-owner">
-      <div className="text-xs font-medium text-[var(--color-text-primary)]">Open Sew as owner</div>
+      <div className="type-name text-[var(--color-text-primary)]">Open Sew as owner</div>
       <Row label="App URL">
         {editing ? (
           <span className="flex flex-wrap items-center gap-2">
-            <input aria-label="Sew app URL" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="https://hearth.<box>.k2.dev" className="flex-1 min-w-[12rem] border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
+            <input aria-label="Sew app URL" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="https://hearth.<box>.k2.dev" className="flex-1 min-w-[12rem] border border-[var(--color-border)] bg-transparent px-2 py-1 type-row font-mono" />
             <Button disabled={busy || !canMutate} onClick={() => void saveUrl(draft)}>
               Save
             </Button>
@@ -489,7 +489,7 @@ function OpenAsOwner({ status, sample, canMutate, reload }: PanelProps): React.J
       <Button variant="accent" disabled={!canOpen} onClick={() => void open()} title={reason ?? undefined}>
         Open Sew as owner
       </Button>
-      {reason ? <p className={`text-[10px] ${muted}`}>{reason}</p> : null}
+      {reason ? <p className={`type-hint ${muted}`}>{reason}</p> : null}
       {error ? <Callout tone="error">{error}</Callout> : null}
     </div>
   )
@@ -536,7 +536,7 @@ function Upgrade({ status, canMutate, reload }: PanelProps): React.JSX.Element |
     <div className="space-y-2" data-settings-id="sew.upgrade">
       {status.upgradeAvailable ? (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[11px] text-[var(--color-text-primary)]">
+          <span className="type-hint text-[var(--color-text-primary)]">
             Sew {status.pinnedVersion} is available (you run {status.onDiskVersion ?? status.installedVersion}).
           </span>
           <Button variant="accent" disabled={!canMutate || busy} onClick={() => void act('upgrade')}>
@@ -638,24 +638,24 @@ function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JS
 
   return (
     <div className="space-y-2 border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] p-3" data-settings-id="sew.uninstall">
-      <div className="text-xs font-medium text-[var(--color-status-error-soft)]">Danger zone</div>
+      <div className="type-name text-[var(--color-status-error-soft)]">Danger zone</div>
       {canDisable ? (
         <Button disabled={!canMutate || busy} onClick={() => void disable()}>
           Disable Chat / Voice Hosting
         </Button>
       ) : null}
-      <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
+      <label className={`flex items-center gap-2 type-hint ${secondary}`}>
         <Checkbox checked={dropGrants} disabled={!canMutate} onChange={(e) => setDropGrants(e.target.checked)} aria-label="Also remove everyone's chat and voice access" />
         Also remove everyone&apos;s chat and voice access
       </label>
-      <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
+      <label className={`flex items-center gap-2 type-hint ${secondary}`}>
         <Checkbox checked={purge} disabled={!canPurge} onChange={(e) => setPurge(e.target.checked)} aria-label="Also delete all chat and voice data" />
         Also delete all chat and voice data {you.canPurge ? '' : '(the box owner only)'}
       </label>
       {purge ? (
         <div className="space-y-1 pl-5">
           <TypeToConfirm label={`Type ${expectHost} to confirm`} expect={expectHost} value={typed} onChange={setTyped} disabled={!canPurge} />
-          <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
+          <label className={`flex items-center gap-2 type-hint ${secondary}`}>
             <Checkbox checked={keepBackups} onChange={(e) => setKeepBackups(e.target.checked)} aria-label="Keep backup bundles" />
             Keep backup bundles
           </label>
@@ -711,7 +711,7 @@ function ServerPanel(props: PanelProps): React.JSX.Element {
       {(status.warnings ?? []).length > 0 ? (
         <ul className="space-y-1" data-testid="sew-warnings">
           {(status.warnings ?? []).map((w) => (
-            <li key={w.code} className={`text-[11px] ${secondary}`}>
+            <li key={w.code} className={`type-hint ${secondary}`}>
               {w.message}
               {w.fix ? <code className="ml-1 font-mono">{w.fix}</code> : null}
             </li>
@@ -721,11 +721,11 @@ function ServerPanel(props: PanelProps): React.JSX.Element {
       {alarms.length > 0 ? (
         <div className="space-y-1">
           {alarms.slice(0, 3).map((a) => (
-            <p key={a} className={`text-[11px] ${secondary}`}>
+            <p key={a} className={`type-hint ${secondary}`}>
               <span className="text-[var(--color-status-warn)]">●</span> {alarmInfo(a).title}
             </p>
           ))}
-          <button type="button" className={`text-[10px] underline ${muted}`} onClick={() => select('alarms')}>
+          <button type="button" className={`type-hint underline ${muted}`} onClick={() => select('alarms')}>
             All alarms ({alarms.length})
           </button>
         </div>
@@ -761,21 +761,21 @@ function AlarmsPanel({ status, select }: PanelProps): React.JSX.Element {
   return (
     <div className="max-w-2xl space-y-3">
       <Title>Alarms</Title>
-      {alarms.length === 0 ? <p className={`text-[11px] ${muted}`}>No alarms.</p> : null}
+      {alarms.length === 0 ? <p className={`type-hint ${muted}`}>No alarms.</p> : null}
       {offboxOnly ? (
-        <p className={`text-[11px] ${secondary}`}>Every K2 box shows Degraded until its chat and voice backups have off-box copies. Set them under Off-box copies.</p>
+        <p className={`type-hint ${secondary}`}>Every K2 box shows Degraded until its chat and voice backups have off-box copies. Set them under Off-box copies.</p>
       ) : null}
       <ul className="space-y-2">
         {alarms.map((a) => {
           const info = alarmInfo(a)
           return (
             <li key={a} className="border border-[var(--color-border)] p-2 space-y-1" data-testid={`sew-alarm-${a}`}>
-              <div className="flex items-center gap-2 text-xs">
+              <div className="flex items-center gap-2 type-row">
                 <span className={info.severity === 'error' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-status-warn)]'}>●</span>
                 <span className="text-[var(--color-text-primary)]">{info.title}</span>
-                <code className={`ml-auto text-[10px] font-mono ${muted}`}>{a}</code>
+                <code className={`ml-auto type-hint font-mono ${muted}`}>{a}</code>
               </div>
-              <p className={`text-[11px] ${secondary}`}>{info.fix}</p>
+              <p className={`type-hint ${secondary}`}>{info.fix}</p>
               {info.action ? (
                 <Button onClick={() => select(ACTION_TARGET[info.action as SewAlarmAction])}>{ACTION_LABEL[info.action]}</Button>
               ) : null}
@@ -886,7 +886,7 @@ function BackupsPanel({ status, sample, canMutate, reload }: PanelProps): React.
       </Button>
       {error ? <Callout tone="error">{error}</Callout> : null}
       {listError ? <Callout tone="error">{listError}</Callout> : null}
-      <table className="w-full text-[11px]" data-testid="sew-backups">
+      <table className="w-full type-hint" data-testid="sew-backups">
         <thead>
           <tr className={muted}>
             <th className="text-left font-normal">Id</th>
@@ -906,7 +906,7 @@ function BackupsPanel({ status, sample, canMutate, reload }: PanelProps): React.
           ))}
         </tbody>
       </table>
-      <p className={`text-[10px] ${muted}`}>
+      <p className={`type-hint ${muted}`}>
         To restore one (it replaces ALL chat and voice data): <code className="font-mono">{SEW_CLI} restore &lt;id&gt; --confirm</code>
       </p>
     </div>
@@ -952,17 +952,17 @@ function OffboxBlock({
   const slug = noun.replace(/\s+/g, '-')
   return (
     <fieldset className="space-y-1 border border-[var(--color-border)] p-3" disabled={disabled}>
-      <legend className="text-xs font-medium text-[var(--color-text-primary)] px-1">{title}</legend>
-      <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
+      <legend className="type-name text-[var(--color-text-primary)] px-1">{title}</legend>
+      <label className={`flex items-center gap-2 type-hint ${secondary}`}>
         <Radio name={`${slug}-kind`} checked={kind === 'none'} onChange={() => setKind('none')} aria-label={`${title}: none`} />
         None ({noun} stay on this machine)
       </label>
-      <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
+      <label className={`flex items-center gap-2 type-hint ${secondary}`}>
         <Radio name={`${slug}-kind`} checked={kind === 'dir'} onChange={() => setKind('dir')} aria-label={`${title}: a folder on another disk`} />
         A folder on another disk
       </label>
       {boxBackup !== false ? (
-        <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
+        <label className={`flex items-center gap-2 type-hint ${secondary}`}>
           <Radio
             name={`${slug}-kind`}
             checked={kind === 'box-backup'}
@@ -973,18 +973,18 @@ function OffboxBlock({
         </label>
       ) : null}
       {kind === 'box-backup' && current.kind === 'box-backup' && boxBackup ? (
-        <p className={`text-[10px] ${boxBackup.ok ? secondary : 'text-[var(--color-status-warn)]'}`}>
+        <p className={`type-hint ${boxBackup.ok ? secondary : 'text-[var(--color-status-warn)]'}`}>
           {boxBackup.ok ? 'K2 sees the box backup carry them.' : `K2 can't see it yet: ${boxBackup.reason ?? 'no evidence'}`}
         </p>
       ) : null}
-      <label className={`flex items-center gap-2 text-[11px] ${muted}`}>
+      <label className={`flex items-center gap-2 type-hint ${muted}`}>
         <Radio name={`${slug}-kind`} disabled aria-label={`${title}: Alakazam escrow`} />
         Alakazam escrow (coming later)
       </label>
       {kind === 'dir' ? (
-        <input aria-label={`${title} path`} value={path} onChange={(e) => setPath(e.target.value)} placeholder="/mnt/offbox/sew" className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
+        <input aria-label={`${title} path`} value={path} onChange={(e) => setPath(e.target.value)} placeholder="/mnt/offbox/sew" className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
       ) : null}
-      {pathBad && path ? <p className="text-[10px] text-[var(--color-status-error-soft)]">Use an absolute path.</p> : null}
+      {pathBad && path ? <p className="type-hint text-[var(--color-status-error-soft)]">Use an absolute path.</p> : null}
       {error ? <Callout tone="error">{error}</Callout> : null}
       <Button variant="accent" disabled={busy || pathBad} onClick={() => void save()}>
         Save
@@ -999,7 +999,7 @@ function OffboxPanel({ status, canMutate, reload }: PanelProps): React.JSX.Eleme
   return (
     <div className="max-w-2xl space-y-3" data-settings-id="sew.offbox">
       <Title>Off-box copies</Title>
-      <p className={`text-[11px] ${secondary}`}>
+      <p className={`type-hint ${secondary}`}>
         Backups hold encrypted data. The keyring mirror holds the keys that open it. Keep them on a different machine from this box. The
         recovery key is in the K2 vault, so back the vault up off this box too (k2 vault backup &lt;dir&gt;).
       </p>
@@ -1058,14 +1058,14 @@ function PublicUrlPanel({ status, canMutate, reload }: PanelProps): React.JSX.El
   return (
     <div className="max-w-2xl space-y-3" data-settings-id="sew.public-url">
       <Title>Public URL</Title>
-      <p className={`text-[11px] ${secondary}`}>
+      <p className={`type-hint ${secondary}`}>
         Where people reach Sew&apos;s web app (an App such as Hearth on this box&apos;s k2.dev name or a bound domain). Sew builds setup
         links from it. Sew&apos;s own API stays on this box only.
       </p>
       <Row label="Now">{status.publicUrl ?? 'Not set'}</Row>
       {warn ? <Callout tone="warn">{warn.message}</Callout> : null}
       <div className="flex flex-wrap items-center gap-2">
-        <input aria-label="Sew public URL" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="https://hearth.<box>.k2.dev" disabled={!canMutate} className="flex-1 min-w-[14rem] border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
+        <input aria-label="Sew public URL" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="https://hearth.<box>.k2.dev" disabled={!canMutate} className="flex-1 min-w-[14rem] border border-[var(--color-border)] bg-transparent px-2 py-1 type-row font-mono" />
         <Button variant="accent" disabled={!canMutate || busy || !draft.trim().startsWith('https://')} onClick={() => void save()}>
           Save
         </Button>
@@ -1118,15 +1118,15 @@ function AppSpacesPanel({ sample, canMutate }: PanelProps): React.JSX.Element {
   return (
     <div className="max-w-2xl space-y-3" data-settings-id="sew.app-spaces">
       <Title>App Spaces</Title>
-      <p className={`text-[11px] ${secondary}`}>Members come only from each App&apos;s user grants; Admin Access never adds anyone.</p>
-      <p className={`text-[11px] ${muted}`}>
+      <p className={`type-hint ${secondary}`}>Members come only from each App&apos;s user grants; Admin Access never adds anyone.</p>
+      <p className={`type-hint ${muted}`}>
         Unbinding keeps everyone by default. You can instead remove the members K2 added; people added by hand always stay.
       </p>
-      {notBuilt ? <p className={`text-[11px] ${muted}`}>This server does not report App Spaces yet.</p> : null}
+      {notBuilt ? <p className={`type-hint ${muted}`}>This server does not report App Spaces yet.</p> : null}
       {error ? <Callout tone="error">{error}</Callout> : null}
       <ul className="space-y-1" data-testid="sew-app-spaces">
         {(spaces ?? []).map((s) => (
-          <li key={`${s.app}/${s.spaceId}`} className="flex items-center gap-2 text-[11px]">
+          <li key={`${s.app}/${s.spaceId}`} className="flex items-center gap-2 type-hint">
             <span className="font-mono text-[var(--color-text-primary)]">{s.app}</span>
             <span className={`font-mono ${muted}`}>{s.spaceId}</span>
             <span className={secondary}>
@@ -1153,11 +1153,11 @@ function AppSpacesPanel({ sample, canMutate }: PanelProps): React.JSX.Element {
           </li>
         ))}
       </ul>
-      {spaces !== null && spaces.length === 0 ? <p className={`text-[11px] ${muted}`}>No App Spaces bound yet.</p> : null}
+      {spaces !== null && spaces.length === 0 ? <p className={`type-hint ${muted}`}>No App Spaces bound yet.</p> : null}
       {canMutate && !notBuilt ? (
         <div className="flex flex-wrap items-center gap-2">
-          <input aria-label="App id" placeholder="app id (e.g. hearth)" value={app} onChange={(e) => setApp(e.target.value)} className="border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
-          <input aria-label="Space id" placeholder="Sew Space id" value={spaceId} onChange={(e) => setSpaceId(e.target.value)} className="border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs font-mono" />
+          <input aria-label="App id" placeholder="app id (e.g. hearth)" value={app} onChange={(e) => setApp(e.target.value)} className="border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
+          <input aria-label="Space id" placeholder="Sew Space id" value={spaceId} onChange={(e) => setSpaceId(e.target.value)} className="border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
           <Button disabled={busy || !app.trim() || !spaceId.trim()} onClick={() => void act(() => bindSewAppSpace(app, spaceId))}>
             Bind
           </Button>
@@ -1238,7 +1238,7 @@ export function SewSection(): React.JSX.Element {
 
   if (loadError && status === null) {
     if (loadError.forbidden) {
-      return <p className={`p-6 text-xs ${muted}`} data-testid="sew-forbidden">Only the box owner or an admin can manage Chat / Voice Hosting.</p>
+      return <p className={`p-6 type-row ${muted}`} data-testid="sew-forbidden">Only the box owner or an admin can manage Chat / Voice Hosting.</p>
     }
     return (
       <div className="p-6 space-y-2">
@@ -1247,7 +1247,7 @@ export function SewSection(): React.JSX.Element {
       </div>
     )
   }
-  if (status === null) return <p className={`p-6 text-xs ${muted}`}>Loading…</p>
+  if (status === null) return <p className={`p-6 type-row ${muted}`}>Loading…</p>
 
   const sample = !status.supported
   const view: SewStatus = sample ? SAMPLE_STATUS : status
@@ -1260,7 +1260,7 @@ export function SewSection(): React.JSX.Element {
   return (
     <div className="flex flex-col h-full min-h-0">
       {sample ? (
-        <div data-testid="sew-sample-banner" className="flex-shrink-0 px-4 py-2 text-[10px] font-bold tracking-wide text-center text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_18%,transparent)] border-b border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)]">
+        <div data-testid="sew-sample-banner" className="flex-shrink-0 px-4 py-2 type-hint tracking-wide text-center text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_18%,transparent)] border-b border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)]">
           {SEW_MAC_BANNER}
         </div>
       ) : null}
@@ -1273,11 +1273,11 @@ export function SewSection(): React.JSX.Element {
           >
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0" style={{ backgroundColor: chip.color }} />
-              <span className="text-xs font-medium text-[var(--color-text-primary)]">Chat / Voice Hosting</span>
+              <span className="type-name text-[var(--color-text-primary)]">Chat / Voice Hosting</span>
               <span className="flex-1" />
-              <span className={`text-[9px] ${muted}`}>{view.installedVersion ? `Sew v${view.installedVersion}` : ''}</span>
+              <span className={`type-hint ${muted}`}>{view.installedVersion ? `Sew v${view.installedVersion}` : ''}</span>
             </div>
-            <p className={`text-[10px] mt-0.5 truncate ${muted}`}>
+            <p className={`type-hint mt-0.5 truncate ${muted}`}>
               <span data-testid="sew-card-state">{chip.label}</span>
               {alarmCount > 0 ? ` · ${alarmCount} alarm${alarmCount === 1 ? '' : 's'}` : ''}
             </p>
@@ -1290,7 +1290,7 @@ export function SewSection(): React.JSX.Element {
                 type="button"
                 disabled={!enabled}
                 onClick={() => setSelection(n.id)}
-                className={`flex items-center gap-2 text-left px-3 py-2 text-xs no-drag ${
+                className={`flex items-center gap-2 text-left px-3 py-2 type-control no-drag ${
                   !enabled
                     ? `${muted} cursor-not-allowed`
                     : selection === n.id
@@ -1300,7 +1300,7 @@ export function SewSection(): React.JSX.Element {
               >
                 {n.label}
                 {n.id === 'alarms' && alarmCount > 0 ? (
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)]">
+                  <span className="type-hint px-1.5 py-0.5 text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)]">
                     {alarmCount}
                   </span>
                 ) : null}
@@ -1310,7 +1310,7 @@ export function SewSection(): React.JSX.Element {
         </div>
         <div className="flex-1 overflow-y-auto p-6 min-h-0">
           {!youOf(status).canManage && !sample ? (
-            <p className={`text-[11px] mb-3 ${muted}`}>You can see Chat / Voice Hosting. Only the box owner, an admin or an agent with Manage Chat / Voice Hosting changes it.</p>
+            <p className={`type-hint mb-3 ${muted}`}>You can see Chat / Voice Hosting. Only the box owner, an admin or an agent with Manage Chat / Voice Hosting changes it.</p>
           ) : null}
           {selection === 'server' ? <ServerPanel {...props} /> : null}
           {selection === 'alarms' ? <AlarmsPanel {...props} /> : null}

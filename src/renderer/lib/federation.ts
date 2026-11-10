@@ -24,7 +24,6 @@ import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
-import { thisMachineLower } from '@/lib/desktop-words'
 
 /** Trust state of a pinned peer (mirrors `federation::PeerTrust`). */
 export type PeerTrust = 'pending' | 'trusted' | 'blocked'
@@ -176,7 +175,7 @@ export function emptyRosterNote(answered: boolean, server: string): string {
   if (!answered) {
     return `Couldn't reach ${server}: it's offline or unreachable, or no longer trusts this server. Try again later; Settings → K2 Server → Connections shows its pairing.`
   }
-  return 'No connectable agents on this server. On their side, turn on "Let agents on other servers message this agent" for an agent, or "Let agents on other servers message every agent" in Settings → K2 Connect.'
+  return 'No connectable agents on this server. On their side, turn on "Let agents on other servers message this agent" for an agent, or "Let agents on other servers message every agent" in Settings → Tunnel.'
 }
 
 /** A server's agents A to Z: name shown (workspace name, else handle),
@@ -488,7 +487,7 @@ async function remoteCreds(host: string): Promise<DaemonCreds> {
   const match = findSavedHost(host)
   if (!match) {
     throw new Error(
-      `"${host}" is not a saved server. Add it under Settings → Connections and sign in first.`,
+      `"${host}" is not a saved server. Add it under Settings → Connected Servers and sign in first.`,
     )
   }
   if (!match.token) {
@@ -943,15 +942,15 @@ export async function autoPairWithHost(
   // "buy a subdomain" copy when pairing over a saved http host:port.
   if (!localSub && !remoteIsLan && !localLanUrl) {
     throw new Error(
-      `Can't pair as a federated peer with "${host}": this server has no K2 Connect tunnel.\n\n` +
-        `Each federated server needs its own purchased <subdomain>.k2.dev so peers can reach it. ` +
-        `Buy a subdomain at k2.dev, bind it under Settings → K2 Connect (tunnel Connected), ` +
+      `Can't pair with "${host}": this server has no K2 Connect tunnel.\n\n` +
+        `Each paired server needs its own purchased <subdomain>.k2.dev so the other can reach it. ` +
+        `Buy a subdomain at k2.dev, bind it under Settings → Tunnel, ` +
         `then try Pair again.`,
     )
   }
   if (remoteIsLan && !localSub && !localLanUrl) {
     throw new Error(
-      `Can't pair as a federated peer with "${host}": ${thisMachineLower()} has no advertised LAN URL. ` +
+      `Can't pair with "${host}": this computer has no advertised LAN URL. ` +
         `Enable LAN listen, set an advertise URL, or run air-gap Caddy.`,
     )
   }

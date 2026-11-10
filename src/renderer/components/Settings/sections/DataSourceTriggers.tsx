@@ -59,7 +59,7 @@ function TriggerFires({ scope, id, rev }: { scope: ServerScope; id: string; rev:
   if (!fires || fires.length === 0) return null
   const now = Math.floor(Date.now() / 1000)
   return (
-    <ul className={`text-[10px] ${muted} pl-3`} data-testid="sources-trigger-fires">
+    <ul className={`type-hint ${muted} pl-3`} data-testid="sources-trigger-fires">
       {fires.map((f) => (
         <li key={f.id}>
           {ago(now - f.at)} · {fireText(f)}
@@ -115,7 +115,7 @@ function TriggerForm({
           .finally(() => setBusy(false))
       }}
     >
-      <div className={`block text-[11px] ${muted}`}>
+      <div className={`block type-hint ${muted}`}>
         When
         <SettingDropdown
           fullWidth
@@ -129,7 +129,7 @@ function TriggerForm({
         />
       </div>
       {f.kind === 'stale_for' && (
-        <label className={`block text-[11px] ${muted}`}>
+        <label className={`block type-hint ${muted}`}>
           Minutes with no good check (5 or more)
           <input
             type="number"
@@ -141,7 +141,7 @@ function TriggerForm({
           />
         </label>
       )}
-      <div className={`block text-[11px] ${muted}`}>
+      <div className={`block type-hint ${muted}`}>
         Wake this agent
         <SettingDropdown
           fullWidth
@@ -155,7 +155,7 @@ function TriggerForm({
           onChange={(v) => set('agent', v)}
         />
       </div>
-      <label className={`block text-[11px] ${muted}`}>
+      <label className={`block type-hint ${muted}`}>
         Your note to the agent (optional, plain text)
         <input
           className={`${input} mt-0.5`}
@@ -167,7 +167,7 @@ function TriggerForm({
         />
       </label>
       <div className="flex gap-2">
-        <label className={`block text-[11px] ${muted}`}>
+        <label className={`block type-hint ${muted}`}>
           At most once every (minutes)
           <input
             type="number"
@@ -178,7 +178,7 @@ function TriggerForm({
             onChange={(e) => set('cooldownMins', Number(e.currentTarget.value))}
           />
         </label>
-        <label className={`block text-[11px] ${muted}`}>
+        <label className={`block type-hint ${muted}`}>
           At most per day
           <input
             type="number"
@@ -199,7 +199,7 @@ function TriggerForm({
         </button>
       </div>
       {error && (
-        <p className={`text-[11px] ${danger}`} role="alert">
+        <p className={`type-hint ${danger}`} role="alert">
           {error}
         </p>
       )}
@@ -241,14 +241,14 @@ export function DataSourceTriggers({ scope, source, rev }: { scope: ServerScope;
 
   return (
     <div className="space-y-2" data-testid="sources-triggers">
-      <p className={`text-[11px] ${muted}`}>
+      <p className={`type-hint ${muted}`}>
         A trigger wakes an agent on this server with a short note when this source changes. It never fires while the source
         is muted, paused or simulated, and at most once per problem.
       </p>
-      {rows && rows.length === 0 && <p className={`text-[11px] ${muted}`}>No triggers yet.</p>}
+      {rows && rows.length === 0 && <p className={`type-hint ${muted}`}>No triggers yet.</p>}
       {(rows ?? []).map((t) => (
         <div key={t.id} className="border border-[var(--color-border)] p-1.5 space-y-1" data-testid="sources-trigger-row">
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <div className="flex flex-wrap items-center gap-1.5 type-hint">
             <span className="text-[var(--color-text-primary)]">
               When it {onLabel(t.on)}, wake{' '}
               {t.agent.missing ? <span className={danger}>missing workspace</span> : <strong>{t.agent.handle}</strong>}
@@ -258,9 +258,9 @@ export function DataSourceTriggers({ scope, source, rev }: { scope: ServerScope;
               {' · '}at most every {every(t.cooldownSecs)}, {t.dailyCap}/day · {t.firesToday} today
             </span>
           </div>
-          {t.note && <p className={`text-[10px] ${muted}`}>Note: {t.note}</p>}
+          {t.note && <p className={`type-hint ${muted}`}>Note: {t.note}</p>}
           {t.status === 'undeliverable' && (
-            <p className={`text-[10px] ${danger}`}>Its workspace is gone. Edit it to wake another agent, or remove it.</p>
+            <p className={`type-hint ${danger}`}>Its workspace is gone. Edit it to wake another agent, or remove it.</p>
           )}
           <div className="flex flex-wrap gap-1">
             {t.status === 'proposed' && (
@@ -358,9 +358,9 @@ export function DataSourceTriggers({ scope, source, rev }: { scope: ServerScope;
           Add a trigger
         </button>
       )}
-      {note && <p className={`text-[11px] ${muted}`}>{note}</p>}
+      {note && <p className={`type-hint ${muted}`}>{note}</p>}
       {error && (
-        <p className={`text-[11px] ${danger}`} role="alert">
+        <p className={`type-hint ${danger}`} role="alert">
           {error}
         </p>
       )}

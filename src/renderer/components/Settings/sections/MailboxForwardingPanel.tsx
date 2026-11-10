@@ -50,7 +50,7 @@ function Chip({ text, tone }: { text: string; tone: 'ok' | 'warn' | 'error' | 'i
   }[tone]
   return (
     <span
-      className="text-[9px] font-semibold px-1.5 py-0.5 uppercase tracking-wide border rounded-[var(--radius-field)] flex-shrink-0"
+      className="type-badge px-1.5 py-0.5 uppercase tracking-wide border rounded-[var(--radius-field)] flex-shrink-0"
       style={{ color, borderColor: `color-mix(in oklab, ${color} 45%, transparent)` }}
     >
       {text}
@@ -109,7 +109,7 @@ function SetForm({
           </Button>
         )}
       </div>
-      <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+      <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
         <Checkbox
           aria-label="Keep a copy in this mailbox"
           checked={shownKeep}
@@ -118,7 +118,7 @@ function SetForm({
         />
         Keep a copy in this mailbox
       </label>
-      <p className={`text-[10px] ${muted}`}>
+      <p className={`type-hint ${muted}`}>
         This starts at once. An outside address isn’t asked: K2 emails it who set this up, with a link to stop it,
         and the owner is told. Spam, mail failing DMARC and bounces always stay here.
         {keep === undefined && ' A mailbox on this server keeps no copy unless you tick the box.'}
@@ -154,13 +154,13 @@ function ForwardRow({
   return (
     <div className="space-y-2 min-w-0" data-testid="forward-row">
       <div className="flex items-center gap-2 min-w-0 flex-wrap">
-        <span className={`text-[11px] ${muted}`}>To</span>
-        <span className="text-xs font-mono text-[var(--color-text-primary)] truncate" data-testid="forward-dest">
+        <span className={`type-hint ${muted}`}>To</span>
+        <span className="type-row font-mono text-[var(--color-text-primary)] truncate" data-testid="forward-dest">
           {f.to}
         </span>
         <Chip text={f.kind === 'external' ? 'Outside' : 'This server'} tone="muted" />
         <Chip text={stateLabel(f)} tone={stateTone(f)} />
-        <span className={`text-[10px] ${muted}`}>{f.keep ? 'Keeps a copy here' : 'No copy kept here'}</span>
+        <span className={`type-hint ${muted}`}>{f.keep ? 'Keeps a copy here' : 'No copy kept here'}</span>
       </div>
 
       {f.cantArrive && (
@@ -183,11 +183,11 @@ function ForwardRow({
       )}
 
       {f.state === 'active' && f.kind === 'external' && f.notice === 'sent' && f.noticeAt && (
-        <p className={`text-[10px] ${muted}`}>K2 emailed this address a link to stop it {fmt(f.noticeAt)}.</p>
+        <p className={`type-hint ${muted}`}>K2 emailed this address a link to stop it {fmt(f.noticeAt)}.</p>
       )}
 
       {showCounts && counts && (
-        <dl className="grid grid-cols-3 gap-2 text-[11px]" data-testid="forward-counts">
+        <dl className="grid grid-cols-3 gap-2 type-hint" data-testid="forward-counts">
           {(
             [
               ['Forwarded', counts.forwarded],
@@ -196,7 +196,7 @@ function ForwardRow({
             ] as const
           ).map(([label, n]) => (
             <div key={label} className="min-w-0">
-              <dt className={`text-[10px] ${muted}`}>{label} · 24 h</dt>
+              <dt className={`type-hint ${muted}`}>{label} · 24 h</dt>
               <dd
                 className={`font-mono ${
                   label === 'Refused' && n > 0 ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-primary)]'
@@ -236,7 +236,7 @@ function ForwardRow({
           </Button>
         </div>
       )}
-      {f.setBy && <p className={`text-[10px] ${muted}`}>Set by {f.setBy} · {fmt(f.createdAt)}</p>}
+      {f.setBy && <p className={`type-hint ${muted}`}>Set by {f.setBy} · {fmt(f.createdAt)}</p>}
     </div>
   )
 }
@@ -358,7 +358,7 @@ export function MailboxForwardingPanel({
 
   if (denied) {
     return (
-      <p className={`text-[11px] ${muted}`} data-testid="forward-denied">
+      <p className={`type-hint ${muted}`} data-testid="forward-denied">
         Forwarding for this mailbox is managed by the owner, an Admin, or the person it’s linked to.
       </p>
     )
@@ -367,7 +367,7 @@ export function MailboxForwardingPanel({
     return <Callout tone="error">Couldn’t load forwarding: {error}</Callout>
   }
   if (!data) {
-    return <p className={`text-[11px] ${muted}`}>Loading forwarding…</p>
+    return <p className={`type-hint ${muted}`}>Loading forwarding…</p>
   }
 
   // A server that doesn't say is from before several destinations.
@@ -377,18 +377,18 @@ export function MailboxForwardingPanel({
   return (
     <Surface role2="inset" className="p-3 space-y-2 min-w-0" data-testid="mailbox-forwarding">
       <div className="flex items-center gap-2 min-w-0">
-        <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Forwarding</h4>
-        {door === 'person' && <span className={`text-[10px] ${muted}`}>your mailbox</span>}
+        <h4 className="type-section uppercase tracking-wider text-[var(--color-text-muted)]">Forwarding</h4>
+        {door === 'person' && <span className={`type-hint ${muted}`}>your mailbox</span>}
       </div>
 
       {rows.length === 0 ? (
         canMutate ? (
           <>
-            <p className={`text-[11px] ${muted}`}>Not forwarded. New mail stays in this mailbox.</p>
+            <p className={`type-hint ${muted}`}>Not forwarded. New mail stays in this mailbox.</p>
             <SetForm initialTo="" initialKeep={undefined} busy={busy} onSubmit={(to, keep) => void onSet(to, keep, false)} />
           </>
         ) : (
-          <p className={`text-[11px] ${muted}`}>Not forwarded.</p>
+          <p className={`type-hint ${muted}`}>Not forwarded.</p>
         )
       ) : (
         <>
@@ -439,7 +439,7 @@ export function MailboxForwardingPanel({
         <div className="pt-1 border-t border-[var(--color-border)]">
           <button
             type="button"
-            className={`text-[10px] ${muted} hover:text-[var(--color-text-primary)] cursor-pointer`}
+            className={`type-hint ${muted} hover:text-[var(--color-text-primary)] cursor-pointer`}
             aria-expanded={showEvents}
             onClick={() => setShowEvents((v) => !v)}
           >
@@ -448,7 +448,7 @@ export function MailboxForwardingPanel({
           {showEvents && (
             <ul className="mt-1 space-y-0.5" data-testid="forward-events">
               {events.map((e) => (
-                <li key={e.id} className="flex items-center gap-2 text-[10px] min-w-0">
+                <li key={e.id} className="flex items-center gap-2 type-hint min-w-0">
                   <span className={`${muted} font-mono flex-shrink-0`}>{fmt(e.at)}</span>
                   <span className="text-[var(--color-text-secondary)] truncate">{eventWords(e)}</span>
                   <span className={`${muted} ml-auto flex-shrink-0`}>{e.actor}</span>

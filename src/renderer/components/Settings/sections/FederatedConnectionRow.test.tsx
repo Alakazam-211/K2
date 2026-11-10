@@ -15,14 +15,14 @@ const gone: RemoteConnectionEntry = { ...live, gone: true }
 afterEach(cleanup)
 
 describe('FederatedConnectionRow', () => {
-  it('a live row looks like today: federated, no note, no Re-add', () => {
+  it('a live row looks like today: paired, no note, no Re-add', () => {
     const { container } = render(
       <FederatedConnectionRow entry={live} canReAdd busy={false} onRemove={() => {}} onReAdd={() => {}} />,
     )
     const row = container.querySelector('[data-federated-connection="ai::rpm.k2.dev"]')
     expect(row).not.toBeNull()
     expect(row?.getAttribute('data-gone')).toBeNull()
-    expect(screen.getByText('federated')).toBeTruthy()
+    expect(screen.getByText('paired')).toBeTruthy()
     expect(screen.queryByText(/no longer exists/)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Re-add' })).toBeNull()
   })
@@ -40,7 +40,7 @@ describe('FederatedConnectionRow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Re-add' }))
     expect(onReAdd).toHaveBeenCalledTimes(1)
     expect(onRemove).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByTitle('Remove federated connection'))
+    fireEvent.click(screen.getByTitle('Remove connection'))
     expect(onRemove).toHaveBeenCalledTimes(1)
   })
 

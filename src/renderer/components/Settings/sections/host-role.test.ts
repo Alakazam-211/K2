@@ -105,7 +105,7 @@ describe('hostActionGate', () => {
   it('a Member: off, and says so on the row', () => {
     const g = gate({ kind: 'known', role: 'member' })
     expect(g.enabled).toBe(false)
-    expect(g.note).toBe("You're signed in to Rosson as a Member. Only the host owner or an admin can update it.")
+    expect(g.note).toBe("You're signed in to Rosson as a Member. Only the server's owner or an admin can update it.")
   })
   it('an expired sign-in: off, and says sign in again (not "owner or admin")', () => {
     const g = gate({ kind: 'signed-out', reason: 'invalid or missing token' })
@@ -123,7 +123,7 @@ describe('refusalCopy: a 403 from an update route, read against whoami', () => {
   const msg = 'invalid or missing token'
   it('whoami says Member: the Member copy', () => {
     expect(refusalCopy('Rosson', 'update', msg, { kind: 'known', role: 'member' })).toBe(
-      "You're signed in to Rosson as a Member. Only the host owner or an admin can update it.",
+      "You're signed in to Rosson as a Member. Only the server's owner or an admin can update it.",
     )
   })
   it('whoami refuses the login too: sign in again', () => {
@@ -134,7 +134,7 @@ describe('refusalCopy: a 403 from an update route, read against whoami', () => {
   it('whoami says owner/admin: never "only the owner or an admin"', () => {
     const owner = refusalCopy('Rosson', 'update', msg, { kind: 'known', role: 'owner' })
     expect(owner).toContain("although you're the owner there")
-    expect(owner).not.toMatch(/only the host owner/i)
+    expect(owner).not.toMatch(/only the server's owner/i)
     expect(refusalCopy('Rosson', 'update', msg, { kind: 'known', role: 'admin' })).toContain("you're an Admin there")
   })
   it('whoami unreadable: quotes the host, no role claim', () => {

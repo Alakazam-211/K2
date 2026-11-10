@@ -54,9 +54,9 @@ export function WorkspacePhonePushToggle({ project }: { project: { id: string; n
     <div className="border border-[var(--color-border)] p-3" data-testid="workspace-phone-push">
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">Phone notifications (you)</div>
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">Phone notifications</div>
           <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-            Push your phone when this agent posts in a Thread. Only your own setting; others keep theirs.
+            Notify your phone when this agent posts in a Thread. Only affects you.
           </div>
           {row && (
             <div data-testid="workspace-phone-push-source" className="text-[10px] text-[var(--color-text-secondary)] mt-1">

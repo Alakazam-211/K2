@@ -325,10 +325,10 @@ describe('updateHostConfirmCopy — unmistakable remote targeting (P4)', () => {
     expect(copy.title).toContain('0.39.33')
     expect(copy.confirmLabel).toContain('Hetzner box')
     expect(copy.message).toContain('Hetzner box')
-    // The hostname is shown too, framed as the REMOTE machine — NOT this Mac.
+    // The hostname is shown too, framed as the server you're connected to, not this computer.
     expect(copy.message).toContain('rosson.k2.dev')
-    expect(copy.message).toContain('REMOTE')
-    expect(copy.message).toContain('not this Mac')
+    expect(copy.message).toContain("the server you're connected to")
+    expect(copy.message).toContain('not this computer')
     expect(copy.message).toContain('0.39.33')
   })
 
@@ -343,7 +343,7 @@ describe('403 handling', () => {
   it('updateForbiddenCopy NAMES the host and both causes of the 403 (expired sign-in, or not owner/admin)', () => {
     const copy = updateForbiddenCopy('Hetzner box')
     expect(copy).toBe(
-      "Hetzner box turned down the update. Your sign-in there may have expired (sign in again), or your login isn't the host owner or an admin.",
+      "Hetzner box turned down the update. Your sign-in there may have expired (sign in again), or your login isn't the server's owner or an admin.",
     )
   })
 

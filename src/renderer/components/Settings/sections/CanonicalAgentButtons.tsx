@@ -50,8 +50,8 @@ export function RoleSkillButton({
   return (
     <div className="flex items-center justify-between">
       <div className="min-w-0">
-        <span className="text-xs text-[var(--color-text-secondary)]">{label} skill</span>
-        <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">
+        <span className="type-row text-[var(--color-text-secondary)]">{label} skill</span>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
           Weaves the {label} role guidance into{' '}
           <span className="font-mono">.k2/agent/ROLE.md</span> organically — your existing
           context is preserved, never overwritten with a templated block.
@@ -59,7 +59,7 @@ export function RoleSkillButton({
       </div>
       <button
         onClick={onOpen}
-        className="px-2.5 py-1 text-[11px] font-medium text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 transition-colors whitespace-nowrap no-drag cursor-pointer"
+        className="px-2.5 py-1 type-control text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 transition-colors whitespace-nowrap no-drag cursor-pointer"
       >
         {skillPresent ? `Re-run ${label}` : `Set up ${label}`}
       </button>
@@ -155,20 +155,20 @@ export function CanonicalAgentButton({
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[11px] font-medium text-[var(--color-text-primary)]">
+            <span className="type-name text-[var(--color-text-primary)]">
               K2 Canonical Agent
             </span>
             {unified ? (
-              <span className="text-[8px] uppercase tracking-wider font-semibold px-1 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+              <span className="type-badge uppercase tracking-wider px-1 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
                 unified
               </span>
             ) : (
-              <span className="text-[8px] uppercase tracking-wider font-semibold px-1 py-0.5 bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] border border-[var(--color-border)]">
+              <span className="type-badge uppercase tracking-wider px-1 py-0.5 bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] border border-[var(--color-border)]">
                 not set up
               </span>
             )}
           </div>
-          <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5 leading-snug">
+          <p className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-snug">
             Write context once — every LLM reads the same generated{' '}
             <span className="font-mono">AGENTS.md</span>.
           </p>
@@ -176,7 +176,7 @@ export function CanonicalAgentButton({
         <button
           type="button"
           onClick={() => onOpen(unified ? 'manage' : 'setup')}
-          className="flex-shrink-0 px-2.5 py-1 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors whitespace-nowrap no-drag cursor-pointer"
+          className="flex-shrink-0 px-2.5 py-1 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors whitespace-nowrap no-drag cursor-pointer"
         >
           {unified ? 'Manage / Undo' : 'Set up'}
         </button>
@@ -185,15 +185,15 @@ export function CanonicalAgentButton({
       {/* Generate toggle — immediately above leftover fan-out. */}
       <div className="flex items-start gap-2 pt-1.5 border-t border-[var(--color-border)]">
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-medium text-[var(--color-text-secondary)] leading-tight">
+          <div className="type-hint text-[var(--color-text-secondary)] leading-tight">
             Generate AGENTS.md
           </div>
-          <p className="text-[9px] text-[var(--color-text-muted)] leading-snug mt-0.5">
+          <p className="type-hint text-[var(--color-text-muted)] leading-snug mt-0.5">
             Write the cwd <span className="font-mono">AGENTS.md</span> most AI tools load
             (from persona + project + stack). Turn off to stop refreshing it; the file is left in place.
           </p>
           {generateSkip ? (
-            <p className="text-[9px] text-[var(--color-status-warn-amber-soft)] leading-snug mt-0.5">
+            <p className="type-hint text-[var(--color-status-warn-amber-soft)] leading-snug mt-0.5">
               Plant skipped: {generateSkip}
             </p>
           ) : null}
@@ -215,10 +215,10 @@ export function CanonicalAgentButton({
       {/* Fan-out toggle row — label left, switch right (stack-row alignment) */}
       <div className="flex items-start gap-2 pt-1.5 border-t border-[var(--color-border)]">
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-medium text-[var(--color-text-secondary)] leading-tight">
+          <div className="type-hint text-[var(--color-text-secondary)] leading-tight">
             Auto harness fan-out
           </div>
-          <p className="text-[9px] text-[var(--color-text-muted)] leading-snug mt-0.5">
+          <p className="type-hint text-[var(--color-text-muted)] leading-snug mt-0.5">
             Symlink <span className="font-mono">CLAUDE.md</span>,{' '}
             <span className="font-mono">GEMINI.md</span>, … →{' '}
             <span className="font-mono">.k2/AGENTS.md</span>. Off by default.
@@ -246,7 +246,7 @@ export function CanonicalAgentButton({
       </div>
 
       {skillHint ? (
-        <div className="border-l-2 border-[var(--color-accent)]/60 bg-[var(--color-accent)]/5 pl-2 py-1.5 text-[9px] leading-snug text-[var(--color-text-secondary)]">
+        <div className="border-l-2 border-[var(--color-accent)]/60 bg-[var(--color-accent)]/5 pl-2 py-1.5 type-hint leading-snug text-[var(--color-text-secondary)]">
           <span className="font-medium text-[var(--color-accent)]">Canonical Agent skill ready.</span>{' '}
           Run it in this workspace&rsquo;s agent chat to merge harness files safely. Fan-out was
           <span className="font-medium"> not</span> turned on.

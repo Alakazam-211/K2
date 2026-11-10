@@ -250,8 +250,8 @@ export function AppsServerSection(): React.JSX.Element {
   return (
     <div className="max-w-2xl space-y-6" data-testid="apps-server" data-settings-id="skin-access.server">
       <div>
-        <h2 className="text-sm font-medium text-[var(--color-text-primary)]">This server</h2>
-        <p className={`text-[11px] ${muted} mt-1 leading-relaxed`}>
+        <h2 className="type-title text-[var(--color-text-primary)]">This server</h2>
+        <p className={`type-hint ${muted} mt-1 leading-relaxed`}>
           Apps your agents build run on this server, each in its own wall. Set the server up here: no terminal on the
           box needed.
         </p>
@@ -266,13 +266,13 @@ export function AppsServerSection(): React.JSX.Element {
             aria-label="Apps (beta)"
           />
           <div className="flex-1 min-w-0">
-            <div className="text-xs text-[var(--color-text-primary)]">Apps (beta)</div>
-            <p className={`text-[11px] ${muted} mt-0.5`}>
+            <div className="type-row text-[var(--color-text-primary)]">Apps (beta)</div>
+            <p className={`type-hint ${muted} mt-0.5`}>
               On: agents you allow can build, install and deploy Apps here. Apps run walled, in a guarded container. Off:
               every App route is closed.
             </p>
             {!isOwner && role !== null ? (
-              <p className={`text-[11px] ${secondary} mt-1`} data-testid="apps-switch-owner-only">
+              <p className={`type-hint ${secondary} mt-1`} data-testid="apps-switch-owner-only">
                 Only the server&apos;s owner can turn Apps on or off.
               </p>
             ) : null}
@@ -286,10 +286,10 @@ export function AppsServerSection(): React.JSX.Element {
         </Callout>
       ) : null}
 
-      {box.kind === 'loading' ? <p className={`text-[11px] ${muted}`}>Checking the box…</p> : null}
+      {box.kind === 'loading' ? <p className={`type-hint ${muted}`}>Checking the box…</p> : null}
       {box.kind === 'error' ? <Callout tone="error">{box.text}</Callout> : null}
       {box.kind === 'off' ? (
-        <p className={`text-[11px] ${muted}`} data-testid="apps-off">
+        <p className={`type-hint ${muted}`} data-testid="apps-off">
           Apps are off on this server. Turn them on to check and prepare the box.
         </p>
       ) : null}
@@ -298,14 +298,14 @@ export function AppsServerSection(): React.JSX.Element {
         <>
           <SettingsGroup title="Box checks">
             <div className="py-2 space-y-2" data-testid="apps-doctor">
-              <p className="text-[11px]">
+              <p className="type-hint">
                 <span className={doctor.ready ? STATUS_STYLE.ok : STATUS_STYLE.warn}>
                   {doctor.ready ? 'Ready for walled Apps' : 'Not ready yet'}
                 </span>
                 {doctor.runtime ? <span className={muted}> · runtime {doctor.runtime}</span> : null}
               </p>
               {!doctor.linux ? (
-                <p className={`text-[11px] ${muted}`}>
+                <p className={`type-hint ${muted}`}>
                   Apps run walled on Linux servers. This machine can build and check Apps, not run them.
                 </p>
               ) : null}
@@ -316,7 +316,7 @@ export function AppsServerSection(): React.JSX.Element {
               </ul>
               <button
                 type="button"
-                className={`text-[11px] ${secondary} underline no-drag cursor-pointer`}
+                className={`type-hint ${secondary} underline no-drag cursor-pointer`}
                 onClick={() => void load()}
               >
                 Check again
@@ -328,7 +328,7 @@ export function AppsServerSection(): React.JSX.Element {
             <SettingsGroup title="Set up the box">
               <div className="py-2 space-y-3" data-testid="apps-setup">
                 {!isOwner && role !== null ? (
-                  <p className={`text-[11px] ${secondary}`}>Only the server&apos;s owner can prepare the box or install the engine.</p>
+                  <p className={`type-hint ${secondary}`}>Only the server&apos;s owner can prepare the box or install the engine.</p>
                 ) : null}
                 {doctor.autoPrepare ? (
                   <div className="flex items-start gap-3" data-testid="apps-auto-prepare">
@@ -339,22 +339,22 @@ export function AppsServerSection(): React.JSX.Element {
                       aria-label="Prepare this box automatically"
                     />
                     <div className="flex-1 min-w-0">
-                      <div className="text-xs text-[var(--color-text-primary)]">Prepare this box automatically</div>
-                      <p className={`text-[11px] ${muted} mt-0.5`}>
+                      <div className="type-row text-[var(--color-text-primary)]">Prepare this box automatically</div>
+                      <p className={`type-hint ${muted} mt-0.5`}>
                         After each K2 update, K2 sets the box up for walled Apps by itself through its root helper (the
                         steps below, plus K2&apos;s Podman where needed and the App engine), so agents you allow can
                         deploy with nobody running sudo. It stops on a box whose sub-UIDs already overlap (rootless
                         Docker) and tells you what it changed.
                       </p>
                       {doctor.autoPrepare.state ? (
-                        <p className={`text-[11px] ${secondary} mt-1`} data-testid="apps-auto-prepare-last">
+                        <p className={`type-hint ${secondary} mt-1`} data-testid="apps-auto-prepare-last">
                           Last run: {doctor.autoPrepare.state}
                           {doctor.autoPrepare.detail ? ` — ${doctor.autoPrepare.detail}` : ''}
                         </p>
                       ) : null}
                       {doctor.autoPrepare.undoneAt !== null || doctor.autoPrepare.blocked ? (
                         <div className="mt-1 space-y-1" data-testid="apps-auto-prepare-stopped">
-                          <p className={`text-[11px] ${STATUS_STYLE.warn}`}>
+                          <p className={`type-hint ${STATUS_STYLE.warn}`}>
                             {doctor.autoPrepare.undoneAt !== null
                               ? 'Paused because you undid the box setup.'
                               : `Stopped: ${doctor.autoPrepare.detail ?? doctor.autoPrepare.code ?? 'this box can’t be prepared'}.`}{' '}
@@ -373,24 +373,24 @@ export function AppsServerSection(): React.JSX.Element {
                   </div>
                 ) : null}
                 <div className="space-y-2">
-                  <div className="text-xs text-[var(--color-text-primary)]">Prepare this box</div>
-                  <p className={`text-[11px] ${muted}`}>
+                  <div className="type-row text-[var(--color-text-primary)]">Prepare this box</div>
+                  <p className={`type-hint ${muted}`}>
                     Sets up the k2app user, its limits, the firewall table and the container runtime through K2&apos;s root
                     helper. See every change first; nothing changes until you apply.
                     {prepareNeeded(doctor) ? '' : ' The checks say the box is prepared; running it again is safe.'}
                   </p>
                   {dry ? (
                     <div className="space-y-2" data-testid="apps-dry-run">
-                      <div className={`text-[11px] ${secondary}`}>Apply will make these changes, in order:</div>
+                      <div className={`type-hint ${secondary}`}>Apply will make these changes, in order:</div>
                       <ol className="list-decimal ml-5 space-y-0.5">
                         {changeLines(dry).map((l, i) => (
-                          <li key={i} className="text-[11px] font-mono text-[var(--color-text-primary)] break-all">
+                          <li key={i} className="type-hint font-mono text-[var(--color-text-primary)] break-all">
                             {l}
                           </li>
                         ))}
                       </ol>
                       {needsPodmanInstall(dry) && dry.podman.bundle ? (
-                        <p className={`text-[11px] ${muted} break-all`}>
+                        <p className={`type-hint ${muted} break-all`}>
                           K2&apos;s Podman {dry.podman.bundle.version}, sha256 {dry.podman.bundle.sha256}, from{' '}
                           {dry.podman.bundle.url}
                         </p>
@@ -420,14 +420,14 @@ export function AppsServerSection(): React.JSX.Element {
                   )}
                 </div>
                 <div className="space-y-2 pt-2 border-t border-[var(--color-border)]">
-                  <div className="text-xs text-[var(--color-text-primary)]">Install App engine</div>
-                  <p className={`text-[11px] ${muted}`}>
+                  <div className="type-row text-[var(--color-text-primary)]">Install App engine</div>
+                  <p className={`type-hint ${muted}`}>
                     The guarded engine runs each App in its own rootless container. It is signed with K2&apos;s release key
                     and matches this server&apos;s K2 version.
                     {engineNeeded(doctor) ? '' : ' It is installed and answering.'}
                   </p>
                   {appEngineLine(doctor.appEngine) ? (
-                    <p className="text-[11px] text-[var(--color-danger)]" data-testid="apps-engine-status">
+                    <p className="type-hint text-[var(--color-danger)]" data-testid="apps-engine-status">
                       {appEngineLine(doctor.appEngine)}
                     </p>
                   ) : null}
@@ -440,27 +440,27 @@ export function AppsServerSection(): React.JSX.Element {
                   </Button>
                 </div>
                 <div className="space-y-2 pt-2 border-t border-[var(--color-border)]" data-testid="apps-unprep">
-                  <div className="text-xs text-[var(--color-text-primary)]">Undo box setup</div>
-                  <p className={`text-[11px] ${muted}`}>
+                  <div className="type-row text-[var(--color-text-primary)]">Undo box setup</div>
+                  <p className={`type-hint ${muted}`}>
                     Removes what box prep set up (the firewall table, AppArmor profile, limits, linger and the engine
                     unit). The k2app user, its data and the distro packages stay. K2&apos;s Podman stays too (k2 app box
                     podman uninstall removes it). Automatic prep pauses until you press Retry. Refused while any App runs.
                   </p>
                   {unprep ? (
                     <div className="space-y-2" data-testid="apps-unprep-plan">
-                      <div className={`text-[11px] ${secondary}`}>Undo will remove:</div>
+                      <div className={`type-hint ${secondary}`}>Undo will remove:</div>
                       <ul className="list-disc ml-5 space-y-0.5">
                         {unprep.undoes.map((l, i) => (
-                          <li key={i} className="text-[11px] font-mono text-[var(--color-text-primary)] break-all">
+                          <li key={i} className="type-hint font-mono text-[var(--color-text-primary)] break-all">
                             {l}
                           </li>
                         ))}
                       </ul>
                       {unprep.kept.length ? (
-                        <p className={`text-[11px] ${muted}`}>Kept: {unprep.kept.join('; ')}</p>
+                        <p className={`type-hint ${muted}`}>Kept: {unprep.kept.join('; ')}</p>
                       ) : null}
                       {unprep.runningApps.length ? (
-                        <p className={`text-[11px] ${STATUS_STYLE.warn}`} data-testid="apps-unprep-running">
+                        <p className={`type-hint ${STATUS_STYLE.warn}`} data-testid="apps-unprep-running">
                           Stop these Apps first: {unprep.runningApps.join(', ')}
                         </p>
                       ) : null}
@@ -494,8 +494,8 @@ export function AppsServerSection(): React.JSX.Element {
         </>
       ) : null}
 
-      <p className={`text-[11px] ${muted}`}>
-        Which agents may build and deploy Apps is set per agent: Settings → Workspaces → the agent → Agent.
+      <p className={`type-hint ${muted}`}>
+        Which agents may build and deploy Apps is set per agent: Settings → Workspaces / Agents → the agent → Agent.
       </p>
     </div>
   )
@@ -503,8 +503,8 @@ export function AppsServerSection(): React.JSX.Element {
 
 function CheckRow({ check }: { check: BoxCheck }): React.JSX.Element {
   return (
-    <li className="text-[11px]" data-testid={`apps-check-${check.id}`} data-status={check.status}>
-      <span className={`inline-block w-12 uppercase tracking-wider text-[9px] font-semibold ${STATUS_STYLE[check.status]}`}>
+    <li className="type-hint" data-testid={`apps-check-${check.id}`} data-status={check.status}>
+      <span className={`inline-block w-12 uppercase tracking-wider type-section ${STATUS_STYLE[check.status]}`}>
         {check.status}
       </span>
       <span className="text-[var(--color-text-primary)]">{checkLabel(check.id)}</span>

@@ -169,13 +169,13 @@ function UsageMeter({
       )}
       {why && (
         <div
-          className={`text-[9px] mt-0.5 ${state === 'expired' ? 'text-amber-400' : 'text-[var(--color-text-muted)]'}`}
+          className={`type-hint mt-0.5 ${state === 'expired' ? 'text-amber-400' : 'text-[var(--color-text-muted)]'}`}
           data-testid={`llm-usage-state-${account.id}`}
         >
           {why}
         </div>
       )}
-      <div className="text-[9px] text-[var(--color-text-muted)] mt-0.5 flex flex-wrap items-center gap-x-1" data-testid={`llm-usage-age-${account.id}`}>
+      <div className="type-hint text-[var(--color-text-muted)] mt-0.5 flex flex-wrap items-center gap-x-1" data-testid={`llm-usage-age-${account.id}`}>
         <span>
           {windows.length === 0 && !why && usage.status ? `${usage.status} · ` : ''}
           Usage {age}
@@ -340,28 +340,28 @@ function AccountRow({
                   setNewLabel(account.label)
                 }
               }}
-              className="w-28 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-1 text-xs text-[var(--color-text-primary)] outline-none"
+              className="w-28 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-1 type-control text-[var(--color-text-primary)] outline-none"
             />
           ) : (
-            <span className="text-xs text-[var(--color-text-secondary)] truncate" data-testid={`llm-name-${account.id}`}>
+            <span className="type-row text-[var(--color-text-secondary)] truncate" data-testid={`llm-name-${account.id}`}>
               {tokenName(tool.display, account)}
             </span>
           )}
           {account.active && (
-            <span className="text-[8px] uppercase tracking-wider font-semibold px-1 py-px border border-[var(--color-accent)] text-[var(--color-accent)] flex-shrink-0">
+            <span className="type-badge uppercase tracking-wider px-1 py-px border border-[var(--color-accent)] text-[var(--color-accent)] flex-shrink-0">
               Server default
             </span>
           )}
           {account.addedOutsideK2 && (
             <span
-              className="text-[8px] uppercase tracking-wider font-semibold px-1 py-px border border-[var(--color-border)] text-[var(--color-text-muted)] flex-shrink-0"
+              className="type-badge uppercase tracking-wider px-1 py-px border border-[var(--color-border)] text-[var(--color-text-muted)] flex-shrink-0"
               title="Someone signed in outside K2 (for example /login in a terminal). K2 saved that sign-in as this token. Keep it, or remove it."
               data-testid={`llm-outside-${account.id}`}
             >
               Added outside K2
             </span>
           )}
-          <span className="text-[10px] text-[var(--color-text-muted)]">
+          <span className="type-hint text-[var(--color-text-muted)]">
             {STATE_LABELS[account.state] ?? account.state}
           </span>
         </div>
@@ -418,29 +418,29 @@ function AccountRow({
           </Button>
         </div>
       </div>
-      {who && <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 truncate">{who}</div>}
+      {who && <div className="type-hint text-[var(--color-text-muted)] mt-0.5 truncate">{who}</div>}
       {account.active && tool.switchedAt !== null && (
-        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-default-since-${account.id}`}>
+        <div className="type-hint text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-default-since-${account.id}`}>
           Server default since {formatWhen(tool.switchedAt)}
         </div>
       )}
       {account.active && !apiKey && (
-        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-relogin-hint-${account.id}`}>
+        <div className="type-hint text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-relogin-hint-${account.id}`}>
           {ACTIVE_RELOGIN_HINT}
         </div>
       )}
       {pinnedTo && (
-        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 truncate" data-testid={`llm-pinned-${account.id}`}>
+        <div className="type-hint text-[var(--color-text-muted)] mt-0.5 truncate" data-testid={`llm-pinned-${account.id}`}>
           Used by: {pinnedTo}
         </div>
       )}
       {account.inUse && (
-        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-inuse-${account.id}`}>
+        <div className="type-hint text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-inuse-${account.id}`}>
           In use by a chat right now
         </div>
       )}
       {account.detail && account.state !== 'signed_in' && (
-        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{account.detail}</div>
+        <div className="type-hint text-[var(--color-text-muted)] mt-0.5">{account.detail}</div>
       )}
       <UsageMeter
         account={account}
@@ -492,17 +492,17 @@ function ApiKeyDialog({
       data-testid="llm-apikey-dialog"
     >
       <div className="w-[min(420px,92vw)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] p-4 space-y-3">
-        <h3 className="text-sm text-[var(--color-text-primary)]">Add {toolLabel} API token</h3>
-        <label className="block text-[10px] text-[var(--color-text-muted)]">
+        <h3 className="type-heading text-[var(--color-text-primary)]">Add {toolLabel} API token</h3>
+        <label className="block type-hint text-[var(--color-text-muted)]">
           Label
           <input
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             aria-label="API token label"
-            className="mt-1 w-full bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text-primary)] outline-none"
+            className="mt-1 w-full bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1 type-control text-[var(--color-text-primary)] outline-none"
           />
         </label>
-        <label className="block text-[10px] text-[var(--color-text-muted)]">
+        <label className="block type-hint text-[var(--color-text-muted)]">
           API token
           <input
             type="password"
@@ -510,18 +510,18 @@ function ApiKeyDialog({
             value={key}
             onChange={(e) => setKey(e.target.value)}
             aria-label="API token"
-            className="mt-1 w-full bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text-primary)] outline-none"
+            className="mt-1 w-full bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1 type-control text-[var(--color-text-primary)] outline-none"
           />
         </label>
-        <p className="text-[10px] text-[var(--color-text-muted)]">
+        <p className="type-hint text-[var(--color-text-muted)]">
           Billed per token by the provider. The key stays on the server and is never shown again.
         </p>
         {error && (
-          <p className="text-[10px] text-red-400" role="alert">
+          <p className="type-hint text-red-400" role="alert">
             {error}
           </p>
         )}
-        <div className="flex justify-end gap-2 text-xs">
+        <div className="flex justify-end gap-2 type-row">
           <Button variant="ghost" size="md" className={ACTION_FOCUS} onClick={onClose}>
             Cancel
           </Button>
@@ -600,24 +600,24 @@ export function AgentAccountsColumn(): React.JSX.Element {
 
   return (
     <div className="w-full" data-settings-id="agents.accounts">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Subs / Tokens</h2>
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Subs / Tokens</h2>
       {/* Hosted web is one server and its primary scope reads "This
           computer", so the line is desktop-only. */}
       {!isWebClient() && (
-        <p className="text-[10px] text-[var(--color-text-muted)] mb-1" data-testid="llm-server">
+        <p className="type-hint text-[var(--color-text-muted)] mb-1" data-testid="llm-server">
           Server: {scope.label}
         </p>
       )}
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-4 leading-relaxed" data-testid="llm-switch-note">
+      <p className="type-hint text-[var(--color-text-muted)] mb-4 leading-relaxed" data-testid="llm-switch-note">
         {SWITCH_NOTE}
       </p>
       {doc && !doc.canChangeDefault && (
-        <p className="text-[10px] text-[var(--color-text-muted)] mb-3" data-testid="llm-default-admin-only">
+        <p className="type-hint text-[var(--color-text-muted)] mb-3" data-testid="llm-default-admin-only">
           {doc.changeDefaultReason ?? ADMIN_SWITCH_REASON}
         </p>
       )}
       {doc?.airgap && (
-        <p className="text-[10px] text-[var(--color-text-muted)] mb-3">
+        <p className="type-hint text-[var(--color-text-muted)] mb-3">
           Air-gap mode is on: adding subscriptions and refreshing tokens are off. Switching between saved tokens still works.
         </p>
       )}
@@ -628,28 +628,28 @@ export function AgentAccountsColumn(): React.JSX.Element {
           role="alert"
           data-testid="llm-keychain-repair"
         >
-          <p className="text-[10px] text-amber-400 leading-relaxed mb-1">
+          <p className="type-hint text-amber-400 leading-relaxed mb-1">
             macOS asks for your password every time Claude reads its keychain item “{r.service}” ({r.holds}). An
             earlier K2 update changed who may read it. Run this once in Terminal on this Mac and enter your login
             password:
           </p>
-          <code className="block text-[10px] font-mono select-all break-all text-[var(--color-text-primary)]">
+          <code className="block type-hint font-mono select-all break-all text-[var(--color-text-primary)]">
             {r.command}
           </code>
         </div>
       ))}
       {!entry && (
-        <p className="text-[10px] text-[var(--color-text-muted)] mb-3" data-testid="llm-accounts-loading">
+        <p className="type-hint text-[var(--color-text-muted)] mb-3" data-testid="llm-accounts-loading">
           Loading tokens…
         </p>
       )}
       {entry?.error && (
-        <p className="text-[10px] text-red-400 mb-3" data-testid="llm-accounts-error">
+        <p className="type-hint text-red-400 mb-3" data-testid="llm-accounts-error">
           {entry.error}
         </p>
       )}
       {error && (
-        <p className="text-[10px] text-red-400 mb-3" role="alert">
+        <p className="type-hint text-red-400 mb-3" role="alert">
           {error}
         </p>
       )}
@@ -679,7 +679,7 @@ export function AgentAccountsColumn(): React.JSX.Element {
                 <div className="flex items-center justify-between gap-3 px-3 py-2.5">
                   <div className="flex items-center gap-2 min-w-0">
                     <AgentIcon agent={row.agentIcon} size={14} />
-                    <div className="text-xs text-[var(--color-text-secondary)] truncate">{row.label}</div>
+                    <div className="type-row text-[var(--color-text-secondary)] truncate">{row.label}</div>
                   </div>
                   {supported ? (
                     <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -704,16 +704,16 @@ export function AgentAccountsColumn(): React.JSX.Element {
                       )}
                     </div>
                   ) : (
-                    <span className="text-[10px] text-[var(--color-text-muted)]">Not available yet</span>
+                    <span className="type-hint text-[var(--color-text-muted)]">Not available yet</span>
                   )}
                 </div>
                 {supported && tool && tool.accounts.length === 0 && (
-                  <div className="px-3 pb-2 text-[10px] text-[var(--color-text-muted)]">
+                  <div className="px-3 pb-2 type-hint text-[var(--color-text-muted)]">
                     {canSignIn ? 'No subscription on this server yet.' : 'No API token on this server yet.'}
                   </div>
                 )}
                 {keptLive && (
-                  <div className="px-3 pb-2 text-[10px] text-[var(--color-text-muted)]" data-testid={`llm-kept-live-${row.id}`}>
+                  <div className="px-3 pb-2 type-hint text-[var(--color-text-muted)]" data-testid={`llm-kept-live-${row.id}`}>
                     Subscription still signed in for {row.label}: {tokenName(row.label, keptLive)}
                   </div>
                 )}
@@ -734,7 +734,7 @@ export function AgentAccountsColumn(): React.JSX.Element {
                   ))}
                 {supported && tool && cyclable.length >= 2 && (
                   <div className="px-3 py-2 border-t border-[var(--color-border)] flex items-center justify-between gap-2">
-                    <span className="text-[10px] text-[var(--color-text-muted)]">
+                    <span className="type-hint text-[var(--color-text-muted)]">
                       Use this when a session hits its limit. Applies to chats on Server default. K2 never switches on its own.
                     </span>
                     <Button

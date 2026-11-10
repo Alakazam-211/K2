@@ -189,25 +189,25 @@ export function LlmLoginSheet({
       data-testid="llm-login-sheet"
     >
       <div className="w-full max-w-lg max-h-full overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] p-5 space-y-4">
-        <div className="text-sm font-medium text-[var(--color-text-primary)]">{title}</div>
+        <div className="type-heading text-[var(--color-text-primary)]">{title}</div>
 
         {!login && (
           <div className="space-y-3">
             {start.kind === 'add' && (
               <label className="block">
-                <span className="text-[10px] text-[var(--color-text-muted)]">Label</span>
+                <span className="type-hint text-[var(--color-text-muted)]">Label</span>
                 <input
                   autoFocus
                   value={label}
                   onChange={(e) => setLabel(e.target.value)}
                   placeholder="work, personal, team…"
                   data-testid="llm-login-label"
-                  className="mt-1 w-full bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 text-xs text-[var(--color-text-primary)] outline-none"
+                  className="mt-1 w-full bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 type-control text-[var(--color-text-primary)] outline-none"
                 />
               </label>
             )}
             <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] mb-1">Sign in from</div>
+              <div className="type-hint text-[var(--color-text-muted)] mb-1">Sign in from</div>
               <div className="flex gap-1">
                 {(
                   [
@@ -220,7 +220,7 @@ export function LlmLoginSheet({
                     type="button"
                     onClick={() => setMode(value)}
                     aria-pressed={mode === value}
-                    className={`px-2 py-1 text-[11px] border ${
+                    className={`px-2 py-1 type-control border ${
                       mode === value
                         ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
                         : 'border-[var(--color-border)] text-[var(--color-text-muted)]'
@@ -230,18 +230,18 @@ export function LlmLoginSheet({
                   </button>
                 ))}
               </div>
-              <p className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+              <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
                 {mode === 'this_computer'
                   ? 'The browser opens on the computer that runs this K2 server.'
                   : 'Open the sign-in page here (phone or laptop), then paste the code back or enter the device code.'}
               </p>
             </div>
-            <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+            <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
               The tool runs its own sign-in on the server. K2 never sees your password; the subscription
               is kept on this server and isn’t the server default until you choose Use this token.
             </p>
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={onClose} className="px-3 py-1 text-xs text-[var(--color-text-muted)]">
+              <button type="button" onClick={onClose} className="px-3 py-1 type-control text-[var(--color-text-muted)]">
                 Cancel
               </button>
               <button
@@ -249,7 +249,7 @@ export function LlmLoginSheet({
                 disabled={busy || (start.kind === 'add' && !label.trim())}
                 onClick={() => void begin()}
                 data-testid="llm-login-start"
-                className="px-3 py-1 text-xs border border-[var(--color-accent)] text-[var(--color-text-primary)] disabled:opacity-40"
+                className="px-3 py-1 type-control border border-[var(--color-accent)] text-[var(--color-text-primary)] disabled:opacity-40"
               >
                 {busy ? 'Starting…' : 'Start sign-in'}
               </button>
@@ -261,13 +261,13 @@ export function LlmLoginSheet({
           <div className="space-y-3">
             {login.banner && (
               <div
-                className="text-[11px] px-2 py-1.5 border border-yellow-500/60 text-yellow-300"
+                className="type-hint px-2 py-1.5 border border-yellow-500/60 text-yellow-300"
                 data-testid="llm-login-banner"
               >
                 {login.banner}
               </div>
             )}
-            <div className="text-xs text-[var(--color-text-secondary)]" data-testid="llm-login-state">
+            <div className="type-row text-[var(--color-text-secondary)]" data-testid="llm-login-state">
               {LOGIN_STATE_LABELS[login.state] ?? login.state}
             </div>
 
@@ -277,14 +277,14 @@ export function LlmLoginSheet({
                   type="button"
                   disabled={!login.url}
                   onClick={openSignIn}
-                  className="w-full py-2.5 text-sm font-medium border border-[var(--color-accent)] text-[var(--color-text-primary)] disabled:opacity-40"
+                  className="w-full py-2.5 type-control border border-[var(--color-accent)] text-[var(--color-text-primary)] disabled:opacity-40"
                 >
                   {login.url ? 'Open sign-in page' : 'Waiting for the sign-in page…'}
                 </button>
                 {login.url && (
                   <div className="space-y-1" data-testid="llm-login-link">
                     <div className="flex items-center justify-between gap-3">
-                      <span className="text-[11px] text-[var(--color-text-secondary)] min-w-0">
+                      <span className="type-hint text-[var(--color-text-secondary)] min-w-0">
                         Sign in at{' '}
                         <span className="font-mono text-[var(--color-text-primary)]" data-testid="llm-login-host">
                           {signInHost(login) ?? 'the sign-in page'}
@@ -295,18 +295,18 @@ export function LlmLoginSheet({
                           type="button"
                           onClick={() => setShowLink((v) => !v)}
                           aria-expanded={showLink}
-                          className="text-[11px] text-[var(--color-text-muted)]"
+                          className="type-hint text-[var(--color-text-muted)]"
                         >
                           {showLink ? 'Hide full link' : 'Show full link'}
                         </button>
-                        <button type="button" onClick={copyLink} className="text-[11px] text-[var(--color-accent)]">
+                        <button type="button" onClick={copyLink} className="type-hint text-[var(--color-accent)]">
                           {linkCopied ? 'Link copied' : 'Copy link'}
                         </button>
                       </span>
                     </div>
                     {showLink && (
                       <div
-                        className="font-mono text-[10px] leading-snug text-[var(--color-text-secondary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 select-all"
+                        className="font-mono type-hint leading-snug text-[var(--color-text-secondary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 select-all"
                         style={{ overflowWrap: 'anywhere', wordBreak: 'break-all', userSelect: 'all', whiteSpace: 'normal' }}
                         data-testid="llm-login-url"
                       >
@@ -317,10 +317,10 @@ export function LlmLoginSheet({
                 )}
                 {login.code && (
                   <div className="flex items-center justify-between gap-3 border border-[var(--color-border)] px-3 py-2">
-                    <span className="font-mono text-lg tracking-widest text-[var(--color-text-primary)]" data-testid="llm-login-code">
+                    <span className="font-mono text-[length:var(--type-xl)] tracking-widest text-[var(--color-text-primary)]" data-testid="llm-login-code">
                       {login.code}
                     </span>
-                    <button type="button" onClick={copyCode} className="text-[11px] text-[var(--color-accent)]">
+                    <button type="button" onClick={copyCode} className="type-hint text-[var(--color-accent)]">
                       {copied ? 'Copied' : 'Copy code'}
                     </button>
                   </div>
@@ -334,13 +334,13 @@ export function LlmLoginSheet({
                       aria-label="Paste code"
                       autoComplete="off"
                       spellCheck={false}
-                      className="flex-1 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 text-xs font-mono text-[var(--color-text-primary)] outline-none"
+                      className="flex-1 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 type-control font-mono text-[var(--color-text-primary)] outline-none"
                     />
                     <button
                       type="button"
                       disabled={!paste.trim()}
                       onClick={() => void sendPaste()}
-                      className="px-3 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40"
+                      className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40"
                     >
                       Send
                     </button>
@@ -351,22 +351,22 @@ export function LlmLoginSheet({
 
             {login.state === 'signed_in' && login.offerMakeActive && madeActive === null && canChangeDefault && (
               <div className="border border-[var(--color-border)] px-3 py-2 space-y-2">
-                <div className="text-xs text-[var(--color-text-secondary)]">Make the new subscription the server default?</div>
-                <div className="text-[10px] text-[var(--color-text-muted)]">
+                <div className="type-row text-[var(--color-text-secondary)]">Make the new subscription the server default?</div>
+                <div className="type-hint text-[var(--color-text-muted)]">
                   Changing it affects every chat that uses Server default on this server.
                 </div>
                 <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={() => void makeActive()}
-                    className="px-3 py-1 text-xs border border-[var(--color-accent)] text-[var(--color-text-primary)]"
+                    className="px-3 py-1 type-control border border-[var(--color-accent)] text-[var(--color-text-primary)]"
                   >
                     Use this token
                   </button>
                   <button
                     type="button"
                     onClick={() => setMadeActive('kept')}
-                    className="px-3 py-1 text-xs text-[var(--color-text-muted)]"
+                    className="px-3 py-1 type-control text-[var(--color-text-muted)]"
                   >
                     Keep current
                   </button>
@@ -374,21 +374,21 @@ export function LlmLoginSheet({
               </div>
             )}
             {madeActive === 'active' && (
-              <div className="text-[11px] text-[var(--color-text-secondary)]">The new subscription is now the server default.</div>
+              <div className="type-hint text-[var(--color-text-secondary)]">The new subscription is now the server default.</div>
             )}
-            {login.error && <div className="text-[11px] text-red-400">{login.error}</div>}
+            {login.error && <div className="type-hint text-red-400">{login.error}</div>}
 
             <div>
               <button
                 type="button"
                 onClick={() => setShowTerminal((v) => !v)}
-                className="text-[10px] text-[var(--color-text-muted)]"
+                className="type-hint text-[var(--color-text-muted)]"
               >
                 {showTerminal ? 'Hide terminal' : 'Show terminal'}
               </button>
               {showTerminal && (
                 <pre
-                  className="mt-1 max-h-48 overflow-auto bg-[var(--color-bg-elevated)] border border-[var(--color-border)] p-2 text-[10px] font-mono text-[var(--color-text-secondary)] whitespace-pre-wrap break-all"
+                  className="mt-1 max-h-48 overflow-auto bg-[var(--color-bg-elevated)] border border-[var(--color-border)] p-2 type-hint font-mono text-[var(--color-text-secondary)] whitespace-pre-wrap break-all"
                   data-testid="llm-login-terminal"
                 >
                   {login.screen.join('\n')}
@@ -400,7 +400,7 @@ export function LlmLoginSheet({
               <button
                 type="button"
                 onClick={() => (done ? onClose() : void cancel())}
-                className="px-3 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-muted)]"
+                className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-muted)]"
               >
                 {done ? 'Close' : 'Cancel'}
               </button>
@@ -408,7 +408,7 @@ export function LlmLoginSheet({
           </div>
         )}
 
-        {error && <div className="text-[11px] text-red-400" data-testid="llm-login-error">{error}</div>}
+        {error && <div className="type-hint text-red-400" data-testid="llm-login-error">{error}</div>}
       </div>
     </div>
   )

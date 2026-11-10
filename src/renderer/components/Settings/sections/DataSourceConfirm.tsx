@@ -103,8 +103,8 @@ export function ConfirmStep({ scope, action, secretId, label, onToken, onCancel 
 
   return (
     <div className="space-y-1.5" data-testid="sources-confirm">
-      {state.step === 'starting' && <p className={`text-[11px] ${muted}`}>Asking the vault…</p>}
-      {state.step === 'mac' && <p className={`text-[11px] ${muted}`}>Confirm on your Mac.</p>}
+      {state.step === 'starting' && <p className={`type-hint ${muted}`}>Asking the vault…</p>}
+      {state.step === 'mac' && <p className={`type-hint ${muted}`}>Confirm on your Mac.</p>}
       {state.step === 'password' && (
         <form
           className="flex flex-col gap-1.5 max-w-sm"
@@ -113,7 +113,7 @@ export function ConfirmStep({ scope, action, secretId, label, onToken, onCancel 
             void submit(state.method)
           }}
         >
-          <label className={`text-[11px] ${muted}`}>
+          <label className={`type-hint ${muted}`}>
             {state.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
             <input
               ref={pwRef}
@@ -136,7 +136,7 @@ export function ConfirmStep({ scope, action, secretId, label, onToken, onCancel 
       )}
       {state.step === 'failed' && (
         <div className="space-y-1">
-          <p className={`text-[11px] ${danger}`} role="alert">
+          <p className={`type-hint ${danger}`} role="alert">
             {state.text}
           </p>
           <button type="button" className={btn} onClick={onCancel}>

@@ -31,10 +31,10 @@ export function AgentContextDiagram(): React.JSX.Element {
   return (
     <div className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/30 px-4 py-3 mb-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-[11px] font-semibold text-[var(--color-text-primary)]">
+        <h3 className="type-heading text-[var(--color-text-primary)]">
           Context stack → generated canon → harness mirrors
         </h3>
-        <div className="flex items-center gap-3 text-[9px] uppercase tracking-wider text-[var(--color-text-muted)]">
+        <div className="flex items-center gap-3 type-section uppercase tracking-wider text-[var(--color-text-muted)]">
           <span className="flex items-center gap-1"><span className="w-2 h-2 border border-violet-400/50 bg-violet-400/10" /> pinned</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 border border-amber-400/50 bg-amber-400/10" /> optional layers</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 border border-sky-400/50 bg-sky-400/10" /> generated canon</span>
@@ -45,68 +45,68 @@ export function AgentContextDiagram(): React.JSX.Element {
       <div className="grid gap-2 items-stretch" style={{ gridTemplateColumns: 'minmax(0,1.1fr) auto minmax(0,0.95fr) auto minmax(0,1.15fr)' }}>
         {/* Stage 1: CONTEXT STACK — pinned + optional layers. */}
         <div className="flex flex-col gap-1.5">
-          <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mb-0.5">Context management stack</div>
+          <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-0.5">Context management stack</div>
           <div className="border border-violet-400/50 bg-violet-400/10 px-2 py-1.5">
-            <div className="text-[11px] font-semibold text-violet-200">ROLE.md</div>
-            <div className="text-[8px] font-mono text-violet-200/60 mt-0.5 truncate">.k2/agent/ROLE.md</div>
-            <div className="text-[8px] text-violet-200/70">pinned · role</div>
+            <div className="type-hint text-violet-200">ROLE.md</div>
+            <div className="type-hint font-mono text-violet-200/60 mt-0.5 truncate">.k2/agent/ROLE.md</div>
+            <div className="type-hint text-violet-200/70">pinned · role</div>
           </div>
           <div className="border border-violet-400/40 bg-violet-400/5 px-2 py-1.5">
-            <div className="text-[11px] font-medium text-violet-200/90">PROJECT.md</div>
-            <div className="text-[8px] font-mono text-violet-200/50 mt-0.5 truncate">.k2/PROJECT.md</div>
-            <div className="text-[8px] text-violet-200/60">pinned · project</div>
+            <div className="type-hint text-violet-200/90">PROJECT.md</div>
+            <div className="type-hint font-mono text-violet-200/50 mt-0.5 truncate">.k2/PROJECT.md</div>
+            <div className="type-hint text-violet-200/60">pinned · project</div>
           </div>
           <div className="border border-amber-400/50 bg-amber-400/10 px-2 py-1.5">
-            <div className="text-[11px] font-medium text-amber-100/90">Optional layers</div>
-            <div className="text-[8px] font-mono text-amber-100/50 mt-0.5 truncate">wiki index · user docs · packs</div>
-            <div className="text-[8px] text-amber-100/70">ordered · toggleable</div>
+            <div className="type-hint text-amber-100/90">Optional layers</div>
+            <div className="type-hint font-mono text-amber-100/50 mt-0.5 truncate">wiki index · user docs · packs</div>
+            <div className="type-hint text-amber-100/70">ordered · toggleable</div>
           </div>
           <div className="border border-violet-400/30 bg-violet-400/5 px-2 py-1.5">
-            <div className="text-[10px] font-medium text-violet-200/80">Tooling</div>
-            <div className="text-[8px] text-violet-200/50">pinned · generated k2-cli pointer</div>
+            <div className="type-hint text-violet-200/80">Tooling</div>
+            <div className="type-hint text-violet-200/50">pinned · generated k2-cli pointer</div>
           </div>
-          <div className="text-[9px] text-[var(--color-text-muted)] italic mt-1 leading-snug">
+          <div className="type-hint text-[var(--color-text-muted)] italic mt-1 leading-snug">
             Edit the stack in Workspace Settings or <span className="font-mono not-italic">k2 agent context</span>. Paths only — compose reads files at regen.
           </div>
         </div>
 
         {/* Arrow: stack → generated. */}
         <div className="flex flex-col justify-center items-center text-[var(--color-text-muted)]">
-          <div className="text-xs">→</div>
-          <div className="text-[8px] uppercase tracking-wider mt-1 text-center leading-snug">K2<br />composes</div>
+          <div className="type-row">→</div>
+          <div className="type-section uppercase tracking-wider mt-1 text-center leading-snug">K2<br />composes</div>
         </div>
 
         {/* Stage 2: GENERATED canonical entrypoint. */}
         <div className="flex flex-col gap-1.5 justify-center">
-          <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mb-0.5">Generated canon</div>
+          <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-0.5">Generated canon</div>
           <div className="border border-sky-400/50 bg-sky-400/10 px-2 py-2.5">
             <div className="flex items-center justify-between gap-2">
-              <div className="text-[12px] font-semibold text-sky-200">AGENTS.md</div>
-              <div className="text-[8px] uppercase tracking-wider px-1.5 py-0.5 bg-sky-400/20 text-sky-100 rounded-[var(--radius-pill)]">canonical</div>
+              <div className="type-name text-sky-200">AGENTS.md</div>
+              <div className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-sky-400/20 text-sky-100 rounded-[var(--radius-pill)]">canonical</div>
             </div>
-            <div className="text-[9px] font-mono text-sky-200/60 mt-1 truncate">.k2/AGENTS.md</div>
+            <div className="type-hint font-mono text-sky-200/60 mt-1 truncate">.k2/AGENTS.md</div>
           </div>
-          <div className="text-[9px] text-[var(--color-text-muted)] italic mt-1 leading-snug">
+          <div className="type-hint text-[var(--color-text-muted)] italic mt-1 leading-snug">
             One composed entrypoint — pinned + enabled optional layers. Read natively by Pi, Hermes, Codex &amp; 28+ others.
           </div>
         </div>
 
         {/* Arrow: generated → mirrors. */}
         <div className="flex flex-col justify-center items-center text-[var(--color-text-muted)]">
-          <div className="text-xs">→</div>
-          <div className="text-[8px] uppercase tracking-wider mt-1 text-center leading-snug">symlink<br />mirrors</div>
+          <div className="type-row">→</div>
+          <div className="type-section uppercase tracking-wider mt-1 text-center leading-snug">symlink<br />mirrors</div>
         </div>
 
         {/* Stage 3: read-only symlink mirrors. */}
         <div className="flex flex-col gap-1">
-          <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mb-0.5">Read-only mirrors</div>
+          <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-0.5">Read-only mirrors</div>
           {HARNESS_MIRRORS.map((m) => (
             <div key={m.path} className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-1.5 py-1" title={m.note ?? m.path}>
               <div className="flex items-baseline justify-between gap-2">
-                <div className="text-[10px] text-[var(--color-text-secondary)] truncate">{m.label}</div>
-                <div className="text-[8px] font-mono text-[var(--color-text-muted)] truncate">{m.path}</div>
+                <div className="type-hint text-[var(--color-text-secondary)] truncate">{m.label}</div>
+                <div className="type-hint font-mono text-[var(--color-text-muted)] truncate">{m.path}</div>
               </div>
-              {m.note ? <div className="text-[8px] text-[var(--color-text-muted)]/80 italic mt-0.5 leading-snug">{m.note}</div> : null}
+              {m.note ? <div className="type-hint text-[var(--color-text-muted)]/80 italic mt-0.5 leading-snug">{m.note}</div> : null}
             </div>
           ))}
         </div>
@@ -114,24 +114,24 @@ export function AgentContextDiagram(): React.JSX.Element {
 
       {/* Separate lane: the two LOADABLE skills (not the canonical entrypoint). */}
       <div className="mt-3 pt-2.5 border-t border-[var(--color-border)]">
-        <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5">
+        <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5">
           Loadable skills — separate lane, loaded on demand from <span className="font-mono">.k2/skills/</span> (NOT compiled into AGENTS.md)
         </div>
         <div className="grid grid-cols-2 gap-1.5">
           {LOADABLE_SKILLS.map((s) => (
             <div key={s.path} className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/50 px-2 py-1.5">
               <div className="flex items-baseline gap-2">
-                <span className="text-[10px] font-medium text-[var(--color-text-secondary)]">{s.label}</span>
-                <span className="text-[8px] font-mono text-[var(--color-text-muted)] truncate">{s.path}</span>
+                <span className="type-hint text-[var(--color-text-secondary)]">{s.label}</span>
+                <span className="type-hint font-mono text-[var(--color-text-muted)] truncate">{s.path}</span>
               </div>
-              <div className="text-[8px] text-[var(--color-text-muted)] mt-0.5 leading-snug">{s.blurb}</div>
+              <div className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-snug">{s.blurb}</div>
             </div>
           ))}
         </div>
       </div>
 
       {/* Footer: stack editor + opt-in mirrors. */}
-      <div className="mt-3 pt-2 border-t border-[var(--color-border)] text-[9px] text-[var(--color-text-muted)] leading-snug">
+      <div className="mt-3 pt-2 border-t border-[var(--color-border)] type-hint text-[var(--color-text-muted)] leading-snug">
         Manage always-on context via the per-workspace{' '}
         <span className="text-[var(--color-text-secondary)] font-medium">stack editor</span> or{' '}
         <span className="font-mono text-[var(--color-text-secondary)]">k2 agent context</span>.

@@ -18,11 +18,11 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 
 const btn =
-  'px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
+  'px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
 const muted = 'text-[var(--color-text-muted)]'
 const danger = 'text-[var(--color-danger,#e5484d)]'
 const input =
-  'px-2 py-0.5 text-[11px] font-mono bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]'
+  'px-2 py-0.5 type-hint font-mono bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]'
 
 const NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/
 
@@ -71,7 +71,7 @@ function IncomingRow({
 
   const pending = row.status === 'pending'
   return (
-    <div className="p-2 text-[11px] space-y-1" data-testid="vault-incoming-row" data-delivery={row.deliveryId} data-status={row.status}>
+    <div className="p-2 type-hint space-y-1" data-testid="vault-incoming-row" data-delivery={row.deliveryId} data-status={row.status}>
       <div className="flex flex-wrap gap-x-3">
         <span className="font-mono text-[var(--color-text-primary)]">{row.landedName && row.status === 'landed' ? row.landedName : row.name}</span>
         <span className="text-[var(--color-text-secondary)]">
@@ -89,7 +89,7 @@ function IncomingRow({
           {handoffConsentWords(row.landsAs.delivery, row.landsAs.ceiling)}
         </div>
       )}
-      {row.status === 'landed' && row.ref && <div className="font-mono text-[10px] select-all">{row.ref}</div>}
+      {row.status === 'landed' && row.ref && <div className="font-mono type-hint select-all">{row.ref}</div>}
       {row.decidedBy && !pending && <div className={muted}>decided by {row.decidedBy}</div>}
       {pending && (
         <div className="flex flex-wrap items-center gap-2">
@@ -172,17 +172,17 @@ export function IncomingList({ scope }: { scope: ServerScope }): React.JSX.Eleme
   const { rows, error, refresh } = useRows(load)
   return (
     <div className="space-y-1" data-testid="vault-incoming">
-      <p className={`text-[11px] ${muted}`}>
+      <p className={`type-hint ${muted}`}>
         Secrets other agents sent to yours. Each waits for a person unless you chose &ldquo;Always accept from&rdquo; that
-        sender (Settings → Projects → the agent). Accepting puts it in the agent&rsquo;s vault; it never sees the value.
+        sender (Settings → Workspaces / Agents → the agent). Accepting puts it in the agent&rsquo;s vault; it never sees the value.
       </p>
       {error && (
-        <p className={`text-[11px] ${danger}`} role="alert">
+        <p className={`type-hint ${danger}`} role="alert">
           {error}
         </p>
       )}
-      {rows === null && !error && <p className={`text-[11px] ${muted}`}>Loading…</p>}
-      {rows !== null && rows.length === 0 && <p className={`text-[11px] ${muted}`}>Nothing sent to your agents yet.</p>}
+      {rows === null && !error && <p className={`type-hint ${muted}`}>Loading…</p>}
+      {rows !== null && rows.length === 0 && <p className={`type-hint ${muted}`}>Nothing sent to your agents yet.</p>}
       {rows !== null && rows.length > 0 && (
         <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
           {rows.map((r) => (
@@ -200,16 +200,16 @@ export function SentList({ scope }: { scope: ServerScope }): React.JSX.Element {
   return (
     <div className="space-y-1" data-testid="vault-sent">
       {error && (
-        <p className={`text-[11px] ${danger}`} role="alert">
+        <p className={`type-hint ${danger}`} role="alert">
           {error}
         </p>
       )}
-      {rows === null && !error && <p className={`text-[11px] ${muted}`}>Loading…</p>}
-      {rows !== null && rows.length === 0 && <p className={`text-[11px] ${muted}`}>Your agents haven&rsquo;t sent any secrets.</p>}
+      {rows === null && !error && <p className={`type-hint ${muted}`}>Loading…</p>}
+      {rows !== null && rows.length === 0 && <p className={`type-hint ${muted}`}>Your agents haven&rsquo;t sent any secrets.</p>}
       {rows !== null && rows.length > 0 && (
         <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
           {rows.map((r) => (
-            <div key={r.deliveryId} className="p-2 text-[11px] space-y-0.5" data-testid="vault-sent-row" data-status={r.status}>
+            <div key={r.deliveryId} className="p-2 type-hint space-y-0.5" data-testid="vault-sent-row" data-status={r.status}>
               <div className="flex flex-wrap gap-x-3">
                 <span className="font-mono text-[var(--color-text-primary)]">{r.name}</span>
                 <span className="text-[var(--color-text-secondary)]">

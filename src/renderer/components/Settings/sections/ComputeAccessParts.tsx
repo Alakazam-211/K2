@@ -184,11 +184,11 @@ export function MachinesPart({
   return (
     <SettingsGroup title="Machines you can use">
       <div className="space-y-2 py-1" data-settings-id="compute.machines" data-testid="compute-machines">
-        <p className="text-[11px] text-[var(--color-text-muted)]">
+        <p className="type-hint text-[var(--color-text-muted)]">
           Your machines with “Make this computer a node” on. Switch one on and agents you allow can run jobs there.
         </p>
-        <p className="text-[11px] text-[var(--color-text-muted)]" data-testid="compute-agents-note">
-          Which agents can use these machines is set per agent: Settings → Workspaces → &lt;agent&gt; → Agent → Allow
+        <p className="type-hint text-[var(--color-text-muted)]" data-testid="compute-agents-note">
+          Which agents can use these machines is set per agent: Settings → Workspaces / Agents → &lt;agent&gt; → Agent → Allow
           compute nodes.
         </p>
         {account.kind === 'signed_out' ? (
@@ -203,10 +203,10 @@ export function MachinesPart({
         ) : null}
         {account.kind === 'error' ? <Callout tone="warn">{account.message}</Callout> : null}
         {account.kind === 'loading' && rows.length === 0 ? (
-          <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
+          <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
         ) : null}
         {account.kind !== 'loading' && rows.length === 0 ? (
-          <p className="text-[11px] text-[var(--color-text-muted)]">
+          <p className="type-hint text-[var(--color-text-muted)]">
             No machines yet. On another computer, open Settings → Compute and turn on “Make this computer a node”, or add
             one with an enroll code below.
           </p>
@@ -225,7 +225,7 @@ export function MachinesPart({
             }}
           />
         ))}
-        {notice ? <p className="text-[11px] text-[var(--color-text-secondary)]">{notice}</p> : null}
+        {notice ? <p className="type-hint text-[var(--color-text-secondary)]">{notice}</p> : null}
         {error ? <Callout tone="error">{error}</Callout> : null}
       </div>
     </SettingsGroup>
@@ -274,23 +274,23 @@ function MachineLine({
           disabled={disabled}
           aria-label={`Use compute from ${row.name}`}
         />
-        <span className="text-xs font-medium text-[var(--color-text-primary)]">{row.name}</span>
+        <span className="type-name text-[var(--color-text-primary)]">{row.name}</span>
         {row.sub && row.sub !== row.name ? (
-          <span className="text-[11px] text-[var(--color-text-muted)]">{row.sub}.k2.dev</span>
+          <span className="type-hint text-[var(--color-text-muted)]">{row.sub}.k2.dev</span>
         ) : null}
-        <span className="text-[11px] text-[var(--color-text-muted)]">{[row.os, row.arch].filter(Boolean).join(' / ') || '—'}</span>
-        <span className="text-[11px] text-[var(--color-text-secondary)]" data-testid="compute-machine-hw">
+        <span className="type-hint text-[var(--color-text-muted)]">{[row.os, row.arch].filter(Boolean).join(' / ') || '—'}</span>
+        <span className="type-hint text-[var(--color-text-secondary)]" data-testid="compute-machine-hw">
           {cores(row.cpuCores)} · {formatBytes(row.memBytes)} RAM · {formatBytes(row.diskFreeBytes)} free
         </span>
-        <span className="text-[11px]" style={{ color: row.online ? 'var(--color-status-ok)' : 'var(--color-text-muted)' }}>
+        <span className="type-hint" style={{ color: row.online ? 'var(--color-status-ok)' : 'var(--color-text-muted)' }}>
           {row.online ? 'online' : 'offline'}
         </span>
-        <span className="text-[11px] text-[var(--color-text-secondary)]" data-testid="compute-machine-status">
+        <span className="type-hint text-[var(--color-text-secondary)]" data-testid="compute-machine-status">
           {row.status === 'elsewhere' && row.elsewhere ? `used by ${row.elsewhere}` : STATUS_TEXT[row.status]}
         </span>
       </div>
       {row.status === 'pending' && row.node ? (
-        <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
+        <div className="flex flex-wrap items-center gap-2 type-hint text-[var(--color-text-secondary)]">
           <span>
             This server&apos;s code: <span className="font-mono text-[var(--color-text-primary)]">{displaySas(row.node.sas)}</span>
             {row.machine?.sas ? (

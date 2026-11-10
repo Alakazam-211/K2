@@ -196,7 +196,7 @@ function tickerDownMessage(status: SchedulerStatus | null): string | null {
     const stale = status.ticker.staleSecs == null || status.ticker.staleSecs > 180
     if (!stale) return null
     // HB9: the daemon's own tick stamp (`lastDaemonTickAt`).
-    return `Heartbeats are not being checked ${since(status.ticker.lastTickAt ?? status.lastDaemonTickAt)}. The K2 daemon checks every minute while this computer is awake; it may be stopped or restarting. Missed heartbeats under 12 hours late fire once when it is back.`
+    return `Heartbeats are not being checked ${since(status.ticker.lastTickAt ?? status.lastDaemonTickAt)}. K2 checks every minute while this computer is awake; it may be stopped or restarting. Missed heartbeats under 12 hours late fire once when it is back.`
   }
   const stale = status.staleSecs == null || status.staleSecs > 180
   if (!stale) return null
@@ -521,23 +521,23 @@ export function WakeSchedulerSection(): React.JSX.Element {
       {/* Heartbeat S2 — the daemon's own 60 s check has stopped. Above
           both columns: nothing below fires while it is down. */}
       {tickerDownMessage(schedulerStatus) && (
-        <div className="border border-[var(--color-status-error-soft)]/60 bg-[var(--color-status-error-soft)]/10 px-3 py-2 text-[11px] text-[var(--color-status-error-soft)] leading-relaxed">
+        <div className="border border-[var(--color-status-error-soft)]/60 bg-[var(--color-status-error-soft)]/10 px-3 py-2 type-hint text-[var(--color-status-error-soft)] leading-relaxed">
           {tickerDownMessage(schedulerStatus)}
         </div>
       )}
       <div className="flex gap-8 items-start">
       {/* ── Left column: when heartbeats fire, and waking ──────────── */}
       <div className="w-1/3 min-w-[280px] max-w-[420px] flex-shrink-0">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1 flex items-center gap-2">
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1 flex items-center gap-2">
         Heartbeats
         <span
-          className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
+          className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
           title="This feature is in beta — interface and behavior may change"
         >
           beta
         </span>
       </h2>
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-4 leading-relaxed">
+      <p className="type-hint text-[var(--color-text-muted)] mb-4 leading-relaxed">
         K2 checks your heartbeats every minute while this computer is awake, with or
         without the app open. A heartbeat missed while the computer slept fires once
         when it wakes, if it is less than 12 hours late; older ones are skipped and
@@ -546,7 +546,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
       </p>
 
       {schedulerStatus && !schedulerStatus.wake && (
-        <p className="text-[10px] text-[var(--color-text-muted)] py-2 border-b border-[var(--color-border)] leading-relaxed">
+        <p className="type-hint text-[var(--color-text-muted)] py-2 border-b border-[var(--color-border)] leading-relaxed">
           This server runs an older K2 that cannot wake the computer for heartbeats.
           Update K2 on it to use this setting.
         </p>
@@ -565,17 +565,17 @@ export function WakeSchedulerSection(): React.JSX.Element {
               className="flex items-start justify-between py-2 border-b border-[var(--color-border)]"
             >
               <div className="flex-1 min-w-0 mr-3">
-                <span className="text-xs text-[var(--color-text-secondary)]">
+                <span className="type-row text-[var(--color-text-secondary)]">
                   Wake this computer for heartbeats
                 </span>
-                <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
+                <p className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
                   {on
                     ? 'On: K2 wakes this computer a minute before the next heartbeat.'
                     : 'Off: K2 does not wake this computer from sleep. Heartbeats still fire whenever it is awake.'}
                   {note ? ` ${note}` : ''}
                 </p>
                 {wakeSaving && wake.platform === 'macos' && !on && (
-                  <p className="text-[10px] text-[var(--color-text-secondary)] mt-1">
+                  <p className="type-hint text-[var(--color-text-secondary)] mt-1">
                     Approve the admin dialog on this Mac to finish turning wake on.
                   </p>
                 )}
@@ -602,8 +602,8 @@ export function WakeSchedulerSection(): React.JSX.Element {
                   className="mt-0.5"
                 />
                 <div className="flex-1 min-w-0">
-                  <span className="text-xs text-[var(--color-text-secondary)]">Also on battery</span>
-                  <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
+                  <span className="type-row text-[var(--color-text-secondary)]">Also on battery</span>
+                  <p className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
                     Without this, K2 wakes the computer only while it is plugged in. Never below {floor}% battery.
                   </p>
                 </div>
@@ -611,7 +611,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
             )}
 
             {on && (
-              <div className="py-2 text-[10px] leading-relaxed">
+              <div className="py-2 type-hint leading-relaxed">
                 {wake.state === 'ok' && wake.nextWakeAt && (
                   <span className="text-[var(--color-text-secondary)]">
                     Next wake {formatClock(wake.nextWakeAt)}
@@ -638,7 +638,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
             )}
 
             {schedulerStatus.awake?.held && (
-              <p className="text-[10px] text-[var(--color-text-muted)] py-1">
+              <p className="type-hint text-[var(--color-text-muted)] py-1">
                 Keeping this computer awake now: {schedulerStatus.awake.reasons.join(', ')}.
               </p>
             )}
@@ -649,14 +649,14 @@ export function WakeSchedulerSection(): React.JSX.Element {
       {/* ── Right column: every heartbeat across all workspaces ──────── */}
       <div className="flex-1 min-w-0 max-w-[640px]">
         <div className="flex items-baseline justify-between mb-1">
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
+          <h2 className="type-title text-[var(--color-text-primary)]">
             All Heartbeats
           </h2>
-          <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums">
+          <span className="type-hint text-[var(--color-text-muted)] tabular-nums">
             {heartbeatsLoading ? 'loading…' : `${heartbeats.length} total`}
           </span>
         </div>
-        <p className="text-[10px] text-[var(--color-text-muted)] mb-3 leading-relaxed">
+        <p className="type-hint text-[var(--color-text-muted)] mb-3 leading-relaxed">
           Every active heartbeat across every workspace. Toggle to
           enable/disable, pick where each heartbeat&apos;s wake is
           delivered (the workspace&apos;s pinned chat, its own session,
@@ -664,7 +664,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
           open the prompt template in your default editor.
         </p>
         {heartbeats.length === 0 && !heartbeatsLoading && (
-          <div className="text-[10px] text-[var(--color-text-muted)] italic py-3">
+          <div className="type-hint text-[var(--color-text-muted)] italic py-3">
             No heartbeats configured. Add one inside any workspace at
             <span className="text-[var(--color-text-secondary)]"> Workspaces → Heartbeats</span>.
           </div>
@@ -676,14 +676,14 @@ export function WakeSchedulerSection(): React.JSX.Element {
               className="border border-[var(--color-border)] hover:border-[var(--color-text-secondary)] transition-colors px-3 py-2 flex items-center gap-3"
             >
               <div className="flex-1 min-w-0">
-                <div className="text-xs text-[var(--color-text-secondary)] flex items-baseline gap-2">
+                <div className="type-row text-[var(--color-text-secondary)] flex items-baseline gap-2">
                   <span className="text-[var(--color-text-primary)] font-medium truncate">
                     {row.projectName}
                   </span>
                   <span className="text-[var(--color-text-muted)]">/</span>
                   <span className="truncate">{row.name}</span>
                 </div>
-                <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 truncate">
+                <div className="type-hint text-[var(--color-text-muted)] mt-0.5 truncate">
                   {describeHeartbeatSpec(row.specJson, row.frequency)}
                 </div>
                 {/* Heartbeat S4 (HB31): the drawer's formatter —
@@ -692,7 +692,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
                   row={row}
                   nextFire={nextFire}
                   nextPrefix="Next: "
-                  className="text-[10px] mt-0.5 truncate"
+                  className="type-hint mt-0.5 truncate"
                 />
               </div>
               {/* Delivery drop-down (replaces the pinned-chat checkbox)
@@ -728,7 +728,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
               <button
                 type="button"
                 onClick={() => handleEditWakeup(row)}
-                className="text-[10px] px-2 py-1 border border-[var(--color-border)] hover:bg-white/[0.04] hover:border-[var(--color-text-secondary)] transition-colors cursor-pointer no-drag flex-shrink-0"
+                className="type-control px-2 py-1 border border-[var(--color-border)] hover:bg-white/[0.04] hover:border-[var(--color-text-secondary)] transition-colors cursor-pointer no-drag flex-shrink-0"
                 title={`Open ${row.wakeupPath}`}
               >
                 Edit Wakeup
@@ -746,21 +746,21 @@ export function WakeSchedulerSection(): React.JSX.Element {
       {/* ── Right-most column: universal fire audit log ──────────────── */}
       <div className="flex-1 min-w-0 max-w-[420px]">
         <div className="flex items-baseline justify-between mb-1">
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
+          <h2 className="type-title text-[var(--color-text-primary)]">
             Recent Fires
           </h2>
-          <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums">
+          <span className="type-hint text-[var(--color-text-muted)] tabular-nums">
             last {fires.length}
           </span>
         </div>
-        <p className="text-[10px] text-[var(--color-text-muted)] mb-3 leading-relaxed">
+        <p className="type-hint text-[var(--color-text-muted)] mb-3 leading-relaxed">
           Live audit feed of every scheduler decision across all
           workspaces — fires, skips, errors. Updates every 5s. Hover
           a row for the full skip reason.
         </p>
         <div className="space-y-0.5 max-h-[600px] overflow-y-auto">
           {fires.length === 0 && (
-            <div className="text-[10px] text-[var(--color-text-muted)] italic py-3">
+            <div className="type-hint text-[var(--color-text-muted)] italic py-3">
               No fire decisions recorded yet. Heartbeats will appear
               here on their next scheduler tick.
             </div>
@@ -770,7 +770,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
             return (
               <div
                 key={fire.id}
-                className="px-2 py-1 flex items-center gap-2 hover:bg-white/[0.03] transition-colors text-[10px] font-mono"
+                className="px-2 py-1 flex items-center gap-2 hover:bg-white/[0.03] transition-colors type-hint font-mono"
                 title={[
                   fire.reason ? `${fire.decision} — ${fire.reason}` : fire.decision,
                   heartbeatHistoryActorLine(fire),
@@ -793,7 +793,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
                     </>
                   )}
                 </span>
-                <span className="flex-shrink-0 text-[var(--color-text-muted)] uppercase tracking-wider text-[8px]">
+                <span className="flex-shrink-0 text-[var(--color-text-muted)] uppercase tracking-wider type-badge">
                   {fire.decision === 'fired' ? 'fired' : fire.decision.replace(/^skipped_/, '')}
                 </span>
               </div>

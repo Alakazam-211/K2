@@ -186,18 +186,18 @@ export function groupSecrets(secrets: readonly VaultSecret[]): SecretGroup[] {
 // ── Shared bits ──────────────────────────────────────────────────────
 
 const btn =
-  'px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
+  'px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
 const btnPrimary =
-  'px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
+  'px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
 const input =
-  'w-full px-2 py-1 text-[12px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]'
+  'w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]'
 const muted = 'text-[var(--color-text-muted)]'
 const danger = 'text-[var(--color-danger,#e5484d)]'
 
 function ErrorLine({ text }: { text: string | null }): React.JSX.Element | null {
   if (!text) return null
   return (
-    <p className={`text-[11px] ${danger}`} role="alert">
+    <p className={`type-hint ${danger}`} role="alert">
       {text}
     </p>
   )
@@ -259,7 +259,7 @@ function ValueField({
         <input
           type="file"
           aria-label={`${label} from a file`}
-          className={`text-[11px] ${muted}`}
+          className={`type-control ${muted}`}
           onChange={async (e) => {
             const f = e.currentTarget.files?.[0]
             const ta = fieldRef.current
@@ -383,8 +383,8 @@ export function RecoverySetup({ onConfirmed }: { onConfirmed: () => void }): Rea
           Set up recovery key
         </button>
       )}
-      {state.step === 'starting' && <p className={`text-[11px] ${muted}`}>Asking the vault…</p>}
-      {state.step === 'mac' && <p className={`text-[11px] ${muted}`}>Confirm on your Mac.</p>}
+      {state.step === 'starting' && <p className={`type-hint ${muted}`}>Asking the vault…</p>}
+      {state.step === 'mac' && <p className={`type-hint ${muted}`}>Confirm on your Mac.</p>}
       {state.step === 'password' && (
         <form
           className="flex flex-col gap-1.5 max-w-sm"
@@ -393,7 +393,7 @@ export function RecoverySetup({ onConfirmed }: { onConfirmed: () => void }): Rea
             void submitPassword(state.method)
           }}
         >
-          <label className={`text-[11px] ${muted}`}>
+          <label className={`type-hint ${muted}`}>
             {state.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
             <input
               ref={pwRef}
@@ -416,11 +416,11 @@ export function RecoverySetup({ onConfirmed }: { onConfirmed: () => void }): Rea
       )}
       {state.step === 'shown' && (
         <div className="border border-[var(--color-border)] bg-[var(--color-bg)] p-2 space-y-2" data-testid="vault-recovery-phrase">
-          <p className="text-[11px] text-[var(--color-text-primary)]">
+          <p className="type-hint text-[var(--color-text-primary)]">
             Write these 24 words down, in order, and keep them offline. K2 shows them once and keeps only the public
             half. Anyone with these words and a copy of the vault can read every secret.
           </p>
-          <ol className="grid grid-cols-3 sm:grid-cols-4 gap-x-3 gap-y-0.5 font-mono text-[11px] text-[var(--color-text-primary)] select-none">
+          <ol className="grid grid-cols-3 sm:grid-cols-4 gap-x-3 gap-y-0.5 font-mono type-hint text-[var(--color-text-primary)] select-none">
             {state.challenge.phrase.split(/\s+/).map((w, i) => (
               <li key={i} data-testid="vault-recovery-word">
                 <span className={muted}>{i + 1}.</span> {w}
@@ -448,10 +448,10 @@ export function RecoverySetup({ onConfirmed }: { onConfirmed: () => void }): Rea
             if (state.step === 'check') void submitWords(state.id)
           }}
         >
-          <p className={`text-[11px] ${muted}`}>Type back these words from your copy.</p>
+          <p className={`type-hint ${muted}`}>Type back these words from your copy.</p>
           {state.step === 'check' &&
             state.checkWords.map((n, i) => (
-              <label key={n} className={`text-[11px] ${muted}`}>
+              <label key={n} className={`type-hint ${muted}`}>
                 Word {n}
                 <input
                   value={typed[i] ?? ''}
@@ -466,7 +466,7 @@ export function RecoverySetup({ onConfirmed }: { onConfirmed: () => void }): Rea
                 />
               </label>
             ))}
-          {state.step === 'saving' && <p className={`text-[11px] ${muted}`}>Checking…</p>}
+          {state.step === 'saving' && <p className={`type-hint ${muted}`}>Checking…</p>}
           {state.step === 'check' && (
             <div className="flex gap-1.5">
               <button type="submit" className={btnPrimary} disabled={typed.some((w) => w.trim() === '')}>
@@ -491,8 +491,8 @@ export function VaultStatusCard({
   if (!status.open) {
     return (
       <div className="border border-[var(--color-border)] p-3 space-y-1" data-testid="vault-status">
-        <div className="text-[12px] font-medium text-[var(--color-text-primary)]">The vault isn&rsquo;t open</div>
-        <p className={`text-[11px] ${muted}`}>{status.error?.hint || status.error?.code || 'K2 couldn’t open the vault on this server.'}</p>
+        <div className="type-name text-[var(--color-text-primary)]">The vault isn&rsquo;t open</div>
+        <p className={`type-hint ${muted}`}>{status.error?.hint || status.error?.code || 'K2 couldn’t open the vault on this server.'}</p>
       </div>
     )
   }
@@ -506,8 +506,8 @@ export function VaultStatusCard({
           data-testid="vault-recovery-banner"
           className="border border-[var(--color-danger,#e5484d)] bg-[var(--color-danger,#e5484d)]/10 p-3 space-y-1"
         >
-          <div className={`text-[12px] font-medium ${danger}`}>The vault has no confirmed recovery key</div>
-          <p className="text-[11px] text-[var(--color-text-primary)]">
+          <div className={`type-name ${danger}`}>The vault has no confirmed recovery key</div>
+          <p className="type-hint text-[var(--color-text-primary)]">
             {status.recoveryHint ||
               'Only you should do this, from your own SSH login or a terminal outside K2: k2 vault recovery show-once.'}
           </p>
@@ -515,7 +515,7 @@ export function VaultStatusCard({
         </div>
       )}
       <div className="border border-[var(--color-border)] p-3 space-y-1.5">
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-[11px]">
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 type-hint">
           <dt className={muted}>Where the key lives</dt>
           <dd className="text-[var(--color-text-primary)]" data-testid="vault-key-home">
             {status.keyHomeLabel || status.keyHome || 'unknown'}
@@ -548,16 +548,16 @@ export function VaultStatusCard({
           )}
         </dl>
         {status.honest && (
-          <p className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed" data-testid="vault-honest">
+          <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed" data-testid="vault-honest">
             {status.honest}
           </p>
         )}
-        <p className={`text-[10px] ${muted} leading-relaxed`}>
+        <p className={`type-hint ${muted} leading-relaxed`}>
           For now, an agent that gets hold of this server&rsquo;s owner token can change a secret&rsquo;s sites or how
           it&rsquo;s given out, as you can. Each secret&rsquo;s history records it.
         </p>
         {status.adopted && status.adopted.length > 0 && (
-          <p className={`text-[10px] ${muted}`} data-testid="vault-adopted">
+          <p className={`type-hint ${muted}`} data-testid="vault-adopted">
             Moved in from older storage:{' '}
             {status.adopted.map((a) => `${a.store} (${a.moved} moved${a.kept ? `, ${a.kept} kept` : ''})`).join(', ')}.
             {status.legacyCopies ? ` ${status.legacyCopies[0].toUpperCase()}${status.legacyCopies.slice(1)}.` : ''}
@@ -653,8 +653,8 @@ export function RevealPanel({ secret }: { secret: VaultSecret }): React.JSX.Elem
           Reveal
         </button>
       )}
-      {state.step === 'starting' && <p className={`text-[11px] ${muted}`}>Asking the vault…</p>}
-      {state.step === 'mac' && <p className={`text-[11px] ${muted}`}>Confirm on your Mac.</p>}
+      {state.step === 'starting' && <p className={`type-hint ${muted}`}>Asking the vault…</p>}
+      {state.step === 'mac' && <p className={`type-hint ${muted}`}>Confirm on your Mac.</p>}
       {state.step === 'password' && (
         <form
           className="flex flex-col gap-1.5 max-w-sm"
@@ -663,7 +663,7 @@ export function RevealPanel({ secret }: { secret: VaultSecret }): React.JSX.Elem
             void submitPassword(state.method)
           }}
         >
-          <label className={`text-[11px] ${muted}`}>
+          <label className={`type-hint ${muted}`}>
             {state.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
             <input
               ref={pwRef}
@@ -686,7 +686,7 @@ export function RevealPanel({ secret }: { secret: VaultSecret }): React.JSX.Elem
       )}
       {state.step === 'shown' && (
         <div className="border border-[var(--color-border)] p-2 space-y-1.5" data-testid="vault-reveal-panel">
-          <div className="font-mono text-[11px] text-[var(--color-text-primary)] break-all select-all" data-testid="vault-reveal-value">
+          <div className="font-mono type-hint text-[var(--color-text-primary)] break-all select-all" data-testid="vault-reveal-value">
             {visible ? state.value : '•'.repeat(Math.min(24, Math.max(8, state.value.length)))}
           </div>
           <div className="flex gap-1.5 items-center">
@@ -697,7 +697,7 @@ export function RevealPanel({ secret }: { secret: VaultSecret }): React.JSX.Elem
             <button type="button" className={btn} onClick={hide}>
               Done
             </button>
-            <span className={`text-[10px] ${muted}`}>Version {state.version}. Hides after 30 seconds.</span>
+            <span className={`type-hint ${muted}`}>Version {state.version}. Hides after 30 seconds.</span>
           </div>
         </div>
       )}
@@ -729,9 +729,9 @@ function SitesPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => voi
   }
   return (
     <div className="space-y-1.5" data-testid="vault-sites-panel">
-      {secret.hosts.length === 0 && <p className={`text-[11px] ${muted}`}>No sites yet.</p>}
+      {secret.hosts.length === 0 && <p className={`type-hint ${muted}`}>No sites yet.</p>}
       {secret.hosts.map((h) => (
-        <div key={h} className="flex items-center gap-2 text-[11px]">
+        <div key={h} className="flex items-center gap-2 type-hint">
           <span className="font-mono text-[var(--color-text-primary)]">{siteLabel(h)}</span>
           <button type="button" className={btn} disabled={busy} onClick={() => void run({ removeHosts: [h] })}>
             Remove
@@ -786,7 +786,7 @@ function DeliveryPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => 
   }
   return (
     <div className="space-y-1.5 max-w-md" data-testid="vault-delivery-panel">
-      <div className={`block text-[11px] ${muted}`}>
+      <div className={`block type-hint ${muted}`}>
         How agents get it
         <SettingDropdown
           fullWidth
@@ -799,7 +799,7 @@ function DeliveryPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => 
           onChange={setDelivery}
         />
       </div>
-      <div className={`block text-[11px] ${muted}`}>
+      <div className={`block type-hint ${muted}`}>
         The most an agent may ever get
         <SettingDropdown
           fullWidth
@@ -811,7 +811,7 @@ function DeliveryPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => 
           onChange={setCeiling}
         />
       </div>
-      {deliveryReadable(delivery) && <p className={`text-[11px] ${muted}`}>Agents can see this value.</p>}
+      {deliveryReadable(delivery) && <p className={`type-hint ${muted}`}>Agents can see this value.</p>}
       <button type="button" className={btn} disabled={busy} onClick={() => void save()}>
         Save
       </button>
@@ -888,7 +888,7 @@ function SharePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => voi
   }
   return (
     <div className="space-y-1.5 max-w-md" data-testid="vault-share-panel">
-      <div className={`block text-[11px] ${muted}`}>
+      <div className={`block type-hint ${muted}`}>
         Share with
         <SettingDropdown
           fullWidth
@@ -903,7 +903,7 @@ function SharePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => voi
           onChange={setTo}
         />
       </div>
-      <div className={`block text-[11px] ${muted}`}>
+      <div className={`block type-hint ${muted}`}>
         How they get it
         <SettingDropdown
           fullWidth
@@ -916,7 +916,7 @@ function SharePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => voi
           onChange={setAs}
         />
       </div>
-      {deliveryReadable(as) && <p className={`text-[11px] ${muted}`}>They can see this value, so you confirm first.</p>}
+      {deliveryReadable(as) && <p className={`type-hint ${muted}`}>They can see this value, so you confirm first.</p>}
       {pwMethod === null ? (
         <button type="button" className={btn} disabled={busy} onClick={() => void share()}>
           Share
@@ -929,7 +929,7 @@ function SharePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => voi
             void submitPassword(pwMethod)
           }}
         >
-          <label className={`text-[11px] ${muted}`}>
+          <label className={`type-hint ${muted}`}>
             {pwMethod === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
             <input
               ref={pwRef}
@@ -979,7 +979,7 @@ function RotatePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => vo
   }
   return (
     <div className="space-y-1.5 max-w-md" data-testid="vault-rotate-panel">
-      <p className={`text-[11px] ${muted}`}>Paste the new value from {secret.provider || 'the provider'}. Agents use it from their next call.</p>
+      <p className={`type-hint ${muted}`}>Paste the new value from {secret.provider || 'the provider'}. Agents use it from their next call.</p>
       <ValueField fieldRef={fieldRef} label={`New value for ${secret.name}`} onPresence={setHas} multiline={isMultilineKind(secret.kind)} />
       <button type="button" className={btn} disabled={busy || !has} onClick={() => void rotate()}>
         Rotate
@@ -1007,10 +1007,10 @@ function DestroyPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => v
   }
   return (
     <div className="space-y-1.5 max-w-md" data-testid="vault-destroy-panel">
-      <p className="text-[11px] text-[var(--color-text-primary)]">
+      <p className="type-hint text-[var(--color-text-primary)]">
         Destroy removes every version from this server. Earlier backups keep it until they expire.
       </p>
-      <label className={`block text-[11px] ${muted}`}>
+      <label className={`block type-hint ${muted}`}>
         Type {secret.name} to confirm
         <input value={typed} onChange={(e) => setTyped(e.target.value)} className={`${input} mt-1`} aria-label="Type the name to confirm" />
       </label>
@@ -1043,10 +1043,10 @@ function HistoryPanel({ secret }: { secret: VaultSecret }): React.JSX.Element {
   return (
     <div className="space-y-1" data-testid="vault-history-panel">
       <ErrorLine text={error} />
-      {rows === null && !error && <p className={`text-[11px] ${muted}`}>Loading…</p>}
-      {rows !== null && rows.length === 0 && <p className={`text-[11px] ${muted}`}>Nothing yet.</p>}
+      {rows === null && !error && <p className={`type-hint ${muted}`}>Loading…</p>}
+      {rows !== null && rows.length === 0 && <p className={`type-hint ${muted}`}>Nothing yet.</p>}
       {rows?.map((r) => (
-        <div key={r.seq} className="text-[10px] font-mono text-[var(--color-text-secondary)] break-all">
+        <div key={r.seq} className="type-hint font-mono text-[var(--color-text-secondary)] break-all">
           {r.ts} · {r.action} · {r.actor}
           {r.consumer ? ` · ${r.consumer}` : ''}
           {r.targetHost ? ` · ${r.targetHost}` : ''} · {r.outcome}
@@ -1084,20 +1084,20 @@ export function SecretRow({ secret, onChanged }: { secret: VaultSecret; onChange
   return (
     <div className="p-3 space-y-1.5" data-testid="vault-secret-row" data-secret={secret.name}>
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[12px] font-mono font-medium text-[var(--color-text-primary)]">{secret.name}</span>
-        <span className={`text-[10px] ${muted}`}>{kindLabel(secret.kind)}</span>
-        <span className={`text-[10px] ${muted}`}>v{secret.latestVersion}</span>
-        {disabled && <span className="text-[10px] px-1 border border-[var(--color-border)] text-[var(--color-text-secondary)]">disabled</span>}
+        <span className="type-name font-mono text-[var(--color-text-primary)]">{secret.name}</span>
+        <span className={`type-hint ${muted}`}>{kindLabel(secret.kind)}</span>
+        <span className={`type-hint ${muted}`}>v{secret.latestVersion}</span>
+        {disabled && <span className="type-hint px-1 border border-[var(--color-border)] text-[var(--color-text-secondary)]">disabled</span>}
         {secret.agentCanSee && (
           <span
-            className="text-[10px] px-1 border border-[var(--color-status-warn)] text-[var(--color-text-secondary)]"
+            className="type-hint px-1 border border-[var(--color-status-warn)] text-[var(--color-text-secondary)]"
             data-testid="vault-agent-can-see"
           >
             agent can see this
           </span>
         )}
       </div>
-      <div className="text-[11px] text-[var(--color-text-secondary)] space-y-0.5">
+      <div className="type-hint text-[var(--color-text-secondary)] space-y-0.5">
         <div>
           Sites:{' '}
           {sites.length === 0
@@ -1122,7 +1122,7 @@ export function SecretRow({ secret, onChanged }: { secret: VaultSecret; onChange
         </div>
         {secret.ref && (
           <div className="flex items-center gap-2">
-            <span className="font-mono text-[10px] text-[var(--color-text-primary)] select-all">{secret.ref}</span>
+            <span className="font-mono type-hint text-[var(--color-text-primary)] select-all">{secret.ref}</span>
             <CopyButton text={secret.ref} label="Copy reference" />
           </div>
         )}
@@ -1170,7 +1170,7 @@ export function SecretRow({ secret, onChanged }: { secret: VaultSecret; onChange
  *  an Admin may reveal it, with the same confirm as any reveal. */
 function SystemRow({ secret }: { secret: VaultSecret }): React.JSX.Element {
   return (
-    <div className="px-3 py-2 text-[11px] space-y-1.5" data-testid="vault-system-row">
+    <div className="px-3 py-2 type-hint space-y-1.5" data-testid="vault-system-row">
       <div className="flex flex-wrap gap-x-3">
         <span className="font-mono text-[var(--color-text-primary)]">{secret.name}</span>
         {secret.personReveal && secret.description ? <span className="text-[var(--color-text-primary)]">{secret.description}</span> : null}
@@ -1240,12 +1240,12 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
 
   return (
     <div className="border border-[var(--color-border)] p-3 space-y-2 max-w-lg" data-testid="vault-add-form">
-      <h3 className="text-[12px] font-medium text-[var(--color-text-primary)]">Add a secret</h3>
-      <label className={`block text-[11px] ${muted}`}>
+      <h3 className="type-heading text-[var(--color-text-primary)]">Add a secret</h3>
+      <label className={`block type-hint ${muted}`}>
         Name
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="STRIPE_KEY" className={`${input} mt-1 font-mono`} />
       </label>
-      <fieldset className="text-[11px] space-y-1">
+      <fieldset className="type-hint space-y-1">
         <legend className={muted}>Keep it for</legend>
         <label className="flex items-center gap-1.5 text-[var(--color-text-secondary)] cursor-pointer">
           <Radio checked={scope === 'workspace'} onChange={() => setScope('workspace')} />
@@ -1266,7 +1266,7 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
           all my agents
         </label>
       </fieldset>
-      <div className={`block text-[11px] ${muted}`}>
+      <div className={`block type-hint ${muted}`}>
         Kind
         <SettingDropdown
           fullWidth
@@ -1295,7 +1295,7 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
         />
       </div>
       {presets.length > 0 && (
-        <div className={`block text-[11px] ${muted}`}>
+        <div className={`block type-hint ${muted}`}>
           Service
           <SettingDropdown
             fullWidth
@@ -1318,7 +1318,7 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
           />
         </div>
       )}
-      <label className={`block text-[11px] ${muted}`}>
+      <label className={`block type-hint ${muted}`}>
         Only send it to
         <input
           value={sites}
@@ -1328,7 +1328,7 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
           data-testid="vault-add-sites"
         />
       </label>
-      <div className={`block text-[11px] ${muted}`}>
+      <div className={`block type-hint ${muted}`}>
         How agents get it
         <SettingDropdown
           fullWidth
@@ -1341,10 +1341,10 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
           onChange={setDelivery}
         />
       </div>
-      {deliveryReadable(delivery) && <p className={`text-[11px] ${muted}`}>Agents can see this value.</p>}
-      {needsSite && <p className={`text-[11px] ${danger}`}>Add a site, or let agents read it.</p>}
+      {deliveryReadable(delivery) && <p className={`type-hint ${muted}`}>Agents can see this value.</p>}
+      {needsSite && <p className={`type-hint ${danger}`}>Add a site, or let agents read it.</p>}
       <ValueField fieldRef={fieldRef} label="Value" onPresence={setHas} multiline={isMultilineKind(kind)} />
-      <p className={`text-[10px] ${muted}`}>
+      <p className={`type-hint ${muted}`}>
         A key can still do anything its service allows it to. Use a restricted key if you can.
       </p>
       <div className="flex gap-1.5">
@@ -1380,12 +1380,12 @@ function RequestsList(): React.JSX.Element {
   return (
     <div className="space-y-1" data-testid="vault-requests">
       <ErrorLine text={error} />
-      {rows === null && !error && <p className={`text-[11px] ${muted}`}>Loading…</p>}
-      {rows !== null && rows.length === 0 && <p className={`text-[11px] ${muted}`}>No secret cards yet.</p>}
+      {rows === null && !error && <p className={`type-hint ${muted}`}>Loading…</p>}
+      {rows !== null && rows.length === 0 && <p className={`type-hint ${muted}`}>No secret cards yet.</p>}
       {rows !== null && rows.length > 0 && (
         <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
           {rows.map((r) => (
-            <div key={r.cardId} className="p-2 text-[11px] space-y-0.5" data-testid="vault-request-row">
+            <div key={r.cardId} className="p-2 type-hint space-y-0.5" data-testid="vault-request-row">
               <div className="flex flex-wrap gap-x-3">
                 <span className="font-mono text-[var(--color-text-primary)]">{r.name}</span>
                 <span className="text-[var(--color-text-secondary)]">asked by {r.requestedBy}</span>
@@ -1459,8 +1459,8 @@ export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Eleme
   return (
     <div className="max-w-4xl space-y-4" data-settings-id="vault.status">
       <div>
-        <h2 className="text-base font-medium text-[var(--color-text-primary)]">Vault</h2>
-        <p className={`text-[11px] ${muted} mt-1 max-w-2xl`}>
+        <h2 className="type-title text-[var(--color-text-primary)]">Vault</h2>
+        <p className={`type-hint ${muted} mt-1 max-w-2xl`}>
           Secrets your agents use: API keys, passwords, tokens. Each one is only sent to the sites you pick, and every
           use is logged.
         </p>
@@ -1478,7 +1478,7 @@ export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Eleme
             aria-selected={tab === t}
             onClick={() => setTab(t)}
             data-settings-id={TAB_SETTINGS_ID[t]}
-            className={`px-3 py-1.5 text-[11px] cursor-pointer -mb-px border-b-2 ${
+            className={`px-3 py-1.5 type-control cursor-pointer -mb-px border-b-2 ${
               tab === t
                 ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
                 : 'border-transparent text-[var(--color-text-muted)]'
@@ -1520,10 +1520,10 @@ export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Eleme
             />
           )}
           <ErrorLine text={error} />
-          {loaded && !error && groups.length === 0 && <p className={`text-[11px] ${muted}`}>No secrets yet.</p>}
+          {loaded && !error && groups.length === 0 && <p className={`type-hint ${muted}`}>No secrets yet.</p>}
           {groups.map((g) => (
             <div key={g.key} className="space-y-1" data-testid="vault-group" data-group={g.key}>
-              <h3 className={`text-[11px] font-medium ${muted}`}>{g.title}</h3>
+              <h3 className={`type-heading ${muted}`}>{g.title}</h3>
               <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
                 {g.rows.map((s) => (
                   <SecretRow key={s.id} secret={s} onChanged={() => void refresh()} />
@@ -1533,10 +1533,10 @@ export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Eleme
           ))}
           {system.length > 0 && (
             <details className="border border-[var(--color-border)]" data-testid="vault-system">
-              <summary className={`px-3 py-2 text-[11px] ${muted} cursor-pointer`}>
+              <summary className={`px-3 py-2 type-control ${muted} cursor-pointer`}>
                 K2&rsquo;s own secrets ({system.length})
               </summary>
-              <p className={`px-3 text-[10px] ${muted}`}>K2 uses these itself. This page shows their names only.</p>
+              <p className={`px-3 type-hint ${muted}`}>K2 uses these itself. This page shows their names only.</p>
               <div className="divide-y divide-[var(--color-border)]">
                 {system.map((s) => (
                   <SystemRow key={s.id} secret={s} />

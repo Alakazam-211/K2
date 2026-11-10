@@ -24,7 +24,7 @@ import {
   type NoticeSenderChoice,
 } from './email-notice-api'
 
-const muted = 'text-[10px] text-[var(--color-text-muted)]'
+const muted = 'type-hint text-[var(--color-text-muted)]'
 
 /** The row's one-line state. */
 export function agentNoticeLine(row: AgentNoticeRow | null): string {
@@ -127,7 +127,7 @@ export function AgentEmailNoticesRow({ scope, projectId }: { scope: ServerScope;
     <div data-testid="agent-email-notices" data-settings-id="projects.agent-email-notices" className="py-2">
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
-          <div className="text-xs text-[var(--color-text-primary)]">Let this agent email people on this server</div>
+          <div className="type-row text-[var(--color-text-primary)]">Let this agent email people on this server</div>
           <div className={muted} data-testid="agent-email-notices-line">
             {loaded ? agentNoticeLine(row) : 'Loading…'}
           </div>
@@ -183,7 +183,7 @@ export function AgentEmailNoticesRow({ scope, projectId }: { scope: ServerScope;
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Vault password"
                   aria-label="Vault password"
-                  className="w-full px-2 py-1 text-xs bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                  className="w-full px-2 py-1 type-control bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)]"
                 />
               )}
               <div className="flex gap-2">
@@ -191,7 +191,7 @@ export function AgentEmailNoticesRow({ scope, projectId }: { scope: ServerScope;
                   type="button"
                   disabled={busy || !sender || (askPassword && password === '')}
                   onClick={() => void confirmOn(askPassword ? password : undefined)}
-                  className="px-2 py-1 text-[11px] border border-[var(--color-accent)] text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50"
+                  className="px-2 py-1 type-control border border-[var(--color-accent)] text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50"
                 >
                   Confirm and turn on
                 </button>
@@ -203,7 +203,7 @@ export function AgentEmailNoticesRow({ scope, projectId }: { scope: ServerScope;
                     setAskPassword(false)
                     setPassword('')
                   }}
-                  className="px-2 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] no-drag cursor-pointer"
+                  className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] no-drag cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -213,7 +213,7 @@ export function AgentEmailNoticesRow({ scope, projectId }: { scope: ServerScope;
         </div>
       )}
       {error && (
-        <p role="alert" data-testid="agent-email-notices-error" className="text-[11px] text-[var(--color-status-error)] mt-1">
+        <p role="alert" data-testid="agent-email-notices-error" className="type-hint text-[var(--color-status-error)] mt-1">
           {error}
         </p>
       )}

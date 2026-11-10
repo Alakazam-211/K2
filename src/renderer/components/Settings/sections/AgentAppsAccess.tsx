@@ -166,7 +166,7 @@ export function AgentAppsAccess({
   }
 
   const lock = readOnly ? null : role === 'owner' ? null : role === 'admin' ? 'admin' : role === null ? 'pending' : 'member'
-  const desc = compact ? 'hidden' : 'text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed'
+  const desc = compact ? 'hidden' : 'type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed'
 
   return (
     <div
@@ -184,9 +184,9 @@ export function AgentAppsAccess({
           onFlip={flipBuild}
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Build and run Apps{' '}
-            <span className="text-[10px] font-normal text-[var(--color-text-muted)]">Apps (beta)</span>
+            <span className="type-hint text-[var(--color-text-muted)]">Apps (beta)</span>
           </div>
           <div className={desc}>
             Builds, installs, deploys, runs and uninstalls its own Apps inside default limits (512 MiB each, up to 3 Apps),
@@ -209,7 +209,7 @@ export function AgentAppsAccess({
           onFlip={flipFull}
         />
         <div className="flex-1 min-w-0">
-          <div className={`text-xs font-medium ${build ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-muted)]'}`}>
+          <div className={`type-name ${build ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-muted)]'}`}>
             Manage its Apps end to end
           </div>
           <div className={desc}>
@@ -230,7 +230,7 @@ export function AgentAppsAccess({
           onFlip={flipUsers}
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">Let this agent manage its Apps&rsquo; users</div>
+          <div className="type-name text-[var(--color-text-primary)]">Let this agent manage its Apps&rsquo; users</div>
           <div className={desc}>
             {APP_USERS_SWITCH_COVERS} Off: adding a test guest, the guests-rooms grant or a key that manages users is a card
             for you; the rest is refused until you turn it on.
@@ -238,19 +238,19 @@ export function AgentAppsAccess({
         </div>
       </div>
 
-      <p className="text-[10px] text-[var(--color-text-secondary)]" data-testid="apps-wall-line">
+      <p className="type-hint text-[var(--color-text-secondary)]" data-testid="apps-wall-line">
         Loosening the wall always asks you.
       </p>
 
       <div className="space-y-1.5" role="group" aria-label="App cores">
-        <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">What its Apps may use</div>
+        <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)]">What its Apps may use</div>
         {APP_CORES.map((c) => {
           const on = cores.includes(c.id)
           const disabled = !may(on, !on)
           return (
             <label
               key={c.id}
-              className={`flex items-start gap-2 text-xs no-drag ${disabled ? 'cursor-default' : 'cursor-pointer'}`}
+              className={`flex items-start gap-2 type-row no-drag ${disabled ? 'cursor-default' : 'cursor-pointer'}`}
               title={lockedReason(role, on) ?? undefined}
             >
               <Checkbox
@@ -264,11 +264,11 @@ export function AgentAppsAccess({
               <span className="min-w-0">
                 <span className="text-[var(--color-text-primary)]">{c.label}</span>
                 {c.later ? (
-                  <span className="ml-1.5 text-[10px] text-[var(--color-text-muted)]" data-testid={`apps-core-${c.id}-later`}>
+                  <span className="ml-1.5 type-hint text-[var(--color-text-muted)]" data-testid={`apps-core-${c.id}-later`}>
                     {c.later}
                   </span>
                 ) : null}
-                {!compact ? <span className="block text-[10px] text-[var(--color-text-muted)]">{c.detail}</span> : null}
+                {!compact ? <span className="block type-hint text-[var(--color-text-muted)]">{c.detail}</span> : null}
               </span>
             </label>
           )
@@ -276,16 +276,16 @@ export function AgentAppsAccess({
       </div>
 
       {lock === 'admin' ? (
-        <p className="text-[10px] text-[var(--color-text-secondary)]" data-testid="apps-access-locked">
+        <p className="type-hint text-[var(--color-text-secondary)]" data-testid="apps-access-locked">
           You can turn these off. Only the server&rsquo;s owner turns them on.
         </p>
       ) : lock === 'member' ? (
-        <p className="text-[10px] text-[var(--color-text-secondary)]" data-testid="apps-access-locked">
+        <p className="type-hint text-[var(--color-text-secondary)]" data-testid="apps-access-locked">
           Only the server&rsquo;s owner or an admin can change these.
         </p>
       ) : null}
       {error ? (
-        <p role="alert" className="text-[10px] text-[var(--color-status-error-soft)]" data-testid="apps-access-error">
+        <p role="alert" className="type-hint text-[var(--color-status-error-soft)]" data-testid="apps-access-error">
           {error}
         </p>
       ) : null}

@@ -83,7 +83,7 @@ const ADVANCED_COLUMN =
 
 /** A Garden's name: reads as plain text, edits in place (border on hover/focus). */
 const NAME_INPUT =
-  'w-full px-1 py-0.5 -ml-1 text-xs bg-transparent border border-transparent text-[var(--color-text-primary)] outline-none hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-bg)] no-drag cursor-text truncate'
+  'w-full px-1 py-0.5 -ml-1 type-control bg-transparent border border-transparent text-[var(--color-text-primary)] outline-none hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-bg)] no-drag cursor-text truncate'
 /** Where the drop line paints on a row: above it, below it, or nowhere. */
 type DropEdge = 'top' | 'bottom' | null
 
@@ -458,7 +458,7 @@ function GardenList({
         ))}
       </ol>
       {filtering && gardens.length === 0 && (
-        <p data-zen-gardens-no-match="" className="py-3 text-xs text-[var(--color-text-muted)]">
+        <p data-zen-gardens-no-match="" className="py-3 type-hint text-[var(--color-text-muted)]">
           No Gardens match “{query.trim()}”
         </p>
       )}
@@ -495,7 +495,7 @@ function GardenSearch({ value, onChange }: { value: string; onChange(v: string):
           aria-label="Clear search"
           title="Clear search"
           onClick={() => onChange('')}
-          className="absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+          className="absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
         >
           ×
         </button>
@@ -529,7 +529,7 @@ function Advanced({
     >
       <h3
         id="zen-gardens-advanced-title"
-        className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider"
+        className="type-section text-[var(--color-text-muted)] uppercase tracking-wider"
       >
         Advanced
       </h3>
@@ -537,7 +537,7 @@ function Advanced({
           {setUp && (
             <div data-settings-id="zen-gardens.theme">
               <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-                <div className="text-xs text-[var(--color-text-primary)]">Global theme</div>
+                <div className="type-row text-[var(--color-text-primary)]">Global theme</div>
                 <SettingDropdown
                   ariaLabel="Global Zen theme"
                   value={globalTheme ?? ''}
@@ -553,7 +553,7 @@ function Advanced({
           {path ? (
             <div data-settings-id="zen-gardens.folder">
               <div className="flex items-center justify-between gap-3 py-2 border-b border-[var(--color-border)]">
-                <span className="text-[11px] font-mono text-[var(--color-text-primary)] select-all truncate" data-zen-gardens-path="">
+                <span className="type-hint font-mono text-[var(--color-text-primary)] select-all truncate" data-zen-gardens-path="">
                   {path}
                 </span>
                 {setUp ? (
@@ -604,8 +604,8 @@ export function ZenGardensSection(): React.JSX.Element {
     // full-height divider in the middle.
     <div className={COLUMNS} data-zen-gardens-section="" data-zen-gardens-columns="">
         <div className={LIST_COLUMN} data-zen-gardens-list-column="">
-          <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Gardens</h2>
-          <p className="text-xs text-[var(--color-text-muted)] mb-6">Your Zen pages on this computer.</p>
+          <h2 className="type-title text-[var(--color-text-primary)] mb-1">Gardens</h2>
+          <p className="type-hint text-[var(--color-text-muted)] mb-6">Your Zen pages on this computer.</p>
           {st.failure ? (
             <div className="mb-4">
               <InlineError text={zenSettingsErrorText(new Error(st.failure.message))} testId="zen-gardens-load-error" />
@@ -616,10 +616,10 @@ export function ZenGardensSection(): React.JSX.Element {
           ) : null}
 
           {!hasData ? (
-            st.failure ? null : <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
+            st.failure ? null : <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
           ) : !st.setUp ? (
             <div data-zen-gardens-setup="">
-              <p className="text-xs text-[var(--color-text-secondary)] mb-3">Gardens aren’t set up on this computer yet.</p>
+              <p className="type-row text-[var(--color-text-secondary)] mb-3">Gardens aren’t set up on this computer yet.</p>
               <button
                 type="button"
                 disabled={busy}

@@ -62,11 +62,11 @@ export function folderTrustLine(s: FolderTrustStatus): string {
   const by = s.decided_by ? ` by ${s.decided_by}${s.decided_at ? ` on ${day(s.decided_at)}` : ''}` : ''
   switch (s.state) {
     case 'clean':
-      return 'Clean, no risky settings'
+      return 'No risky settings found in this folder'
     case 'trusted':
       return s.decided_by === 'upgrade' ? 'Trusted before K2 checked; K2 asks again if these settings change' : `Trusted this version${by}`
     case 'always':
-      return `Always${by}`
+      return `Always trusted${by}`
     case 'denied':
       return `Not trusted${by}: K2 starts no programs here`
     case 'pending':
@@ -194,18 +194,18 @@ export function FolderTrustRow({ scope, projectPath }: { scope: ServerScope; pro
   )
 
   const canReset = status !== null && ['trusted', 'always', 'denied', 'changed'].includes(status.state)
-  const buttonClass = 'text-[10px] px-2 py-1 border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-50'
+  const buttonClass = 'type-control px-2 py-1 border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-50'
 
   return (
     <div className="border border-[var(--color-border)] p-3" data-settings-id="projects.folder-trust">
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">Folder trust</div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed" data-testid="folder-trust-line">
+          <div className="type-name text-[var(--color-text-primary)]">Folder trust</div>
+          <div className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed" data-testid="folder-trust-line">
             {status ? folderTrustLine(status) : error ? '' : 'Checking…'}
           </div>
           {status && status.findings.length > 0 && status.state !== 'clean' ? (
-            <ul className="text-[10px] text-[var(--color-text-secondary)] mt-1 leading-relaxed">
+            <ul className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed">
               {status.findings.slice(0, 5).map((f) => (
                 <li key={`${f.file}:${f.what}`}>
                   <code>{f.file}</code>: {f.detail}
@@ -217,7 +217,7 @@ export function FolderTrustRow({ scope, projectPath }: { scope: ServerScope; pro
             </ul>
           ) : null}
           {status && status.state === 'denied' && status.trusted_by.length > 0 ? (
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1">Still trusted elsewhere: {status.trusted_by.join('; ')}</div>
+            <div className="type-hint text-[var(--color-text-muted)] mt-1">Still trusted elsewhere: {status.trusted_by.join('; ')}</div>
           ) : null}
           {waiting ? (
             <div className="flex flex-wrap gap-1.5 mt-2" data-testid="folder-trust-choices">
@@ -229,12 +229,12 @@ export function FolderTrustRow({ scope, projectPath }: { scope: ServerScope; pro
             </div>
           ) : null}
           {notice ? (
-            <div className="text-[10px] text-[var(--color-text-secondary)] mt-1 leading-relaxed" data-testid="folder-trust-notice">
+            <div className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed" data-testid="folder-trust-notice">
               {notice}
             </div>
           ) : null}
           {error ? (
-            <div role="alert" className="text-[10px] text-[var(--color-danger,#c33)] mt-1">
+            <div role="alert" className="type-hint text-[var(--color-danger,#c33)] mt-1">
               {error}
             </div>
           ) : null}

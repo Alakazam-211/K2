@@ -248,10 +248,10 @@ function SubmitKeysEditor({
 
   return (
     <div className="space-y-2" data-settings-id="agents.submit-keys">
-      <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+      <div className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
         Submit keys
       </div>
-      <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+      <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
         How K2 delivers a message into this LLM’s terminal.{' '}
         <span className="text-[var(--color-text-secondary)] font-medium">Paste message</span> writes
         the text (not Cmd+V). Return submits. Esc / Space are extra TUI keys (e.g. Grok). Wait is
@@ -261,7 +261,7 @@ function SubmitKeysEditor({
         {steps.map((step, i) => (
           <div key={i} className="flex items-center gap-1.5">
             <span
-              className="w-4 shrink-0 text-[10px] text-[var(--color-text-muted)] font-mono text-right tabular-nums"
+              className="w-4 shrink-0 type-hint text-[var(--color-text-muted)] font-mono text-right tabular-nums"
               aria-hidden="true"
             >
               {i + 1}
@@ -286,14 +286,14 @@ function SubmitKeysEditor({
               onKeyDown={(e) => {
                 if (e.key === 'Enter') e.stopPropagation()
               }}
-              className="w-16 px-1.5 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
+              className="w-16 px-1.5 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
             />
-            <span className="text-[10px] text-[var(--color-text-muted)] font-mono">ms</span>
+            <span className="type-hint text-[var(--color-text-muted)] font-mono">ms</span>
             <button
               type="button"
               onClick={() => move(i, -1)}
               disabled={i === 0}
-              className="px-1 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] disabled:opacity-30 no-drag cursor-pointer font-mono"
+              className="px-1 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] disabled:opacity-30 no-drag cursor-pointer font-mono"
               aria-label="Move step up"
             >
               ↑
@@ -302,7 +302,7 @@ function SubmitKeysEditor({
               type="button"
               onClick={() => move(i, 1)}
               disabled={i === steps.length - 1}
-              className="px-1 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] disabled:opacity-30 no-drag cursor-pointer font-mono"
+              className="px-1 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] disabled:opacity-30 no-drag cursor-pointer font-mono"
               aria-label="Move step down"
             >
               ↓
@@ -311,7 +311,7 @@ function SubmitKeysEditor({
               type="button"
               onClick={() => remove(i)}
               disabled={steps.length <= 1}
-              className="px-1 py-0.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] border border-[var(--color-border)] disabled:opacity-30 no-drag cursor-pointer font-mono"
+              className="px-1 py-0.5 type-control text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] border border-[var(--color-border)] disabled:opacity-30 no-drag cursor-pointer font-mono"
               aria-label="Remove step"
             >
               ×
@@ -324,14 +324,14 @@ function SubmitKeysEditor({
           type="button"
           onClick={add}
           disabled={steps.length >= 16}
-          className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] disabled:opacity-30 no-drag cursor-pointer font-mono"
+          className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] disabled:opacity-30 no-drag cursor-pointer font-mono"
         >
           Add step
         </button>
         <button
           type="button"
           onClick={() => onChange(cloneDefaultInjectFlowForCommand(command))}
-          className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer font-mono"
+          className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer font-mono"
         >
           Reset to default
         </button>
@@ -357,8 +357,8 @@ function DefaultAgentPickerInline({
   return (
     <div className="flex items-center justify-between px-3 py-2.5" data-settings-id="agents.default-agent">
       <div>
-        <div className="text-xs text-[var(--color-text-secondary)]">Default AI Agent</div>
-        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+        <div className="type-row text-[var(--color-text-secondary)]">Default AI Agent</div>
+        <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
           <KeyCombo combo={defaultAgentLaunchCopy()} />
         </div>
       </div>
@@ -551,14 +551,14 @@ export function AgentsSection(): React.JSX.Element {
       {/* Left: defaults, launch bar, presets */}
       <div className="flex-1 min-w-0 overflow-y-auto p-6 pr-3 [scrollbar-gutter:stable] space-y-8">
         <div>
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">Defaults</h2>
+          <h2 className="type-title text-[var(--color-text-primary)] mb-3">Defaults</h2>
           <div className="border border-[var(--color-border)]">
             <DefaultAgentPickerInline presets={presets} />
           </div>
         </div>
 
         <label
-          className="flex items-center gap-2 border border-[var(--color-border)] px-3 py-2.5 text-xs text-[var(--color-text-secondary)] cursor-pointer select-none"
+          className="flex items-center gap-2 border border-[var(--color-border)] px-3 py-2.5 type-control text-[var(--color-text-secondary)] cursor-pointer select-none"
           data-settings-id="agents.show-launch-bar"
         >
           <Checkbox
@@ -570,11 +570,11 @@ export function AgentsSection(): React.JSX.Element {
 
         <div data-settings-id="agents.agent-presets">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Agent Presets</h2>
+            <h2 className="type-title text-[var(--color-text-primary)]">Agent Presets</h2>
             <button
               type="button"
               onClick={() => void handleResetBuiltIns()}
-              className="px-3 py-1 text-xs text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer font-mono"
+              className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer font-mono"
               data-settings-id="agents.reset-built-ins"
             >
               Reset Built-ins
@@ -600,22 +600,22 @@ export function AgentsSection(): React.JSX.Element {
 
                 <span className="w-5 flex items-center justify-center flex-shrink-0">
                   {preset.icon ? (
-                    <span className="text-sm leading-none">{preset.icon}</span>
+                    <span className="type-row leading-none">{preset.icon}</span>
                   ) : (
                     <AgentIcon agent={preset.label} size={16} />
                   )}
                 </span>
 
-                <span className="text-xs text-[var(--color-text-primary)] font-mono w-28 truncate flex-shrink-0">
+                <span className="type-row text-[var(--color-text-primary)] font-mono w-28 truncate flex-shrink-0">
                   {preset.label}
                 </span>
 
-                <span className="text-[10px] text-[var(--color-text-muted)] font-mono flex-1 truncate">
+                <span className="type-hint text-[var(--color-text-muted)] font-mono flex-1 truncate">
                   {preset.command}
                 </span>
 
                 {preset.isBuiltIn ? (
-                  <span className="text-[9px] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-0.5 flex-shrink-0 font-mono">
+                  <span className="type-hint text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-0.5 flex-shrink-0 font-mono">
                     built-in
                   </span>
                 ) : null}
@@ -626,7 +626,7 @@ export function AgentsSection(): React.JSX.Element {
                     e.stopPropagation()
                     handleEditPreset(preset)
                   }}
-                  className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] opacity-0 group-hover:opacity-100 transition-opacity no-drag cursor-pointer font-mono flex-shrink-0"
+                  className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] opacity-0 group-hover:opacity-100 transition-opacity no-drag cursor-pointer font-mono flex-shrink-0"
                 >
                   edit
                 </button>
@@ -638,7 +638,7 @@ export function AgentsSection(): React.JSX.Element {
                       e.stopPropagation()
                       void handleDeletePreset(preset.id)
                     }}
-                    className="text-[10px] text-[color-mix(in_srgb,var(--color-status-error-soft)_60%,transparent)] hover:text-[var(--color-status-error-soft)] opacity-0 group-hover:opacity-100 transition-opacity no-drag cursor-pointer font-mono flex-shrink-0"
+                    className="type-hint text-[color-mix(in_srgb,var(--color-status-error-soft)_60%,transparent)] hover:text-[var(--color-status-error-soft)] opacity-0 group-hover:opacity-100 transition-opacity no-drag cursor-pointer font-mono flex-shrink-0"
                   >
                     del
                   </button>
@@ -660,7 +660,7 @@ export function AgentsSection(): React.JSX.Element {
               className="mt-2 border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 space-y-2"
               onKeyDown={handleFormKeyDown}
             >
-              <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1">
+              <div className="type-section text-[var(--color-text-muted)] uppercase tracking-wider mb-1">
                 {presetForm.editingId ? 'Edit Preset' : 'New Preset'}
               </div>
               <div className="flex items-center gap-2">
@@ -669,7 +669,7 @@ export function AgentsSection(): React.JSX.Element {
                   value={presetForm.icon}
                   onChange={(e) => setPresetForm((s) => ({ ...s, icon: e.target.value }))}
                   placeholder="Icon"
-                  className="w-10 px-1 py-1 text-center text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
+                  className="w-10 px-1 py-1 text-center type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
                 />
                 <input
                   ref={formLabelRef}
@@ -677,14 +677,14 @@ export function AgentsSection(): React.JSX.Element {
                   value={presetForm.label}
                   onChange={(e) => setPresetForm((s) => ({ ...s, label: e.target.value }))}
                   placeholder="Label"
-                  className="w-28 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
+                  className="w-28 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
                 />
                 <input
                   type="text"
                   value={presetForm.command}
                   onChange={(e) => setPresetForm((s) => ({ ...s, command: e.target.value }))}
                   placeholder="Command (e.g. aider --model gpt-4)"
-                  className="flex-1 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
+                  className="flex-1 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
                 />
               </div>
               <SubmitKeysEditor
@@ -698,14 +698,14 @@ export function AgentsSection(): React.JSX.Element {
                 <button
                   type="button"
                   onClick={cancelForm}
-                  className="px-3 py-1 text-xs text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer font-mono"
+                  className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer font-mono"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={() => void submitForm()}
-                  className="px-3 py-1 text-xs bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/80 no-drag cursor-pointer font-mono"
+                  className="px-3 py-1 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/80 no-drag cursor-pointer font-mono"
                 >
                   {presetForm.editingId ? 'Save' : 'Add'}
                 </button>
@@ -717,7 +717,7 @@ export function AgentsSection(): React.JSX.Element {
             <button
               type="button"
               onClick={openAddForm}
-              className="px-3 py-1 text-xs text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer font-mono"
+              className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer font-mono"
               data-settings-id="agents.add-preset"
             >
               + Add Custom Preset
@@ -882,8 +882,8 @@ function CLIInstallGuide(): React.JSX.Element {
 
   return (
     <div>
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">CLI Tools Setup</h2>
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-3">
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1">CLI Tools Setup</h2>
+      <p className="type-hint text-[var(--color-text-muted)] mb-3">
         Install instructions for each AI coding agent. Click to expand.
       </p>
 
@@ -913,10 +913,10 @@ function CLIInstallGuide(): React.JSX.Element {
                 >
                   <polygon points="1,0 7,4 1,8" />
                 </svg>
-                <span className="text-xs text-[var(--color-text-primary)] font-mono flex-1">
+                <span className="type-row text-[var(--color-text-primary)] font-mono flex-1">
                   {entry.name}
                 </span>
-                <span className="text-[10px] text-[var(--color-text-muted)] font-mono">
+                <span className="type-hint text-[var(--color-text-muted)] font-mono">
                   {entry.command}
                 </span>
               </button>
@@ -924,7 +924,7 @@ function CLIInstallGuide(): React.JSX.Element {
               {isExpanded && (
                 <div className="px-3 pb-3 pt-0 ml-5 space-y-2">
                   <div className="flex items-center gap-2">
-                    <code className="flex-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1.5 text-[var(--color-text-primary)] select-all">
+                    <code className="flex-1 type-hint font-mono bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1.5 text-[var(--color-text-primary)] select-all">
                       {entry.installCommand}
                     </code>
                     {isInstallableCli(entry.command) && (
@@ -935,7 +935,7 @@ function CLIInstallGuide(): React.JSX.Element {
                           if (isInstallableCli(command)) handleInstall(command)
                         }}
                         disabled={installing === entry.command}
-                        className="flex-shrink-0 px-2 py-1.5 text-[10px] font-mono border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer disabled:cursor-wait"
+                        className="flex-shrink-0 px-2 py-1.5 type-control font-mono border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer disabled:cursor-wait"
                       >
                         {installing === entry.command ? installingCliLabel(entry.command) : 'Install'}
                       </button>
@@ -943,7 +943,7 @@ function CLIInstallGuide(): React.JSX.Element {
                     <button
                       type="button"
                       onClick={() => handleCopy(entry.installCommand, i)}
-                      className="flex-shrink-0 px-2 py-1.5 text-[10px] font-mono border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
+                      className="flex-shrink-0 px-2 py-1.5 type-control font-mono border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
                       style={{
                         color: isCopied ? 'var(--color-status-ok)' : 'var(--color-text-muted)',
                       }}
@@ -952,13 +952,13 @@ function CLIInstallGuide(): React.JSX.Element {
                     </button>
                   </div>
                   {isInstallableCli(entry.command) && installError[entry.command] && (
-                    <p className="text-[10px] text-[var(--color-status-error)] leading-relaxed">
+                    <p className="type-hint text-[var(--color-status-error)] leading-relaxed">
                       {installError[entry.command]}
                     </p>
                   )}
 
                   {entry.notes && (
-                    <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+                    <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
                       {entry.notes}
                     </p>
                   )}
@@ -967,7 +967,7 @@ function CLIInstallGuide(): React.JSX.Element {
                     href={entry.docs}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-block text-[10px] text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 font-mono transition-colors"
+                    className="inline-block type-hint text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 font-mono transition-colors"
                   >
                     Documentation →
                   </a>

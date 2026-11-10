@@ -32,10 +32,10 @@ export function AgentsCanCreateConnectionsRow(): React.JSX.Element {
       data-settings-id="k2-connect.agents-can-create-connections"
     >
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
+        <span className="type-row text-[var(--color-text-secondary)]">
           Allow agents to create connections
         </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
           {allow
             ? 'Agents on this host may add and remove workspace connections. Each workspace can also opt in individually under Workspaces. You (the owner) can always manage connections.'
             : 'Off (recommended): agents cannot add or remove connections. Turn on to let agents wire workspaces on this host — each workspace can also opt in individually under Workspaces. You (the owner) can always manage connections.'}

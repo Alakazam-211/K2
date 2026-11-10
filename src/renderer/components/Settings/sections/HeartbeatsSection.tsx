@@ -265,13 +265,13 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 no-drag" role="dialog" aria-modal="true" aria-label={isEdit ? 'Edit schedule' : 'Add heartbeat'}>
       <div {...floatMaterial('dialog')} className="w-[520px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] p-5 shadow-2xl">
-        <div className="text-sm font-medium text-[var(--color-text-primary)] mb-4">
+        <div className="type-heading text-[var(--color-text-primary)] mb-4">
           {isEdit ? `Edit schedule: ${initial?.name}` : 'Add heartbeat'}
         </div>
 
         {!isEdit && (
           <div className="mb-3">
-            <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
+            <label className="block type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
               Name
             </label>
             <input
@@ -279,16 +279,16 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
               value={name}
               onChange={(e) => setName(e.target.value.toLowerCase())}
               placeholder="daily-brief"
-              className="w-full px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
+              className="w-full px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
             />
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1">
+            <div className="type-hint text-[var(--color-text-muted)] mt-1">
               Lowercase, hyphens, digits. Becomes the folder name under <code>heartbeats/</code>.
             </div>
           </div>
         )}
 
         <div className="mb-3">
-          <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
+          <label className="block type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
             Frequency
           </label>
           <SettingDropdown
@@ -306,19 +306,19 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
 
         {(spec.frequency === 'daily' || spec.frequency === 'weekly' || spec.frequency === 'monthly' || spec.frequency === 'yearly') && (
           <div className="mb-3">
-            <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Time</label>
+            <label className="block type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Time</label>
             <input
               type="time"
               value={spec.time ?? '07:00'}
               onChange={(e) => update({ time: e.target.value })}
-              className="px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+              className="px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
             />
           </div>
         )}
 
         {spec.frequency === 'weekly' && (
           <div className="mb-3">
-            <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Days of week</label>
+            <label className="block type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Days of week</label>
             <div className="flex gap-1 flex-wrap">
               {WEEK_DAYS.map((d) => {
                 const on = (spec.days ?? []).includes(d)
@@ -326,7 +326,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
                   <button
                     key={d}
                     onClick={() => toggleDay(d)}
-                    className={`px-2 py-1 text-[11px] cursor-pointer no-drag ${
+                    className={`px-2 py-1 type-control cursor-pointer no-drag ${
                       on
                         ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                         : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border)]'
@@ -342,7 +342,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
 
         {(spec.frequency === 'monthly' || spec.frequency === 'yearly') && (
           <div className="mb-3">
-            <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
+            <label className="block type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
               Day(s) of month (comma-separated 1–31)
             </label>
             <input
@@ -357,14 +357,14 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
                 })
               }
               placeholder="1, 15"
-              className="w-full px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+              className="w-full px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
             />
           </div>
         )}
 
         {spec.frequency === 'yearly' && (
           <div className="mb-3">
-            <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Months</label>
+            <label className="block type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Months</label>
             <div className="flex gap-1 flex-wrap">
               {MONTHS.map((m) => {
                 const on = (spec.months ?? []).includes(m)
@@ -372,7 +372,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
                   <button
                     key={m}
                     onClick={() => toggleMonth(m)}
-                    className={`px-2 py-1 text-[11px] cursor-pointer no-drag ${
+                    className={`px-2 py-1 type-control cursor-pointer no-drag ${
                       on
                         ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
                         : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border)]'
@@ -390,7 +390,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
           <>
             <div className="mb-3 flex gap-3">
               <div>
-                <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
+                <label className="block type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
                   Every (minutes)
                 </label>
                 <input
@@ -410,25 +410,25 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
                     const mins = e.target.value === '' ? NaN : Number(e.target.value)
                     update({ every_seconds: mins * 60 })
                   }}
-                  className="w-24 px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                  className="w-24 px-2 py-1.5 type-row bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
                 />
               </div>
               <div>
-                <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Start</label>
+                <label className="block type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Start</label>
                 <input
                   type="time"
                   value={spec.start ?? '09:00'}
                   onChange={(e) => update({ start: e.target.value })}
-                  className="px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                  className="px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
                 />
               </div>
               <div>
-                <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">End</label>
+                <label className="block type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1">End</label>
                 <input
                   type="time"
                   value={spec.end ?? '17:00'}
                   onChange={(e) => update({ end: e.target.value })}
-                  className="px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                  className="px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
                 />
               </div>
             </div>
@@ -439,7 +439,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
           <div className="mb-3">
             <button
               onClick={toggleWindow}
-              className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
+              className="flex items-center gap-1.5 type-hint text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
             >
               <span
                 role="checkbox"
@@ -461,26 +461,26 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
             {windowOn && (
               <div className="mt-2 flex gap-3 items-end">
                 <div>
-                  <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Window start</label>
+                  <label className="block type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Window start</label>
                   <input
                     type="time"
                     value={spec.start ?? '09:00'}
                     onChange={(e) => update({ start: e.target.value })}
-                    className="px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                    className="px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Window end</label>
+                  <label className="block type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Window end</label>
                   <input
                     type="time"
                     value={spec.end ?? '17:00'}
                     onChange={(e) => update({ end: e.target.value })}
-                    className="px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                    className="px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
                   />
                 </div>
               </div>
             )}
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1">
+            <div className="type-hint text-[var(--color-text-muted)] mt-1">
               Fires — including catch-ups for missed occurrences — happen only inside this
               window; a fire that comes due outside it waits for the window to open.
             </div>
@@ -491,7 +491,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
           <div className="mb-3">
             <label
               htmlFor="heartbeat-add-instructions"
-              className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1"
+              className="block type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1"
             >
               Instructions
             </label>
@@ -501,28 +501,28 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
               onChange={(e) => setInstructions(e.target.value)}
               rows={5}
               placeholder="Check the inbox and summarise anything new."
-              className="w-full px-2 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-y"
+              className="w-full px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-y"
             />
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1">
+            <div className="type-hint text-[var(--color-text-muted)] mt-1">
               Required. What the agent does each time this fires. Saved as the heartbeat's <code>WAKEUP.md</code>.
             </div>
           </div>
         )}
 
-        {error && <div className="text-[11px] text-[var(--color-status-error-soft)] mb-3">{error}</div>}
+        {error && <div className="type-hint text-[var(--color-status-error-soft)] mb-3">{error}</div>}
 
         <div className="flex justify-end gap-2">
           <button
             onClick={onCancel}
             disabled={busy}
-            className="px-3 py-1.5 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag disabled:opacity-50"
+            className="px-3 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
             disabled={busy || (!isEdit && !nameValid) || formError !== null}
-            className="px-3 py-1.5 text-xs bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag disabled:opacity-50"
+            className="px-3 py-1.5 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag disabled:opacity-50"
           >
             {busy ? 'Saving…' : isEdit ? 'Update' : 'Add'}
           </button>
@@ -813,8 +813,8 @@ export function HistoryPanel({
     <div className={fillHeight ? 'flex flex-col h-full min-h-0' : undefined}>
       <div className={`flex items-center justify-between mb-2 ${fillHeight ? 'flex-shrink-0' : ''}`}>
         <div>
-          <h3 className="text-xs font-medium text-[var(--color-text-primary)]">Run history</h3>
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+          <h3 className="type-heading text-[var(--color-text-primary)]">Run history</h3>
+          <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
             Last 50 heartbeat fires. Refreshes every 15s.
           </p>
         </div>
@@ -838,13 +838,13 @@ export function HistoryPanel({
         }
       >
         {loading ? (
-          <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">Loading…</div>
+          <div className="px-3 py-2 type-hint text-[var(--color-text-muted)]">Loading…</div>
         ) : fires.length === 0 ? (
-          <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">No fires recorded yet.</div>
+          <div className="px-3 py-2 type-hint text-[var(--color-text-muted)]">No fires recorded yet.</div>
         ) : (
           groups.map(([label, entries]) => (
             <div key={label}>
-              <div className="px-3 py-1 bg-[var(--color-bg-elevated)] text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)] sticky top-0">
+              <div className="px-3 py-1 bg-[var(--color-bg-elevated)] type-section uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)] sticky top-0">
                 {label}
               </div>
               {entries.map((f) => {
@@ -852,7 +852,7 @@ export function HistoryPanel({
                 return (
                   <div
                     key={f.id}
-                    className="px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0 text-[10px]"
+                    className="px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0 type-hint"
                     title={f.reason ?? ''}
                   >
                     <div className="flex items-center gap-2">
@@ -879,23 +879,23 @@ export function HistoryPanel({
                       <span className={`ml-auto ${decisionColor(f.decision)}`}>{shortDecision(f.decision)}</span>
                     </div>
                     {f.decision === 'changed' ? (
-                      <div className="text-[9px] text-[var(--color-text-muted)] truncate">
+                      <div className="type-hint text-[var(--color-text-muted)] truncate">
                         {heartbeatHistoryActorLine(f)}
                       </div>
                     ) : (
                       <>
                         {f.reason && (
-                          <div className="text-[9px] text-[var(--color-text-muted)] truncate">{f.reason}</div>
+                          <div className="type-hint text-[var(--color-text-muted)] truncate">{f.reason}</div>
                         )}
                         {heartbeatHistoryActorLine(f) && (
-                          <div className="text-[9px] text-[var(--color-text-muted)] truncate">
+                          <div className="type-hint text-[var(--color-text-muted)] truncate">
                             {heartbeatHistoryActorLine(f)}
                           </div>
                         )}
                       </>
                     )}
                     {(inbox || f.durationMs != null) && (
-                      <div className="text-[9px] text-[var(--color-text-muted)] flex gap-2">
+                      <div className="type-hint text-[var(--color-text-muted)] flex gap-2">
                         {inbox && <span>inbox: {inbox}</span>}
                         {f.durationMs != null && <span>{f.durationMs}ms</span>}
                       </div>
@@ -1144,35 +1144,35 @@ export function HeartbeatsPanel({
     <div data-settings-id="heartbeats">
       <div className="flex items-center justify-between mb-2">
         <div>
-          <h3 className="text-xs font-medium text-[var(--color-text-primary)] flex items-center gap-2">
+          <h3 className="type-heading text-[var(--color-text-primary)] flex items-center gap-2">
             Heartbeats
             <span
-              className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
+              className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
               title="This feature is in beta — interface and behavior may change"
             >
               beta
             </span>
           </h3>
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+          <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
             Scheduled wakeups for <span className="text-[var(--color-text-secondary)]">{agentModeLabel(agentMode, agentName)}</span>. Each fires on its own cadence with its own <span className="font-mono">WAKEUP.md</span>.
           </p>
         </div>
         <button
           onClick={() => setShowAdd(true)}
           title="Add heartbeat"
-          className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
+          className="w-6 h-6 flex items-center justify-center type-control leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
         >
           +
         </button>
       </div>
 
       {rows.length === 0 ? (
-        <div className="p-3 border border-dashed border-[var(--color-border)] text-[10px] text-[var(--color-text-muted)]">
+        <div className="p-3 border border-dashed border-[var(--color-border)] type-hint text-[var(--color-text-muted)]">
           No heartbeats yet. Click <strong>+ Add heartbeat</strong>.
         </div>
       ) : (
         <div className="border border-[var(--color-border)]">
-          <div className="grid grid-cols-[1.2fr_2fr_auto_auto] gap-3 px-3 py-1.5 bg-[var(--color-bg-elevated)] text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
+          <div className="grid grid-cols-[1.2fr_2fr_auto_auto] gap-3 px-3 py-1.5 bg-[var(--color-bg-elevated)] type-section uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
             <div>Heartbeat Name</div>
             <div>Schedule (click to edit)</div>
             <div className="text-right pr-[28px]">Wakeup</div>
@@ -1189,7 +1189,7 @@ export function HeartbeatsPanel({
             return (
               <div
                 key={r.id}
-                className="px-3 py-2 border-b border-[var(--color-border)] last:border-b-0 text-xs"
+                className="px-3 py-2 border-b border-[var(--color-border)] last:border-b-0 type-row"
               >
                 <div className="grid grid-cols-[1.2fr_2fr_auto_auto] gap-3 items-center">
                 {/* Col 1 — name (click-to-edit) + last-fired hint */}
@@ -1205,7 +1205,7 @@ export function HeartbeatsPanel({
                         if (e.key === 'Enter') { e.preventDefault(); void commitRename(r) }
                         else if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
                       }}
-                      className="font-mono text-xs px-1 py-0.5 bg-[var(--color-bg-elevated)] border border-[var(--color-accent)] text-[var(--color-text-primary)] focus:outline-none"
+                      className="font-mono type-control px-1 py-0.5 bg-[var(--color-bg-elevated)] border border-[var(--color-accent)] text-[var(--color-text-primary)] focus:outline-none"
                     />
                   ) : (
                     <span
@@ -1217,9 +1217,9 @@ export function HeartbeatsPanel({
                     </span>
                   )}
                   {isRenaming && renameError ? (
-                    <span className="text-[9px] text-[var(--color-status-error-soft)] truncate">{renameError}</span>
+                    <span className="type-hint text-[var(--color-status-error-soft)] truncate">{renameError}</span>
                   ) : (
-                    <span className="text-[9px] text-[var(--color-text-muted)] truncate">
+                    <span className="type-hint text-[var(--color-text-muted)] truncate">
                       Last fired: {describeLastFired(r.lastFired)}
                     </span>
                   )}
@@ -1235,7 +1235,7 @@ export function HeartbeatsPanel({
                     row={r}
                     nextFire={nextFire}
                     nextPrefix="Next: "
-                    className="text-[9px] truncate"
+                    className="type-hint truncate"
                   />
                   {/* Delivery drop-down (replaces the 0.37.8 checkbox) —
                       pinned chat / own session / a trained saved
@@ -1274,7 +1274,7 @@ export function HeartbeatsPanel({
                   className="text-left text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag truncate"
                   title="Click to edit schedule"
                 >
-                  <span className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mr-2">{r.frequency}</span>
+                  <span className="type-section uppercase tracking-wider text-[var(--color-text-muted)] mr-2">{r.frequency}</span>
                   {describeSpec(r)}
                 </button>
 
@@ -1285,7 +1285,7 @@ export function HeartbeatsPanel({
                 <button
                   onClick={() => onConfigureWakeup?.(r)}
                   disabled={!onConfigureWakeup}
-                  className="px-2 py-1 text-[10px] bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag justify-self-end disabled:opacity-50"
+                  className="px-2 py-1 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag justify-self-end disabled:opacity-50"
                 >
                   Configure Wakeup
                 </button>
@@ -1317,7 +1317,7 @@ export function HeartbeatsPanel({
                         ? 'Fire this heartbeat now'
                         : 'Fire now to test — stays off the schedule until you enable it'
                     }
-                    className="px-2 py-0.5 text-[10px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="px-2 py-0.5 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {launchingName === r.name ? '…' : 'Launch'}
                   </button>
@@ -1360,7 +1360,7 @@ export function HeartbeatsPanel({
 // imports during transition.
 export function HeartbeatsSection(): React.JSX.Element {
   return (
-    <div className="p-6 text-xs text-[var(--color-text-muted)]">
+    <div className="p-6 type-hint text-[var(--color-text-muted)]">
       Heartbeats are managed inline per-workspace in the Workspaces section.
     </div>
   )

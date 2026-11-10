@@ -112,9 +112,9 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search settings… (try: font, theme, hidden files, clear terminal)"
-            className="flex-1 bg-transparent text-xs text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
+            className="flex-1 bg-transparent type-control text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
           />
-          <kbd className="text-[9px] font-mono text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5">
+          <kbd className="type-hint font-mono text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5">
             esc
           </kbd>
         </div>
@@ -122,7 +122,7 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
         {/* Results */}
         <div ref={listRef} className="flex-1 overflow-y-auto py-1">
           {results.length === 0 ? (
-            <div className="px-3 py-6 text-center text-xs text-[var(--color-text-muted)]">
+            <div className="px-3 py-6 text-center type-hint text-[var(--color-text-muted)]">
               {query.trim() ? `No settings match "${query}"` : 'Type to search…'}
             </div>
           ) : (
@@ -134,13 +134,13 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
                   data-result-index={i}
                   onMouseEnter={() => setSelectedIndex(i)}
                   onClick={() => onPick(entry)}
-                  className={`w-full flex items-baseline gap-3 px-3 py-1.5 text-left text-xs no-drag cursor-pointer ${
+                  className={`w-full flex items-baseline gap-3 px-3 py-1.5 text-left type-control no-drag cursor-pointer ${
                     isSelected
                       ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
                       : 'text-[var(--color-text-secondary)] hover:bg-white/[0.03]'
                   }`}
                 >
-                  <span className="text-[10px] text-[var(--color-text-muted)] uppercase tracking-wider w-28 flex-shrink-0 truncate">
+                  <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider w-28 flex-shrink-0 truncate">
                     {sectionLabel(entry.section, { gardensPage })}
                     {entry.group && <span className="mx-1 opacity-60">/</span>}
                     {entry.group && <span className="normal-case">{entry.group}</span>}
@@ -149,7 +149,7 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
                     {entry.label}
                   </span>
                   {entry.description && (
-                    <span className="flex-1 min-w-0 truncate text-[10px] text-[var(--color-text-muted)]">
+                    <span className="flex-1 min-w-0 truncate type-hint text-[var(--color-text-muted)]">
                       — {entry.description}
                     </span>
                   )}
@@ -160,7 +160,7 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
         </div>
 
         {/* Footer hint */}
-        <div className="flex items-center gap-3 px-3 py-1.5 border-t border-[var(--color-border)] flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">
+        <div className="flex items-center gap-3 px-3 py-1.5 border-t border-[var(--color-border)] flex-shrink-0 type-hint text-[var(--color-text-muted)]">
           <span className="flex items-center gap-1">
             <kbd className="font-mono border border-[var(--color-border)] px-1">↑</kbd>
             <kbd className="font-mono border border-[var(--color-border)] px-1">↓</kbd>

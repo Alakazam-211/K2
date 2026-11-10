@@ -80,7 +80,7 @@ export function ClonePersonalComputersRow({ scope }: { scope: ServerScope }): Re
   return (
     <div className="py-2 border-b border-[var(--color-border)]" data-settings-id="general.clone-personal-computers">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">{CLONE_SWITCH_LABEL}</span>
+        <span className="type-row text-[var(--color-text-secondary)]">{CLONE_SWITCH_LABEL}</span>
         <Toggle
           checked={on}
           onChange={(v: boolean) => void change(v)}
@@ -88,12 +88,12 @@ export function ClonePersonalComputersRow({ scope }: { scope: ServerScope }): Re
           aria-label={CLONE_SWITCH_LABEL}
         />
       </div>
-      <p className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+      <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
         When off, Admins and Members can&apos;t clone agents from this server to their own computers. The owner always
         can. Who may clone at all is set per person in Admin Access.
         {!editable && who ? ` ${CLONE_SWITCH_OWNER_HINT}` : ''}
       </p>
-      {error && <p className="text-[10px] text-[var(--color-status-error-soft)] mt-1">{error}</p>}
+      {error && <p className="type-hint text-[var(--color-status-error-soft)] mt-1">{error}</p>}
     </div>
   )
 }

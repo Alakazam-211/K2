@@ -105,14 +105,14 @@ function TenantShare({ node }: { node: ComputeNode }): React.JSX.Element {
   const s = node.share
   return (
     <div className="space-y-1" data-testid="compute-tenant-share">
-      <div className={`text-[11px] ${primary}`}>
+      <div className={`type-hint ${primary}`}>
         Shared by <span className="font-medium">{s?.ownerLabel ?? 'another server'}</span>
         {s?.servers ? ` (${s.servers} servers)` : ''}. Its admin, updates and servers are that server&apos;s.
       </div>
-      <div className={`text-[11px] ${secondary}`}>
+      <div className={`type-hint ${secondary}`}>
         Your share: {s?.state ?? '—'} · {s?.running ?? 0} running · {s?.queued ?? 0} queued · {cpuHours(s?.cpuSecsToday)} · {endDate(s?.expiresAt)}
       </div>
-      {s?.limits ? <div className={`text-[10px] ${muted}`}>{limitsLine(s.limits)}</div> : null}
+      {s?.limits ? <div className={`type-hint ${muted}`}>{limitsLine(s.limits)}</div> : null}
     </div>
   )
 }
@@ -149,9 +149,9 @@ function QueuePart({ node }: { node: string }): React.JSX.Element {
       {open ? (
         <div className="space-y-0.5" data-testid={`compute-queue-${node}`}>
           {error ? <Callout tone="error">{error}</Callout> : null}
-          {q && q.entries.length === 0 ? <p className={`text-[11px] ${muted}`}>Nothing running or queued.</p> : null}
+          {q && q.entries.length === 0 ? <p className={`type-hint ${muted}`}>Nothing running or queued.</p> : null}
           {(q?.entries ?? []).map((e) => (
-            <div key={`${e.pos}-${e.short ?? ''}`} className={`text-[11px] flex flex-wrap gap-x-3 ${secondary}`}>
+            <div key={`${e.pos}-${e.short ?? ''}`} className={`type-hint flex flex-wrap gap-x-3 ${secondary}`}>
               <span className={muted}>#{e.pos}</span>
               <span className={primary}>{e.mine ? (e.short ?? 'yours') : e.server ? e.server : 'another server'}</span>
               <span>{e.state}</span>
@@ -250,16 +250,16 @@ function ServersPanel({ node }: { node: ComputeNode }): React.JSX.Element {
             </Callout>
           ) : null}
           {owner ? (
-            <div className={`text-[11px] ${secondary}`} data-testid="compute-servers-header">
+            <div className={`type-hint ${secondary}`} data-testid="compute-servers-header">
               {count} of {owner.maxServers ?? '?'} servers ·{' '}
               {team.ok ? 'takes other people’s servers' : `other people’s servers: no (${team.why})`}
             </div>
           ) : null}
-          {owner?.note ? <p className={`text-[10px] ${muted}`}>{owner.note}</p> : null}
+          {owner?.note ? <p className={`type-hint ${muted}`}>{owner.note}</p> : null}
           {(owner?.requests ?? [])
             .filter((r) => r.state === 'pending')
             .map((r) => (
-              <div key={r.id} className={`text-[11px] ${secondary}`} data-testid={`compute-servers-waiting-${r.id}`}>
+              <div key={r.id} className={`type-hint ${secondary}`} data-testid={`compute-servers-waiting-${r.id}`}>
                 Waiting for your approval: {r.summary}
               </div>
             ))}
@@ -307,7 +307,7 @@ function ServerRow({
   const toggle = (p: Pane): void => setPane((cur) => (cur === p ? 'none' : p))
   return (
     <div className="border-t border-[var(--color-border)] pt-1 space-y-1" data-testid={`compute-server-row-${r.slot}`}>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 type-hint">
         <span className={`font-medium ${primary}`}>{r.label}</span>
         <span className={muted}>slot {r.slot}</span>
         {isOwner ? <span className={`font-medium ${secondary}`}>owner</span> : null}
@@ -323,13 +323,13 @@ function ServerRow({
         ) : null}
         {!isOwner ? <span className={muted}>{endDate(r.expiresAt)}</span> : null}
       </div>
-      {r.limits ? <div className={`text-[10px] ${muted}`}>{limitsLine(r.limits)}</div> : null}
+      {r.limits ? <div className={`type-hint ${muted}`}>{limitsLine(r.limits)}</div> : null}
       {/* Job tiers (0.46.5): a guest server's Priority counts here only when
           the node's owner says so; turning it on is a widening (held for
           approval). The owner's own line always counts. Absent on older
           daemons: nothing shown. */}
       {!isOwner && r.priority !== undefined && r.state !== 'revoked' ? (
-        <div className="flex items-center gap-2 text-[11px]" data-testid="compute-server-priority">
+        <div className="flex items-center gap-2 type-hint" data-testid="compute-server-priority">
           <Toggle
             checked={r.priority === true}
             disabled={r.priority === null}
@@ -341,12 +341,12 @@ function ServerRow({
         </div>
       ) : null}
       {r.sas && r.state === 'pending' ? (
-        <div className={`text-[11px] ${primary}`} data-testid="compute-server-sas">
+        <div className={`type-hint ${primary}`} data-testid="compute-server-sas">
           SAS <span className="font-mono">{r.sas}</span>: read it to {r.label}&apos;s owner.
         </div>
       ) : null}
       {r.refusal && r.state === 'refused' ? (
-        <div className="text-[11px] text-[var(--color-status-warn-amber-soft)]">Its attach is refused: {r.refusal.replace(/_/g, ' ')}</div>
+        <div className="type-hint text-[var(--color-status-warn-amber-soft)]">Its attach is refused: {r.refusal.replace(/_/g, ' ')}</div>
       ) : null}
       {r.solo ? null : (
         <div className="flex flex-wrap items-center gap-2">
@@ -478,16 +478,16 @@ function LimitsForm({
   }
   return (
     <div className="space-y-1 border border-[var(--color-border)] p-2" data-testid="compute-limits-form">
-      <p className={`text-[10px] ${muted}`}>A lower limit applies at once. A higher one waits for your approval.</p>
+      <p className={`type-hint ${muted}`}>A lower limit applies at once. A higher one waits for your approval.</p>
       <div className="grid grid-cols-2 gap-1">
         {LIMIT_FIELDS.map(({ key, label }) => (
-          <label key={key} className={`text-[11px] ${secondary} flex items-center gap-2`}>
+          <label key={key} className={`type-hint ${secondary} flex items-center gap-2`}>
             <span className="w-36">{label}</span>
             <Input value={vals[key] ?? ''} onChange={(e) => setVals((v) => ({ ...v, [key]: e.target.value }))} className="w-20" />
           </label>
         ))}
         {!isOwner ? (
-          <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
+          <label className={`type-hint ${secondary} flex items-center gap-2`}>
             <span className="w-36">End date from now</span>
             <Input value={forv} onChange={(e) => setForv(e.target.value)} placeholder="7d, none" className="w-20" />
           </label>
@@ -519,13 +519,13 @@ function RevokeConfirm({
   const [wipe, setWipe] = useState(false)
   return (
     <div role="dialog" aria-label={`Revoke ${label}?`} className="space-y-1 border border-[var(--color-border)] p-2" data-testid="compute-revoke-confirm">
-      <div className={`text-[11px] font-medium ${primary}`}>Revoke {label}?</div>
-      <p className={`text-[11px] ${secondary}`}>Its queued jobs are cancelled and it takes no new work here. Its files are wiped in 24 hours.</p>
-      <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
+      <div className={`type-hint ${primary}`}>Revoke {label}?</div>
+      <p className={`type-hint ${secondary}`}>Its queued jobs are cancelled and it takes no new work here. Its files are wiped in 24 hours.</p>
+      <label className={`type-hint ${secondary} flex items-center gap-2`}>
         <Checkbox checked={now} onChange={(e) => setNow(e.target.checked)} aria-label="Stop running jobs now" />
         Stop its running jobs now (else they finish)
       </label>
-      <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
+      <label className={`type-hint ${secondary} flex items-center gap-2`}>
         <Checkbox checked={wipe} onChange={(e) => setWipe(e.target.checked)} aria-label="Wipe its files now" />
         Wipe its files now (else in 24 hours)
       </label>
@@ -559,27 +559,27 @@ function OwnerConfirm({
   const [now, setNow] = useState(false)
   return (
     <div role="dialog" aria-label={`Make ${label} the owner of ${node}?`} className="space-y-1 border border-[var(--color-border)] p-2" data-testid="compute-owner-confirm">
-      <div className={`text-[11px] font-medium ${primary}`}>
+      <div className={`type-hint ${primary}`}>
         Make {label} the owner of {node}?
       </div>
-      <p className={`text-[11px] ${secondary}`}>
+      <p className={`type-hint ${secondary}`}>
         {label} gets this node&apos;s admin, updates and approvals, and pins its own approval key. After you approve, the node drains (running jobs
         finish, up to 30 min), the two servers swap places, root re-pins to {label}, and k2-node restarts once. Queued jobs stay with their server;
         other servers on the node are untouched.
       </p>
-      <p className={`text-[11px] ${secondary}`} data-testid="compute-owner-key">
+      <p className={`type-hint ${secondary}`} data-testid="compute-owner-key">
         Its key: <span className={`font-mono break-all ${primary}`}>{fp}</span>. Check it matches what {label} shows (controllerFp in{' '}
         <span className="font-mono">k2 compute nodes --json</span> there) before you approve.
       </p>
-      <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
+      <label className={`type-hint ${secondary} flex items-center gap-2`}>
         <Checkbox checked={leave} onChange={(e) => setLeave(e.target.checked)} aria-label="Remove this server from the node" />
         Remove this server from the node (else it stays as one of your servers)
       </label>
-      <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
+      <label className={`type-hint ${secondary} flex items-center gap-2`}>
         <Checkbox checked={wipe} onChange={(e) => setWipe(e.target.checked)} aria-label="Wipe the build caches" />
         Wipe both servers&apos; build caches (else they move with their server)
       </label>
-      <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
+      <label className={`type-hint ${secondary} flex items-center gap-2`}>
         <Checkbox checked={now} onChange={(e) => setNow(e.target.checked)} aria-label="Stop running jobs now" />
         Stop running jobs now (else they finish first)
       </label>
@@ -628,15 +628,15 @@ function AddServerForm({
   }
   return (
     <div className="space-y-1 border border-[var(--color-border)] p-2" data-testid="compute-add-server">
-      <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
+      <label className={`type-hint ${secondary} flex items-center gap-2`}>
         <span className="w-24">Address</span>
         <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://baden.k2.dev" aria-label="New server address" className="flex-1" />
       </label>
-      <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
+      <label className={`type-hint ${secondary} flex items-center gap-2`}>
         <span className="w-24">Code</span>
         <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="ABCDE-FGHJK.0123456789abcdef" aria-label="Enroll code" className="flex-1 font-mono" />
       </label>
-      <div className={`text-[11px] ${secondary} flex items-center gap-3`}>
+      <div className={`type-hint ${secondary} flex items-center gap-3`}>
         <label className="flex items-center gap-1">
           <Radio name="trust" checked={trust === 'own'} onChange={() => setTrust('own')} aria-label="One of your own servers" /> Yours
         </label>
@@ -646,17 +646,17 @@ function AddServerForm({
         </label>
         {!team.ok ? <span className={muted}>({team.why})</span> : null}
       </div>
-      <label className={`text-[11px] ${secondary} flex items-center gap-2`}>
+      <label className={`type-hint ${secondary} flex items-center gap-2`}>
         <span className="w-24">End date</span>
         <Input value={forv} onChange={(e) => setForv(e.target.value)} placeholder={trust === 'team' ? '7d (default)' : 'none (default)'} className="w-28" />
       </label>
       {trust === 'team' ? (
-        <p className={`text-[10px] ${muted}`}>
+        <p className={`type-hint ${muted}`}>
           Its jobs get their own user and folders here and can&apos;t read yours. They do share the machine&apos;s kernel, CPU and disk and can reach
           the internet and services on this machine&apos;s loopback. Only add people you trust.
         </p>
       ) : null}
-      <p className={`text-[10px] ${muted}`}>The add waits for your approval; then read the SAS shown here to the new server&apos;s owner.</p>
+      <p className={`type-hint ${muted}`}>The add waits for your approval; then read the SAS shown here to the new server&apos;s owner.</p>
       {err ? <Callout tone="warn">{err}</Callout> : null}
       <div className="flex gap-2">
         <Button variant="accent" onClick={() => void submit()}>

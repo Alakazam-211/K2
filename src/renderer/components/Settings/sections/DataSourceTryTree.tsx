@@ -13,9 +13,9 @@ function depth(pointer: string): number {
 
 export function DataSourceTryTree({ nodes, truncated }: { nodes: TryTreeNode[]; truncated: boolean }): React.JSX.Element {
   const [copied, setCopied] = useState<string | null>(null)
-  if (nodes.length === 0) return <p className={`text-[11px] ${muted}`}>No shape to show.</p>
+  if (nodes.length === 0) return <p className={`type-hint ${muted}`}>No shape to show.</p>
   return (
-    <div className="font-mono text-[11px] max-h-72 overflow-auto border border-[var(--color-border)] p-1.5" data-testid="sources-try-tree">
+    <div className="font-mono type-hint max-h-72 overflow-auto border border-[var(--color-border)] p-1.5" data-testid="sources-try-tree">
       {nodes.map((n) => {
         const p = n.pointer === '' ? '/' : n.pointer
         return (
@@ -48,7 +48,7 @@ export function DataSourceTryTree({ nodes, truncated }: { nodes: TryTreeNode[]; 
 /** The head line of a Try result: ok/failed, status, time, warnings. */
 export function TrySummary({ r }: { r: SourceTryResponse }): React.JSX.Element {
   return (
-    <div className="space-y-1 text-[11px]" data-testid="sources-try-summary">
+    <div className="space-y-1 type-hint" data-testid="sources-try-summary">
       <p className="text-[var(--color-text-primary)]">
         {r.ok ? 'Answered' : `Failed: ${r.view?.reasonText ?? r.reason ?? 'error'}`}
         {r.status != null && ` · HTTP ${r.status}`} · {r.elapsedMs} ms{r.truncated && ' · too large, not read'}

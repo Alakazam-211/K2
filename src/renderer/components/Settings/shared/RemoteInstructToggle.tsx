@@ -15,7 +15,7 @@ export const AGENT_SWITCH_ON_TEXT =
   'On: this agent is listed to connected servers and their agents can message it. People who log in here can always message it.'
 /** Shown under an OFF per-agent switch while the app master is on. */
 export const AGENT_SWITCH_OVERRIDE_TEXT =
-  'On anyway: "Let agents on other servers message every agent" (Settings → K2 Connect) is on, so this agent is listed to connected servers and their agents can message it.'
+  'On anyway: "Let agents on other servers message every agent" (Settings → Tunnel) is on, so this agent is listed to connected servers and their agents can message it.'
 
 // ── #67 per-agent "Let agents on other servers message this agent" ────
 // Internal name: remote-instruct (`projects.allow_remote_instruct`, written
@@ -82,12 +82,12 @@ export function RemoteInstructToggle({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">{AGENT_SWITCH_LABEL}</div>
-          <div className={compact ? 'hidden' : 'text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed'}>
+          <div className="type-name text-[var(--color-text-primary)]">{AGENT_SWITCH_LABEL}</div>
+          <div className={compact ? 'hidden' : 'type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed'}>
             {enabled ? AGENT_SWITCH_ON_TEXT : AGENT_SWITCH_OFF_TEXT}
           </div>
           {!enabled && globalAllow && !readOnly && (
-            <div className="text-[10px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
+            <div className="type-hint text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
               {AGENT_SWITCH_OVERRIDE_TEXT}
             </div>
           )}

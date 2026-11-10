@@ -88,7 +88,6 @@ import { PersonPictureControl } from '@/components/Presence/PersonPictureControl
 import { onTunnelIdentityChanged } from '@/stores/session-events'
 import { runTunnelSwitch, type TunnelSwitchProgress } from '../lib/tunnel-switch'
 import { isAirgap } from '@/lib/airgap'
-import { thisMachine } from '@/lib/desktop-words'
 
 // 0.46.6: no relay address lives here. The daemon owns the default
 // (relay.k2.dev) and the relay list; the form shows what the daemon
@@ -199,13 +198,13 @@ export const K2_CONNECT_MANIFEST: SettingEntry[] = [
   { id: 'k2-connect.token', section: 'k2-connect', label: 'K2 Connect Token', description: 'Bearer token for the frpc tunnel', keywords: ['token', 'tunnel', 'frpc', 'auth', 'bearer'] },
   { id: 'k2-connect.server-addr', section: 'k2-connect', label: 'Tunnel Server Address', description: 'The K2 Connect frps endpoint', keywords: ['server', 'frps', 'address', 'hetzner', 'endpoint'] },
   { id: 'k2-connect.start-stop', section: 'k2-connect', label: 'Start / Stop Tunnel', description: 'Expose this device at a public URL', keywords: ['start', 'stop', 'tunnel', 'expose', 'connect'] },
-  { id: 'k2-connect.auto-start', section: 'k2-connect', label: 'Re-launch tunnel on restart', description: 'Automatically start this tunnel when the daemon restarts', keywords: ['auto', 'autostart', 'restart', 'reconnect', 'boot', 'relaunch'] },
-  { id: 'k2-connect.users', section: 'k2-connect', label: 'Users / Access', description: 'People you allow to connect in to this device’s daemon', keywords: ['users', 'access', 'people', 'login', 'password', 'connect in', 'multi-user', 'allow', 'invite'] },
+  { id: 'k2-connect.auto-start', section: 'k2-connect', label: 'Re-launch tunnel on restart', description: 'Automatically start this tunnel when K2 restarts', keywords: ['auto', 'autostart', 'restart', 'reconnect', 'boot', 'relaunch'] },
+  { id: 'k2-connect.users', section: 'k2-connect', label: 'Users / Access', description: 'People you allow to connect in to this computer', keywords: ['users', 'access', 'people', 'login', 'password', 'connect in', 'multi-user', 'allow', 'invite'] },
   { id: 'k2-connect.urls', section: 'k2-connect', label: 'URLs', description: 'Tunnel status plus every nested subdomain URL and its workspace', keywords: ['urls', 'nested', 'subdomains', 'routing', 'targets', 'ports', 'workspace', 'attribution', 'claim'] },
   { id: 'k2-connect.federation', section: 'k2-connect', label: 'Enable federation', description: 'Allow cross-server agent communication on this server', keywords: ['federation', 'cross-server', 'peers', 'agents', 'connect', 'mesh', 'cortana'] },
   { id: 'k2-connect.allow-remote-instruct', section: 'k2-connect', label: 'Let agents on other servers message every agent', description: 'List every agent to connected servers and let their agents message it. People who log in here can always message agents.', keywords: ['remote', 'instruct', 'message', 'agents', 'other servers', 'consent', 'federation', 'inbound', 'roster', 'allow'] },
-  { id: 'k2-connect.public-api', section: 'k2-connect', label: 'Enable public API (/v1)', description: 'Serve the external /v1 API from this daemon — takes effect immediately, no restart', keywords: ['api', 'v1', 'public api', 'rest', 'http', 'external', 'surface', 'K2_API', 'api keys', 'host sessions'] },
-  { id: 'k2-connect.login-ingress', section: 'k2-connect', label: 'Password sign-in over the tunnel', description: 'Only via K2 edge (recommended), any client, or off — where the daemon answers password login on tunnel ingress', keywords: ['login', 'sign in', 'password', 'tunnel', 'edge', 'ingress', 'scanner', 'brute force', 'connect users', 'app.k2.dev'] },
+  { id: 'k2-connect.public-api', section: 'k2-connect', label: 'Enable public API (/v1)', description: 'Serve the external /v1 API from this server. Takes effect immediately.', keywords: ['api', 'v1', 'public api', 'rest', 'http', 'external', 'surface', 'K2_API', 'api keys', 'host sessions'] },
+  { id: 'k2-connect.login-ingress', section: 'k2-connect', label: 'Password sign-in over the tunnel', description: 'Only via K2 edge (recommended), any client, or off: where this server accepts password sign-in through the tunnel', keywords: ['login', 'sign in', 'password', 'tunnel', 'edge', 'ingress', 'scanner', 'brute force', 'connect users', 'app.k2.dev'] },
   { id: 'k2-connect.boot-status-public', section: 'k2-connect', label: "Hide this server's details from the internet", description: 'Visitors without a sign-in see only that the server is up — not its version or features (boot-status ghost)', keywords: ['boot-status', 'ghost', 'hide', 'version', 'fingerprint', 'scanner', 'privacy', 'stealth', 'ping'] },
 ]
 
@@ -1373,7 +1372,7 @@ export function K2ConnectSection({
   }
 
   const inputCls =
-    'w-full px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
+    'w-full px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 
   const visibleUsers = useMemo(() => {
     const q = userQuery.trim().toLowerCase()
@@ -1512,10 +1511,10 @@ export function K2ConnectSection({
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-3" data-settings-id="k2-connect.federation">
                   <div className="min-w-0">
-                    <span className="text-xs text-[var(--color-text-secondary)]">
+                    <span className="type-row text-[var(--color-text-secondary)]">
                       Enable federation (cross-server agents)
                     </span>
-                    <span className="text-[10px] text-[var(--color-text-muted)] ml-2">{isRemote ? 'this server' : 'this device'}</span>
+                    <span className="type-hint text-[var(--color-text-muted)] ml-2">{isRemote ? 'this server' : 'this device'}</span>
                   </div>
                   <Toggle
                     checked={federationEnabled}
@@ -1529,10 +1528,10 @@ export function K2ConnectSection({
                   data-settings-id="k2-connect.public-api"
                 >
                   <div className="min-w-0">
-                    <span className="text-xs text-[var(--color-text-secondary)]">
+                    <span className="type-row text-[var(--color-text-secondary)]">
                       Enable public API (/v1)
                     </span>
-                    <span className="text-[10px] text-[var(--color-text-muted)] ml-2">
+                    <span className="type-hint text-[var(--color-text-muted)] ml-2">
                       {isRemote ? 'this server' : 'this device'} · takes effect immediately, no restart
                     </span>
                   </div>
@@ -1548,7 +1547,7 @@ export function K2ConnectSection({
                 <BootStatusPublicRow />
               </div>
             ) : (
-              <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+              <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
                 Host policies are managed by an administrator.
               </p>
             )}
@@ -1559,14 +1558,14 @@ export function K2ConnectSection({
         {panel === 'tunnel' && (
         <>
         {isRemote ? (
-          <div className="px-3 py-2 border border-[var(--color-border)] text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-            K2 Connect tunneling is managed on the machine that owns the daemon. You&apos;re
+          <div className="px-3 py-2 border border-[var(--color-border)] type-hint text-[var(--color-text-muted)] leading-relaxed">
+            Tunnels are set up on the computer they belong to. You&apos;re
             viewing{' '}
             <span className="text-[var(--color-text-secondary)]">
               {activeHost.label}
             </span>
-            . Switch to <span className="text-[var(--color-text-secondary)]">{thisMachine()}</span> in
-            the server switcher to configure your own tunnel.
+            . Switch to <span className="text-[var(--color-text-secondary)]">This computer</span> in
+            the server menu to set up your own tunnel.
           </div>
         ) : (
           <>
@@ -1574,7 +1573,7 @@ export function K2ConnectSection({
         <SettingsGroup
           title="Account"
           badge={
-            <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+            <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
               beta
             </span>
           }
@@ -1582,8 +1581,8 @@ export function K2ConnectSection({
           {!session ? (
             <div data-settings-id="k2-connect.account-login">
               <div className="flex flex-col mb-2">
-                <span className="text-xs text-[var(--color-text-secondary)]">Sign in to K2 Connect</span>
-                <span className="text-[10px] text-[var(--color-text-muted)]">
+                <span className="type-row text-[var(--color-text-secondary)]">Sign in to K2 Connect</span>
+                <span className="type-hint text-[var(--color-text-muted)]">
                   Sign in with your k2.dev account to pick a purchased subdomain automatically.
                 </span>
               </div>
@@ -1611,12 +1610,12 @@ export function K2ConnectSection({
                   onChange={(e) => setPassword(e.target.value)}
                 />
                 {authError && (
-                  <div className="text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{authError}</div>
+                  <div className="type-hint text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{authError}</div>
                 )}
                 <button
                   type="submit"
                   disabled={authBusy || !email.trim() || !password}
-                  className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+                  className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
                 >
                   {authBusy ? 'Signing in…' : 'Sign in'}
                 </button>
@@ -1635,7 +1634,7 @@ export function K2ConnectSection({
               >
                 <button
                   onClick={() => void handleSignOut()}
-                  className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer"
+                  className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer"
                 >
                   Sign out
                 </button>
@@ -1643,7 +1642,7 @@ export function K2ConnectSection({
 
               <SettingRow settingId="k2-connect.subdomain-list" label="Your subdomains">
                 {subdomains.length === 0 ? (
-                  <span className="text-[10px] text-[var(--color-text-muted)]">
+                  <span className="type-hint text-[var(--color-text-muted)]">
                     No subdomains yet — buy one at{' '}
                     <a
                       href="https://k2.dev"
@@ -1669,11 +1668,11 @@ export function K2ConnectSection({
                 )}
               </SettingRow>
               {boundMsg && (
-                <div className="text-[10px] text-[var(--color-status-ok-soft)] py-1">{boundMsg}</div>
+                <div className="type-hint text-[var(--color-status-ok-soft)] py-1">{boundMsg}</div>
               )}
               {switchProgress && switchProgress.phase !== 'done' && (
                 <div
-                  className="text-[10px] py-1 space-y-0.5"
+                  className="type-hint py-1 space-y-0.5"
                   data-testid="tunnel-switch-progress"
                   aria-live="polite"
                 >
@@ -1718,7 +1717,7 @@ export function K2ConnectSection({
                   : 'var(--color-neutral)',
             }}
           />
-          <span className="text-xs text-[var(--color-text-secondary)]">
+          <span className="type-row text-[var(--color-text-secondary)]">
             {running
               ? 'Tunnel running'
               : tunnelReleased
@@ -1732,7 +1731,7 @@ export function K2ConnectSection({
               href={publicUrl}
               target="_blank"
               rel="noreferrer"
-              className="ml-auto text-[10px] text-[var(--color-accent)] hover:underline font-mono truncate max-w-[220px]"
+              className="ml-auto type-hint text-[var(--color-accent)] hover:underline font-mono truncate max-w-[220px]"
             >
               {publicUrl}
             </a>
@@ -1740,7 +1739,7 @@ export function K2ConnectSection({
         </div>
 
         {listenerMismatch && (
-          <div className="text-[10px] px-3 py-1.5 border border-[color-mix(in_srgb,var(--color-status-warn-amber)_30%,transparent)] text-[var(--color-status-warn-amber-soft)]">
+          <div className="type-hint px-3 py-1.5 border border-[color-mix(in_srgb,var(--color-status-warn-amber)_30%,transparent)] text-[var(--color-status-warn-amber-soft)]">
             The tunnel is {subdomain.trim()}.k2.dev but the encrypted listener still holds the{' '}
             {status?.e2eListener?.subdomain}.k2.dev certificate, so direct connections fail. Pick{' '}
             {subdomain.trim()} in the list above again to repair it (no restart needed).
@@ -1749,8 +1748,8 @@ export function K2ConnectSection({
 
         {frpcMissing && (
           <div className="flex items-start gap-2 px-3 py-2 border border-[color-mix(in_srgb,var(--color-status-warn-amber)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warn-amber)_5%,transparent)]">
-            <span className="text-[var(--color-status-warn-amber)] text-sm leading-none flex-shrink-0 mt-0.5">&#9888;</span>
-            <div className="text-[10px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] leading-relaxed">
+            <span className="text-[var(--color-status-warn-amber)] type-row leading-none flex-shrink-0 mt-0.5">&#9888;</span>
+            <div className="type-hint text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] leading-relaxed">
               <strong className="text-[var(--color-status-warn-amber-soft)]">frpc not installed.</strong>{' '}
               K2 Connect needs the <span className="font-mono">frpc</span> client on your PATH.
               Install it from <span className="font-mono">github.com/fatedier/frp/releases</span>{' '}
@@ -1759,7 +1758,7 @@ export function K2ConnectSection({
           </div>
         )}
 
-        {error && <div className="text-[10px] text-[var(--color-status-error-soft)] px-3 py-1.5 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{error}</div>}
+        {error && <div className="type-hint text-[var(--color-status-error-soft)] px-3 py-1.5 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{error}</div>}
 
         {/* ── Auto-start toggle (left) + Start/Stop (right), one row,
             above the Advanced/manual config ──────────────────────────── */}
@@ -1769,13 +1768,13 @@ export function K2ConnectSection({
               checked={autoStart}
               onChange={(e) => void toggleAutoStart(e.target.checked)}
             />
-            <span className="text-xs text-[var(--color-text-secondary)]">Re-launch this tunnel on restart</span>
+            <span className="type-row text-[var(--color-text-secondary)]">Re-launch this tunnel on restart</span>
           </label>
           {running ? (
             <button
               onClick={() => void stopTunnel()}
               disabled={busy || swapBusy}
-              className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[color-mix(in_srgb,var(--color-status-error)_80%,transparent)] hover:bg-[var(--color-status-error)] no-drag cursor-pointer disabled:opacity-60"
+              className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[color-mix(in_srgb,var(--color-status-error)_80%,transparent)] hover:bg-[var(--color-status-error)] no-drag cursor-pointer disabled:opacity-60"
             >
               {swapBusy ? 'Swapping…' : 'Stop tunnel'}
             </button>
@@ -1783,7 +1782,7 @@ export function K2ConnectSection({
             <button
               onClick={() => void startTunnel()}
               disabled={busy || swapBusy}
-              className="px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+              className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
             >
               Start tunnel
             </button>
@@ -1800,31 +1799,31 @@ export function K2ConnectSection({
               onClick={() => void releaseFromDevice('forget')}
               disabled={busy || swapBusy}
               title="Delete this device's tunnel settings without telling K2 Connect (settings copied from another machine)"
-              className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer disabled:opacity-60"
+              className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer disabled:opacity-60"
             >
               Forget this tunnel on this device…
             </button>
             <button
               onClick={() => void releaseFromDevice('release')}
               disabled={busy || swapBusy}
-              className="text-[10px] text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error)] hover:underline no-drag cursor-pointer disabled:opacity-60"
+              className="type-hint text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error)] hover:underline no-drag cursor-pointer disabled:opacity-60"
             >
               Release subdomain from this device…
             </button>
           </div>
         )}
 
-        <div className="text-[10px] text-[var(--color-text-muted)] space-y-1">
+        <div className="type-hint text-[var(--color-text-muted)] space-y-1">
           <p>1. Sign in to k2.dev above and pick a subdomain you own (e.g. <span className="font-mono">alice</span>).</p>
-          <p>2. Start the tunnel — your daemon becomes reachable at <span className="font-mono">https://&lt;sub&gt;.k2.dev</span>.</p>
-          <p>3. Add that address as a server on another computer (Settings → Connections), or pair the K2 Companion app.</p>
+          <p>2. Start the tunnel. This computer becomes reachable at <span className="font-mono">https://&lt;sub&gt;.k2.dev</span>.</p>
+          <p>3. Add that address as a server on another computer (Settings → Connected Servers), or pair the K2 Companion app.</p>
         </div>
 
         {/* ── Advanced / manual config (fallback) — below the instructions ── */}
         <div>
           <button
             onClick={() => setShowAdvanced((v) => !v)}
-            className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] no-drag cursor-pointer mb-2"
+            className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] no-drag cursor-pointer mb-2"
           >
             {showAdvanced ? '▾' : '▸'} Advanced / manual config
           </button>
@@ -1844,7 +1843,7 @@ export function K2ConnectSection({
                 label={
                   <>
                     Token
-                    {tokenSet && <span className="ml-2 text-[10px] text-[var(--color-status-ok-soft)]">Set</span>}
+                    {tokenSet && <span className="ml-2 type-hint text-[var(--color-status-ok-soft)]">Set</span>}
                   </>
                 }
               >
@@ -1885,11 +1884,11 @@ export function K2ConnectSection({
                 <button
                   onClick={() => void saveConfig()}
                   disabled={busy}
-                  className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60"
+                  className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60"
                 >
                   {busy ? 'Saving…' : 'Save'}
                 </button>
-                {savedMsg && <span className="text-[10px] text-[var(--color-status-ok-soft)]">{savedMsg}</span>}
+                {savedMsg && <span className="type-hint text-[var(--color-status-ok-soft)]">{savedMsg}</span>}
               </div>
             </SettingsGroup>
           )}
@@ -1915,17 +1914,17 @@ export function K2ConnectSection({
                 unresolved/forbidden whoami) gets a clean note — never the
                 raw token/403 error. */}
             {whoamiLoaded && !canManageUsers(myRole) ? (
-              <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed py-1">
+              <p className="type-hint text-[var(--color-text-muted)] leading-relaxed py-1">
                 {oldHostNoRoles
                   ? `This host (v${serverVersion}) predates roles — update it to v${featureMinVersion('roles')} to manage users here.`
                   : 'User management is handled by an administrator.'}
               </p>
             ) : !whoamiLoaded ? (
-              <p className="text-[10px] text-[var(--color-text-muted)] py-1">Loading…</p>
+              <p className="type-hint text-[var(--color-text-muted)] py-1">Loading…</p>
             ) : (
             <>
-            <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-              People you allow to connect IN to this device&apos;s daemon. You set each
+            <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
+              People you allow to connect in to this computer. You set each
               person&apos;s username + initial password; they sign in from their K2 app (or
               change their own password at <span className="font-mono">https://&lt;sub&gt;.k2.dev</span>).
               You can&apos;t view a password after setting it — only reset it.
@@ -1934,11 +1933,11 @@ export function K2ConnectSection({
             {/* Password requirements (K2 #620) — server-enforced policy */}
             <div className="border border-[var(--color-border)] p-2.5 space-y-2">
               <div className="flex items-center justify-between gap-3">
-                <span className="text-[11px] text-[var(--color-text-secondary)] font-medium">
+                <span className="type-hint text-[var(--color-text-secondary)] ">
                   Password requirements
                 </span>
                 <span className="flex items-center gap-2">
-                  <label className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)]">
+                  <label className="flex items-center gap-1.5 type-hint text-[var(--color-text-muted)]">
                     Min length
                     <input
                       className={inputCls}
@@ -1965,19 +1964,19 @@ export function K2ConnectSection({
                       checked={checked}
                       onChange={(e) => setVal(e.target.checked)}
                     />
-                    <span className="text-[10px] text-[var(--color-text-secondary)]">Require {label}</span>
+                    <span className="type-hint text-[var(--color-text-secondary)]">Require {label}</span>
                   </label>
                 ))}
               </div>
               <div className="flex items-center gap-2 pt-0.5">
                 <button
                   onClick={() => void savePolicy()}
-                  className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer"
+                  className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer"
                 >
                   Save requirements
                 </button>
-                {policySavedMsg && <span className="text-[10px] text-[var(--color-status-ok-soft)]">{policySavedMsg}</span>}
-                {policyError && <span className="text-[10px] text-[var(--color-status-error-soft)]">{policyError}</span>}
+                {policySavedMsg && <span className="type-hint text-[var(--color-status-ok-soft)]">{policySavedMsg}</span>}
+                {policyError && <span className="type-hint text-[var(--color-status-error-soft)]">{policyError}</span>}
               </div>
             </div>
 
@@ -2056,22 +2055,22 @@ export function K2ConnectSection({
                 <button
                   type="submit"
                   disabled={addBusy || !newUsername.trim() || !newPassword}
-                  className="flex-shrink-0 px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+                  className="flex-shrink-0 px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
                 >
                   {addBusy ? 'Adding…' : 'Add user'}
                 </button>
               </div>
               {voiceChatRole && pickerOptions(myRole, voiceChatRole).length > 0 && (
-                <div className="text-[10px] text-[var(--color-text-muted)]" data-testid="voice-chat-role-help">
+                <div className="type-hint text-[var(--color-text-muted)]" data-testid="voice-chat-role-help">
                   {VOICE_CHAT_ROLE_HELP}
                 </div>
               )}
               {newRole === 'voice_chat' && (
                 <div className="space-y-1" data-testid="new-user-shares">
                   <div className="flex items-center gap-2">
-                    <span className="w-16 flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">Agents</span>
+                    <span className="w-16 flex-shrink-0 type-hint text-[var(--color-text-muted)]">Agents</span>
                     <input
-                      className="flex-1 min-w-0 px-2 py-1 text-[11px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag"
+                      className="flex-1 min-w-0 px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag"
                       placeholder="Shared agents (addresses, comma separated)"
                       aria-label="New user shared agents"
                       value={newShareAgents}
@@ -2079,9 +2078,9 @@ export function K2ConnectSection({
                     />
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="w-16 flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">Gardens</span>
+                    <span className="w-16 flex-shrink-0 type-hint text-[var(--color-text-muted)]">Gardens</span>
                     <input
-                      className="flex-1 min-w-0 px-2 py-1 text-[11px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag"
+                      className="flex-1 min-w-0 px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag"
                       placeholder="Shared Gardens (ids, comma separated)"
                       aria-label="New user shared Gardens"
                       value={newShareGardens}
@@ -2098,7 +2097,7 @@ export function K2ConnectSection({
                   aria-label="Temporary password"
                   className="mt-0.5"
                 />
-                <span className="text-[10px] text-[var(--color-text-secondary)]">
+                <span className="type-hint text-[var(--color-text-secondary)]">
                   Temporary password
                   <span className="text-[var(--color-text-muted)]">
                     {newTemporary ? ` — ${MUST_CHANGE_NOTE}` : ' — off: they keep the password you type.'}
@@ -2106,15 +2105,15 @@ export function K2ConnectSection({
                 </span>
               </label>
               {addError && (
-                <div className="text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{addError}</div>
+                <div className="type-hint text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{addError}</div>
               )}
-              {addedMsg && <div className="text-[10px] text-[var(--color-status-ok-soft)]" data-testid="added-user-msg">{addedMsg}</div>}
+              {addedMsg && <div className="type-hint text-[var(--color-status-ok-soft)]" data-testid="added-user-msg">{addedMsg}</div>}
             </form>
 
             {usersError && (
-              <div className="text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{usersError}</div>
+              <div className="type-hint text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{usersError}</div>
             )}
-            {resetMsg && <div className="text-[10px] text-[var(--color-status-ok-soft)]" data-testid="reset-password-msg">{resetMsg}</div>}
+            {resetMsg && <div className="type-hint text-[var(--color-status-ok-soft)]" data-testid="reset-password-msg">{resetMsg}</div>}
 
             {/* User list */}
             <input
@@ -2126,14 +2125,14 @@ export function K2ConnectSection({
               className={inputCls}
             />
             {ownerAccounts.error && (
-              <div className="text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{ownerAccounts.error}</div>
+              <div className="type-hint text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{ownerAccounts.error}</div>
             )}
             {usersLoaded && users.length === 0 ? (
-              <div className="text-[10px] text-[var(--color-text-muted)] py-1">
+              <div className="type-hint text-[var(--color-text-muted)] py-1">
                 No users yet — add one above.
               </div>
             ) : usersLoaded && visibleUsers.length === 0 ? (
-              <div className="text-[10px] text-[var(--color-text-muted)] py-1">
+              <div className="type-hint text-[var(--color-text-muted)] py-1">
                 No users match.
               </div>
             ) : (
@@ -2156,17 +2155,17 @@ export function K2ConnectSection({
                           />
                         </span>
                         {realName(u) ? (
-                          <span className="text-xs text-[var(--color-text-primary)] truncate" data-testid={`user-real-name-${u.username}`}>
+                          <span className="type-row text-[var(--color-text-primary)] truncate" data-testid={`user-real-name-${u.username}`}>
                             {realName(u)}
                           </span>
                         ) : null}
                         <span
-                          className={`text-xs font-mono truncate ${realName(u) ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-primary)]'}`}
+                          className={`type-row font-mono truncate ${realName(u) ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-primary)]'}`}
                         >
                           {u.username}
                         </span>
                         {u.disabled && (
-                          <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">
+                          <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">
                             disabled
                           </span>
                         )}
@@ -2175,7 +2174,7 @@ export function K2ConnectSection({
                           <span
                             data-testid={`temporary-password-${u.username}`}
                             title={MUST_CHANGE_NOTE}
-                            className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-status-warn-text)_10%,transparent)] text-[var(--color-status-warn-text)]"
+                            className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-status-warn-text)_10%,transparent)] text-[var(--color-status-warn-text)]"
                           >
                             Temporary password
                           </span>
@@ -2200,7 +2199,7 @@ export function K2ConnectSection({
                             }}
                           />
                         ) : (
-                          <span className="text-[9px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]">
+                          <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]">
                             {roleLabel(u.role)}
                           </span>
                         )}
@@ -2220,7 +2219,7 @@ export function K2ConnectSection({
                             checked={!u.disabled}
                             onChange={(e) => void toggleDisabled(u.username, !e.target.checked)}
                           />
-                          <span className="text-[10px] text-[var(--color-text-secondary)]">Enabled</span>
+                          <span className="type-hint text-[var(--color-text-secondary)]">Enabled</span>
                         </label>
                         <button
                           data-testid={`edit-name-${u.username}`}
@@ -2228,7 +2227,7 @@ export function K2ConnectSection({
                             setNameFor((cur) => (cur === u.username ? null : u.username))
                             setNameDraft({ firstName: u.firstName ?? '', lastName: u.lastName ?? '' })
                           }}
-                          className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer"
+                          className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer"
                         >
                           Edit name
                         </button>
@@ -2247,7 +2246,7 @@ export function K2ConnectSection({
                             setResetFor((cur) => (cur === u.username ? null : u.username))
                             setResetPassword('')
                           }}
-                          className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer"
+                          className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer"
                         >
                           Reset password
                         </button>
@@ -2255,13 +2254,13 @@ export function K2ConnectSection({
                           <span className="flex items-center gap-1.5">
                             <button
                               onClick={() => void removeUser(u.username)}
-                              className="text-[10px] text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
+                              className="type-hint text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
                             >
                               Confirm remove
                             </button>
                             <button
                               onClick={() => setRemoveConfirm(null)}
-                              className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
+                              className="type-hint text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
                             >
                               Cancel
                             </button>
@@ -2269,7 +2268,7 @@ export function K2ConnectSection({
                         ) : (
                           <button
                             onClick={() => setRemoveConfirm(u.username)}
-                            className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
+                            className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
                           >
                             Remove
                           </button>
@@ -2325,14 +2324,14 @@ export function K2ConnectSection({
                         <button
                           type="submit"
                           disabled={nameBusy}
-                          className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60"
+                          className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60"
                         >
                           {nameBusy ? 'Saving…' : 'Save name'}
                         </button>
                         <button
                           type="button"
                           onClick={() => setNameFor(null)}
-                          className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
+                          className="type-hint text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
                         >
                           Cancel
                         </button>
@@ -2359,7 +2358,7 @@ export function K2ConnectSection({
                         <button
                           type="submit"
                           disabled={resetBusy || !resetPassword}
-                          className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60"
+                          className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60"
                         >
                           {resetBusy ? 'Saving…' : 'Set password'}
                         </button>
@@ -2369,11 +2368,11 @@ export function K2ConnectSection({
                             setResetFor(null)
                             setResetPassword('')
                           }}
-                          className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
+                          className="type-hint text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
                         >
                           Cancel
                         </button>
-                        <span className="basis-full text-[10px] text-[var(--color-text-muted)]">
+                        <span className="basis-full type-hint text-[var(--color-text-muted)]">
                           {ownerAccounts.loaded && ownerAccounts.isLinked(u.username)
                             ? 'Your own login: you keep this password.'
                             : MUST_CHANGE_NOTE}

@@ -60,7 +60,7 @@ export function UsageChart({
         />
       </div>
       {error ? (
-        <p className="text-xs text-amber-400 border border-[var(--color-border)] p-3" data-testid="usage-chart-error" role="alert">
+        <p className="type-row text-amber-400 border border-[var(--color-border)] p-3" data-testid="usage-chart-error" role="alert">
           The chart could not load: {error}
         </p>
       ) : (
@@ -70,7 +70,7 @@ export function UsageChart({
             preserveAspectRatio="none"
             className="block w-full h-48"
             role="img"
-            aria-label={`${measureLabel} per day, ${first} to ${last}, by harness`}
+            aria-label={`${measureLabel} per day, ${first} to ${last}, by provider`}
             onMouseLeave={() => setHover(null)}
           >
             {geo.ticks.map((t) => (
@@ -115,7 +115,7 @@ export function UsageChart({
             {geo.ticks.map((t) => (
               <span
                 key={t.value}
-                className="absolute right-1 -translate-y-1/2 text-[10px] tabular-nums text-[var(--color-text-muted)]"
+                className="absolute right-1 -translate-y-1/2 type-hint tabular-nums text-[var(--color-text-muted)]"
                 style={{ top: `${(t.y / geo.height) * 100}%` }}
               >
                 {fmtMeasure(t.value, measure)}
@@ -126,7 +126,7 @@ export function UsageChart({
             <div
               role="tooltip"
               data-testid="usage-chart-tooltip"
-              className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1 text-[11px] shadow-lg"
+              className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1 type-hint shadow-lg"
               style={{ left: `${((col.x + col.width / 2) / geo.width) * 100}%` }}
             >
               <div className="text-[var(--color-text-primary)]">{col.day}</div>
@@ -142,20 +142,20 @@ export function UsageChart({
             </div>
           ) : null}
           {loading ? (
-            <p className="absolute inset-0 flex items-center justify-center text-[11px] text-[var(--color-text-muted)]">Loading…</p>
+            <p className="absolute inset-0 flex items-center justify-center type-hint text-[var(--color-text-muted)]">Loading…</p>
           ) : empty ? (
-            <p className="absolute inset-0 flex items-center justify-center text-[11px] text-[var(--color-text-muted)]">
+            <p className="absolute inset-0 flex items-center justify-center type-hint text-[var(--color-text-muted)]">
               Nothing in this range.
             </p>
           ) : null}
         </div>
       )}
-      <div className="mt-1 flex justify-between text-[11px] text-[var(--color-text-muted)]" style={{ paddingLeft: `${(geo.plotLeft / geo.width) * 100}%` }}>
+      <div className="mt-1 flex justify-between type-hint text-[var(--color-text-muted)]" style={{ paddingLeft: `${(geo.plotLeft / geo.width) * 100}%` }}>
         <span>{first}</span>
         <span>{last}</span>
       </div>
       {geo.harnesses.length > 0 ? (
-        <div className="mt-1 flex gap-3 text-[11px] text-[var(--color-text-muted)]" data-testid="usage-chart-legend">
+        <div className="mt-1 flex gap-3 type-hint text-[var(--color-text-muted)]" data-testid="usage-chart-legend">
           {geo.harnesses.map((h) => (
             <span key={h} className="inline-flex items-center gap-1">
               <span className="inline-block w-2 h-2" style={{ background: harnessColor(h) }} />
@@ -165,7 +165,7 @@ export function UsageChart({
         </div>
       ) : null}
       {!error && !empty ? (
-        <details className="mt-1 text-[11px] text-[var(--color-text-muted)]">
+        <details className="mt-1 type-hint text-[var(--color-text-muted)]">
           <summary className="cursor-pointer">Show as table</summary>
           <table className="mt-1 w-full border-collapse" data-testid="usage-chart-table">
             <thead>

@@ -38,14 +38,14 @@ export const ZEN_WIDGET_DATA_MANIFEST: SettingEntry[] = [
 ]
 
 const BTN =
-  'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
-const MUTED = 'text-xs text-[var(--color-text-muted)]'
+  'px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
+const MUTED = 'type-hint text-[var(--color-text-muted)]'
 
 /** External Data is the next page in the Gardens group; Garden cards read from it. */
 function DataSourcesLink(): React.JSX.Element {
   return (
     <section className="mt-8 pt-4 border-t border-[var(--color-border)]" data-zen-widget-data-sources-link="">
-      <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">External Data</h3>
+      <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">External Data</h3>
       <p className={`${MUTED} mt-1 mb-2`}>
         Garden cards that show checks a server runs (sites, status, triggers) get them from External Data, the next page in this group.
       </p>
@@ -79,11 +79,11 @@ export function ZenWidgetDataSection(): React.JSX.Element {
         <ZenWidgetData />
       ) : (
         <>
-          <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">{accessOn ? 'Widget data' : 'Local Data'}</h2>
+          <h2 className="type-title text-[var(--color-text-primary)] mb-1">{accessOn ? 'Widget data' : 'Local Data'}</h2>
           <p className={`${MUTED} mb-6`}>Each custom widget’s data on this computer.</p>
           {st.failure ? (
             <div className="mb-4">
-              <p role="alert" className="text-[11px] text-[var(--color-status-error)]" data-testid="zen-widget-data-load-error">
+              <p role="alert" className="type-hint text-[var(--color-status-error)]" data-testid="zen-widget-data-load-error">
                 {zenSettingsErrorText(new Error(st.failure.message))}
               </p>
               <button type="button" onClick={() => void loadZenSettings()} className={`${BTN} mt-2`}>
@@ -94,7 +94,7 @@ export function ZenWidgetDataSection(): React.JSX.Element {
             <p className={MUTED}>Loading…</p>
           ) : (
             <div data-zen-widget-data-setup="">
-              <p className="text-xs text-[var(--color-text-secondary)] mb-3">Gardens aren’t set up on this computer yet.</p>
+              <p className="type-row text-[var(--color-text-secondary)] mb-3">Gardens aren’t set up on this computer yet.</p>
               <button
                 type="button"
                 className={BTN}

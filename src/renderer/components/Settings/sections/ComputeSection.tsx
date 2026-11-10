@@ -247,8 +247,8 @@ export function ComputeSection(): React.JSX.Element {
   return (
     <div className="p-6 max-w-4xl space-y-6" data-testid="compute-section">
       <div>
-        <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Compute</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+        <h2 className="type-title text-[var(--color-text-primary)]">Compute</h2>
+        <p className="type-hint text-[var(--color-text-muted)] mt-1">
           Let agents on a K2 server run builds and tests on your other machines. Preview.
         </p>
       </div>
@@ -261,13 +261,13 @@ export function ComputeSection(): React.JSX.Element {
             aria-label="Compute nodes (preview)"
           />
           <div className="flex-1 min-w-0">
-            <div className="text-xs text-[var(--color-text-primary)]">Compute nodes (preview)</div>
-            <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+            <div className="type-row text-[var(--color-text-primary)]">Compute nodes (preview)</div>
+            <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
               When on, this server can pair with your other machines and agents you allow can run
               programs on them. Only the server&apos;s owner can turn this on.
             </p>
             {computePreview && controllerState === 'disabled' ? (
-              <p className="text-[11px] text-[var(--color-status-warn-amber-soft)] mt-1">
+              <p className="type-hint text-[var(--color-status-warn-amber-soft)] mt-1">
                 The server still has compute nodes off. Only its owner can turn them on.
               </p>
             ) : null}
@@ -318,7 +318,7 @@ const DOT_COLOR: Record<NodeDot, string> = {
 
 function StatusDot({ dot }: { dot: NodeDot }): React.JSX.Element {
   return (
-    <span className="inline-flex items-center gap-1.5 text-[10px] text-[var(--color-text-secondary)]">
+    <span className="inline-flex items-center gap-1.5 type-hint text-[var(--color-text-secondary)]">
       <span aria-hidden style={{ width: 8, height: 8, backgroundColor: DOT_COLOR[dot], display: 'inline-block' }} />
       <span data-testid="node-dot">{dot}</span>
     </span>
@@ -338,9 +338,9 @@ function CopyBox({ text, label }: { text: string; label?: string }): React.JSX.E
   }
   return (
     <div className="space-y-1">
-      {label ? <div className="text-[10px] text-[var(--color-text-muted)]">{label}</div> : null}
+      {label ? <div className="type-hint text-[var(--color-text-muted)]">{label}</div> : null}
       <div className="flex items-start gap-2">
-        <code className="flex-1 min-w-0 break-all text-[11px] bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1 select-all">
+        <code className="flex-1 min-w-0 break-all type-hint bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1 select-all">
           {text}
         </code>
         <Button onClick={() => void copy()} aria-label={label ? `Copy ${label}` : 'Copy'}>
@@ -408,18 +408,18 @@ function ControllerPart({
       <SettingsGroup title={list?.controller ? `Node details: ${list.controller}` : 'Node details'}>
         <div data-settings-id="compute.nodes" className="space-y-2 py-1">
           {state === 'loading' && !list ? (
-            <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
+            <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
           ) : null}
           {state === 'error' && error ? <Callout tone="error">{error}</Callout> : null}
           {list && nodes.length > 0 ? <ApprovalsPanel onChanged={() => void onChanged()} /> : null}
           {list && nodes.length > 0 ? <PackageRequestsPanel onChanged={() => void onChanged()} /> : null}
           {list && nodes.length === 0 ? (
-            <p className="text-[11px] text-[var(--color-text-muted)]">
+            <p className="type-hint text-[var(--color-text-muted)]">
               No nodes yet. Add one below, or make another computer a node from its own K2.
             </p>
           ) : null}
           {(list?.waitingCodes ?? []).map((c) => (
-            <div key={c.name} className="text-[11px] text-[var(--color-text-secondary)]">
+            <div key={c.name} className="type-hint text-[var(--color-text-secondary)]">
               Waiting for <span className="font-medium">{c.name}</span> to enroll ({inFuture(c.expiresAt)})
             </div>
           ))}
@@ -444,17 +444,17 @@ function ControllerPart({
             {(list.criticalPath ?? []).map((c) => (
               <p
                 key={`${c.workspace}/${c.submitter}`}
-                className="text-[11px] text-[var(--color-text-secondary)]"
+                className="type-hint text-[var(--color-text-secondary)]"
                 data-testid="compute-critical-path"
               >
                 Critical path (Priority): {c.submitter} — {c.jobs} {c.jobs === 1 ? 'job' : 'jobs'}
               </p>
             ))}
             {jobs.length === 0 && !sideErrors.jobs ? (
-              <p className="text-[11px] text-[var(--color-text-muted)]">No jobs yet.</p>
+              <p className="type-hint text-[var(--color-text-muted)]">No jobs yet.</p>
             ) : null}
             {jobs.map((j) => (
-              <div key={j.id} className="text-[11px] flex flex-wrap gap-x-3 gap-y-0.5 border-b border-[var(--color-border)] py-1">
+              <div key={j.id} className="type-hint flex flex-wrap gap-x-3 gap-y-0.5 border-b border-[var(--color-border)] py-1">
                 <span className="font-mono text-[var(--color-text-primary)]">{j.short}</span>
                 {tierTag(j.tier) ? (
                   <span
@@ -493,10 +493,10 @@ function ControllerPart({
           <div className="space-y-1 py-1">
             {sideErrors.events ? <Callout tone="warn">{sideErrors.events}</Callout> : null}
             {events.length === 0 && !sideErrors.events ? (
-              <p className="text-[11px] text-[var(--color-text-muted)]">Nothing yet.</p>
+              <p className="type-hint text-[var(--color-text-muted)]">Nothing yet.</p>
             ) : null}
             {events.map((e) => (
-              <div key={e.id} className="text-[11px] flex flex-wrap gap-x-3 border-b border-[var(--color-border)] py-1">
+              <div key={e.id} className="type-hint flex flex-wrap gap-x-3 border-b border-[var(--color-border)] py-1">
                 <span className="text-[var(--color-text-muted)]">{formatRelativeTime(e.at, nowSec())}</span>
                 <span className="text-[var(--color-text-secondary)]">{e.actor}</span>
                 <span className="text-[var(--color-text-primary)]">{e.kind}</span>
@@ -583,35 +583,35 @@ function NodeCard({
     <div className="border border-[var(--color-border)] p-3 space-y-2" data-testid={`compute-node-${node.name}`}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <StatusDot dot={dot} />
-        <span className="text-xs font-medium text-[var(--color-text-primary)]">{node.name}</span>
-        <span className="text-[11px] text-[var(--color-text-muted)]">
+        <span className="type-name text-[var(--color-text-primary)]">{node.name}</span>
+        <span className="type-hint text-[var(--color-text-muted)]">
           {[node.os, node.arch].filter(Boolean).join(' / ') || '—'}
         </span>
         {offer ? (
-          <span className="text-[11px] text-[var(--color-text-secondary)]">
+          <span className="type-hint text-[var(--color-text-secondary)]">
             {formatCores(offer.caps.cpu_millis)} · {formatBytes(offer.caps.mem_bytes)} RAM · {formatBytes(offer.free.disk_free_bytes)} free
             {offer.caps.hard ? '' : ' · soft caps'}
           </span>
         ) : null}
-        <span className="text-[11px] text-[var(--color-text-secondary)]">
+        <span className="type-hint text-[var(--color-text-secondary)]">
           {node.running} running · {node.queued} queued
         </span>
         {tierCountsLine(node.queueTiers) ? (
-          <span className="text-[11px] text-[var(--color-text-secondary)]" data-testid="compute-node-tiers">
+          <span className="type-hint text-[var(--color-text-secondary)]" data-testid="compute-node-tiers">
             queued: {tierCountsLine(node.queueTiers)}
           </span>
         ) : null}
-        <span className="text-[11px] text-[var(--color-text-muted)]">
+        <span className="type-hint text-[var(--color-text-muted)]">
           seen {formatRelativeTime(node.lastSeen, nowSec())}
           {node.liveRoute || node.lastRoute ? ` · via ${node.liveRoute || node.lastRoute}` : ''}
         </span>
       </div>
       {offer && !offer.available && offer.unavailable.length > 0 ? (
-        <div className="text-[11px] text-[var(--color-status-warn-amber-soft)]">Not taking jobs: {offer.unavailable.join(', ')}</div>
+        <div className="type-hint text-[var(--color-status-warn-amber-soft)]">Not taking jobs: {offer.unavailable.join(', ')}</div>
       ) : null}
       <NodePackagesSummary node={node} />
       {tools.length > 0 || features.length > 0 ? (
-        <div className="text-[10px] text-[var(--color-text-muted)] flex flex-wrap gap-x-2">
+        <div className="type-hint text-[var(--color-text-muted)] flex flex-wrap gap-x-2">
           {tools.map(([name, ver]) => (
             <span key={name}>
               {name} {ver}
@@ -627,7 +627,7 @@ function NodeCard({
 
       {node.state === 'pending' ? (
         <div className="space-y-2">
-          <p className="text-[11px] text-[var(--color-text-secondary)]">
+          <p className="type-hint text-[var(--color-text-secondary)]">
             Waiting for your OK. Type the 6-digit code the node shows.
             {node.sas ? (
               <>
@@ -692,7 +692,7 @@ function NodeCard({
             </Button>
           </div>
           {node.controllerPause ? (
-            <p className="text-[10px] text-[var(--color-text-muted)]">
+            <p className="type-hint text-[var(--color-text-muted)]">
               {node.controllerPause === 'paused' ? 'Paused' : 'Draining'} here: this server sends it no new jobs.
             </p>
           ) : null}
@@ -762,16 +762,16 @@ function GrantsBlock({
 
   return (
     <div className="space-y-1 pt-1" data-settings-id="compute.grants">
-      <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">Workspaces that may use it</div>
+      <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)]">Workspaces that may use it</div>
       {grants.length === 0 ? (
-        <p className="text-[11px] text-[var(--color-text-muted)]">None yet: no workspace may use this node.</p>
+        <p className="type-hint text-[var(--color-text-muted)]">None yet: no workspace may use this node.</p>
       ) : null}
       {grants.map((g) => {
         const project = projects.find((p) => p.id === g.workspaceId)
         const reported = project?.agentsCanUseCompute
         const on = reported === undefined ? undefined : reported === 1
         return (
-          <div key={g.workspaceId} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] border-b border-[var(--color-border)] py-1" data-testid={`compute-grant-${g.workspace}`}>
+          <div key={g.workspaceId} className="flex flex-wrap items-center gap-x-3 gap-y-1 type-hint border-b border-[var(--color-border)] py-1" data-testid={`compute-grant-${g.workspace}`}>
             <span className="text-[var(--color-text-primary)] font-medium">{project?.name ?? g.workspace}</span>
             <span className="text-[var(--color-text-muted)]">
               ≤{Math.round(g.maxJobSecs / 60)} min · {g.maxDiskGb} GB · {g.maxParallel} at once · {g.maxQueued} queued
@@ -831,11 +831,11 @@ function GrantsBlock({
         </Button>
       </div>
       {grants.some((g) => g.allowCi !== undefined) ? (
-        <p className="text-[10px] text-[var(--color-text-muted)]" data-testid="compute-grant-ci-help">
+        <p className="type-hint text-[var(--color-text-muted)]" data-testid="compute-grant-ci-help">
           CI jumps every queue. Give it to CI and release workspaces, not to agents doing normal work.
         </p>
       ) : null}
-      {note ? <p className="text-[11px] text-[var(--color-text-muted)]">{note}</p> : null}
+      {note ? <p className="type-hint text-[var(--color-text-muted)]">{note}</p> : null}
       {error ? <Callout tone="error">{error}</Callout> : null}
     </div>
   )
@@ -858,7 +858,7 @@ function AddNodeForm({ onChanged }: { onChanged: () => Promise<void> }): React.J
   return (
     <SettingsGroup title="Add a machine with an enroll code">
       <div className="space-y-2 py-1" data-settings-id="compute.add-node">
-        <p className="text-[11px] text-[var(--color-text-muted)]">
+        <p className="type-hint text-[var(--color-text-muted)]">
           Name the machine, then run the install command on it. It shows a 6-digit code; confirm that code here.
         </p>
         <div className="flex items-center gap-2">
@@ -870,14 +870,14 @@ function AddNodeForm({ onChanged }: { onChanged: () => Promise<void> }): React.J
         {error ? <Callout tone="error">{error}</Callout> : null}
         {code ? (
           <div className="space-y-2 border border-[var(--color-border)] p-3" data-testid="compute-enroll-code">
-            <div className="text-[11px] text-[var(--color-text-secondary)]">
+            <div className="type-hint text-[var(--color-text-secondary)]">
               Enroll code for <span className="font-medium">{code.name}</span> ({inFuture(code.expiresAt)})
             </div>
             <CopyBox label="Enroll code" text={code.enroll} />
             <CopyBox label="Install on Linux" text={code.install.linux} />
             <CopyBox label="Install on macOS" text={code.install.macos} />
             <CopyBox label="Already installed: enroll only" text={code.install.enrollOnly} />
-            <p className="text-[11px] text-[var(--color-text-muted)]">
+            <p className="type-hint text-[var(--color-text-muted)]">
               Then confirm the code the node shows in its card above (or: <span className="font-mono">{code.confirm}</span>).
             </p>
           </div>
@@ -940,7 +940,7 @@ function ThisComputerPart({
   return (
     <SettingsGroup title="This computer">
       <div className="space-y-3 py-1" data-settings-id="compute.this-computer" data-testid="compute-this-computer">
-        {state === 'loading' && !status ? <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p> : null}
+        {state === 'loading' && !status ? <p className="type-hint text-[var(--color-text-muted)]">Loading…</p> : null}
         {state === 'disabled' ? (
           <Callout tone="info">
             Compute nodes are off in this computer&apos;s own K2. Switch this window to This computer and turn on
@@ -954,8 +954,8 @@ function ThisComputerPart({
             <div className="flex items-start gap-3">
               <Toggle checked={sheetOpen} onChange={setSheetOpen} aria-label="Make this computer a compute node" />
               <div className="flex-1 min-w-0">
-                <div className="text-xs text-[var(--color-text-primary)]">Make this computer a compute node</div>
-                <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                <div className="type-row text-[var(--color-text-primary)]">Make this computer a compute node</div>
+                <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
                   Agents on the server you pick can run programs here as a separate, limited user (k2node). They
                   can&apos;t read your files unless your files are readable by everyone.
                 </p>
@@ -1025,8 +1025,8 @@ export function RemoteAdminToggles({
           aria-label="Let K2 keep this node updated and healthy (remote admin: policy)"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs text-[var(--color-text-primary)]">Let K2 keep this node updated and healthy (remote admin: policy)</div>
-          <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+          <div className="type-row text-[var(--color-text-primary)]">Let K2 keep this node updated and healthy (remote admin: policy)</div>
+          <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
             Signed k2-node updates and rollbacks, limits (raising them waits for you), pause, and the job wall.
           </p>
         </div>
@@ -1040,8 +1040,8 @@ export function RemoteAdminToggles({
             aria-label="Also let K2 run admin scripts as root (remote admin: full)"
           />
           <div className="flex-1 min-w-0">
-            <div className="text-xs text-[var(--color-text-primary)]">Also let K2 run admin scripts as root (remote admin: full)</div>
-            <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+            <div className="type-row text-[var(--color-text-primary)]">Also let K2 run admin scripts as root (remote admin: full)</div>
+            <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
               Each root action still waits for your approval ({touchIdOrPassword()}).
             </p>
           </div>
@@ -1065,7 +1065,7 @@ function RemoteAdminPart({ status, onChanged }: { status: LocalStatus; onChanged
   }
   return (
     <div className="space-y-2" data-testid="compute-local-remote-admin">
-      <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">Remote admin (now: {level ?? 'not set up'})</div>
+      <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)]">Remote admin (now: {level ?? 'not set up'})</div>
       <RemoteAdminToggles
         keepUpdated={keepUpdated}
         allowRoot={level === 'full'}
@@ -1082,7 +1082,7 @@ function RemoteAdminPart({ status, onChanged }: { status: LocalStatus; onChanged
         </div>
       ) : null}
       {result?.rootNeeded && result.command ? <CopyBox label="Admin command" text={result.command} /> : null}
-      {result?.message ? <p className="text-[11px] text-[var(--color-text-secondary)]">{result.message}</p> : null}
+      {result?.message ? <p className="type-hint text-[var(--color-text-secondary)]">{result.message}</p> : null}
       {error ? <Callout tone="error">{error}</Callout> : null}
     </div>
   )
@@ -1098,9 +1098,9 @@ function EnableResultBox({ result }: { result: LocalEnableResult }): React.JSX.E
           <CopyBox label="Admin command" text={result.command} />
         </>
       ) : null}
-      {result.message ? <p className="text-[11px] text-[var(--color-text-secondary)]">{result.message}</p> : null}
+      {result.message ? <p className="type-hint text-[var(--color-text-secondary)]">{result.message}</p> : null}
       {result.sas ? (
-        <p className="text-[11px] text-[var(--color-text-secondary)]">
+        <p className="type-hint text-[var(--color-text-secondary)]">
           Code: <span className="font-mono text-[var(--color-text-primary)]">{displaySas(result.sas)}</span>
         </p>
       ) : null}
@@ -1113,7 +1113,7 @@ function EnrollProgress({ status }: { status: LocalStatus }): React.JSX.Element 
   const r = status.enrollResult ?? null
   if (status.enrollRequestPending) {
     return (
-      <p className="text-[11px] text-[var(--color-text-muted)]" data-testid="compute-enroll-pending">
+      <p className="type-hint text-[var(--color-text-muted)]" data-testid="compute-enroll-pending">
         Waiting for the node to answer the enroll request…
       </p>
     )
@@ -1282,7 +1282,7 @@ function EnableSheet({
   return (
     <div className="border border-[var(--color-border)] p-3 space-y-3" data-testid="compute-enable-sheet">
       <div className="space-y-1">
-        <div className="text-[11px] font-medium text-[var(--color-text-primary)]">1. Which server may use this computer?</div>
+        <div className="type-name text-[var(--color-text-primary)]">1. Which server may use this computer?</div>
         <div className="flex gap-2">
           <Button variant={mode === 'code' ? 'accent' : 'quiet'} onClick={() => setMode('code')}>
             Enter an enroll code
@@ -1322,15 +1322,15 @@ function EnableSheet({
           </div>
         ) : (
           <div className="space-y-1 pt-1">
-            {phase.kind === 'loading' ? <p className="text-[11px] text-[var(--color-text-muted)]">Reading your servers…</p> : null}
+            {phase.kind === 'loading' ? <p className="type-hint text-[var(--color-text-muted)]">Reading your servers…</p> : null}
             {phase.kind === 'signed_out' ? (
-              <p className="text-[11px] text-[var(--color-text-muted)]">
+              <p className="type-hint text-[var(--color-text-muted)]">
                 Sign in to your k2.dev account in Settings → Tunnel first, or use an enroll code.
               </p>
             ) : null}
             {phase.kind === 'list' ? (
               phase.servers.length === 0 ? (
-                <p className="text-[11px] text-[var(--color-text-muted)]">No active servers on this account.</p>
+                <p className="type-hint text-[var(--color-text-muted)]">No active servers on this account.</p>
               ) : (
                 <div className="flex flex-wrap gap-2">
                   {phase.servers.map((sub) => (
@@ -1342,19 +1342,19 @@ function EnableSheet({
               )
             ) : null}
             {phase.kind === 'installing' ? (
-              <p className="text-[11px] text-[var(--color-text-muted)]">Installing the node service… then pairing with {phase.sub}.k2.dev.</p>
+              <p className="type-hint text-[var(--color-text-muted)]">Installing the node service… then pairing with {phase.sub}.k2.dev.</p>
             ) : null}
             {phase.kind === 'working' ? (
-              <p className="text-[11px] text-[var(--color-text-muted)]">Pairing with {phase.sub}.k2.dev…</p>
+              <p className="type-hint text-[var(--color-text-muted)]">Pairing with {phase.sub}.k2.dev…</p>
             ) : null}
           </div>
         )}
       </div>
 
       <div className="space-y-1">
-        <div className="text-[11px] font-medium text-[var(--color-text-primary)]">2. Your home folder</div>
+        <div className="type-name text-[var(--color-text-primary)]">2. Your home folder</div>
         {homeCheck ? (
-          <div className="text-[11px] text-[var(--color-text-secondary)] space-y-1">
+          <div className="type-hint text-[var(--color-text-secondary)] space-y-1">
             <p>
               {homeCheck.home} is {homeCheck.private ? 'private' : 'readable by other users'} (mode {homeCheck.mode}).
             </p>
@@ -1372,9 +1372,9 @@ function EnableSheet({
             ) : null}
           </div>
         ) : (
-          <p className="text-[11px] text-[var(--color-text-muted)]">This K2 doesn&apos;t report a home folder check.</p>
+          <p className="type-hint text-[var(--color-text-muted)]">This K2 doesn&apos;t report a home folder check.</p>
         )}
-        <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
+        <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)]">
           <Checkbox checked={privateHome} onChange={(e) => setPrivateHome(e.target.checked)} aria-label="Make my home folder private (chmod 700)" />
           Make my home folder private (chmod 700)
         </label>
@@ -1455,19 +1455,19 @@ function LocalNodePanel({
     <div className="space-y-3" data-testid="compute-local-node">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <StatusDot dot={dot} />
-        <span className="text-xs text-[var(--color-text-primary)]">{node?.name ?? 'Node service installed'}</span>
-        <span className="text-[11px] text-[var(--color-text-secondary)]">{node?.state ?? 'starting'}</span>
-        {node?.controller ? <span className="text-[11px] text-[var(--color-text-muted)]">for {node.controller}</span> : null}
-        {node?.route ? <span className="text-[11px] text-[var(--color-text-muted)]">via {node.route}</span> : null}
+        <span className="type-row text-[var(--color-text-primary)]">{node?.name ?? 'Node service installed'}</span>
+        <span className="type-hint text-[var(--color-text-secondary)]">{node?.state ?? 'starting'}</span>
+        {node?.controller ? <span className="type-hint text-[var(--color-text-muted)]">for {node.controller}</span> : null}
+        {node?.route ? <span className="type-hint text-[var(--color-text-muted)]">via {node.route}</span> : null}
       </div>
       {node?.last_error ? <Callout tone="warn">{node.last_error}</Callout> : null}
       {node?.unavailable && node.unavailable.length > 0 ? (
-        <p className="text-[11px] text-[var(--color-status-warn-amber-soft)]">Not taking jobs: {node.unavailable.join(', ')}</p>
+        <p className="type-hint text-[var(--color-status-warn-amber-soft)]">Not taking jobs: {node.unavailable.join(', ')}</p>
       ) : null}
 
       {node?.sas && node.state === 'pending' ? (
         <div className="flex flex-wrap items-center gap-2" data-testid="compute-local-sas">
-          <span className="text-[11px] text-[var(--color-text-secondary)]">
+          <span className="type-hint text-[var(--color-text-secondary)]">
             Code: <span className="font-mono text-[var(--color-text-primary)]">{displaySas(node.sas)}</span> — confirm it on{' '}
             {node.controller ?? 'the server'}
           </span>
@@ -1484,20 +1484,20 @@ function LocalNodePanel({
       ) : null}
 
       <div className="space-y-1">
-        <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">Running jobs</div>
+        <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)]">Running jobs</div>
         {node?.running && node.running.length > 0 ? (
-          <ul className="text-[11px] font-mono text-[var(--color-text-secondary)]">
+          <ul className="type-hint font-mono text-[var(--color-text-secondary)]">
             {node.running.map((j) => (
               <li key={j}>{j}</li>
             ))}
           </ul>
         ) : (
-          <p className="text-[11px] text-[var(--color-text-muted)]">None.</p>
+          <p className="type-hint text-[var(--color-text-muted)]">None.</p>
         )}
       </div>
 
       <div className="space-y-1">
-        <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">Your say (now: {control})</div>
+        <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)]">Your say (now: {control})</div>
         <div className="flex flex-wrap gap-2">
           <Button disabled={busy} onClick={() => void run(() => pauseLocalNode(false))}>
             Pause after current jobs
@@ -1520,20 +1520,20 @@ function LocalNodePanel({
 
       {status.packages ? (
         <div className="space-y-1">
-          <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+          <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)]">
             Approved system packages{status.packages.manager ? ` (${status.packages.manager})` : ''}
           </div>
           {status.packages.approved.length > 0 ? (
-            <p className="text-[11px] font-mono text-[var(--color-text-secondary)]">{status.packages.approved.join(', ')}</p>
+            <p className="type-hint font-mono text-[var(--color-text-secondary)]">{status.packages.approved.join(', ')}</p>
           ) : (
-            <p className="text-[11px] text-[var(--color-text-muted)]">None.</p>
+            <p className="type-hint text-[var(--color-text-muted)]">None.</p>
           )}
           {listedNode ? <LocalPackagesSummary node={listedNode} /> : null}
-          <p className="text-[10px] text-[var(--color-text-muted)]">
+          <p className="type-hint text-[var(--color-text-muted)]">
             Approve with: <span className="font-mono">sudo k2-node packages allow &lt;name&gt;</span>
           </p>
           {status.packages.installer === false && status.platform !== 'macos' ? (
-            <p className="text-[10px] text-[var(--color-text-muted)]">
+            <p className="type-hint text-[var(--color-text-muted)]">
               This node has no package installer yet (re-run sudo k2-node setup), so approved packages aren&apos;t installed for jobs.
             </p>
           ) : null}
@@ -1549,11 +1549,11 @@ function LocalNodePanel({
         {disableResult ? (
           !disableResult.done && disableResult.command ? (
             <div className="space-y-1">
-              {disableResult.message ? <p className="text-[11px] text-[var(--color-text-secondary)]">{disableResult.message}</p> : null}
+              {disableResult.message ? <p className="type-hint text-[var(--color-text-secondary)]">{disableResult.message}</p> : null}
               <CopyBox label="Admin command" text={disableResult.command} />
             </div>
           ) : (
-            <p className="text-[11px] text-[var(--color-text-secondary)]">{disableResult.message ?? 'Done.'}</p>
+            <p className="type-hint text-[var(--color-text-secondary)]">{disableResult.message ?? 'Done.'}</p>
           )
         ) : null}
       </div>
@@ -1617,8 +1617,8 @@ function PolicyEditor({
 
   return (
     <div className="space-y-2">
-      <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">How much of this computer</div>
-      <label className="flex items-center gap-3 text-[11px] text-[var(--color-text-secondary)]">
+      <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)]">How much of this computer</div>
+      <label className="flex items-center gap-3 type-hint text-[var(--color-text-secondary)]">
         <span className="w-28">CPU cap</span>
         <Slider
           min={1}
@@ -1630,7 +1630,7 @@ function PolicyEditor({
         />
         <span className="w-10 text-right">{draft.cpu_cap_percent}%</span>
       </label>
-      <label className="flex items-center gap-3 text-[11px] text-[var(--color-text-secondary)]">
+      <label className="flex items-center gap-3 type-hint text-[var(--color-text-secondary)]">
         <span className="w-28">Memory cap (GB)</span>
         <Input
           value={draft.mem_cap_gb}
@@ -1639,7 +1639,7 @@ function PolicyEditor({
           className="w-20"
         />
       </label>
-      <label className="flex items-center gap-3 text-[11px] text-[var(--color-text-secondary)]">
+      <label className="flex items-center gap-3 type-hint text-[var(--color-text-secondary)]">
         <span className="w-28">Disk budget (GB)</span>
         <Input
           value={draft.disk_budget_gb}
@@ -1648,7 +1648,7 @@ function PolicyEditor({
           className="w-20"
         />
       </label>
-      <div className="flex items-center gap-3 text-[11px] text-[var(--color-text-secondary)]">
+      <div className="flex items-center gap-3 type-hint text-[var(--color-text-secondary)]">
         <span className="w-28">Available</span>
         <SettingDropdown
           value={draft.availability}
@@ -1658,7 +1658,7 @@ function PolicyEditor({
           ariaLabel="Availability"
         />
       </div>
-      <div className="flex items-start gap-3 text-[11px] text-[var(--color-text-secondary)]">
+      <div className="flex items-start gap-3 type-hint text-[var(--color-text-secondary)]">
         <span className="w-28 pt-0.5">Repo toolchains</span>
         <Toggle
           checked={draft.repo_toolchains === 'true'}
@@ -1669,7 +1669,7 @@ function PolicyEditor({
           Install the toolchains a job&apos;s repo declares (mise.toml, .tool-versions, .nvmrc, rust-toolchain.toml)
         </span>
       </div>
-      <div className="flex items-center gap-3 text-[11px] text-[var(--color-text-secondary)]">
+      <div className="flex items-center gap-3 type-hint text-[var(--color-text-secondary)]">
         <span className="w-28">When I come back</span>
         <SettingDropdown
           value={draft.on_owner_return}

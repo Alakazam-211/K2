@@ -53,7 +53,7 @@ export function CanCloneToggle({
         onChange={(e) => onChange(e.target.checked)}
         style={st.locked ? { opacity: 1, cursor: 'not-allowed' } : undefined}
       />
-      <span className="text-[10px] text-[var(--color-text-secondary)]">Can clone</span>
+      <span className="type-hint text-[var(--color-text-secondary)]">Can clone</span>
     </label>
   )
 }

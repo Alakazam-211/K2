@@ -33,8 +33,8 @@ export function ComingSoonBotSection({ id }: { id: SettingsSection }): React.JSX
   if (!bot) return null
   return (
     <div className="max-w-xl" data-coming-soon-bot={bot.id} data-settings-id={`${bot.id}.soon`}>
-      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">{bot.name}</h2>
-      <p className="text-xs text-[var(--color-text-muted)]">{comingSoonBotCopy(bot.name)}</p>
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1">{bot.name}</h2>
+      <p className="type-hint text-[var(--color-text-muted)]">{comingSoonBotCopy(bot.name)}</p>
     </div>
   )
 }

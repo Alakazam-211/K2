@@ -143,10 +143,10 @@ export function AppHandoverSheet({
           Close
         </Button>
       </div>
-      {step.kind === 'planning' ? <p className={`text-[11px] ${muted}`}>Working out what moves…</p> : null}
+      {step.kind === 'planning' ? <p className={`type-hint ${muted}`}>Working out what moves…</p> : null}
       {plan ? (
         <div className="space-y-2" data-testid={`apps-handover-${appId}-plan`}>
-          <ul className="space-y-1 text-[11px] text-[var(--color-text-secondary)] list-disc pl-4">
+          <ul className="space-y-1 type-hint text-[var(--color-text-secondary)] list-disc pl-4">
             {plan.lines.map((l, i) => (
               <li key={i}>{l}</li>
             ))}
@@ -157,13 +157,13 @@ export function AppHandoverSheet({
             </Callout>
           ))}
           {plan.databaseCase === 'shared' ? (
-            <label className="flex items-center gap-2 text-[11px]">
+            <label className="flex items-center gap-2 type-hint">
               <Checkbox checked={opts.db === 'share'} onChange={(e) => setOpt({ ...opts, db: e.target.checked ? 'share' : undefined })} />
               Share the database (the old agent keeps access to this App’s data)
             </label>
           ) : null}
           {plan.collisions ? (
-            <label className="flex items-center gap-2 text-[11px]">
+            <label className="flex items-center gap-2 type-hint">
               <Checkbox
                 checked={opts.collisions === 'use_b'}
                 onChange={(e) => setOpt({ ...opts, collisions: e.target.checked ? 'use_b' : undefined })}
@@ -172,7 +172,7 @@ export function AppHandoverSheet({
             </label>
           ) : null}
           {plan.sharedGuests > 0 ? (
-            <label className="flex items-center gap-2 text-[11px]">
+            <label className="flex items-center gap-2 type-hint">
               <Checkbox checked={opts.resetShared === true} onChange={(e) => setOpt({ ...opts, resetShared: e.target.checked || undefined })} />
               Take over the guests who also use the old agent’s other Apps (they keep this App and set a new password)
             </label>
@@ -182,14 +182,14 @@ export function AppHandoverSheet({
           </Button>
         </div>
       ) : null}
-      {step.kind === 'confirming' ? <p className={`text-[11px] ${muted}`}>Confirm it’s you…</p> : null}
+      {step.kind === 'confirming' ? <p className={`type-hint ${muted}`}>Confirm it’s you…</p> : null}
       {step.kind === 'password' ? (
         <div className="flex items-center gap-2">
           <input
             ref={pwRef}
             type="password"
             aria-label="Password to confirm"
-            className="px-2 py-1 text-[11px] bg-[var(--color-bg-surface)] border border-[var(--color-border)]"
+            className="px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)]"
           />
           <Button onClick={() => void submitPassword(step.request, step.method)}>Confirm</Button>
         </div>

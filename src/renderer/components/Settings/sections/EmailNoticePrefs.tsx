@@ -24,7 +24,7 @@ export interface NoticeWorkspace {
   name: string
 }
 
-const muted = 'text-[10px] text-[var(--color-text-muted)]'
+const muted = 'type-hint text-[var(--color-text-muted)]'
 
 export function EmailNoticePrefs({ scope, workspaces }: { scope: ServerScope; workspaces: NoticeWorkspace[] }): React.JSX.Element | null {
   const [mine, setMine] = useState<MyEmailNotices | null>(null)
@@ -86,17 +86,17 @@ export function EmailNoticePrefs({ scope, workspaces }: { scope: ServerScope; wo
         address and the owner turns notices on for that workspace. Each email has a link to stop them.
       </p>
       {loadError && (
-        <p role="alert" className="text-[11px] text-[var(--color-status-error)]">
+        <p role="alert" className="type-hint text-[var(--color-status-error)]">
           Could not load your email notices: {loadError}
         </p>
       )}
-      {!mine && !loadError && <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>}
+      {!mine && !loadError && <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>}
       {mine && (
         <>
           {live.map((a) => (
             <div key={a.id} data-testid={`email-notice-address-${a.state}`} className="flex items-center justify-between gap-3 py-2 border-b border-[var(--color-border)]">
               <div className="min-w-0">
-                <div className="text-xs text-[var(--color-text-primary)] truncate">{a.address}</div>
+                <div className="type-row text-[var(--color-text-primary)] truncate">{a.address}</div>
                 <div className={muted}>{noticeAddressStatus(a)}</div>
               </div>
               <button
@@ -104,7 +104,7 @@ export function EmailNoticePrefs({ scope, workspaces }: { scope: ServerScope; wo
                 disabled={busy}
                 aria-label={`Stop email notices to ${a.address}`}
                 onClick={() => void run(() => removeMyNoticeAddress(scope, a.address))}
-                className="px-2 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50"
+                className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50"
               >
                 Remove
               </button>
@@ -124,12 +124,12 @@ export function EmailNoticePrefs({ scope, workspaces }: { scope: ServerScope; wo
               onChange={(e) => setDraft(e.target.value)}
               placeholder={mine.address ? 'Use another address…' : 'you@example.com'}
               aria-label="Your address for email notices"
-              className="flex-1 min-w-0 px-2 py-1 text-xs bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)]"
+              className="flex-1 min-w-0 px-2 py-1 type-control bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)]"
             />
             <button
               type="submit"
               disabled={busy || draft.trim() === ''}
-              className="px-2 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50"
+              className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50"
             >
               Send confirm link
             </button>
@@ -146,7 +146,7 @@ export function EmailNoticePrefs({ scope, workspaces }: { scope: ServerScope; wo
                 return (
                   <div key={w.projectId} data-testid={`email-notice-ws-${w.projectId}`} className="flex items-center justify-between gap-4 py-2 border-b border-[var(--color-border)]">
                     <div className="min-w-0">
-                      <div className="text-xs text-[var(--color-text-primary)] truncate">{w.name}</div>
+                      <div className="type-row text-[var(--color-text-primary)] truncate">{w.name}</div>
                       <div className={muted}>{on ? 'May email you' : 'Off for you'}</div>
                     </div>
                     <Toggle
@@ -163,7 +163,7 @@ export function EmailNoticePrefs({ scope, workspaces }: { scope: ServerScope; wo
         </>
       )}
       {error && (
-        <p role="alert" data-testid="email-notice-error" className="text-[11px] text-[var(--color-status-error)]">
+        <p role="alert" data-testid="email-notice-error" className="type-hint text-[var(--color-status-error)]">
           {error}
         </p>
       )}

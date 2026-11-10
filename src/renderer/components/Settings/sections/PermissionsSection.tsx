@@ -28,20 +28,20 @@ function StatusBadge({ kind }: { kind: StatusKind }): React.JSX.Element {
   // accent for "granted".
   if (kind === 'granted') {
     return (
-      <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)] font-medium">
+      <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)] ">
         Granted
       </span>
     )
   }
   if (kind === 'not-granted') {
     return (
-      <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-muted)] font-medium">
+      <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-muted)] ">
         Not granted
       </span>
     )
   }
   return (
-    <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-muted)] font-medium">
+    <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-muted)] ">
       Unknown
     </span>
   )
@@ -68,10 +68,10 @@ function PermissionRow({
       className="flex items-start justify-between gap-4 py-3 border-b border-[var(--color-border)] last:border-b-0"
     >
       <div className="min-w-0 flex-1 space-y-0.5">
-        <div className="text-xs font-medium text-[var(--color-text-primary)]">
+        <div className="type-name text-[var(--color-text-primary)]">
           {label}
         </div>
-        <p className="text-[10px] text-[var(--color-text-muted)]">
+        <p className="type-hint text-[var(--color-text-muted)]">
           {description}
         </p>
       </div>
@@ -79,7 +79,7 @@ function PermissionRow({
         <StatusBadge kind={status} />
         <button
           onClick={onRequest}
-          className="px-2 py-1 text-[10px] bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
+          className="px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
         >
           {buttonLabel}
         </button>
@@ -173,10 +173,10 @@ export function PermissionsSection(): React.JSX.Element {
   return (
     <div className="max-w-2xl">
       <div className="mb-4">
-        <h3 className="text-xs font-medium text-[var(--color-text-primary)]">
+        <h3 className="type-heading text-[var(--color-text-primary)]">
           Accessibility
         </h3>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
           OS-level access K2 needs to function. Grants are managed by
           macOS in <span className="text-[var(--color-text-secondary)]">System Settings → Privacy &amp; Security</span>.
         </p>
@@ -184,7 +184,7 @@ export function PermissionsSection(): React.JSX.Element {
 
       <div className="border border-[var(--color-border)]">
         {loading ? (
-          <div className="px-3 py-6 text-[10px] text-[var(--color-text-muted)] text-center">
+          <div className="px-3 py-6 type-hint text-[var(--color-text-muted)] text-center">
             Loading permission status…
           </div>
         ) : (
@@ -233,7 +233,7 @@ export function PermissionsSection(): React.JSX.Element {
         )}
       </div>
 
-      <p className="mt-3 text-[10px] text-[var(--color-text-muted)]">
+      <p className="mt-3 type-hint text-[var(--color-text-muted)]">
         Granting a permission opens System Settings — flip the toggle next to
         K2 and the status here updates automatically.
       </p>

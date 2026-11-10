@@ -104,14 +104,14 @@ function ServerBlock({
 
   return (
     <div className="space-y-1.5 border border-[var(--color-border)] p-2" data-testid="sources-batch-server">
-      <p className="text-[11px] text-[var(--color-text-primary)]">
+      <p className="type-hint text-[var(--color-text-primary)]">
         On <strong>{scope.label}</strong>
       </p>
-      {state.step === 'loading' && <p className={`text-[11px] ${muted}`}>Loading…</p>}
-      {state.step === 'failed' && <p className={`text-[11px] ${danger}`}>{state.text}</p>}
-      {state.step === 'done' && <p className={`text-[11px] ${muted}`}>{state.text}</p>}
+      {state.step === 'loading' && <p className={`type-hint ${muted}`}>Loading…</p>}
+      {state.step === 'failed' && <p className={`type-hint ${danger}`}>{state.text}</p>}
+      {state.step === 'done' && <p className={`type-hint ${muted}`}>{state.text}</p>}
       {state.step === 'ready' && state.sources.length + state.triggers.length === 0 && (
-        <p className={`text-[11px] ${muted}`}>Nothing is waiting here.</p>
+        <p className={`type-hint ${muted}`}>Nothing is waiting here.</p>
       )}
       {state.step === 'ready' && (
         <>
@@ -119,7 +119,7 @@ function ServerBlock({
             const sec = s.urlSecret ?? s.secret
             const key = `s:${s.name}`
             return (
-              <label key={key} className="flex items-start gap-1.5 text-[11px] text-[var(--color-text-secondary)]">
+              <label key={key} className="flex items-start gap-1.5 type-hint text-[var(--color-text-secondary)]">
                 <Checkbox
                   disabled={s.approval === 'owner_only'}
                   checked={picked[key] ?? false}
@@ -141,7 +141,7 @@ function ServerBlock({
           {state.triggers.map((t) => {
             const key = `t:${t.id}`
             return (
-              <label key={key} className="flex items-start gap-1.5 text-[11px] text-[var(--color-text-secondary)]">
+              <label key={key} className="flex items-start gap-1.5 type-hint text-[var(--color-text-secondary)]">
                 <Checkbox
                   checked={picked[key] ?? false}
                   onChange={(e) => {
@@ -174,7 +174,7 @@ function ServerBlock({
         />
       )}
       {error && (
-        <p className={`text-[11px] ${danger}`} role="alert">
+        <p className={`type-hint ${danger}`} role="alert">
           {error}
         </p>
       )}
@@ -196,10 +196,10 @@ export function DataSourcesBatchDialog({
   return (
     <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/40" data-testid="sources-batch" role="dialog" aria-modal="true" aria-label="Review pending">
       <div className="bg-[var(--color-bg)] border border-[var(--color-border)] p-3 w-[560px] max-w-[95vw] max-h-[85vh] overflow-auto space-y-2">
-        <p className="text-[12px] font-medium text-[var(--color-text-primary)]">
+        <p className="type-name text-[var(--color-text-primary)]">
           {args.gardenName ? `Review pending for Garden “${args.gardenName}”` : 'Review pending'}
         </p>
-        <p className={`text-[11px] ${muted}`}>
+        <p className={`type-hint ${muted}`}>
           Each check runs on its own server. Items that use a secret on one server need one confirm.
         </p>
         {servers.map(([hostKey, names]) => (

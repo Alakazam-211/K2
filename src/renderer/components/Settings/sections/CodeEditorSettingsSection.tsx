@@ -78,8 +78,8 @@ export function CodeEditorSettingsSection(): React.JSX.Element {
   const toggleRow = (label: string, description: string, key: keyof typeof editor, isLast = false, disabled = false) => (
     <div key={key} className={`flex items-center justify-between px-3 py-2.5 ${!isLast ? 'border-b border-[var(--color-border)]' : ''} ${disabled ? 'opacity-40' : ''}`}>
       <div>
-        <div className="text-xs text-[var(--color-text-secondary)]">{label}</div>
-        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{description}</div>
+        <div className="type-row text-[var(--color-text-secondary)]">{label}</div>
+        <div className="type-hint text-[var(--color-text-muted)] mt-0.5">{description}</div>
       </div>
       <Toggle
         size="sm"
@@ -94,8 +94,8 @@ export function CodeEditorSettingsSection(): React.JSX.Element {
   const dropdownRow = (label: string, description: string, value: string, options: { value: string; label: string }[], onChange: (v: string) => void, isLast = false) => (
     <div className={`flex items-center justify-between px-3 py-2.5 ${!isLast ? 'border-b border-[var(--color-border)]' : ''}`}>
       <div>
-        <div className="text-xs text-[var(--color-text-secondary)]">{label}</div>
-        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{description}</div>
+        <div className="type-row text-[var(--color-text-secondary)]">{label}</div>
+        <div className="type-hint text-[var(--color-text-muted)] mt-0.5">{description}</div>
       </div>
       <SettingDropdown value={value} options={options} onChange={onChange} />
     </div>
@@ -240,18 +240,18 @@ async function fetchClassifiedData(id: string): Promise<string[]> {
       <div className="max-w-xl flex-1 space-y-6 min-w-0">
         {/* ── Appearance ── */}
         <div>
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">Appearance</h2>
+          <h2 className="type-title text-[var(--color-text-primary)] mb-3">Appearance</h2>
           <div className="border border-[var(--color-border)]">
             <div className="flex items-center justify-between px-3 py-2.5 border-b border-[var(--color-border)]">
               <div>
-                <div className="text-xs text-[var(--color-text-secondary)]">Theme</div>
-                <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Color theme for the code editor</div>
+                <div className="type-row text-[var(--color-text-secondary)]">Theme</div>
+                <div className="type-hint text-[var(--color-text-muted)] mt-0.5">Color theme for the code editor</div>
               </div>
               <div className="flex items-center gap-1.5">
                 {customThemes.length > 0 && (
                   <button
                     onClick={() => setShowThemeManager(!showThemeManager)}
-                    className="px-2 py-1 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-secondary)] transition-colors cursor-pointer no-drag"
+                    className="px-2 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-secondary)] transition-colors cursor-pointer no-drag"
                   >
                     Manage
                   </button>
@@ -259,7 +259,7 @@ async function fetchClassifiedData(id: string): Promise<string[]> {
                 {isCustomTheme && (
                   <button
                     onClick={handleCustomize}
-                    className="px-2 py-1 text-[10px] text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer no-drag"
+                    className="px-2 py-1 type-control text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer no-drag"
                   >
                     Customize
                   </button>
@@ -271,7 +271,7 @@ async function fetchClassifiedData(id: string): Promise<string[]> {
                 />
                 <button
                   onClick={handleNewTheme}
-                  className="px-2 py-1 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-secondary)] transition-colors cursor-pointer no-drag whitespace-nowrap"
+                  className="px-2 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-secondary)] transition-colors cursor-pointer no-drag whitespace-nowrap"
                 >
                   + New
                 </button>
@@ -280,14 +280,14 @@ async function fetchClassifiedData(id: string): Promise<string[]> {
             {showThemeManager && customThemes.length > 0 && (
               <div className="border-b border-[var(--color-border)] bg-[var(--color-bg)]/50">
                 <div className="px-3 py-2">
-                  <div className="text-[10px] text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Custom Themes</div>
+                  <div className="type-section text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Custom Themes</div>
                   {customThemes.map((t) => (
                     <div key={t.id} className="flex items-center justify-between py-1.5 group">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="w-3 h-3 flex-shrink-0 border border-[var(--color-border)]" style={{ backgroundColor: t.colors.bg }} />
-                        <span className="text-xs text-[var(--color-text-primary)] truncate">{t.name}</span>
+                        <span className="type-row text-[var(--color-text-primary)] truncate">{t.name}</span>
                         {editor.theme === t.id && (
-                          <span className="text-[9px] text-[var(--color-accent)] flex-shrink-0">active</span>
+                          <span className="type-hint text-[var(--color-accent)] flex-shrink-0">active</span>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -297,7 +297,7 @@ async function fetchClassifiedData(id: string): Promise<string[]> {
                             setShowCreator(true)
                             setShowThemeManager(false)
                           }}
-                          className="px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag"
+                          className="px-1.5 py-0.5 type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag"
                         >
                           Edit
                         </button>
@@ -308,7 +308,7 @@ async function fetchClassifiedData(id: string): Promise<string[]> {
                             }
                             await deleteCustomTheme(t.id)
                           }}
-                          className="px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] cursor-pointer no-drag"
+                          className="px-1.5 py-0.5 type-control text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] cursor-pointer no-drag"
                         >
                           Delete
                         </button>
@@ -331,7 +331,7 @@ async function fetchClassifiedData(id: string): Promise<string[]> {
 
         {/* ── Editing ── */}
         <div>
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">Editing</h2>
+          <h2 className="type-title text-[var(--color-text-primary)] mb-3">Editing</h2>
           <div className="border border-[var(--color-border)]">
             {dropdownRow('Tab Size', 'Default spaces per indentation (languages may override)', String(editor.tabSize),
               [{ value: '2', label: '2' }, { value: '4', label: '4' }, { value: '8', label: '8' }],
@@ -347,7 +347,7 @@ async function fetchClassifiedData(id: string): Promise<string[]> {
 
         {/* ── Gutter & Display ── */}
         <div>
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">Gutter & Display</h2>
+          <h2 className="type-title text-[var(--color-text-primary)] mb-3">Gutter & Display</h2>
           <div className="border border-[var(--color-border)]">
             {toggleRow('Line Numbers', 'Show line numbers in the gutter', 'lineNumbers')}
             {toggleRow('Indent Guides', 'Show vertical indentation guide lines', 'indentGuides')}
@@ -366,29 +366,29 @@ async function fetchClassifiedData(id: string): Promise<string[]> {
 
         {/* ── Keybindings & Modes ── */}
         <div>
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">Keybindings & Modes</h2>
+          <h2 className="type-title text-[var(--color-text-primary)] mb-3">Keybindings & Modes</h2>
           <div className="border border-[var(--color-border)]">
             {toggleRow('Vim Mode', 'Full vim keybinding emulation (hjkl, modes, commands)', 'vimMode')}
             <div className="px-3 py-2.5 border-b border-[var(--color-border)]">
               <div className="flex items-center justify-between">
-                <div className="text-xs text-[var(--color-text-secondary)]">Select Next Occurrence</div>
-                <span className="text-[10px] text-[var(--color-text-muted)] font-mono bg-[var(--color-bg)] px-2 py-0.5 border border-[var(--color-border)]">Cmd+D</span>
+                <div className="type-row text-[var(--color-text-secondary)]">Select Next Occurrence</div>
+                <span className="type-hint text-[var(--color-text-muted)] font-mono bg-[var(--color-bg)] px-2 py-0.5 border border-[var(--color-border)]">Cmd+D</span>
               </div>
-              <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Add a cursor at the next match of the selected word</div>
+              <div className="type-hint text-[var(--color-text-muted)] mt-0.5">Add a cursor at the next match of the selected word</div>
             </div>
             <div className="px-3 py-2.5 border-b border-[var(--color-border)]">
               <div className="flex items-center justify-between">
-                <div className="text-xs text-[var(--color-text-secondary)]">Find & Replace</div>
-                <span className="text-[10px] text-[var(--color-text-muted)] font-mono bg-[var(--color-bg)] px-2 py-0.5 border border-[var(--color-border)]">Cmd+F / Cmd+H</span>
+                <div className="type-row text-[var(--color-text-secondary)]">Find & Replace</div>
+                <span className="type-hint text-[var(--color-text-muted)] font-mono bg-[var(--color-bg)] px-2 py-0.5 border border-[var(--color-border)]">Cmd+F / Cmd+H</span>
               </div>
-              <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Search with regex, case-sensitive, and replace support</div>
+              <div className="type-hint text-[var(--color-text-muted)] mt-0.5">Search with regex, case-sensitive, and replace support</div>
             </div>
             <div className="px-3 py-2.5">
               <div className="flex items-center justify-between">
-                <div className="text-xs text-[var(--color-text-secondary)]">Fold / Unfold</div>
-                <span className="text-[10px] text-[var(--color-text-muted)] font-mono bg-[var(--color-bg)] px-2 py-0.5 border border-[var(--color-border)]">Cmd+Shift+[ / ]</span>
+                <div className="type-row text-[var(--color-text-secondary)]">Fold / Unfold</div>
+                <span className="type-hint text-[var(--color-text-muted)] font-mono bg-[var(--color-bg)] px-2 py-0.5 border border-[var(--color-border)]">Cmd+Shift+[ / ]</span>
               </div>
-              <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Collapse or expand code blocks at the cursor</div>
+              <div className="type-hint text-[var(--color-text-muted)] mt-0.5">Collapse or expand code blocks at the cursor</div>
             </div>
           </div>
         </div>
@@ -396,7 +396,7 @@ async function fetchClassifiedData(id: string): Promise<string[]> {
 
       {/* ── Live Preview (sticky) ── */}
       <div className="flex-1 min-w-[400px] sticky top-0 self-start">
-        <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">Preview</h2>
+        <h2 className="type-title text-[var(--color-text-primary)] mb-3">Preview</h2>
         <div className="border border-[var(--color-border)] h-[calc(100vh-120px)] overflow-hidden">
           <CodeEditor
             code={previewCode}

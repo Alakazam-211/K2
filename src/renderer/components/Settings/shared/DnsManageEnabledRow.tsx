@@ -27,10 +27,10 @@ export function DnsManageEnabledRow(): React.JSX.Element {
   return (
     <div className="flex items-center justify-between py-2" data-settings-id="k2-connect.dns-manage-enabled">
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
+        <span className="type-row text-[var(--color-text-secondary)]">
           Allow agents to manage DNS records
         </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
           {allow
             ? 'Agents on this host may create, update, and delete DNS records. Each workspace can also opt in individually under Workspaces.'
             : 'Off (recommended): agents cannot mutate DNS. Turn on to let agents manage DNS records for this host — each workspace can also opt in individually under Workspaces.'}

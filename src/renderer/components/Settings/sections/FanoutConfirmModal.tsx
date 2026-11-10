@@ -121,10 +121,10 @@ export function FanoutConfirmModal({
       >
         {/* Header */}
         <div className="px-5 pt-5 pb-2">
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
+          <h2 className="type-title text-[var(--color-text-primary)]">
             Set up canonical harness fan-out
           </h2>
-          <p className="text-xs text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
             Canonical fan-out makes K2&rsquo;s generated{' '}
             <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENTS.md</span> the
             single source of truth, and points each AI tool&rsquo;s file
@@ -140,7 +140,7 @@ export function FanoutConfirmModal({
 
         {/* Safety note — displaced files are moved into .k2/migration/. */}
         <div className="px-5 pb-3">
-          <div className="border-l-2 border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5 pl-3 pr-2 py-2 text-[11px] leading-snug text-[var(--color-text-muted)]">
+          <div className="border-l-2 border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5 pl-3 pr-2 py-2 type-hint leading-snug text-[var(--color-text-muted)]">
             <span className="font-medium text-[var(--color-text-secondary)]">Safe by default: </span>
             {FANOUT_ENABLE_WARNING}
           </div>
@@ -148,7 +148,7 @@ export function FanoutConfirmModal({
 
         {error && (
           <div className="px-5 pb-2">
-            <p className="text-[11px] text-[var(--color-status-error-soft)]">{error}</p>
+            <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>
           </div>
         )}
 
@@ -161,10 +161,10 @@ export function FanoutConfirmModal({
               disabled={busy !== null}
               className="px-4 py-3 text-left border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 transition-colors disabled:opacity-40 no-drag cursor-pointer"
             >
-              <div className="text-xs font-medium text-[var(--color-accent)]">
+              <div className="type-name text-[var(--color-accent)]">
                 {busy === 'skill' ? 'Setting up…' : 'Set it up agentically'}
               </div>
-              <div className="mt-1 text-[11px] leading-snug text-[var(--color-text-muted)]">
+              <div className="mt-1 type-hint leading-snug text-[var(--color-text-muted)]">
                 Recommended. The K2 Canonical Agent merges your files into the canon — nothing changes without you.
               </div>
             </button>
@@ -175,10 +175,10 @@ export function FanoutConfirmModal({
               disabled={busy !== null}
               className="px-4 py-3 text-left border border-[var(--color-border)] bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
             >
-              <div className="text-xs font-medium text-[var(--color-text-primary)]">
+              <div className="type-name text-[var(--color-text-primary)]">
                 {busy === 'programmatic' ? 'Enabling…' : 'Symlink it now'}
               </div>
-              <div className="mt-1 text-[11px] leading-snug text-[var(--color-text-muted)]">
+              <div className="mt-1 type-hint leading-snug text-[var(--color-text-muted)]">
                 K2 links your files to the canon automatically. Your originals are moved into .k2/migration/ first.
               </div>
             </button>
@@ -187,7 +187,7 @@ export function FanoutConfirmModal({
           <button
             onClick={onCancel}
             disabled={busy !== null}
-            className="mt-3 w-full px-3 py-1.5 text-xs text-center text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
+            className="mt-3 w-full px-3 py-1.5 type-control text-center text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
           >
             Cancel
           </button>

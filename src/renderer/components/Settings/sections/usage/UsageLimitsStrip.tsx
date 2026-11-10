@@ -31,7 +31,7 @@ export function UsageLimitsStrip({
   if (!entry?.doc || items.length === 0) return null
   return (
     <div
-      className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-1 border border-[var(--color-border)] px-3 py-2 text-[11px]"
+      className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-1 border border-[var(--color-border)] px-3 py-2 type-hint"
       data-testid="usage-limits-strip"
     >
       <span className="text-[var(--color-text-muted)]">Limits</span>
@@ -58,7 +58,7 @@ export function UsageLimitsStrip({
           data-testid="usage-limits-strip-link"
           onClick={() => void openSettingsPage('llm-tokens')}
         >
-          Every login on Subs / Tokens →
+          See every login in Subs / Tokens →
         </button>
       ) : null}
     </div>

@@ -104,7 +104,7 @@ function SendStateLine({
       data-send-state={participant.sendState}
     >
       <span
-        className={`text-[10px] flex-1 min-w-0 ${
+        className={`type-hint flex-1 min-w-0 ${
           note.blocked
             ? 'text-[var(--color-status-error-soft)]'
             : 'text-[var(--color-text-muted)]'
@@ -118,7 +118,7 @@ function SendStateLine({
           disabled={!canMutate || busy}
           onClick={onTurnOn}
           title="Let this workspace's agents send email (k2 mail sending <workspace> on)"
-          className="px-2 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
+          className="px-2 py-1 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
         >
           {pending ? '…' : 'Turn on sending'}
         </button>
@@ -147,7 +147,7 @@ function levelOptions(maxLevel: Inbox['maxLevel']): { value: InboxLevel; label: 
 
 function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
-    <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+    <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
       {children}
     </h3>
   )
@@ -173,7 +173,7 @@ function ManageToggles({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] text-[var(--color-text-secondary)]">
+        <span className="type-hint text-[var(--color-text-secondary)]">
           Allow inbox management
         </span>
         <Toggle
@@ -186,7 +186,7 @@ function ManageToggles({
       </div>
       {canManage && (
         <div className="flex items-center justify-between gap-2 pl-5">
-          <span className="text-[11px] text-[var(--color-text-secondary)]">Allow delete</span>
+          <span className="type-hint text-[var(--color-text-secondary)]">Allow delete</span>
           <Toggle
             checked={canDelete}
             disabled={disabled}
@@ -417,7 +417,7 @@ export function InboxAccessPanel({
   return (
     <div className="space-y-2">
       <SectionTitle>Workspace access</SectionTitle>
-      <p className="text-[10px] text-[var(--color-text-muted)]">
+      <p className="type-hint text-[var(--color-text-muted)]">
         The <strong>Primary</strong> workspace manages this inbox and its access list. Grant other
         workspaces <strong>Read-only</strong>{canSend ? ', ' : ' or '}
         <strong>Read + Draft</strong>
@@ -433,7 +433,7 @@ export function InboxAccessPanel({
         )}{' '}
         Agents use the inbox via <span className="font-mono">k2 mail</span>.
       </p>
-      <p className="text-[10px] text-[var(--color-text-muted)]">
+      <p className="type-hint text-[var(--color-text-muted)]">
         <strong>Inbox management</strong> lets a workspace move and organize mail into folders;{' '}
         <strong>Allow delete</strong> lets it move messages to Trash (recoverable) — not permanent
         removal. Delete requires management.
@@ -443,10 +443,10 @@ export function InboxAccessPanel({
         {/* Primary row — workspace + its own level (editable), no remove. */}
         <div className="px-3 py-2 space-y-2">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-[var(--color-text-primary)] truncate flex-1 min-w-0">
+            <span className="type-row text-[var(--color-text-primary)] truncate flex-1 min-w-0">
               {inbox.primary.workspace ?? inbox.primary.projectId}
             </span>
-            <span className="text-[9px] font-semibold px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-accent)] bg-[var(--color-accent)]/15 flex-shrink-0">
+            <span className="type-badge px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-accent)] bg-[var(--color-accent)]/15 flex-shrink-0">
               Primary
             </span>
             <SettingDropdown
@@ -474,7 +474,7 @@ export function InboxAccessPanel({
         {inbox.grants.map((g) => (
           <div key={g.projectId} className="px-3 py-2 space-y-2">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-[var(--color-text-primary)] truncate flex-1 min-w-0">
+              <span className="type-row text-[var(--color-text-primary)] truncate flex-1 min-w-0">
                 {g.workspace ?? projectName(g.projectId)}
               </span>
               <SettingDropdown
@@ -488,7 +488,7 @@ export function InboxAccessPanel({
                 disabled={!canMutate || busy}
                 onClick={() => void doMakePrimary(g.projectId)}
                 title="Transfer Primary to this workspace"
-                className="px-2 py-1 text-[10px] font-medium text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
+                className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
               >
                 {pending === `primary:${g.projectId}` ? '…' : 'Make Primary'}
               </button>
@@ -497,7 +497,7 @@ export function InboxAccessPanel({
                 disabled={!canMutate || busy}
                 onClick={() => void doRevoke(g.projectId)}
                 title="Remove this workspace's access"
-                className="px-2 py-1 text-[10px] font-medium text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
+                className="px-2 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
               >
                 {pending === g.projectId ? '…' : 'Remove'}
               </button>
@@ -518,7 +518,7 @@ export function InboxAccessPanel({
         ))}
 
         {inbox.grants.length === 0 && (
-          <div className="px-3 py-2 text-[11px] text-[var(--color-text-muted)] italic">
+          <div className="px-3 py-2 type-hint text-[var(--color-text-muted)] italic">
             No other workspaces have access yet — only the Primary can use this inbox.
           </div>
         )}
@@ -546,14 +546,14 @@ export function InboxAccessPanel({
           type="button"
           disabled={!canMutate || busy || !newProject}
           onClick={() => void doAdd()}
-          className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
+          className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
         >
           {pending === 'add' ? 'Adding…' : 'Add access'}
         </button>
       </div>
 
       {error && (
-        <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p>
+        <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
       )}
     </div>
   )

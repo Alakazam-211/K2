@@ -1,4 +1,3 @@
-import { thisMachineLower } from '@/lib/desktop-words'
 // Pure decision logic + copy for the "Restart connected host" control
 // (#661), split out of GeneralSection.tsx so the gating rules + dialog
 // copy are unit-testable WITHOUT importing the React component (which
@@ -40,9 +39,8 @@ export function restartHostConfirmCopy(hostLabel: string, hostname: string): {
   return {
     title: `Restart ${hostLabel}?`,
     message:
-      `This will restart ${hostLabel} (${hostname}) — the REMOTE machine you're ` +
-      `connected to, not ${thisMachineLower()}. Active sessions on it will briefly disconnect, ` +
-      `then reconnect automatically when it's back. Continue?`,
+      `This restarts ${hostLabel} (${hostname}), the server you're connected to, not this computer. ` +
+      `Sessions on it disconnect briefly, then reconnect automatically when it's back.`,
     confirmLabel: `Restart ${hostLabel}`,
   }
 }

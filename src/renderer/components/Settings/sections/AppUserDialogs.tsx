@@ -26,14 +26,14 @@ import type { PersonRow } from './PeopleSection'
 export type DaemonPost = (route: string, body: Record<string, unknown>) => Promise<unknown>
 
 const FIELD_CLS =
-  'w-full px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
+  'w-full px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 const BTN_PRIMARY =
-  'px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
+  'px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
 const BTN_PLAIN =
-  'px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50'
-const LINK_BTN = 'text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer disabled:opacity-40'
-const NOTE = 'text-[11px] leading-relaxed text-[var(--color-text-secondary)]'
-const MUTED = 'text-[10px] leading-relaxed text-[var(--color-text-muted)]'
+  'px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50'
+const LINK_BTN = 'type-hint text-[var(--color-accent)] hover:underline no-drag cursor-pointer disabled:opacity-40'
+const NOTE = 'type-hint leading-relaxed text-[var(--color-text-secondary)]'
+const MUTED = 'type-hint leading-relaxed text-[var(--color-text-muted)]'
 
 function rec(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
@@ -91,7 +91,7 @@ function Sheet({
       >
         {/* The frame stays still (its chamfer); the content scrolls inside. */}
         <div className="min-h-0 overflow-y-auto p-4 space-y-3">
-          <h3 id={titleId} className="text-sm font-medium text-[var(--color-text-primary)]">
+          <h3 id={titleId} className="type-heading text-[var(--color-text-primary)]">
             {title}
           </h3>
           {children}
@@ -135,7 +135,7 @@ export function OneTimeSecret({
   return (
     <div className="space-y-1.5 border border-[var(--color-border)] p-2">
       <p className={NOTE}>{label}</p>
-      <p data-testid="one-time-secret" className="text-xs font-mono break-all select-all text-[var(--color-text-primary)]">
+      <p data-testid="one-time-secret" className="type-row font-mono break-all select-all text-[var(--color-text-primary)]">
         {value}
       </p>
       <div className="flex flex-wrap items-center gap-3">
@@ -153,7 +153,7 @@ export function OneTimeSecret({
 function ErrorLine({ text }: { text: string | null }): React.JSX.Element | null {
   if (!text) return null
   return (
-    <p role="alert" className="text-[11px] text-[var(--color-status-error)]">
+    <p role="alert" className="type-hint text-[var(--color-status-error)]">
       {text}
     </p>
   )
@@ -257,14 +257,14 @@ export function ResetPasswordDialog({
           </p>
           {tie ? <p className={NOTE}>{tie}</p> : null}
           <div role="radiogroup" aria-label="How to reset" className="space-y-1.5">
-            <label className="flex items-start gap-2 text-xs text-[var(--color-text-primary)] cursor-pointer">
+            <label className="flex items-start gap-2 type-control text-[var(--color-text-primary)] cursor-pointer">
               <Radio name="reset-mode" checked={mode === 'link'} onChange={() => setMode('link')} />
               <span>
                 Get a one-time link (recommended: no email involved)
                 <span className={`block ${MUTED}`}>You give it to them yourself. K2 shows it once.</span>
               </span>
             </label>
-            <label className="flex items-start gap-2 text-xs text-[var(--color-text-primary)] cursor-pointer">
+            <label className="flex items-start gap-2 type-control text-[var(--color-text-primary)] cursor-pointer">
               <Radio name="reset-mode" checked={mode === 'email'} onChange={() => setMode('email')} />
               <span>
                 Email them the link
@@ -594,16 +594,16 @@ export function AddUserDialog({
         </label>
         <div role="radiogroup" aria-label="Password" className="space-y-1.5">
           <span className={MUTED}>Password</span>
-          <label className="flex items-center gap-2 text-xs text-[var(--color-text-primary)] cursor-pointer">
+          <label className="flex items-center gap-2 type-control text-[var(--color-text-primary)] cursor-pointer">
             <Radio name="add-mode" checked={mode === 'type'} onChange={() => setMode('type')} />
             Type one
           </label>
-          <label className="flex items-center gap-2 text-xs text-[var(--color-text-primary)] cursor-pointer">
+          <label className="flex items-center gap-2 type-control text-[var(--color-text-primary)] cursor-pointer">
             <Radio name="add-mode" checked={mode === 'generate'} onChange={() => setMode('generate')} />
             Let K2 generate one (shown once, after you add them)
           </label>
           <label
-            className={`flex items-start gap-2 text-xs cursor-pointer ${hasEmail ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-muted)]'}`}
+            className={`flex items-start gap-2 type-control cursor-pointer ${hasEmail ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-muted)]'}`}
           >
             <Radio
               name="add-mode"

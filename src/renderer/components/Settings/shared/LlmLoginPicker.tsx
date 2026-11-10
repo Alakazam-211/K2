@@ -173,11 +173,11 @@ function Notes({
   return (
     <>
       {picked?.kind === 'api_key' && (
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">This API token is billed per token.</p>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">This API token is billed per token.</p>
       )}
-      {note && <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{note}</p>}
+      {note && <p className="type-hint text-[var(--color-text-muted)] mt-0.5">{note}</p>}
       {error && (
-        <p className="text-[10px] text-red-400 mt-0.5" role="alert">
+        <p className="type-hint text-red-400 mt-0.5" role="alert">
           {error}
         </p>
       )}
@@ -200,7 +200,7 @@ function WorkspaceTokenRow({
   return (
     <div className="py-1.5" data-testid={`llm-pin-workspace-${tool.tool}`}>
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">{tool.display}</span>
+        <span className="type-row text-[var(--color-text-secondary)]">{tool.display}</span>
         <SettingDropdown
           value={value}
           options={tokenOptions(tool, value)}
@@ -220,12 +220,12 @@ export function WorkspaceLlmTokens({ scope, projectId }: { scope: ServerScope; p
   const tools = (doc?.tools ?? []).filter((t) => t.supported)
   return (
     <div data-settings-id="projects.llm-logins" data-testid="workspace-llm-tokens">
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-1 leading-relaxed">
+      <p className="type-hint text-[var(--color-text-muted)] mb-1 leading-relaxed">
         Server default uses this server&apos;s default token (Settings → Language Models → Subs / Tokens). Pick a subscription or API token to
         use this token for this workspace&apos;s agents and sidecars instead. Resumed chats keep the token they
         started on.
       </p>
-      {!doc && <p className="text-[10px] text-[var(--color-text-muted)]">Loading tokens…</p>}
+      {!doc && <p className="type-hint text-[var(--color-text-muted)]">Loading tokens…</p>}
       {doc && tools.map((t) => <WorkspaceTokenRow key={t.tool} scope={scope} doc={doc} tool={t} projectId={projectId} />)}
     </div>
   )
@@ -250,7 +250,7 @@ function TokenList({
         return (
           <React.Fragment key={o.value}>
             {heading !== null && (
-              <div className="pt-1.5 pb-0.5 text-[9px] uppercase tracking-wider text-[var(--color-text-muted)]">{heading}</div>
+              <div className="pt-1.5 pb-0.5 type-section uppercase tracking-wider text-[var(--color-text-muted)]">{heading}</div>
             )}
             <button
               type="button"
@@ -258,7 +258,7 @@ function TokenList({
               onClick={() => {
                 if (!o.disabled && !active) onPick(o.value)
               }}
-              className={`w-full flex items-center gap-2 px-1.5 py-1 text-left text-[11px] ${
+              className={`w-full flex items-center gap-2 px-1.5 py-1 text-left type-control ${
                 o.disabled
                   ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
                   : active
@@ -268,7 +268,7 @@ function TokenList({
             >
               <span className="flex-1 min-w-0 break-words">{o.label}</span>
               {o.badge && (
-                <span className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0">{o.badge}</span>
+                <span className="type-badge uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0">{o.badge}</span>
               )}
               {active && (
                 <svg
@@ -396,15 +396,15 @@ function SessionTokenMenu({
   }
   return (
     <div className="space-y-1">
-      <p className="text-[10px] text-[var(--color-text-muted)]">Use this token for this chat</p>
+      <p className="type-hint text-[var(--color-text-muted)]">Use this token for this chat</p>
       <TokenList options={tokenOptions(tool, value, workspaceDefaultId)} value={value} onPick={(v) => void choose(v)} />
       <Notes tool={tool} value={value} note={note} error={error} />
       {value !== DEFAULT_VALUE && (
-        <p className="text-[10px] text-[var(--color-text-muted)] pt-1 border-t border-[var(--color-border)]">
+        <p className="type-hint text-[var(--color-text-muted)] pt-1 border-t border-[var(--color-border)]">
           Hit a limit on this token? Pick another one above.
         </p>
       )}
-      <p className="text-[10px] text-[var(--color-text-muted)]">{SESSION_PIN_NOTE}</p>
+      <p className="type-hint text-[var(--color-text-muted)]">{SESSION_PIN_NOTE}</p>
     </div>
   )
 }
@@ -451,7 +451,7 @@ export function SessionTokenPicker({
         aria-label={`${tool.display} token for this chat: ${inUseName(tool, value, workspaceDefaultId)}`}
         aria-expanded={open}
         {...floatProps(floating, 'pill')}
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-field)] text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer"
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[var(--radius-field)] type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer"
       >
         <span>{TOKEN_LABEL}</span>
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="flex-shrink-0">

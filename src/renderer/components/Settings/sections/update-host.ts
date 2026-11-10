@@ -1,4 +1,3 @@
-import { thisMachineLower } from '@/lib/desktop-words'
 // Pure decision logic + phase handling + copy for the "Update host"
 // control (P4 of the remote-update system), split out of GeneralSection.tsx
 // so the gating rules, update-phase state machine, and host-named copy are
@@ -860,10 +859,8 @@ export function updateHostConfirmCopy(
   return {
     title: `Update ${hostLabel} to ${latest}?`,
     message:
-      `This will install ${latest} on ${hostLabel} (${hostname}) — the REMOTE ` +
-      `machine you're connected to, not ${thisMachineLower()} — and restart it. Active ` +
-      `sessions on it will briefly disconnect, then reconnect automatically ` +
-      `when it's back on the new version. Continue?`,
+      `This installs ${latest} on ${hostLabel} (${hostname}), the server you're connected to, not this computer, and restarts it. ` +
+      `Sessions on it disconnect briefly, then reconnect automatically when it's back on the new version.`,
     confirmLabel: `Install & restart ${hostLabel}`,
   }
 }
@@ -873,7 +870,7 @@ export function updateHostConfirmCopy(
  *  the same for a Member and for a login it no longer knows, so it names
  *  both; Settings → General reads whoami and says which (`refusalCopy`). */
 export function updateForbiddenCopy(hostLabel: string): string {
-  return `${hostLabel} turned down the update. Your sign-in there may have expired (sign in again), or your login isn't the host owner or an admin.`
+  return `${hostLabel} turned down the update. Your sign-in there may have expired (sign in again), or your login isn't the server's owner or an admin.`
 }
 
 /** True when an error message looks like a 403/forbidden from the

@@ -140,8 +140,8 @@ export function HomesSyncSection(props: {
   const now = Date.now()
   return (
     <div className="max-w-2xl" data-settings-id="homes-sync.devices" data-testid="homes-sync-section">
-      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Homes Sync</h2>
-      <p className="text-xs text-[var(--color-text-muted)] mb-4">
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Homes Sync</h2>
+      <p className="type-hint text-[var(--color-text-muted)] mb-4">
         Your Homes stay in step between this computer and your phone through this computer’s K2 server. Every device keeps
         its own copy, so Home always opens, even offline; changes made while apart are combined when they meet again.
         Which Home you’re looking at stays on each device. Your prompt stash syncs the same way, with these devices; its
@@ -149,15 +149,15 @@ export function HomesSyncSection(props: {
       </p>
 
       {!supported ? (
-        <p className="text-xs text-[var(--color-text-secondary)]" data-testid="homes-sync-unsupported">
+        <p className="type-row text-[var(--color-text-secondary)]" data-testid="homes-sync-unsupported">
           This computer’s K2 server doesn’t sync Homes yet. Update K2 to turn it on.
         </p>
       ) : (
         <>
           <div className="flex items-center justify-between gap-3 border border-[var(--color-border)] px-3 py-2 mb-4">
             <div className="min-w-0">
-              <div className="text-xs text-[var(--color-text-primary)]">This computer</div>
-              <div className="text-[11px] text-[var(--color-text-muted)]" data-testid="homes-sync-status">
+              <div className="type-row text-[var(--color-text-primary)]">This computer</div>
+              <div className="type-hint text-[var(--color-text-muted)]" data-testid="homes-sync-status">
                 {enabled ? statusLine(status) : statusLine({ ...status, phase: 'off' })}
               </div>
             </div>
@@ -172,19 +172,19 @@ export function HomesSyncSection(props: {
             )}
           </div>
 
-          <h3 className="text-xs font-medium text-[var(--color-text-primary)] mb-1">Devices syncing from this computer</h3>
-          <p className="text-[11px] text-[var(--color-text-muted)] mb-2">
+          <h3 className="type-heading text-[var(--color-text-primary)] mb-1">Devices syncing from this computer</h3>
+          <p className="type-hint text-[var(--color-text-muted)] mb-2">
             Phones and computers that keep their Homes here. Removing one stops its sync; its Homes stay on it.
           </p>
           {error && (
-            <p className="text-[11px] text-[var(--color-status-error,#e5484d)] mb-2" role="alert">
+            <p className="type-hint text-[var(--color-status-error,#e5484d)] mb-2" role="alert">
               {error}
             </p>
           )}
           {devices === null ? (
-            <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
+            <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
           ) : devices.length === 0 ? (
-            <p className="text-[11px] text-[var(--color-text-muted)]" data-testid="homes-sync-no-devices">
+            <p className="type-hint text-[var(--color-text-muted)]" data-testid="homes-sync-no-devices">
               No devices sync their Homes here yet.
             </p>
           ) : (
@@ -192,11 +192,11 @@ export function HomesSyncSection(props: {
               {devices.map((d) => (
                 <li key={d.deviceId} className="flex items-center justify-between gap-3 px-3 py-2" data-testid="homes-sync-device">
                   <div className="min-w-0">
-                    <div className="text-xs text-[var(--color-text-primary)] truncate">
+                    <div className="type-row text-[var(--color-text-primary)] truncate">
                       {d.name}
-                      {d.current && <span className="ml-2 text-[10px] text-[var(--color-text-muted)]">(this computer)</span>}
+                      {d.current && <span className="ml-2 type-hint text-[var(--color-text-muted)]">(this computer)</span>}
                     </div>
-                    <div className="text-[11px] text-[var(--color-text-muted)]">
+                    <div className="type-hint text-[var(--color-text-muted)]">
                       {PLATFORM_LABEL[d.platform] ?? d.platform} · {ago(d.lastSyncAt, now)}
                     </div>
                   </div>

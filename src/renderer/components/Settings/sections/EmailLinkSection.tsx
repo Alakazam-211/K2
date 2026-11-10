@@ -77,7 +77,7 @@ type Selection = { kind: 'add' } | { kind: 'inbox'; address: string }
 
 function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
-    <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+    <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
       {children}
     </h3>
   )
@@ -101,7 +101,7 @@ function StatusChip({ status }: { status: string }): React.JSX.Element {
   const label = status === 'connected' ? 'Connected' : status === 'error' ? 'Error' : status
   return (
     <span
-      className="text-[9px] font-semibold px-1.5 py-0.5 flex-shrink-0 uppercase tracking-wide"
+      className="type-badge px-1.5 py-0.5 flex-shrink-0 uppercase tracking-wide"
       style={{ color, backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)` }}
     >
       {label}
@@ -128,7 +128,7 @@ function CopyButton({ text, title }: { text: string; title?: string }): React.JS
             useToastStore.getState().addToast('Copy failed', 'error')
           })
       }}
-      className="px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] border border-[var(--color-border)] transition-colors cursor-pointer flex-shrink-0"
+      className="px-1.5 py-0.5 type-control text-[var(--color-text-muted)] hover:text-[var(--color-accent)] border border-[var(--color-border)] transition-colors cursor-pointer flex-shrink-0"
     >
       {copied ? 'Copied' : 'Copy'}
     </button>
@@ -191,7 +191,7 @@ export function microsoftLinkState(cfg: OauthConfig | null | 'error'): {
     return {
       enabled: false,
       badge: 'Unavailable',
-      title: "Couldn't read the OAuth app config from the daemon",
+      title: "Couldn't read the OAuth app settings from this server",
     }
   }
   const ms = cfg.providers.microsoft
@@ -235,11 +235,11 @@ export function MicrosoftConnectButton({
       onClick={onStart}
       title={st.title}
       data-testid="connect-microsoft"
-      className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+      className="inline-flex items-center gap-2 px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
     >
       {busy ? 'Starting…' : 'Connect Microsoft (Outlook / 365)'}
       {st.badge && (
-        <span className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide border border-[var(--color-border)] flex-shrink-0">
+        <span className="px-1.5 py-0.5 type-badge uppercase tracking-wide border border-[var(--color-border)] flex-shrink-0">
           {st.badge}
         </span>
       )}
@@ -421,7 +421,7 @@ function OauthConnect({
           // Unexpected non-capture loopback from daemon — teach, don't hang.
           setResult({
             kind: 'error',
-            message: res.hint ?? 'Gmail link started without an in-app browser URL. Update the daemon and try again.',
+            message: res.hint ?? 'Gmail link started without an in-app browser URL. Update K2 on this server and try again.',
           })
         }
       } catch (e) {
@@ -521,7 +521,7 @@ function OauthConnect({
   }, [closeOauthBrowser])
 
   const inputCls =
-    'px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'
+    'px-2 py-1 type-hint font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'
 
   const disabledField = busy !== null || flow !== null
 
@@ -532,10 +532,10 @@ function OauthConnect({
         <div className="flex-shrink-0 px-4 pt-4 pb-3 space-y-2 border-b border-[var(--color-border)]">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 space-y-1">
-              <h2 className="text-base font-medium text-[var(--color-text-primary)]">
+              <h2 className="type-title text-[var(--color-text-primary)]">
                 Approve Google access
               </h2>
-              <p className="text-[11px] text-[var(--color-text-muted)]">
+              <p className="type-hint text-[var(--color-text-muted)]">
                 Sign in and allow K2 in the browser below. When Google finishes, this page updates
                 automatically — you can stay in Settings.
               </p>
@@ -543,14 +543,14 @@ function OauthConnect({
             <button
               type="button"
               onClick={reset}
-              className="px-2.5 py-1 text-[11px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
+              className="px-2.5 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
             >
               Cancel
             </button>
           </div>
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-[10px] text-[var(--color-text-muted)] flex-shrink-0">URL</span>
-            <code className="flex-1 min-w-0 truncate text-[10px] font-mono text-[var(--color-text-secondary)] select-all">
+            <span className="type-hint text-[var(--color-text-muted)] flex-shrink-0">URL</span>
+            <code className="flex-1 min-w-0 truncate type-hint font-mono text-[var(--color-text-secondary)] select-all">
               {gmailSession.authorizationUrl}
             </code>
             <CopyButton text={gmailSession.authorizationUrl} title="Copy consent URL" />
@@ -561,13 +561,13 @@ function OauthConnect({
                   useToastStore.getState().addToast('Could not open system browser', 'error')
                 })
               }
-              className="px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
+              className="px-2 py-0.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
               title="Open in the system browser if the in-app view is blocked"
             >
               Open outside K2
             </button>
           </div>
-          <p className="text-[10px] text-[var(--color-text-muted)]">
+          <p className="type-hint text-[var(--color-text-muted)]">
             {gmailSession.hint ?? 'Waiting for approval…'}
           </p>
         </div>
@@ -587,14 +587,14 @@ function OauthConnect({
               </PrimaryRoom>
             ) : (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-                <p className="text-[12px] text-[var(--color-text-secondary)] max-w-md">
+                <p className="type-row text-[var(--color-text-secondary)] max-w-md">
                   In-app browser is not available here. Open the consent URL in your system browser,
                   then return to K2 — the link still completes automatically.
                 </p>
                 <button
                   type="button"
                   onClick={() => void openUrl(gmailSession.authorizationUrl)}
-                  className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer"
+                  className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer"
                 >
                   Open consent page
                 </button>
@@ -609,15 +609,15 @@ function OauthConnect({
   return (
     <div className="space-y-3" data-settings-id="email-link.oauth">
       <SectionTitle>Connect with Google or Microsoft</SectionTitle>
-      <p className="text-[11px] text-[var(--color-text-muted)]">
+      <p className="type-hint text-[var(--color-text-muted)]">
         No app-password needed — approve access in your provider and K2 stores the connection in the
-        daemon vault. Pick the <strong>Primary</strong> workspace and enter the account&rsquo;s email
+        K2 vault. Pick the <strong>Primary</strong> workspace and enter the account&rsquo;s email
         so K2 can label the pending link. Gmail opens Google consent <strong>in this page</strong>.
       </p>
 
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-0.5 min-w-0">
-          <span className="text-[10px] text-[var(--color-text-secondary)]">Primary workspace</span>
+          <span className="type-hint text-[var(--color-text-secondary)]">Primary workspace</span>
           <SettingDropdown
             value={project}
             placeholder="Pick a workspace…"
@@ -628,7 +628,7 @@ function OauthConnect({
           />
         </div>
         <label className="flex flex-col gap-0.5 min-w-0">
-          <span className="text-[10px] text-[var(--color-text-secondary)]">Email address</span>
+          <span className="type-hint text-[var(--color-text-secondary)]">Email address</span>
           <input
             type="email"
             value={address}
@@ -646,7 +646,7 @@ function OauthConnect({
           disabled={!canStart}
           onClick={() => void start('gmail')}
           title={canMutate ? 'Open Google consent in K2' : 'Not available in viewer mode'}
-          className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+          className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
         >
           {busy === 'gmail' ? 'Starting…' : 'Connect Gmail'}
         </button>
@@ -660,7 +660,7 @@ function OauthConnect({
 
       {flow?.kind === 'device' && (
         <div className="border border-[var(--color-border)] px-3 py-3 space-y-2">
-          <p className="text-[11px] text-[var(--color-text-secondary)]">
+          <p className="type-hint text-[var(--color-text-secondary)]">
             Go to{' '}
             <button
               type="button"
@@ -672,19 +672,19 @@ function OauthConnect({
             and enter this code:
           </p>
           <div className="flex items-center gap-2">
-            <span className="px-2 py-1 text-sm font-mono tracking-widest bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] select-all">
+            <span className="px-2 py-1 text-[length:var(--type-xl)] font-mono tracking-widest bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] select-all">
               {flow.userCode}
             </span>
             <CopyButton text={flow.userCode} title="Copy code" />
             <button
               type="button"
               onClick={() => void openUrl(flow.verificationUrl)}
-              className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
+              className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer flex-shrink-0"
             >
               Open page
             </button>
           </div>
-          <p className="text-[10px] text-[var(--color-text-muted)]">
+          <p className="type-hint text-[var(--color-text-muted)]">
             Waiting for approval… this card updates automatically.
           </p>
         </div>
@@ -692,7 +692,7 @@ function OauthConnect({
 
       {result?.kind === 'connected' && (
         <div className="border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)] px-3 py-2 flex items-center gap-2">
-          <p className="text-[11px] text-[var(--color-status-ok)]">
+          <p className="type-hint text-[var(--color-status-ok)]">
             Connected{result.address ? <span className="font-mono"> {result.address}</span> : ''}.
           </p>
         </div>
@@ -700,7 +700,7 @@ function OauthConnect({
 
       {result?.kind === 'failed' && (
         <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2 space-y-2">
-          <p className="text-[11px] text-[var(--color-status-error-soft)]">
+          <p className="type-hint text-[var(--color-status-error-soft)]">
             {result.state === 'denied'
               ? 'Access was denied.'
               : result.state === 'expired'
@@ -716,7 +716,7 @@ function OauthConnect({
             <button
               type="button"
               onClick={() => void openUrl(result.adminConsentUrl as string)}
-              className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer mr-2"
+              className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer mr-2"
             >
               Open the admin consent page
             </button>
@@ -724,7 +724,7 @@ function OauthConnect({
           <button
             type="button"
             onClick={reset}
-            className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+            className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
           >
             Try again
           </button>
@@ -733,17 +733,17 @@ function OauthConnect({
 
       {result?.kind === 'remote_unsupported' && (
         <div className="border border-[color-mix(in_srgb,var(--color-status-warn)_30%,transparent)] px-3 py-2">
-          <p className="text-[11px] text-[var(--color-text-secondary)]">{result.message}</p>
+          <p className="type-hint text-[var(--color-text-secondary)]">{result.message}</p>
         </div>
       )}
 
       {result?.kind === 'error' && (
         <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2 space-y-2">
-          <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{result.message}</p>
+          <p className="type-hint text-[var(--color-status-error-soft)] break-words">{result.message}</p>
           <button
             type="button"
             onClick={reset}
-            className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+            className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
           >
             Try again
           </button>
@@ -842,16 +842,16 @@ function OauthClientRow({
   }, [canMutate, busy, provider, label, onChanged])
 
   const inputCls =
-    'px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'
+    'px-2 py-1 type-hint font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'
 
   return (
     <div className="border border-[var(--color-border)] px-3 py-3 space-y-3">
       <div className="flex items-center gap-2 min-w-0">
-        <span className="text-xs font-medium text-[var(--color-text-primary)] flex-1 min-w-0 truncate">
+        <span className="type-name text-[var(--color-text-primary)] flex-1 min-w-0 truncate">
           {label}
         </span>
         <span
-          className="text-[9px] font-semibold px-1.5 py-0.5 flex-shrink-0 uppercase tracking-wide"
+          className="type-badge px-1.5 py-0.5 flex-shrink-0 uppercase tracking-wide"
           style={{
             color: isCustom ? 'var(--color-accent)' : 'var(--color-text-muted)',
             backgroundColor: isCustom
@@ -864,7 +864,7 @@ function OauthClientRow({
       </div>
 
       <label className="flex flex-col gap-0.5 min-w-0">
-        <span className="text-[10px] text-[var(--color-text-secondary)]">Client ID</span>
+        <span className="type-hint text-[var(--color-text-secondary)]">Client ID</span>
         <input
           type="text"
           value={clientId}
@@ -878,7 +878,7 @@ function OauthClientRow({
 
       {hasSecret && (
         <label className="flex flex-col gap-0.5 min-w-0">
-          <span className="text-[10px] text-[var(--color-text-secondary)]">Client secret</span>
+          <span className="type-hint text-[var(--color-text-secondary)]">Client secret</span>
           <input
             type="password"
             value={clientSecret}
@@ -888,13 +888,13 @@ function OauthClientRow({
             placeholder={cfg.secretSet ? '••••••••  (set — leave blank to keep)' : 'Client secret'}
             className={`w-full ${inputCls}`}
           />
-          <span className="text-[9px] text-[var(--color-text-muted)]">
-            Write-only — stored in the daemon vault and never shown again.
+          <span className="type-hint text-[var(--color-text-muted)]">
+            Write-only: stored in the K2 vault and never shown again.
           </span>
           {cfg.secretSet &&
             clientSecret.length === 0 &&
             clientId.trim() !== (cfg.clientId ?? '') && (
-              <span className="text-[9px] text-[var(--color-status-warn)]">
+              <span className="type-hint text-[var(--color-status-warn)]">
                 You changed the client ID — re-enter the secret too, or the new ID pairs
                 with the old secret and the link will fail.
               </span>
@@ -908,7 +908,7 @@ function OauthClientRow({
           disabled={!canSave}
           onClick={() => void save()}
           title={canMutate ? `Use your own ${label} OAuth app` : 'Not available in viewer mode'}
-          className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+          className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
         >
           {busy === 'save' ? 'Saving…' : 'Save'}
         </button>
@@ -918,13 +918,13 @@ function OauthClientRow({
             disabled={!canMutate || busy !== null}
             onClick={() => void reset()}
             title={canMutate ? "Revert to K2's built-in OAuth client" : 'Not available in viewer mode'}
-            className="px-2.5 py-1 text-[10px] font-medium text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+            className="px-2.5 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
           >
             {busy === 'reset' ? 'Resetting…' : 'Reset to default'}
           </button>
         )}
         {error && (
-          <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p>
+          <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
         )}
       </div>
     </div>
@@ -990,31 +990,31 @@ function OauthAppsSection({
 
       {open && (
         <div className="mt-3 space-y-3">
-          <p className="text-[11px] text-[var(--color-text-muted)]">
+          <p className="type-hint text-[var(--color-text-muted)]">
             Bring your own Google/Microsoft OAuth app so K2 uses your quota, verification, and consent
             screen instead of the built-in default. You register the app in Google/Microsoft; paste the
             client ID (and, for Google, the secret) here.
           </p>
 
           {!canMutate && (
-            <p className="text-[10px] text-[var(--color-text-muted)] italic">
+            <p className="type-hint text-[var(--color-text-muted)] italic">
               Only the owner can change OAuth apps — this is read-only in viewer mode.
             </p>
           )}
 
           {error ? (
             <div className="space-y-2">
-              <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p>
+              <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
               <button
                 type="button"
                 onClick={bump}
-                className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer no-drag"
+                className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer no-drag"
               >
                 Retry
               </button>
             </div>
           ) : config === null ? (
-            <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
+            <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
           ) : (
             <div className="space-y-3">
               <OauthClientRow
@@ -1123,14 +1123,14 @@ function AddInboxForm({
     hint?: string,
   ): React.JSX.Element => (
     <div className="flex flex-col gap-0.5 min-w-0">
-      <span className="text-[10px] text-[var(--color-text-secondary)]">{label}</span>
+      <span className="type-hint text-[var(--color-text-secondary)]">{label}</span>
       {node}
-      {hint && <span className="text-[9px] text-[var(--color-text-muted)]">{hint}</span>}
+      {hint && <span className="type-hint text-[var(--color-text-muted)]">{hint}</span>}
     </div>
   )
 
   const inputCls =
-    'px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'
+    'px-2 py-1 type-hint font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50'
 
   // Single OauthConnect mount: when Gmail session is active it expands
   // to full pane and the IMAP/app-password chrome is not rendered.
@@ -1144,8 +1144,8 @@ function AddInboxForm({
     >
       {!gmailOauthActive && (
         <div className="min-w-0" data-settings-id="email-link.add">
-          <h2 className="text-base font-medium text-[var(--color-text-primary)]">Connect an inbox</h2>
-          <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+          <h2 className="type-title text-[var(--color-text-primary)]">Connect an inbox</h2>
+          <p className="type-hint text-[var(--color-text-muted)] mt-1">
             Connect one of your email accounts and pick the workspace that will be its{' '}
             <strong>Primary</strong>. Prefer <strong>Connect Gmail</strong> (opens Google consent
             in this page). Or use an app-password over IMAP below. The Primary manages the account
@@ -1275,9 +1275,9 @@ function AddInboxForm({
               placeholder="app-specific password"
               className={`w-full ${inputCls}`}
             />
-            <p className="text-[10px] text-[var(--color-text-muted)]">
+            <p className="type-hint text-[var(--color-text-muted)]">
               Use an <span className="font-mono">app-specific password</span> (Gmail / Fastmail issue
-              these), not your login password. It&rsquo;s stored securely in the daemon vault and never
+              these), not your login password. It&rsquo;s stored securely in the K2 vault and never
               shown again — K2 never displays it back and never sends from this account.
             </p>
           </div>
@@ -1288,12 +1288,12 @@ function AddInboxForm({
               disabled={!canSubmit}
               onClick={() => void submit()}
               title={canMutate ? 'Connect and verify over IMAP' : 'Not available in viewer mode'}
-              className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+              className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
             >
               {busy ? 'Connecting…' : 'Connect inbox'}
             </button>
             {error && (
-              <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{error}</p>
+              <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
             )}
           </div>
         </div>
@@ -1362,10 +1362,10 @@ export function AddCalendarAccess({
         redirectUri: bind.redirectUri,
       })
       if (res.flow !== 'loopback') {
-        throw new Error('The daemon did not start a Google consent page.')
+        throw new Error('K2 could not start a Google consent page. Try again.')
       }
       if (!res.authorizationUrl || !res.state) {
-        throw new Error(res.hint ?? 'The daemon did not start a Google consent page.')
+        throw new Error(res.hint ?? 'K2 could not start a Google consent page. Try again.')
       }
       const { linkId, authorizationUrl } = res
       const oauthState = res.state
@@ -1419,7 +1419,7 @@ export function AddCalendarAccess({
           deadlineMs: Date.now() + Math.min(bound, OAUTH_MAX_MS),
         })
       } else {
-        setFailure({ text: res.hint ?? 'The daemon did not start a Microsoft device sign-in.' })
+        setFailure({ text: res.hint ?? 'K2 could not start a Microsoft device sign-in. Try again.' })
       }
     } catch (e) {
       setFailure({ text: mailErrorMessage(e) })
@@ -1483,8 +1483,8 @@ export function AddCalendarAccess({
       <div className="border border-[var(--color-border)] px-3 py-2 space-y-2">
         <div className="flex items-center gap-3">
           <div className="flex-1 min-w-0">
-            <p className="text-xs text-[var(--color-text-primary)]">Calendar isn&rsquo;t connected</p>
-            <p className="text-[10px] text-[var(--color-text-muted)]">
+            <p className="type-row text-[var(--color-text-primary)]">Calendar isn&rsquo;t connected</p>
+            <p className="type-hint text-[var(--color-text-muted)]">
               This account was linked for mail only. Add calendar access so agents with a grant can
               use <span className="font-mono">k2 calendar</span> — same inbox, same access.
               {isGoogle && ' Google asks you to allow calendar access in your browser.'}
@@ -1502,14 +1502,14 @@ export function AddCalendarAccess({
                   ? 'Open Google consent to add calendar access'
                   : 'Sign in again with a device code to add calendar access'
             }
-            className="px-2.5 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+            className="px-2.5 py-1 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
           >
             {busy ? 'Starting…' : 'Add calendar'}
           </button>
         </div>
         {flow?.kind === 'browser' && (
           <div className="space-y-2" data-testid="add-calendar-browser">
-            <p className="text-[11px] text-[var(--color-text-secondary)]">
+            <p className="type-hint text-[var(--color-text-secondary)]">
               Allow calendar access for <span className="font-mono">{inbox.address}</span> on
               Google&rsquo;s consent page (it opened in your browser).
             </p>
@@ -1517,20 +1517,20 @@ export function AddCalendarAccess({
               <button
                 type="button"
                 onClick={() => void openUrl(flow.authorizationUrl)}
-                className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+                className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
               >
                 Open Google consent again
               </button>
               <CopyButton text={flow.authorizationUrl} title="Copy consent URL" />
             </div>
-            <p className="text-[10px] text-[var(--color-text-muted)]">
+            <p className="type-hint text-[var(--color-text-muted)]">
               Waiting for approval… this updates automatically.
             </p>
           </div>
         )}
         {flow?.kind === 'device' && (
           <div className="space-y-2" data-testid="add-calendar-device">
-            <p className="text-[11px] text-[var(--color-text-secondary)]">
+            <p className="type-hint text-[var(--color-text-secondary)]">
               Go to{' '}
               <button
                 type="button"
@@ -1542,26 +1542,26 @@ export function AddCalendarAccess({
               and enter this code, signed in as <span className="font-mono">{inbox.address}</span>:
             </p>
             <div className="flex items-center gap-2">
-              <span className="px-2 py-1 text-sm font-mono tracking-widest bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] select-all">
+              <span className="px-2 py-1 text-[length:var(--type-xl)] font-mono tracking-widest bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] select-all">
                 {flow.userCode}
               </span>
               <CopyButton text={flow.userCode} title="Copy code" />
             </div>
-            <p className="text-[10px] text-[var(--color-text-muted)]">
+            <p className="type-hint text-[var(--color-text-muted)]">
               Waiting for approval… this updates automatically.
             </p>
           </div>
         )}
         {failure && (
           <div className="space-y-1">
-            <p className="text-[11px] text-[var(--color-status-error-soft)]" data-testid="add-calendar-error">
+            <p className="type-hint text-[var(--color-status-error-soft)]" data-testid="add-calendar-error">
               {failure.text}
             </p>
             {failure.adminConsentUrl && (
               <button
                 type="button"
                 onClick={() => void openUrl(failure.adminConsentUrl as string)}
-                className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+                className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
               >
                 Open the admin consent page
               </button>
@@ -1616,10 +1616,10 @@ function InboxDetail({
 
   const detailRow = (label: string, value: React.ReactNode): React.JSX.Element => (
     <div className="flex items-center gap-3 px-3 py-2">
-      <span className="text-[11px] text-[var(--color-text-secondary)] w-28 flex-shrink-0">
+      <span className="type-hint text-[var(--color-text-secondary)] w-28 flex-shrink-0">
         {label}
       </span>
-      <span className="text-xs text-[var(--color-text-primary)] truncate min-w-0">{value}</span>
+      <span className="type-row text-[var(--color-text-primary)] truncate min-w-0">{value}</span>
     </div>
   )
 
@@ -1627,12 +1627,12 @@ function InboxDetail({
     <div className="grid gap-6 grid-cols-[minmax(0,42rem)]">
       <div className="min-w-0">
         <div className="flex items-center gap-2 min-w-0">
-          <h2 className="text-base font-medium text-[var(--color-text-primary)] font-mono truncate">
+          <h2 className="type-title text-[var(--color-text-primary)] font-mono truncate">
             {inbox.address}
           </h2>
           <StatusChip status={inbox.status} />
         </div>
-        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+        <p className="type-hint text-[var(--color-text-muted)] mt-1">
           Primary{' '}
           <span className="text-[var(--color-text-secondary)]">
             {inbox.primary.workspace ?? 'unknown workspace'}
@@ -1661,8 +1661,8 @@ function InboxDetail({
         <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2">
           <div className="flex items-center gap-3">
             <div className="flex-1 min-w-0">
-              <p className="text-xs text-[var(--color-text-primary)]">Disconnect this inbox</p>
-              <p className="text-[10px] text-[var(--color-text-muted)]">
+              <p className="type-row text-[var(--color-text-primary)]">Disconnect this inbox</p>
+              <p className="type-hint text-[var(--color-text-muted)]">
                 Deletes the stored app-password and revokes agent access. The account itself is
                 untouched.
               </p>
@@ -1671,7 +1671,7 @@ function InboxDetail({
               type="button"
               disabled={!canMutate || busy}
               onClick={() => void doRemove()}
-              className="px-2.5 py-1 text-[10px] font-medium text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+              className="px-2.5 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
             >
               {busy ? 'Disconnecting…' : 'Disconnect'}
             </button>
@@ -1759,21 +1759,21 @@ export function EmailLinkSection(): React.JSX.Element {
           <div className="flex-1 overflow-y-auto px-1 py-1" data-settings-id="email-link.inboxes">
             {error ? (
               <div className="px-2 py-2 space-y-2">
-                <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">
+                <p className="type-hint text-[var(--color-status-error-soft)] break-words">
                   {error}
                 </p>
                 <button
                   type="button"
                   onClick={bump}
-                  className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer no-drag"
+                  className="px-2 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer no-drag"
                 >
                   Retry
                 </button>
               </div>
             ) : inboxes === null ? (
-              <p className="px-2 py-1 text-[11px] text-[var(--color-text-muted)]">Loading…</p>
+              <p className="px-2 py-1 type-hint text-[var(--color-text-muted)]">Loading…</p>
             ) : inboxes.length === 0 ? (
-              <p className="px-2 py-2 text-[11px] text-[var(--color-text-muted)] italic">
+              <p className="px-2 py-2 type-hint text-[var(--color-text-muted)] italic">
                 No inboxes connected yet — link a personal account to give a workspace&rsquo;s
                 agents read + draft access.
               </p>
@@ -1792,7 +1792,7 @@ export function EmailLinkSection(): React.JSX.Element {
                     }`}
                   >
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="text-xs font-mono truncate flex-1 text-[var(--color-text-primary)]">
+                      <span className="type-row font-mono truncate flex-1 text-[var(--color-text-primary)]">
                         {i.address}
                       </span>
                       <span
@@ -1801,7 +1801,7 @@ export function EmailLinkSection(): React.JSX.Element {
                         title={i.status}
                       />
                     </div>
-                    <span className="text-[10px] text-[var(--color-text-muted)] truncate">
+                    <span className="type-hint text-[var(--color-text-muted)] truncate">
                       {i.primary.workspace ?? 'unknown workspace'}
                       {i.grants.length > 0 ? ` +${i.grants.length}` : ''}
                     </span>
@@ -1818,7 +1818,7 @@ export function EmailLinkSection(): React.JSX.Element {
               disabled={!canMutate}
               onClick={() => setSelection({ kind: 'add' })}
               title={canMutate ? 'Connect a personal email account' : 'Not available in viewer mode'}
-              className={`w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+              className={`w-full flex items-center justify-center gap-1.5 px-2 py-1.5 type-control transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                 selection.kind === 'add'
                   ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
                   : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-hover)] hover:bg-[var(--color-bg-elevated)]'

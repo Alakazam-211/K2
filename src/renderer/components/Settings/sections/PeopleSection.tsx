@@ -88,10 +88,10 @@ const KIND_OPTIONS = [
 ]
 
 const INPUT_CLS =
-  'flex-1 min-w-[8rem] px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
+  'flex-1 min-w-[8rem] px-2 py-1 type-row bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 
 const BTN_ACCENT =
-  'px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60'
+  'px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60'
 
 function asRecord(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
@@ -504,8 +504,8 @@ export function PeopleSection(): React.JSX.Element {
     <div className="flex h-full min-h-0">
       <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0">
         <div className="px-3 pt-3 pb-2 border-b border-[var(--color-border)]">
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">User Access</h2>
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <h2 className="type-title text-[var(--color-text-primary)]">User Access</h2>
+          <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
             Username and full name for app guests on this box. This reads principals.
             It is not Admin Access and not a separate people list.
           </p>
@@ -513,14 +513,14 @@ export function PeopleSection(): React.JSX.Element {
         </div>
         <div data-settings-id="people.roster" className="flex-1 overflow-y-auto min-h-0">
           <div className="px-3 pt-2 pb-1">
-            <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+            <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
               People
             </span>
           </div>
           {loading ? (
-            <p className="px-3 text-[10px] text-[var(--color-text-muted)]">Loading…</p>
+            <p className="px-3 type-hint text-[var(--color-text-muted)]">Loading…</p>
           ) : people.length === 0 ? (
-            <p className="px-3 text-[10px] text-[var(--color-text-muted)]">No app users yet.</p>
+            <p className="px-3 type-hint text-[var(--color-text-muted)]">No app users yet.</p>
           ) : (
             people.map((row) => (
               <div key={row.username} className="relative flex items-stretch">
@@ -530,26 +530,26 @@ export function PeopleSection(): React.JSX.Element {
                   className={`${listButtonClass(selection === row.username)} min-w-0`}
                   onClick={() => setSelection(row.username)}
                 >
-                  <span className="block text-xs font-mono text-[var(--color-text-primary)] truncate">
+                  <span className="block type-row font-mono text-[var(--color-text-primary)] truncate">
                     {row.username}
                     {row.pendingReset ? (
-                      <span className="ml-1.5 text-[9px] font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-warn)]/20 text-[var(--color-text-secondary)]">
+                      <span className="ml-1.5 type-badge font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-warn)]/20 text-[var(--color-text-secondary)]">
                         Waiting for reset
                       </span>
                     ) : null}
                     {row.lockedUntil ? (
-                      <span title="Locked after too many wrong passwords" className="ml-1.5 text-[9px] font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-error)]/15 text-[var(--color-text-secondary)]">
+                      <span title="Locked after too many wrong passwords" className="ml-1.5 type-badge font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-error)]/15 text-[var(--color-text-secondary)]">
                         Locked
                       </span>
                     ) : null}
                   </span>
                   {row.fullName ? (
-                    <span className="block text-[10px] text-[var(--color-text-muted)] truncate">
+                    <span className="block type-hint text-[var(--color-text-muted)] truncate">
                       {row.fullName}
                     </span>
                   ) : null}
                   {sewGrantOf(row.id) ? (
-                    <span data-testid={`sew-tag-${row.username}`} className="block text-[9px] text-[var(--color-text-muted)] truncate">
+                    <span data-testid={`sew-tag-${row.username}`} className="block type-hint text-[var(--color-text-muted)] truncate">
                       Chat {sewGrantOf(row.id)?.scope === 'guest' ? 'guest' : 'member'}
                     </span>
                   ) : null}
@@ -560,7 +560,7 @@ export function PeopleSection(): React.JSX.Element {
                     aria-label={`Password actions for ${row.username}`}
                     aria-haspopup="menu"
                     aria-expanded={menuFor === row.username}
-                    className="px-2 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer flex-shrink-0"
+                    className="px-2 type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer flex-shrink-0"
                     onClick={() => setMenuFor((m) => (m === row.username ? null : row.username))}
                   >
                     ⋯
@@ -576,7 +576,7 @@ export function PeopleSection(): React.JSX.Element {
                     }}
                   >
                     {!canResetRow(row) ? (
-                      <p data-testid={`owner-only-${row.username}`} className="max-w-[14rem] px-3 py-1 text-[10px] leading-snug text-[var(--color-text-muted)]">
+                      <p data-testid={`owner-only-${row.username}`} className="max-w-[14rem] px-3 py-1 type-hint leading-snug text-[var(--color-text-muted)]">
                         {BOX_LOGIN_REASON}
                       </p>
                     ) : null}
@@ -585,7 +585,7 @@ export function PeopleSection(): React.JSX.Element {
                       role="menuitem"
                       disabled={!canResetRow(row)}
                       title={canResetRow(row) ? undefined : BOX_LOGIN_REASON}
-                      className="block w-full text-left px-3 py-1 text-[11px] text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                      className="block w-full text-left px-3 py-1 type-control text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default"
                       onClick={() => {
                         setMenuFor(null)
                         setDialog({ kind: 'reset', username: row.username })
@@ -598,7 +598,7 @@ export function PeopleSection(): React.JSX.Element {
                       role="menuitem"
                       disabled={!canResetRow(row)}
                       title={canResetRow(row) ? undefined : BOX_LOGIN_REASON}
-                      className="block w-full text-left px-3 py-1 text-[11px] text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                      className="block w-full text-left px-3 py-1 type-control text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default"
                       onClick={() => {
                         setMenuFor(null)
                         setDialog({ kind: 'set', username: row.username })
@@ -612,7 +612,7 @@ export function PeopleSection(): React.JSX.Element {
                         role="menuitem"
                         disabled={!canResetRow(row) || busy === `unlock:${row.username}`}
                         title={canResetRow(row) ? undefined : BOX_LOGIN_REASON}
-                        className="block w-full text-left px-3 py-1 text-[11px] text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                        className="block w-full text-left px-3 py-1 type-control text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default"
                         onClick={() => {
                           setMenuFor(null)
                           void unlock(row.username)
@@ -637,11 +637,11 @@ export function PeopleSection(): React.JSX.Element {
       </div>
       <div className="flex-1 overflow-y-auto p-6 min-h-0">
         {error && (
-          <p role="alert" className="text-[10px] text-[var(--color-status-error)] mb-3">
+          <p role="alert" className="type-hint text-[var(--color-status-error)] mb-3">
             {error}
           </p>
         )}
-        {notice && <p className="text-[10px] text-[var(--color-text-secondary)] mb-3">{notice}</p>}
+        {notice && <p className="type-hint text-[var(--color-text-secondary)] mb-3">{notice}</p>}
         {person ? (
           <PersonDetail
             person={person}
@@ -678,7 +678,7 @@ export function PeopleSection(): React.JSX.Element {
             onReset={canResetRow(person) ? () => setDialog({ kind: 'reset', username: person.username }) : null}
           />
         ) : (
-          <p className="text-[10px] text-[var(--color-text-muted)]">Select a person.</p>
+          <p className="type-hint text-[var(--color-text-muted)]">Select a person.</p>
         )}
       </div>
       {dialogPerson && dialog?.kind === 'reset' ? (
@@ -716,26 +716,26 @@ export function PeopleSection(): React.JSX.Element {
 function roleBits(role: RoleRow | null, fallbackHandles: string[]): React.JSX.Element {
   if (!role) {
     return (
-      <p className="text-[10px] text-[var(--color-text-muted)]">
+      <p className="type-hint text-[var(--color-text-muted)]">
         default rooms: {fallbackHandles.length ? fallbackHandles.join(', ') : 'none'}
       </p>
     )
   }
   return (
     <div className="space-y-1">
-      <p className="text-[10px] font-mono text-[var(--color-text-primary)]">{role.name}</p>
+      <p className="type-hint font-mono text-[var(--color-text-primary)]">{role.name}</p>
       {role.roomAccess.length === 0 ? (
-        <span className="text-[10px] text-[var(--color-text-muted)]">no rooms</span>
+        <span className="type-hint text-[var(--color-text-muted)]">no rooms</span>
       ) : (
         role.roomAccess.map((room) => (
           <div key={room.handle} className="flex flex-wrap items-center gap-1">
-            <span className="text-[9px] font-mono px-1.5 py-0.5 bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
+            <span className="type-hint font-mono px-1.5 py-0.5 bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
               {room.handle}
             </span>
             {room.caps.map((cap) => (
               <span
                 key={cap}
-                className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]"
+                className="type-badge font-mono uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]"
               >
                 {cap}
               </span>
@@ -760,7 +760,7 @@ export function ResetPanel({ person, onReset }: { person: PersonRow; onReset: ((
   if (!person.tiedTo) return null
   return (
     <SettingsGroup title={person.pendingReset ? 'Waiting for reset' : 'Set up by an agent'}>
-      <p className="text-[10px] text-[var(--color-text-muted)]">
+      <p className="type-hint text-[var(--color-text-muted)]">
         {person.pendingReset
           ? `${person.tiedTo}'s agent set ${person.username} up, so the extra access you gave starts once ${person.username} chooses their own password. Until then they keep ${person.tiedTo}'s access.`
           : `${person.tiedTo}'s agent set ${person.username} up, so they use ${person.tiedTo}'s room only until they choose their own password, through the App or a reset link from you. Anything more you give waits until then, rooms you approved for its App included.`}
@@ -771,7 +771,7 @@ export function ResetPanel({ person, onReset }: { person: PersonRow; onReset: ((
         <div className="pt-1">
           <button
             type="button"
-            className="text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer"
+            className="type-hint text-[var(--color-accent)] hover:underline no-drag cursor-pointer"
             onClick={onReset}
           >
             Reset password…
@@ -864,7 +864,7 @@ function PersonDetail({
           onSave(person.username, value.trim())
         }}
       >
-        <span className="w-28 text-xs font-mono text-[var(--color-text-primary)] truncate">
+        <span className="w-28 type-row font-mono text-[var(--color-text-primary)] truncate">
           {person.username}
         </span>
         <input
@@ -879,7 +879,7 @@ function PersonDetail({
           type="submit"
           aria-label={`Save ${person.username} full name`}
           disabled={busy === person.username}
-          className="text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer disabled:opacity-40"
+          className="type-hint text-[var(--color-accent)] hover:underline no-drag cursor-pointer disabled:opacity-40"
         >
           Save
         </button>
@@ -889,7 +889,7 @@ function PersonDetail({
             aria-label={`Clear ${person.username} full name`}
             disabled={busy === person.username}
             onClick={() => onSave(person.username, '')}
-            className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer disabled:opacity-40"
+            className="type-hint text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer disabled:opacity-40"
           >
             Clear
           </button>
@@ -902,7 +902,7 @@ function PersonDetail({
 
       <SettingsGroup title="Grants">
         {grants.length === 0 ? (
-          <p className="text-[10px] text-[var(--color-text-muted)]">No grants for this person.</p>
+          <p className="type-hint text-[var(--color-text-muted)]">No grants for this person.</p>
         ) : (
           <div className="divide-y divide-[var(--color-border)]">
             {grants.map((grant) => {
@@ -916,7 +916,7 @@ function PersonDetail({
                   <div className="flex items-center justify-between gap-2">
                     <button
                       type="button"
-                      className="text-xs font-mono text-[var(--color-text-primary)] no-drag cursor-pointer"
+                      className="type-control font-mono text-[var(--color-text-primary)] no-drag cursor-pointer"
                       aria-label={`Show ${grant.kind} ${grant.targetId}`}
                       onClick={() => onExpand(open ? null : grant.id)}
                     >
@@ -934,7 +934,7 @@ function PersonDetail({
                       <button
                         type="button"
                         aria-label={`Revoke ${grant.id}`}
-                        className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
+                        className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
                         onClick={() => onRevoke(grant.id)}
                       >
                         Revoke
@@ -1022,14 +1022,14 @@ function PersonDetail({
         <span className="flex items-center gap-2">
           <button
             type="button"
-            className="text-[10px] text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
+            className="type-hint text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
             onClick={onDelete}
           >
             Confirm delete account
           </button>
           <button
             type="button"
-            className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
+            className="type-hint text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
             onClick={() => onDeleteConfirm(null)}
           >
             Cancel
@@ -1039,7 +1039,7 @@ function PersonDetail({
         <button
           type="button"
           aria-label={`Delete account ${person.username}`}
-          className="text-[10px] text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
+          className="type-hint text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
           onClick={() => onDeleteConfirm(person.username)}
         >
           Delete account

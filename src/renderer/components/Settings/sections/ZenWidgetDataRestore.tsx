@@ -19,8 +19,8 @@ import { Radio } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
 
 const BTN =
-  'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
-const MUTED = 'text-[11px] text-[var(--color-text-muted)]'
+  'px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
+const MUTED = 'type-hint text-[var(--color-text-muted)]'
 
 /** R2b: the warning before a whole-widget restore that rewrites more than
  *  one top-level key family. */
@@ -161,7 +161,7 @@ export function ZenWidgetRestorePanel({ widget, onDone }: { widget: string; onDo
 
   return (
     <div className="mt-2 p-2 border border-[var(--color-border)]" data-garden-data-restore={widget}>
-      <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Restore</div>
+      <div className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">Restore</div>
       <p className={MUTED}>
         Go back to how {widget}&apos;s data was before a change. K2 keeps 7 days of changes, takes a snapshot first, and the restore is
         itself a change you can undo.
@@ -173,7 +173,7 @@ export function ZenWidgetRestorePanel({ widget, onDone }: { widget: string; onDo
           {items.map((i) => {
             const can = i.rev - 1 >= oldest
             return (
-              <label key={`${i.rev}/${i.key}`} className={`flex items-center gap-2 text-[11px] ${can ? '' : 'opacity-40'}`}>
+              <label key={`${i.rev}/${i.key}`} className={`flex items-center gap-2 type-hint ${can ? '' : 'opacity-40'}`}>
                 <Radio
                   name={`restore-${widget}`}
                   disabled={!can || busy}
@@ -193,7 +193,7 @@ export function ZenWidgetRestorePanel({ widget, onDone }: { widget: string; onDo
         </div>
       ) : null}
       {toRev !== null ? (
-        <div className="mt-2 flex items-center gap-2 text-[11px]">
+        <div className="mt-2 flex items-center gap-2 type-hint">
           <span>Restore</span>
           <SettingDropdown
             compact
@@ -211,7 +211,7 @@ export function ZenWidgetRestorePanel({ widget, onDone }: { widget: string; onDo
         </div>
       ) : null}
       {wide ? (
-        <p className="text-[11px] text-[var(--color-status-warn)] mt-1" data-garden-data-restore-warning="">
+        <p className="type-hint text-[var(--color-status-warn)] mt-1" data-garden-data-restore-warning="">
           {RESTORE_WIDE_WARNING}
         </p>
       ) : null}
@@ -240,7 +240,7 @@ export function ZenWidgetRestorePanel({ widget, onDone }: { widget: string; onDo
       </div>
       {done ? <p className={MUTED}>{done}</p> : null}
       {error ? (
-        <p className="text-[11px] text-[var(--color-status-error)] mt-1" data-testid="garden-data-restore-error">
+        <p className="type-hint text-[var(--color-status-error)] mt-1" data-testid="garden-data-restore-error">
           {error}
         </p>
       ) : null}

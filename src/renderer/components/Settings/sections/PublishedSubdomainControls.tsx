@@ -16,13 +16,13 @@ import {
 // whether to render them at all (local server, owner or admin).
 
 export const inputCls =
-  'w-full px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
+  'w-full px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 
 export const buttonCls =
-  'px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60 disabled:cursor-default'
+  'px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60 disabled:cursor-default'
 
 const smallButtonCls =
-  'px-1.5 py-0.5 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60 disabled:cursor-default'
+  'px-1.5 py-0.5 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60 disabled:cursor-default'
 
 const NO_WORKSPACE = ''
 
@@ -102,9 +102,9 @@ export function AddPublishedSubdomainForm({
         <button type="button" className={buttonCls} onClick={() => setOpen(true)}>
           Add published subdomain
         </button>
-        {note && <p className="text-[10px] text-[var(--color-status-ok-soft)]">{note}</p>}
+        {note && <p className="type-hint text-[var(--color-status-ok-soft)]">{note}</p>}
         {warning && (
-          <p className="text-[10px] text-[var(--color-status-warn-amber-soft)] leading-relaxed">{warning}</p>
+          <p className="type-hint text-[var(--color-status-warn-amber-soft)] leading-relaxed">{warning}</p>
         )}
       </div>
     )
@@ -119,11 +119,11 @@ export function AddPublishedSubdomainForm({
         void submit()
       }}
     >
-      <span className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
+      <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
         Add published subdomain
       </span>
       <label className="block">
-        <span className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Label</span>
+        <span className="block type-hint text-[var(--color-text-muted)] mb-0.5">Label</span>
         <input
           className={inputCls}
           placeholder="staging"
@@ -135,12 +135,12 @@ export function AddPublishedSubdomainForm({
           aria-invalid={labelError ? true : undefined}
         />
       </label>
-      <p className="text-[10px] font-mono text-[var(--color-text-secondary)]" data-testid="subdomain-preview">
+      <p className="type-hint font-mono text-[var(--color-text-secondary)]" data-testid="subdomain-preview">
         {previewHost(label, primary, publicUrl)}
       </p>
-      {labelError && <p className="text-[10px] text-[var(--color-status-error-soft)]">{labelError}</p>}
+      {labelError && <p className="type-hint text-[var(--color-status-error-soft)]">{labelError}</p>}
       <label className="block">
-        <span className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Target</span>
+        <span className="block type-hint text-[var(--color-text-muted)] mb-0.5">Target</span>
         <input
           className={inputCls}
           placeholder="localhost:<port>"
@@ -152,9 +152,9 @@ export function AddPublishedSubdomainForm({
           aria-invalid={targetError ? true : undefined}
         />
       </label>
-      {targetError && <p className="text-[10px] text-[var(--color-status-error-soft)]">{targetError}</p>}
+      {targetError && <p className="type-hint text-[var(--color-status-error-soft)]">{targetError}</p>}
       <div>
-        <span className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Workspace</span>
+        <span className="block type-hint text-[var(--color-text-muted)] mb-0.5">Workspace</span>
         <SettingDropdown
           value={owner}
           options={ownerOptions}
@@ -164,7 +164,7 @@ export function AddPublishedSubdomainForm({
         />
       </div>
       {error && (
-        <p role="alert" className="text-[10px] text-[var(--color-status-error-soft)] leading-relaxed">
+        <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed">
           {error}
         </p>
       )}
@@ -316,14 +316,14 @@ export function PublishedSubdomainRowActions({
         </div>
       )}
       {draftError && editing && (
-        <p className="text-[10px] text-[var(--color-status-error-soft)]">{draftError}</p>
+        <p className="type-hint text-[var(--color-status-error-soft)]">{draftError}</p>
       )}
       {error && (
-        <p role="alert" className="text-[10px] text-[var(--color-status-error-soft)] leading-relaxed">
+        <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed">
           {error}
         </p>
       )}
-      {note && <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">{note}</p>}
+      {note && <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">{note}</p>}
     </div>
   )
 }

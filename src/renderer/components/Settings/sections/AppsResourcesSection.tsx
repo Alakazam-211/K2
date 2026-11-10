@@ -63,10 +63,10 @@ function DiskBar({ disk, lines }: { disk: Disk; lines: Lines }): React.JSX.Eleme
   const pct = Math.max(0, Math.min(100, disk.usedPct))
   return (
     <div className="space-y-1" data-testid={`box-disk-${disk.mount}`}>
-      <div className="flex items-baseline gap-2 text-[11px]">
+      <div className="flex items-baseline gap-2 type-hint">
         <span className="font-mono text-[var(--color-text-primary)]">{disk.mount}</span>
         <span
-          className="px-1.5 rounded-[var(--radius-pill)] text-[10px] text-[var(--color-on-accent)]"
+          className="px-1.5 rounded-[var(--radius-pill)] type-hint text-[var(--color-on-accent)]"
           style={{ background: LEVEL_COLOR[disk.level] }}
           data-testid={`box-disk-level-${disk.mount}`}
         >
@@ -94,7 +94,7 @@ function DiskBar({ disk, lines }: { disk: Disk; lines: Lines }): React.JSX.Eleme
           />
         ))}
       </div>
-      {disk.holds.length ? <p className={`text-[10px] ${muted}`}>Holds {disk.holds.join(', ')}</p> : null}
+      {disk.holds.length ? <p className={`type-hint ${muted}`}>Holds {disk.holds.join(', ')}</p> : null}
     </div>
   )
 }
@@ -104,10 +104,10 @@ function UsageList({ title, rows }: { title: string; rows: { key: string; name: 
   const top = rows[0].bytes || 1
   return (
     <div className="space-y-1">
-      <p className={`text-[10px] uppercase tracking-wider ${muted}`}>{title}</p>
+      <p className={`type-section uppercase tracking-wider ${muted}`}>{title}</p>
       <ul className="space-y-1">
         {rows.map((r) => (
-          <li key={r.key} className="text-[11px]" data-testid={`box-usage-row-${r.key}`}>
+          <li key={r.key} className="type-hint" data-testid={`box-usage-row-${r.key}`}>
             <div className="flex items-baseline gap-2">
               <span className="font-mono text-[var(--color-text-primary)] truncate">{r.name}</span>
               <span className={`${muted} truncate`}>{r.detail}</span>
@@ -126,7 +126,7 @@ function UsageList({ title, rows }: { title: string; rows: { key: string; name: 
 function Spark({ label, values, top, last }: { label: string; values: (number | null)[]; top: number | null; last: string }): React.JSX.Element {
   const pts = sparkPoints(values, 160, 24, top)
   return (
-    <div className="flex items-center gap-2 text-[11px]" data-testid={`box-trend-${label}`}>
+    <div className="flex items-center gap-2 type-hint" data-testid={`box-trend-${label}`}>
       <span className={`w-10 ${muted}`}>{label}</span>
       {pts ? (
         <svg width={160} height={24} viewBox="0 0 160 24" aria-hidden="true">
@@ -206,7 +206,7 @@ export function AppsResourcesSection(): React.JSX.Element | null {
     <div className="max-w-2xl space-y-4 mt-6" data-testid="apps-resources">
       <SettingsGroup title="Box usage">
         <div className="py-2 space-y-3">
-          {load.kind === 'loading' ? <p className={`text-[11px] ${muted}`}>Reading this server’s disks…</p> : null}
+          {load.kind === 'loading' ? <p className={`type-hint ${muted}`}>Reading this server’s disks…</p> : null}
           {load.kind === 'error' ? <Callout tone="error">{load.text}</Callout> : null}
           {load.kind === 'ready' ? (
             <Ready
@@ -279,9 +279,9 @@ function Ready(p: {
   const budgets = (trends?.apps ?? []).filter((a) => a.memBudgetBytes !== null)
   return (
     <>
-      <p className={`text-[11px] ${muted}`} data-testid="box-guard">
+      <p className={`type-hint ${muted}`} data-testid="box-guard">
         Disk guard {usage.mode}
-        {usage.modeSource === 'env' ? ' (set in the daemon’s environment)' : ''}. Lines: warn {l.warnPct}% or {gib(l.warnFreeBytes)} free ·
+        {usage.modeSource === 'env' ? ' (set in the server’s environment)' : ''}. Lines: warn {l.warnPct}% or {gib(l.warnFreeBytes)} free ·
         refuse new work at {l.refusePct}% or {gib(l.reserveBytes)} left · critical {l.criticalPct}% or {gib(l.criticalFreeBytes)} free.
         The owner changes them with <span className="font-mono">k2 app resources settings</span>.
       </p>
@@ -290,30 +290,30 @@ function Ready(p: {
           {p.notice.text}
         </Callout>
       ) : null}
-      {usage.disks.length === 0 ? <p className={`text-[11px] ${muted}`}>No disk could be read.</p> : null}
+      {usage.disks.length === 0 ? <p className={`type-hint ${muted}`}>No disk could be read.</p> : null}
       {usage.disks.map((d) => (
         <DiskBar key={d.id || d.mount} disk={d} lines={l} />
       ))}
       <UsageList title="Biggest users" rows={rows} />
       <UsageList title="Agents using the most" rows={owners} />
       {usage.k2WillClearBytes ? (
-        <p className={`text-[11px] ${secondary}`}>K2 clears {sizeLabel(usage.k2WillClearBytes)} of its own old Seeds at the next daily sweep.</p>
+        <p className={`type-hint ${secondary}`}>K2 clears {sizeLabel(usage.k2WillClearBytes)} of its own old Seeds at the next daily sweep.</p>
       ) : null}
       <div className="space-y-1">
-        <p className={`text-[10px] uppercase tracking-wider ${muted}`}>The last 24 hours</p>
+        <p className={`type-section uppercase tracking-wider ${muted}`}>The last 24 hours</p>
         <Spark label="CPU" values={cpu} top={trends?.cores ?? null} last={lastCpu === null ? '—' : `${lastCpu.toFixed(2)} of ${trends?.cores ?? '?'} cores`} />
         <Spark label="RAM" values={mem} top={trends?.memTotalBytes ?? null} last={lastMem === null ? '—' : `${gib(lastMem)} of ${gib(trends?.memTotalBytes ?? null)}`} />
         {budgets.length ? (
           <ul className="space-y-0.5" data-testid="box-budgets">
             {budgets.map((a) => (
-              <li key={a.app} className={`text-[11px] ${secondary}`}>
+              <li key={a.app} className={`type-hint ${secondary}`}>
                 <span className="font-mono text-[var(--color-text-primary)]">{a.app}</span> peak {gib(a.memPeakBytes)} of its {gib(a.memBudgetBytes)} RAM budget
               </li>
             ))}
           </ul>
         ) : null}
       </div>
-      <p className={`text-[10px] ${muted}`}>
+      <p className={`type-hint ${muted}`}>
         Folders measured {usage.scannedAt ? new Date(usage.scannedAt * 1000).toLocaleString() : 'not yet'}
         {usage.scanRunning ? ' · a scan is running' : ''}.
       </p>
@@ -328,15 +328,15 @@ function Ready(p: {
       {plan ? (
         <div className="space-y-2 border border-[var(--color-border)] p-3" data-testid="box-clean-plan-list">
           {plan.items.length === 0 ? (
-            <p className={`text-[11px] ${secondary}`}>Nothing to clean: K2 found nothing it made and can make again.</p>
+            <p className={`type-hint ${secondary}`}>Nothing to clean: K2 found nothing it made and can make again.</p>
           ) : (
             <>
-              <p className={`text-[11px] ${secondary}`}>
+              <p className={`type-hint ${secondary}`}>
                 K2 can free about {sizeLabel(plan.totalBytes)} of things it made and can make again:
               </p>
               <ul className="space-y-0.5 max-h-48 overflow-y-auto">
                 {plan.items.map((i) => (
-                  <li key={`${i.kind}-${i.id}`} className="flex gap-2 text-[11px]">
+                  <li key={`${i.kind}-${i.id}`} className="flex gap-2 type-hint">
                     <span className={muted}>{CLEAN_WORDS[i.kind] ?? i.kind}</span>
                     <span className="font-mono truncate text-[var(--color-text-primary)]">{i.id}</span>
                     {i.app ? <span className={muted}>{i.app}</span> : null}
@@ -346,8 +346,8 @@ function Ready(p: {
               </ul>
             </>
           )}
-          <p className={`text-[10px] ${muted}`}>{plan.never}</p>
-          {plan.note ? <p className={`text-[10px] ${muted}`}>{plan.note}</p> : null}
+          <p className={`type-hint ${muted}`}>{plan.never}</p>
+          {plan.note ? <p className={`type-hint ${muted}`}>{plan.note}</p> : null}
           <div className="flex gap-2">
             {p.isStaff && plan.items.length > 0 ? (
               <Button variant="accent" disabled={p.busy !== null} onClick={p.onClean} data-testid="box-clean-now">

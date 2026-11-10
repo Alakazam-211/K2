@@ -10,7 +10,6 @@ import { K2ConnectSection } from './K2ConnectSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
-import { thisMachine, thisMachineLower } from '@/lib/desktop-words'
 
 type ConnectTab = 'tunnel' | 'people' | 'servers'
 
@@ -18,16 +17,16 @@ const PAGE: Record<ConnectTab, { title: string; blurb: string }> = {
   tunnel: {
     title: 'Tunnel',
     blurb:
-      'Expose this device’s daemon (left) and set host policies for the active daemon (right).',
+      'Make this computer reachable from other devices (left) and set policies for the current server (right).',
   },
   people: {
     title: 'Admin Access',
-    blurb: 'Who can connect in to this daemon — users, roles, and password policy.',
+    blurb: 'Who can sign in to this server: people, roles and password rules.',
   },
   servers: {
     title: 'Connected Servers',
     blurb:
-      `On ${thisMachine()}: your saved servers. On a remote: that host’s federation peers (pair new ones from ${thisMachineLower()}’s signed-in servers). External agents on the right are host-aware.`,
+      'The K2 servers you use, and the agents on other servers connected to your workspaces.',
   },
 }
 
@@ -46,10 +45,10 @@ export function K2ConnectSettingsShell(): React.JSX.Element {
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden p-6">
       <div className="flex-shrink-0 space-y-1 pb-3">
-        <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
+        <h2 className="type-title text-[var(--color-text-primary)]">
           {PAGE[tab].title}
         </h2>
-        <p className="text-[10px] text-[var(--color-text-muted)]">{PAGE[tab].blurb}</p>
+        <p className="type-hint text-[var(--color-text-muted)]">{PAGE[tab].blurb}</p>
         {tab === 'people' && <AccessAuditLink />}
       </div>
 

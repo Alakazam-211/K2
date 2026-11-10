@@ -506,7 +506,7 @@ export default function Settings(): React.JSX.Element {
       {/* Left nav */}
       <div data-material="tile" data-clip="" className="w-48 flex-shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-surface)] flex flex-col min-h-0">
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] flex-shrink-0">
-          <span className="text-xs font-medium text-[var(--color-text-secondary)] uppercase tracking-wider">
+          <span className="type-name text-[var(--color-text-secondary)] uppercase tracking-wider">
             Settings
           </span>
           <button
@@ -538,7 +538,7 @@ export default function Settings(): React.JSX.Element {
             if (items.length === 0) return null
             return (
               <div key={block.title} className="mt-2 first:mt-0">
-                <div className="px-4 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+                <div className="px-4 pt-2 pb-1 type-section uppercase tracking-wider text-[var(--color-text-muted)]">
                   {block.title}
                 </div>
                 {items.map((it) => {
@@ -547,11 +547,11 @@ export default function Settings(): React.JSX.Element {
                       <div
                         key={it.label}
                         data-settings-soon={it.label}
-                        className="w-full text-left pl-7 pr-2.5 py-1.5 text-xs text-[var(--color-text-muted)] flex items-center justify-between"
+                        className="w-full text-left pl-7 pr-2.5 py-1.5 type-control text-[var(--color-text-muted)] flex items-center justify-between"
                       >
                         <span>{it.label}</span>
                         {/* The same right-hand SOON tag as 3rd Party Bots (Rosson 2026-10-15). */}
-                        <span className="ml-auto text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>
+                        <span className="ml-auto type-badge uppercase tracking-wider px-1 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>
                       </div>
                     )
                   }
@@ -577,10 +577,10 @@ export default function Settings(): React.JSX.Element {
         <div className="px-4 py-3 border-t border-[var(--color-border)] flex-shrink-0">
           <button
             onClick={closeSettings}
-            className="flex items-center gap-2 text-xs text-[var(--color-text-primary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+            className="flex items-center gap-2 type-control text-[var(--color-text-primary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
           >
             &larr; Back
-            <span className="text-[10px] text-[var(--color-text-muted)]">Esc</span>
+            <span className="type-hint text-[var(--color-text-muted)]">Esc</span>
           </button>
         </div>
       </div>
@@ -877,7 +877,7 @@ function SettingsNavButton({
       // The left margin and the scrollbar lane (.settings-nav-scroll) are the
       // same width, so the highlight is a whole shape with even insets. The
       // padding is 6px less than the header's, which keeps the labels aligned.
-      className={`ml-1.5 w-[calc(100%-6px)] border-transparent rounded-[var(--radius-selector)] text-left flex items-center justify-between ${nested ? 'pl-[22px] pr-2.5' : 'px-2.5'} py-1.5 text-xs no-drag cursor-pointer transition-colors ${
+      className={`ml-1.5 w-[calc(100%-6px)] border-transparent rounded-[var(--radius-selector)] text-left flex items-center justify-between ${nested ? 'pl-[22px] pr-2.5' : 'px-2.5'} py-1.5 type-control no-drag cursor-pointer transition-colors ${
         active
           ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]'
           : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]'
@@ -885,16 +885,16 @@ function SettingsNavButton({
     >
       <span>{label}</span>
       {beta ? (
-        <span className="ml-auto text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">BETA</span>
+        <span className="ml-auto type-badge uppercase tracking-wider px-1 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">BETA</span>
       ) : null}
       {comingSoon ? (
-        <span className="ml-auto text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>
+        <span className="ml-auto type-badge uppercase tracking-wider px-1 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>
       ) : null}
       {count && count > 0 ? (
         <span
           data-settings-badge={id}
           aria-label={`${count} waiting`}
-          className="ml-auto min-w-[16px] text-center text-[9px] font-semibold px-1 py-0.5 rounded-[var(--radius-badge)] bg-[var(--color-accent)] text-white"
+          className="ml-auto min-w-[16px] text-center type-badge px-1 py-0.5 rounded-[var(--radius-badge)] bg-[var(--color-accent)] text-white"
         >
           {count > 99 ? '99+' : count}
         </span>

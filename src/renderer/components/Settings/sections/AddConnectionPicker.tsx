@@ -286,7 +286,7 @@ export function AddConnectionPicker({
         label: 'Paired servers',
         count: null,
         status: hasQuery ? undefined : (
-          <AgentListStatus marker="none" text="No paired servers yet. Pair one under Settings → Connected Servers (Pair as federated peer)." />
+          <AgentListStatus marker="none" text="No paired servers yet. Pair one under Settings → Connected Servers." />
         ),
         rows: [],
       })
@@ -365,7 +365,7 @@ export function AddConnectionPicker({
         count: s.status === 'ok' ? undefined : null,
         dim: s.status === 'offline' || s.status === 'rejected',
         headerExtra: s.repair_recommended ? (
-          <span className="text-[10px] text-[var(--color-status-warn-text)] truncate" title={REPAIR_RECOMMENDED_HINT} data-repair-hint="">
+          <span className="type-hint text-[var(--color-status-warn-text)] truncate" title={REPAIR_RECOMMENDED_HINT} data-repair-hint="">
             ⚠ older pairing ·{' '}
             <button
               type="button"
@@ -438,7 +438,7 @@ export function AddConnectionPicker({
       />
       {note && (
         <div
-          className={`px-3 py-2 text-[10px] border-t border-[var(--color-border)] ${
+          className={`px-3 py-2 type-hint border-t border-[var(--color-border)] ${
             note.tone === 'error' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-muted)]'
           }`}
           role={note.tone === 'error' ? 'alert' : 'status'}
@@ -447,7 +447,7 @@ export function AddConnectionPicker({
           {note.text}
         </div>
       )}
-      <div className="px-3 py-1.5 text-[10px] text-[var(--color-text-muted)] border-t border-[var(--color-border)]">
+      <div className="px-3 py-1.5 type-hint text-[var(--color-text-muted)] border-t border-[var(--color-border)]">
         ↑/↓ move · Enter connects · Esc closes · stays open after each add
       </div>
     </div>

@@ -11,8 +11,8 @@ import { daemonErrorText } from '@/lib/daemon-error'
 import { SettingsGroup } from '../controls/SettingControls'
 import { fetchDownloads, fetchUpdates, promote, pull, rollback, size, type Downloads, type Release, type Updates } from './app-updates-api'
 
-const muted = 'text-[10px] text-[var(--color-text-muted)]'
-const secondary = 'text-[10px] text-[var(--color-text-secondary)]'
+const muted = 'type-hint text-[var(--color-text-muted)]'
+const secondary = 'type-hint text-[var(--color-text-secondary)]'
 
 function errCode(e: unknown): string | null {
   const c = (e as { code?: unknown } | null)?.code
@@ -81,7 +81,7 @@ export function AppReleases({ app }: { app: string }): React.JSX.Element | null 
     <SettingsGroup title="Releases">
       <div className="space-y-2" data-testid="app-releases">
         {error ? (
-          <p role="alert" className="text-[10px] text-[var(--color-status-error)]">
+          <p role="alert" className="type-hint text-[var(--color-status-error)]">
             {error}
           </p>
         ) : null}
@@ -110,7 +110,7 @@ export function AppReleases({ app }: { app: string }): React.JSX.Element | null 
               {u.counting === 'checks' ? ' (update checks; one install may check more than once)' : ''}
               {dl == null ? '' : dl.available ? ` · Downloads (30 days): ${dl.total}` : ' · Downloads: unavailable'}
             </p>
-            <table className="w-full text-[10px]">
+            <table className="w-full type-hint">
               <thead>
                 <tr className="text-left text-[var(--color-text-muted)]">
                   <th>Version</th>

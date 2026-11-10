@@ -9,9 +9,9 @@ import { useEffect, useState } from 'react'
 import { SHARED_CONTEXT_NOTICE, splitShareList, type VoiceChatShares } from './connect-user-roles'
 
 const INPUT =
-  'flex-1 min-w-0 px-2 py-1 text-[11px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
+  'flex-1 min-w-0 px-2 py-1 type-hint bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 const BUTTON =
-  'flex-shrink-0 px-2 py-0.5 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-50'
+  'flex-shrink-0 px-2 py-0.5 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-50'
 
 export interface VoiceChatSharesEditorProps {
   username: string
@@ -53,17 +53,17 @@ export function VoiceChatSharesEditor({ username, shares, onSave }: VoiceChatSha
   }
   return (
     <div className="pl-7 space-y-1" data-testid={`voice-chat-shares-${username}`}>
-      <div className="text-[10px] text-[var(--color-text-muted)]">
+      <div className="type-hint text-[var(--color-text-muted)]">
         Shared with {username}: they get their own conversation with each of these agents and can view these Gardens.
         Nothing else.
       </div>
       {agents.trim() ? (
-        <div className="text-[10px] text-[var(--color-status-warn-soft)]" data-testid={`voice-chat-shares-notice-${username}`}>
+        <div className="type-hint text-[var(--color-status-warn-soft)]" data-testid={`voice-chat-shares-notice-${username}`}>
           {SHARED_CONTEXT_NOTICE}
         </div>
       ) : null}
       <div className="flex items-center gap-2">
-        <span className="w-16 flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">Agents</span>
+        <span className="w-16 flex-shrink-0 type-hint text-[var(--color-text-muted)]">Agents</span>
         <input
           className={INPUT}
           value={agents}
@@ -73,7 +73,7 @@ export function VoiceChatSharesEditor({ username, shares, onSave }: VoiceChatSha
         />
       </div>
       <div className="flex items-center gap-2">
-        <span className="w-16 flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">Gardens</span>
+        <span className="w-16 flex-shrink-0 type-hint text-[var(--color-text-muted)]">Gardens</span>
         <input
           className={INPUT}
           value={gardens}
@@ -85,8 +85,8 @@ export function VoiceChatSharesEditor({ username, shares, onSave }: VoiceChatSha
           {busy ? 'Saving…' : 'Save shares'}
         </button>
       </div>
-      {error ? <div className="text-[10px] text-[var(--color-status-error-soft)]">{error}</div> : null}
-      {saved && !dirty ? <div className="text-[10px] text-[var(--color-text-muted)]">Saved</div> : null}
+      {error ? <div className="type-hint text-[var(--color-status-error-soft)]">{error}</div> : null}
+      {saved && !dirty ? <div className="type-hint text-[var(--color-text-muted)]">Saved</div> : null}
     </div>
   )
 }

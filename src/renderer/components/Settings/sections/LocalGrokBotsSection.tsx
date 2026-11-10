@@ -65,8 +65,8 @@ function Row({
       data-settings-id={settingId}
     >
       <div className="min-w-0">
-        <div className="text-xs text-[var(--color-text-primary)]">{title}</div>
-        <div className="text-[10px] text-[var(--color-text-muted)]">{hint}</div>
+        <div className="type-row text-[var(--color-text-primary)]">{title}</div>
+        <div className="type-hint text-[var(--color-text-muted)]">{hint}</div>
       </div>
       <div className="flex-shrink-0">{children}</div>
     </div>
@@ -121,8 +121,8 @@ export function LocalGrokBotsSection(): React.JSX.Element {
 
   return (
     <div className="max-w-xl" data-testid="local-grokbots-settings">
-      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Grok Bot</h2>
-      <p className="text-xs text-[var(--color-text-muted)] mb-6">
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Grok Bot</h2>
+      <p className="type-hint text-[var(--color-text-muted)] mb-6">
         Grok Bot agents running on this server's computer can show up in Agents and on your Homes, tagged
         "Grok Bot". K2 reads only Grok Bot's agent list and their chats, for the user K2 runs as. Off until you
         turn it on.
@@ -130,17 +130,17 @@ export function LocalGrokBotsSection(): React.JSX.Element {
 
       <div className="space-y-6">
         <SettingsGroup title="What K2 found">
-          {found === null && canEdit && <p className="text-[11px] text-[var(--color-text-muted)] py-2">Looking…</p>}
+          {found === null && canEdit && <p className="type-hint text-[var(--color-text-muted)] py-2">Looking…</p>}
           {found === null && settings && !canEdit && (
-            <p className="text-[11px] text-[var(--color-text-muted)] py-2">Only the owner or an admin can see this.</p>
+            <p className="type-hint text-[var(--color-text-muted)] py-2">Only the owner or an admin can see this.</p>
           )}
           {found && !found.installed && (
-            <p data-testid="grokbots-not-found" className="text-[11px] text-[var(--color-text-muted)] py-2">
+            <p data-testid="grokbots-not-found" className="type-hint text-[var(--color-text-muted)] py-2">
               No Grok Bot here (looked in <code>{found.dataPath}</code>).
             </p>
           )}
           {found && found.installed && (
-            <div data-testid="grokbots-found" className="py-2 text-[11px] text-[var(--color-text-secondary)]">
+            <div data-testid="grokbots-found" className="py-2 type-hint text-[var(--color-text-secondary)]">
               <div>
                 Grok Bot data in <code>{found.dataPath}</code>
               </div>
@@ -155,15 +155,15 @@ export function LocalGrokBotsSection(): React.JSX.Element {
 
         <SettingsGroup title="Local Grok Bots">
           {loadError && (
-            <p role="alert" className="text-[11px] text-[var(--color-status-error)] py-2">
+            <p role="alert" className="type-hint text-[var(--color-status-error)] py-2">
               Could not load this setting: {loadError}
             </p>
           )}
-          {!settings && !loadError && <p className="text-[11px] text-[var(--color-text-muted)] py-2">Loading…</p>}
+          {!settings && !loadError && <p className="type-hint text-[var(--color-text-muted)] py-2">Loading…</p>}
           {settings && (
             <>
               {!canEdit && (
-                <p data-testid="grokbots-settings-readonly" className="text-[10px] text-[var(--color-text-muted)] py-1">
+                <p data-testid="grokbots-settings-readonly" className="type-hint text-[var(--color-text-muted)] py-1">
                   Only the owner or an admin can change these.
                 </p>
               )}
@@ -194,7 +194,7 @@ export function LocalGrokBotsSection(): React.JSX.Element {
             </>
           )}
           {saveError && (
-            <p role="alert" className="text-[11px] text-[var(--color-status-error)] py-2">
+            <p role="alert" className="type-hint text-[var(--color-status-error)] py-2">
               Could not save: {saveError}
             </p>
           )}

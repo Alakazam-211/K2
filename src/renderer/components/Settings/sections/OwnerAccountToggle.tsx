@@ -23,7 +23,7 @@ import {
 export const OWNER_ACCOUNT_TAG = "Owner's account"
 
 export const OWNER_LINK_EXPLAINER =
-  "Your phone or laptop signing in with this login counts as you: notifications, 'you' labels and your colour. It doesn't change what the login can do."
+  "K2 treats sign-ins with this login as you: notifications, “you” labels and your color. It doesn't change what the login can do."
 
 /** What this viewer may do with the switch. */
 export type OwnerLinkAccess = 'edit' | 'read' | 'hidden'
@@ -133,7 +133,7 @@ export function OwnerAccountTag({ username, linked }: { username: string; linked
     <span
       data-testid={`owner-account-tag-${username}`}
       title={OWNER_LINK_EXPLAINER}
-      className="inline-flex w-fit items-center px-1.5 py-px text-[9px] font-medium uppercase tracking-wider border border-[var(--color-border)] text-[var(--color-text-secondary)] bg-[var(--color-bg-elevated)] select-none"
+      className="inline-flex w-fit items-center px-1.5 py-px type-badge uppercase tracking-wider border border-[var(--color-border)] text-[var(--color-text-secondary)] bg-[var(--color-bg-elevated)] select-none"
     >
       {OWNER_ACCOUNT_TAG}
     </span>

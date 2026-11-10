@@ -77,7 +77,7 @@ export function PushPreviewsRow(): React.JSX.Element | null {
         data-testid="notifications-push-previews"
       >
         <div className="flex items-center justify-between gap-4">
-          <span className="text-xs text-[var(--color-text-primary)]">{PUSH_PREVIEWS_LABEL}</span>
+          <span className="type-row text-[var(--color-text-primary)]">{PUSH_PREVIEWS_LABEL}</span>
           <Toggle
             aria-label={PUSH_PREVIEWS_LABEL}
             checked={on}
@@ -85,9 +85,9 @@ export function PushPreviewsRow(): React.JSX.Element | null {
             onChange={(v: boolean) => void change(v)}
           />
         </div>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">{PUSH_PREVIEWS_HINT}</p>
+        <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">{PUSH_PREVIEWS_HINT}</p>
         {error && (
-          <p role="alert" className="text-[10px] text-[var(--color-status-error)] mt-1">
+          <p role="alert" className="type-hint text-[var(--color-status-error)] mt-1">
             {error}
           </p>
         )}

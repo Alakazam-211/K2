@@ -243,15 +243,15 @@ export function CustomThemeCreator({ onClose, currentThemeId, existingThemePath 
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <p className="text-xs text-[var(--color-status-error-soft)]">Failed to initialize theme editor: {error}</p>
-        <button onClick={onClose} className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag">&larr; Back to Settings</button>
+        <p className="type-row text-[var(--color-status-error-soft)]">Failed to initialize theme editor: {error}</p>
+        <button onClick={onClose} className="type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag">&larr; Back to Settings</button>
       </div>
     )
   }
 
   if (!themePath || !themesDir) {
     return (
-      <div className="flex items-center justify-center h-64 text-xs text-[var(--color-text-muted)]">
+      <div className="flex items-center justify-center h-64 type-hint text-[var(--color-text-muted)]">
         Setting up theme editor...
       </div>
     )

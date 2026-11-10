@@ -46,8 +46,8 @@ export function AppFontRows({
     <>
       <div className={row(true)} data-settings-id={`${where}.font-family`}>
         <div>
-          <div className="text-xs text-[var(--color-text-secondary)]">{copy.family}</div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{copy.familyHint}</div>
+          <div className="type-row text-[var(--color-text-secondary)]">{copy.family}</div>
+          <div className="type-hint text-[var(--color-text-muted)] mt-0.5">{copy.familyHint}</div>
         </div>
         <SettingDropdown
           value={fontFamily}
@@ -58,8 +58,8 @@ export function AppFontRows({
       </div>
       <div className={row(lastHasBorder)} data-settings-id={`${where}.font-size`}>
         <div>
-          <div className="text-xs text-[var(--color-text-secondary)]">{copy.size}</div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{copy.sizeHint}</div>
+          <div className="type-row text-[var(--color-text-secondary)]">{copy.size}</div>
+          <div className="type-hint text-[var(--color-text-muted)] mt-0.5">{copy.sizeHint}</div>
         </div>
         <SettingDropdown
           value={String(fontSize)}

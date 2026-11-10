@@ -56,10 +56,10 @@ const KIND_OPTIONS = [
 ]
 
 const INPUT_CLS =
-  'flex-1 min-w-[8rem] px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
+  'flex-1 min-w-[8rem] px-2 py-1 type-row bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 
 const BTN_ACCENT =
-  'px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60'
+  'px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60'
 
 function asRecord(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
@@ -329,22 +329,22 @@ export function UserTemplatesSection(): React.JSX.Element {
     <div className="flex h-full min-h-0">
       <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0">
         <div className="px-3 pt-3 pb-2 border-b border-[var(--color-border)]">
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">User Templates</h2>
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <h2 className="type-title text-[var(--color-text-primary)]">User Templates</h2>
+          <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
             A template is a named recipe. Applying it writes grants. Editing it does not rewrite grants already written.
           </p>
           <AccessAuditLink className="mt-1" />
         </div>
         <div data-settings-id="user-templates.list" className="flex-1 overflow-y-auto min-h-0">
           <div className="px-3 pt-2 pb-1">
-            <span className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+            <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
               Access templates
             </span>
           </div>
           {loading ? (
-            <p className="px-3 text-[10px] text-[var(--color-text-muted)]">Loading…</p>
+            <p className="px-3 type-hint text-[var(--color-text-muted)]">Loading…</p>
           ) : templates.length === 0 ? (
-            <p className="px-3 text-[10px] text-[var(--color-text-muted)]">No access templates yet.</p>
+            <p className="px-3 type-hint text-[var(--color-text-muted)]">No access templates yet.</p>
           ) : (
             templates.map((row) => (
               <button
@@ -354,7 +354,7 @@ export function UserTemplatesSection(): React.JSX.Element {
                 className={listButtonClass(selection === row.id)}
                 onClick={() => setSelection(row.id)}
               >
-                <span className="block text-xs text-[var(--color-text-primary)] truncate">{row.name}</span>
+                <span className="block type-row text-[var(--color-text-primary)] truncate">{row.name}</span>
               </button>
             ))
           )}
@@ -380,7 +380,7 @@ export function UserTemplatesSection(): React.JSX.Element {
       </div>
       <div className="flex-1 overflow-y-auto p-6 min-h-0">
         {error && (
-          <p role="alert" className="text-[10px] text-[var(--color-status-error)] mb-3">
+          <p role="alert" className="type-hint text-[var(--color-status-error)] mb-3">
             {error}
           </p>
         )}
@@ -408,7 +408,7 @@ export function UserTemplatesSection(): React.JSX.Element {
             onApply={() => void applyTemplate()}
           />
         ) : (
-          <p className="text-[10px] text-[var(--color-text-muted)]">Select an access template.</p>
+          <p className="type-hint text-[var(--color-text-muted)]">Select an access template.</p>
         )}
       </div>
     </div>
@@ -479,22 +479,22 @@ function TemplateDetail({
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <button type="submit" className="text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer">
+          <button type="submit" className="type-hint text-[var(--color-accent)] hover:underline no-drag cursor-pointer">
             Save template
           </button>
           <button
             type="button"
-            className="text-[10px] text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
+            className="type-hint text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
             onClick={onDelete}
           >
             Delete template
           </button>
         </form>
-        <p className="text-[10px] text-[var(--color-text-muted)]">
+        <p className="type-hint text-[var(--color-text-muted)]">
           Saving this name or its lines does not rewrite grants already written.
         </p>
         {template.lines.length === 0 ? (
-          <p className="text-[10px] text-[var(--color-text-muted)]">No lines yet. A line stores kind and, for app, a role. Not a target.</p>
+          <p className="type-hint text-[var(--color-text-muted)]">No lines yet. A line stores kind and, for app, a role. Not a target.</p>
         ) : (
           <div className="divide-y divide-[var(--color-border)]">
             {template.lines.map((line) => {
@@ -505,12 +505,12 @@ function TemplateDetail({
               return (
                 <div key={line.id} className="py-2 space-y-1">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-mono text-[var(--color-text-primary)]">
+                    <span className="type-row font-mono text-[var(--color-text-primary)]">
                       {line.kind}{role ? ` · ${role.name}` : ''}
                     </span>
                     <button
                       type="button"
-                      className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
+                      className="type-hint text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
                       onClick={() => onRemoveLine(line.id)}
                     >
                       Remove line

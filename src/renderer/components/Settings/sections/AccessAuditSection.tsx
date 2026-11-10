@@ -153,8 +153,8 @@ export function AccessAuditSection(): React.JSX.Element {
         data-settings-id="k2-connect.access-audit"
       >
         <div>
-          <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">Access Audit</h2>
-          <p className="text-xs text-[var(--color-text-muted)] mt-1">
+          <h2 className="type-title text-[var(--color-text-primary)]">Access Audit</h2>
+          <p className="type-hint text-[var(--color-text-muted)] mt-1">
             Login history and vault handoffs for this host. A successful sign-in is the account
             that got in; a handoff line names the secret, who sent it and to whom — passwords and
             secret values are never stored in this log.
@@ -163,28 +163,28 @@ export function AccessAuditSection(): React.JSX.Element {
       </div>
 
       {view.kind === 'old-host' && (
-        <p className="text-xs text-[var(--color-text-muted)] mt-6">{OLD_HOST_COPY}</p>
+        <p className="type-hint text-[var(--color-text-muted)] mt-6">{OLD_HOST_COPY}</p>
       )}
       {view.kind === 'owner-only' && (
-        <p className="text-xs text-[var(--color-text-muted)] mt-6">{OWNER_ONLY_COPY}</p>
+        <p className="type-hint text-[var(--color-text-muted)] mt-6">{OWNER_ONLY_COPY}</p>
       )}
       {view.kind === 'unauthorized' && (
-        <p className="text-xs text-[var(--color-text-muted)] mt-6">
+        <p className="type-hint text-[var(--color-text-muted)] mt-6">
           Could not load login history — sign in again.
         </p>
       )}
       {view.kind === 'error' && (
-        <p className="text-xs text-[var(--color-text-muted)] mt-6">{view.message}</p>
+        <p className="type-hint text-[var(--color-text-muted)] mt-6">{view.message}</p>
       )}
       {view.kind === 'loading' && (
-        <p className="text-xs text-[var(--color-text-muted)] mt-6">Loading login history…</p>
+        <p className="type-hint text-[var(--color-text-muted)] mt-6">Loading login history…</p>
       )}
 
       {(view.kind === 'empty' || view.kind === 'table') && (
         <>
           <div className="flex flex-wrap items-end justify-between gap-3 mt-6 mb-3">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-semibold text-[var(--color-text-primary)]">
+              <span className="type-heading text-[var(--color-text-primary)]">
                 Records
               </span>
               <div className="flex gap-1">
@@ -194,7 +194,7 @@ export function AccessAuditSection(): React.JSX.Element {
                     type="button"
                     aria-pressed={filter === mode}
                     onClick={() => setFilter(mode)}
-                    className={`text-[10px] px-2 py-0.5 border cursor-pointer no-drag ${
+                    className={`type-control px-2 py-0.5 border cursor-pointer no-drag ${
                       filter === mode
                         ? 'border-[var(--color-accent)] text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]'
                         : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]'
@@ -204,19 +204,19 @@ export function AccessAuditSection(): React.JSX.Element {
                   </button>
                 ))}
               </div>
-              <label className="text-[10px] text-[var(--color-text-muted)] flex items-center gap-1">
+              <label className="type-hint text-[var(--color-text-muted)] flex items-center gap-1">
                 User
                 <input
                   type="text"
                   value={userFilter}
                   onChange={(e) => setUserFilter(e.target.value)}
                   aria-label="Filter by user"
-                  className="text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] px-2 py-0.5 outline-none w-28"
+                  className="type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] px-2 py-0.5 outline-none w-28"
                 />
               </label>
             </div>
             <div className="flex items-center gap-2">
-              <label className="text-[10px] text-[var(--color-text-muted)] flex items-center gap-1">
+              <label className="type-hint text-[var(--color-text-muted)] flex items-center gap-1">
                 tail
                 <SettingDropdown
                   ariaLabel="Audit tail"
@@ -231,7 +231,7 @@ export function AccessAuditSection(): React.JSX.Element {
               <button
                 type="button"
                 onClick={onRefresh}
-                className="text-[10px] px-2 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer no-drag"
+                className="type-control px-2 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer no-drag"
               >
                 Refresh
               </button>
@@ -242,7 +242,7 @@ export function AccessAuditSection(): React.JSX.Element {
             <p
               role="status"
               data-testid="agent-vault-export-banner"
-              className="text-xs mb-3 px-2 py-1.5 border border-[var(--color-status-warn)] text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]"
+              className="type-row mb-3 px-2 py-1.5 border border-[var(--color-status-warn)] text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]"
             >
               {agentExports === 1
                 ? 'An agent exported secrets from this box’s vault in this window. It is marked below; names only, never values.'
@@ -250,12 +250,12 @@ export function AccessAuditSection(): React.JSX.Element {
             </p>
           )}
           {view.kind === 'empty' ? (
-            <p className="text-xs text-[var(--color-text-muted)]">{EMPTY_COPY}</p>
+            <p className="type-hint text-[var(--color-text-muted)]">{EMPTY_COPY}</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left border-collapse min-w-[640px]">
+              <table className="w-full type-row text-left border-collapse min-w-[640px]">
                 <thead>
-                  <tr className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
+                  <tr className="type-section uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
                     <th className="font-medium py-1.5 pr-3">Time (UTC)</th>
                     <th className="font-medium py-1.5 pr-3">Event</th>
                     <th className="font-medium py-1.5 pr-3">Outcome</th>
@@ -291,7 +291,7 @@ export function AccessAuditSection(): React.JSX.Element {
                         <td className="py-1.5 pr-3">
                           {ev.event || '—'}
                           {flagged && (
-                            <span className="ml-1 text-[10px] px-1 border border-[var(--color-status-warn)] text-[var(--color-status-warn)]">
+                            <span className="ml-1 type-hint px-1 border border-[var(--color-status-warn)] text-[var(--color-status-warn)]">
                               agent export
                             </span>
                           )}

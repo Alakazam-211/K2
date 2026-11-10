@@ -58,8 +58,8 @@ export function AgentSkillsSection(): React.JSX.Element {
   // state here just confused users. Removed per that feedback.
   return (
     <div className="w-full" data-settings-id="agent-skills.canonical-flow">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Canonical Agent Flow</h2>
-      <div className="text-xs text-[var(--color-text-muted)] mb-4 space-y-2 leading-relaxed max-w-3xl">
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Canonical Agent Flow</h2>
+      <div className="type-hint text-[var(--color-text-muted)] mb-4 space-y-2 leading-relaxed max-w-3xl">
         <p>
           Different AI tools look for project notes in different files. Always-on context is a{' '}
           <span className="text-[var(--color-text-secondary)]">context management stack</span>:
@@ -91,7 +91,7 @@ export function AgentSkillsSection(): React.JSX.Element {
       <AgentContextDiagram />
 
       {/* The two opt-in routes (PRD §11). */}
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/30 px-3 py-2.5 mb-4 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+      <div className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/30 px-3 py-2.5 mb-4 type-hint leading-relaxed text-[var(--color-text-secondary)]">
         <div className="font-medium text-[var(--color-text-primary)] mb-1">Two opt-in routes to canonical</div>
         <p className="mb-1.5">
           <span className="text-[var(--color-text-primary)]">Skill route (recommended for existing projects).</span>{' '}
@@ -113,7 +113,7 @@ export function AgentSkillsSection(): React.JSX.Element {
       </div>
 
       {/* The three opt-in skills as first-class entries (flat list). */}
-      <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5">
+      <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5">
         Opt-in skills under <span className="font-mono">.k2/skills/</span>
       </div>
       <div className="border border-[var(--color-border)] mb-4">
@@ -124,10 +124,10 @@ export function AgentSkillsSection(): React.JSX.Element {
           >
             <div className="flex items-center gap-2">
               <span className="w-1 h-4 bg-[var(--color-accent)] rounded-[var(--radius-pill)] flex-shrink-0" />
-              <span className="text-xs font-medium text-[var(--color-text-primary)]">{skill.label}</span>
-              <span className="text-[9px] font-mono text-[var(--color-text-muted)]">.k2/skills/{skill.dir}/</span>
+              <span className="type-name text-[var(--color-text-primary)]">{skill.label}</span>
+              <span className="type-hint font-mono text-[var(--color-text-muted)]">.k2/skills/{skill.dir}/</span>
             </div>
-            <p className="text-[10px] text-[var(--color-text-muted)] leading-snug mt-1 pl-3">{skill.blurb}</p>
+            <p className="type-hint text-[var(--color-text-muted)] leading-snug mt-1 pl-3">{skill.blurb}</p>
           </div>
         ))}
       </div>

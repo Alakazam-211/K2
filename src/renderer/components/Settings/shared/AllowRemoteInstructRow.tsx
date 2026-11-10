@@ -33,8 +33,8 @@ export function AllowRemoteInstructRow(): React.JSX.Element {
   return (
     <div className="flex items-center justify-between py-2" data-settings-id="k2-connect.allow-remote-instruct">
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">{MASTER_SWITCH_LABEL}</span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+        <span className="type-row text-[var(--color-text-secondary)]">{MASTER_SWITCH_LABEL}</span>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
           {allow ? MASTER_SWITCH_ON_TEXT : MASTER_SWITCH_OFF_TEXT}
         </p>
       </div>

@@ -86,21 +86,21 @@ export function ApprovalsPanel({ onChanged }: { onChanged?: () => void }): React
   const inFlight = (rows ?? []).filter((r) => r.state === 'approved' || r.state === 'sent')
   return (
     <div className="space-y-2" data-testid="compute-approvals" data-settings-id="compute.approvals">
-      <div className="text-xs font-medium text-[var(--color-text-primary)]">
+      <div className="type-name text-[var(--color-text-primary)]">
         Approvals{pending.length > 0 ? ` (${pending.length})` : ''}
       </div>
-      <p className={`text-[11px] ${muted}`}>
+      <p className={`type-hint ${muted}`}>
         Agents can only ask. Root work on a node waits here until you approve it, with {touchIdOrPassword()}, each time.
       </p>
       {error ? <Callout tone="error">{error}</Callout> : null}
       {rows && pending.length === 0 && inFlight.length === 0 ? (
-        <p className={`text-[11px] ${muted}`}>Nothing is waiting.</p>
+        <p className={`type-hint ${muted}`}>Nothing is waiting.</p>
       ) : null}
       {pending.map((r) => (
         <RequestCard key={r.id} request={r} canApprove={canApprove} onChanged={changed} />
       ))}
       {inFlight.map((r) => (
-        <div key={r.id} className={`text-[11px] ${secondary}`} data-testid={`compute-request-inflight-${r.id}`}>
+        <div key={r.id} className={`type-hint ${secondary}`} data-testid={`compute-request-inflight-${r.id}`}>
           {r.state === 'approved' ? 'Approved, waiting for the node' : 'Running on the node'}: {r.summary}
         </div>
       ))}
@@ -191,19 +191,19 @@ function RequestCard({
 
   return (
     <div className="border border-[var(--color-border)] p-3 space-y-2" data-testid={`compute-request-${r.id}`}>
-      <div className="text-xs text-[var(--color-text-primary)]">{r.summary}</div>
-      <div className={`text-[11px] ${secondary} flex flex-wrap gap-x-3`}>
+      <div className="type-row text-[var(--color-text-primary)]">{r.summary}</div>
+      <div className={`type-hint ${secondary} flex flex-wrap gap-x-3`}>
         <span>{r.node ?? r.nodeId}</span>
         <span>asked by {proposerLabel(r)}</span>
         <span>{formatRelativeTime(r.proposedAt, nowSec())}</span>
         <span className={muted}>{r.class === 'privileged' ? 'root' : 'operate'}</span>
       </div>
-      {r.reason ? <div className={`text-[11px] ${secondary}`}>Why: {r.reason}</div> : null}
+      {r.reason ? <div className={`type-hint ${secondary}`}>Why: {r.reason}</div> : null}
       {scripts.map((s, i) => (
         <div key={i} className="space-y-1">
-          <div className={`text-[11px] ${muted}`}>Runs as root with {s.interpreter}. Read it all:</div>
+          <div className={`type-hint ${muted}`}>Runs as root with {s.interpreter}. Read it all:</div>
           <pre
-            className="text-[11px] font-mono whitespace-pre-wrap break-all max-h-64 overflow-auto border border-[var(--color-border)] p-2 text-[var(--color-text-primary)]"
+            className="type-hint font-mono whitespace-pre-wrap break-all max-h-64 overflow-auto border border-[var(--color-border)] p-2 text-[var(--color-text-primary)]"
             data-testid="compute-request-script"
           >
             {s.text}
@@ -211,19 +211,19 @@ function RequestCard({
         </div>
       ))}
       {steps.length > 0 ? (
-        <button type="button" className={`text-[10px] ${muted} underline`} onClick={() => setShowArgs((v) => !v)}>
+        <button type="button" className={`type-hint ${muted} underline`} onClick={() => setShowArgs((v) => !v)}>
           {showArgs ? 'Hide exact request' : 'Show exact request'}
         </button>
       ) : null}
       {showArgs ? (
-        <pre className="text-[10px] font-mono whitespace-pre-wrap break-all text-[var(--color-text-secondary)]" data-testid="compute-request-args">
+        <pre className="type-hint font-mono whitespace-pre-wrap break-all text-[var(--color-text-secondary)]" data-testid="compute-request-args">
           {JSON.stringify(steps, null, 2)}
           {`\n${r.digest}`}
         </pre>
       ) : null}
 
-      {confirm.step === 'starting' ? <p className={`text-[11px] ${muted}`}>Asking for your confirm…</p> : null}
-      {confirm.step === 'mac' ? <p className={`text-[11px] ${muted}`}>Confirm on your Mac.</p> : null}
+      {confirm.step === 'starting' ? <p className={`type-hint ${muted}`}>Asking for your confirm…</p> : null}
+      {confirm.step === 'mac' ? <p className={`type-hint ${muted}`}>Confirm on your Mac.</p> : null}
       {confirm.step === 'password' ? (
         <form
           className="flex flex-col gap-1.5 max-w-sm"
@@ -232,7 +232,7 @@ function RequestCard({
             void submitPassword(confirm.method)
           }}
         >
-          <label className={`text-[11px] ${muted}`}>
+          <label className={`type-hint ${muted}`}>
             {confirm.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
             <input
               ref={pwRef}
@@ -240,7 +240,7 @@ function RequestCard({
               autoComplete="current-password"
               data-testid="compute-approve-password"
               onChange={(e) => setHasPw(e.currentTarget.value !== '')}
-              className="mt-1 w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs"
+              className="mt-1 w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control"
             />
           </label>
           <div className="flex gap-1.5">
@@ -272,12 +272,12 @@ function RequestCard({
                 Approve
               </Button>
             ) : (
-              <span className={`text-[11px] ${muted}`}>Only the server's owner approves.</span>
+              <span className={`type-hint ${muted}`}>Only the server's owner approves.</span>
             )}
             <Button disabled={busy} onClick={() => setDenying(true)} data-testid={`compute-deny-${r.id}`}>
               Deny
             </Button>
-            <span className={`text-[10px] ${muted}`}>expires {formatRelativeTime(r.expiresAt, nowSec())}</span>
+            <span className={`type-hint ${muted}`}>expires {formatRelativeTime(r.expiresAt, nowSec())}</span>
           </div>
         )
       ) : null}
@@ -334,7 +334,7 @@ export function NodeAdminPanel({ node }: { node: string }): React.JSX.Element | 
   if (hidden) return null
   if (!open) {
     return (
-      <button type="button" className={`text-[11px] ${secondary} underline`} onClick={() => setOpen(true)} data-testid={`compute-node-admin-open-${node}`}>
+      <button type="button" className={`type-hint ${secondary} underline`} onClick={() => setOpen(true)} data-testid={`compute-node-admin-open-${node}`}>
         Health and admin
       </button>
     )
@@ -345,15 +345,15 @@ export function NodeAdminPanel({ node }: { node: string }): React.JSX.Element | 
   return (
     <div className="space-y-1.5 border-t border-[var(--color-border)] pt-2" data-testid={`compute-node-admin-${node}`}>
       <div className="flex items-center gap-2">
-        <span className="text-[11px] font-medium text-[var(--color-text-primary)]">Health and admin</span>
-        <button type="button" className={`text-[10px] ${muted} underline`} onClick={() => setOpen(false)}>
+        <span className="type-name text-[var(--color-text-primary)]">Health and admin</span>
+        <button type="button" className={`type-hint ${muted} underline`} onClick={() => setOpen(false)}>
           Hide
         </button>
       </div>
-      {!view && !error ? <p className={`text-[11px] ${muted}`}>Loading…</p> : null}
+      {!view && !error ? <p className={`type-hint ${muted}`}>Loading…</p> : null}
       {view ? (
         <>
-          <div className={`text-[11px] ${secondary}`}>
+          <div className={`type-hint ${secondary}`}>
             k2-node {view.nodeVersion ?? '?'} · remote admin {view.remoteAdmin ?? 'unknown'}
             {view.at ? ` · reported ${formatRelativeTime(view.at, nowSec())}` : ''}
           </div>
@@ -366,20 +366,20 @@ export function NodeAdminPanel({ node }: { node: string }): React.JSX.Element | 
             </Callout>
           ) : null}
           {lines.length > 0 ? (
-            <ul className={`text-[11px] ${secondary} list-none space-y-0.5`} data-testid="compute-node-health">
+            <ul className={`type-hint ${secondary} list-none space-y-0.5`} data-testid="compute-node-health">
               {lines.map((l) => (
                 <li key={l}>{l}</li>
               ))}
             </ul>
           ) : (
-            <p className={`text-[11px] ${muted}`}>No health report yet (this k2-node may predate node admin).</p>
+            <p className={`type-hint ${muted}`}>No health report yet (this k2-node may predate node admin).</p>
           )}
           {view.pendingApprovals > 0 ? (
-            <div className="text-[11px] text-[var(--color-status-warn-amber-soft)]" data-testid="compute-node-pending">
+            <div className="type-hint text-[var(--color-status-warn-amber-soft)]" data-testid="compute-node-pending">
               {view.pendingApprovals} request(s) wait for your approval above.
             </div>
           ) : null}
-          <div className={`text-[11px] ${secondary}`} data-testid="compute-node-update">
+          <div className={`type-hint ${secondary}`} data-testid="compute-node-update">
             Update: {u ? `${u.state}${u.version ? ` ${u.version}` : ''}${u.reason ? ` (${u.reason})` : ''}` : 'nothing yet'}
             {view.updateRing === 'canary' ? ' · canary' : ''}
           </div>
@@ -394,7 +394,7 @@ export function NodeAdminPanel({ node }: { node: string }): React.JSX.Element | 
                 </Button>
               </>
             ) : (
-              <span className={`text-[11px] ${muted}`}>Remote update needs a k2-node with self-update.</span>
+              <span className={`type-hint ${muted}`}>Remote update needs a k2-node with self-update.</span>
             )}
             <Button
               disabled={busy}
@@ -404,12 +404,12 @@ export function NodeAdminPanel({ node }: { node: string }): React.JSX.Element | 
               {view.alertAfterSecs ? `Offline alert after ${Math.round(view.alertAfterSecs / 60)}m: turn off` : 'Alert me when it goes offline'}
             </Button>
           </div>
-          <div className={`text-[10px] ${muted}`}>
+          <div className={`type-hint ${muted}`}>
             Alerts go to {view.alertsTo ?? 'nobody yet (k2 compute node alerts --to <workspace>)'}. They only fire while this server is awake.
           </div>
         </>
       ) : null}
-      {note ? <p className={`text-[11px] ${muted}`}>{note}</p> : null}
+      {note ? <p className={`type-hint ${muted}`}>{note}</p> : null}
       {error ? <Callout tone="error">{error}</Callout> : null}
     </div>
   )

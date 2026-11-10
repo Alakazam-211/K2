@@ -63,11 +63,11 @@ describe('restartHostConfirmCopy — unmistakable remote targeting (#661)', () =
     expect(copy.title).toContain('Hetzner box')
     expect(copy.confirmLabel).toContain('Hetzner box')
     expect(copy.message).toContain('Hetzner box')
-    // The hostname is shown too, and it's framed as the REMOTE machine —
-    // explicitly NOT this Mac.
+    // The hostname is shown too, and it's framed as the server you're
+    // connected to, explicitly not this computer.
     expect(copy.message).toContain('rosson.k2.dev')
-    expect(copy.message).toContain('REMOTE')
-    expect(copy.message).toContain('not this Mac')
+    expect(copy.message).toContain("the server you're connected to")
+    expect(copy.message).toContain('not this computer')
   })
 
   it('falls back to the hostname when used as the label (never blank copy)', () => {

@@ -196,12 +196,12 @@ export function AppsBoxSection(): React.JSX.Element | null {
       {isStaff && review.length > 0 ? (
         <Callout tone="info" data-testid="apps-review-note">
           <div className="space-y-1.5">
-            <p className="text-[11px]">
+            <p className="type-hint">
               These agents could manage Apps before; they now have Build and run Apps on. Review what each one may do.
             </p>
             <ul className="space-y-1">
               {review.map((r) => (
-                <li key={r.workspaceId} className="flex items-center gap-2 text-[11px]" data-testid={`apps-review-${r.workspaceId}`}>
+                <li key={r.workspaceId} className="flex items-center gap-2 type-hint" data-testid={`apps-review-${r.workspaceId}`}>
                   <span className="font-mono text-[var(--color-text-primary)]">{byId.get(r.workspaceId)?.name ?? r.handle}</span>
                   <button
                     type="button"
@@ -229,8 +229,8 @@ export function AppsBoxSection(): React.JSX.Element | null {
 
       <SettingsGroup title="Apps on this server">
         <div className="py-2 space-y-2">
-          <p className={`text-[11px] ${muted}`}>
-            Every App here and the agent that maintains it. What an agent may do is set on its card: Settings → Workspaces →
+          <p className={`type-hint ${muted}`}>
+            Every App here and the agent that maintains it. What an agent may do is set on its card: Settings → Workspaces / Agents →
             the agent → Agent → Apps.
           </p>
           {notice ? (
@@ -238,10 +238,10 @@ export function AppsBoxSection(): React.JSX.Element | null {
               {notice.text}
             </Callout>
           ) : null}
-          {load.kind === 'loading' ? <p className={`text-[11px] ${muted}`}>Loading Apps…</p> : null}
+          {load.kind === 'loading' ? <p className={`type-hint ${muted}`}>Loading Apps…</p> : null}
           {load.kind === 'error' ? <Callout tone="error">{load.text}</Callout> : null}
           {load.kind === 'ready' && load.apps.length === 0 ? (
-            <p className={`text-[11px] ${muted}`} data-testid="apps-box-empty">
+            <p className={`type-hint ${muted}`} data-testid="apps-box-empty">
               No Apps on this server yet.
             </p>
           ) : null}
@@ -267,29 +267,29 @@ export function AppsBoxSection(): React.JSX.Element | null {
                       ) : (
                         <span
                           aria-hidden
-                          className="w-6 h-6 flex-shrink-0 flex items-center justify-center text-[10px] border border-[var(--color-border)] text-[var(--color-text-muted)]"
+                          className="w-6 h-6 flex-shrink-0 flex items-center justify-center type-hint border border-[var(--color-border)] text-[var(--color-text-muted)]"
                         >
                           ?
                         </span>
                       )}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-baseline gap-2 flex-wrap">
-                          <span className="text-xs font-mono text-[var(--color-text-primary)]">{app.appId}</span>
-                          <span className={`text-[10px] ${owner ? 'text-[var(--color-status-warn-amber-soft)]' : muted}`}>
+                          <span className="type-row font-mono text-[var(--color-text-primary)]">{app.appId}</span>
+                          <span className={`type-hint ${owner ? 'text-[var(--color-status-warn-amber-soft)]' : muted}`}>
                             {stateLabel(app)}
                           </span>
                         </div>
-                        <div className={`text-[11px] ${secondary}`} data-testid={`apps-row-${app.appId}-agent`}>
+                        <div className={`type-hint ${secondary}`} data-testid={`apps-row-${app.appId}-agent`}>
                           {app.maintainer.kind === 'agent'
                             ? `${app.maintainer.agent ?? app.maintainer.handle ?? 'an agent'}${app.maintainer.address ? ` · ${app.maintainer.address}` : ''}`
                             : 'No agent maintains it'}
                         </div>
-                        <div className={`text-[10px] ${muted}`}>
+                        <div className={`type-hint ${muted}`}>
                           {memoryLabel(app.memoryLimitBytes)}
                           {app.hostnames.length ? ` · ${app.hostnames.join(', ')}` : ' · no public hostname'}
                           {postgresChip(app.database) ? (
                             <span
-                              className="ml-2 px-1.5 py-px border border-[var(--color-border)] text-[10px]"
+                              className="ml-2 px-1.5 py-px border border-[var(--color-border)] type-hint"
                               data-testid={`apps-row-${app.appId}-postgres`}
                               title={app.database?.name ? `database ${app.database.name}` : undefined}
                             >
@@ -298,7 +298,7 @@ export function AppsBoxSection(): React.JSX.Element | null {
                           ) : null}
                         </div>
                         {app.maintainer.kind === 'agent' ? (
-                          <div className={`text-[10px] ${muted}`} data-testid={`apps-row-${app.appId}-access`}>
+                          <div className={`type-hint ${muted}`} data-testid={`apps-row-${app.appId}-access`}>
                             {accessLine(app, project)}
                             {wsId ? (
                               <>
@@ -318,7 +318,7 @@ export function AppsBoxSection(): React.JSX.Element | null {
                       </div>
                     </div>
                     {recent && isStaff ? (
-                      <div className={`flex items-center gap-2 flex-wrap pl-9 text-[10px] ${muted}`} data-testid={`apps-row-${app.appId}-handover`}>
+                      <div className={`flex items-center gap-2 flex-wrap pl-9 type-hint ${muted}`} data-testid={`apps-row-${app.appId}-handover`}>
                         <span>
                           Handed over from {recent.fromHandle ?? 'the owner'} to {recent.toHandle}
                           {recent.rekeyState === 'failed' ? ' · its keys didn’t change yet' : ''}

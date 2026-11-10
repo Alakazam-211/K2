@@ -164,7 +164,7 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
     // Its tag matches the 3rd Party Bots SOON tag: same classes, right-justified.
     const settingsSrc = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
     const tag =
-      '<span className="ml-auto text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>'
+      '<span className="ml-auto type-badge uppercase tracking-wider px-1 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>'
     expect(settingsSrc.split(tag).length - 1).toBe(2)
     expect(settingsSrc).not.toContain('>\n                          soon\n')
   })

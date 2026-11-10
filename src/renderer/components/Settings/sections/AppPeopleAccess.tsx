@@ -91,14 +91,14 @@ export function AppPeopleAccess({
     <SettingsGroup title="People">
       <div data-settings-id="skin-access.people" className="space-y-3">
         {error ? (
-          <p role="alert" className="text-[10px] text-[var(--color-status-error-soft)]">
+          <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
             {error}
           </p>
         ) : null}
 
         {!hasRoles && templates.length > 0 ? (
           <div className="space-y-1" aria-label="Suggested roles">
-            <p className="text-[10px] text-[var(--color-text-muted)]">
+            <p className="type-hint text-[var(--color-text-muted)]">
               Suggested roles: pick one to start from, then edit it. Nothing is made until you click.
             </p>
             <div className="flex flex-wrap gap-1">
@@ -114,7 +114,7 @@ export function AppPeopleAccess({
                       onRolesChanged()
                     })
                   }
-                  className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] no-drag cursor-pointer disabled:opacity-60"
+                  className="px-2 py-0.5 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] no-drag cursor-pointer disabled:opacity-60"
                 >
                   + {t.label}
                 </button>
@@ -124,12 +124,12 @@ export function AppPeopleAccess({
         ) : null}
 
         {access == null ? (
-          <p className="text-[10px] text-[var(--color-text-muted)]">Loading people…</p>
+          <p className="type-hint text-[var(--color-text-muted)]">Loading people…</p>
         ) : access.people.length === 0 ? (
-          <p className="text-[10px] text-[var(--color-text-muted)]">Nobody has this App yet.</p>
+          <p className="type-hint text-[var(--color-text-muted)]">Nobody has this App yet.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="text-[10px] border-collapse" aria-label="People and agents">
+            <table className="type-hint border-collapse" aria-label="People and agents">
               <thead>
                 <tr>
                   <th className="text-left pr-3 py-1 font-normal text-[var(--color-text-muted)]">Person</th>
@@ -179,7 +179,7 @@ export function AppPeopleAccess({
 
         {access ? (
           <>
-            <p className="text-[10px] text-[var(--color-text-muted)]">
+            <p className="type-hint text-[var(--color-text-muted)]">
               Stay signed in: how long a phone that signs in stays signed in without being used.
             </p>
             <SettingRow label="Stay signed in">
@@ -192,7 +192,7 @@ export function AppPeopleAccess({
               />
             </SettingRow>
             {app !== 'host' ? (
-              <p className="text-[10px] text-[var(--color-text-muted)]">
+              <p className="type-hint text-[var(--color-text-muted)]">
                 Listed: an app can find this App by its id and see only its name and how to sign in. Off,
                 the server answers as if nothing were here.
               </p>
@@ -210,7 +210,7 @@ export function AppPeopleAccess({
             {access.devices.length > 0 ? (
               <div className="space-y-1" aria-label="Signed-in devices">
                 {access.devices.map((d) => (
-                  <div key={d.id} className="flex items-center justify-between gap-2 text-[10px]">
+                  <div key={d.id} className="flex items-center justify-between gap-2 type-hint">
                     <span className="text-[var(--color-text-secondary)]">
                       {d.username} · {d.name}
                       {d.via === 'pairing' ? (

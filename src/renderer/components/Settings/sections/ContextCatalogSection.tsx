@@ -201,8 +201,8 @@ export function ContextCatalogSection(): React.JSX.Element {
       <div className="flex-shrink-0 px-6 pt-5 pb-3 border-b border-[var(--color-border)] space-y-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0" data-settings-id="context-catalog.library">
-            <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Context Catalog</h2>
-            <p className="text-[11px] text-[var(--color-text-muted)] mt-1 leading-snug">
+            <h2 className="type-title text-[var(--color-text-primary)]">Context Catalog</h2>
+            <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-snug">
               Host library of context packs. Creating a pack does not stack it on a workspace —
               apply later via Browse catalog or <span className="font-mono">k2 agent context add</span>.
             </p>
@@ -211,7 +211,7 @@ export function ContextCatalogSection(): React.JSX.Element {
             type="button"
             data-settings-id="context-catalog.add"
             onClick={() => setSlugOpen(true)}
-            className="flex-shrink-0 px-3 py-1.5 text-[11px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/20 no-drag cursor-pointer"
+            className="flex-shrink-0 px-3 py-1.5 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/20 no-drag cursor-pointer"
           >
             Add context
           </button>
@@ -231,19 +231,19 @@ export function ContextCatalogSection(): React.JSX.Element {
               onChange={(e) => setSlugDraft(e.target.value)}
               placeholder="slug (becomes user:&lt;slug&gt;)"
               aria-label="Pack slug"
-              className="flex-1 px-3 py-2 text-[12px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)]/50 no-drag"
+              className="flex-1 px-3 py-2 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)]/50 no-drag"
             />
             <button
               type="submit"
               disabled={adding || !slugDraft.trim()}
-              className="px-3 py-1.5 text-[11px] font-medium text-[var(--color-on-accent)] bg-[var(--color-accent)] no-drag cursor-pointer disabled:opacity-50"
+              className="px-3 py-1.5 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] no-drag cursor-pointer disabled:opacity-50"
             >
               {adding ? 'Creating…' : 'Create'}
             </button>
             <button
               type="button"
               onClick={() => setSlugOpen(false)}
-              className="px-2 py-1.5 text-[11px] text-[var(--color-text-secondary)] no-drag cursor-pointer"
+              className="px-2 py-1.5 type-control text-[var(--color-text-secondary)] no-drag cursor-pointer"
             >
               Cancel
             </button>
@@ -256,7 +256,7 @@ export function ContextCatalogSection(): React.JSX.Element {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search catalog…"
           aria-label="Search context catalog"
-          className="w-full px-3 py-2 text-[12px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)]/50 no-drag"
+          className="w-full px-3 py-2 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)]/50 no-drag"
         />
 
         <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Catalog filters">
@@ -269,7 +269,7 @@ export function ContextCatalogSection(): React.JSX.Element {
                 role="tab"
                 aria-selected={active}
                 onClick={() => setFilter(f.id)}
-                className={`px-2.5 py-1 text-[10px] font-medium no-drag cursor-pointer border transition-colors ${
+                className={`px-2.5 py-1 type-control no-drag cursor-pointer border transition-colors ${
                   active
                     ? 'text-[var(--color-accent)] bg-[var(--color-accent)]/15 border-[var(--color-accent)]/40'
                     : 'text-[var(--color-text-secondary)] border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)]'
@@ -283,15 +283,15 @@ export function ContextCatalogSection(): React.JSX.Element {
         </div>
 
         {error ? (
-          <p className="text-[11px] text-[var(--color-status-error-soft)]">{error}</p>
+          <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>
         ) : null}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
         {loading ? (
-          <div className="px-6 py-10 text-[12px] text-[var(--color-text-muted)]">Loading catalog…</div>
+          <div className="px-6 py-10 type-hint text-[var(--color-text-muted)]">Loading catalog…</div>
         ) : filtered.length === 0 ? (
-          <div className="px-6 py-10 text-[12px] text-[var(--color-text-muted)] text-center">
+          <div className="px-6 py-10 type-hint text-[var(--color-text-muted)] text-center">
             {query.trim() ? `No catalog items match “${query.trim()}”.` : 'No items in this filter.'}
           </div>
         ) : (
@@ -309,27 +309,27 @@ export function ContextCatalogSection(): React.JSX.Element {
                 <li key={p.id} className="px-6 py-3.5 flex items-start gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline gap-2 min-w-0 flex-wrap">
-                      <span className="text-[13px] font-medium text-[var(--color-text-primary)]">
+                      <span className="type-heading text-[var(--color-text-primary)]">
                         {p.label}
                       </span>
                       {p.recommended ? (
-                        <span className="px-1.5 py-0.5 text-[9px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/12 border border-[var(--color-accent)]/30">
+                        <span className="px-1.5 py-0.5 type-hint text-[var(--color-accent)] bg-[var(--color-accent)]/12 border border-[var(--color-accent)]/30">
                           Recommended
                         </span>
                       ) : null}
                       {live ? (
-                        <span className="px-1.5 py-0.5 text-[9px] text-[var(--color-text-muted)] border border-[var(--color-border)]">
+                        <span className="px-1.5 py-0.5 type-hint text-[var(--color-text-muted)] border border-[var(--color-border)]">
                           Live · view only
                         </span>
                       ) : null}
                       {metaBits.length > 0 ? (
-                        <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums">
+                        <span className="type-hint text-[var(--color-text-muted)] tabular-nums">
                           {metaBits.join(' · ')}
                         </span>
                       ) : null}
                     </div>
                     {p.description ? (
-                      <p className="text-[11px] text-[var(--color-text-secondary)] mt-1 leading-snug">
+                      <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-snug">
                         {p.description}
                       </p>
                     ) : null}
@@ -338,14 +338,14 @@ export function ContextCatalogSection(): React.JSX.Element {
                         {(p.tags ?? []).map((tag) => (
                           <span
                             key={tag}
-                            className="px-1.5 py-0.5 text-[9px] text-[var(--color-text-muted)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/40"
+                            className="px-1.5 py-0.5 type-hint text-[var(--color-text-muted)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/40"
                           >
                             {tag}
                           </span>
                         ))}
                       </div>
                     ) : null}
-                    <div className="text-[10px] font-mono text-[var(--color-text-muted)] mt-1.5 truncate" title={p.id}>
+                    <div className="type-hint font-mono text-[var(--color-text-muted)] mt-1.5 truncate" title={p.id}>
                       {p.id}
                     </div>
                   </div>
@@ -359,20 +359,20 @@ export function ContextCatalogSection(): React.JSX.Element {
                             if (!p.dir) return
                             setEditor({ dir: p.dir, label: p.label })
                           }}
-                          className="px-2.5 py-1 text-[11px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 no-drag cursor-pointer disabled:opacity-40"
+                          className="px-2.5 py-1 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 no-drag cursor-pointer disabled:opacity-40"
                         >
                           Edit
                         </button>
                         <button
                           type="button"
                           onClick={() => void handleDelete(p)}
-                          className="px-2.5 py-1 text-[11px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer"
+                          className="px-2.5 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer"
                         >
                           Delete
                         </button>
                       </>
                     ) : (
-                      <span className="text-[10px] text-[var(--color-text-muted)]">
+                      <span className="type-hint text-[var(--color-text-muted)]">
                         {live ? 'View only' : 'Built-in'}
                       </span>
                     )}

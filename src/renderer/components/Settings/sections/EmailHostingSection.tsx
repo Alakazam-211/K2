@@ -107,7 +107,7 @@ type Selection =
 
 function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
-    <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+    <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
       {children}
     </h3>
   )
@@ -169,7 +169,7 @@ function StatusChip({ status }: { status: string }): React.JSX.Element {
   const { label, color } = recordChip(status)
   return (
     <span
-      className="text-[9px] font-semibold px-1.5 py-0.5 flex-shrink-0 uppercase tracking-wide"
+      className="type-badge px-1.5 py-0.5 flex-shrink-0 uppercase tracking-wide"
       style={{ color, backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)` }}
     >
       {label}
@@ -195,7 +195,7 @@ function CopyButton({ text, title }: { text: string; title?: string }): React.JS
             useToastStore.getState().addToast('Copy failed', 'error')
           })
       }}
-      className="px-1.5 py-0.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] border border-[var(--color-border)] transition-colors cursor-pointer flex-shrink-0"
+      className="px-1.5 py-0.5 type-control text-[var(--color-text-muted)] hover:text-[var(--color-accent)] border border-[var(--color-border)] transition-colors cursor-pointer flex-shrink-0"
     >
       {copied ? 'Copied' : 'Copy'}
     </button>
@@ -225,20 +225,20 @@ function PreflightChecklist({ report }: { report: PreflightReport }): React.JSX.
         const m = mark(c.status)
         return (
           <div key={c.id} className="flex items-start gap-2 px-3 py-1.5">
-            <span className="w-3 flex-shrink-0 text-xs font-bold" style={{ color: m.color }}>
+            <span className="w-3 flex-shrink-0 type-name " style={{ color: m.color }}>
               {m.glyph}
             </span>
             <div className="flex-1 min-w-0">
-              <span className="text-xs text-[var(--color-text-primary)]">{c.label}</span>
+              <span className="type-row text-[var(--color-text-primary)]">{c.label}</span>
               {c.detail && (
-                <p className="text-[10px] text-[var(--color-text-muted)] break-words">{c.detail}</p>
+                <p className="type-hint text-[var(--color-text-muted)] break-words">{c.detail}</p>
               )}
             </div>
           </div>
         )
       })}
       {report.portPlan && (
-        <div className="px-3 py-1.5 text-[10px] text-[var(--color-text-muted)]">
+        <div className="px-3 py-1.5 type-hint text-[var(--color-text-muted)]">
           TLS/port plan: <span className="text-[var(--color-text-secondary)]">{report.portPlan}</span>
         </div>
       )}
@@ -257,7 +257,7 @@ function EnableProgress({ status }: { status: MailStatus }): React.JSX.Element {
         return (
           <div key={s.id} className="flex items-center gap-2 px-3 py-1">
             <span
-              className="w-3 flex-shrink-0 text-xs font-bold"
+              className="w-3 flex-shrink-0 type-name "
               style={{
                 color: done
                   ? 'var(--color-status-ok)'
@@ -269,7 +269,7 @@ function EnableProgress({ status }: { status: MailStatus }): React.JSX.Element {
               {done ? '✓' : active ? '›' : '·'}
             </span>
             <span
-              className={`text-[11px] ${
+              className={`type-hint ${
                 done || active
                   ? 'text-[var(--color-text-primary)]'
                   : 'text-[var(--color-text-muted)]'
@@ -420,14 +420,14 @@ function ServerPanel({
   return (
     <div className="grid gap-6 grid-cols-[minmax(0,42rem)]">
       <div className="min-w-0" data-settings-id="email-hosting.server">
-        <h2 className="text-base font-medium text-[var(--color-text-primary)]">Email server</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+        <h2 className="type-title text-[var(--color-text-primary)]">Email server</h2>
+        <p className="type-hint text-[var(--color-text-muted)] mt-1">
           K2 installs and supervises a mail server on this deployment. Agents mint addresses on
           your domains, read their mail, and send under your governance — Send is available because
           these inboxes live on your own server.
         </p>
         {notInstalled && (
-          <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+          <p className="type-hint text-[var(--color-text-muted)] mt-1">
             The hosted server isn&rsquo;t installed yet — that&rsquo;s optional, not broken. Reading
             and drafting still work for any account you connect under{' '}
             <span className="text-[var(--color-text-secondary)]">Settings → Email Link</span>;
@@ -446,33 +446,33 @@ function ServerPanel({
               className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0"
               style={{ backgroundColor: stateColor(status.state) }}
             />
-            <span className="text-xs text-[var(--color-text-primary)]">{status.state}</span>
+            <span className="type-row text-[var(--color-text-primary)]">{status.state}</span>
             <span className="flex-1" />
-            <span className="text-[10px] text-[var(--color-text-muted)]">
+            <span className="type-hint text-[var(--color-text-muted)]">
               {status.version ? `v${status.version}` : `pinned v${status.pinnedVersion}`}
             </span>
           </div>
           {status.hostname && (
             <div className="flex items-center gap-3 px-3 py-2">
-              <span className="text-[11px] text-[var(--color-text-secondary)] w-24 flex-shrink-0">
+              <span className="type-hint text-[var(--color-text-secondary)] w-24 flex-shrink-0">
                 Mail hostname
               </span>
-              <span className="text-xs font-mono text-[var(--color-text-primary)] truncate">
+              <span className="type-row font-mono text-[var(--color-text-primary)] truncate">
                 {status.hostname}
               </span>
             </div>
           )}
           {status.portPlan && (
             <div className="flex items-center gap-3 px-3 py-2">
-              <span className="text-[11px] text-[var(--color-text-secondary)] w-24 flex-shrink-0">
+              <span className="type-hint text-[var(--color-text-secondary)] w-24 flex-shrink-0">
                 TLS/port plan
               </span>
-              <span className="text-xs text-[var(--color-text-primary)]">{status.portPlan}</span>
+              <span className="type-row text-[var(--color-text-primary)]">{status.portPlan}</span>
             </div>
           )}
           {status.lastError && (
             <div className="px-3 py-2">
-              <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">
+              <p className="type-hint text-[var(--color-status-error-soft)] break-words">
                 {status.lastError}
               </p>
             </div>
@@ -487,15 +487,15 @@ function ServerPanel({
 
           {notInstalled && (
             <>
-              <p className="text-[11px] text-[var(--color-text-muted)]">
+              <p className="type-hint text-[var(--color-text-muted)]">
                 Preflight runs first — hard stops block the install; warnings don&rsquo;t.
               </p>
               {preflightError ? (
-                <p className="text-[11px] text-[var(--color-status-error-soft)]">
+                <p className="type-hint text-[var(--color-status-error-soft)]">
                   Preflight failed to run: {preflightError}
                 </p>
               ) : preflight === null ? (
-                <p className="text-[11px] text-[var(--color-text-muted)]">Running preflight…</p>
+                <p className="type-hint text-[var(--color-text-muted)]">Running preflight…</p>
               ) : (
                 <PreflightChecklist report={preflight} />
               )}
@@ -506,14 +506,14 @@ function ServerPanel({
                   disabled={!canMutate || busy}
                   onChange={(e) => setHostname(e.target.value)}
                   placeholder="mail.acme.dev"
-                  className="flex-1 min-w-0 px-2 py-1.5 text-xs font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
+                  className="flex-1 min-w-0 px-2 py-1.5 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
                 />
                 <button
                   type="button"
                   disabled={!canMutate || busy}
                   onClick={() => void doEnable()}
                   title={canMutate ? 'Preflight-gate, then install' : 'Not available on this deployment'}
-                  className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                  className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                 >
                   {busy ? 'Starting…' : 'Enable Email Server'}
                 </button>
@@ -521,12 +521,12 @@ function ServerPanel({
                   type="button"
                   disabled={preflightBusy || sample}
                   onClick={() => void runPreflight()}
-                  className="px-2 py-1.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer disabled:opacity-50 flex-shrink-0"
+                  className="px-2 py-1.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer disabled:opacity-50 flex-shrink-0"
                 >
                   {preflightBusy ? 'Checking…' : 'Re-run preflight'}
                 </button>
               </div>
-              <p className="text-[10px] text-[var(--color-text-muted)] opacity-70">
+              <p className="type-hint text-[var(--color-text-muted)] opacity-70">
                 Before anything works, point <span className="font-mono">A &lt;hostname&gt; → &lt;box IP&gt;</span> at
                 this box and set its reverse DNS (PTR) to the hostname at your VPS provider.
               </p>
@@ -542,11 +542,11 @@ function ServerPanel({
                     type="button"
                     disabled={!canMutate || busy}
                     onClick={() => void doEnable()}
-                    className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50"
+                    className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50"
                   >
                     Resume install
                   </button>
-                  <span className="text-[10px] text-[var(--color-text-muted)]">
+                  <span className="type-hint text-[var(--color-text-muted)]">
                     Re-enabling resumes from the last completed step.
                   </span>
                 </div>
@@ -560,18 +560,18 @@ function ServerPanel({
                 type="button"
                 disabled={!canMutate || busy}
                 onClick={() => void doEnable()}
-                className="px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50"
+                className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50"
               >
                 Re-enable
               </button>
-              <span className="text-[10px] text-[var(--color-text-muted)]">
+              <span className="type-hint text-[var(--color-text-muted)]">
                 Mail data was kept — re-enabling brings existing domains back online.
               </span>
             </div>
           )}
 
           {enableError && (
-            <p className="text-[11px] text-[var(--color-status-error-soft)] break-words">{enableError}</p>
+            <p className="type-hint text-[var(--color-status-error-soft)] break-words">{enableError}</p>
           )}
         </div>
       )}
@@ -583,8 +583,8 @@ function ServerPanel({
           <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] divide-y divide-[var(--color-border)]">
             <div className="flex items-center gap-3 px-3 py-2">
               <div className="flex-1 min-w-0">
-                <p className="text-xs text-[var(--color-text-primary)]">Disable</p>
-                <p className="text-[10px] text-[var(--color-text-muted)]">
+                <p className="type-row text-[var(--color-text-primary)]">Disable</p>
+                <p className="type-hint text-[var(--color-text-muted)]">
                   Stops the server, keeps all mail data. MX records will point at a dead port.
                 </p>
               </div>
@@ -592,7 +592,7 @@ function ServerPanel({
                 type="button"
                 disabled={!canMutate || busy}
                 onClick={() => void doDisable()}
-                className="px-2.5 py-1 text-[10px] font-medium text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                className="px-2.5 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
               >
                 Disable
               </button>
@@ -600,8 +600,8 @@ function ServerPanel({
             <div className="px-3 py-2 space-y-1.5">
               <div className="flex items-center gap-3">
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs text-[var(--color-text-primary)]">Uninstall</p>
-                  <p className="text-[10px] text-[var(--color-text-muted)]">
+                  <p className="type-row text-[var(--color-text-primary)]">Uninstall</p>
+                  <p className="type-hint text-[var(--color-text-muted)]">
                     Removes the server binary and unit.
                   </p>
                 </div>
@@ -613,12 +613,12 @@ function ServerPanel({
                     (purge && confirmHost.trim() !== (status.hostname ?? ''))
                   }
                   onClick={() => void doUninstall()}
-                  className="px-2.5 py-1 text-[10px] font-medium text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                  className="px-2.5 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                 >
                   Uninstall
                 </button>
               </div>
-              <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+              <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
                 <Checkbox
                   checked={purge}
                   disabled={!canMutate || busy}
@@ -634,7 +634,7 @@ function ServerPanel({
                   disabled={!canMutate || busy}
                   onChange={(e) => setConfirmHost(e.target.value)}
                   placeholder={`Type ${status.hostname ?? 'the mail hostname'} to confirm`}
-                  className="w-full px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-status-error-soft)] no-drag disabled:opacity-50"
+                  className="w-full px-2 py-1 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-status-error-soft)] no-drag disabled:opacity-50"
                 />
               )}
             </div>
@@ -661,21 +661,21 @@ function DnsRecordTable({
   const row = (r: DnsRecordRow): React.JSX.Element => (
     <div key={r.id} className="px-3 py-2 space-y-1">
       <div className="flex items-center gap-2 min-w-0">
-        <span className="text-[10px] font-semibold text-[var(--color-text-secondary)] w-12 flex-shrink-0">
+        <span className="type-hint text-[var(--color-text-secondary)] w-12 flex-shrink-0">
           {r.type}
         </span>
-        <span className="text-[11px] font-mono text-[var(--color-text-primary)] truncate flex-1" title={r.name}>
+        <span className="type-hint font-mono text-[var(--color-text-primary)] truncate flex-1" title={r.name}>
           {r.name}
         </span>
         <StatusChip status={r.status} />
         <CopyButton text={r.expected} title={`Copy the ${r.type} value`} />
       </div>
-      <p className="text-[10px] text-[var(--color-text-muted)]">{r.purpose}</p>
-      <div className="text-[10px] font-mono text-[var(--color-text-secondary)] break-all bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1">
+      <p className="type-hint text-[var(--color-text-muted)]">{r.purpose}</p>
+      <div className="type-hint font-mono text-[var(--color-text-secondary)] break-all bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1">
         {r.expectedDisplay}
       </div>
       {(r.status === 'wrong' || (r.status === 'missing' && (r.live?.length ?? 0) > 0)) && (
-        <div className="text-[10px] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-2 py-1 space-y-0.5">
+        <div className="type-hint border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-2 py-1 space-y-0.5">
           <p className="text-[var(--color-status-error-soft)] font-semibold">
             {r.status === 'wrong' ? 'DNS serves a different value:' : 'DNS has other records at this name:'}
           </p>
@@ -691,7 +691,7 @@ function DnsRecordTable({
         </div>
       )}
       {r.checkedAt != null && (
-        <p className="text-[9px] text-[var(--color-text-muted)] opacity-70">
+        <p className="type-hint text-[var(--color-text-muted)] opacity-70">
           checked {fmtDate(r.checkedAt)}
         </p>
       )}
@@ -705,7 +705,7 @@ function DnsRecordTable({
           <button
             type="button"
             onClick={onToggleAdvanced}
-            className="w-full text-left px-3 py-1.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+            className="w-full text-left px-3 py-1.5 type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
           >
             {advancedOpen ? '▾' : '▸'} Advanced, optional records ({advanced.length}) —
             autoconfig / MTA-STS / TLS-RPT / TLSA
@@ -759,7 +759,7 @@ function DomainPanel({
     if (sample) {
       setDetail(SAMPLE_DOMAIN_DETAILS[domain] ?? null)
       setError(null)
-      setDoctorNote('Deliverability doctor ships with a later mail slice (S6).')
+      setDoctorNote('Deliverability checks aren’t available yet.')
       return
     }
     let cancelled = false
@@ -781,7 +781,7 @@ function DomainPanel({
         if (cancelled) return
         setDoctorNote(
           isNotBuilt(e)
-            ? 'Deliverability doctor ships with a later mail slice (S6).'
+            ? 'Deliverability checks aren’t available yet.'
             : `Doctor unavailable: ${mailErrorMessage(e)}`,
         )
       })
@@ -861,9 +861,7 @@ function DomainPanel({
     } catch (e) {
       if (isNotBuilt(e)) {
         setConfigNote(
-          'Send-mode & relay configuration isn’t wired up yet (the mail config routes ' +
-            'ship with a later slice) — this domain stays ' +
-            `${detail.sendMode} for now.`,
+          `Send-mode and relay settings aren’t available yet. This domain stays ${detail.sendMode} for now.`,
         )
       } else {
         setConfigNote(mailErrorMessage(e))
@@ -874,10 +872,10 @@ function DomainPanel({
   }, [detail, domain, modeDraft, relayHost, relayPort, relayUser, relayPass, spfInclude, onChanged])
 
   if (error) {
-    return <p className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load {domain}: {error}</p>
+    return <p className="type-hint text-[var(--color-status-error-soft)]">Failed to load {domain}: {error}</p>
   }
   if (detail === null || detail.domain !== domain) {
-    return <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
+    return <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
   }
 
   const effectiveMode = modeDraft ?? detail.sendMode
@@ -887,12 +885,12 @@ function DomainPanel({
       {/* ── Header ── */}
       <div className="min-w-0" data-settings-id="email-hosting.domains">
         <div className="flex items-center gap-2 min-w-0">
-          <h2 className="text-base font-medium text-[var(--color-text-primary)] truncate">
+          <h2 className="type-title text-[var(--color-text-primary)] truncate">
             {detail.domain}
           </h2>
           <StatusChip status={detail.status} />
         </div>
-        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+        <p className="type-hint text-[var(--color-text-muted)] mt-1">
           {detail.status === 'verified'
             ? `Verified ${fmtDate(detail.verifiedAt)} · re-checked daily`
             : 'Verifies when MX + SPF + at least one DKIM record are valid.'}
@@ -901,15 +899,15 @@ function DomainPanel({
         {/* Catch-all / plus-addressing indicators (§6.1 V1 defaults —
             per-domain values aren't surfaced by the daemon yet). */}
         <div className="flex items-center gap-1.5 mt-2">
-          <span className="text-[9px] font-semibold px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-status-ok)] bg-[color-mix(in_srgb,var(--color-status-ok)_12%,transparent)]">
+          <span className="type-badge px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-status-ok)] bg-[color-mix(in_srgb,var(--color-status-ok)_12%,transparent)]">
             Plus-addressing on
           </span>
-          <span className="text-[9px] font-semibold px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-text-muted)] bg-[var(--color-bg-elevated)]">
+          <span className="type-badge px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-text-muted)] bg-[var(--color-bg-elevated)]">
             Catch-all off
           </span>
           {detail.dmarcNag && (
             <span
-              className="text-[9px] font-semibold px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-status-warn)] bg-[color-mix(in_srgb,var(--color-status-warn)_12%,transparent)]"
+              className="type-badge px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-status-warn)] bg-[color-mix(in_srgb,var(--color-status-warn)_12%,transparent)]"
               title="DMARC is strongly recommended — it never blocks verification, but set it."
             >
               Set DMARC
@@ -926,7 +924,7 @@ function DomainPanel({
           <button
             type="button"
             onClick={downloadZone}
-            className="px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+            className="px-2 py-0.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
           >
             Download zone file
           </button>
@@ -935,7 +933,7 @@ function DomainPanel({
             disabled={sample || checking}
             onClick={() => void checkNow()}
             title={sample ? 'Not available on this deployment' : 'Re-verify every record now'}
-            className="px-2 py-0.5 text-[10px] text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-2 py-0.5 type-control text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {checking ? 'Checking…' : 'Check now'}
           </button>
@@ -945,7 +943,7 @@ function DomainPanel({
           advancedOpen={advancedOpen}
           onToggleAdvanced={() => setAdvancedOpen((v) => !v)}
         />
-        <p className="text-[10px] text-[var(--color-text-muted)] opacity-70">{detail.note}.</p>
+        <p className="type-hint text-[var(--color-text-muted)] opacity-70">{detail.note}.</p>
       </div>
 
       {/* ── Sending (send mode + relay, §8.3) ── */}
@@ -953,7 +951,7 @@ function DomainPanel({
         <SectionTitle>Sending</SectionTitle>
         <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
           <div className="flex items-center gap-3 px-3 py-2">
-            <span className="text-[11px] text-[var(--color-text-secondary)] w-24 flex-shrink-0">
+            <span className="type-hint text-[var(--color-text-secondary)] w-24 flex-shrink-0">
               Send mode
             </span>
             <SettingDropdown
@@ -968,7 +966,7 @@ function DomainPanel({
               ]}
             />
             {effectiveMode === 'direct' && (
-              <span className="text-[10px] text-[var(--color-text-muted)]">
+              <span className="type-hint text-[var(--color-text-muted)]">
                 Requires a passing deliverability-doctor grade.
               </span>
             )}
@@ -983,29 +981,29 @@ function DomainPanel({
                 ] as const
               ).map(([label, value, setter, placeholder]) => (
                 <label key={label} className="flex flex-col gap-0.5 min-w-0">
-                  <span className="text-[10px] text-[var(--color-text-secondary)]">{label}</span>
+                  <span className="type-hint text-[var(--color-text-secondary)]">{label}</span>
                   <input
                     type="text"
                     value={value}
                     disabled={!canMutate || configBusy}
                     onChange={(e) => setter(e.target.value)}
                     placeholder={placeholder}
-                    className="px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
+                    className="px-2 py-1 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
                   />
                 </label>
               ))}
               <label className="flex flex-col gap-0.5 min-w-0">
-                <span className="text-[10px] text-[var(--color-text-secondary)]">Password</span>
+                <span className="type-hint text-[var(--color-text-secondary)]">Password</span>
                 <input
                   type="password"
                   value={relayPass}
                   disabled={!canMutate || configBusy}
                   onChange={(e) => setRelayPass(e.target.value)}
-                  className="px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
+                  className="px-2 py-1 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
                 />
               </label>
               <label className="flex flex-col gap-0.5 min-w-0 col-span-2">
-                <span className="text-[10px] text-[var(--color-text-secondary)]">
+                <span className="type-hint text-[var(--color-text-secondary)]">
                   SPF include (from your relay provider&rsquo;s setup page)
                 </span>
                 <input
@@ -1014,10 +1012,10 @@ function DomainPanel({
                   disabled={!canMutate || configBusy}
                   onChange={(e) => setSpfInclude(e.target.value)}
                   placeholder="include:mailgun.org"
-                  className="px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
+                  className="px-2 py-1 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
                 />
               </label>
-              <p className="col-span-2 text-[10px] text-[var(--color-text-muted)]">
+              <p className="col-span-2 type-hint text-[var(--color-text-muted)]">
                 The relay&rsquo;s own DNS records (its DKIM CNAMEs etc.) must also be set at the
                 provider — the SPF row above updates to include the relay once saved.
               </p>
@@ -1028,12 +1026,12 @@ function DomainPanel({
               type="button"
               disabled={!canMutate || configBusy}
               onClick={() => void saveSendConfig()}
-              className="px-2.5 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-2.5 py-1 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {configBusy ? 'Saving…' : 'Save sending config'}
             </button>
             {configNote && (
-              <span className="text-[10px] text-[var(--color-text-muted)]">{configNote}</span>
+              <span className="type-hint text-[var(--color-text-muted)]">{configNote}</span>
             )}
           </div>
         </div>
@@ -1043,9 +1041,9 @@ function DomainPanel({
       <div className="space-y-2">
         <SectionTitle>Deliverability doctor</SectionTitle>
         {doctorNote ? (
-          <p className="text-[10px] text-[var(--color-text-muted)] italic">{doctorNote}</p>
+          <p className="type-hint text-[var(--color-text-muted)] italic">{doctorNote}</p>
         ) : (
-          <p className="text-[10px] text-[var(--color-text-muted)]">No doctor runs yet.</p>
+          <p className="type-hint text-[var(--color-text-muted)]">No doctor runs yet.</p>
         )}
       </div>
 
@@ -1055,8 +1053,8 @@ function DomainPanel({
         <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2 space-y-1.5">
           <div className="flex items-center gap-3">
             <div className="flex-1 min-w-0">
-              <p className="text-xs text-[var(--color-text-primary)]">Remove this domain</p>
-              <p className="text-[10px] text-[var(--color-text-muted)]">
+              <p className="type-row text-[var(--color-text-primary)]">Remove this domain</p>
+              <p className="type-hint text-[var(--color-text-muted)]">
                 Retires all its addresses and destroys the domain in the mail server.
               </p>
             </div>
@@ -1064,12 +1062,12 @@ function DomainPanel({
               type="button"
               disabled={!canMutate || busy}
               onClick={() => void doRemove()}
-              className="px-2.5 py-1 text-[10px] font-medium text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+              className="px-2.5 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
             >
               Remove domain
             </button>
           </div>
-          <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+          <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
             <Checkbox
               checked={purgeMail}
               disabled={!canMutate || busy}
@@ -1147,7 +1145,7 @@ function AddressesPanel({
         if (cancelled) return
         setCapNote(
           isNotBuilt(e)
-            ? 'Per-workspace cap controls arrive with the mail config slice.'
+            ? 'Per-workspace limits aren’t available yet.'
             : `Config unavailable: ${mailErrorMessage(e)}`,
         )
       })
@@ -1251,14 +1249,14 @@ function AddressesPanel({
           role="dialog"
           aria-label="IMAP/SMTP password shown once"
         >
-          <p className="text-[11px] font-semibold text-[var(--color-text-primary)]">
+          <p className="type-name text-[var(--color-text-primary)]">
             Store this password now — it cannot be retrieved again
           </p>
-          <p className="text-[10px] text-[var(--color-text-muted)]">
+          <p className="type-hint text-[var(--color-text-muted)]">
             {onceCreds.note ??
               'IMAP/SMTP sessions on the old password die, and the mailbox\'s API keys and app passwords stop working too.'}
           </p>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] text-[var(--color-text-primary)]">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 type-hint text-[var(--color-text-primary)]">
             <dt className="text-[var(--color-text-muted)]">Host</dt>
             <dd className="font-mono break-all">{onceCreds.imap?.host || '—'}</dd>
             <dt className="text-[var(--color-text-muted)]">IMAP</dt>
@@ -1276,7 +1274,7 @@ function AddressesPanel({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="text-[11px] text-[var(--color-accent)] cursor-pointer"
+              className="type-hint text-[var(--color-accent)] cursor-pointer"
               onClick={() => {
                 void navigator.clipboard?.writeText(onceCreds.password)
               }}
@@ -1285,7 +1283,7 @@ function AddressesPanel({
             </button>
             <button
               type="button"
-              className="text-[11px] text-[var(--color-text-secondary)] cursor-pointer"
+              className="type-hint text-[var(--color-text-secondary)] cursor-pointer"
               onClick={() => setOnceCreds(null)}
             >
               Dismiss
@@ -1294,21 +1292,21 @@ function AddressesPanel({
         </div>
       )}
       <div className="min-w-0" data-settings-id="email-hosting.addresses">
-        <h2 className="text-base font-medium text-[var(--color-text-primary)]">Addresses</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+        <h2 className="type-title text-[var(--color-text-primary)]">Addresses</h2>
+        <p className="type-hint text-[var(--color-text-muted)] mt-1">
           Agent mailboxes across every domain. Agents mint their own with{' '}
           <span className="font-mono">k2 hostmail create</span> (default cap: 5 active addresses per
           agent, 0 = unlimited); plus-addressing gives unlimited tags without new addresses.
         </p>
-        {capNote && <p className="text-[10px] text-[var(--color-text-muted)] italic mt-1">{capNote}</p>}
+        {capNote && <p className="type-hint text-[var(--color-text-muted)] italic mt-1">{capNote}</p>}
       </div>
 
       {error ? (
-        <p className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load addresses: {error}</p>
+        <p className="type-hint text-[var(--color-status-error-soft)]">Failed to load addresses: {error}</p>
       ) : rows === null ? (
-        <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
+        <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
       ) : groups.length === 0 ? (
-        <p className="text-[11px] text-[var(--color-text-muted)] italic">
+        <p className="type-hint text-[var(--color-text-muted)] italic">
           No addresses yet — agents mint them on verified domains with{' '}
           <span className="font-mono">k2 hostmail create &lt;name&gt;@&lt;domain&gt;</span>, or add a
           domain first.
@@ -1326,7 +1324,7 @@ function AddressesPanel({
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
                           <span
-                            className={`text-xs font-mono truncate ${
+                            className={`type-row font-mono truncate ${
                               r.status === 'retired'
                                 ? 'text-[var(--color-text-muted)] line-through'
                                 : 'text-[var(--color-text-primary)]'
@@ -1335,12 +1333,12 @@ function AddressesPanel({
                             {r.address}
                           </span>
                           {r.status === 'retired' && (
-                            <span className="text-[9px] font-semibold px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-text-muted)] bg-[var(--color-bg-elevated)] flex-shrink-0">
+                            <span className="type-badge px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-text-muted)] bg-[var(--color-bg-elevated)] flex-shrink-0">
                               Retired
                             </span>
                           )}
                         </div>
-                        <p className="text-[10px] text-[var(--color-text-muted)] truncate">
+                        <p className="type-hint text-[var(--color-text-muted)] truncate">
                           {r.holderWorkspace ?? 'unknown workspace'} · created {fmtDate(r.createdAt)}
                           {r.retiredAt != null ? ` · retired ${fmtDate(r.retiredAt)}` : ''}
                         </p>
@@ -1352,7 +1350,7 @@ function AddressesPanel({
                               type="button"
                               aria-expanded={forwardOpen === r.id}
                               onClick={() => setForwardOpen((cur) => (cur === r.id ? null : r.id))}
-                              className="px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer flex-shrink-0"
+                              className="px-2 py-0.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer flex-shrink-0"
                             >
                               Forwarding
                             </button>
@@ -1361,7 +1359,7 @@ function AddressesPanel({
                             type="button"
                             disabled={!canMutate || busyId === r.id}
                             onClick={() => void rotatePassword(r)}
-                            className="px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                            className="px-2 py-0.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                           >
                             {busyId === r.id && busyKind === 'rotate'
                               ? 'Rotating…'
@@ -1371,7 +1369,7 @@ function AddressesPanel({
                             type="button"
                             disabled={!canMutate || busyId === r.id}
                             onClick={() => void retire(r)}
-                            className="px-2 py-0.5 text-[10px] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                            className="px-2 py-0.5 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                           >
                             {busyId === r.id && busyKind === 'retire' ? 'Retiring…' : 'Retire'}
                           </button>
@@ -1466,14 +1464,14 @@ function ApprovalCard({
   return (
     <div className="border border-[var(--color-border)] px-3 py-2 space-y-1.5">
       <div className="flex items-center gap-2 min-w-0">
-        <span className="text-xs text-[var(--color-text-primary)] truncate flex-1" title={item.subject}>
+        <span className="type-row text-[var(--color-text-primary)] truncate flex-1" title={item.subject}>
           {item.subject || '(no subject)'}
         </span>
-        <span className="text-[10px] text-[var(--color-text-muted)] flex-shrink-0">
+        <span className="type-hint text-[var(--color-text-muted)] flex-shrink-0">
           {fmtDate(item.createdAt)}
         </span>
       </div>
-      <p className="text-[10px] text-[var(--color-text-muted)] break-words">
+      <p className="type-hint text-[var(--color-text-muted)] break-words">
         <span className="font-mono">{item.from}</span>
         {item.fromName ? <span> shown as “{item.fromName}”</span> : null}
         {' → '}
@@ -1487,40 +1485,40 @@ function ApprovalCard({
         )}
       </p>
       {item.sourceCheck && (
-        <p className="text-[10px] text-[var(--color-status-warn)] break-words">
+        <p className="type-hint text-[var(--color-status-warn)] break-words">
           The original message {item.sourceCheck}. Its sender may be forged.
         </p>
       )}
       {item.sourceDmarc && (
-        <p className={`text-[10px] break-words ${item.sourceDmarc === 'fail' ? 'text-[var(--color-status-warn)]' : 'text-[var(--color-text-muted)]'}`}>
+        <p className={`type-hint break-words ${item.sourceDmarc === 'fail' ? 'text-[var(--color-status-warn)]' : 'text-[var(--color-text-muted)]'}`}>
           The original message&apos;s DMARC check: {item.sourceDmarc}
           {item.sourceDmarc === 'fail' ? '. Its sender may be forged.' : '.'}
         </p>
       )}
       {item.forwardOf && (
-        <p className="text-[10px] text-[var(--color-text-muted)] break-words">
+        <p className="type-hint text-[var(--color-text-muted)] break-words">
           Forwards a message in <span className="font-mono">{item.forwardOf.mailbox}</span> from{' '}
           <span className="font-mono">{item.forwardOf.sender}</span> (unverified)
           {item.forwardOf.asEml ? ', whole, as an .eml file' : ''}.
         </p>
       )}
       {(item.replyTo?.length ?? 0) > 0 && (
-        <p className="text-[10px] text-[var(--color-status-warn)] break-words">
+        <p className="type-hint text-[var(--color-status-warn)] break-words">
           Answers go to <span className="font-mono">{item.replyTo?.join(', ')}</span>, not to the sender.
         </p>
       )}
-      <p className="text-[10px] text-[var(--color-text-muted)]">
+      <p className="type-hint text-[var(--color-text-muted)]">
         {item.agentName ?? 'agent'}
         {item.workspace ? ` · ${item.workspace}` : ''} · expires {fmtDate(item.expiresAt)} (auto-deny)
       </p>
 
       {(item.files?.length ?? 0) > 0 && (
         <div className="space-y-0.5">
-          <p className="text-[10px] text-[var(--color-text-muted)]">
+          <p className="type-hint text-[var(--color-text-muted)]">
             Files that will leave, as they were when the agent sent this:
           </p>
           {item.files?.map((f) => (
-            <div key={f.n} className="flex items-center gap-2 min-w-0 text-[10px]">
+            <div key={f.n} className="flex items-center gap-2 min-w-0 type-hint">
               <span className="font-mono truncate text-[var(--color-text-secondary)]" title={f.name}>{f.name}</span>
               <span className="flex-shrink-0 text-[var(--color-text-muted)]">
                 {fmtFileSize(f.size)}{f.scanned ? '' : ' · not scanned'}
@@ -1542,23 +1540,23 @@ function ApprovalCard({
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="text-[10px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+        className="type-hint text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
       >
         {expanded ? '▾ Hide message body' : '▸ Show message body'}
       </button>
       {expanded && (
         <div className="space-y-1">
-          <p className="text-[9px] text-[var(--color-status-warn)] uppercase tracking-wide font-semibold">
+          <p className="type-section text-[var(--color-status-warn)] uppercase tracking-wide ">
             Agent-composed content — plain-text preview
           </p>
-          <pre className="text-[10px] font-mono text-[var(--color-text-secondary)] whitespace-pre-wrap break-words bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1.5 max-h-48 overflow-y-auto">
+          <pre className="type-hint font-mono text-[var(--color-text-secondary)] whitespace-pre-wrap break-words bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1.5 max-h-48 overflow-y-auto">
             {fullText ?? item.bodyPreview ?? '(body preview unavailable)'}
           </pre>
           {fullText === null && item.bodyPreview !== null && item.bodyPreview.length >= 280 && (
             <button
               type="button"
               onClick={() => void loadFullText()}
-              className="text-[9px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+              className="type-hint text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
             >
               Preview stops at 280 characters. Show the whole message
             </button>
@@ -1571,7 +1569,7 @@ function ApprovalCard({
           type="button"
           disabled={!canMutate || busy !== null}
           onClick={() => void approve()}
-          className="px-2.5 py-1 text-[10px] font-medium text-[var(--color-status-ok)] border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-ok)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          className="px-2.5 py-1 type-control text-[var(--color-status-ok)] border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-ok)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {busy === 'approve' ? 'Approving…' : 'Approve & send'}
         </button>
@@ -1580,7 +1578,7 @@ function ApprovalCard({
             type="button"
             disabled={!canMutate || busy !== null}
             onClick={() => setDenying(true)}
-            className="px-2.5 py-1 text-[10px] font-medium text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-2.5 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Deny…
           </button>
@@ -1601,13 +1599,13 @@ function ApprovalCard({
                 }
               }}
               placeholder="Reason (flows back to the agent — required)"
-              className="flex-1 min-w-0 px-2 py-1 text-[10px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-status-error-soft)] no-drag"
+              className="flex-1 min-w-0 px-2 py-1 type-hint bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-status-error-soft)] no-drag"
             />
             <button
               type="button"
               disabled={!canMutate || busy !== null || note.trim().length === 0}
               onClick={() => void deny()}
-              className="px-2 py-1 text-[10px] font-medium text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+              className="px-2 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
             >
               {busy === 'deny' ? 'Denying…' : 'Deny'}
             </button>
@@ -1718,8 +1716,8 @@ function ApprovalsPanel({
   return (
     <div className="grid gap-6 grid-cols-[minmax(0,44rem)]">
       <div className="min-w-0" data-settings-id="email-hosting.approvals">
-        <h2 className="text-base font-medium text-[var(--color-text-primary)]">Approvals</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+        <h2 className="type-title text-[var(--color-text-primary)]">Approvals</h2>
+        <p className="type-hint text-[var(--color-text-muted)] mt-1">
           Agent sends queued for your decision (workspaces in approval mode). Approving submits
           the message; denying returns your note to the agent. Pending items auto-deny after 7
           days.
@@ -1729,13 +1727,13 @@ function ApprovalsPanel({
       <div className="space-y-2">
         <SectionTitle>Pending</SectionTitle>
         {pendingError ? (
-          <p className="text-[11px] text-[var(--color-status-error-soft)]">
+          <p className="type-hint text-[var(--color-status-error-soft)]">
             Failed to load the queue: {pendingError}
           </p>
         ) : pending === null ? (
-          <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
+          <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
         ) : pending.length === 0 ? (
-          <p className="text-[11px] text-[var(--color-text-muted)] italic">
+          <p className="type-hint text-[var(--color-text-muted)] italic">
             Nothing waiting. Agent sends land here when a workspace&rsquo;s send mode is
             &ldquo;approval&rdquo; (the default is off — enable it per workspace with{' '}
             <span className="font-mono">k2 hostmail config --agent-send approval</span>).
@@ -1766,15 +1764,15 @@ function ApprovalsPanel({
           )}
         </div>
         {historyError ? (
-          <p className="text-[11px] text-[var(--color-status-error-soft)]">{historyError}</p>
+          <p className="type-hint text-[var(--color-status-error-soft)]">{historyError}</p>
         ) : history === null ? (
-          <p className="text-[10px] text-[var(--color-text-muted)] italic">
+          <p className="type-hint text-[var(--color-text-muted)] italic">
             Decided and sent messages live in each workspace&rsquo;s outbox — pick a workspace to
             view its history (agents see their own with{' '}
             <span className="font-mono">k2 mail outbox</span>).
           </p>
         ) : history.length === 0 ? (
-          <p className="text-[11px] text-[var(--color-text-muted)] italic">
+          <p className="type-hint text-[var(--color-text-muted)] italic">
             No outbound messages in this workspace.
           </p>
         ) : (
@@ -1785,7 +1783,7 @@ function ApprovalsPanel({
                 <div key={o.id} className="px-3 py-2 space-y-0.5 min-w-0">
                   <div className="flex items-center gap-2 min-w-0">
                     <span
-                      className="text-[9px] font-semibold px-1.5 py-0.5 uppercase tracking-wide flex-shrink-0"
+                      className="type-badge px-1.5 py-0.5 uppercase tracking-wide flex-shrink-0"
                       style={{
                         color: chip.color,
                         backgroundColor: `color-mix(in srgb, ${chip.color} 14%, transparent)`,
@@ -1793,20 +1791,20 @@ function ApprovalsPanel({
                     >
                       {chip.label}
                     </span>
-                    <span className="text-xs text-[var(--color-text-primary)] truncate flex-1">
+                    <span className="type-row text-[var(--color-text-primary)] truncate flex-1">
                       {o.subject || '(no subject)'}
                     </span>
-                    <span className="text-[10px] text-[var(--color-text-muted)] flex-shrink-0">
+                    <span className="type-hint text-[var(--color-text-muted)] flex-shrink-0">
                       {fmtDate(o.decidedAt ?? o.createdAt)}
                     </span>
                   </div>
-                  <p className="text-[10px] text-[var(--color-text-muted)] break-words">
+                  <p className="type-hint text-[var(--color-text-muted)] break-words">
                     <span className="font-mono">{o.from}</span>
                     {' → '}
                     <span className="font-mono">{o.to.join(', ')}</span>
                   </p>
                   {o.note && (
-                    <p className="text-[10px] text-[var(--color-text-secondary)]">
+                    <p className="type-hint text-[var(--color-text-secondary)]">
                       Note: {o.note}
                     </p>
                   )}
@@ -1969,13 +1967,13 @@ export function EmailHostingSection(): React.JSX.Element {
   if (statusError) {
     return (
       <div className="p-6 space-y-2">
-        <p className="text-[11px] text-[var(--color-status-error-soft)]">
+        <p className="type-hint text-[var(--color-status-error-soft)]">
           Couldn&rsquo;t read the mail server status: {statusError}
         </p>
         <button
           type="button"
           onClick={bump}
-          className="px-2.5 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+          className="px-2.5 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
         >
           Retry
         </button>
@@ -1983,7 +1981,7 @@ export function EmailHostingSection(): React.JSX.Element {
     )
   }
   if (status === null) {
-    return <p className="p-6 text-xs text-[var(--color-text-muted)]">Loading…</p>
+    return <p className="p-6 type-hint text-[var(--color-text-muted)]">Loading…</p>
   }
 
   return (
@@ -1991,7 +1989,7 @@ export function EmailHostingSection(): React.JSX.Element {
       {/* ── D3 banner — pinned on top of the whole page when the DAEMON
           reports unsupported (never navigator.platform). ── */}
       {sample && (
-        <div className="flex-shrink-0 px-4 py-2 text-[10px] font-bold tracking-wide text-center text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_18%,transparent)] border-b border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)]">
+        <div className="flex-shrink-0 px-4 py-2 type-hint tracking-wide text-center text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_18%,transparent)] border-b border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)]">
           {MAC_BANNER}
         </div>
       )}
@@ -2014,15 +2012,15 @@ export function EmailHostingSection(): React.JSX.Element {
                 className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0"
                 style={{ backgroundColor: stateColor(status.state) }}
               />
-              <span className="text-xs font-medium text-[var(--color-text-primary)]">
+              <span className="type-name text-[var(--color-text-primary)]">
                 Email server
               </span>
               <span className="flex-1" />
-              <span className="text-[9px] text-[var(--color-text-muted)]">
+              <span className="type-hint text-[var(--color-text-muted)]">
                 {status.version ? `v${status.version}` : ''}
               </span>
             </div>
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 truncate">
+            <p className="type-hint text-[var(--color-text-muted)] mt-0.5 truncate">
               {status.state}
               {status.hostname ? ` · ${status.hostname}` : ''}
               {status.portPlan ? ` · ${status.portPlan}` : ''}
@@ -2033,7 +2031,7 @@ export function EmailHostingSection(): React.JSX.Element {
           <button
             type="button"
             onClick={() => setSelection({ kind: 'approvals' })}
-            className={`flex items-center gap-2 text-left px-3 py-2 text-xs transition-colors no-drag cursor-pointer ${
+            className={`flex items-center gap-2 text-left px-3 py-2 type-control transition-colors no-drag cursor-pointer ${
               selection.kind === 'approvals'
                 ? 'bg-[var(--color-accent)]/10 text-[var(--color-text-primary)]'
                 : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
@@ -2041,7 +2039,7 @@ export function EmailHostingSection(): React.JSX.Element {
           >
             Approvals
             {pendingCount > 0 && (
-              <span className="text-[9px] font-bold px-1.5 py-0.5 text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)] flex-shrink-0">
+              <span className="type-hint px-1.5 py-0.5 text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)] flex-shrink-0">
                 {pendingCount}
               </span>
             )}
@@ -2049,7 +2047,7 @@ export function EmailHostingSection(): React.JSX.Element {
           <button
             type="button"
             onClick={() => setSelection({ kind: 'addresses' })}
-            className={`text-left px-3 py-2 text-xs transition-colors no-drag cursor-pointer ${
+            className={`text-left px-3 py-2 type-control transition-colors no-drag cursor-pointer ${
               selection.kind === 'addresses'
                 ? 'bg-[var(--color-accent)]/10 text-[var(--color-text-primary)]'
                 : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
@@ -2064,9 +2062,9 @@ export function EmailHostingSection(): React.JSX.Element {
           </div>
           <div className="flex-1 overflow-y-auto px-1 py-1">
             {domains === null ? (
-              <p className="px-2 py-1 text-[11px] text-[var(--color-text-muted)]">Loading…</p>
+              <p className="px-2 py-1 type-hint text-[var(--color-text-muted)]">Loading…</p>
             ) : domains.length === 0 ? (
-              <p className="px-2 py-1 text-[11px] text-[var(--color-text-muted)] italic">
+              <p className="px-2 py-1 type-hint text-[var(--color-text-muted)] italic">
                 No domains yet.
               </p>
             ) : (
@@ -2084,10 +2082,10 @@ export function EmailHostingSection(): React.JSX.Element {
                         : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
                     }`}
                   >
-                    <span className="text-xs font-mono truncate flex-1">{d.domain}</span>
+                    <span className="type-row font-mono truncate flex-1">{d.domain}</span>
                     {broken > 0 && d.status !== 'verified' && (
                       <span
-                        className="text-[9px] text-[var(--color-status-error-soft)] flex-shrink-0 tabular-nums"
+                        className="type-hint text-[var(--color-status-error-soft)] flex-shrink-0 tabular-nums"
                         title={`${broken} record(s) missing or wrong`}
                       >
                         {broken}✖
@@ -2124,19 +2122,19 @@ export function EmailHostingSection(): React.JSX.Element {
                       }
                     }}
                     placeholder="acme.dev"
-                    className="flex-1 min-w-0 px-2 py-1 text-[11px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
+                    className="flex-1 min-w-0 px-2 py-1 type-hint font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
                   />
                   <button
                     type="button"
                     disabled={addBusy || newDomain.trim().length === 0}
                     onClick={() => void submitAddDomain()}
-                    className="px-2 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 flex-shrink-0"
+                    className="px-2 py-1 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 flex-shrink-0"
                   >
                     {addBusy ? '…' : 'Add'}
                   </button>
                 </div>
                 {addError && (
-                  <p className="text-[10px] text-[var(--color-status-error-soft)] break-words">{addError}</p>
+                  <p className="type-hint text-[var(--color-status-error-soft)] break-words">{addError}</p>
                 )}
               </div>
             ) : (
@@ -2149,7 +2147,7 @@ export function EmailHostingSection(): React.JSX.Element {
                     ? 'Add a domain — K2 shows the DNS records to set at your registrar'
                     : 'Not available on this deployment'
                 }
-                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-hover)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 type-control text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-hover)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />

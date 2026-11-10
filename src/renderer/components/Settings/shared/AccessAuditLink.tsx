@@ -7,7 +7,7 @@ import { useSettingsStore } from '@/stores/settings'
 
 export function AccessAuditLink({ className = '' }: { className?: string }): React.JSX.Element {
   return (
-    <p className={`text-[10px] text-[var(--color-text-muted)] ${className}`.trim()} data-access-audit-link="">
+    <p className={`type-hint text-[var(--color-text-muted)] ${className}`.trim()} data-access-audit-link="">
       Who signed in, from where and when:{' '}
       <button
         type="button"

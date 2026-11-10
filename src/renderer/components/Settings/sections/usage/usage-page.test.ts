@@ -99,9 +99,9 @@ describe('numbers and cost labels', () => {
     expect(fmtUsd(0.00001)).toBe('<$0.0001')
     const cost = { usd: 3.5, source: 'mixed', priced_requests: 9, provider_requests: 2, unpriced_requests: 3 }
     expect(costFigure(cost)).toBe('$3.50')
-    expect(costSourceText('mixed')).toBe('provider + price table')
-    expect(costSourceText('provider')).toBe('provider-reported')
-    expect(costSourceText('model')).toBe('price table')
+    expect(costSourceText('mixed')).toBe('provider and list prices')
+    expect(costSourceText('provider')).toBe('reported by the provider')
+    expect(costSourceText('model')).toBe('list prices')
     expect(unpricedNote(cost)).toBe('3 requests unpriced')
     expect(costFigure({ ...cost, source: 'unpriced', usd: 0 })).toBe('unpriced')
     expect(unpricedNote({ ...cost, source: 'unpriced' })).toBeNull()

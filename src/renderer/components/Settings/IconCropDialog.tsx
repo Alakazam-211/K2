@@ -154,7 +154,7 @@ export default function IconCropDialog({
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <span className="text-xs text-[var(--color-text-muted)] font-mono tracking-wide uppercase">
+        <span className="type-section text-[var(--color-text-muted)] font-mono tracking-wide uppercase">
           Drag to position, scroll to zoom
         </span>
 
@@ -180,13 +180,13 @@ export default function IconCropDialog({
         <div className="flex items-center gap-3">
           <button
             onClick={onCancel}
-            className="px-4 py-1.5 text-xs text-[var(--color-text-muted)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer transition-colors font-mono"
+            className="px-4 py-1.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer transition-colors font-mono"
           >
             Cancel
           </button>
           <button
             onClick={handleConfirm}
-            className="px-4 py-1.5 text-xs text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer transition-colors font-mono"
+            className="px-4 py-1.5 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer transition-colors font-mono"
           >
             Apply
           </button>

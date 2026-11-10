@@ -171,14 +171,14 @@ export default function DisableWorktreesDialog({
       >
         {/* Header */}
         <div className="px-5 pt-5 pb-2">
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
+          <h2 className="type-title text-[var(--color-text-primary)]">
             Disable Worktrees
           </h2>
         </div>
 
         {/* Body */}
         <div className="px-5 pb-4">
-          <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+          <p className="type-row text-[var(--color-text-secondary)] leading-relaxed">
             <span className="text-[var(--color-text-primary)] font-medium">{project.name}</span>{' '}
             has {worktreeCount} active worktree{worktreeCount !== 1 ? 's' : ''}.
             How would you like to handle them?
@@ -189,7 +189,7 @@ export default function DisableWorktreesDialog({
             {worktrees.map((ws, i) => (
               <div
                 key={ws.id}
-                className={`flex items-center gap-2 px-3 py-1.5 text-xs ${
+                className={`flex items-center gap-2 px-3 py-1.5 type-row ${
                   i < worktrees.length - 1 ? 'border-b border-[var(--color-border)]' : ''
                 }`}
               >
@@ -198,7 +198,7 @@ export default function DisableWorktreesDialog({
                 </svg>
                 <span className="text-[var(--color-text-secondary)] truncate flex-1">{ws.name}</span>
                 {ws.branch && (
-                  <span className="text-[10px] text-[var(--color-text-muted)] font-mono truncate max-w-[120px]">{ws.branch}</span>
+                  <span className="type-hint text-[var(--color-text-muted)] font-mono truncate max-w-[120px]">{ws.branch}</span>
                 )}
               </div>
             ))}
@@ -209,8 +209,8 @@ export default function DisableWorktreesDialog({
         {showRecycleConfirm && (
           <div className="px-5 pb-4">
             <div className="border border-[color-mix(in_srgb,var(--color-status-warn-soft)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warn-soft)_10%,transparent)] px-3 py-2">
-              <p className="text-[11px] text-[var(--color-status-warn-text)] font-medium mb-1">Warning: Unmerged Changes Detected</p>
-              <p className="text-[11px] text-[color-mix(in_srgb,var(--color-status-warn-text)_80%,transparent)]">
+              <p className="type-hint text-[var(--color-status-warn-text)] mb-1">Warning: Unmerged Changes Detected</p>
+              <p className="type-hint text-[color-mix(in_srgb,var(--color-status-warn-text)_80%,transparent)]">
                 One or more worktrees have uncommitted or unmerged changes.
                 Recycling will move these folders to {trashName()} permanently.
               </p>
@@ -218,14 +218,14 @@ export default function DisableWorktreesDialog({
                 <button
                   onClick={() => handleAction('recycle')}
                   disabled={isPending}
-                  className="px-3 py-1 text-xs text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
+                  className="px-3 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
                 >
                   {isPending && action === 'recycle' ? 'Recycling...' : 'Confirm Recycle'}
                 </button>
                 <button
                   onClick={() => setShowRecycleConfirm(false)}
                   disabled={isPending}
-                  className="px-3 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
+                  className="px-3 py-1 type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
                 >
                   Back
                 </button>
@@ -241,7 +241,7 @@ export default function DisableWorktreesDialog({
             <button
               onClick={() => handleAction('conceal')}
               disabled={isPending}
-              className="w-full px-3 py-2 text-xs text-left flex items-start gap-3 bg-white/[0.04] hover:bg-white/[0.08] border border-[var(--color-border)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
+              className="w-full px-3 py-2 type-control text-left flex items-start gap-3 bg-white/[0.04] hover:bg-white/[0.08] border border-[var(--color-border)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
             >
               <span className="text-[var(--color-text-primary)] font-medium flex-shrink-0 w-14">Conceal</span>
               <span className="text-[var(--color-text-muted)]">
@@ -253,7 +253,7 @@ export default function DisableWorktreesDialog({
             <button
               onClick={() => handleAction('close')}
               disabled={isPending}
-              className="w-full px-3 py-2 text-xs text-left flex items-start gap-3 bg-white/[0.04] hover:bg-white/[0.08] border border-[var(--color-border)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
+              className="w-full px-3 py-2 type-control text-left flex items-start gap-3 bg-white/[0.04] hover:bg-white/[0.08] border border-[var(--color-border)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
             >
               <span className="text-[var(--color-text-primary)] font-medium flex-shrink-0 w-14">Close</span>
               <span className="text-[var(--color-text-muted)]">
@@ -265,7 +265,7 @@ export default function DisableWorktreesDialog({
             <button
               onClick={() => handleAction('recycle')}
               disabled={isPending}
-              className="w-full px-3 py-2 text-xs text-left flex items-start gap-3 bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
+              className="w-full px-3 py-2 type-control text-left flex items-start gap-3 bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
             >
               <span className="text-[var(--color-status-error-soft)] font-medium flex-shrink-0 w-14">Recycle</span>
               <span className="text-[var(--color-text-muted)]">
@@ -277,7 +277,7 @@ export default function DisableWorktreesDialog({
             <button
               onClick={onClose}
               disabled={isPending}
-              className="w-full px-3 py-1.5 text-xs text-center text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
+              className="w-full px-3 py-1.5 type-control text-center text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
             >
               Cancel
             </button>
@@ -287,7 +287,7 @@ export default function DisableWorktreesDialog({
         {/* Loading indicator */}
         {isPending && !showRecycleConfirm && (
           <div className="px-5 pb-4">
-            <p className="text-xs text-[var(--color-text-muted)]">
+            <p className="type-hint text-[var(--color-text-muted)]">
               {action === 'conceal' ? 'Concealing' : action === 'close' ? 'Closing' : 'Recycling'} worktrees...
             </p>
           </div>

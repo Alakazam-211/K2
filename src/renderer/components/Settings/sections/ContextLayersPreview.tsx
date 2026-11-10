@@ -98,7 +98,7 @@ function KindBadge({ kind }: { kind: LayerKind }): React.JSX.Element {
     ws: 'text-[var(--color-status-warn-amber)]',
     heartbeat: 'text-emerald-400',
   }
-  return <span className={`text-[10px] ${style[kind]}`}>{kind}</span>
+  return <span className={`type-hint ${style[kind]}`}>{kind}</span>
 }
 
 export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, onEditHeartbeat }: Props): React.JSX.Element | null {
@@ -232,21 +232,21 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+        <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
           Context Layers
-          <span className="ml-2 text-[9px] tabular-nums font-medium px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{entries.length}</span>
+          <span className="ml-2 type-badge tabular-nums px-1.5 py-0.5 bg-[var(--color-wash-1)] text-[var(--color-text-muted)]">{entries.length}</span>
         </h3>
         {onOpenSettings && (
           <button
             onClick={onOpenSettings}
-            className="text-[10px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] no-drag cursor-pointer"
+            className="type-hint text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] no-drag cursor-pointer"
             title="Edit layers in Settings → Canonical Agent Flow"
           >
             Edit layers ↗
           </button>
         )}
       </div>
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-2 leading-relaxed">
+      <p className="type-hint text-[var(--color-text-muted)] mb-2 leading-relaxed">
         Everything that ships to the agent each wake. Click a layer to preview what's in it.
       </p>
       <div className="border border-[var(--color-border)]">
@@ -268,9 +268,9 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
                     'bg-emerald-400/60'
                   }`} />
                   <div className="min-w-0">
-                    <span className="text-xs text-[var(--color-text-primary)] block truncate">{entry.name}</span>
+                    <span className="type-row text-[var(--color-text-primary)] block truncate">{entry.name}</span>
                     {entry.subtitle && (
-                      <span className="text-[10px] text-[var(--color-text-muted)] block truncate">{entry.subtitle}</span>
+                      <span className="type-hint text-[var(--color-text-muted)] block truncate">{entry.subtitle}</span>
                     )}
                   </div>
                 </div>
@@ -278,13 +278,13 @@ export function ContextLayersPreview({ projectPath, agentMode, onOpenSettings, o
               </div>
               {isOpen && (
                 <div className="px-3 py-2 border-b border-[var(--color-border)] bg-black/20">
-                  <div className="prose prose-invert prose-xs max-w-none text-[11px] text-[var(--color-text-secondary)] leading-relaxed">
+                  <div className="prose prose-invert prose-xs max-w-none type-hint text-[var(--color-text-secondary)] leading-relaxed">
                     <Markdown remarkPlugins={[remarkGfm]}>{expandedBody}</Markdown>
                   </div>
                   {entry.editAction && (
                     <button
                       onClick={(e) => { e.stopPropagation(); entry.editAction?.() }}
-                      className="mt-2 text-[10px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] no-drag cursor-pointer"
+                      className="mt-2 type-hint text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] no-drag cursor-pointer"
                     >
                       Edit ↗
                     </button>

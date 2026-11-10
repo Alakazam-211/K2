@@ -1,3 +1,20 @@
+// Settings type scale. Every Settings page uses these roles, and each role is
+// one token and one weight (the utilities are in globals.css). Sizes change in
+// styles/*/tokens.json, never at the call site. Nothing a person reads as a
+// sentence goes below type-hint.
+//
+//   type-title    page title, stat value      --type-xl     500
+//   type-heading  sentence-case subheading    --type-lg     500
+//   type-section  uppercase section label     --type-xs     600
+//   type-row      row label, row value, body  --type-md     400
+//   type-name     name of a thing in a list   --type-md     500
+//   type-hint     hint, description, status   --type-sm     400
+//   type-control  button, input, dropdown     --type-md     400
+//   type-badge    uppercase badge, count      --type-micro  600
+//
+// An unboxed text link takes type-hint, like the sentence around it.
+// font-mono stays where a value or code is meant to be monospaced.
+
 import React from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -31,7 +48,7 @@ export function SettingRow({
         data-settings-id={settingId}
         data-testid={testId}
       >
-        <span className="w-28 flex-shrink-0 text-xs text-[var(--color-text-secondary)]">{label}</span>
+        <span className="w-28 flex-shrink-0 type-row text-[var(--color-text-secondary)]">{label}</span>
         <div className="flex-1 min-w-0 flex items-center">{children}</div>
       </div>
     )
@@ -42,7 +59,7 @@ export function SettingRow({
       data-settings-id={settingId}
       data-testid={testId}
     >
-      <span className="text-xs text-[var(--color-text-secondary)]">{label}</span>
+      <span className="type-row text-[var(--color-text-secondary)]">{label}</span>
       {children}
     </div>
   )
@@ -62,7 +79,7 @@ export function SettingsGroup({
 }): React.JSX.Element {
   return (
     <div className="space-y-2">
-      <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-2">
+      <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-2">
         <span>{title}</span>
         {badge}
       </h3>
@@ -290,7 +307,7 @@ export function SettingDropdown({
         title={title}
         data-k2-chamfer="control"
         {...triggerData}
-        className={`flex items-center text-xs ${compact ? 'h-6 max-w-full gap-1 px-1.5' : 'gap-2 px-2 py-1'} bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] transition-colors ${
+        className={`flex items-center type-control ${compact ? 'h-6 max-w-full gap-1 px-1.5' : 'gap-2 px-2 py-1'} bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] transition-colors ${
           disabled
             ? 'opacity-50 cursor-not-allowed'
             : 'hover:border-[var(--color-text-muted)] cursor-pointer'
@@ -343,7 +360,7 @@ export function SettingDropdown({
               {heading !== null && (
                 <div
                   role="presentation"
-                  className="px-3 pt-2 pb-0.5 text-[9px] uppercase tracking-wider text-[var(--color-text-muted)]"
+                  className="px-3 pt-2 pb-0.5 type-section uppercase tracking-wider text-[var(--color-text-muted)]"
                 >
                   {heading}
                 </div>
@@ -358,7 +375,7 @@ export function SettingDropdown({
                   onChange(option.value)
                   setIsOpen(false)
                 }}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-left type-control transition-colors ${
                   isDisabled
                     ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
                     : isActive
@@ -369,7 +386,7 @@ export function SettingDropdown({
                 {option.leading}
                 <span className="whitespace-nowrap flex-1">{option.label}</span>
                 {option.badge && (
-                  <span className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0">
+                  <span className="type-badge uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0">
                     {option.badge}
                   </span>
                 )}

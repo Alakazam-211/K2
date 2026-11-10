@@ -29,7 +29,7 @@ export const REMOVE_TEXT = 'Gardens on other computers that show this will say r
 
 function Badge({ children, title }: { children: React.ReactNode; title?: string }): React.JSX.Element {
   return (
-    <span title={title} className="px-1 text-[9px] uppercase tracking-wide border border-[var(--color-border)] text-[var(--color-text-secondary)]">
+    <span title={title} className="px-1 type-badge uppercase tracking-wide border border-[var(--color-border)] text-[var(--color-text-secondary)]">
       {children}
     </span>
   )
@@ -139,14 +139,14 @@ export function DataSourceRow({
 
   return (
     <div className="relative" data-testid="sources-row" data-source={row.name}>
-      <div className="flex items-center gap-2 py-1 text-[12px]">
+      <div className="flex items-center gap-2 py-1 type-row">
         <span
           className="inline-block w-2 h-2 rounded-[var(--radius-badge)] shrink-0"
           style={{ background: dotColor(proposed ? 'proposed' : v.display), opacity: v.phase === 'stale' ? 0.5 : 1 }}
           aria-hidden
         />
         <span className="text-[var(--color-text-primary)] min-w-[9rem] truncate">{row.label}</span>
-        <span className={`text-[11px] ${muted} truncate flex-1`}>
+        <span className={`type-hint ${muted} truncate flex-1`}>
           {proposed ? (
             <>proposed{row.secret ? ` · wants secret ${row.secret}` : ''}</>
           ) : (
@@ -184,7 +184,7 @@ export function DataSourceRow({
               key={it.testid}
               type="button"
               role="menuitem"
-              className="text-left px-2 py-1 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg)] cursor-pointer"
+              className="text-left px-2 py-1 type-control text-[var(--color-text-secondary)] hover:bg-[var(--color-bg)] cursor-pointer"
               onClick={it.run}
               data-testid={`sources-menu-${it.testid}`}
             >

@@ -113,16 +113,16 @@ export function TimerSection(): React.JSX.Element {
   return (
     <div>
       <div className="max-w-xl">
-      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Timer</h2>
-      <p className="text-xs text-[var(--color-text-muted)] mb-6">
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Timer</h2>
+      <p className="type-hint text-[var(--color-text-muted)] mb-6">
         Track work sessions. Click the clock icon in the top bar to start.
       </p>
 
       {/* Show timer button */}
       <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
         <div>
-          <div className="text-xs text-[var(--color-text-primary)]">Show timer button</div>
-          <div className="text-[10px] text-[var(--color-text-muted)]">Display the timer icon in the top bar</div>
+          <div className="type-row text-[var(--color-text-primary)]">Show timer button</div>
+          <div className="type-hint text-[var(--color-text-muted)]">Display the timer icon in the top bar</div>
         </div>
         <Toggle
           size="sm"
@@ -135,8 +135,8 @@ export function TimerSection(): React.JSX.Element {
       {/* Skip memo */}
       <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
         <div>
-          <div className="text-xs text-[var(--color-text-primary)]">Skip memo on stop</div>
-          <div className="text-[10px] text-[var(--color-text-muted)]">Save time entries without asking for a note</div>
+          <div className="type-row text-[var(--color-text-primary)]">Skip memo on stop</div>
+          <div className="type-hint text-[var(--color-text-muted)]">Save time entries without asking for a note</div>
         </div>
         <Toggle
           size="sm"
@@ -149,8 +149,8 @@ export function TimerSection(): React.JSX.Element {
       {/* Timezone */}
       <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
         <div>
-          <div className="text-xs text-[var(--color-text-primary)]">Timezone</div>
-          <div className="text-[10px] text-[var(--color-text-muted)]">
+          <div className="type-row text-[var(--color-text-primary)]">Timezone</div>
+          <div className="type-hint text-[var(--color-text-muted)]">
             Times displayed in this timezone (detected: {detectedTz})
           </div>
         </div>
@@ -169,17 +169,17 @@ export function TimerSection(): React.JSX.Element {
       {/* Timer History */}
       <div className="mt-6">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">History</h3>
+          <h3 className="type-heading text-[var(--color-text-primary)]">History</h3>
           <div className="flex gap-2">
             <button
               onClick={() => handleExport('csv')}
-              className="text-[10px] px-2 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer"
+              className="type-control px-2 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer"
             >
               Export CSV
             </button>
             <button
               onClick={() => handleExport('json')}
-              className="text-[10px] px-2 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer"
+              className="type-control px-2 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer"
             >
               Export JSON
             </button>
@@ -189,25 +189,25 @@ export function TimerSection(): React.JSX.Element {
         {/* Filters */}
         <div className="flex gap-2 mb-3 items-end">
           <div>
-            <label className="text-[10px] text-[var(--color-text-muted)] block mb-0.5">From</label>
+            <label className="type-hint text-[var(--color-text-muted)] block mb-0.5">From</label>
             <input
               type="date"
               value={filterStart}
               onChange={(e) => setFilterStart(e.target.value)}
-              className="text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] px-2 py-1 outline-none"
+              className="type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] px-2 py-1 outline-none"
             />
           </div>
           <div>
-            <label className="text-[10px] text-[var(--color-text-muted)] block mb-0.5">To</label>
+            <label className="type-hint text-[var(--color-text-muted)] block mb-0.5">To</label>
             <input
               type="date"
               value={filterEnd}
               onChange={(e) => setFilterEnd(e.target.value)}
-              className="text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] px-2 py-1 outline-none"
+              className="type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] px-2 py-1 outline-none"
             />
           </div>
           <div>
-            <label className="text-[10px] text-[var(--color-text-muted)] block mb-0.5">Project</label>
+            <label className="type-hint text-[var(--color-text-muted)] block mb-0.5">Project</label>
             <SettingDropdown
               value={filterProject}
               options={[
@@ -220,7 +220,7 @@ export function TimerSection(): React.JSX.Element {
           {(filterStart || filterEnd || filterProject) && (
             <button
               onClick={() => { setFilterStart(''); setFilterEnd(''); setFilterProject('') }}
-              className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer pb-1"
+              className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer pb-1"
             >
               Clear
             </button>
@@ -229,13 +229,13 @@ export function TimerSection(): React.JSX.Element {
 
         {/* Entries */}
         {entries.length === 0 ? (
-          <div className="text-xs text-[var(--color-text-muted)] py-4 text-center">
+          <div className="type-hint text-[var(--color-text-muted)] py-4 text-center">
             No time entries yet. Click the timer button to start tracking.
           </div>
         ) : (
           <div className="max-h-[600px] overflow-y-auto">
             {/* Column headers */}
-            <div className="grid gap-x-3 px-2 py-1.5 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-bg)] z-10 text-[11px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider"
+            <div className="grid gap-x-3 px-2 py-1.5 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-bg)] z-10 type-section text-[var(--color-text-muted)] uppercase tracking-wider"
               style={{ gridTemplateColumns: '190px 190px 80px 100px 1fr 20px' }}
             >
               <span>Start</span>
@@ -252,7 +252,7 @@ export function TimerSection(): React.JSX.Element {
                 const monthLabel = new Date(Number(year), Number(month) - 1).toLocaleString('en-US', { month: 'long', year: 'numeric' })
                 return (
                   <div key={monthKey}>
-                    <div className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wider mb-1 sticky top-[28px] bg-[var(--color-bg)] py-1 px-2 z-[5]">
+                    <div className="type-section text-[var(--color-text-muted)] uppercase tracking-wider mb-1 sticky top-[28px] bg-[var(--color-bg)] py-1 px-2 z-[5]">
                       {monthLabel}
                     </div>
                     <div>
@@ -262,7 +262,7 @@ export function TimerSection(): React.JSX.Element {
                         return (
                           <div
                             key={entry.id}
-                            className="grid items-center gap-x-3 py-1.5 px-2 hover:bg-[var(--color-bg-elevated)] group text-xs font-mono"
+                            className="grid items-center gap-x-3 py-1.5 px-2 hover:bg-[var(--color-bg-elevated)] group type-row font-mono"
                             style={{ gridTemplateColumns: '190px 190px 80px 100px 1fr 20px' }}
                           >
                             <span className="text-[var(--color-text-muted)] truncate">

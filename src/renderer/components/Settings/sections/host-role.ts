@@ -93,7 +93,7 @@ function roleName(role: HostRole): string {
 
 /** Copy for a Member (a role the host reported). */
 export function memberRefusalCopy(hostLabel: string, action: HostAction): string {
-  return `You're signed in to ${hostLabel} as a Member. Only the host owner or an admin can ${action} it.`
+  return `You're signed in to ${hostLabel} as a Member. Only the server's owner or an admin can ${action} it.`
 }
 
 /** Copy for a login the host no longer accepts. */

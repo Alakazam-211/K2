@@ -250,15 +250,15 @@ describe('Usage page sections', () => {
     const cost = screen.getByTestId('usage-tile-cost')
     expect(cost.textContent).toContain('$0.32')
     expect(cost.textContent).toContain('estimate, not your bill')
-    expect(cost.textContent).toContain('provider + price table')
+    expect(cost.textContent).toContain('provider and list prices')
     expect(screen.getByTestId('usage-tile-cost-unpriced').textContent).toContain('1 request unpriced')
-    expect(cost.getAttribute('title')).toBe('Estimated API-equivalent cost — not your bill.')
+    expect(cost.getAttribute('title')).toBe('Estimated cost at API prices. Not your bill.')
 
     await waitFor(() => expect(screen.getByTestId('usage-chart-legend').textContent).toBe('ClaudeCodex'))
     expect(screen.getByTestId('usage-breakdown-row-/w/k2').textContent).toContain('K2')
     expect(screen.getByTestId('usage-breakdown-row-outside').textContent).toContain('Outside workspaces')
     expect(screen.getByTestId('usage-footnote').textContent).toBe(
-      'Input is uncached input. Cache read and cache write are separate. Output includes reasoning. One request is one model call (Grok: one prompt). Estimated API-equivalent cost — not your bill.',
+      'Input excludes cached tokens, which are counted separately. Output includes reasoning. A request is one model call (for Grok, one prompt). Estimated cost at API prices. Not your bill.',
     )
     const rows = within(screen.getByTestId('usage-activity-rows')).getAllByTestId(/^usage-activity-row-/)
     expect(rows.map((r) => r.getAttribute('data-testid'))).toEqual(['usage-activity-row-3', 'usage-activity-row-2', 'usage-activity-row-1'])
@@ -266,7 +266,7 @@ describe('Usage page sections', () => {
     expect(rows[0].textContent).toContain('Claude · claude-opus-5-5 · work')
     expect(screen.getByTestId('usage-activity-cost-3').textContent).toBe(' · est. $0.0012')
     expect(screen.getByTestId('usage-activity-cost-3').getAttribute('title')).toBe(
-      'Estimated API-equivalent cost — not your bill. Source: price table.',
+      'Estimated cost at API prices. Not your bill. Source: list prices.',
     )
   })
 

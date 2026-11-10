@@ -89,8 +89,8 @@ function Row({
       data-settings-id={settingId}
     >
       <div className="min-w-0">
-        <div className="text-xs text-[var(--color-text-primary)]">{title}</div>
-        <div className="text-[10px] text-[var(--color-text-muted)]">{hint}</div>
+        <div className="type-row text-[var(--color-text-primary)]">{title}</div>
+        <div className="type-hint text-[var(--color-text-muted)]">{hint}</div>
       </div>
       <div className="flex-shrink-0">{children}</div>
     </div>
@@ -151,25 +151,25 @@ export function TicketsSection(): React.JSX.Element {
 
   return (
     <div className="max-w-xl" data-testid="tickets-settings">
-      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Tickets</h2>
-      <p className="text-xs text-[var(--color-text-muted)] mb-6">
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Tickets</h2>
+      <p className="type-hint text-[var(--color-text-muted)] mb-6">
         Rules for the tickets agents file with <code>k2 tickets ask</code>, and how your Tickets page opens.
       </p>
 
       <div className="space-y-6">
         <SettingsGroup title="Server rules">
           {loadError && (
-            <p role="alert" data-testid="tickets-settings-error" className="text-[11px] text-[var(--color-status-error)] py-2">
+            <p role="alert" data-testid="tickets-settings-error" className="type-hint text-[var(--color-status-error)] py-2">
               Could not load the ticket rules: {loadError}
             </p>
           )}
           {!settings && !loadError && (
-            <p className="text-[11px] text-[var(--color-text-muted)] py-2">Loading…</p>
+            <p className="type-hint text-[var(--color-text-muted)] py-2">Loading…</p>
           )}
           {settings && (
             <>
               {!canEdit && (
-                <p data-testid="tickets-settings-readonly" className="text-[10px] text-[var(--color-text-muted)] py-1">
+                <p data-testid="tickets-settings-readonly" className="type-hint text-[var(--color-text-muted)] py-1">
                   Only the owner or an admin can change these.
                 </p>
               )}
@@ -217,7 +217,7 @@ export function TicketsSection(): React.JSX.Element {
                 />
               </Row>
               {saveError && (
-                <p role="alert" data-testid="tickets-settings-save-error" className="text-[11px] text-[var(--color-status-error)] mt-1">
+                <p role="alert" data-testid="tickets-settings-save-error" className="type-hint text-[var(--color-status-error)] mt-1">
                   {saveError}
                 </p>
               )}

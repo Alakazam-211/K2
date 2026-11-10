@@ -62,10 +62,10 @@ export function ConnectLoginIngressRow(): React.JSX.Element {
       data-settings-id="k2-connect.login-ingress"
     >
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
+        <span className="type-row text-[var(--color-text-secondary)]">
           Password sign-in over the tunnel
         </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{current.detail}</p>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">{current.detail}</p>
       </div>
       <SettingDropdown
         value={mode}

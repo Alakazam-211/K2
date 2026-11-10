@@ -26,10 +26,10 @@ import {
 } from './app-pairing-api'
 import { confirmWays } from '@/lib/desktop-words'
 
-const muted = 'text-[10px] text-[var(--color-text-muted)]'
-const secondary = 'text-[10px] text-[var(--color-text-secondary)]'
+const muted = 'type-hint text-[var(--color-text-muted)]'
+const secondary = 'type-hint text-[var(--color-text-secondary)]'
 const field =
-  'w-full px-2 py-1 text-[10px] bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)] font-mono'
+  'w-full px-2 py-1 type-control bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)] font-mono'
 
 const NO_CONFIRM_HINT =
   'No vault password and no Owner Connect login on this box: setting the phone apps needs one (k2 vault password set).'
@@ -155,7 +155,7 @@ export function AppPhonePairing({ app }: { app: string }): React.JSX.Element {
     <SettingsGroup title="Phones">
       <div data-settings-id="skin-access.phones" className="space-y-2" aria-label="Phone pairing">
         {error ? (
-          <p data-testid="phones-error" aria-live="polite" className="text-[10px] text-[var(--color-status-error-soft)]">
+          <p data-testid="phones-error" aria-live="polite" className="type-hint text-[var(--color-status-error-soft)]">
             {error}
           </p>
         ) : null}
@@ -171,7 +171,7 @@ export function AppPhonePairing({ app }: { app: string }): React.JSX.Element {
           <p className={muted}>Loading phone pairing…</p>
         ) : (
           <>
-            <p data-testid="phones-state" className="text-[10px] text-[var(--color-text-primary)]">
+            <p data-testid="phones-state" className="type-hint text-[var(--color-text-primary)]">
               Phone pairing {status.on ? 'on' : `off: ${offWords(status)}`}
             </p>
             {status.ios.map((id) => (

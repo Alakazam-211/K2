@@ -164,19 +164,19 @@ export function UsageActivity({
 
   return (
     <section className="mt-8" data-testid="usage-activity">
-      <h3 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Activity</h3>
-      <p className="text-[11px] text-[var(--color-text-muted)] mb-2">
-        Every counted request, newest first, for the filters and range above. Updates as transcripts are scanned.
+      <h3 className="type-heading text-[var(--color-text-primary)] mb-1">Activity</h3>
+      <p className="type-hint text-[var(--color-text-muted)] mb-2">
+        Every request for the range and filters above, newest first. Updates automatically.
       </p>
       <div data-settings-card="" className="border border-[var(--color-border)] max-h-[60vh] overflow-auto">
         {loading ? (
-          <p className="text-xs text-[var(--color-text-muted)] p-3">Loading…</p>
+          <p className="type-hint text-[var(--color-text-muted)] p-3">Loading…</p>
         ) : error ? (
-          <p className="text-xs text-amber-400 p-3" role="alert" data-testid="usage-activity-error">
+          <p className="type-row text-amber-400 p-3" role="alert" data-testid="usage-activity-error">
             The activity log could not load: {error}
           </p>
         ) : rows.length === 0 ? (
-          <p className="text-xs text-[var(--color-text-muted)] p-3">No requests in this range.</p>
+          <p className="type-hint text-[var(--color-text-muted)] p-3">No requests in this range.</p>
         ) : (
           <ul className="divide-y divide-[var(--color-border)]" data-testid="usage-activity-rows">
             {rows.map((row) => {
@@ -186,22 +186,22 @@ export function UsageActivity({
               const login = row.account_id ? loginLabel(row.account_id) : null
               const costTitle = `${COST_LABEL}${row.cost_source ? ` Source: ${costSourceText(row.cost_source)}.` : ''}`
               return (
-                <li key={row.rowid} className="px-3 py-2 text-xs" data-testid={`usage-activity-row-${row.rowid}`}>
+                <li key={row.rowid} className="px-3 py-2 type-row" data-testid={`usage-activity-row-${row.rowid}`}>
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="font-medium text-[var(--color-text-primary)] truncate" title={row.outside ? undefined : row.workspace_path}>
                       {label.name}
                     </span>
-                    <span className="text-[11px] text-[var(--color-text-muted)] shrink-0 tabular-nums" title={absolute}>
+                    <span className="type-hint text-[var(--color-text-muted)] shrink-0 tabular-nums" title={absolute}>
                       {relTime(row.recorded_ms, now)}
                     </span>
                   </div>
-                  <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                  <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
                     {harnessLabel(row.harness)} · {row.model || 'unknown'}
                     {login ? ` · ${login}` : ''}
                   </div>
-                  <div className="flex items-baseline justify-between gap-2 text-[11px] text-[var(--color-text-muted)] mt-0.5 tabular-nums">
+                  <div className="flex items-baseline justify-between gap-2 type-hint text-[var(--color-text-muted)] mt-0.5 tabular-nums">
                     <span>
-                      in {fmtExact(row.input_tokens)} · out {fmtExact(row.output_tokens)} · cache r {fmtExact(row.cache_read_tokens)} · w{' '}
+                      input {fmtExact(row.input_tokens)} · output {fmtExact(row.output_tokens)} · cache read {fmtExact(row.cache_read_tokens)} · cache write{' '}
                       {fmtExact(row.cache_write_tokens)}
                       {row.cost_source ? (
                         <span title={costTitle} data-testid={`usage-activity-cost-${row.rowid}`}>
@@ -226,7 +226,7 @@ export function UsageActivity({
             })}
             <li className="px-3 py-2 text-center">
               {moreError ? (
-                <p className="text-[11px] text-amber-400 mb-1" role="alert" data-testid="usage-activity-more-error">
+                <p className="type-hint text-amber-400 mb-1" role="alert" data-testid="usage-activity-more-error">
                   {moreError}
                 </p>
               ) : null}
@@ -236,12 +236,12 @@ export function UsageActivity({
                   onClick={() => void loadMore()}
                   disabled={loadingMore}
                   data-testid="usage-activity-more"
-                  className="text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                  className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
                 >
                   {loadingMore ? 'Loading…' : 'Load older'}
                 </button>
               ) : (
-                <span className="text-[11px] text-[var(--color-text-muted)]">End of log</span>
+                <span className="type-hint text-[var(--color-text-muted)]">End of log</span>
               )}
             </li>
           </ul>

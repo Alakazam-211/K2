@@ -116,7 +116,7 @@ function Check({
   return (
     <label
       title={tip}
-      className={`flex items-center gap-2 py-0.5 text-xs text-[var(--color-text-primary)] no-drag ${
+      className={`flex items-center gap-2 py-0.5 type-row text-[var(--color-text-primary)] no-drag ${
         disabled ? 'cursor-default' : 'cursor-pointer'
       }`}
       {...dataAttr}
@@ -133,7 +133,7 @@ function Check({
         }}
       />
       <span>{label}</span>
-      {caption ? <span className="text-[11px] text-[var(--color-text-muted)]">{caption}</span> : null}
+      {caption ? <span className="type-hint text-[var(--color-text-muted)]">{caption}</span> : null}
       {tag}
     </label>
   )
@@ -179,7 +179,7 @@ export function ZenGardenSyncControls({
     synced !== false && templateLabel ? (
       <span
         data-zen-garden-sync-template={garden.id}
-        className="flex-shrink-0 px-1 py-0.5 text-[9px] leading-none text-[var(--color-text-muted)] border border-[var(--color-border)]"
+        className="flex-shrink-0 px-1 py-0.5 type-hint leading-none text-[var(--color-text-muted)] border border-[var(--color-border)]"
       >
         {templateLabel}
       </span>
@@ -223,7 +223,7 @@ export function ZenGardenSyncControls({
         }
       />
       {error && (
-        <p role="alert" className="text-[11px] text-[var(--color-status-error)] mt-1">
+        <p role="alert" className="type-hint text-[var(--color-status-error)] mt-1">
           {error}
         </p>
       )}

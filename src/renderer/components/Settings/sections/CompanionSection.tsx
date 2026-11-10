@@ -41,7 +41,7 @@ async function tunnelStatus(): Promise<TunnelStatus> {
 
 export const COMPANION_MANIFEST: SettingEntry[] = [
   { id: 'companion.get-app', section: 'companion', label: 'Get the K2 mobile app', description: 'Install the K2 Companion app on iPhone or Android', keywords: ['mobile', 'companion', 'app', 'download', 'install', 'iphone', 'ios', 'app store', 'android', 'google play', 'qr'] },
-  { id: 'companion.status', section: 'companion', label: 'K2 Connect Status', description: 'Whether your daemon is reachable for the mobile app', keywords: ['status', 'tunnel', 'connect', 'reachable', 'subdomain', 'k2.dev', 'pair'] },
+  { id: 'companion.status', section: 'companion', label: 'K2 Connect Status', description: 'Whether the mobile app can reach this server', keywords: ['status', 'tunnel', 'connect', 'reachable', 'subdomain', 'k2.dev', 'pair'] },
   { id: 'companion.pair', section: 'companion', label: 'Pair a phone', description: 'A one-time code and QR that pair the K2 phone app; every paired phone, with Revoke', keywords: ['pair', 'phone', 'qr', 'code', 'companion', 'mobile', 'device', 'revoke', 'iphone', 'android', 'web access'] },
 ]
 
@@ -105,16 +105,16 @@ export function CompanionSection(): React.JSX.Element {
 
   return (
     <div className="max-w-xl">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1 flex items-center gap-2">
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1 flex items-center gap-2">
         K2 Companion
         <span
-          className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
+          className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
           title="This feature is in beta — interface and behavior may change"
         >
           beta
         </span>
       </h2>
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-4">
+      <p className="type-hint text-[var(--color-text-muted)] mb-4">
         Reach your K2 agents from your phone. The mobile app pairs to the same
         public address K2 Connect exposes this daemon at — one tunnel, both
         clients. No separate setup here.
@@ -125,8 +125,8 @@ export function CompanionSection(): React.JSX.Element {
         className="mb-4 px-3 py-3 border border-[var(--color-border)]"
         data-settings-id="companion.get-app"
       >
-        <div className="text-xs text-[var(--color-text-primary)]">Get the K2 mobile app</div>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 mb-3">
+        <div className="type-row text-[var(--color-text-primary)]">Get the K2 mobile app</div>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5 mb-3">
           Scan a code with your phone, or open the store page. Then pair the app
           to your daemon&apos;s public address (shown below).
         </p>
@@ -138,8 +138,8 @@ export function CompanionSection(): React.JSX.Element {
 
       {/* ── Pair a phone (phone-web-off) ──────────────────────────── */}
       <div className="mb-4 px-3 py-3 border border-[var(--color-border)]" data-settings-id="companion.pair">
-        <div className="text-xs text-[var(--color-text-primary)]">Pair a phone</div>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5 mb-3 leading-relaxed">
+        <div className="type-row text-[var(--color-text-primary)]">Pair a phone</div>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5 mb-3 leading-relaxed">
           A one-time code (10 minutes) signs the K2 app in on a phone. A paired phone keeps working when web
           access is off, and stays signed in while it&apos;s used: it pairs again after 30 days unused or 180
           days in all, after its login&apos;s password changes, or when you revoke it. Password sign-in on the
@@ -154,17 +154,17 @@ export function CompanionSection(): React.JSX.Element {
           <div className="px-3 py-3 border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-ok)_5%,transparent)]">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)]" style={{ backgroundColor: 'var(--color-status-ok)' }} />
-              <span className="text-xs text-[var(--color-text-secondary)]">Connected</span>
+              <span className="type-row text-[var(--color-text-secondary)]">Connected</span>
             </div>
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-2 leading-relaxed">
-              Your daemon is reachable at the address below. Open the K2 app and
+            <p className="type-hint text-[var(--color-text-muted)] mt-2 leading-relaxed">
+              This server is reachable at the address below. Open the K2 app and
               pair to it.
             </p>
             <a
               href={publicUrl!}
               target="_blank"
               rel="noreferrer"
-              className="inline-block mt-1.5 text-xs text-[var(--color-accent)] hover:underline font-mono break-all no-drag cursor-pointer"
+              className="inline-block mt-1.5 type-control text-[var(--color-accent)] hover:underline font-mono break-all no-drag cursor-pointer"
             >
               {publicUrl}
             </a>
@@ -173,16 +173,16 @@ export function CompanionSection(): React.JSX.Element {
           <div className="px-3 py-3 border border-[var(--color-border)]">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)]" style={{ backgroundColor: 'var(--color-neutral)' }} />
-              <span className="text-xs text-[var(--color-text-secondary)]">K2 Connect isn&apos;t running</span>
+              <span className="type-row text-[var(--color-text-secondary)]">K2 Connect isn&apos;t running</span>
             </div>
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-2 leading-relaxed">
-              The mobile app reaches this daemon through the K2 Connect tunnel.
+            <p className="type-hint text-[var(--color-text-muted)] mt-2 leading-relaxed">
+              The mobile app reaches this server through the K2 Connect tunnel.
               Start it to get a <span className="font-mono">https://&lt;sub&gt;.k2.dev</span> address
               you can pair to.
             </p>
             <button
               onClick={goToK2Connect}
-              className="mt-2 text-[11px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer"
+              className="mt-2 type-hint text-[var(--color-accent)] hover:underline no-drag cursor-pointer"
             >
               Set up K2 Connect →
             </button>

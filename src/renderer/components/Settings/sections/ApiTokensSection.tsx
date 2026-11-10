@@ -92,7 +92,7 @@ function stateBadge(state: ReturnType<typeof keyState>): React.JSX.Element {
       : state === 'disabled'
         ? 'text-[var(--color-status-warn-text)]'
         : 'text-[var(--color-text-muted)]'
-  return <span className={`text-[10px] font-semibold uppercase ${cls}`}>{state}</span>
+  return <span className={`type-section uppercase ${cls}`}>{state}</span>
 }
 
 export function ApiTokensSection(): React.JSX.Element {
@@ -156,19 +156,19 @@ export function ApiTokensSection(): React.JSX.Element {
   return (
     <div className="max-w-4xl space-y-6">
       <div>
-        <h2 className="text-base font-medium text-[var(--color-text-primary)]">API Keys</h2>
-        <p className="text-[11px] text-[var(--color-text-muted)] mt-1 max-w-2xl">
-          Top-level <code className="text-[10px]">k2sk_…</code> keys for the public{' '}
-          <code className="text-[10px]">/v1</code> API (host-sessions, sandboxes, …). The raw secret
+        <h2 className="type-title text-[var(--color-text-primary)]">API Keys</h2>
+        <p className="type-hint text-[var(--color-text-muted)] mt-1 max-w-2xl">
+          Top-level <code className="type-hint">k2sk_…</code> keys for the public{' '}
+          <code className="type-hint">/v1</code> API (host-sessions, sandboxes, …). The raw secret
           is shown only once when created. Disable for emergencies (re-enableable); revoke is
           permanent.
         </p>
         <AccessAuditLink className="mt-1" />
         {!apiEnabled && (
-          <p className="text-[11px] text-[var(--color-status-warn-text)] mt-1 max-w-2xl" data-testid="api-surface-off">
+          <p className="type-hint text-[var(--color-status-warn-text)] mt-1 max-w-2xl" data-testid="api-surface-off">
             The public /v1 API is off on this server, so no key works yet (hiring agents included).
             Turn it on under {publicApiToggleLocation()} → Enable public API (/v1), or{' '}
-            <code className="text-[10px]">k2 api on</code>.
+            <code className="type-hint">k2 api on</code>.
           </p>
         )}
       </div>
@@ -180,34 +180,34 @@ export function ApiTokensSection(): React.JSX.Element {
             setMintedSecret(null)
             setCreateOpen(true)
           }}
-          className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer"
+          className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer"
         >
           Create API key
         </button>
         <button
           type="button"
           onClick={() => void refresh()}
-          className="px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] cursor-pointer"
+          className="px-3 py-1.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] cursor-pointer"
         >
           Refresh
         </button>
       </div>
 
       {error && (
-        <p className="text-[11px] text-[var(--color-status-error-soft)] max-w-2xl">{error}</p>
+        <p className="type-hint text-[var(--color-status-error-soft)] max-w-2xl">{error}</p>
       )}
 
       {mintedSecret && (
         <div className="border border-[var(--color-status-warn)]/40 bg-[var(--color-status-warn)]/10 p-3 space-y-2">
-          <p className="text-[11px] font-semibold text-[var(--color-text-primary)]">
+          <p className="type-name text-[var(--color-text-primary)]">
             Store this key now — it cannot be retrieved again
           </p>
-          <code className="block text-[11px] break-all select-all text-[var(--color-text-primary)]">
+          <code className="block type-hint break-all select-all text-[var(--color-text-primary)]">
             {mintedSecret}
           </code>
           <button
             type="button"
-            className="text-[11px] text-[var(--color-accent)] cursor-pointer"
+            className="type-hint text-[var(--color-accent)] cursor-pointer"
             onClick={() => {
               void navigator.clipboard?.writeText(mintedSecret)
             }}
@@ -218,9 +218,9 @@ export function ApiTokensSection(): React.JSX.Element {
       )}
 
       {loading ? (
-        <p className="text-[11px] text-[var(--color-text-muted)]">Loading keys…</p>
+        <p className="type-hint text-[var(--color-text-muted)]">Loading keys…</p>
       ) : keys.length === 0 ? (
-        <p className="text-[11px] text-[var(--color-text-muted)]">
+        <p className="type-hint text-[var(--color-text-muted)]">
           No API keys yet. Create one to allow external apps (e.g. Scout) to call host-sessions on
           granted workspaces.
         </p>
@@ -241,16 +241,16 @@ export function ApiTokensSection(): React.JSX.Element {
                 >
                   <div className="min-w-0 space-y-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[12px] font-medium text-[var(--color-text-primary)]">
+                      <span className="type-name text-[var(--color-text-primary)]">
                         {k.label || '(no label)'}
                       </span>
-                      <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)]">
+                      <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)]">
                         Status (read-only)
                       </span>
                       {stateBadge(state)}
                     </div>
-                    <p className="text-[10px] font-mono text-[var(--color-text-muted)] break-all">{k.id}</p>
-                    <p className="text-[11px] text-[var(--color-text-secondary)]">
+                    <p className="type-hint font-mono text-[var(--color-text-muted)] break-all">{k.id}</p>
+                    <p className="type-hint text-[var(--color-text-secondary)]">
                       Reads this server&apos;s status (version, phase) for a monitor. Opens nothing else.
                     </p>
                   </div>
@@ -260,7 +260,7 @@ export function ApiTokensSection(): React.JSX.Element {
                         type="button"
                         disabled={busy}
                         onClick={() => void act(k.id, 'revoke')}
-                        className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-status-error-soft)] hover:border-[var(--color-status-error-soft)] cursor-pointer disabled:opacity-50"
+                        className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-status-error-soft)] hover:border-[var(--color-status-error-soft)] cursor-pointer disabled:opacity-50"
                       >
                         Revoke
                       </button>
@@ -273,29 +273,29 @@ export function ApiTokensSection(): React.JSX.Element {
               <div key={k.id} className="p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 space-y-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-[12px] font-medium text-[var(--color-text-primary)]">
+                    <span className="type-name text-[var(--color-text-primary)]">
                       {k.label || '(no label)'}
                     </span>
                     {stateBadge(state)}
                   </div>
-                  <p className="text-[10px] font-mono text-[var(--color-text-muted)] break-all">
+                  <p className="type-hint font-mono text-[var(--color-text-muted)] break-all">
                     {k.id}
                   </p>
-                  <p className="text-[11px] text-[var(--color-text-secondary)]">
+                  <p className="type-hint text-[var(--color-text-secondary)]">
                     Workspaces: {formatGrant(k.allowedWorkspaces)}
                   </p>
-                  <p className="text-[11px] text-[var(--color-text-secondary)]">
+                  <p className="type-hint text-[var(--color-text-secondary)]">
                     Caps: {capsSummary(k.capabilities)}
                     {k.anthropicKeySet ? ' · LLM key staged' : ' · no LLM key'}
                     {k.provider ? ` · ${k.provider}` : ''}
                   </p>
                   {k.capabilities?.hire && k.hireLimits && (
-                    <p className="text-[11px] text-[var(--color-text-secondary)]" data-testid={`hire-limits-${k.id}`}>
+                    <p className="type-hint text-[var(--color-text-secondary)]" data-testid={`hire-limits-${k.id}`}>
                       Hires agents: {hireSummary(k.hireLimits)}
                     </p>
                   )}
                   {k.capabilities?.hire && k.hireLimits && (
-                    <p className="text-[11px] text-[var(--color-text-secondary)]" data-testid={`hire-ceiling-${k.id}`}>
+                    <p className="type-hint text-[var(--color-text-secondary)]" data-testid={`hire-ceiling-${k.id}`}>
                       App access: {ceilingSummary(k.hireLimits.apps, ceilingOpts)}
                     </p>
                   )}
@@ -307,7 +307,7 @@ export function ApiTokensSection(): React.JSX.Element {
                       disabled={busy}
                       onClick={() => setEditing(k)}
                       aria-label={`Change App access for ${k.label || k.id}`}
-                      className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-50"
+                      className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-50"
                     >
                       App access…
                     </button>
@@ -317,7 +317,7 @@ export function ApiTokensSection(): React.JSX.Element {
                       type="button"
                       disabled={busy}
                       onClick={() => void act(k.id, 'disable')}
-                      className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-status-warn)] cursor-pointer disabled:opacity-50"
+                      className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-status-warn)] cursor-pointer disabled:opacity-50"
                     >
                       Disable
                     </button>
@@ -327,7 +327,7 @@ export function ApiTokensSection(): React.JSX.Element {
                       type="button"
                       disabled={busy}
                       onClick={() => void act(k.id, 'enable')}
-                      className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-status-ok)] cursor-pointer disabled:opacity-50"
+                      className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-status-ok)] cursor-pointer disabled:opacity-50"
                     >
                       Enable
                     </button>
@@ -337,7 +337,7 @@ export function ApiTokensSection(): React.JSX.Element {
                       type="button"
                       disabled={busy}
                       onClick={() => void act(k.id, 'revoke')}
-                      className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-status-error-soft)] hover:border-[var(--color-status-error-soft)] cursor-pointer disabled:opacity-50"
+                      className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-status-error-soft)] hover:border-[var(--color-status-error-soft)] cursor-pointer disabled:opacity-50"
                     >
                       Revoke
                     </button>
@@ -445,19 +445,19 @@ function ConfirmPrompt({
   buttonLabel: string
 }): React.JSX.Element | null {
   if (confirm.step === 'mac') {
-    return <p className="text-[11px] text-[var(--color-text-secondary)]">Confirm on this Mac (Touch ID or your login password)…</p>
+    return <p className="type-hint text-[var(--color-text-secondary)]">Confirm on this Mac (Touch ID or your login password)…</p>
   }
   if (confirm.step !== 'password') return null
   return (
     <div className="space-y-1">
-      <p className="text-[11px] text-[var(--color-text-secondary)]">
+      <p className="type-hint text-[var(--color-text-secondary)]">
         {confirm.pwMethod === 'connect-password' ? 'Your login password' : 'Vault password'} to confirm
       </p>
       <input
         ref={confirm.pwRef}
         type="password"
         aria-label="Confirm password"
-        className="w-full px-2 py-1.5 text-[12px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+        className="w-full px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
         onKeyDown={(e) => {
           if (e.key === 'Enter') onSubmit()
         }}
@@ -466,7 +466,7 @@ function ConfirmPrompt({
         type="button"
         disabled={submitting}
         onClick={onSubmit}
-        className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
+        className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
       >
         {buttonLabel}
       </button>
@@ -508,7 +508,7 @@ function AppAccessLimit({
     onChange({ ...form, rooms })
   }
   const roomBox = (r: CeilingRoom) => (
-    <label key={r.id} className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+    <label key={r.id} className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
       <Checkbox
         checked={form.rooms.includes(r.id)}
         onChange={(e) => toggleRoom(r.id, e.target.checked)}
@@ -516,19 +516,19 @@ function AppAccessLimit({
       />
       <span className="truncate">{r.id === SELF_ROOM ? r.name : r.handle || r.name}</span>
       {r.id !== SELF_ROOM && r.name && r.name !== r.handle && (
-        <span className="text-[10px] text-[var(--color-text-muted)] truncate">{r.name}</span>
+        <span className="type-hint text-[var(--color-text-muted)] truncate">{r.name}</span>
       )}
     </label>
   )
 
   return (
     <div className="space-y-1.5 border-t border-[var(--color-border)] pt-1.5" data-testid="app-access-limit">
-      <p className="text-[11px] text-[var(--color-text-secondary)]">App access limit</p>
-      <p className="text-[10px] text-[var(--color-text-muted)]">
+      <p className="type-hint text-[var(--color-text-secondary)]">App access limit</p>
+      <p className="type-hint text-[var(--color-text-muted)]">
         The most an App login made for a hired agent may get: one App, its rooms, and the highest role.
       </p>
-      {optsError && <p className="text-[10px] text-[var(--color-status-error-soft)]">Couldn&apos;t load Apps: {optsError}</p>}
-      <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+      {optsError && <p className="type-hint text-[var(--color-status-error-soft)]">Couldn&apos;t load Apps: {optsError}</p>}
+      <div className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
         App
         <SettingDropdown
           compact
@@ -548,24 +548,24 @@ function AppAccessLimit({
         />
       </div>
       {!form.app ? (
-        <p className="text-[10px] text-[var(--color-text-muted)]" data-testid="app-access-none">
+        <p className="type-hint text-[var(--color-text-muted)]" data-testid="app-access-none">
           {NO_APP_ACCESS}: agents hired with this key get no App login.
           {opts.apps.length === 0 && ' No Apps are published on this server yet.'}
         </p>
       ) : (
         <>
-          <p className="text-[10px] text-[var(--color-text-muted)]">Rooms</p>
+          <p className="type-hint text-[var(--color-text-muted)]">Rooms</p>
           <div className="max-h-32 overflow-y-auto border border-[var(--color-border)] p-2 space-y-1">
             {roomRows.first.map(roomBox)}
             {roomRows.other.length > 0 && (
-              <p className="text-[10px] text-[var(--color-text-muted)] pt-1">Other rooms on this server</p>
+              <p className="type-hint text-[var(--color-text-muted)] pt-1">Other rooms on this server</p>
             )}
             {roomRows.other.map(roomBox)}
           </div>
           {form.rooms.length === 0 && (
-            <p className="text-[10px] text-[var(--color-status-warn-text)]">Pick at least one room.</p>
+            <p className="type-hint text-[var(--color-status-warn-text)]">Pick at least one room.</p>
           )}
-          <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+          <div className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
             Highest role
             <SettingDropdown
               compact
@@ -582,12 +582,12 @@ function AppAccessLimit({
               onChange={(v) => onChange({ ...form, role: v })}
             />
           </div>
-          <p className="text-[10px] text-[var(--color-text-muted)]">
+          <p className="type-hint text-[var(--color-text-muted)]">
             A hired agent may get this role, or one no wider, when all its rooms are ticked above.
           </p>
         </>
       )}
-      <p className="text-[10px] text-[var(--color-status-warn-text)]" data-testid="hire-whole-room-warning">
+      <p className="type-hint text-[var(--color-status-warn-text)]" data-testid="hire-whole-room-warning">
         App logins for hired agents cover whole rooms until folder grants exist.
       </p>
     </div>
@@ -701,31 +701,31 @@ function CreateKeyModal({
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Create API key">
       <div {...floatMaterial('dialog')} className="w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl">
-        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">Create API key</h3>
-        <label className="block text-[11px] text-[var(--color-text-muted)]">
+        <h3 className="type-heading text-[var(--color-text-primary)]">Create API key</h3>
+        <label className="block type-hint text-[var(--color-text-muted)]">
           Label
           <input
             value={label}
             onChange={(e) => setLabel(e.target.value)}
-            className="mt-1 w-full px-2 py-1.5 text-[12px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+            className="mt-1 w-full px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
             placeholder="e.g. scout-sales"
           />
         </label>
         <div className="space-y-1">
-          <p className="text-[11px] text-[var(--color-text-muted)]">Workspace grant</p>
-          <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+          <p className="type-hint text-[var(--color-text-muted)]">Workspace grant</p>
+          <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
             <Checkbox checked={allWs} onChange={(e) => setAllWs(e.target.checked)} />
             All workspaces (*)
           </label>
           {!allWs && (
             <div className="max-h-32 overflow-y-auto border border-[var(--color-border)] p-2 space-y-1">
               {slugs.length === 0 ? (
-                <p className="text-[10px] text-[var(--color-text-muted)]">No workspaces registered.</p>
+                <p className="type-hint text-[var(--color-text-muted)]">No workspaces registered.</p>
               ) : (
                 slugs.map(({ slug, label: lab }) => (
                   <label
                     key={slug}
-                    className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer"
+                    className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer"
                   >
                     <Checkbox
                       checked={selected.has(slug)}
@@ -739,20 +739,20 @@ function CreateKeyModal({
                       }}
                     />
                     <span className="truncate">{lab}</span>
-                    <span className="text-[10px] text-[var(--color-text-muted)] font-mono">{slug}</span>
+                    <span className="type-hint text-[var(--color-text-muted)] font-mono">{slug}</span>
                   </label>
                 ))
               )}
             </div>
           )}
           {!allWs && selected.size === 0 && (
-            <p className="text-[10px] text-[var(--color-status-warn-text)]">
+            <p className="type-hint text-[var(--color-status-warn-text)]">
               No workspaces selected — key will authorize zero /v1 workspaces (fail-closed).
             </p>
           )}
         </div>
         <div className="space-y-1">
-          <p className="text-[11px] text-[var(--color-text-muted)]">Capabilities</p>
+          <p className="type-hint text-[var(--color-text-muted)]">Capabilities</p>
           {(
             [
               ['hostSessions', hostSessions, setHostSessions, 'host-sessions'],
@@ -763,7 +763,7 @@ function CreateKeyModal({
           ).map(([key, val, set, lab]) => (
             <label
               key={key}
-              className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer"
+              className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer"
             >
               <Checkbox checked={val} onChange={(e) => set(e.target.checked)} />
               {lab}
@@ -771,13 +771,13 @@ function CreateKeyModal({
           ))}
         </div>
         <div className="space-y-1" data-testid="hire-scope">
-          <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+          <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
             <Checkbox checked={hire} onChange={(e) => setHire(e.target.checked)} aria-label="Allow hiring agents" />
             Allow hiring agents (POST /v1/agents/hire)
           </label>
           {hire && (
             <div className="border border-[var(--color-border)] p-2 space-y-1.5">
-              <p className="text-[10px] text-[var(--color-text-muted)]">
+              <p className="type-hint text-[var(--color-text-muted)]">
                 Agents this key hires never get more than the key allows. Only the App access limit can be
                 changed later; for the rest, mint a new key and revoke this one. {hireConfirmCopy()}
               </p>
@@ -788,18 +788,18 @@ function CreateKeyModal({
                   ['maxMembersPerTeam', 'Agents per team'],
                 ] as const
               ).map(([k, lab]) => (
-                <label key={k} className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+                <label key={k} className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
                   {lab}
                   <input
                     aria-label={lab}
                     value={hireForm[k]}
                     onChange={(e) => setHireField(k, e.target.value)}
                     inputMode="numeric"
-                    className="w-20 px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                    className="w-20 px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
                   />
                 </label>
               ))}
-              <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+              <div className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
                 Database access for hired agents
                 <SettingDropdown
                   compact
@@ -814,7 +814,7 @@ function CreateKeyModal({
                   onChange={(v) => setHireField('db', v as HireForm['db'])}
                 />
               </div>
-              <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+              <div className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
                 Messages and sessions to its agents
                 <SettingDropdown
                   compact
@@ -829,21 +829,21 @@ function CreateKeyModal({
                   onChange={(v) => setHireField('reach', v as HireForm['reach'])}
                 />
               </div>
-              <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+              <label className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
                 Folder under the hire root
                 <input
                   aria-label="Folder under the hire root"
                   value={hireForm.folder}
                   onChange={(e) => setHireField('folder', e.target.value)}
                   placeholder="(the root)"
-                  className="w-32 px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                  className="w-32 px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
                 />
               </label>
-              <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+              <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
                 <Checkbox checked={hireForm.link} onChange={(e) => setHireField('link', e.target.checked)} aria-label="May link teams" />
                 May link teams (only to agents this key hired)
               </label>
-              <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+              <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
                 <Checkbox checked={hireForm.retire} onChange={(e) => setHireField('retire', e.target.checked)} aria-label="May retire" />
                 May retire the agents it hired
               </label>
@@ -857,12 +857,12 @@ function CreateKeyModal({
           onSubmit={() => void submitPassword()}
           buttonLabel="Confirm and create"
         />
-        {err && <p className="text-[11px] text-[var(--color-status-error-soft)]">{err}</p>}
+        {err && <p className="type-hint text-[var(--color-status-error-soft)]">{err}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1.5 text-[11px] text-[var(--color-text-muted)] cursor-pointer"
+            className="px-3 py-1.5 type-control text-[var(--color-text-muted)] cursor-pointer"
           >
             Cancel
           </button>
@@ -870,7 +870,7 @@ function CreateKeyModal({
             type="button"
             disabled={submitting}
             onClick={() => void submit()}
-            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
+            className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
           >
             {submitting ? 'Creating…' : 'Create'}
           </button>
@@ -944,18 +944,18 @@ function EditCeilingModal({
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="App access">
       <div {...floatMaterial('dialog')} className="w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl" data-testid="edit-app-access">
-        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
+        <h3 className="type-heading text-[var(--color-text-primary)]">
           App access for {keyRow.label || keyRow.id}
         </h3>
-        <p className="text-[11px] text-[var(--color-text-secondary)]">
+        <p className="type-hint text-[var(--color-text-secondary)]">
           Now: {ceilingSummary(stored, ceilingOpts)}
         </p>
-        <p className="text-[10px] text-[var(--color-text-muted)]">
+        <p className="type-hint text-[var(--color-text-muted)]">
           Lowering it saves right away. Widening it (another App, a new room or a higher role) asks you to
           confirm, like creating the key. Logins already made keep what they have.
         </p>
         {stored.length > 1 && (
-          <p className="text-[10px] text-[var(--color-status-warn-text)]">
+          <p className="type-hint text-[var(--color-status-warn-text)]">
             This key names {stored.length} Apps (set from a terminal). Saving here keeps only the one shown.
           </p>
         )}
@@ -966,12 +966,12 @@ function EditCeilingModal({
           onSubmit={() => void submitPassword()}
           buttonLabel="Confirm and save"
         />
-        {err && <p className="text-[11px] text-[var(--color-status-error-soft)]">{err}</p>}
+        {err && <p className="type-hint text-[var(--color-status-error-soft)]">{err}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1.5 text-[11px] text-[var(--color-text-muted)] cursor-pointer"
+            className="px-3 py-1.5 type-control text-[var(--color-text-muted)] cursor-pointer"
           >
             Cancel
           </button>
@@ -979,7 +979,7 @@ function EditCeilingModal({
             type="button"
             disabled={submitting}
             onClick={() => void save()}
-            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
+            className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
           >
             {submitting ? 'Saving…' : 'Save'}
           </button>
@@ -1047,26 +1047,26 @@ export function WorkspaceApiKeysPanel({
   return (
     <div className="space-y-4 max-w-3xl">
       <div>
-        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">API access</h3>
-        <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
-          Tokens that can call <code className="text-[10px]">/v1/w/{workspaceSlug}/…</code> on this
-          daemon (grant includes this workspace or <code className="text-[10px]">*</code>).
+        <h3 className="type-heading text-[var(--color-text-primary)]">API access</h3>
+        <p className="type-hint text-[var(--color-text-muted)] mt-1">
+          Tokens that can call <code className="type-hint">/v1/w/{workspaceSlug}/…</code> on this
+          server (grant includes this workspace or <code className="type-hint">*</code>).
         </p>
       </div>
       <button
         type="button"
         onClick={openGlobal}
-        className="text-[11px] text-[var(--color-accent)] cursor-pointer"
+        className="type-hint text-[var(--color-accent)] cursor-pointer"
       >
         Manage all tokens →
       </button>
-      {error && <p className="text-[11px] text-[var(--color-status-error-soft)]">{error}</p>}
+      {error && <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>}
       {loading ? (
-        <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
+        <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
       ) : keys.length === 0 ? (
-        <p className="text-[11px] text-[var(--color-text-muted)]">
+        <p className="type-hint text-[var(--color-text-muted)]">
           No API keys grant this workspace. Mint one under Settings → API Keys (or{' '}
-          <code className="text-[10px]">k2 api-key create --workspaces &apos;{workspaceSlug}&apos;</code>
+          <code className="type-hint">k2 api-key create --workspaces &apos;{workspaceSlug}&apos;</code>
           ).
         </p>
       ) : (
@@ -1078,15 +1078,15 @@ export function WorkspaceApiKeysPanel({
               <div key={k.id} className="p-3 flex flex-col sm:flex-row sm:justify-between gap-2">
                 <div className="min-w-0 space-y-0.5">
                   <div className="flex items-center gap-2">
-                    <span className="text-[12px] font-medium text-[var(--color-text-primary)]">
+                    <span className="type-name text-[var(--color-text-primary)]">
                       {k.label || '(no label)'}
                     </span>
                     {stateBadge(state)}
                   </div>
-                  <p className="text-[10px] font-mono text-[var(--color-text-muted)] break-all">
+                  <p className="type-hint font-mono text-[var(--color-text-muted)] break-all">
                     {k.id}
                   </p>
-                  <p className="text-[11px] text-[var(--color-text-secondary)]">
+                  <p className="type-hint text-[var(--color-text-secondary)]">
                     {formatGrant(k.allowedWorkspaces)} · {capsSummary(k.capabilities)}
                   </p>
                 </div>
@@ -1096,7 +1096,7 @@ export function WorkspaceApiKeysPanel({
                       type="button"
                       disabled={busy}
                       onClick={() => void act(k.id, 'disable')}
-                      className="px-2 py-1 text-[10px] border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
+                      className="px-2 py-1 type-control border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
                     >
                       Disable
                     </button>
@@ -1106,7 +1106,7 @@ export function WorkspaceApiKeysPanel({
                       type="button"
                       disabled={busy}
                       onClick={() => void act(k.id, 'enable')}
-                      className="px-2 py-1 text-[10px] border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
+                      className="px-2 py-1 type-control border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
                     >
                       Enable
                     </button>
@@ -1116,7 +1116,7 @@ export function WorkspaceApiKeysPanel({
                       type="button"
                       disabled={busy}
                       onClick={() => void act(k.id, 'revoke')}
-                      className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-status-error-soft)] cursor-pointer disabled:opacity-50"
+                      className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-status-error-soft)] cursor-pointer disabled:opacity-50"
                     >
                       Revoke
                     </button>

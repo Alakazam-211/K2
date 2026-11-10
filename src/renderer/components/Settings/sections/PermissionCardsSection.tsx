@@ -114,7 +114,7 @@ export function requestStateLabel(state: string): string {
 
 function BetaPill(): React.JSX.Element {
   return (
-    <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+    <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
       BETA
     </span>
   )
@@ -241,7 +241,7 @@ export function AskedChip({ row }: { row: string }): React.JSX.Element | null {
         openPermissionCard(first.agent)
       }}
       title={`${first.agent} asked for this (${first.setting}). Open the card in its Thread.`}
-      className="ml-1.5 align-middle text-[10px] font-normal px-1.5 py-0.5 border border-[var(--color-status-warn-amber-soft)] text-[var(--color-status-warn-amber-soft)] hover:bg-[var(--color-bg-elevated)] cursor-pointer no-drag"
+      className="ml-1.5 align-middle type-control px-1.5 py-0.5 border border-[var(--color-status-warn-amber-soft)] text-[var(--color-status-warn-amber-soft)] hover:bg-[var(--color-bg-elevated)] cursor-pointer no-drag"
     >
       Asked for this
     </button>
@@ -325,28 +325,28 @@ export function AgentPermissionCardsRow({ project }: { project: { id: string; na
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             Can ask for permission cards{' '}
-            <span className="text-[10px] font-normal text-[var(--color-text-muted)]">Beta</span>
+            <span className="type-hint text-[var(--color-text-muted)]">Beta</span>
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+          <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
             When this agent needs a setting changed (like compute nodes or hosted mail), it can post
             a card in its Thread saying what and why. You or an admin allow or deny it there; nothing
             changes until someone allows it, and every answer is logged in Access Audit. Off: it asks
             the usual way, in its own words.
           </div>
           {loadError ? (
-            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agent-permission-cards-load-error">
+            <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agent-permission-cards-load-error">
               Couldn&rsquo;t read this switch: {loadError}
             </div>
           ) : null}
           {error ? (
-            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agent-permission-cards-error">
+            <div className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="agent-permission-cards-error">
               {error}
             </div>
           ) : null}
           {ctx.pending.length > 0 ? (
-            <div className="text-[10px] text-[var(--color-text-secondary)] mt-1" data-testid="agent-permission-cards-waiting">
+            <div className="type-hint text-[var(--color-text-secondary)] mt-1" data-testid="agent-permission-cards-waiting">
               {ctx.pending.length === 1
                 ? `1 request from this agent is waiting on you: ${ctx.pending[0].setting}.`
                 : `${ctx.pending.length} requests from this agent are waiting on you.`}{' '}
@@ -503,10 +503,10 @@ export function PermissionCardsSection(): React.JSX.Element {
   return (
     <div className="max-w-3xl space-y-6" data-testid="permission-cards-section">
       <div>
-        <h2 className="text-lg font-semibold text-[var(--color-text-primary)] flex items-center gap-2">
+        <h2 className="type-title text-[var(--color-text-primary)] flex items-center gap-2">
           Permission Cards <BetaPill />
         </h2>
-        <p className="text-xs text-[var(--color-text-muted)] mt-1">
+        <p className="type-hint text-[var(--color-text-muted)] mt-1">
           When an agent hits something only an owner or admin can turn on, it can post a card in its
           Thread that says what it needs and why, instead of you hunting for the switch in Settings.
           You answer on the card; it changes the same setting you would change here, and every answer
@@ -523,31 +523,31 @@ export function PermissionCardsSection(): React.JSX.Element {
             aria-label="Permission cards"
           />
           <div className="flex-1 min-w-0">
-            <div className="text-xs text-[var(--color-text-primary)]">Permission cards</div>
-            <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+            <div className="type-row text-[var(--color-text-primary)]">Permission cards</div>
+            <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
               Lets agents you choose ask for setting changes with a card. Off: nothing changes; agents
               ask the usual way, in their own words. Turning it off closes any cards still waiting.
             </p>
             {server.kind === 'loading' ? (
-              <p className="text-[11px] text-[var(--color-text-muted)] mt-1">Reading this server&rsquo;s settings…</p>
+              <p className="type-hint text-[var(--color-text-muted)] mt-1">Reading this server&rsquo;s settings…</p>
             ) : null}
             {server.kind === 'error' ? (
-              <p className="text-[11px] text-[var(--color-status-error-soft)] mt-1" data-testid="permission-cards-server-error">
+              <p className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="permission-cards-server-error">
                 Couldn&rsquo;t read this server&rsquo;s settings: {server.message}
               </p>
             ) : null}
             {server.kind === 'ready' && server.on === null ? (
-              <p className="text-[11px] text-[var(--color-text-muted)] mt-1" data-testid="permission-cards-old-server">
+              <p className="type-hint text-[var(--color-text-muted)] mt-1" data-testid="permission-cards-old-server">
                 This server doesn&rsquo;t have permission cards yet. Update it to K2 0.46.3 or later.
               </p>
             ) : null}
             {serverOn !== null && role !== null && !canFlipGlobal ? (
-              <p className="text-[11px] text-[var(--color-text-muted)] mt-1" data-testid="permission-cards-owner-only">
+              <p className="type-hint text-[var(--color-text-muted)] mt-1" data-testid="permission-cards-owner-only">
                 Only the server&rsquo;s owner can turn permission cards on or off.
               </p>
             ) : null}
             {globalError ? (
-              <p className="text-[11px] text-[var(--color-status-error-soft)] mt-1" data-testid="permission-cards-switch-error">
+              <p className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="permission-cards-switch-error">
                 {globalError}
               </p>
             ) : null}
@@ -556,7 +556,7 @@ export function PermissionCardsSection(): React.JSX.Element {
       </SettingsGroup>
 
       {serverOn === true && role === 'member' ? (
-        <p className="text-xs text-[var(--color-text-muted)]" data-testid="permission-cards-member">
+        <p className="type-hint text-[var(--color-text-muted)]" data-testid="permission-cards-member">
           The server&rsquo;s owner and admins choose which agents can ask, and answer their cards.
         </p>
       ) : null}
@@ -566,7 +566,7 @@ export function PermissionCardsSection(): React.JSX.Element {
           <SettingsGroup title="Agents">
             <div data-settings-id="permission-cards.agents">
               <div className="flex items-center justify-between gap-3 py-1">
-                <p className="text-[11px] text-[var(--color-text-muted)]">
+                <p className="type-hint text-[var(--color-text-muted)]">
                   An agent can ask only while its own switch is on too. It&rsquo;s also on each agent&rsquo;s
                   Agent tab.
                 </p>
@@ -574,19 +574,19 @@ export function PermissionCardsSection(): React.JSX.Element {
                   type="button"
                   onClick={() => void turnOnAll()}
                   disabled={agents.kind !== 'ready' || agents.value.agents.every((a) => a.on) || busyAgents.size > 0}
-                  className="flex-shrink-0 px-2 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-50 cursor-pointer no-drag"
+                  className="flex-shrink-0 px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-50 cursor-pointer no-drag"
                 >
                   Turn on for all agents
                 </button>
               </div>
-              {agents.kind === 'loading' ? <p className="text-[11px] text-[var(--color-text-muted)] py-1">Loading agents…</p> : null}
+              {agents.kind === 'loading' ? <p className="type-hint text-[var(--color-text-muted)] py-1">Loading agents…</p> : null}
               {agents.kind === 'error' ? (
-                <p className="text-[11px] text-[var(--color-status-error-soft)] py-1" data-testid="permission-cards-agents-error">
+                <p className="type-hint text-[var(--color-status-error-soft)] py-1" data-testid="permission-cards-agents-error">
                   Couldn&rsquo;t load the agents: {agents.message}
                 </p>
               ) : null}
               {agents.kind === 'ready' && agents.value.agents.length === 0 ? (
-                <p className="text-[11px] text-[var(--color-text-muted)] py-1">No agents on this server yet.</p>
+                <p className="type-hint text-[var(--color-text-muted)] py-1">No agents on this server yet.</p>
               ) : null}
               {agents.kind === 'ready'
                 ? agents.value.agents.map((a) => (
@@ -598,11 +598,11 @@ export function PermissionCardsSection(): React.JSX.Element {
                         aria-label={`${a.name} can ask for permission cards`}
                       />
                       <div className="flex-1 min-w-0">
-                        <div className="text-xs text-[var(--color-text-primary)]">
-                          {a.name} <span className="text-[10px] text-[var(--color-text-muted)]">{a.handle}</span>
+                        <div className="type-row text-[var(--color-text-primary)]">
+                          {a.name} <span className="type-hint text-[var(--color-text-muted)]">{a.handle}</span>
                         </div>
                         {agentErrors[a.workspace] ? (
-                          <div className="text-[10px] text-[var(--color-status-error-soft)] mt-0.5">{agentErrors[a.workspace]}</div>
+                          <div className="type-hint text-[var(--color-status-error-soft)] mt-0.5">{agentErrors[a.workspace]}</div>
                         ) : null}
                       </div>
                     </div>
@@ -613,24 +613,24 @@ export function PermissionCardsSection(): React.JSX.Element {
 
           <SettingsGroup title="Waiting on you">
             <div data-settings-id="permission-cards.waiting">
-              {openError ? <p className="text-[11px] text-[var(--color-status-error-soft)] py-1">{openError}</p> : null}
-              {pending.kind === 'loading' ? <p className="text-[11px] text-[var(--color-text-muted)] py-1">Loading…</p> : null}
+              {openError ? <p className="type-hint text-[var(--color-status-error-soft)] py-1">{openError}</p> : null}
+              {pending.kind === 'loading' ? <p className="type-hint text-[var(--color-text-muted)] py-1">Loading…</p> : null}
               {pending.kind === 'error' ? (
-                <p className="text-[11px] text-[var(--color-status-error-soft)] py-1" data-testid="permission-cards-pending-error">
+                <p className="type-hint text-[var(--color-status-error-soft)] py-1" data-testid="permission-cards-pending-error">
                   Couldn&rsquo;t load the cards waiting on you: {pending.message}
                 </p>
               ) : null}
               {pending.kind === 'ready' && pending.value.length === 0 ? (
-                <p className="text-[11px] text-[var(--color-text-muted)] py-1">Nothing is waiting on you.</p>
+                <p className="type-hint text-[var(--color-text-muted)] py-1">Nothing is waiting on you.</p>
               ) : null}
               {pending.kind === 'ready'
                 ? pending.value.map((p) => (
                     <div key={p.requestId} className="flex items-start gap-3 py-1.5 border-t border-[var(--color-border)]" data-testid={`permission-pending-${p.requestId}`}>
                       <div className="flex-1 min-w-0">
-                        <div className="text-xs text-[var(--color-text-primary)]">
+                        <div className="type-row text-[var(--color-text-primary)]">
                           {p.agent} asks: {p.setting}
                         </div>
-                        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+                        <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
                           {p.whatChanges ? `${p.whatChanges} ` : ''}
                           Asked {formatRelativeTime(p.createdAt, now)}
                           {p.askedFor ? ` while working with ${p.askedFor}` : ''}.
@@ -640,7 +640,7 @@ export function PermissionCardsSection(): React.JSX.Element {
                       <button
                         type="button"
                         onClick={() => open(p.agent)}
-                        className="flex-shrink-0 px-2 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer no-drag"
+                        className="flex-shrink-0 px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer no-drag"
                       >
                         Open card
                       </button>
@@ -653,16 +653,16 @@ export function PermissionCardsSection(): React.JSX.Element {
           <SettingsGroup title="Recent requests">
             <div data-settings-id="permission-cards.recent">
               {agents.kind === 'ready' && agents.value.recent.length === 0 ? (
-                <p className="text-[11px] text-[var(--color-text-muted)] py-1">No requests yet.</p>
+                <p className="type-hint text-[var(--color-text-muted)] py-1">No requests yet.</p>
               ) : null}
               {agents.kind === 'ready'
                 ? agents.value.recent.map((r) => (
                     <div key={r.id} className="flex items-start gap-3 py-1.5 border-t border-[var(--color-border)]" data-testid={`permission-recent-${r.id}`}>
                       <div className="flex-1 min-w-0">
-                        <div className="text-xs text-[var(--color-text-primary)]">
+                        <div className="type-row text-[var(--color-text-primary)]">
                           {r.agent || '—'}: {r.setting}
                         </div>
-                        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+                        <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
                           {requestStateLabel(r.state)}
                           {r.answeredBy ? ` by ${r.answeredBy}` : ''} · asked {formatRelativeTime(r.askedAt, now)}
                         </div>
@@ -671,7 +671,7 @@ export function PermissionCardsSection(): React.JSX.Element {
                         <button
                           type="button"
                           onClick={() => open(r.agent)}
-                          className="flex-shrink-0 px-2 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer no-drag"
+                          className="flex-shrink-0 px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer no-drag"
                         >
                           Open card
                         </button>

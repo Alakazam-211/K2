@@ -99,10 +99,10 @@ export function AppApprovalsSection(): React.JSX.Element {
   return (
     <div className="max-w-3xl space-y-4" data-testid="app-approvals" data-settings-id="app-approvals.list">
       <div>
-        <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
+        <h2 className="type-title text-[var(--color-text-primary)]">
           App Approvals{total > 0 ? ` (${total})` : ''}
         </h2>
-        <p className={`text-[11px] ${muted} mt-1 leading-relaxed`}>
+        <p className={`type-hint ${muted} mt-1 leading-relaxed`}>
           Changes to an App that only the server&apos;s owner may allow wait here: new caps on a deploy or install, outside
           hosts, raised quotas, keys and more. Agents can only ask. You approve each one in person, with{' '}
           {touchIdOrPassword()}. Requests expire after 7 days.
@@ -114,7 +114,7 @@ export function AppApprovalsSection(): React.JSX.Element {
           {notice.text}
         </Callout>
       ) : null}
-      {groups && anyRead && total === 0 && !multi ? <p className={`text-[11px] ${muted}`}>Nothing is waiting.</p> : null}
+      {groups && anyRead && total === 0 && !multi ? <p className={`type-hint ${muted}`}>Nothing is waiting.</p> : null}
       {(groups ?? []).map((g) => (
         <ServerBlock
           key={g.server.hostKey}
@@ -129,7 +129,7 @@ export function AppApprovalsSection(): React.JSX.Element {
       <div className="pt-2 border-t border-[var(--color-border)] space-y-2">
         <button
           type="button"
-          className={`text-[11px] ${secondary} underline no-drag cursor-pointer`}
+          className={`type-hint ${secondary} underline no-drag cursor-pointer`}
           onClick={() => setShowHistory((v) => !v)}
           data-testid="app-approvals-history-toggle"
         >
@@ -161,10 +161,10 @@ function ServerBlock({
   return (
     <div className="space-y-2" data-testid={`app-approvals-server-${g.server.hostKey}`}>
       {multi ? (
-        <h3 className="text-xs font-medium text-[var(--color-text-primary)]">
+        <h3 className="type-heading text-[var(--color-text-primary)]">
           {g.server.label}
-          {g.server.isWindow ? <span className={`ml-2 text-[10px] ${muted}`}>this window&apos;s server</span> : null}
-          {g.list && pending.length === 0 ? <span className={`ml-2 text-[10px] ${muted}`}>nothing waiting</span> : null}
+          {g.server.isWindow ? <span className={`ml-2 type-hint ${muted}`}>this window&apos;s server</span> : null}
+          {g.list && pending.length === 0 ? <span className={`ml-2 type-hint ${muted}`}>nothing waiting</span> : null}
         </h3>
       ) : null}
       {ownerConfirm && !canConfirm && (pending.length > 0 || !multi) ? (
@@ -191,9 +191,9 @@ function HistoryBlock({ group: g, multi }: { group: ServerApprovals; multi: bool
   const history = g.list.requests.filter((r) => r.status !== 'pending')
   return (
     <div className="space-y-2" data-testid={multi ? `app-approvals-history-${g.server.hostKey}` : 'app-approvals-history'}>
-      {multi ? <h3 className={`text-[11px] ${secondary}`}>{g.server.label}</h3> : null}
+      {multi ? <h3 className={`type-heading ${secondary}`}>{g.server.label}</h3> : null}
       {history.length === 0 ? (
-        <p className={`text-[11px] ${muted}`}>No decided requests yet.</p>
+        <p className={`type-hint ${muted}`}>No decided requests yet.</p>
       ) : (
         history.map((r) => <HistoryRow key={r.id} request={r} />)
       )}
@@ -203,7 +203,7 @@ function HistoryBlock({ group: g, multi }: { group: ServerApprovals; multi: bool
 
 function KindBadge({ kind }: { kind: string }): React.JSX.Element {
   return (
-    <span className="text-[9px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+    <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
       {kindLabel(kind)}
     </span>
   )
@@ -213,8 +213,8 @@ function AppLine({ r }: { r: AppRequest }): React.JSX.Element {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <KindBadge kind={r.kind} />
-      <span className="text-xs font-mono text-[var(--color-text-primary)]">{r.appLabel}</span>
-      {r.workspaceHandle ? <span className={`text-[11px] ${muted}`}>{r.workspaceHandle}</span> : null}
+      <span className="type-row font-mono text-[var(--color-text-primary)]">{r.appLabel}</span>
+      {r.workspaceHandle ? <span className={`type-hint ${muted}`}>{r.workspaceHandle}</span> : null}
     </div>
   )
 }
@@ -325,10 +325,10 @@ function RequestCard({
   return (
     <div className="border border-[var(--color-border)] p-3 space-y-2" data-testid={`app-request-${r.id}`}>
       <AppLine r={r} />
-      <div className="text-xs text-[var(--color-text-primary)]">{r.summary}</div>
+      <div className="type-row text-[var(--color-text-primary)]">{r.summary}</div>
       {lines.length > 0 ? (
         <ul
-          className="text-[11px] font-mono list-none space-y-0.5 border border-[var(--color-border)] p-2 text-[var(--color-text-primary)]"
+          className="type-hint font-mono list-none space-y-0.5 border border-[var(--color-border)] p-2 text-[var(--color-text-primary)]"
           data-testid="app-request-diff"
         >
           {lines.map((l, i) => (
@@ -337,22 +337,22 @@ function RequestCard({
         </ul>
       ) : null}
       {after.length > 0 ? (
-        <div className={`text-[10px] ${muted}`}>After approval it holds: {after.join(', ')}</div>
+        <div className={`type-hint ${muted}`}>After approval it holds: {after.join(', ')}</div>
       ) : null}
-      <div className={`text-[11px] ${secondary} flex flex-wrap gap-x-3`}>
+      <div className={`type-hint ${secondary} flex flex-wrap gap-x-3`}>
         <span>asked by {r.requestedBy}</span>
         <span>{formatRelativeTime(r.requestedAt, now)}</span>
         <span className={muted}>{expiryText(r.expiresAt, now)}</span>
       </div>
-      {r.reason ? <div className={`text-[11px] ${secondary}`}>Why: {r.reason}</div> : null}
+      {r.reason ? <div className={`type-hint ${secondary}`}>Why: {r.reason}</div> : null}
       {r.reasons.length > 0 ? (
-        <div className={`text-[11px] ${muted}`} data-testid="app-request-reasons">
+        <div className={`type-hint ${muted}`} data-testid="app-request-reasons">
           Held because: {r.reasons.join('; ')}
         </div>
       ) : null}
 
-      {confirm.step === 'starting' ? <p className={`text-[11px] ${muted}`}>Asking for your confirm…</p> : null}
-      {confirm.step === 'mac' ? <p className={`text-[11px] ${muted}`}>Confirm on your Mac.</p> : null}
+      {confirm.step === 'starting' ? <p className={`type-hint ${muted}`}>Asking for your confirm…</p> : null}
+      {confirm.step === 'mac' ? <p className={`type-hint ${muted}`}>Confirm on your Mac.</p> : null}
       {confirm.step === 'password' ? (
         <form
           className="flex flex-col gap-1.5 max-w-sm"
@@ -361,7 +361,7 @@ function RequestCard({
             void submitPassword(confirm.method)
           }}
         >
-          <label className={`text-[11px] ${muted}`}>
+          <label className={`type-hint ${muted}`}>
             {confirm.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
             <input
               ref={pwRef}
@@ -369,7 +369,7 @@ function RequestCard({
               autoComplete="current-password"
               data-testid="app-approve-password"
               onChange={(e) => setHasPw(e.currentTarget.value !== '')}
-              className="mt-1 w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs"
+              className="mt-1 w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control"
             />
           </label>
           <div className="flex gap-1.5">
@@ -394,7 +394,7 @@ function RequestCard({
               placeholder="Why (optional; the requester reads this)"
               aria-label="Why deny"
               data-testid={`app-deny-note-${r.id}`}
-              className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 text-xs text-[var(--color-text-primary)]"
+              className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control text-[var(--color-text-primary)]"
             />
             <div className="flex items-center gap-2">
               <Button disabled={busy} onClick={() => void deny()} data-testid={`app-deny-send-${r.id}`}>
@@ -403,7 +403,7 @@ function RequestCard({
               <Button variant="ghost" onClick={() => setDenying(false)}>
                 Cancel
               </Button>
-              <span className={`text-[10px] ${muted}`}>
+              <span className={`type-hint ${muted}`}>
                 {note.length}/{DENY_MAX}
               </span>
             </div>
@@ -448,8 +448,8 @@ function HistoryRow({ request: r }: { request: AppRequest }): React.JSX.Element 
   return (
     <div className="border border-[var(--color-border)] p-2 space-y-1" data-testid={`app-history-${r.id}`}>
       <AppLine r={r} />
-      <div className={`text-[11px] ${secondary}`}>{r.summary}</div>
-      <div className={`text-[11px] ${muted} flex flex-wrap gap-x-3`}>
+      <div className={`type-hint ${secondary}`}>{r.summary}</div>
+      <div className={`type-hint ${muted} flex flex-wrap gap-x-3`}>
         <span className={r.status === 'approved' ? 'text-[var(--color-status-ok-soft)]' : undefined}>
           {STATUS_WORDS[r.status] ?? r.status}
         </span>
@@ -458,8 +458,8 @@ function HistoryRow({ request: r }: { request: AppRequest }): React.JSX.Element 
         {r.decidedAt ? <span>{formatRelativeTime(r.decidedAt, now)}</span> : null}
         <span>asked by {r.requestedBy}</span>
       </div>
-      {r.decisionReason ? <div className={`text-[11px] ${secondary}`}>Note: {r.decisionReason}</div> : null}
-      {failed ? <div className="text-[11px] text-[var(--color-status-error-soft)]">{failed}</div> : null}
+      {r.decisionReason ? <div className={`type-hint ${secondary}`}>Note: {r.decisionReason}</div> : null}
+      {failed ? <div className="type-hint text-[var(--color-status-error-soft)]">{failed}</div> : null}
     </div>
   )
 }

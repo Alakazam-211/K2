@@ -189,16 +189,16 @@ function CaseRow({
     >
       <div className="flex items-baseline justify-between mb-2">
         <div>
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+          <div className="type-name text-[var(--color-text-primary)]">
             {label}
           </div>
           {hint && (
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+            <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
               {hint}
             </div>
           )}
         </div>
-        <code className="text-[9px] text-[var(--color-text-muted)] tabular-nums">
+        <code className="type-hint text-[var(--color-text-muted)] tabular-nums">
           {id}
         </code>
       </div>
@@ -437,10 +437,10 @@ export function DictationLabSection(): React.JSX.Element {
       {/* Left column — test inputs (scrolls independently). */}
       <div className="flex-1 min-w-0 overflow-y-auto pr-2">
         <div className="mb-4">
-          <h3 className="text-xs font-medium text-[var(--color-text-primary)]">
+          <h3 className="type-heading text-[var(--color-text-primary)]">
             Dictation Lab
           </h3>
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+          <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
             Dev-only. Each row is a different input config; press your
             Apple Dictation shortcut (Fn-Fn / Globe) on each to see how
             AppKit engages. The log on the right captures focus/blur,
@@ -459,7 +459,7 @@ export function DictationLabSection(): React.JSX.Element {
           data-tap-source="A.bare"
           type="text"
           placeholder="dictate here"
-          className="w-full px-2 py-1 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
+          className="w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
         />
       </CaseRow>
 
@@ -477,7 +477,7 @@ export function DictationLabSection(): React.JSX.Element {
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
-          className="w-full px-2 py-1 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
+          className="w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
         />
       </CaseRow>
 
@@ -493,7 +493,7 @@ export function DictationLabSection(): React.JSX.Element {
           placeholder="dictate here"
           value={controlledValue}
           onChange={(e) => setControlledValue(e.target.value)}
-          className="w-full px-2 py-1 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
+          className="w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
         />
       </CaseRow>
 
@@ -509,7 +509,7 @@ export function DictationLabSection(): React.JSX.Element {
           placeholder="dictate here"
           value={transformerValue}
           onChange={(e) => setTransformerValue(e.target.value.toLowerCase())}
-          className="w-full px-2 py-1 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
+          className="w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
         />
       </CaseRow>
 
@@ -524,7 +524,7 @@ export function DictationLabSection(): React.JSX.Element {
           type="text"
           placeholder="dictate here"
           disabled={!disabledReady}
-          className="w-full px-2 py-1 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
+          className="w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
         />
       </CaseRow>
 
@@ -545,7 +545,7 @@ export function DictationLabSection(): React.JSX.Element {
               push({ source: 'F.onkeydown-enter', event: 'enter-pressed', detail: `value=${JSON.stringify(keydownValue)}` })
             }
           }}
-          className="w-full px-2 py-1 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
+          className="w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
         />
       </CaseRow>
 
@@ -561,7 +561,7 @@ export function DictationLabSection(): React.JSX.Element {
           value={textareaValue}
           onChange={(e) => setTextareaValue(e.target.value)}
           rows={3}
-          className="w-full px-2 py-1 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-none"
+          className="w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-none"
         />
       </CaseRow>
 
@@ -621,7 +621,7 @@ export function DictationLabSection(): React.JSX.Element {
             aria-hidden="true"
           />
           <div
-            className="text-[10px] text-[var(--color-text-muted)] absolute"
+            className="type-hint text-[var(--color-text-muted)] absolute"
             style={{ left: 30, top: 14 }}
           >
             ← invisible 1-cell textarea (click the box to focus, then dictate)
@@ -633,7 +633,7 @@ export function DictationLabSection(): React.JSX.Element {
             style={{ background: 'transparent', border: 0 }}
           />
         </div>
-        <div className="text-[10px] text-[var(--color-text-muted)] mt-2">
+        <div className="type-hint text-[var(--color-text-muted)] mt-2">
           current value: <code>{JSON.stringify(textareaCursorishValue).slice(0, 80)}</code>
         </div>
       </CaseRow>
@@ -645,7 +645,7 @@ export function DictationLabSection(): React.JSX.Element {
         hint="Programmatic JS API. Bypasses NSTextInputClient/Apple Dictation entirely. WebKit ships this; we just call .start() / .stop()."
       >
         {!speechSupported ? (
-          <div className="text-[10px] text-[var(--color-status-error-soft)]">
+          <div className="type-hint text-[var(--color-status-error-soft)]">
             Web Speech API not available in this WebView build.
           </div>
         ) : (
@@ -653,7 +653,7 @@ export function DictationLabSection(): React.JSX.Element {
             <div className="flex items-center gap-2">
               <button
                 onClick={toggleSpeech}
-                className={`px-3 py-1.5 text-[10px] font-medium border transition-colors no-drag cursor-pointer ${
+                className={`px-3 py-1.5 type-control border transition-colors no-drag cursor-pointer ${
                   speechListening
                     ? 'bg-[color-mix(in_srgb,var(--color-status-error)_15%,transparent)] border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] text-[var(--color-status-error-bright)] animate-pulse'
                     : 'bg-[var(--color-accent)]/10 border-[var(--color-accent)]/30 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20'
@@ -663,12 +663,12 @@ export function DictationLabSection(): React.JSX.Element {
               </button>
               <button
                 onClick={clearSpeechTranscript}
-                className="px-2 py-1 text-[10px] bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
+                className="px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
               >
                 Clear
               </button>
               {speechError && (
-                <span className="text-[10px] text-[var(--color-status-error-soft)]">
+                <span className="type-hint text-[var(--color-status-error-soft)]">
                   error: {speechError}
                 </span>
               )}
@@ -682,9 +682,9 @@ export function DictationLabSection(): React.JSX.Element {
               readOnly
               rows={3}
               placeholder="Click 'Start listening' and speak. Final transcript accumulates here; the in-flight (italicized) interim is what WebKit's STT thinks you're saying right now."
-              className="w-full px-2 py-1 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-none"
+              className="w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-none"
             />
-            <div className="text-[10px] text-[var(--color-text-muted)]">
+            <div className="type-hint text-[var(--color-text-muted)]">
               {speechListening
                 ? 'Listening… speak naturally. Pauses are OK; results stream as you talk.'
                 : 'Microphone needs to be granted (Settings → Permissions → Microphone). First start may prompt.'}
@@ -693,7 +693,7 @@ export function DictationLabSection(): React.JSX.Element {
         )}
       </CaseRow>
 
-        <p className="mt-3 text-[10px] text-[var(--color-text-muted)]">
+        <p className="mt-3 type-hint text-[var(--color-text-muted)]">
           How to use: focus an input, press your Apple Dictation shortcut
           (typically Fn-Fn or Globe). Watch the log on the right. A
           clean engagement produces a <code>compositionstart</code>{' '}
@@ -711,15 +711,15 @@ export function DictationLabSection(): React.JSX.Element {
         <div className="border border-[var(--color-border)] flex flex-col min-h-0 h-full">
         <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
           <div className="flex items-center gap-3">
-            <span className="text-xs font-medium text-[var(--color-text-primary)]">
+            <span className="type-name text-[var(--color-text-primary)]">
               Event log
             </span>
-            <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums">
+            <span className="type-hint text-[var(--color-text-muted)] tabular-nums">
               {log.length} / {MAX_LOG_LINES}
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <label className="flex items-center gap-1 text-[10px] text-[var(--color-text-muted)]">
+            <label className="flex items-center gap-1 type-hint text-[var(--color-text-muted)]">
               <Checkbox
                 checked={autoScroll}
                 onChange={(e) => setAutoScroll(e.target.checked)}
@@ -729,13 +729,13 @@ export function DictationLabSection(): React.JSX.Element {
             </label>
             <button
               onClick={copyLog}
-              className="px-2 py-1 text-[10px] bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
+              className="px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
             >
               Copy log
             </button>
             <button
               onClick={clearLog}
-              className="px-2 py-1 text-[10px] bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-status-error-soft)] text-[var(--color-text-secondary)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer"
+              className="px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] hover:border-[var(--color-status-error-soft)] text-[var(--color-text-secondary)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer"
             >
               Clear
             </button>
@@ -749,11 +749,11 @@ export function DictationLabSection(): React.JSX.Element {
           }}
         >
           {log.length === 0 ? (
-            <div className="px-3 py-6 text-[10px] text-[var(--color-text-muted)] text-center">
+            <div className="px-3 py-6 type-hint text-[var(--color-text-muted)] text-center">
               No events yet. Click an input above and try dictating.
             </div>
           ) : (
-            <table className="w-full text-[10px] tabular-nums">
+            <table className="w-full type-hint tabular-nums">
               <tbody>
                 {log.map((e, i) => (
                   <tr key={i} className="border-b border-[var(--color-border)]/40 last:border-b-0">

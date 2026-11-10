@@ -200,10 +200,10 @@ export function CanonicalAgentModal({
           {/* Per-harness plan/manifest table — same card/border idiom as
               the Canonical Agent Flow settings section (PRD §9.2 / §11). */}
           <div className="px-4 py-3 border-b border-[var(--color-border)] flex-shrink-0">
-            <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            <div className="type-name text-[var(--color-text-primary)]">
               Per-harness plan
             </div>
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+            <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
               {manifest
                 ? `From manifest ${manifest.timestamp}`
                 : 'Detected state (no plan written yet)'}
@@ -211,7 +211,7 @@ export function CanonicalAgentModal({
           </div>
           <div className="p-3 space-y-1.5">
             {planRows.length === 0 ? (
-              <p className="text-[11px] text-[var(--color-text-muted)] italic">
+              <p className="type-hint text-[var(--color-text-muted)] italic">
                 No harness files detected yet.
               </p>
             ) : (
@@ -221,17 +221,17 @@ export function CanonicalAgentModal({
                   className="flex items-start gap-2 py-1.5 px-2 border border-[var(--color-border)] bg-[var(--color-bg-elevated)]"
                 >
                   <div
-                    className={`px-1.5 py-0.5 text-[9px] uppercase tracking-wider border whitespace-nowrap ${
+                    className={`px-1.5 py-0.5 type-badge uppercase tracking-wider border whitespace-nowrap ${
                       ACTION_BADGE[row.action] ?? ACTION_BADGE.skip
                     }`}
                   >
                     {actionLabel(row.action)}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[11px] font-mono text-[var(--color-text-primary)] truncate">
+                    <div className="type-hint font-mono text-[var(--color-text-primary)] truncate">
                       {row.path}
                     </div>
-                    <div className="text-[10px] text-[var(--color-text-muted)] leading-snug">
+                    <div className="type-hint text-[var(--color-text-muted)] leading-snug">
                       {row.harness}
                       {row.backup ? (
                         <>
@@ -249,12 +249,12 @@ export function CanonicalAgentModal({
           {/* Detected state summary (independent of the plan). */}
           {probes.length > 0 ? (
             <div className="px-4 pt-2 pb-1 border-t border-[var(--color-border)]">
-              <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5">
+              <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5">
                 Current per-harness state
               </div>
               <div className="flex flex-col gap-1">
                 {probes.map((p) => (
-                  <div key={p.relative_path} className="flex items-center justify-between gap-2 text-[10px]">
+                  <div key={p.relative_path} className="flex items-center justify-between gap-2 type-hint">
                     <span className="font-mono text-[var(--color-text-secondary)] truncate">
                       {p.relative_path}
                     </span>
@@ -270,10 +270,10 @@ export function CanonicalAgentModal({
           {/* The agent's prose plan (plan.md), rendered as markdown. */}
           {planContent ? (
             <div className="flex-1 overflow-auto p-4 border-t border-[var(--color-border)]">
-              <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-2">
+              <div className="type-section uppercase tracking-wider text-[var(--color-text-muted)] mb-2">
                 plan.md
               </div>
-              <div className="markdown-content text-[11px]">
+              <div className="markdown-content type-hint">
                 <Markdown remarkPlugins={[remarkGfm]}>{planContent}</Markdown>
               </div>
             </div>

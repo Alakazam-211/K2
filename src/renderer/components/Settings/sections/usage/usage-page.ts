@@ -99,7 +99,7 @@ export const BREAKDOWN_TABS: ReadonlyArray<{ id: BreakdownTab; label: string }> 
   { id: 'workspace', label: 'Workspace' },
   { id: 'model', label: 'Model' },
   { id: 'login', label: 'Login' },
-  { id: 'harness', label: 'Harness' },
+  { id: 'harness', label: 'Provider' },
 ]
 
 /** `GET /cli/usage/tokens` params: filters, `since` from the range, the
@@ -179,17 +179,17 @@ export function fmtUsd(usd: number): string {
 }
 
 /** The label every cost figure carries (§2.3, Q2). */
-export const COST_LABEL = 'Estimated API-equivalent cost — not your bill.'
+export const COST_LABEL = 'Estimated cost at API prices. Not your bill.'
 
 /** Where a cost came from, in words; empty when there is none. */
 export function costSourceText(source: string): string {
   switch (source) {
     case 'provider':
-      return 'provider-reported'
+      return 'reported by the provider'
     case 'model':
-      return 'price table'
+      return 'list prices'
     case 'mixed':
-      return 'provider + price table'
+      return 'provider and list prices'
     case 'unpriced':
       return 'unpriced'
     default:
@@ -213,7 +213,7 @@ export function unpricedNote(cost: UsageCost | undefined): string | null {
 
 /** The units footnote (§2.1), one short line. */
 export const UNITS_FOOTNOTE =
-  'Input is uncached input. Cache read and cache write are separate. Output includes reasoning. One request is one model call (Grok: one prompt).'
+  'Input excludes cached tokens, which are counted separately. Output includes reasoning. A request is one model call (for Grok, one prompt).'
 
 // ── Chart: one stacked series per harness ────────────────────────────
 

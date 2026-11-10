@@ -74,26 +74,25 @@ import { ChatLinkCopyRow } from './ChatLinkCopyRow'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
 import { YourAccountRow } from './YourAccountRow'
 import { GitToolsRow } from '@/components/GitTools/GitToolsNotice'
-import { thisMachine, thisMachineLower } from '@/lib/desktop-words'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
-  { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater. Right-click the version to toggle automatic update checks.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
-  { id: 'general.cli-version', section: 'general', group: 'General', label: 'CLI Version', description: 'Installed k2so CLI version + install/update button', keywords: ['k2so', 'cli', 'terminal', 'install', 'update', 'path'] },
-  { id: 'general.git-tools', section: 'general', group: 'General', label: 'Git', description: "Whether git works on this server. On a Mac without Apple's command line tools: one click to install them (no Xcode needed)", keywords: ['git', 'xcode', 'xcode-select', 'command line tools', 'clt', 'developer tools', 'install', 'apple', 'homebrew', 'apt'] },
+  { id: 'general.app-version', section: 'general', group: 'General', label: 'App version', description: 'K2 version and updates. Right-click the version to turn automatic checks on or off.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
+  { id: 'general.cli-version', section: 'general', group: 'General', label: 'CLI version', description: 'The installed k2 command-line tool, with install and update', keywords: ['k2so', 'cli', 'terminal', 'install', 'update', 'path'] },
+  { id: 'general.git-tools', section: 'general', group: 'General', label: 'Git', description: "Whether git works on this server. On a Mac without Apple's command line tools, install them in one click (no Xcode needed)", keywords: ['git', 'xcode', 'xcode-select', 'command line tools', 'clt', 'developer tools', 'install', 'apple', 'homebrew', 'apt'] },
   { id: 'general.start-page', section: 'general', group: 'General', label: 'Start page', description: 'The page K2 opens on: Home or Agents (this computer only)', keywords: ['start', 'startup', 'launch', 'open', 'default page', 'home', 'agents', 'workspaces', 'landing'] },
   { id: 'general.font-family', section: 'general', group: 'General', label: 'Font family', description: 'The app font; same setting as Editors / Fonts → Code', keywords: ['font', 'typeface', 'family', 'text', 'monospace'] },
   { id: 'general.font-size', section: 'general', group: 'General', label: 'Font size', description: 'Text size for code, the message box, chats and tickets; same setting as Editors / Fonts → Code', keywords: ['font', 'size', 'text size', 'zoom', 'bigger', 'smaller'] },
   { id: 'general.link-copy-button', section: 'general', group: 'General', label: 'Show a copy button beside links on hover', description: 'A copy icon beside links in chats, Threads and tickets; off by default; this computer only. Right-click a link to copy it either way', keywords: ['copy', 'link', 'url', 'hover', 'button', 'icon', 'chat', 'thread', 'clipboard'] },
-  { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Open the Chromium DevTools console for this window', keywords: ['devtools', 'developer', 'console', 'inspect', 'debug', 'chromium', 'network', 'logs'] },
-  { id: 'general.your-account', section: 'general', group: 'General', label: 'Your account', description: 'The Connect login you use on your phone or laptop counts as you (owner)', keywords: ['account', 'login', 'owner', 'you', 'me', 'this is me', 'linked', 'phone', 'laptop', 'connect', 'identity'] },
-  { id: 'general.config-location', section: 'general', group: 'General', label: 'Config Location', description: '~/.k2/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
-  { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
-  { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 Server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
-  { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'When on, clicking the red close button hides the window and keeps the Agent & Companion server running. When off, the red button stops everything. Cmd+Q always closes everything.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
+  { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Open the web inspector for this window', keywords: ['devtools', 'developer', 'console', 'inspect', 'debug', 'chromium', 'network', 'logs'] },
+  { id: 'general.your-account', section: 'general', group: 'General', label: 'Your account', description: 'The login on your phone or laptop that counts as you', keywords: ['account', 'login', 'owner', 'you', 'me', 'this is me', 'linked', 'phone', 'laptop', 'connect', 'identity'] },
+  { id: 'general.config-location', section: 'general', group: 'General', label: 'Config location', description: '~/.k2/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
+  { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset all settings', description: 'Reset every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
+  { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
+  { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'On: the red close button hides the window and keeps agents and K2 Companion running. Off: it stops everything. Cmd+Q always closes everything.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
   { id: 'general.agents-survive-restarts', section: 'general', group: 'Server', label: 'Agents keep running through updates and restarts', description: 'On by default: agent sessions keep running when K2 updates, restarts or crashes; quitting the server still stops them. macOS and Linux.', keywords: ['agents', 'survive', 'restart', 'update', 'crash', 'keep', 'running', 'ptyd', 'session', 'terminal'] },
   { id: 'general.clone-personal-computers', section: 'general', group: 'Server', label: "Allow cloning agents to people's personal computers", description: 'When off, Admins and Members cannot clone agents from this server to their own computers. Owner only.', keywords: ['clone', 'copy', 'agent', 'workspace', 'personal', 'computer', 'pull', 'permission', 'migrate'] },
-  { id: 'general.restart-host', section: 'general', group: 'Server', label: 'Restart connected host', description: 'Restart the REMOTE machine you are connected to over K2 Connect', keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
-  { id: 'general.update-host', section: 'general', group: 'Server', label: 'Update connected host', description: 'Update the REMOTE machine you are connected to over K2 Connect', keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
+  { id: 'general.restart-host', section: 'general', group: 'Server', label: 'Restart connected server', description: 'Restart the server you are connected to, not this computer', keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
+  { id: 'general.update-host', section: 'general', group: 'Server', label: 'Update connected server', description: 'Update the server you are connected to, not this computer', keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
 ]
 
 const GENERAL_TABS: Array<{ id: GeneralSubTab; label: string }> = [
@@ -176,7 +175,7 @@ export function GeneralSection(): React.JSX.Element {
     <div className="w-full h-full flex flex-col min-h-0">
       {/* Full-width chrome */}
       <div className="flex-shrink-0 px-6 pt-6">
-        <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">General</h2>
+        <h2 className="type-title text-[var(--color-text-primary)] mb-3">General</h2>
 
         <div
           role="tablist"
@@ -192,7 +191,7 @@ export function GeneralSection(): React.JSX.Element {
                 role="tab"
                 aria-selected={active}
                 onClick={() => setTab(t.id)}
-                className={`px-3 py-2 text-[11px] font-medium transition-colors no-drag cursor-pointer border-b-2 -mb-px inline-flex items-center gap-1.5 ${
+                className={`px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px inline-flex items-center gap-1.5 ${
                   active
                     ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
                     : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
@@ -214,13 +213,13 @@ export function GeneralSection(): React.JSX.Element {
         {/* Version & Update */}
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]" data-settings-id="general.app-version">
           <span className="flex items-center gap-2 min-w-0">
-            <span className="text-xs text-[var(--color-text-secondary)]">K2 by Alakazam Labs</span>
+            <span className="type-row text-[var(--color-text-secondary)]">K2 by Alakazam Labs</span>
             {isRemote && (
               <span
-                className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0"
-                title={`This is ${thisMachineLower()}'s app version — not the connected host's. The host version is shown under the remote-host controls.`}
+                className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0"
+                title="The K2 version on this computer. The connected server's version is under Connected server."
               >
-                {thisMachine()}
+                This computer
               </span>
             )}
           </span>
@@ -231,7 +230,7 @@ export function GeneralSection(): React.JSX.Element {
                 style={{ backgroundColor: updateStatus === 'available' ? 'var(--color-status-warn-soft)' : 'var(--color-status-ok-soft)' }}
               />
               <span
-                className="text-xs text-[var(--color-text-muted)] no-drag cursor-default"
+                className="type-row text-[var(--color-text-muted)] no-drag cursor-default"
                 data-testid="app-version-label"
                 title="Right-click to change automatic update checks"
                 onContextMenu={handleVersionContextMenu}
@@ -243,13 +242,13 @@ export function GeneralSection(): React.JSX.Element {
             {webFeatures.appUpdater && updateStatus === 'idle' && (
               <button
                 onClick={handleCheckUpdate}
-                className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
+                className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
               >
-                Check for Updates
+                Check for updates
               </button>
             )}
             {webFeatures.appUpdater && updateStatus === 'checking' && (
-              <span className="text-[10px] text-[var(--color-text-muted)]">Checking...</span>
+              <span className="type-hint text-[var(--color-text-muted)]">Checking...</span>
             )}
           </div>
         </div>
@@ -258,24 +257,24 @@ export function GeneralSection(): React.JSX.Element {
         {webFeatures.appUpdater && updateStatus === 'available' && updateVersion && (
           <div className="flex items-center justify-between p-3 bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30">
             <div>
-              <p className="text-xs text-[var(--color-text-primary)]">K2 v{updateVersion} is available</p>
-              <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">You&apos;re on v{currentVersion}</p>
+              <p className="type-row text-[var(--color-text-primary)]">K2 v{updateVersion} is available</p>
+              <p className="type-hint text-[var(--color-text-muted)] mt-0.5">You&apos;re on v{currentVersion}</p>
               {updatePackageUrl && linuxCanInstall && (
-                <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5" data-testid="linux-package-update-hint">
-                  K2 downloads the package, checks it against the release&apos;s SHA256SUMS, and asks for your password to install it. The app and its daemon then restart.
+                <p className="type-hint text-[var(--color-text-muted)] mt-0.5" data-testid="linux-package-update-hint">
+                  K2 downloads the package, verifies it, and asks for your password to install it. K2 then restarts.
                 </p>
               )}
               {updatePackageUrl && !linuxCanInstall && (
-                <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5" data-testid="linux-package-update-hint">
+                <p className="type-hint text-[var(--color-text-muted)] mt-0.5" data-testid="linux-package-update-hint">
                   Updates on Linux come from your package (deb, rpm or Arch). Download opens the new version on GitHub releases.
                 </p>
               )}
             </div>
             <button
-              className="px-3 py-1 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer"
+              className="px-3 py-1 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer"
               onClick={() => void useUpdateStore.getState().openAvailableDownload()}
             >
-              {updatePackageUrl && linuxCanInstall ? 'Install & Relaunch' : 'Download'}
+              {updatePackageUrl && linuxCanInstall ? 'Install & relaunch' : 'Download'}
             </button>
           </div>
         )}
@@ -283,8 +282,8 @@ export function GeneralSection(): React.JSX.Element {
         {/* Downloading */}
         {webFeatures.appUpdater && updateStatus === 'downloading' && linuxInstalling && (
           <div className="p-3 border border-[var(--color-border)]" data-testid="linux-package-installing">
-            <p className="text-xs text-[var(--color-text-primary)]">Installing v{updateVersion}...</p>
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+            <p className="type-row text-[var(--color-text-primary)]">Installing v{updateVersion}...</p>
+            <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
               Downloading and checking the package. K2 will ask for your password, then restart.
             </p>
           </div>
@@ -292,8 +291,8 @@ export function GeneralSection(): React.JSX.Element {
         {webFeatures.appUpdater && updateStatus === 'downloading' && !linuxInstalling && (
           <div className="p-3 border border-[var(--color-border)]">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-[var(--color-text-primary)]">Downloading v{updateVersion}...</span>
-              <span className="text-[10px] tabular-nums text-[var(--color-text-muted)]">{updateProgress}%</span>
+              <span className="type-row text-[var(--color-text-primary)]">Downloading v{updateVersion}...</span>
+              <span className="type-hint tabular-nums text-[var(--color-text-muted)]">{updateProgress}%</span>
             </div>
             <div className="h-1.5 bg-[var(--color-border)] overflow-hidden">
               <div
@@ -308,14 +307,14 @@ export function GeneralSection(): React.JSX.Element {
         {webFeatures.appUpdater && updateStatus === 'ready' && (
           <div className="flex items-center justify-between p-3 bg-[color-mix(in_srgb,var(--color-status-ok)_10%,transparent)] border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)]">
             <div>
-              <p className="text-xs text-[var(--color-text-primary)]">v{updateVersion} is ready to install</p>
-              <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">The app will restart after installation</p>
+              <p className="type-row text-[var(--color-text-primary)]">v{updateVersion} is ready to install</p>
+              <p className="type-hint text-[var(--color-text-muted)] mt-0.5">The app will restart after installation</p>
             </div>
             <button
-              className="px-3 py-1 text-xs font-medium bg-[var(--color-status-ok)] text-[var(--color-on-accent)] hover:bg-[var(--color-status-ok-hover)] transition-colors no-drag cursor-pointer"
+              className="px-3 py-1 type-control bg-[var(--color-status-ok)] text-[var(--color-on-accent)] hover:bg-[var(--color-status-ok-hover)] transition-colors no-drag cursor-pointer"
               onClick={() => useUpdateStore.getState().installAndRelaunch()}
             >
-              Install & Relaunch
+              Install & relaunch
             </button>
           </div>
         )}
@@ -323,14 +322,14 @@ export function GeneralSection(): React.JSX.Element {
         {/* Error */}
         {webFeatures.appUpdater && updateStatus === 'error' && (
           <div className="p-3 border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)]">
-            <p className="text-[10px] text-[var(--color-status-error-soft)]">{updateError}</p>
+            <p className="type-hint text-[var(--color-status-error-soft)]">{updateError}</p>
             {linuxManualCommand && (
               <div className="mt-2 flex items-start gap-2" data-testid="linux-package-manual-command">
-                <code className="flex-1 min-w-0 break-all select-text text-[10px] p-1.5 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]">
+                <code className="flex-1 min-w-0 break-all select-text type-hint p-1.5 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]">
                   {linuxManualCommand}
                 </code>
                 <button
-                  className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
+                  className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
                   onClick={() => void navigator.clipboard?.writeText(linuxManualCommand)}
                 >
                   Copy
@@ -339,13 +338,13 @@ export function GeneralSection(): React.JSX.Element {
             )}
             <div className="flex items-center gap-2 mt-2">
               <button
-                className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
+                className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
                 onClick={handleCheckUpdate}
               >
                 Retry
               </button>
               <button
-                className="px-2 py-0.5 text-[10px] text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 transition-colors no-drag cursor-pointer"
+                className="px-2 py-0.5 type-control text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 transition-colors no-drag cursor-pointer"
                 onClick={() => {
                   const tag = updateVersion ? `v${updateVersion}` : 'latest'
                   invoke('plugin:opener|open_url', { url: `https://github.com/Alakazam-211/K2/releases/tag/${tag}` }).catch(() => {
@@ -391,31 +390,31 @@ export function GeneralSection(): React.JSX.Element {
             "Your name" is gone: the owner's name is the picked account's
             first and last name (profile modal, Admin Access). */}
         <div data-settings-group="you" data-testid="general-you-group">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] m-0 mb-1">You</h3>
+          <h3 className="type-section uppercase tracking-wider text-[var(--color-text-muted)] m-0 mb-1">You</h3>
           <YourAccountRow />
         </div>
 
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]" data-settings-id="general.config-location">
-          <span className="text-xs text-[var(--color-text-secondary)]">Config Location</span>
-          <span className="text-xs text-[var(--color-text-muted)]">~/.k2/settings.json</span>
+          <span className="type-row text-[var(--color-text-secondary)]">Config location</span>
+          <span className="type-row text-[var(--color-text-muted)]">~/.k2/settings.json</span>
         </div>
 
         <div className="pt-4" data-settings-id="general.reset-all">
           {confirming ? (
             <div className="flex items-center gap-2">
-              <span className="text-xs text-[var(--color-status-error-soft)]">Reset all settings to defaults?</span>
+              <span className="type-row text-[var(--color-status-error-soft)]">Reset all settings to defaults?</span>
               <button
                 onClick={() => {
                   resetAllSettings()
                   setConfirming(false)
                 }}
-                className="px-3 py-1 text-xs bg-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] no-drag cursor-pointer"
+                className="px-3 py-1 type-control bg-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] no-drag cursor-pointer"
               >
-                Confirm
+                Reset
               </button>
               <button
                 onClick={() => setConfirming(false)}
-                className="px-3 py-1 text-xs text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+                className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
               >
                 Cancel
               </button>
@@ -423,9 +422,9 @@ export function GeneralSection(): React.JSX.Element {
           ) : (
             <button
               onClick={() => setConfirming(true)}
-              className="px-3 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer"
+              className="px-3 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer"
             >
-              Reset All Settings
+              Reset all settings
             </button>
           )}
         </div>
@@ -434,8 +433,8 @@ export function GeneralSection(): React.JSX.Element {
 
       {tab === 'server' && (
         <div className="space-y-4">
-          <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed -mt-1">
-            Local K2 daemon — keeps agents and Companion running when the window is closed.
+          <p className="type-hint text-[var(--color-text-muted)] leading-relaxed -mt-1">
+            The K2 server on this computer.
           </p>
           <DaemonRow />
           <KeepDaemonOnQuitRow />
@@ -458,7 +457,7 @@ export function GeneralSection(): React.JSX.Element {
 export function GeneralRemoteHostPanel(): React.JSX.Element {
   return (
     <div className="w-full">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-4">Connected host</h2>
+      <h2 className="type-title text-[var(--color-text-primary)] mb-4">Connected host</h2>
       <div className="space-y-4">
         <RestartHostRow />
         <UpdateHostRow />
@@ -539,7 +538,7 @@ function CLIVersionRow(): React.JSX.Element {
 
   return (
     <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-      <span className="text-xs text-[var(--color-text-secondary)]">CLI Version</span>
+      <span className="type-row text-[var(--color-text-secondary)]">CLI Version</span>
       <div className="flex items-center gap-3">
         {status?.installed ? (
           <>
@@ -548,7 +547,7 @@ function CLIVersionRow(): React.JSX.Element {
                 className="w-1.5 h-1.5 flex-shrink-0"
                 style={{ backgroundColor: updateAvailable ? 'var(--color-status-warn-soft)' : 'var(--color-status-ok-soft)' }}
               />
-              <span className="text-xs text-[var(--color-text-muted)]">
+              <span className="type-row text-[var(--color-text-muted)]">
                 v{status.installedVersion || '?'}
               </span>
             </div>
@@ -556,7 +555,7 @@ function CLIVersionRow(): React.JSX.Element {
               <button
                 onClick={handleInstallOrUpdate}
                 disabled={loading}
-                className="px-2 py-0.5 text-[10px] bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
+                className="px-2 py-0.5 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
               >
                 {loading ? 'Updating...' : `Update to v${status.bundledVersion}`}
               </button>
@@ -564,19 +563,19 @@ function CLIVersionRow(): React.JSX.Element {
               <button
                 onClick={handleCheckForUpdates}
                 disabled={checking}
-                className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer disabled:opacity-50"
+                className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer disabled:opacity-50"
               >
-                {checking ? 'Checking...' : 'Check for Updates'}
+                {checking ? 'Checking...' : 'Check for updates'}
               </button>
             )}
           </>
         ) : (
           <>
-            <span className="text-xs text-[var(--color-text-muted)]">Not installed</span>
+            <span className="type-row text-[var(--color-text-muted)]">Not installed</span>
             <button
               onClick={handleInstallOrUpdate}
               disabled={loading}
-              className="px-2 py-0.5 text-[10px] bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
+              className="px-2 py-0.5 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
             >
               {loading ? 'Installing...' : 'Install'}
             </button>
@@ -647,12 +646,11 @@ function DevToolsRow(): React.JSX.Element {
       data-settings-id="general.devtools"
     >
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
+        <span className="type-row text-[var(--color-text-secondary)]">
           Developer tools
         </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-          Open the Chromium DevTools console for this window (inspect console
-          logs, network). Useful when diagnosing remote terminal freezes.
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
+          Opens the web inspector for this window, for troubleshooting. On this computer only.
         </p>
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
@@ -661,15 +659,15 @@ function DevToolsRow(): React.JSX.Element {
             type="button"
             onClick={() => void openDevTools()}
             disabled={opening}
-            className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer disabled:opacity-50"
+            className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer disabled:opacity-50"
           >
-            {opening ? 'Opening…' : 'Open DevTools'}
+            {opening ? 'Opening…' : 'Open inspector'}
           </button>
         )}
         <Toggle
           checked={enabled}
           onChange={toggle}
-          aria-label="Enable Developer tools"
+          aria-label="Enable developer tools"
         />
       </div>
     </div>
@@ -687,11 +685,11 @@ function WhatsNewRow(): React.JSX.Element {
 
   return (
     <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-      <span className="text-xs text-[var(--color-text-secondary)]">Release notes</span>
+      <span className="type-row text-[var(--color-text-secondary)]">Release notes</span>
       <button
         type="button"
         onClick={handleClick}
-        className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
+        className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
       >
         Read what's new
       </button>
@@ -809,21 +807,21 @@ function DaemonRow(): React.JSX.Element {
     <div className="py-2 border-b border-[var(--color-border)]">
       <div className="flex items-center justify-between gap-4">
         <div className="flex flex-col min-w-0 flex-1">
-          <span className="text-xs text-[var(--color-text-secondary)]">K2 Server</span>
-          <span className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-            Keeps agents, terminals, heartbeats, &amp; companion app service running when the app is closed
+          <span className="type-row text-[var(--color-text-secondary)]">K2 server</span>
+          <span className="type-hint text-[var(--color-text-muted)] mt-0.5">
+            Keeps agents, terminals, heartbeats and K2 Companion running when the app is closed
           </span>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
           <div className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 flex-shrink-0" style={{ backgroundColor: dotColor }} />
-            <span className="text-xs text-[var(--color-text-muted)]">{statusText}</span>
+            <span className="type-row text-[var(--color-text-muted)]">{statusText}</span>
           </div>
           {status?.state === 'not_installed' && (
             <button
               onClick={handleInstall}
               disabled={busy !== null}
-              className="px-2 py-0.5 text-[10px] bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
+              className="px-2 py-0.5 type-control bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 transition-opacity no-drag cursor-pointer disabled:opacity-50"
             >
               {busy === 'install' ? 'Installing...' : 'Install'}
             </button>
@@ -832,7 +830,7 @@ function DaemonRow(): React.JSX.Element {
             <button
               onClick={handleRestart}
               disabled={busy !== null}
-              className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer disabled:opacity-50"
+              className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer disabled:opacity-50"
             >
               {busy === 'restart' ? 'Restarting...' : 'Restart'}
             </button>
@@ -841,7 +839,7 @@ function DaemonRow(): React.JSX.Element {
             <button
               onClick={handleRestart}
               disabled={busy !== null}
-              className="px-2 py-0.5 text-[10px] bg-[color-mix(in_srgb,var(--color-status-warn-soft)_20%,transparent)] text-[var(--color-status-warn-text)] border border-[color-mix(in_srgb,var(--color-status-warn-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn-soft)_30%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50"
+              className="px-2 py-0.5 type-control bg-[color-mix(in_srgb,var(--color-status-warn-soft)_20%,transparent)] text-[var(--color-status-warn-text)] border border-[color-mix(in_srgb,var(--color-status-warn-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn-soft)_30%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50"
             >
               {busy === 'restart' ? 'Restarting...' : 'Restart'}
             </button>
@@ -854,12 +852,12 @@ function DaemonRow(): React.JSX.Element {
         <div className="flex items-center gap-3 mt-1.5 pl-0">
           <button
             onClick={handleViewLog}
-            className="text-[10px] text-[var(--color-text-muted)] underline hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
+            className="type-hint text-[var(--color-text-muted)] underline hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
           >
             View log
           </button>
           {runtimeText && (
-            <span className="text-[10px] text-[var(--color-text-muted)]">{runtimeText}</span>
+            <span className="type-hint text-[var(--color-text-muted)]">{runtimeText}</span>
           )}
         </div>
       )}
@@ -868,15 +866,15 @@ function DaemonRow(): React.JSX.Element {
       {showingLog && (
         <div className="mt-2 p-2 bg-black/30 border border-[var(--color-border)] max-h-60 overflow-auto">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] text-[var(--color-text-muted)]">~/.k2/daemon.stdout.log (last 300 lines)</span>
+            <span className="type-hint text-[var(--color-text-muted)]">~/.k2/daemon.stdout.log (last 300 lines)</span>
             <button
               onClick={() => setShowingLog(false)}
-              className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+              className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
             >
               Close
             </button>
           </div>
-          <pre className="text-[10px] text-[var(--color-text-muted)] whitespace-pre-wrap font-mono leading-tight">
+          <pre className="type-hint text-[var(--color-text-muted)] whitespace-pre-wrap font-mono leading-tight">
             {logText || '(log file empty or missing)'}
           </pre>
         </div>
@@ -885,7 +883,7 @@ function DaemonRow(): React.JSX.Element {
       {/* Error surface — visible until the next action clears it */}
       {error && (
         <div className="mt-2 p-2 bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)]">
-          <p className="text-[10px] text-[var(--color-status-error-soft)] break-all">{error}</p>
+          <p className="type-hint text-[var(--color-status-error-soft)] break-all">{error}</p>
         </div>
       )}
     </div>
@@ -925,10 +923,10 @@ function AgentsSurviveRestartsRow(): React.JSX.Element {
   return (
     <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
+        <span className="type-row text-[var(--color-text-secondary)]">
           Agents keep running through updates and restarts
         </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
           {on
             ? 'New agent sessions keep running when K2 updates, restarts or crashes, and pick up where they were. Quitting the server still stops them. Sessions already running before you turned this on stop at the next restart. macOS and Linux.'
             : 'Off: updating or restarting K2 stops running agents; they resume their conversation afterwards.'}
@@ -985,13 +983,13 @@ function KeepDaemonOnQuitRow(): React.JSX.Element {
   return (
     <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
+        <span className="type-row text-[var(--color-text-secondary)]">
           Keep server running when the window is closed
         </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
           {keep
-            ? 'Red close button hides the window; agents keep working and the mobile companion stays reachable. Menu bar shows status. Cmd+Q closes everything.'
-            : 'Red close button stops everything, same as Cmd+Q. Agents pause and the mobile companion disconnects until you reopen K2.'}
+            ? 'The red close button hides the window. Agents keep working and K2 Companion stays connected. The menu bar shows status. Cmd+Q closes everything.'
+            : 'The red close button stops everything, same as Cmd+Q. Agents pause and K2 Companion disconnects until you reopen K2.'}
         </p>
       </div>
       <Toggle
@@ -1090,30 +1088,30 @@ function RestartHostRow(): React.JSX.Element | null {
       <div className="flex items-center justify-between gap-4">
         <div className="flex flex-col min-w-0 flex-1">
           <span className="flex items-center gap-2 min-w-0">
-            <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0">
-              Remote host
+            <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0">
+              Connected server
             </span>
-            <span className="text-xs text-[var(--color-text-primary)] font-medium truncate">
+            <span className="type-name text-[var(--color-text-primary)] truncate">
               {hostLabel}
             </span>
-            <span className="text-[10px] text-[var(--color-text-muted)] font-mono truncate">
+            <span className="type-hint text-[var(--color-text-muted)] font-mono truncate">
               {hostname}
             </span>
           </span>
-          <span className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            Restart the machine you&apos;re connected to — <strong className="text-[var(--color-status-warn-amber-soft)]">not {thisMachineLower()}</strong>.
-            Active sessions briefly disconnect, then reconnect automatically.
+          <span className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            Restart the server you&apos;re connected to, <strong className="text-[var(--color-status-warn-amber-soft)]">not this computer</strong>.
+            Sessions on it disconnect briefly, then reconnect automatically.
           </span>
         </div>
         <div className="flex-shrink-0">
           {restarting ? (
-            <span className="text-[11px] text-[var(--color-status-warn-amber-soft)]">Restarting {hostLabel}…</span>
+            <span className="type-hint text-[var(--color-status-warn-amber-soft)]">Restarting {hostLabel}…</span>
           ) : (
             <button
               onClick={() => void handleRestart()}
               disabled={!canRestart}
               title={gate.title}
-              className="px-3 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3 py-1 type-control text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Restart {hostLabel}
             </button>
@@ -1121,7 +1119,7 @@ function RestartHostRow(): React.JSX.Element | null {
         </div>
       </div>
       {gate.note && (
-        <div className="mt-2 text-[11px] text-[var(--color-text-muted)]">{gate.note}</div>
+        <div className="mt-2 type-hint text-[var(--color-text-muted)]">{gate.note}</div>
       )}
     </div>
   )
@@ -1566,19 +1564,19 @@ export function UpdateHostRow(): React.JSX.Element | null {
       <div className="flex items-center justify-between gap-4">
         <div className="flex flex-col min-w-0 flex-1">
           <span className="flex items-center gap-2 min-w-0">
-            <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0">
-              Remote host
+            <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0">
+              Connected server
             </span>
-            <span className="text-xs text-[var(--color-text-primary)] font-medium truncate">
+            <span className="type-name text-[var(--color-text-primary)] truncate">
               {hostLabel}
             </span>
-            <span className="text-[10px] text-[var(--color-text-muted)] font-mono truncate">
+            <span className="type-hint text-[var(--color-text-muted)] font-mono truncate">
               {hostname}
             </span>
           </span>
-          <span className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            Update the machine you&apos;re connected to — <strong className="text-[var(--color-status-warn-amber-soft)]">not {thisMachineLower()}</strong>.
-            It briefly disconnects to install, then reconnects automatically.
+          <span className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            Update the server you&apos;re connected to, <strong className="text-[var(--color-status-warn-amber-soft)]">not this computer</strong>.
+            It disconnects briefly to install, then reconnects automatically.
           </span>
         </div>
         <div className="flex-shrink-0">
@@ -1589,21 +1587,21 @@ export function UpdateHostRow(): React.JSX.Element | null {
                 onClick={() => void handleDownload()}
                 disabled={!canUpdate}
                 title={gate.title}
-                className="px-3 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1 type-control text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {/* Bundled-app hosts (Shape A) update in one shot — the Tauri
                     updater downloads + installs + relaunches, there's no
                     separate staged "Install & restart" step — so the button is
                     "Update Host", not "Download". Standalone (Shape B) hosts
                     keep the two-step Download → Install & restart flow. */}
-                {check?.installKind === 'bundled-app' ? 'Update Host' : 'Download'}
+                {check?.installKind === 'bundled-app' ? 'Update server' : 'Download'}
               </button>
             ) : (
               <button
                 onClick={() => void handleCheck()}
                 disabled={!canUpdate || checking}
                 title={gate.title}
-                className="px-3 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1 type-control text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {checking ? 'Checking…' : 'Check for updates'}
               </button>
@@ -1612,13 +1610,13 @@ export function UpdateHostRow(): React.JSX.Element | null {
           {/* Staged: ready to install & restart the host */}
           {staged && (
             applying ? (
-              <span className="text-[11px] text-[var(--color-status-warn-amber-soft)]">Installing & restarting {hostLabel}…</span>
+              <span className="type-hint text-[var(--color-status-warn-amber-soft)]">Installing & restarting {hostLabel}…</span>
             ) : (
               <button
                 onClick={() => void handleApply()}
                 disabled={!canUpdate}
                 title={gate.title}
-                className="px-3 py-1 text-[11px] font-medium text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1 type-control text-[var(--color-status-warn-amber-bright)] bg-[color-mix(in_srgb,var(--color-status-warn)_15%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warn)_25%,transparent)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Install & restart {hostLabel}
               </button>
@@ -1631,7 +1629,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
           role couldn't be read yet — never "owner or admin" for an unread
           role (Rosson 2026-11-05). */}
       {gate.note && (
-        <div className="mt-2 text-[11px] text-[var(--color-text-muted)]">{gate.note}</div>
+        <div className="mt-2 type-hint text-[var(--color-text-muted)]">{gate.note}</div>
       )}
 
       {/* B1: persistent host-version line — shown after ANY successful check,
@@ -1640,14 +1638,14 @@ export function UpdateHostRow(): React.JSX.Element | null {
           the update banner). Hidden once a job is downloading/staging (the
           phase line takes over) so the row doesn't double up. */}
       {check && !inProgress && !staged && (
-        <div className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+        <div className="mt-2 type-hint text-[var(--color-text-muted)]">
           {hostVersionCopy(hostLabel, check.current)}
         </div>
       )}
 
       {/* Update-available banner once a check reports one (pre-download) */}
       {check?.available && !inProgress && !staged && (
-        <div className="mt-1 text-[11px] text-[var(--color-status-warn-amber-bright)]">
+        <div className="mt-1 type-hint text-[var(--color-status-warn-amber-bright)]">
           {updateAvailableCopy(hostLabel, check.current, check.latest)}
         </div>
       )}
@@ -1656,12 +1654,12 @@ export function UpdateHostRow(): React.JSX.Element | null {
           platform — DISTINCT from "up to date" (available is false but the
           host is behind). Only when not already in/after a job. */}
       {check?.newerNoArtifact && !inProgress && !staged && (
-        <div className="mt-1 text-[11px] text-[color-mix(in_srgb,var(--color-status-warn-amber-bright)_90%,transparent)]">
+        <div className="mt-1 type-hint text-[color-mix(in_srgb,var(--color-status-warn-amber-bright)_90%,transparent)]">
           {newerNoArtifactCopy(hostLabel, check.latest, check.platform)}
         </div>
       )}
       {check?.newerViaPackage && !inProgress && !staged && (
-        <div className="mt-1 text-[11px] text-[color-mix(in_srgb,var(--color-status-warn-amber-bright)_90%,transparent)]">
+        <div className="mt-1 type-hint text-[color-mix(in_srgb,var(--color-status-warn-amber-bright)_90%,transparent)]">
           {newerViaPackageCopy(hostLabel, check.latest)}
         </div>
       )}
@@ -1671,18 +1669,18 @@ export function UpdateHostRow(): React.JSX.Element | null {
           a real failure; amber "couldn't confirm" when there was no verdict
           in time — never a false failure. */}
       {comeback?.kind === 'success' && !inProgress && !staged && (
-        <div className="mt-2 text-[11px] text-[var(--color-status-ok-soft)]">
+        <div className="mt-2 type-hint text-[var(--color-status-ok-soft)]">
           {updateSucceededCopy(hostLabel, comeback.version)}
         </div>
       )}
       {comeback?.kind === 'unconfirmed' && !inProgress && !staged && (
-        <div className="mt-2 text-[11px] text-[var(--color-status-warn-amber-bright)]">
+        <div className="mt-2 type-hint text-[var(--color-status-warn-amber-bright)]">
           {updateUnconfirmedCopy(hostLabel, comeback.reason)}
         </div>
       )}
       {comeback?.kind === 'failed' && !inProgress && !staged && (
         <div className="mt-2 p-2 bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)]">
-          <p className="text-[11px] text-[var(--color-status-error-soft)]">
+          <p className="type-hint text-[var(--color-status-error-soft)]">
             {updateFailedCopy(hostLabel, comeback.reason)}
           </p>
         </div>
@@ -1691,7 +1689,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
       {/* In-flight phase + download progress line */}
       {(inProgress || staged) && (phase || hostGoneInstalling) && (
         <div className="mt-2">
-          <div className="text-[11px] text-[var(--color-status-warn-amber-bright)]">
+          <div className="type-hint text-[var(--color-status-warn-amber-bright)]">
             {hostGoneInstalling || !phase
               ? watchLine
               : updatePhaseCopy(phase, hostLabel, {
@@ -1714,7 +1712,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
       {/* The job can't be shown as a phase: an unreadable status reply, or
           the host no longer has the downloaded update. */}
       {jobNote && !hostGoneInstalling && (
-        <div className="mt-2 text-[11px] text-[var(--color-status-error-soft)] break-words">
+        <div className="mt-2 type-hint text-[var(--color-status-error-soft)] break-words">
           {jobNote}
         </div>
       )}
@@ -1722,11 +1720,11 @@ export function UpdateHostRow(): React.JSX.Element | null {
       {/* Failure surface — host-named, host stays on its current version */}
       {!hostGoneInstalling && isFailurePhase(phase) && phase && (
         <div className="mt-2 p-2 bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)]">
-          <p className="text-[11px] text-[var(--color-status-error-soft)]">
+          <p className="type-hint text-[var(--color-status-error-soft)]">
             {updatePhaseCopy(phase, hostLabel, { current: check?.current })}
           </p>
           {status?.error && (
-            <p className="mt-1 text-[10px] text-[var(--color-status-error-soft)] break-all">
+            <p className="mt-1 type-hint text-[var(--color-status-error-soft)] break-all">
               {status.error}
             </p>
           )}

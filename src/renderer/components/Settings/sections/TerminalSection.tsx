@@ -48,7 +48,7 @@ export function TerminalSection(): React.JSX.Element {
 
   return (
     <div className="max-w-xl">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-4">Terminal</h2>
+      <h2 className="type-title text-[var(--color-text-primary)] mb-4">Terminal</h2>
 
       <div className="space-y-4">
         {/* Font Family */}
@@ -57,7 +57,7 @@ export function TerminalSection(): React.JSX.Element {
             type="text"
             value={terminal.fontFamily}
             onChange={(e) => updateTerminalSettings({ fontFamily: e.target.value })}
-            className="w-64 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag"
+            className="w-64 px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag"
           />
         </SettingRow>
 
@@ -81,7 +81,7 @@ export function TerminalSection(): React.JSX.Element {
                 const v = parseInt(e.target.value, 10)
                 if (v >= 10 && v <= 24) updateTerminalSettings({ fontSize: v })
               }}
-              className="w-14 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
+              className="w-14 px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
             />
           </div>
         </SettingRow>
@@ -113,19 +113,19 @@ export function TerminalSection(): React.JSX.Element {
                 if (Number.isFinite(v)) setLineHeightMultiplier(v)
               }}
               disabled={painter !== 'webgl'}
-              className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center disabled:opacity-50"
+              className="w-16 px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center disabled:opacity-50"
             />
             <button
               type="button"
               onClick={() => setLineHeightMultiplier(LINE_HEIGHT_MULT_DEFAULT)}
               disabled={painter !== 'webgl'}
-              className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="type-hint no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Reset
             </button>
           </div>
           {painter !== 'webgl' && (
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1">
+            <div className="type-hint text-[var(--color-text-muted)] mt-1">
               Switch Terminal Painter to WebGL to adjust (DOM is unaffected).
             </div>
           )}
@@ -158,19 +158,19 @@ export function TerminalSection(): React.JSX.Element {
                 if (Number.isFinite(v)) setCharTracking(v)
               }}
               disabled={painter !== 'webgl'}
-              className="w-16 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center disabled:opacity-50"
+              className="w-16 px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center disabled:opacity-50"
             />
             <button
               type="button"
               onClick={() => setCharTracking(CHAR_TRACKING_DEFAULT)}
               disabled={painter !== 'webgl'}
-              className="text-[10px] no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="type-hint no-drag cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Reset
             </button>
           </div>
           {painter !== 'webgl' && (
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1">
+            <div className="type-hint text-[var(--color-text-muted)] mt-1">
               Switch Terminal Painter to WebGL to adjust (DOM is unaffected).
             </div>
           )}
@@ -201,7 +201,7 @@ export function TerminalSection(): React.JSX.Element {
               const v = parseInt(e.target.value, 10)
               if (v >= 500 && v <= 100000) updateTerminalSettings({ scrollback: v })
             }}
-            className="w-28 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
+            className="w-28 px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag text-center"
           />
         </SettingRow>
 
@@ -245,7 +245,7 @@ export function TerminalSection(): React.JSX.Element {
          *  future renderer additions.
          */}
         <SettingRow settingId="terminal.renderer" label={
-          <span title="Kessel runs on the daemon, survives Tauri quit, and supports heartbeats. Changing this only affects NEW terminals; existing tabs keep their current renderer.">
+          <span title="Runs in the background, keeps going after you quit K2, and supports heartbeats. Changing this only affects new terminals; existing tabs keep their current renderer.">
             Terminal Renderer
           </span>
         }>

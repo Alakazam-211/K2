@@ -84,9 +84,9 @@ import { ZenWidgetData } from './ZenWidgetData'
 import { DataSourcesSection } from './DataSourcesSection'
 import { gardensLandingSelection, takeGardensLanding, useGardensLandingStore } from '../gardens-landing'
 
-const MUTED = 'text-[11px] text-[var(--color-text-muted)]'
-const H3 = 'text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider'
-const SIDE_ROW = 'w-full text-left px-3 py-2 text-xs no-drag cursor-pointer'
+const MUTED = 'type-hint text-[var(--color-text-muted)]'
+const H3 = 'type-section text-[var(--color-text-muted)] uppercase tracking-wider'
+const SIDE_ROW = 'w-full text-left px-3 py-2 type-control no-drag cursor-pointer'
 const SIDE_ON = 'bg-[var(--color-accent)]/15'
 const SIDE_OFF = 'hover:bg-white/[0.03]'
 
@@ -239,8 +239,8 @@ function Sidebar({
   return (
     <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0" data-gardens-sidebar="">
       <div className="px-3 pt-3 pb-2 border-b border-[var(--color-border)]">
-        <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Gardens</h2>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">Your Zen pages on this computer.</p>
+        <h2 className="type-title text-[var(--color-text-primary)]">Gardens</h2>
+        <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">Your Zen pages on this computer.</p>
       </div>
       <div className="flex-1 overflow-y-auto min-h-0">
         <button
@@ -252,7 +252,7 @@ function Sidebar({
           onClick={() => onSelect({ kind: 'styles' })}
         >
           <span className="block text-[var(--color-text-primary)]">Styles</span>
-          <span className="block text-[10px] text-[var(--color-text-muted)]">The look of every Garden</span>
+          <span className="block type-hint text-[var(--color-text-muted)]">The look of every Garden</span>
         </button>
         <p id={GARDEN_REORDER_HELP_ID} className="sr-only">
           {GARDEN_REORDER_HELP}
@@ -295,7 +295,7 @@ function Sidebar({
                     onSelect({ kind: 'garden', id: g.id })
                   }}
                 >
-                  <span className="flex items-center gap-1.5 text-xs text-[var(--color-text-primary)]">
+                  <span className="flex items-center gap-1.5 type-row text-[var(--color-text-primary)]">
                     <span className="truncate">{g.name}</span>
                     {locked(g.id) ? (
                       <span className="text-[var(--color-text-muted)]" data-garden-side-locked="">
@@ -304,7 +304,7 @@ function Sidebar({
                     ) : null}
                   </span>
                   {detail ? (
-                    <span className="block text-[10px] text-[var(--color-text-muted)] truncate" data-garden-side-detail="">
+                    <span className="block type-hint text-[var(--color-text-muted)] truncate" data-garden-side-detail="">
                       {detail}
                     </span>
                   ) : null}
@@ -355,7 +355,7 @@ function Sidebar({
           onClick={() => onSelect({ kind: 'unplaced' })}
         >
           <span className="block text-[var(--color-text-primary)]">{NOT_IN_A_GARDEN}</span>
-          <span className="block text-[10px] text-[var(--color-text-muted)]">Data and sources no Garden uses</span>
+          <span className="block type-hint text-[var(--color-text-muted)]">Data and sources no Garden uses</span>
         </button>
       </div>
     </div>
@@ -418,8 +418,8 @@ function UnplacedPane(props: { membership: GardenMembership | null; error: strin
   return (
     <div className="max-w-2xl space-y-6" data-gardens-pane="unplaced">
       <div>
-        <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">{NOT_IN_A_GARDEN}</h2>
-        <p className="text-xs text-[var(--color-text-muted)]">
+        <h2 className="type-title text-[var(--color-text-primary)] mb-1">{NOT_IN_A_GARDEN}</h2>
+        <p className="type-hint text-[var(--color-text-muted)]">
           Widget data and data sources on no Garden&apos;s page. A widget or source a Garden uses is under that Garden.
         </p>
       </div>
@@ -461,13 +461,13 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
   return (
     <div className="max-w-2xl space-y-6" data-gardens-pane="styles" data-settings-id="zen-gardens.advanced">
       <div>
-        <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Styles</h2>
-        <p className="text-xs text-[var(--color-text-muted)]">The look every Garden uses on this computer.</p>
+        <h2 className="type-title text-[var(--color-text-primary)] mb-1">Styles</h2>
+        <p className="type-hint text-[var(--color-text-muted)]">The look every Garden uses on this computer.</p>
       </div>
       <section data-settings-id="zen-gardens.theme">
         <h3 className={H3}>Theme</h3>
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-          <div className="text-xs text-[var(--color-text-primary)]">Global theme</div>
+          <div className="type-row text-[var(--color-text-primary)]">Global theme</div>
           <SettingDropdown
             ariaLabel="Global Zen theme"
             value={st.globalTheme ?? ''}
@@ -479,7 +479,7 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
         </div>
         <ul className="mt-1" data-gardens-theme-list="">
           {st.themes.map((t) => (
-            <li key={t.name} className="flex items-baseline gap-2 py-1 text-xs text-[var(--color-text-primary)]">
+            <li key={t.name} className="flex items-baseline gap-2 py-1 type-row text-[var(--color-text-primary)]">
               <span className="font-mono">{t.name}</span>
               <span className={MUTED}>
                 {t.builtin ? 'built in' : 'yours'}
@@ -490,7 +490,7 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
           ))}
         </ul>
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-          <div className="text-xs text-[var(--color-text-primary)]">
+          <div className="type-row text-[var(--color-text-primary)]">
             Zen settings <span className={`${MUTED} font-mono`}>zen.toml</span>
           </div>
           <button type="button" className={BTN} disabled={busy} data-gardens-reset-zen="" onClick={() => void reset()}>
@@ -503,7 +503,7 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
         <section data-settings-id="zen-gardens.folder">
           <h3 className={H3}>Folder</h3>
           <div className="flex items-center justify-between gap-3 py-2 border-b border-[var(--color-border)]">
-            <span className="text-[11px] font-mono text-[var(--color-text-primary)] select-all truncate" data-zen-gardens-path="">
+            <span className="type-hint font-mono text-[var(--color-text-primary)] select-all truncate" data-zen-gardens-path="">
               {st.path}
             </span>
             <button
@@ -537,7 +537,7 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
         {recent !== null && recent.length === 0 ? <p className={`${MUTED} mt-2`}>No changes yet.</p> : null}
         <ul className="mt-1">
           {(recent ?? []).map((it) => (
-            <li key={it.id} className="py-1 text-xs text-[var(--color-text-primary)]" data-gardens-look-line={it.id}>
+            <li key={it.id} className="py-1 type-row text-[var(--color-text-primary)]" data-gardens-look-line={it.id}>
               {gardenHistoryLine(it)} <span className={MUTED}>· {gardenWhen(it.at)}</span>
             </li>
           ))}
@@ -628,7 +628,7 @@ function AddAgent({
             style={menu.style}
           >
             {error ? (
-              <p role="alert" className="text-[11px] text-[var(--color-status-error)] p-1">
+              <p role="alert" className="type-hint text-[var(--color-status-error)] p-1">
                 {error}
               </p>
             ) : agents === null ? (
@@ -690,7 +690,7 @@ function GardenMenu({ onDelete, name }: { onDelete(): void; name: string }): Rea
               type="button"
               role="menuitem"
               data-garden-pane-delete=""
-              className="text-left px-3 py-1.5 text-xs text-[var(--color-status-error)] hover:bg-white/[0.04] cursor-pointer"
+              className="text-left px-3 py-1.5 type-control text-[var(--color-status-error)] hover:bg-white/[0.04] cursor-pointer"
               onClick={() => {
                 setOpen(false)
                 onDelete()
@@ -841,10 +841,10 @@ function GardenPane({
                   setDraft(garden.name)
                 }
               }}
-              className={`${INPUT} flex-1 text-sm`}
+              className={`${INPUT} flex-1 type-row`}
             />
           ) : (
-            <h2 className="flex-1 min-w-0 truncate text-lg font-semibold text-[var(--color-text-primary)]" data-garden-pane-title="">
+            <h2 className="flex-1 min-w-0 truncate type-title text-[var(--color-text-primary)]" data-garden-pane-title="">
               {garden.name}
             </h2>
           )}
@@ -905,7 +905,7 @@ function GardenPane({
                 className="w-2 h-2 rounded-[var(--radius-pill)] flex-shrink-0"
                 style={{ background: e.color ?? 'var(--color-text-muted)' }}
               />
-              <span className="text-xs text-[var(--color-text-primary)]">{e.name}</span>
+              <span className="type-row text-[var(--color-text-primary)]">{e.name}</span>
               <span className={`${MUTED} flex-1 min-w-0 truncate`} data-garden-editor-added="">
                 {gardenEditorAddedWords(e)}
               </span>
@@ -927,7 +927,7 @@ function GardenPane({
 
       <section className="flex items-baseline gap-4" data-garden-sees="">
         <h3 className={H3}>Sees</h3>
-        <span className="text-xs text-[var(--color-text-primary)]">{GARDEN_SEES_TEXT}</span>
+        <span className="type-row text-[var(--color-text-primary)]">{GARDEN_SEES_TEXT}</span>
       </section>
 
       <section data-garden-pane-controls="">
@@ -944,7 +944,7 @@ function GardenPane({
               data-garden-widget={w.widget}
               className="flex items-center gap-2 py-1.5 border-b border-[var(--color-border)]"
             >
-              <span className="text-xs font-mono text-[var(--color-text-primary)]">{w.widget}</span>
+              <span className="type-row font-mono text-[var(--color-text-primary)]">{w.widget}</span>
               <span className={`${MUTED} flex-1 min-w-0 truncate`} data-garden-widget-signer="">
                 {gardenWidgetSignerWords(w)}
               </span>
@@ -982,7 +982,7 @@ function DeletedPane({
   return (
     <div className="max-w-2xl space-y-4" data-gardens-pane="deleted" data-garden-deleted-pane={garden.id}>
       <div>
-        <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">{garden.name}</h2>
+        <h2 className="type-title text-[var(--color-text-primary)]">{garden.name}</h2>
         <p className={`${MUTED} mt-1`}>
           Deleted
           {garden.deletedBy ? ` by ${gardenActorWords(garden.deletedBy).replace(/^You$/, 'you')}` : ''}
@@ -1109,7 +1109,7 @@ export function ZenGardensAccessPage(): React.JSX.Element {
       />
       <div className="flex-1 overflow-y-auto p-6 min-h-0">
         {error ? (
-          <p role="alert" className="text-[11px] text-[var(--color-status-error)] max-w-2xl mb-3" data-gardens-error="">
+          <p role="alert" className="type-hint text-[var(--color-status-error)] max-w-2xl mb-3" data-gardens-error="">
             {error}
           </p>
         ) : null}

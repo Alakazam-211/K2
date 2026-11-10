@@ -18,13 +18,13 @@ export function WasViewerNotice({
       className="flex items-center justify-between gap-3 px-2 py-1.5 border border-[var(--color-border)] bg-[var(--color-bg-elevated)]"
       data-testid={`was-viewer-${username}`}
     >
-      <span className="text-[10px] text-[var(--color-text-secondary)]">{WAS_VIEWER_NOTE}</span>
+      <span className="type-hint text-[var(--color-text-secondary)]">{WAS_VIEWER_NOTE}</span>
       <button
         type="button"
         disabled={busy}
         onClick={() => onEnableAsMember(username)}
         aria-label={`Enable ${username} as Member`}
-        className="flex-shrink-0 px-3 py-1 text-[11px] text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
+        className="flex-shrink-0 px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
       >
         {busy ? 'Enabling…' : 'Enable as Member'}
       </button>
@@ -35,7 +35,7 @@ export function WasViewerNotice({
 /** Small badge next to the username. */
 export function WasViewerBadge(): React.JSX.Element {
   return (
-    <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">
+    <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">
       was Viewer
     </span>
   )

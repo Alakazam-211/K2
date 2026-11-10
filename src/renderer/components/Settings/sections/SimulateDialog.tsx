@@ -60,25 +60,25 @@ export function SimulateDialog({
 
   return (
     <div className="space-y-1.5 border border-[var(--color-border)] p-2 max-w-md" data-testid="sources-simulate">
-      <p className={`text-[11px] ${muted}`}>
+      <p className={`type-hint ${muted}`}>
         Cards show this state with a TEST badge. Triggers never fire for it and nothing goes into history. Real checks keep
         running.
       </p>
       {current && (
-        <p className="text-[11px] text-[var(--color-text-primary)]">
+        <p className="type-hint text-[var(--color-text-primary)]">
           Now: TEST {current.state} until {hhmm(current.until)}
           {current.by ? ` (by ${current.by})` : ''}.
         </p>
       )}
       <fieldset className="space-y-0.5">
         {STATES.map((s) => (
-          <label key={s.state} className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]">
+          <label key={s.state} className="flex items-center gap-1.5 type-hint text-[var(--color-text-secondary)]">
             <Radio name={`sim-${name}`} checked={state === s.state} onChange={() => setState(s.state)} />
             {s.label}
           </label>
         ))}
       </fieldset>
-      <div className={`flex items-center text-[11px] ${muted}`}>
+      <div className={`flex items-center type-hint ${muted}`}>
         For
         <SettingDropdown
           compact
@@ -105,7 +105,7 @@ export function SimulateDialog({
         </button>
       </div>
       {error && (
-        <p className={`text-[11px] ${danger}`} role="alert">
+        <p className={`type-hint ${danger}`} role="alert">
           {error}
         </p>
       )}

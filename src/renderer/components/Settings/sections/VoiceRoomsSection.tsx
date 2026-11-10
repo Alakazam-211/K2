@@ -122,8 +122,8 @@ export function VoiceRoomsSection(): React.JSX.Element {
   return (
     <div data-testid="voice-rooms-section" className="flex max-w-[640px] flex-col gap-4">
       <header>
-        <h2 className="text-[14px] text-[var(--color-text-primary)]">Voice Rooms</h2>
-        <p className="mt-1 text-[12px] text-[var(--color-text-secondary)]">
+        <h2 className="type-title text-[var(--color-text-primary)]">Voice Rooms</h2>
+        <p className="mt-1 type-row text-[var(--color-text-secondary)]">
           Voice rooms on this server, for its owner, Admins and Members. Join them from the headset in the top bar.
         </p>
       </header>
@@ -135,7 +135,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
       ) : null}
 
       {line ? (
-        <p data-testid="voice-rooms-hosting" data-state={hosting?.state} className="text-[12px] text-[var(--color-text-secondary)]">
+        <p data-testid="voice-rooms-hosting" data-state={hosting?.state} className="type-row text-[var(--color-text-secondary)]">
           {line}
           {hosting?.state === 'not_pro' ? (
             <>
@@ -162,7 +162,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
             </>
           ) : null}
           {hosting?.detail ? (
-            <span data-testid="voice-rooms-hosting-detail" className="mt-0.5 block text-[11px] text-[var(--color-text-muted)]">
+            <span data-testid="voice-rooms-hosting-detail" className="mt-0.5 block type-hint text-[var(--color-text-muted)]">
               {hosting.detail}
             </span>
           ) : null}
@@ -171,7 +171,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
 
       {manage ? (
         <section className="flex flex-col gap-2">
-          <h3 className="text-[12px] text-[var(--color-text-primary)]">Rooms</h3>
+          <h3 className="type-heading text-[var(--color-text-primary)]">Rooms</h3>
           <div className="flex items-center gap-2">
             <Button
               data-testid="voice-rooms-minus"
@@ -180,7 +180,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
             >
               −
             </Button>
-            <span data-testid="voice-rooms-count" className="w-6 text-center font-mono text-[12px]">
+            <span data-testid="voice-rooms-count" className="w-6 text-center font-mono type-row">
               {count ?? '–'}
             </span>
             <Button
@@ -195,7 +195,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
             </Button>
           </div>
           {lowering ? (
-            <div className="text-[11px] text-[var(--color-text-muted)]">
+            <div className="type-hint text-[var(--color-text-muted)]">
               <p>Removed rooms close when empty; people in them stay until they leave.</p>
               {occupiedDropped ? (
                 <label className="mt-1 flex items-center gap-2 text-[var(--color-text-secondary)]">
@@ -211,12 +211,12 @@ export function VoiceRoomsSection(): React.JSX.Element {
       {rooms ? (
         <ul className="flex flex-col gap-1" data-testid="voice-rooms-list">
           {rooms.rooms.map((r) => (
-            <li key={r.id} data-testid="voice-rooms-row" className="flex items-center gap-2 text-[12px]">
+            <li key={r.id} data-testid="voice-rooms-row" className="flex items-center gap-2 type-row">
               {manage ? (
                 <>
                   <input
                     aria-label={`Name of ${r.name}`}
-                    className="w-[200px] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-0.5 text-[12px]"
+                    className="w-[200px] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-0.5 type-control"
                     value={names[r.id] ?? r.name}
                     maxLength={64}
                     onChange={(e) => {
@@ -233,7 +233,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
               ) : (
                 <span className="text-[var(--color-text-primary)]">{r.name}</span>
               )}
-              <span className="text-[11px] text-[var(--color-text-muted)]">
+              <span className="type-hint text-[var(--color-text-muted)]">
                 {r.occupants.length} {r.occupants.length === 1 ? 'person' : 'people'} now
                 {r.closing ? (r.closesAt !== null ? ' · Closing now' : ' · Closing when empty') : ''}
               </span>
@@ -243,7 +243,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
       ) : null}
 
       {status?.mediaTier ? (
-        <p data-testid="voice-rooms-media" className="text-[11px] text-[var(--color-text-muted)]">
+        <p data-testid="voice-rooms-media" className="type-hint text-[var(--color-text-muted)]">
           {status.mediaTier === 'tunnel'
             ? "Media mode: through K2's tunnel. This box's address isn't published."
             : "Media mode: direct. This box's public address is in DNS and in every join answer, so people in a call can see it."}
@@ -251,8 +251,8 @@ export function VoiceRoomsSection(): React.JSX.Element {
       ) : null}
 
       <section className="flex flex-col gap-1 border-t border-[var(--color-border)] pt-3">
-        <h3 className="text-[12px] text-[var(--color-text-primary)]">On this computer</h3>
-        <label className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)]">
+        <h3 className="type-heading text-[var(--color-text-primary)]">On this computer</h3>
+        <label className="flex items-center gap-2 type-row text-[var(--color-text-secondary)]">
           <Checkbox data-testid="voice-join-muted" checked={joinMuted} onChange={(e) => voice.setPrefs({ joinMuted: e.currentTarget.checked })} />
           Join voice rooms with my microphone off
         </label>

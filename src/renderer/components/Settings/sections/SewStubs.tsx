@@ -28,9 +28,9 @@ export const SEW_STUB_NOTE = 'Arrives with k2 chat (S30/S31).'
 function Stub({ title, what, testId }: { title: string; what: string; testId: string }): React.JSX.Element {
   return (
     <div className="max-w-xl space-y-2" data-testid={testId}>
-      <h3 className="text-sm font-medium text-[var(--color-text-primary)]">{title}</h3>
-      <p className="text-[11px] text-[var(--color-text-secondary)]">{what}</p>
-      <p className="text-[11px] text-[var(--color-text-muted)]">{SEW_STUB_NOTE}</p>
+      <h3 className="type-heading text-[var(--color-text-primary)]">{title}</h3>
+      <p className="type-hint text-[var(--color-text-secondary)]">{what}</p>
+      <p className="type-hint text-[var(--color-text-muted)]">{SEW_STUB_NOTE}</p>
     </div>
   )
 }

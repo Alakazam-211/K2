@@ -71,14 +71,14 @@ export function HookStatePill({
   switch (grant.hookState) {
     case 'pending':
       return (
-        <span data-testid="sew-hook-pill" title={grant.hookError ?? 'K2 keeps telling Sew'} className="text-[10px] text-[var(--color-status-working)]">
+        <span data-testid="sew-hook-pill" title={grant.hookError ?? 'K2 keeps telling Sew'} className="type-hint text-[var(--color-status-working)]">
           Pending
         </span>
       )
     case 'blocked':
       return (
         <span className="flex items-center gap-1.5">
-          <span data-testid="sew-hook-pill" title={grant.hookError ?? ''} className="text-[10px] text-[var(--color-status-error-soft)]">
+          <span data-testid="sew-hook-pill" title={grant.hookError ?? ''} className="type-hint text-[var(--color-status-error-soft)]">
             Failed
           </span>
           {onRetry ? (
@@ -90,13 +90,13 @@ export function HookStatePill({
       )
     case 'held':
       return (
-        <span data-testid="sew-hook-pill" title={grant.hookError ?? 'Sew holds this member (banned in a Space)'} className={`text-[10px] ${muted}`}>
+        <span data-testid="sew-hook-pill" title={grant.hookError ?? 'Sew holds this member (banned in a Space)'} className={`type-hint ${muted}`}>
           Held
         </span>
       )
     case 'synced':
       return (
-        <span data-testid="sew-hook-pill" className={`text-[10px] ${muted}`}>
+        <span data-testid="sew-hook-pill" className={`type-hint ${muted}`}>
           Active
         </span>
       )
@@ -198,7 +198,7 @@ export function SewPersonAccess({
     <SettingsGroup title="Chat / Voice Hosting">
     <div className="space-y-1" data-testid="sew-person-access" title={SEW_ACCESS_TOOLTIP}>
       <div className="flex items-center gap-2">
-        <span className="text-xs text-[var(--color-text-primary)] w-28">Chat and voice</span>
+        <span className="type-row text-[var(--color-text-primary)] w-28">Chat and voice</span>
         {installed && (targetOn || !grant) ? (
           <SettingDropdown
             ariaLabel={`Chat and voice access for ${username}`}
@@ -212,30 +212,30 @@ export function SewPersonAccess({
             onChange={(v) => void change(v as Level)}
           />
         ) : installed ? (
-          <span className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
+          <span className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)]">
             {value === 'guest' ? 'Guest' : 'Member'} (Chat / Voice Hosting is off; read only)
             <Button disabled={disabled} onClick={() => void change('none')}>
               Remove
             </Button>
           </span>
         ) : (
-          <span className={`text-[11px] ${muted}`}>—</span>
+          <span className={`type-hint ${muted}`}>—</span>
         )}
         {grant ? <HookStatePill grant={grant} onRetry={() => void retry()} /> : null}
       </div>
       {!installed ? (
         <button
           type="button"
-          className={`text-[10px] underline ${muted}`}
+          className={`type-hint underline ${muted}`}
           onClick={() => useSettingsStore.setState({ activeSection: 'sew' })}
         >
           Enable Chat / Voice Hosting in Cores to give people access.
         </button>
       ) : null}
-      {!principalId ? <p className={`text-[10px] ${muted}`}>This person has no id yet; update K2 on the server.</p> : null}
-      <p className={`text-[10px] ${muted}`}>{SEW_ACCESS_TOOLTIP}</p>
+      {!principalId ? <p className={`type-hint ${muted}`}>This person has no id yet; update K2 on the server.</p> : null}
+      <p className={`type-hint ${muted}`}>{SEW_ACCESS_TOOLTIP}</p>
       {error ? (
-        <p role="alert" className="text-[10px] text-[var(--color-status-error-soft)]">
+        <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
           {error}
         </p>
       ) : null}
@@ -266,14 +266,14 @@ export function SewAdminAccessState({ users }: { users: { id?: string; username:
   const nameOf = (id: string): string => users.find((u) => u.id === id)?.username ?? id
   return (
     <div className="space-y-1 border border-[var(--color-border)] p-2" data-testid="sew-admin-access">
-      <div className="text-[11px] font-medium text-[var(--color-text-primary)]">Chat / Voice Hosting (read only)</div>
-      <p className={`text-[10px] ${muted}`}>
+      <div className="type-name text-[var(--color-text-primary)]">Chat / Voice Hosting (read only)</div>
+      <p className={`type-hint ${muted}`}>
         A login uses chat and voice only through its own chat grant, never because of its role here. Admin Access never adds anyone to an App&apos;s
         Spaces.
       </p>
       <ul className="space-y-0.5">
         {grants.map((g) => (
-          <li key={g.id} className="flex items-center gap-2 text-[11px]" data-testid={`sew-admin-row-${nameOf(g.subjectId)}`}>
+          <li key={g.id} className="flex items-center gap-2 type-hint" data-testid={`sew-admin-row-${nameOf(g.subjectId)}`}>
             <span className="font-mono text-[var(--color-text-primary)]">{nameOf(g.subjectId)}</span>
             <span className="text-[var(--color-text-secondary)]">
               {g.scope === 'guest' ? 'Chat guest' : 'Chat member'}

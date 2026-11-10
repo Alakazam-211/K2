@@ -86,24 +86,24 @@ export function KeybindingsSection(): React.JSX.Element {
   return (
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Key Bindings</h2>
+        <h2 className="type-title text-[var(--color-text-primary)]">Key Bindings</h2>
         <button
           onClick={resetAllKeybindings}
-          className="px-3 py-1 text-xs text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+          className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
         >
           Reset All to Defaults
         </button>
       </div>
 
-      <div className="text-xs text-[var(--color-text-muted)] mb-3">
+      <div className="type-hint text-[var(--color-text-muted)] mb-3">
         Click a binding to rebind. Press Escape to cancel. Reserved keys: {RESERVED_KEYS.join(', ')}
       </div>
 
       {/* Workspace number shortcut layout */}
       <div className="mb-4 border border-[var(--color-border)] px-3 py-2.5 flex items-center justify-between">
         <div>
-          <div className="text-xs text-[var(--color-text-primary)]">Workspace Number Shortcuts</div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+          <div className="type-row text-[var(--color-text-primary)]">Workspace Number Shortcuts</div>
+          <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
             {shortcutLayout === 'cmd-active-cmdshift-pinned'
               ? <><KeyCombo combo="⌘" /> 1-9 switches Active, <KeyCombo combo="⇧⌘" /> 1-9 switches Pinned</>
               : <><KeyCombo combo="⌘" /> 1-9 switches Pinned, <KeyCombo combo="⇧⌘" /> 1-9 switches Active</>
@@ -116,7 +116,7 @@ export function KeybindingsSection(): React.JSX.Element {
               ? 'cmd-pinned-cmdshift-active'
               : 'cmd-active-cmdshift-pinned'
           )}
-          className="px-3 py-1 text-xs text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer font-mono flex-shrink-0"
+          className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer font-mono flex-shrink-0"
         >
           Swap
         </button>
@@ -125,26 +125,26 @@ export function KeybindingsSection(): React.JSX.Element {
       <div className="space-y-4">
         {grouped.map(({ category, items }) => (
           <div key={category}>
-            <div className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider mb-1 px-1">
+            <div className="type-badge text-[var(--color-text-muted)] uppercase tracking-wider mb-1 px-1">
               {category}
             </div>
             {category === 'Navigation' && (
               <div className="border border-[var(--color-border)] mb-px">
                 <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)]">
                   <div>
-                    <span className="text-xs text-[var(--color-text-secondary)]">Active Workspaces</span>
-                    <span className="text-[10px] text-[var(--color-text-muted)] ml-2">1-9</span>
+                    <span className="type-row text-[var(--color-text-secondary)]">Active Workspaces</span>
+                    <span className="type-hint text-[var(--color-text-muted)] ml-2">1-9</span>
                   </div>
-                  <span className="text-xs font-mono text-[var(--color-text-muted)] bg-white/[0.06] px-2 py-0.5">
+                  <span className="type-row font-mono text-[var(--color-text-muted)] bg-white/[0.06] px-2 py-0.5">
                     <KeyCombo combo={shortcutLayout === 'cmd-active-cmdshift-pinned' ? '⌘ 1-9' : '⌥⌘ 1-9'} />
                   </span>
                 </div>
                 <div className="flex items-center justify-between px-3 py-2">
                   <div>
-                    <span className="text-xs text-[var(--color-text-secondary)]">Pinned Workspaces</span>
-                    <span className="text-[10px] text-[var(--color-text-muted)] ml-2">1-9</span>
+                    <span className="type-row text-[var(--color-text-secondary)]">Pinned Workspaces</span>
+                    <span className="type-hint text-[var(--color-text-muted)] ml-2">1-9</span>
                   </div>
-                  <span className="text-xs font-mono text-[var(--color-text-muted)] bg-white/[0.06] px-2 py-0.5">
+                  <span className="type-row font-mono text-[var(--color-text-muted)] bg-white/[0.06] px-2 py-0.5">
                     <KeyCombo combo={shortcutLayout === 'cmd-active-cmdshift-pinned' ? '⌥⌘ 1-9' : '⌘ 1-9'} />
                   </span>
                 </div>
@@ -154,10 +154,10 @@ export function KeybindingsSection(): React.JSX.Element {
               <div className="border border-[var(--color-border)] mb-px" data-zen-keybinding="">
                 <div className="flex items-center justify-between px-3 py-2">
                   <div>
-                    <span className="text-xs text-[var(--color-text-secondary)]">Enter / Exit Zen Mode</span>
-                    <span className="text-[10px] text-[var(--color-text-muted)] ml-2">Not rebindable</span>
+                    <span className="type-row text-[var(--color-text-secondary)]">Enter / Exit Zen Mode</span>
+                    <span className="type-hint text-[var(--color-text-muted)] ml-2">Not rebindable</span>
                   </div>
-                  <span className="text-xs font-mono text-[var(--color-text-muted)] bg-[var(--color-bg-hover)] px-2 py-0.5">
+                  <span className="type-row font-mono text-[var(--color-text-muted)] bg-[var(--color-bg-hover)] px-2 py-0.5">
                     <KeyCombo combo={isMacPlatform() ? ZEN_CHORD_LABEL.mac : ZEN_CHORD_LABEL.other} />
                   </span>
                 </div>
@@ -255,20 +255,20 @@ function KeybindingRow({
         hasBorder ? 'border-b border-[var(--color-border)]' : ''
       } ${conflict ? 'bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)]' : ''}`}
     >
-      <span className="text-xs text-[var(--color-text-secondary)] flex-1">{hotkey.label}</span>
+      <span className="type-row text-[var(--color-text-secondary)] flex-1">{hotkey.label}</span>
 
       <div className="flex items-center gap-2">
         {capturing ? (
           <button
             ref={captureRef}
-            className="px-2 py-0.5 text-xs bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/50 text-[var(--color-accent)] no-drag cursor-pointer animate-pulse"
+            className="px-2 py-0.5 type-control bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/50 text-[var(--color-accent)] no-drag cursor-pointer animate-pulse"
           >
             Press a key...
           </button>
         ) : (
           <button
             onClick={onStartCapture}
-            className={`px-2 py-0.5 text-xs border no-drag cursor-pointer ${
+            className={`px-2 py-0.5 type-control border no-drag cursor-pointer ${
               conflict
                 ? 'bg-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] text-[var(--color-status-error-soft)]'
                 : 'bg-[var(--color-bg-surface)] border-[var(--color-border)] text-[var(--color-text-primary)]'
@@ -281,7 +281,7 @@ function KeybindingRow({
         {isCustom && (
           <button
             onClick={onReset}
-            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+            className="type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
             title="Reset to default"
           >
             x

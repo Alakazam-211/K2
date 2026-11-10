@@ -87,15 +87,15 @@ export function EditorsSection(): React.JSX.Element {
   return (
     <div className="max-w-2xl space-y-8">
       <div>
-        <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">Defaults</h2>
+        <h2 className="type-title text-[var(--color-text-primary)] mb-3">Defaults</h2>
         <div className="border border-[var(--color-border)]">
           <div
             className="flex items-center justify-between px-3 py-2.5 border-b border-[var(--color-border)]"
             data-settings-id="editors.default-editor"
           >
             <div>
-              <div className="text-xs text-[var(--color-text-secondary)]">Default Editor</div>
-              <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+              <div className="type-row text-[var(--color-text-secondary)]">Default Editor</div>
+              <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
                 Opens files and projects with this editor
               </div>
             </div>
@@ -117,8 +117,8 @@ export function EditorsSection(): React.JSX.Element {
             data-settings-id="editors.default-terminal"
           >
             <div>
-              <div className="text-xs text-[var(--color-text-secondary)]">Default Terminal</div>
-              <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+              <div className="type-row text-[var(--color-text-secondary)]">Default Terminal</div>
+              <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
                 Right-click a tab to open in this terminal
               </div>
             </div>
@@ -141,12 +141,12 @@ export function EditorsSection(): React.JSX.Element {
 
       <div data-settings-id="editors.detected-editors">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Detected Editors</h2>
+          <h2 className="type-title text-[var(--color-text-primary)]">Detected Editors</h2>
           <button
             type="button"
             onClick={() => void refreshEditors()}
             disabled={editorsLoading}
-            className="px-3 py-1 text-xs text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default font-mono"
+            className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default font-mono"
           >
             {editorsLoading ? 'Scanning...' : 'Refresh'}
           </button>
@@ -167,16 +167,16 @@ export function EditorsSection(): React.JSX.Element {
                     : 'bg-[color-mix(in_srgb,var(--color-status-error)_60%,transparent)]'
                 }`}
               />
-              <span className="text-xs text-[var(--color-text-primary)] font-mono flex-1">
+              <span className="type-row text-[var(--color-text-primary)] font-mono flex-1">
                 {editor.label}
               </span>
-              <span className="text-[10px] text-[var(--color-text-muted)] font-mono">
+              <span className="type-hint text-[var(--color-text-muted)] font-mono">
                 {editor.installed ? editor.cliCommand || editor.macApp : 'not found'}
               </span>
             </div>
           ))}
           {editorApps.length === 0 && !editorsLoading && (
-            <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
+            <div className="px-3 py-2 type-hint text-[var(--color-text-muted)]">
               No editors detected yet. Click Refresh to scan.
             </div>
           )}
@@ -184,7 +184,7 @@ export function EditorsSection(): React.JSX.Element {
 
         {terminalApps.length > 0 && (
           <div className="mt-3" data-settings-id="editors.terminal-apps">
-            <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1 px-1">
+            <div className="type-badge text-[var(--color-text-muted)] uppercase tracking-wider mb-1 px-1">
               Terminal Apps
             </div>
             <div className="border border-[var(--color-border)]">
@@ -202,10 +202,10 @@ export function EditorsSection(): React.JSX.Element {
                         : 'bg-[color-mix(in_srgb,var(--color-status-error)_60%,transparent)]'
                     }`}
                   />
-                  <span className="text-xs text-[var(--color-text-primary)] font-mono flex-1">
+                  <span className="type-row text-[var(--color-text-primary)] font-mono flex-1">
                     {app.label}
                   </span>
-                  <span className="text-[10px] text-[var(--color-text-muted)] font-mono">
+                  <span className="type-hint text-[var(--color-text-muted)] font-mono">
                     {app.installed ? 'installed' : 'not found'}
                   </span>
                 </div>

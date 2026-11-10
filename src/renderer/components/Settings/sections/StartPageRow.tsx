@@ -21,8 +21,8 @@ export function StartPageRow(): React.JSX.Element {
       data-settings-id="general.start-page"
     >
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">Start page</span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+        <span className="type-row text-[var(--color-text-secondary)]">Start page</span>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
           The page K2 opens on when it starts or after you sign in. On this computer only.
         </p>
       </div>

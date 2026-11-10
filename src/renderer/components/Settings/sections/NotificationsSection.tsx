@@ -124,8 +124,8 @@ function Row({
       <div className="min-w-0 flex items-center gap-2">
         {leading}
         <div className="min-w-0">
-          <div className="text-xs text-[var(--color-text-primary)] truncate">{title}</div>
-          {hint ? <div className="text-[10px] text-[var(--color-text-muted)]">{hint}</div> : null}
+          <div className="type-row text-[var(--color-text-primary)] truncate">{title}</div>
+          {hint ? <div className="type-hint text-[var(--color-text-muted)]">{hint}</div> : null}
         </div>
       </div>
       <div className="flex-shrink-0 flex items-center gap-2">{children}</div>
@@ -148,7 +148,7 @@ function ResetButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
-      className="text-[10px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+      className="type-control px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
     >
       Reset
     </button>
@@ -281,8 +281,8 @@ export function NotificationsSection(): React.JSX.Element {
   if (!available) {
     return (
       <div className="max-w-xl" data-testid="notifications-settings-unavailable">
-        <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Notifications</h2>
-        <p className="text-xs text-[var(--color-text-muted)]">
+        <h2 className="type-title text-[var(--color-text-primary)] mb-1">Notifications</h2>
+        <p className="type-hint text-[var(--color-text-muted)]">
           This server does not send Thread pushes yet. Update it to 0.45.5 or newer.
         </p>
       </div>
@@ -294,13 +294,13 @@ export function NotificationsSection(): React.JSX.Element {
 
   return (
     <div className="max-w-xl" data-testid="notifications-settings">
-      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Notifications</h2>
-      <p className="text-xs text-[var(--color-text-muted)] mb-2">
+      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Notifications</h2>
+      <p className="type-hint text-[var(--color-text-muted)] mb-2">
         Phone pushes from K2 Companion when an agent posts in a Thread. A push shows the agent’s name only, and
         opens that Thread when tapped. Reading a Thread here keeps its pushes quiet.
       </p>
       {prefs && (
-        <p data-testid="notifications-status" className="text-[11px] text-[var(--color-text-secondary)] mb-6">
+        <p data-testid="notifications-status" className="type-hint text-[var(--color-text-secondary)] mb-6">
           Push: {pushStatusText(prefs.push)} · {deviceCountText(prefs.devices)}
         </p>
       )}
@@ -308,11 +308,11 @@ export function NotificationsSection(): React.JSX.Element {
       <div className="space-y-6">
         <SettingsGroup title="Your notifications">
           {loadError && (
-            <p role="alert" data-testid="notifications-load-error" className="text-[11px] text-[var(--color-status-error)] py-2">
+            <p role="alert" data-testid="notifications-load-error" className="type-hint text-[var(--color-status-error)] py-2">
               Could not load your notifications: {loadError}
             </p>
           )}
-          {!prefs && !loadError && <p className="text-[11px] text-[var(--color-text-muted)] py-2">Loading…</p>}
+          {!prefs && !loadError && <p className="type-hint text-[var(--color-text-muted)] py-2">Loading…</p>}
           {prefs && (
             <>
               <Row
@@ -329,19 +329,19 @@ export function NotificationsSection(): React.JSX.Element {
                 />
               </Row>
               {hint?.kind === 'aliases' && (
-                <p data-testid="notifications-owner-hint" className="text-[10px] text-[var(--color-text-muted)] py-1">
+                <p data-testid="notifications-owner-hint" className="type-hint text-[var(--color-text-muted)] py-1">
                   Also you: <strong>{hint.logins.join(', ')}</strong>
                 </p>
               )}
               {hint?.kind === 'separate' && (
-                <p data-testid="notifications-owner-hint" className="text-[10px] text-[var(--color-text-muted)] py-1">
+                <p data-testid="notifications-owner-hint" className="type-hint text-[var(--color-text-muted)] py-1">
                   {hint.owners} logins have the Owner role, so this owner token is its own person here. Each owner sets
                   their own pushes on their phone; see People below.
                 </p>
               )}
               <div data-settings-id="notifications.workspaces">
                 {prefs.workspaces.length === 0 && (
-                  <p className="text-[11px] text-[var(--color-text-muted)] py-2">No workspaces on this server.</p>
+                  <p className="type-hint text-[var(--color-text-muted)] py-2">No workspaces on this server.</p>
                 )}
                 {prefs.workspaces.map((w) => (
                   <Row
@@ -387,11 +387,11 @@ export function NotificationsSection(): React.JSX.Element {
         {isAdmin && (
           <SettingsGroup title="Workspace defaults">
             <div data-testid="notifications-defaults" data-settings-id="notifications.defaults">
-              <p className="text-[10px] text-[var(--color-text-muted)] py-1">
+              <p className="type-hint text-[var(--color-text-muted)] py-1">
                 What new and unset people get for each workspace. A person’s own switch wins.
               </p>
               {adminError && (
-                <p role="alert" className="text-[11px] text-[var(--color-status-error)] py-2">
+                <p role="alert" className="type-hint text-[var(--color-status-error)] py-2">
                   Could not load everyone’s notifications: {adminError}
                 </p>
               )}
@@ -426,7 +426,7 @@ export function NotificationsSection(): React.JSX.Element {
           <SettingsGroup title="People">
             <div data-testid="notifications-people" data-settings-id="notifications.people" className="space-y-2">
               {!canEditPeople && (
-                <p data-testid="notifications-people-readonly" className="text-[10px] text-[var(--color-text-muted)] py-1">
+                <p data-testid="notifications-people-readonly" className="type-hint text-[var(--color-text-muted)] py-1">
                   Only the owner can change other people’s notifications.
                 </p>
               )}
@@ -451,7 +451,7 @@ export function NotificationsSection(): React.JSX.Element {
         )}
 
         {saveError && (
-          <p role="alert" data-testid="notifications-save-error" className="text-[11px] text-[var(--color-status-error)]">
+          <p role="alert" data-testid="notifications-save-error" className="type-hint text-[var(--color-status-error)]">
             {saveError}
           </p>
         )}
@@ -509,21 +509,21 @@ function PersonCard({
         className="w-full flex items-center justify-between gap-3 p-2 text-left hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer"
       >
         <div className="min-w-0 flex items-center gap-2">
-          <span className="text-xs text-[var(--color-text-primary)] truncate">
+          <span className="type-row text-[var(--color-text-primary)] truncate">
             {person.principal}
             {isMe ? ' (you)' : ''}
           </span>
-          <span className="flex-shrink-0 px-1 py-0.5 text-[9px] leading-none text-[var(--color-text-muted)] border border-[var(--color-border)]">
+          <span className="flex-shrink-0 px-1 py-0.5 type-hint leading-none text-[var(--color-text-muted)] border border-[var(--color-border)]">
             {roleText}
           </span>
           {person.disabled && (
-            <span className="flex-shrink-0 px-1 py-0.5 text-[9px] leading-none text-[var(--color-text-muted)] border border-[var(--color-border)]">
+            <span className="flex-shrink-0 px-1 py-0.5 type-hint leading-none text-[var(--color-text-muted)] border border-[var(--color-border)]">
               Disabled
             </span>
           )}
         </div>
         <div className="flex-shrink-0 flex items-center gap-2">
-          <span data-testid="notifications-summary" className="text-[10px] text-[var(--color-text-secondary)]">
+          <span data-testid="notifications-summary" className="type-hint text-[var(--color-text-secondary)]">
             {personSummary(person)}
           </span>
           <svg
@@ -545,7 +545,7 @@ function PersonCard({
       {open && (
         <div id={panelId} role="region" aria-label={`Notifications for ${person.principal}`} className="px-2 pb-2">
           <div className="flex items-center justify-between gap-3 py-1 border-t border-[var(--color-border)]">
-            <div className="text-[10px] text-[var(--color-text-muted)]">{deviceCountText(person.devices)}</div>
+            <div className="type-hint text-[var(--color-text-muted)]">{deviceCountText(person.devices)}</div>
             {editable ? (
               <Toggle
                 aria-label={`Pushes from this server for ${person.principal}`}
@@ -554,7 +554,7 @@ function PersonCard({
                 onChange={onBell}
               />
             ) : (
-              <span className="text-[10px] text-[var(--color-text-secondary)]">
+              <span className="type-hint text-[var(--color-text-secondary)]">
                 Server: {person.server.enabled ? 'on' : 'off'}
               </span>
             )}
@@ -570,8 +570,8 @@ function PersonCard({
                     className="flex items-center justify-between gap-2 py-1"
                   >
                     <div className="min-w-0">
-                      <div className="text-[11px] text-[var(--color-text-secondary)] truncate">{name}</div>
-                      <div className="text-[9px] text-[var(--color-text-muted)]">{sourceLabel(w, me)}</div>
+                      <div className="type-hint text-[var(--color-text-secondary)] truncate">{name}</div>
+                      <div className="type-hint text-[var(--color-text-muted)]">{sourceLabel(w, me)}</div>
                     </div>
                     {editable ? (
                       <div className="flex items-center gap-1">
@@ -590,14 +590,14 @@ function PersonCard({
                         />
                       </div>
                     ) : (
-                      <span className="text-[10px] text-[var(--color-text-secondary)]">{w.threadPush ? 'on' : 'off'}</span>
+                      <span className="type-hint text-[var(--color-text-secondary)]">{w.threadPush ? 'on' : 'off'}</span>
                     )}
                   </div>
                 )
               })}
             </div>
           )}
-          {isMe && <div className="text-[9px] text-[var(--color-text-muted)] mt-1">Change yours above.</div>}
+          {isMe && <div className="type-hint text-[var(--color-text-muted)] mt-1">Change yours above.</div>}
         </div>
       )}
     </div>

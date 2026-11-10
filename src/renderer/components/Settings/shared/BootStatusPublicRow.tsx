@@ -28,10 +28,10 @@ export function BootStatusPublicRow(): React.JSX.Element {
   return (
     <div className="flex items-center justify-between gap-3 py-2" data-settings-id="k2-connect.boot-status-public">
       <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
+        <span className="type-row text-[var(--color-text-secondary)]">
           Hide this server&apos;s details from the internet
         </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{BOOT_STATUS_PUBLIC_DETAIL[mode]}</p>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">{BOOT_STATUS_PUBLIC_DETAIL[mode]}</p>
       </div>
       <Toggle
         checked={mode === 'ghost'}

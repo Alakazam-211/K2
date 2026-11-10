@@ -95,28 +95,28 @@ export function PackageRequestsPanel({ onChanged }: { onChanged?: () => void }):
   const batches = groupPkgBatches(pending ?? [])
   return (
     <div className="space-y-2" data-testid="compute-pkg-requests" data-settings-id="compute.packages">
-      <div className="text-xs font-medium text-[var(--color-text-primary)]">
+      <div className="type-name text-[var(--color-text-primary)]">
         Package requests{batches.length > 0 ? ` (${batches.length})` : ''}
       </div>
-      <p className={`text-[11px] ${muted}`}>
+      <p className={`type-hint ${muted}`}>
         Agents ask for system packages a job needs. The node checks each one with a dry run before it installs.
       </p>
       {error ? <Callout tone="error">{error}</Callout> : null}
-      {pending && batches.length === 0 ? <p className={`text-[11px] ${muted}`}>Nothing is waiting.</p> : null}
+      {pending && batches.length === 0 ? <p className={`type-hint ${muted}`}>Nothing is waiting.</p> : null}
       {batches.length > 0 && !canDecide ? (
-        <p className={`text-[11px] ${muted}`}>Only this server&apos;s owner or an Admin decides these.</p>
+        <p className={`type-hint ${muted}`}>Only this server&apos;s owner or an Admin decides these.</p>
       ) : null}
       {batches.map((b) => (
         <PkgBatchCard key={b.batchId} batch={b} canDecide={canDecide} onChanged={changed} />
       ))}
       {recent.length > 0 ? (
         <details data-testid="compute-pkg-recent">
-          <summary className={`text-[11px] ${secondary} cursor-pointer`}>Recent decisions ({recent.length})</summary>
+          <summary className={`type-hint ${secondary} cursor-pointer`}>Recent decisions ({recent.length})</summary>
           <div className="space-y-1 pt-1">
             {recent.map((r) => (
               <div
                 key={r.id}
-                className="text-[11px] flex flex-wrap gap-x-3 border-b border-[var(--color-border)] py-1"
+                className="type-hint flex flex-wrap gap-x-3 border-b border-[var(--color-border)] py-1"
                 data-testid={`compute-pkg-recent-${r.id}`}
               >
                 <span className="text-[var(--color-text-primary)]">{r.state}</span>
@@ -170,10 +170,10 @@ export function PkgBatchCard({
 
   return (
     <div className="border border-[var(--color-border)] p-3 space-y-2" data-testid={`compute-pkg-batch-${b.batchId}`}>
-      <div className="text-xs text-[var(--color-text-primary)]">
+      <div className="type-row text-[var(--color-text-primary)]">
         Install <span className="font-mono">{b.names.join(', ')}</span>
       </div>
-      <div className={`text-[11px] ${secondary} space-y-0.5`}>
+      <div className={`type-hint ${secondary} space-y-0.5`}>
         {b.nodes.map((n) => (
           <div key={n.node} data-testid="compute-pkg-batch-node">
             on <span className="font-medium">{n.node}</span>
@@ -181,14 +181,14 @@ export function PkgBatchCard({
           </div>
         ))}
       </div>
-      <div className={`text-[11px] ${secondary} flex flex-wrap gap-x-3`}>
+      <div className={`type-hint ${secondary} flex flex-wrap gap-x-3`}>
         <span>for {b.who}</span>
         {deps ? <span data-testid="compute-pkg-batch-deps">{deps}</span> : null}
         <span className={muted}>{formatRelativeTime(b.createdAt, nowSec())}</span>
       </div>
-      {b.why ? <p className={`text-[11px] ${secondary}`}>Why: {b.why}</p> : null}
+      {b.why ? <p className={`type-hint ${secondary}`}>Why: {b.why}</p> : null}
       {b.otherServer ? (
-        <p className={`text-[11px] ${muted}`} data-testid="compute-pkg-batch-hostwide">
+        <p className={`type-hint ${muted}`} data-testid="compute-pkg-batch-hostwide">
           {HOST_WIDE_NOTE}
         </p>
       ) : null}
@@ -228,7 +228,7 @@ export function PkgBatchCard({
           </div>
         )
       ) : null}
-      {result ? <p className={`text-[11px] ${secondary}`}>{result}</p> : null}
+      {result ? <p className={`type-hint ${secondary}`}>{result}</p> : null}
       {error ? <Callout tone="error">{error}</Callout> : null}
     </div>
   )
@@ -242,13 +242,13 @@ export function NodePackagesSummary({ node }: { node: ComputeNode }): React.JSX.
   const reboot = node.rebootPending === true || node.host?.rebootRequired === true
   if (!hostLine && !pkg && !reboot) return null
   return (
-    <div className={`text-[11px] ${secondary} space-y-0.5`} data-testid={`compute-node-packages-${node.name}`}>
+    <div className={`type-hint ${secondary} space-y-0.5`} data-testid={`compute-node-packages-${node.name}`}>
       {hostLine || reboot ? (
         <div className="flex flex-wrap items-center gap-x-2">
           {hostLine ? <span data-testid="compute-node-host">{hostLine}</span> : null}
           {reboot ? (
             <span
-              className="text-[10px] text-[var(--color-status-warn-amber-soft)] border border-[var(--color-border)] px-1"
+              className="type-hint text-[var(--color-status-warn-amber-soft)] border border-[var(--color-border)] px-1"
               data-testid="compute-node-reboot"
             >
               reboot pending
@@ -300,13 +300,13 @@ export function LocalPackagesSummary({ node }: { node: ComputeNode }): React.JSX
   const openCount = view?.packages?.openRequests ?? node.packages?.openRequests ?? open.length
   return (
     <div className="space-y-1" data-testid="compute-local-packages">
-      {policy ? <p className={`text-[11px] ${secondary}`}>Package policy for {node.name}: {policy}</p> : null}
-      <p className={`text-[11px] ${secondary}`}>
+      {policy ? <p className={`type-hint ${secondary}`}>Package policy for {node.name}: {policy}</p> : null}
+      <p className={`type-hint ${secondary}`}>
         {openCount} open package {openCount === 1 ? 'request' : 'requests'}
         {openCount > 0 ? ': allow or deny them under Package requests above.' : '.'}
       </p>
       {open.length > 0 ? (
-        <ul className={`text-[11px] ${secondary}`}>
+        <ul className={`type-hint ${secondary}`}>
           {open.map((r) => (
             <li key={r.id} data-testid={`compute-local-pkg-${r.id}`}>
               <span className="font-mono">{r.names.join(', ')}</span> for {pkgAskerLabel(r)}

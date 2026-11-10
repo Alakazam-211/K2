@@ -16,16 +16,16 @@ import {
 import { ZenNewGardenModal, zenNewGardenTurnsOn } from '@/components/Zen/widgets/ZenNewGardenModal'
 
 export const BTN =
-  'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
+  'px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
 export const DANGER_BTN =
-  'px-2 py-1 text-xs border border-[var(--color-status-error)] text-[var(--color-status-error)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
+  'px-2 py-1 type-control border border-[var(--color-status-error)] text-[var(--color-status-error)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
 export const INPUT =
-  'px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
+  'px-2 py-1 type-row bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
 
 export function InlineError({ text, testId }: { text: string | null; testId?: string }): React.JSX.Element | null {
   if (!text) return null
   return (
-    <p role="alert" data-testid={testId} className="text-[11px] text-[var(--color-status-error)] mt-1">
+    <p role="alert" data-testid={testId} className="type-hint text-[var(--color-status-error)] mt-1">
       {text}
     </p>
   )

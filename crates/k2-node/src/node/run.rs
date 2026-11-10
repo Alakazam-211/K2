@@ -2534,25 +2534,40 @@ pub(super) mod tests {
         let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
         let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
         std::thread::spawn(move || {
+            use crate::admin::exec::LocalRequest;
+            use crate::admin::jobs::JobOp;
             let r = (|| -> Result<Vec<u8>, String> {
-                // The start: stdout, stderr and the stdin pipe's read end.
-                let (mut s, _) = l.accept().map_err(|e| e.to_string())?;
-                crate::admin::server::read_frame(&mut s, 1 << 20)?;
-                let fds = crate::admin::fdpass::recv_fds(&s).map_err(|e| e.to_string())?;
-                if fds.len() != 3 {
-                    return Err(format!("a secret start carries 3 fds, got {}", fds.len()));
+                let mut stdin = None;
+                loop {
+                    let (mut s, _) = l.accept().map_err(|e| e.to_string())?;
+                    let h = crate::admin::server::read_frame(&mut s, 1 << 20)?;
+                    let answer = match serde_json::from_slice::<LocalRequest>(&h).map_err(|e| e.to_string())? {
+                        // The start: stdout, stderr and the stdin pipe's
+                        // read end; started without a uid of its own.
+                        LocalRequest::Job { job: JobOp::Start(_) } => {
+                            let fds = crate::admin::fdpass::recv_fds(&s).map_err(|e| e.to_string())?;
+                            if fds.len() != 3 {
+                                return Err(format!("a secret start carries 3 fds, got {}", fds.len()));
+                            }
+                            stdin = fds.into_iter().nth(2);
+                            JobAnswer::Started { unit: "k2job-sj-g1.service".into(), uid_index: None, gpu: None }
+                        }
+                        // The node's open asks root for its key's taint mark.
+                        LocalRequest::Job { job: JobOp::KeyTaint { .. } } => JobAnswer::KeyTaint { tainted: false },
+                        // The node's release of the unit: then read what
+                        // reached the unit's stdin.
+                        LocalRequest::Job { job: JobOp::Release { .. } } => {
+                            let done = serde_json::to_vec(&LocalResponse::Job(JobAnswer::Done { detail: serde_json::json!({}) })).unwrap();
+                            crate::admin::server::write_frame(&mut s, &done)?;
+                            let fd = stdin.take().ok_or("released before a start")?;
+                            let mut got = Vec::new();
+                            std::io::Read::read_to_end(&mut std::fs::File::from(fd), &mut got).map_err(|e| e.to_string())?;
+                            return Ok(got);
+                        }
+                        _ => JobAnswer::Refused(k2_node_proto::admin::AdminRefusal::new("not_configured", "the test executor only starts and releases")),
+                    };
+                    crate::admin::server::write_frame(&mut s, &serde_json::to_vec(&LocalResponse::Job(answer)).unwrap())?;
                 }
-                let ans = serde_json::to_vec(&LocalResponse::Job(JobAnswer::Started { unit: "k2job-sj-g1.service".into(), uid_index: None, gpu: None })).unwrap();
-                crate::admin::server::write_frame(&mut s, &ans)?;
-                let stdin = fds.into_iter().nth(2).ok_or("no stdin fd")?;
-                // The node's release of the unit.
-                let (mut s2, _) = l.accept().map_err(|e| e.to_string())?;
-                crate::admin::server::read_frame(&mut s2, 1 << 20)?;
-                let done = serde_json::to_vec(&LocalResponse::Job(JobAnswer::Done { detail: serde_json::json!({}) })).unwrap();
-                crate::admin::server::write_frame(&mut s2, &done)?;
-                let mut got = Vec::new();
-                std::io::Read::read_to_end(&mut std::fs::File::from(stdin), &mut got).map_err(|e| e.to_string())?;
-                Ok(got)
             })();
             let _ = tx.send(r);
         });

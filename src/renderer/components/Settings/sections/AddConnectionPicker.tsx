@@ -431,6 +431,7 @@ export function AddConnectionPicker({
         onPick={onPick}
         matches={tokenAndMatch}
         placeholder="Search agents on this server and paired servers…"
+        searchStyle="field"
         emptyText="No agents match"
         ariaLabel="Agents you can connect to"
         listClassName={listClass}

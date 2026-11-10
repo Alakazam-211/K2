@@ -794,6 +794,7 @@ function AddAgent({
                 }}
                 onEscape={() => setOpen(false)}
                 placeholder="Search agents"
+                searchStyle="field"
                 emptyText="No agents on this computer match."
                 ariaLabel="Agents on this computer"
                 autoFocus

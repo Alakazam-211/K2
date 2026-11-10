@@ -71,7 +71,7 @@ import { workspaceGrantSlug } from './api-keys-api'
 import { setSqlDbAgentAccess, setWorkspaceDbUpgrade } from './data-api'
 import { primaryScope } from '@/kessel/server-scope'
 import { RemoteInstructToggle } from '../shared/RemoteInstructToggle'
-import { BetaTag, Button, Callout, Input, OverflowMenu, Spinner, Surface, Tag, Toggle } from '@/components/ui'
+import { BetaTag, Button, Callout, Input, OverflowMenu, SearchField, Spinner, Surface, Tag, Toggle } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 import { computeErrorMessage, setWorkspaceComputeManage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
 import { metaChordLabel } from '@/lib/shortcut-label'
@@ -805,8 +805,7 @@ export function ProjectsSection(): React.JSX.Element {
   const noMatches = projects.length > 0 && allVisibleProjects.length === 0
 
   const searchField = (
-    <Input
-      variant="search"
+    <SearchField
       ref={searchInputRef}
       value={searchQuery}
       onChange={(e) => setSearchQuery(e.target.value)}

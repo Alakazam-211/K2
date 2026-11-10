@@ -29,7 +29,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import type { SettingEntry } from '../searchManifest'
 import { SettingDropdown, SettingsLoadState, SETTING_ROW_HINT } from '../controls/SettingControls'
-import { Button, Callout } from '@/components/ui'
+import { Button, Callout, SearchField } from '@/components/ui'
 import { ZenGardenSyncControls } from './ZenGardenSyncControls'
 import { watchLocalZenChanged } from '@/lib/zen/zen-api'
 import {
@@ -46,7 +46,7 @@ import {
   type ZenSettingsTheme,
 } from '@/lib/zen/zen-settings'
 import { useGardenAccessSwitchStore, watchGardenAccessSwitch } from '@/lib/zen/garden-access-api'
-import { BTN, DANGER_BTN, INPUT, InlineError, NewGarden, attempt, revealLabel, themeOptions } from './zen-gardens-ui'
+import { BTN, DANGER_BTN, InlineError, NewGarden, attempt, revealLabel, themeOptions } from './zen-gardens-ui'
 import { GARDENS_LEAD, ZenGardensAccessPage } from './ZenGardensAccessPage'
 import { DataSourcesSection } from './DataSourcesSection'
 import { useToastStore } from '@/stores/toast'
@@ -470,37 +470,18 @@ function GardenList({
   )
 }
 
-/** Search the Gardens by name (Rosson 2026-10-13): the Settings search-field
- *  look, a × to clear, Escape clears too. Not remembered. */
+/** Search the Gardens by name (Rosson 2026-10-13): Settings' one search
+ *  field (a × to clear, Escape clears too). Not remembered. */
 function GardenSearch({ value, onChange }: { value: string; onChange(v: string): void }): React.JSX.Element {
   return (
-    <div className="relative mb-3" data-zen-gardens-search="">
-      <input
-        type="search"
+    <div className="flex mb-3" data-zen-gardens-search="">
+      <SearchField
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape' && value !== '') {
-            e.preventDefault()
-            e.stopPropagation()
-            onChange('')
-          }
-        }}
         placeholder="Search Gardens"
         aria-label="Search Gardens"
-        className={`${INPUT} w-full pr-7 [&::-webkit-search-cancel-button]:hidden`}
+        className="w-full"
       />
-      {value !== '' && (
-        <button
-          type="button"
-          aria-label="Clear search"
-          title="Clear search"
-          onClick={() => onChange('')}
-          className="absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
-        >
-          ×
-        </button>
-      )}
     </div>
   )
 }

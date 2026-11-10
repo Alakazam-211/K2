@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
 import { BetaTag } from '@/components/ui/Tag'
 import { DialogCloseButton, useDialogCancel } from '@/components/ui'
+import { SearchField } from '@/components/ui/SearchField'
 import { searchManifest, sectionLabel, type SettingEntry } from './searchManifest'
 
 interface SettingsSearchModalProps {
@@ -74,24 +75,22 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[10vh]"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-[var(--color-scrim)] pt-[10vh]"
       onKeyDown={onKeyDown}
       tabIndex={-1}
     >
       <div {...floatMaterial('dialog')} {...cancel} className="w-full max-w-xl mx-4 bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-2xl flex flex-col max-h-[70vh]">
         {/* Input */}
+        {/* Escape closes the palette here, so it doesn't clear the text. */}
         <div className="flex items-center gap-2 px-3 py-2.5 border-b border-[var(--color-border)] flex-shrink-0">
-          <svg className="w-3.5 h-3.5 text-[var(--color-text-muted)] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
+          <SearchField
             ref={inputRef}
-            type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search settings… (try: font, theme, hidden files, clear terminal)"
-            className="flex-1 bg-transparent type-control text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
+            escapeClears={false}
+            placeholder="Search settings, like font or theme"
+            aria-label="Search settings"
+            className="flex-1 min-w-0"
           />
           <kbd className="type-hint font-mono text-[var(--color-text-muted)] border border-[var(--color-border)] rounded-[var(--radius-selector)] px-1.5 py-0.5">
             esc

@@ -24,6 +24,8 @@
   --control-switch-sm-knob: 10px;
   --control-slider-track: 3.5px;
   --control-slider-thumb: 10px;
+  --control-search-height: 36px;
+  --control-search-icon: 16px;
   --gap-pane: 0px;
   --gap-tile: 1px;
   --gap-section: 0px;
@@ -170,6 +172,8 @@
   --control-switch-sm-knob: 10px;
   --control-slider-track: 3.5px;
   --control-slider-thumb: 10px;
+  --control-search-height: 36px;
+  --control-search-icon: 16px;
   --gap-pane: 8px;
   --gap-tile: 8px;
   --gap-section: 10px;
@@ -407,6 +411,8 @@
   --control-switch-sm-knob: 14px;
   --control-slider-track: 4px;
   --control-slider-thumb: 16px;
+  --control-search-height: 36px;
+  --control-search-icon: 16px;
   --gap-pane: 8px;
   --gap-tile: 4px;
   --gap-section: 0px;
@@ -1550,6 +1556,8 @@
   --control-switch-sm-knob: 10px;
   --control-slider-track: 3.5px;
   --control-slider-thumb: 10px;
+  --control-search-height: 36px;
+  --control-search-icon: 16px;
   --gap-pane: 8px;
   --gap-tile: 6px;
   --gap-section: 8px;
@@ -1915,6 +1923,8 @@
   --control-switch-sm-knob: 10px;
   --control-slider-track: 3.5px;
   --control-slider-thumb: 10px;
+  --control-search-height: 36px;
+  --control-search-icon: 16px;
   --gap-pane: 0px;
   --gap-tile: 1px;
   --gap-section: 0px;

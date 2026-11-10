@@ -28,7 +28,7 @@ const DEFAULT_STYLE = 'terminal'
 const REQUIRED_TOKEN_SLOTS = {
   radius: ['box', 'field', 'field-multiline', 'selector', 'pill', 'badge', 'status'],
   chamfer: ['surface', 'control', 'chip', 'send'],
-  control: ['check', 'switch-width', 'switch-height', 'switch-knob', 'switch-sm-width', 'switch-sm-height', 'switch-sm-knob', 'slider-track', 'slider-thumb'],
+  control: ['check', 'switch-width', 'switch-height', 'switch-knob', 'switch-sm-width', 'switch-sm-height', 'switch-sm-knob', 'slider-track', 'slider-thumb', 'search-height', 'search-icon'],
   gap: ['pane', 'tile', 'section'],
   inset: ['window'],
   divider: ['width', 'color'],

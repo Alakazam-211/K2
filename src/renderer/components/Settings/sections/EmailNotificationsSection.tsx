@@ -10,6 +10,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
+import { SearchField } from '@/components/ui/SearchField'
 import type { SettingEntry } from '../searchManifest'
 import {
   emailNotifyApiOn,
@@ -242,10 +243,10 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
       <div>
         <Title>Suppressed addresses</Title>
         <p className={`${muted} mb-2`}>Kept hashed. A hard bounce stops every sender; a spam complaint stops that sender. Search by address to remove one.</p>
-        <div className="flex gap-2 mb-2">
-          <input
+        <div className="flex items-center gap-2 mb-2">
+          <SearchField
             aria-label="Address"
-            className="type-control px-2 py-1 bg-transparent border border-[var(--color-border)] flex-1"
+            className="flex-1 min-w-0"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="someone@example.com"

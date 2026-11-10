@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { FileViewerPane } from '@/components/FileViewerPane/FileViewerPane'
-import { DialogCloseButton, DialogFrame, DialogScrim, Toggle } from '@/components/ui'
+import { DialogCloseButton, DialogFrame, DialogScrim, SearchField, Toggle } from '@/components/ui'
 import {
   addContextLayer,
   contextErrorMessage,
@@ -800,29 +800,14 @@ function BrowseDefaultsModal({
             <DialogCloseButton className="-mt-2 -mr-3" onClick={onClose} />
           </div>
 
-          <div className="relative">
-            <input
-              ref={searchRef}
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search catalog…"
-              aria-label="Search context catalog"
-              className="w-full px-3 py-2 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)]/50 no-drag"
-            />
-            {query.trim() ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setQuery('')
-                  searchRef.current?.focus()
-                }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] no-drag cursor-pointer px-1.5 py-0.5"
-              >
-                Clear
-              </button>
-            ) : null}
-          </div>
+          <SearchField
+            ref={searchRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search the catalog"
+            aria-label="Search context catalog"
+            className="w-full"
+          />
 
           <div
             className="flex flex-wrap items-center gap-1.5"

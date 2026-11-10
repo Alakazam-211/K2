@@ -147,6 +147,8 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--control-switch-sm-knob': '10px',
   '--control-slider-track': '3.5px',
   '--control-slider-thumb': '10px',
+  '--control-search-height': '36px',
+  '--control-search-icon': '16px',
   '--type-micro': '9px',
   '--type-xs': '10px',
   '--type-sm': '11px',

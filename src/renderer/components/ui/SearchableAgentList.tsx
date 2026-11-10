@@ -19,6 +19,7 @@
 // bubbles (Home's sidebar listener closes the picker).
 
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { SearchField } from './SearchField'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 
 /** A row's image: a workspace's `ProjectAvatar`, or a caller's glyph. */
@@ -102,6 +103,10 @@ export interface SearchableAgentListProps {
   ariaLabel: string
   /** Classes of the scrolling list body. */
   listClassName?: string
+  /** `field`: the search box is the shared <SearchField> (magnifier, ×, the
+   *  search height), as every search in Settings is. `inline` (default) keeps
+   *  the compact menu box the pickers elsewhere in the app use. */
+  searchStyle?: 'inline' | 'field'
 }
 
 /** Case-insensitive substring match over the label and `keywords`; an
@@ -171,6 +176,7 @@ export function SearchableAgentList({
   emptyText,
   onEscape,
   matches,
+  searchStyle = 'inline',
   autoFocus = false,
   ariaLabel,
   listClassName = 'max-h-72 overflow-y-auto py-1',
@@ -223,20 +229,37 @@ export function SearchableAgentList({
   return (
     <>
       <div className="p-1.5 border-b border-[var(--color-border)]">
-        <input
-          ref={searchRef}
-          type="text"
-          role="combobox"
-          aria-expanded={true}
-          aria-controls={listId}
-          aria-autocomplete="list"
-          aria-activedescendant={keyboardValue !== undefined ? optionId(keyboardValue) : undefined}
-          value={query}
-          onChange={(e) => onQuery(e.target.value)}
-          onKeyDown={onSearchKeyDown}
-          placeholder={placeholder}
-          className={searchInputClass}
-        />
+        {searchStyle === 'field' ? (
+          <SearchField
+            ref={searchRef}
+            type="text"
+            role="combobox"
+            aria-expanded={true}
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={keyboardValue !== undefined ? optionId(keyboardValue) : undefined}
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            onKeyDown={onSearchKeyDown}
+            placeholder={placeholder}
+            className="w-full"
+          />
+        ) : (
+          <input
+            ref={searchRef}
+            type="text"
+            role="combobox"
+            aria-expanded={true}
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={keyboardValue !== undefined ? optionId(keyboardValue) : undefined}
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            onKeyDown={onSearchKeyDown}
+            placeholder={placeholder}
+            className={searchInputClass}
+          />
+        )}
       </div>
 
       <div ref={listRef} id={listId} role="listbox" aria-label={ariaLabel} className={listClassName}>

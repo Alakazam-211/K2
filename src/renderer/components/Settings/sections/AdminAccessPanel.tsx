@@ -32,7 +32,7 @@ import {
   SETTING_FIELD_WIDTH,
   SETTING_ROW_HINT,
 } from '../controls/SettingControls'
-import { Button, Input, OverflowMenu, Tag, Toggle, type OverflowMenuItem } from '@/components/ui'
+import { Button, Input, OverflowMenu, SearchField, Tag, Toggle, type OverflowMenuItem } from '@/components/ui'
 import { PresenceChip } from '@/components/Presence/PresenceChip'
 import { setPersonName } from '@/components/Presence/person-name-api'
 import { realName } from '@/lib/person-name'
@@ -488,7 +488,7 @@ export function AdminAccessPanel(): React.JSX.Element {
           ) : null}
           {users.length > 6 ? (
             <div className="px-4 py-2.5">
-              <Input variant="search" className="w-full" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search people" aria-label="Search people" />
+              <SearchField className="w-full" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search people" aria-label="Search people" />
             </div>
           ) : null}
           {visible.map((u) => (

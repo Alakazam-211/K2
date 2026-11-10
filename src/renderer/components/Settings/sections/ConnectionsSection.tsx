@@ -104,6 +104,7 @@ import {
   DialogScrim,
   Input,
   OverflowMenu,
+  SearchField,
   Surface,
   type OverflowMenuItem,
 } from '@/components/ui'
@@ -463,8 +464,7 @@ export function ConnectionsSection(): React.JSX.Element {
       {isLocalActive ? (
         <>
           {hosts.length > 0 && (
-            <Input
-              variant="search"
+            <SearchField
               value={serverQuery}
               onChange={(e) => setServerQuery(e.target.value)}
               placeholder="Search servers"

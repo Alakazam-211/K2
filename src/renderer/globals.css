@@ -1313,6 +1313,16 @@ html:not([data-style="terminal"]) :is(.k2-focus, .k2-checkbox, .k2-radio):focus-
   border-radius: var(--radius-selector);
   box-shadow: inset 0 0 0 2px var(--color-accent-text);
 }
+/* A focused search field (<SearchField>) in Terminal: the same 2px cut ring.
+   An <input> has no ::after, so the field's wrapper draws it over the edge. */
+html[data-style="terminal"] [data-k2-search-field]:has(> input:focus-visible):not([data-zen-root] *, [data-k2-thread-zen] *)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+html[data-style="terminal"] [data-k2-search-field]:has(> input:focus-visible):not([data-zen-root] *, [data-k2-thread-zen] *)::after,
 html[data-style="terminal"] [data-k2-focus]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)::after {
   --k2-ch-cut: var(--chamfer-control);
   --k2-ch-fr: 2px;
@@ -1890,7 +1900,7 @@ html[data-style="glass"] [data-material="frost"]:not([data-frost-shape], [data-f
   transform-origin: var(--k2-menu-origin, top left);
 }
 html[data-style="glass"] [data-material="frost"][class~="right-0"]:not([data-zen-root] *) { --k2-menu-origin: top right; }
-/* A search field (<Input variant="search">) is Frost in Glass, but keeps the
+/* A search field (<SearchField>) is Frost in Glass, but keeps the
    shared control edge: the frost hairline alone is under 3:1 on the page.
    Focus takes the accent edge, as every field does. */
 html[data-style="glass"] input[data-k2-search][data-material="frost"]:not(:focus):not([data-zen-root] *) {

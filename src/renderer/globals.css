@@ -1265,6 +1265,17 @@ html[data-style="terminal"] :where(button[data-k2-chamfer]:focus-visible:not([da
   clip-path: polygon(evenodd, var(--k2-ch-cut) 0, calc(100% - var(--k2-ch-cut)) 0, 100% var(--k2-ch-cut), 100% calc(100% - var(--k2-ch-cut)), calc(100% - var(--k2-ch-cut)) 100%, var(--k2-ch-cut) 100%, 0 calc(100% - var(--k2-ch-cut)), 0 var(--k2-ch-cut), var(--k2-ch-cut) 0, calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr)) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr)) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), var(--k2-ch-fr) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), var(--k2-ch-fr) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr));
 }
 
+/* Keyboard focus on the shared buttons, fields, dropdown triggers, checkboxes
+   and radios outside Terminal (whose cut controls draw the rings above and
+   below): a 2px outline 2px out, following the control's round shape. It is
+   the accent as text (--color-accent-text), which reads at 4.5:1 on every
+   ground, so the ring clears 3:1 on any card, also with a custom accent. A
+   button or field opts in with the k2-focus class. */
+html:not([data-style="terminal"]) :is(.k2-focus, .k2-checkbox, .k2-radio):focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  outline: 2px solid var(--color-accent-text);
+  outline-offset: 2px;
+}
+
 /* Line-2 chips on agent rows (project tags, the Home machine chip) in K2's
    square Style: chamfered rectangles, like the presence chips and the
    Thread (Rosson 2026-10-16). The cut follows the Thread's rule for a 14px
@@ -1567,7 +1578,7 @@ html:not([data-style="terminal"]) .k2-radio:checked {
 html[data-style="terminal"] .k2-switch { --k2-ch-cut: var(--k2-sw-cut); }
 html[data-style="terminal"] .k2-switch-knob { --k2-ch-cut: var(--k2-sw-knob-cut, 2.828px); }
 .k2-switch:hover:not(:disabled) { filter: brightness(1.12); }
-.k2-switch:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.k2-switch:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: 2px; }
 .k2-switch:disabled { cursor: not-allowed; opacity: 0.5; }
 .k2-switch-knob {
   position: absolute;
@@ -1712,7 +1723,7 @@ html:not([data-style="terminal"]) .k2-segmented { overflow: hidden; }
   color: var(--color-on-accent);
   cursor: default;
 }
-.k2-segment:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.k2-segment:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: -2px; }
 .k2-segment[aria-checked="true"]:focus-visible { outline-color: var(--color-on-accent); }
 .k2-segment:disabled { cursor: default; opacity: 0.45; }
 

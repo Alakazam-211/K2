@@ -417,7 +417,7 @@ export function SettingDropdown({
         title={title}
         data-k2-chamfer="control"
         {...triggerData}
-        className={`flex items-center type-control ${compact ? 'h-6 max-w-full gap-1 px-1.5' : 'gap-2 px-2 py-1'} bg-[var(--color-bg)] border border-[var(--color-control-edge)] text-[var(--color-text-primary)] transition-colors ${
+        className={`k2-focus flex items-center type-control ${compact ? 'h-6 max-w-full gap-1 px-1.5' : 'gap-2 px-2 py-1'} bg-[var(--color-bg)] border border-[var(--color-control-edge)] text-[var(--color-text-primary)] transition-colors ${
           disabled
             ? 'opacity-50 cursor-not-allowed'
             : 'hover:border-[var(--color-text-muted)] cursor-pointer'
@@ -485,7 +485,7 @@ export function SettingDropdown({
                   onChange(option.value)
                   setIsOpen(false)
                 }}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-left type-control transition-colors ${
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-left type-control transition-colors focus:outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)] ${
                   isDisabled
                     ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
                     : isActive

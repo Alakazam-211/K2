@@ -133,3 +133,40 @@ describe('Toggle', () => {
     expect(body).toContain('box-shadow: none')
   })
 })
+
+describe('Keyboard focus', () => {
+  it('outside Terminal, buttons, fields, dropdown triggers, checkboxes and radios get a 2px ring in the readable accent', () => {
+    const body = rule(
+      globals,
+      'html:not([data-style="terminal"]) :is(.k2-focus, .k2-checkbox, .k2-radio):focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)',
+    )
+    expect(body).toContain('outline: 2px solid var(--color-accent-text)')
+    expect(body).toContain('outline-offset: 2px')
+  })
+
+  it('the shared Button, Input and the Settings dropdown trigger opt in', () => {
+    for (const file of [join(__dirname, 'Button.tsx'), join(__dirname, 'Input.tsx'), join(repo, 'src/renderer/components/Settings/controls/SettingControls.tsx')]) {
+      expect(readFileSync(file, 'utf8'), file).toMatch(/['`]k2-focus /)
+    }
+  })
+
+  it('switch, segment, slider thumb, menu items and dropdown options ring in the readable accent', () => {
+    expect(rule(globals, '.k2-switch:focus-visible')).toContain('outline: 2px solid var(--color-accent-text)')
+    expect(rule(globals, '.k2-segment:focus-visible')).toContain('outline: 2px solid var(--color-accent-text)')
+    expect(rule(generated, '[data-style="glass"] .k2-slider:focus-visible:not([data-zen-root] *)::-webkit-slider-thumb')).toContain('0 0 0 2px var(--color-accent-text)')
+    expect(readFileSync(join(__dirname, 'OverflowMenu.tsx'), 'utf8')).toContain('focus-visible:outline-[var(--color-accent-text)]')
+    expect(readFileSync(join(repo, 'src/renderer/components/Settings/controls/SettingControls.tsx'), 'utf8')).toContain(
+      'focus:outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)]',
+    )
+  })
+
+  it.each(LOOKS)('the readable accent clears 3:1 as a ring on a card and a raised control (%s %s)', (style, id) => {
+    const p = palette(style, id)
+    // Veil darkens it in overrides.css (80% accent, 20% black); elsewhere it is the accent.
+    const accent = resolve(style, id, 'var(--color-accent)')
+    const ring = id === 'veil' ? (accent.map((c) => c * 0.8) as Rgb) : accent
+    for (const ground of ['bg-surface', 'bg-elevated', 'bg']) {
+      expect(contrast(ring, hex(p[ground])), `${id} ring on ${ground}`).toBeGreaterThanOrEqual(3)
+    }
+  })
+})

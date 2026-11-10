@@ -1040,7 +1040,7 @@
 }
 [data-style="glass"] .k2-slider:focus-visible:not([data-zen-root] *)::-webkit-slider-thumb {
   background: #ffffff;
-  box-shadow: 0 0 0 2px var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-text);
   transform: none;
 }
 /* Segmented: a Frost pill with a blue thumb that slides inside it, inset 3px,
@@ -1079,7 +1079,7 @@
 }
 [data-style="glass"][data-palette="veil"] .k2-segment:not([data-zen-root] *) { color: #666666; }
 [data-style="glass"][data-palette="veil"] .k2-segment[aria-checked="true"]:not([data-zen-root] *) { color: #000000; }
-[data-style="glass"][data-palette="veil"] .k2-segment[aria-checked="true"]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-accent); }
+[data-style="glass"][data-palette="veil"] .k2-segment[aria-checked="true"]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-accent-text); }
 
 /* ── Drawers and the nav ─────────────────────────────────────────────────
    A drawer is one tile. The sliding box itself carries the fill, rim and

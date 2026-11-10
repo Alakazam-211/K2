@@ -61,7 +61,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       className={cx(
         // A label never wraps: a squeezed row overflows rather than breaking
         // "Try again" over two lines. Give the button flex-shrink-0 in a row.
-        'no-drag cursor-pointer transition-colors whitespace-nowrap rounded-[var(--radius-field)] [box-shadow:var(--ring-field)]',
+        'k2-focus no-drag cursor-pointer transition-colors whitespace-nowrap rounded-[var(--radius-field)] [box-shadow:var(--ring-field)]',
         'disabled:opacity-50 disabled:cursor-not-allowed',
         VARIANTS[variant],
         SIZES[size],

@@ -13,7 +13,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       ref={ref}
       data-k2-chamfer="control"
       className={cx(
-        'no-drag bg-[var(--color-bg)] border border-[var(--color-control-edge)] text-[var(--color-text-primary)]',
+        'k2-focus no-drag bg-[var(--color-bg)] border border-[var(--color-control-edge)] text-[var(--color-text-primary)]',
         'placeholder:text-[var(--color-text-muted)]',
         'text-[11px] px-2 py-1 outline-none',
         'rounded-[var(--radius-field)] [box-shadow:var(--ring-field)]',

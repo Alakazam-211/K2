@@ -137,7 +137,7 @@ export function OverflowMenu({ items, label, triggerProps, className }: Overflow
                     }}
                     className={cx(
                       'no-drag w-full px-3 py-1.5 text-left type-control transition-colors',
-                      'focus:outline-none focus-visible:bg-[var(--color-wash-1)] focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)]',
+                      'focus:outline-none focus-visible:bg-[var(--color-wash-1)] focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)]',
                       item.disabled
                         ? 'text-[var(--color-text-muted)] cursor-not-allowed'
                         : cx(

@@ -61,7 +61,9 @@ function View({ call, video, actions, inWindow, startedAt }: CallFullscreenProps
       // The browser's own Esc leaves element full screen; this one leaves
       // the in-window view (and the OS one, where the key still reaches us).
       if (e.key === 'Escape') {
+        // Only this: not a drawer or a dialog under the view too.
         e.preventDefault()
+        e.stopPropagation()
         exitCallFullscreen()
         return
       }

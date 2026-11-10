@@ -112,6 +112,42 @@ const SCOPE = `:is([data-zen-root], [${THREAD_ZEN_SCOPE_ATTR}])`
 const anim = (name: string, ms: number, ease = 'cubic-bezier(0.22, 1, 0.36, 1)'): string =>
   `var(--zen-anim-${name}-duration, ${ms}ms) var(--zen-anim-${name}-ease, ${ease})`
 
+/** Where the bubble tail applies: the desktop Thread box under Glass. Never
+ *  under Terminal (its bubbles are chamfered, CHAMFER_SCOPE) nor in a Garden
+ *  (`[data-zen-root]` themes itself). */
+export const THREAD_TAIL_SCOPE = `html[data-style="glass"] [${THREAD_ZEN_SCOPE_ATTR}]`
+
+/** The tail's shape (K2 Companion, chatBubbles.css): a 20×20 box, the
+ *  bubble's 14px corner block on the left, the curl out to the right. */
+const TAIL_PATH = 'M0 0H14V8C14 13 16 17 20 19.6C15.5 20.2 11.5 18.6 9 16.2C7 18.5 3.5 20 0 20Z'
+const TAIL_MASK = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='${TAIL_PATH}'/%3E%3C/svg%3E") center / 100% 100% no-repeat`
+
+/**
+ * Glass's message tail (K2 Companion's iMessage tail, 4.2.2), on the last
+ * bubble of each run (`ThreadBubble`'s `tail`, threadRuns):
+ *
+ *   - A run's other bubbles round all four corners (as on the phone).
+ *   - The tail is the bubble's own `::after`, filled with its colour
+ *     (`--zen-tail-fill`), shaped by a vector mask. Inside the bubble's
+ *     box, so the "Sending…" dim (the row's opacity) covers bubble and
+ *     tail as one, and a `drop-shadow` ring would trace both.
+ *   - The bubble is its own stacking layer and the tail sits at z -1: over
+ *     the bubble's fill, under its words (the tail's corner block is inside
+ *     the bubble and would cover the last line's first letter).
+ *   - The corner under the tail rounds at 14px, the tail's base, so no
+ *     sliver of the page shows where the two meet.
+ *   - The bubble never clips (the tail hangs 6px outside it).
+ */
+export const THREAD_TAIL_CSS = `
+${THREAD_TAIL_SCOPE} [data-zen-tail] { border-bottom-left-radius: var(--zen-bubble-radius) !important; border-bottom-right-radius: var(--zen-bubble-radius) !important; }
+${THREAD_TAIL_SCOPE} :is([data-zen-tail="mine"], [data-zen-tail="theirs"]) { position: relative; isolation: isolate; }
+${THREAD_TAIL_SCOPE} [data-zen-tail="mine"] { --zen-tail-fill: var(--zen-bubble-me); border-bottom-right-radius: 14px !important; }
+${THREAD_TAIL_SCOPE} [data-zen-tail="theirs"] { --zen-tail-fill: var(--zen-bubble-agent); border-bottom-left-radius: 14px !important; }
+${THREAD_TAIL_SCOPE} :is([data-zen-tail="mine"], [data-zen-tail="theirs"])::after { content: ''; position: absolute; bottom: 0; width: 20px; height: 20px; z-index: -1; background: var(--zen-tail-fill); pointer-events: none; -webkit-mask: ${TAIL_MASK}; mask: ${TAIL_MASK}; }
+${THREAD_TAIL_SCOPE} [data-zen-tail="mine"]::after { right: -6px; }
+${THREAD_TAIL_SCOPE} [data-zen-tail="theirs"]::after { left: -6px; transform: scaleX(-1); }
+`
+
 /** Motion and hover rules for the shared pieces (Zen and the desktop Thread). */
 export const THREAD_ZEN_CSS = `
 ${SCOPE} [data-zen-message] { animation: zen-message-in ${anim('messageIn', 220)} both; }
@@ -296,7 +332,7 @@ export function ThreadFooterFade({ top }: { top?: number | null }): JSX.Element 
 }
 
 export function ThreadZenStyles(): JSX.Element {
-  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_FOOTER_FADE_CSS + THREAD_SENDER_CSS}</style>
+  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_TAIL_CSS + THREAD_FOOTER_FADE_CSS + THREAD_SENDER_CSS}</style>
 }
 
 /** The message list's padding and the space between messages (the
@@ -391,6 +427,11 @@ export interface ThreadBubbleProps {
   /** The sender column (threadSenders, more than two people in the
    *  Thread): another sender's picture on the left. Absent: none. */
   sender?: ThreadSenderSlot | null
+  /** Where the Thread knows its runs (threadRuns, the desktop Thread):
+   *  true on the last bubble of a run, which draws a tail in Glass
+   *  (THREAD_TAIL_CSS); false on the others, which round every corner.
+   *  Absent (Gardens, the chats without runs): the bubble as before. */
+  tail?: boolean
 }
 
 function shallowSame(a: object | null | undefined, b: object | null | undefined): boolean {
@@ -426,6 +467,7 @@ export function sameBubbleProps(a: ThreadBubbleProps, b: ThreadBubbleProps): boo
     a.handoffRemoteHost === b.handoffRemoteHost &&
     a.still === b.still &&
     a.pending === b.pending &&
+    a.tail === b.tail &&
     sameSenderSlot(a.sender, b.sender) &&
     shallowSame(a.secret, b.secret) &&
     sameChatNode(a.footer, b.footer)
@@ -449,6 +491,7 @@ export const ThreadBubble = memo(function ThreadBubble({
   still = false,
   pending,
   sender = null,
+  tail,
 }: ThreadBubbleProps): JSX.Element {
   const kind = item.doc.kind
   // A handoff doc as it arrived (a live frame, another server's row) is
@@ -530,6 +573,7 @@ export const ThreadBubble = memo(function ThreadBubble({
         className="selectable-copy"
         {...(menuOn ? gestures : {})}
         data-zen-bubble={mine ? 'me' : 'agent'}
+        data-zen-tail={tail === undefined ? undefined : tail ? (mine ? 'mine' : 'theirs') : 'none'}
         data-chamfer=""
         style={{
           padding: '9px 14px',

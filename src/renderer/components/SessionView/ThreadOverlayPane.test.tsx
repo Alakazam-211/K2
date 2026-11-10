@@ -134,6 +134,53 @@ describe('Thread overlay pane', () => {
     expect(document.querySelector('[data-zen-message]')?.getAttribute('data-zen-message')).toBe('w50')
   })
 
+  it('Glass tail: the last bubble of each run, on both sides; a windowed run still has one', () => {
+    const t0 = 1_762_700_000
+    const row = (id: string, at: number, mine: boolean, from = 'sales'): OverlayThreadItem => ({
+      collection: 'thread',
+      seq: at - t0 + 1,
+      id,
+      doc: {
+        id,
+        kind: 'text',
+        from: mine ? 'Rosson' : from,
+        ...(mine ? { via: 'compose', author: { kind: 'owner', login: 'owner' } } : {}),
+        created_at: at,
+        body: `body ${id}`,
+      },
+    })
+    threadHook.items = [
+      row('a', t0, false),
+      row('b', t0 + 30, false),
+      row('c', t0 + 60, true),
+      row('d', t0 + 70, true),
+      row('e', t0 + 80, false, 'sales/helper'),
+      row('f', t0 + 400, false, 'sales/helper'),
+    ]
+    renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
+    const tails = Array.from(document.querySelectorAll('[data-zen-message]')).map((el) => [
+      el.getAttribute('data-zen-message'),
+      el.querySelector('[data-zen-bubble]')?.getAttribute('data-zen-tail'),
+    ])
+    expect(tails).toEqual([
+      ['a', 'none'],
+      ['b', 'theirs'],
+      ['c', 'none'],
+      ['d', 'mine'],
+      ['e', 'theirs'],
+      ['f', 'theirs'],
+    ])
+    cleanup()
+    // One run of 40 from the agent: the window draws its newest 30. Only
+    // the newest has a tail.
+    threadHook.items = Array.from({ length: 40 }, (_, i) => row(`r${i}`, t0 + i, false))
+    renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
+    const drawn = Array.from(document.querySelectorAll('[data-zen-bubble]')).map((b) => b.getAttribute('data-zen-tail'))
+    expect(drawn).toHaveLength(30)
+    expect(drawn.filter((t) => t === 'theirs')).toHaveLength(1)
+    expect(drawn[29]).toBe('theirs')
+  })
+
   it('empty list shows the Zen Thread widget\'s centered line and names the agent', () => {
     renderInRoom(
       overlayRoom,

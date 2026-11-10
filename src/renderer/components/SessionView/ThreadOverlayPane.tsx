@@ -49,6 +49,7 @@ import {
   useThreadSenderAnchor,
   type ThreadSenderSlot,
 } from '@/components/Thread/threadSenders'
+import { threadRunEnds } from '@/components/Thread/threadRuns'
 import { useReducedMotion } from '@/hooks/useReducedMotion'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { handoffApi, type HandoffDecideBody, type HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
@@ -322,14 +323,24 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   // window move, never per keystroke or frame.
   const reducedMotion = useReducedMotion()
   const senderHost = roomScope.isPrimary ? null : roomScope.hostKey
-  const senders = useMemo(() => {
-    const rows = visible.slice(win.lo, win.hi).map((it) => ({
+  // Glass's bubble tail (threadRuns): on the last bubble of each run. The
+  // row after the window counts, so a run going on past it has no tail here.
+  const { senders, tails } = useMemo(() => {
+    const row = (it: OverlayThreadItem) => ({
       id: it.id,
       sender: threadSender(it.doc, currentAddr, pastAddresses),
       // A pending bubble is always this window's own send (as ThreadItemRow).
       mine: it.pending ? true : threadAuthorLabel(it.doc, viewer, currentAddr, pastAddresses).mine,
-    }))
-    return threadSenderSlots(rows, { motion: !reducedMotion, host: senderHost })
+      at: it.doc.created_at,
+    })
+    const rows = visible.slice(win.lo, win.hi).map(row)
+    const after = win.hi < visible.length ? row(visible[win.hi]) : null
+    const run = (r: ReturnType<typeof row>) => ({ mine: r.mine, from: r.sender.key, at: r.at })
+    const ends = threadRunEnds(rows.map(run), after ? run(after) : null)
+    return {
+      senders: threadSenderSlots(rows, { motion: !reducedMotion, host: senderHost }),
+      tails: new Set(rows.filter((_, i) => ends[i]).map((r) => r.id)),
+    }
   }, [visible, win.lo, win.hi, viewer, currentAddr, pastAddresses, reducedMotion, senderHost])
   useThreadSenderAnchor(
     senders.on,
@@ -436,6 +447,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
                 handoffRemoteHost={handoffRemoteHost}
                 still={win.wasDrawn(it.id) || wasPendingBubble(it.id)}
                 sender={senders.slots.get(it.id) ?? null}
+                tail={tails.has(it.id)}
               />
             ))}
             <ThreadWindowSpacer px={win.below} gap={THREAD_LIST_GAP} edge="bottom" />
@@ -492,6 +504,7 @@ interface OverlayRowProps {
   handoffRemoteHost: string | null
   still: boolean
   sender: ThreadSenderSlot | null
+  tail: boolean
 }
 
 /** One Thread row, memoized (0.46.2): a keystroke, an activity frame, a
@@ -517,6 +530,7 @@ const OverlayRow = memo(
     a.onHandoffDecide === b.onHandoffDecide &&
     a.handoffRemoteHost === b.handoffRemoteHost &&
     a.still === b.still &&
+    a.tail === b.tail &&
     sameSenderSlot(a.sender, b.sender),
 )
 
@@ -533,6 +547,7 @@ export function ThreadItemRow({
   handoffRemoteHost = null,
   still,
   sender = null,
+  tail,
 }: {
   item: OverlayThreadItem
   /** Who is looking (`useThreadViewer` on the room's server). Defaults to
@@ -555,6 +570,8 @@ export function ThreadItemRow({
   still?: boolean
   /** The sender column (more than two people in the Thread). */
   sender?: ThreadSenderSlot | null
+  /** The last bubble of its run (threadRuns): Glass draws its tail. */
+  tail?: boolean
 }): JSX.Element {
   const { label: author, mine } = threadAuthorLabel(item.doc, viewer, currentAddr, pastAddresses)
   const now = nowSec ?? Math.floor(Date.now() / 1000)
@@ -579,6 +596,7 @@ export function ThreadItemRow({
       handoffRemoteHost={handoffRemoteHost}
       still={still}
       sender={sender}
+      tail={tail}
       pending={pending?.state}
       footer={pending?.state === 'failed' ? <PendingSendActions clientMsgId={pending.clientMsgId} error={pending.error} /> : undefined}
     />

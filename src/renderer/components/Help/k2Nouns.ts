@@ -110,6 +110,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         example: 'k2 sidecar new reviewer --harness claude',
       },
       { noun: 'project', blurb: 'Named group of workspaces + one shared chat.', example: 'k2 project msg launch "done"' },
+      {
+        noun: 'organization',
+        blurb: "The Org Chart: orgs, heads and the daily bulletin; reach a department's head.",
+        example: 'k2 organization bulletin',
+      },
       { noun: 'workspace', blurb: 'List / launch / profile; pin files in the Files drawer.', example: 'k2 workspace list --running' },
       { noun: 'skills', blurb: 'Capability profiles (SKILL.md).', example: 'k2 skills list' },
       { noun: 'llm', blurb: 'LLM subscriptions and API tokens per tool.', example: 'k2 llm tokens list' },

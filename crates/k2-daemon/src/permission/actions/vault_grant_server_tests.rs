@@ -39,7 +39,7 @@ fn server_secret(v: &k2_vault::LocalVault, name: &str) {
     v.put(r, SecretBytes::from_slice(VALUE), &Actor::Owner).expect("put");
 }
 
-fn agent_grant(v: &k2_vault::LocalVault, ws: &Ws, name: &str, how: Option<&str>) -> (String, Value) {
+fn agent_grant(v: &std::sync::Arc<k2_vault::LocalVault>, ws: &Ws, name: &str, how: Option<&str>) -> (String, Value) {
     let mut b = json!({ "name": name, "scope": "server", "to": format!("ws:{}", ws.handle) });
     if let Some(h) = how {
         b["as"] = json!(h);

@@ -590,7 +590,7 @@ pub(crate) fn send_remote(
     if item.human_given {
         if let Some((secret_id, _)) = &source {
             let granted = match (c.workspace_id(), &sender_ws) {
-                (Some(ws), Some(sw)) if c.is_passport() && ws == sw => {
+                (Some(ws), Some(sw)) if c.is_passport() && ws == sw.as_str() => {
                     vault.send_allowed(ws, secret_id, &send_allow_keys(agent, host, &peer_host))
                 }
                 _ => None,

@@ -44,7 +44,8 @@ describe('needs the person = needs-you, never the working token', () => {
     // per-harness series colours, so no series can collide with working.
     // The series are the theme's chart tokens (0.46.11), slot by harness.
     const page = src('Settings/sections/usage/usage-page.ts')
-    expect(page).toContain('var(--color-chart-${')
+    expect(page).toContain('var(--color-chart-1,')
+    expect(page).toContain('var(--color-chart-other,')
     for (const rel of ['Settings/sections/TokenUsageSection.tsx', 'Settings/sections/usage/UsageChart.tsx', 'Settings/sections/usage/usage-page.ts']) {
       expect([rel, src(rel).includes('var(--color-status-working)')]).toEqual([rel, false])
     }

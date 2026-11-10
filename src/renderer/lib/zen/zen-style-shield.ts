@@ -89,6 +89,11 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--color-bad': zen('danger'),
   '--color-neutral': zen('idle'),
   '--color-control-track-off': zen('border'),
+  // Chart series (Usage): Gardens chart with their own palette.
+  '--color-chart-1': zen('accent'),
+  '--color-chart-2': zen('working'),
+  '--color-chart-3': zen('needs-you'),
+  '--color-chart-other': zen('idle'),
   '--color-diff-add-text': zen('working'),
   '--color-diff-remove-text': zen('danger'),
   '--color-diff-modified-border': zen('working'),

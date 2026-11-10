@@ -270,9 +270,16 @@ export function harnessRank(h: string): number {
 
 /** CSS colour for a harness series: the theme's chart tokens, slot by
  *  harness (Claude 1, Codex 2, Grok 3), so a filter never repaints one. */
+const CHART_SLOTS = [
+  'var(--color-chart-1, var(--color-accent))',
+  'var(--color-chart-2, var(--color-accent))',
+  'var(--color-chart-3, var(--color-accent))',
+] as const
+const CHART_OTHER = 'var(--color-chart-other, var(--color-accent))'
+
 export function harnessColor(h: string): string {
   const i = (HARNESS_ORDER as readonly string[]).indexOf(h)
-  return `var(--color-chart-${i === -1 ? 'other' : i + 1}, var(--color-accent))`
+  return CHART_SLOTS[i] ?? CHART_OTHER
 }
 
 /** "Nov 2" for an axis; "Mon, Nov 2" for a tooltip. From `YYYY-MM-DD`. */

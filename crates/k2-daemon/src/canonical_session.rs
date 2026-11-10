@@ -10,7 +10,7 @@
 //! is the canonical example — a fresh workspace flow is:
 //!
 //!   k2so workspace open <path>
-//!   k2so mode custom
+//!   k2so settings --mode custom
 //!   # write .k2so/agent/AGENT.md
 //!   <webhook fires k2so msg <ws> --wake within ~150ms>
 //!

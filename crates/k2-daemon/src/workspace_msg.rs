@@ -134,7 +134,7 @@ impl MsgReason {
                 "Run `k2 connections list` to see available workspaces."
             }
             Self::NoAgentMode => {
-                "Workspace has no agent. Use `k2 work send` to queue, or `k2 mode custom` to set up an agent."
+                "Workspace has no agent. Use `k2 msg <workspace> --inbox-silent <file>` to queue, or `k2 settings --mode custom` to set up an agent."
             }
             Self::SpawnFailed => {
                 "Spawn failed. Verify the workspace's agent CLI (e.g. `claude`) is on PATH for the daemon."
@@ -1346,7 +1346,7 @@ fn attempt_delivery(
     // ── Issue #9: classify the no-live-session state BEFORE the spawn
     // branches, so the three states the ticket calls out are distinct:
     //   • no agent configured            → no_agent_mode (un-wakeable;
-    //     clear remedy `k2 mode custom` / register). Do NOT spawn.
+    //     clear remedy `k2 settings --mode custom` / register). Do NOT spawn.
     //   • agent configured + wake NOT requested → dormant_no_wake (the peer
     //     CAN be woken; the caller opted out — point them at `--wake`).
     //   • agent configured + wake requested → wake it (resume or fresh) and
@@ -3829,8 +3829,8 @@ mod tests {
         assert_eq!(json["reason"], "no_agent_mode");
         let hint = json["hint"].as_str().expect("hint must be present");
         assert!(
-            hint.contains("k2 work send"),
-            "no_agent_mode hint should point to `k2 work send`: {hint}"
+            hint.contains("k2 msg <workspace> --inbox-silent"),
+            "no_agent_mode hint should point to `k2 msg <workspace> --inbox-silent`: {hint}"
         );
         assert!(
             !hint.contains("k2so"),
@@ -4159,9 +4159,9 @@ mod tests {
                 "no agent_enabled + no saved session must be no_agent_mode (wake={wake})"
             );
             assert!(r.target_session_id.is_none());
-            let hint = r.hint.as_deref().unwrap_or("");
+            let hint = r.hint.as_deref().expect("no_agent_mode must carry a hint");
             assert!(
-                hint.contains("k2 mode custom") && !hint.contains("k2so"),
+                hint.contains("k2 settings --mode custom") && !hint.contains("k2so"),
                 "no_agent_mode hint must use the corrected `k2` CLI: {hint}"
             );
         }

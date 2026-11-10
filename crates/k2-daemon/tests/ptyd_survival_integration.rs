@@ -1094,7 +1094,7 @@ fn a_restart_never_fires_a_heartbeat_twice_and_fires_land_in_the_adopted_agent()
     let (s, b) = http(port, "POST", &format!("/cli/projects/update?token={token}"), &serde_json::json!({"id": project_id, "defaultAgent": preset}).to_string());
     assert_eq!(s, 200, "projects/update: {b}");
     let wsq = enc(&ws.to_string_lossy());
-    // A heartbeat wakes the workspace's agent: give it one (`k2 mode custom`).
+    // A heartbeat wakes the workspace's agent: give it one (`k2 settings --mode custom`).
     let (s, b) = http(port, "POST", &format!("/cli/mode?token={token}&project={wsq}&set=custom"), "");
     assert_eq!(s, 200, "mode custom: {b}");
     let (s, b) = http(

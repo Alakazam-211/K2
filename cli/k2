@@ -2566,9 +2566,6 @@ cmd_terminal_spawn() {
     echo "Terminal spawned: ${title:-$command}"
 }
 
-# 0.39.0f Phase 2.1b: cmd_work_create removed; dispatch arm now
-# routes `work create` straight to fail_deprecated.
-
 cmd_commit() {
     local message=""
     while [ $# -gt 0 ]; do
@@ -44741,10 +44738,6 @@ cmd_workspace_open() {
     cli_print_or_fail "$resp"
 }
 
-# 0.39.0f Phase 2.1b: cmd_mode orphan removed. `k2 mode` is
-# hard-deprecated at dispatch; `k2 settings --mode <value>` owns
-# this now.
-
 cmd_heartbeat_toggle() {
     # 0.40.41 (GH#10/#22/#23/#24): this used to be the legacy control
     # surface — a workspace-level on/off POST to /cli/heartbeat (route
@@ -44784,9 +44777,8 @@ cmd_heartbeat_toggle() {
 
 cmd_settings() {
     # 0.39.45 (#26c): `k2 settings --mode <value>` actually SETS the
-    # workspace agent mode. The `k2 mode` deprecation pointed here,
-    # but the setter was never implemented — the command printed the
-    # current settings and silently ignored the flag.
+    # workspace agent mode (it used to print the settings and ignore
+    # the flag).
     # 0.46.9: `k2 settings set <key> <value>`, the server switches the
     # daemon's hints name (voice rooms, voice tunnel, compute, board files).
     if [ "${1:-}" = "set" ]; then
@@ -57777,6 +57769,72 @@ warn_deprecated() {
     echo "warning: '$old_verb' is deprecated; use '$new_verb' instead." >&2
 }
 
+# BEGIN_RETIRED_VERBS
+# Retired verbs the CLI no longer runs. Each row is "old verb|pointer".
+# The top-level and `agent` dispatchers look a verb up here before they
+# say "Unknown command", so old AGENT.md / SKILL.md text still gets a
+# pointer, and `k2 help-deprecated` prints its map from this table.
+# tests/cli/retired_verbs_table.sh runs every row.
+_K2_RETIRED_VERBS=(
+    "agents create|k2 skills create <name> --role \"...\""
+    "agents running|k2 workspace list --running"
+    "agents list|k2 workspace list  (or k2 skills list)"
+    "agents work|k2 inbox"
+    "agents status|k2 workspace list"
+    "agents delete|k2 skills remove <name>"
+    "agents remove|k2 skills remove <name>"
+    "agents launch|your harness's own session start (K2 no longer launches agents)"
+    "agents generate-md|k2 skills regenerate [<name>]"
+    "agents profile|k2 skills profile <name>"
+    "agents lock|(nothing replaces it)"
+    "agents unlock|(nothing replaces it)"
+    "agents triage|k2 workspace triage"
+    "agents reap|(nothing replaces it)"
+    "agent create|k2 skills create <name> --role \"...\""
+    "agent delete|k2 agent retire <name>"
+    "agent remove|k2 agent retire <name>"
+    "work create|k2 inbox compose --title \"...\" --body \"...\""
+    "work send|k2 msg <workspace> --inbox-silent <file>  (or --inbox-wake)"
+    "work move|k2 agent complete --agent <name> --file <file>"
+    "work inbox|k2 inbox"
+    "work done|k2 inbox archive <id>"
+    "delegate|your harness's sub-agent feature, with k2 skills profile <agent>"
+    "mode|k2 settings --mode custom  (or off|manager|k2)"
+    "who|k2 connections list"
+    "roster|k2 connections list"
+    "whatsnew|k2 whats-new"
+    "commit-merge|k2 commit --merge"
+    "feed|k2 activity"
+    "signal|k2 msg <workspace> --signal <kind> [--payload <json>]"
+    "companion|k2 users pair-phone"
+    "agentic|(agentic mode is always on)"
+)
+
+# `_retired_verb_exit "<verb> [<sub>]"`: when the words name a retired
+# verb, print its pointer on one line and exit 1 (the old stubs' code).
+# Otherwise return, and the caller says "Unknown ...".
+_retired_verb_exit() {
+    local key="$1" row new
+    for row in "${_K2_RETIRED_VERBS[@]}"; do
+        [ "${row%%|*}" = "$key" ] || continue
+        new="${row#*|}"
+        case "$new" in
+            "("*) echo "Error: '$key' is retired $new. Run 'k2 help-deprecated' for the full map." >&2 ;;
+            *)    echo "Error: '$key' is retired. Use instead: $new" >&2 ;;
+        esac
+        exit 1
+    done
+}
+
+# The help-deprecated map rows for the table above.
+_retired_verbs_map() {
+    local row
+    for row in "${_K2_RETIRED_VERBS[@]}"; do
+        printf '  %-31s → %s\n' "${row%%|*}" "${row#*|}"
+    done
+}
+# END_RETIRED_VERBS
+
 # Hard-deprecation: print pointer to new equivalent + help-deprecated.
 # Exits non-zero so scripts notice.
 fail_deprecated() {
@@ -62368,31 +62426,8 @@ K2 retired verbs → new equivalents
 HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
 
   state list|get|set              → (removed — Workspace States retired)
-  mode off|agent|manager          → settings --mode <value>
   app-update                      → update --app
-  commit-merge                    → commit --merge
-  whatsnew                        → whats-new
-  who                             → connections list  (0.39.0)
   status "msg"                    → checkin --status "msg"
-  delegate <agent> <file>         → Your harness handles worktree+spawn now
-                                     (Claude Code sub-agent, Cursor worktree,
-                                     Tauri Cmd+T). K2 no longer manages
-                                     the spawn lifecycle. For skill profile
-                                     content, use `k2 skills profile <name>`
-                                     and load it into your harness.
-
-  # 0.39.0f Phase 2.1b — these were soft-deprecated in 2.1a (warn +
-  # forward) and hard-cut in 2.1b. No transition window remains; every
-  # arm exits non-zero.
-
-  agents create                   → skills create <name>
-  agents running                  → workspace list --running
-  agents work <n>                 → inbox  (the route answers 410 and points here)
-
-  work create --title --body      → inbox compose --title "..." --body "..."
-  work inbox                      → inbox  (the route answers 410 and points here)
-  work move --from <a> --to <b>   → inbox move <id> <folder>
-  work send <ws> --title --body   → msg <ws> --inbox-wake|--inbox-silent --title "..." --body "..."
 
   # 0.40.31 — legacy per-agent adaptive heartbeat control removed
   # (heartbeat.json; nothing consumed it since 0.39.0d). Named
@@ -62407,38 +62442,22 @@ HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
   --agent <name> flag             → --workspace <path>  (everywhere)
                                        Hard-removed; pass workspace explicitly.
 
+RETIRED (the CLI no longer runs these; each answers with its pointer and
+exits 1; /cli/agents/work and /cli/work/inbox answer 410 and point here)
+
+EOF
+    _retired_verbs_map
+    cat <<'EOF'
+
 EXAMPLES OF MIGRATION
 
   # Sending a message
   Old: k2 msg --agent scout_v3 "hello"
   New: k2 msg scout_v3 "hello"            # workspace-implicit; --agent removed
 
-  # Queueing work to another workspace
-  Old: k2 work send my_other_ws --title "task" --body "do this"
-  New: k2 msg my_other_ws --inbox-wake ./task.md
-
-  # Creating your own task / note
-  Old: k2 work create --title "audit auth" --body "..."
-  New: k2 inbox compose --title "audit auth" --body "..."
-
   # Marking a task done
   Old: k2 done --blocked "Stripe API access"
   New: k2 checkin --done --blocked "Stripe API access"   (or just `done`)
-
-  # Filing a completed item
-  Old: k2 work move --file <f> --from active --to done
-  New: k2 inbox archive <id>               # archives by id (folder-agnostic)
-
-  # Creating a sub-agent
-  Old: k2 agents create backend-eng
-  New: k2 skills create backend-eng        # skill is documentation; your
-                                             # harness spawns the agent
-
-  # Spawning a sub-agent on a work item
-  Old: k2 delegate backend-eng .k2so/agents/backend-eng/work/inbox/task.md
-  New: Use your harness's sub-agent feature (Claude Code, Cursor) to spawn
-       a worktree-based session. Reference the skill via
-       `k2 skills profile backend-eng` and load into the harness's context.
 EOF
 }
 
@@ -95102,11 +95121,8 @@ case "${1:-help}" in
             update) shift 2; cmd_agent_update "$@" ;;
             complete) shift 2; cmd_agent_complete "$@" ;;
             profile) shift 2; cmd_workspace_profile "$@" ;;
-            create)
-                fail_deprecated "agent create" "k2 agent hire <dir> (see 'k2 agent hire --help')" ;;
-            delete|remove)
-                fail_deprecated "agent delete" "k2 agent retire <name> (guards + archive; see 'k2 agent retire --help')" ;;
             *)
+                _retired_verb_exit "agent ${2:-}"
                 echo "Unknown agent subcommand: ${2:-}" >&2
                 cmd_help_agent >&2
                 exit 2 ;;
@@ -95290,34 +95306,6 @@ case "${1:-help}" in
         shift
         cmd_cert "$@"
         ;;
-    agents)
-        # 0.39.0f Phase 2.1b cut every `agents *` subverb. Two pointers
-        # stay while text the daemon still writes for agents names them
-        # (`agents create` in the wake context, `agents running` in the
-        # delegate completion steps). The other subverbs are gone.
-        case "${2:-}" in
-            create)
-                fail_deprecated "agents create" "k2 skills create <name> (or register a new workspace via your IDE/harness)" ;;
-            running)
-                fail_deprecated "agents running" "k2 workspace list --running" ;;
-            *)      echo "Unknown agents subcommand: ${2:-}" >&2; cmd_help; exit 1 ;;
-        esac
-        ;;
-    work)
-        # 0.39.0f Phase 2.1b cut every `work *` subverb. Three pointers
-        # stay while text the daemon still writes names them (`work send`
-        # in the no-agent hint, `work create` and `work move` in the
-        # default agent body and the resume context).
-        case "${2:-}" in
-            create)
-                fail_deprecated "work create" "k2 inbox compose --title \"...\" --body \"...\"" ;;
-            send)
-                fail_deprecated "work send" "k2 msg <workspace> --inbox-wake <path>  (or --inbox-silent)" ;;
-            move)
-                fail_deprecated "work move" "k2 inbox move <id> <folder>" ;;
-            *)      echo "Unknown work subcommand: ${2:-}" >&2; cmd_help; exit 1 ;;
-        esac
-        ;;
     terminal)
         case "${2:-}" in
             spawn) shift 2; cmd_terminal_spawn "$@" ;;
@@ -95332,32 +95320,9 @@ case "${1:-help}" in
         # Workspace States product feature retired entirely.
         fail_deprecated "state" "(removed — Workspace States no longer exist)"
         ;;
-    delegate)
-        # Phase 2.1 A23: hard-deprecated. Modern harnesses (Claude Code,
-        # Cursor) create worktrees + spawn sub-agents natively. K2 no
-        # longer manages the spawn lifecycle.
-        cat >&2 <<EOF
-Error: 'delegate' is deprecated.
-
-Modern harnesses (Claude Code, Cursor, etc.) create worktrees and
-spawn agents natively — use your IDE's sub-agent / worktree feature
-instead. K2 no longer manages the spawn lifecycle.
-
-For applying a skill profile to specific work without a fresh worktree,
-see 'k2 skills profile <name>' for the SKILL.md content; load it
-into your harness's context.
-
-Run 'k2 help-deprecated' for the full map of retired verbs.
-EOF
-        exit 1
-        ;;
     commit)
         # Phase 2.1: commit --merge subsumes commit-merge per A2.3.
         shift; cmd_commit_v2 "$@"
-        ;;
-    commit-merge)
-        # Phase 2.1: hard-deprecated. Use commit --merge.
-        fail_deprecated "commit-merge" "k2 commit --merge"
         ;;
     reviews)
         shift; cmd_reviews "$@"
@@ -95439,10 +95404,6 @@ EOF
                 shift 2; cmd_onboarding_fresh "$@" ;;
             *)            echo "Usage: k2 onboarding <scan|adopt|defer|start-fresh> [args]" >&2; exit 1 ;;
         esac
-        ;;
-    mode)
-        # Phase 2.1: hard-deprecated. Use settings --mode.
-        fail_deprecated "mode" "k2 settings --mode <off|agent|manager>"
         ;;
     remind)
         shift
@@ -95682,17 +95643,8 @@ EOF
         # Cell-only — errors outside a sandbox (no per-cell socket).
         shift; cmd_respond "$@"
         ;;
-    whatsnew)
-        # Phase 2.1: hard-deprecated spelling. Use whats-new.
-        fail_deprecated "whatsnew" "k2 whats-new"
-        ;;
     whats-new)
         shift; cmd_whatsnew "$@"
-        ;;
-    who)
-        # 0.39.0: `who` collapsed into `k2 connections list`. The pointer
-        # stays while docs/agent-orchestration.md still names `k2so who`.
-        fail_deprecated "who" "k2 connections list"
         ;;
     activity)
         # Phase 2.1 A5: feed → activity.
@@ -96018,6 +95970,8 @@ EOF
         cmd_help_v2_advanced
         ;;
     *)
+        _retired_verb_exit "$1 ${2:-}"
+        _retired_verb_exit "$1"
         echo "Unknown command: $1" >&2
         cmd_help
         exit 1

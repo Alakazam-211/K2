@@ -1,418 +1,334 @@
-// Settings → Access → User Templates. Named access_templates recipes.
-// A line stores kind and, for kind=app, a role_id. No target_id on a line.
-// Apply inserts real grants and collects target_id (and scope) then.
-// Editing a template does not rewrite grants already written.
+// Settings → Access → User Templates: starting sets of access for new
+// people. A list and detail like Workspaces / Agents: the templates on the
+// left; on the right one template, with what it gives (an App and a role per
+// line) and Apply, which gives a person all of it at once.
+//
+// The daemon's words: a template (`/cli/skin/templates`) is a list of lines;
+// a line stores a kind and, for an App, a role, never the App itself, so a
+// role that works in any App asks which App when you apply. Applying writes
+// grants for that person; changing the template later doesn't rewrite them.
 
 import React, { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
-import type { SettingEntry } from '../searchManifest'
+import { daemonErrorText } from '@/lib/daemon-error'
 import { primaryScope } from '@/kessel/server-scope'
+import { Button, Input, OverflowMenu, Surface, Tag, cx } from '@/components/ui'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { useSettingsStore } from '@/stores/settings'
+import {
+  SETTING_FIELD_WIDTH,
+  SaveError,
+  SaveNote,
+  SettingDropdown,
+  SettingRow,
+  SettingsGroup,
+  SettingsLoadState,
+  useSaveStatus,
+  type SaveState,
+} from '../controls/SettingControls'
+import type { SettingEntry } from '../searchManifest'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
+import {
+  HOST_APP,
+  HOST_LABEL,
+  appName,
+  asRecord,
+  asString,
+  fetchApps,
+  listWords,
+  parsePeople,
+  parseRoles,
+  parseTemplates,
+  reachWords,
+  roleLabel,
+  showPersonNext,
+  type AppOption,
+  type PersonRow,
+  type RoleRow,
+  type TemplateLine,
+  type TemplateRow,
+} from './user-access-api'
 
 export const USER_TEMPLATES_MANIFEST: SettingEntry[] = [
   {
     id: 'user-templates.list',
     section: 'user-templates',
     label: 'User Templates',
-    description: 'Kind and role lines applied onto a person as grants. Editing a template does not rewrite grants.',
-    keywords: ['template', 'access', 'grant', 'mailbox', 'role', 'user templates'],
+    description: 'Starting sets of access for new people: Apps and roles you give someone in one step.',
+    keywords: ['template', 'access', 'grant', 'role', 'apply', 'new person', 'user templates'],
     group: 'User Templates',
   },
 ]
 
-type PersonRow = {
-  id: string | null
-  username: string
-}
+type Load = 'loading' | 'ready' | { error: string }
+/** A template id, the new-template form, or nothing yet. */
+type Selection = string | 'new' | null
 
-type RoleRow = {
-  id: string
-  name: string
-  appId: string | null
-}
+const NOTED_KIND: Record<string, string> = { mailbox: 'Mailbox', database: 'Database', cli: 'Command-line tool' }
 
-type TemplateLine = {
-  id: string
-  templateId: string
-  kind: string
-  roleId: string | null
-  position: number
-}
-
-type TemplateRow = {
-  id: string
-  name: string
-  lines: TemplateLine[]
-}
-
-type AppOption = { id: string; name: string; kind: string }
-
-const KIND_OPTIONS = [
-  { value: 'app', label: 'app' },
-  { value: 'mailbox', label: 'mailbox' },
-  { value: 'database', label: 'database' },
-  { value: 'cli', label: 'cli' },
-]
-
-const INPUT_CLS =
-  'flex-1 min-w-[8rem] px-2 py-1 type-row bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
-
-const BTN_ACCENT =
-  'px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60'
-
-function asRecord(raw: unknown): Record<string, unknown> {
-  return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
-}
-
-function asString(v: unknown): string | null {
-  return typeof v === 'string' && v.trim() ? v.trim() : null
-}
-
-function asList(raw: unknown, keys: string[]): unknown[] {
-  if (Array.isArray(raw)) return raw
-  const rec = asRecord(raw)
-  for (const k of keys) {
-    if (Array.isArray(rec[k])) return rec[k] as unknown[]
+/** One write at a time: which part it was, whether it's running, and how it
+ *  ended (the shared "Saved" note, or why it failed). */
+function useWrites(): {
+  busy: string | null
+  at: (key: string) => SaveState
+  run: (key: string, fn: () => Promise<unknown>) => Promise<boolean>
+} {
+  const status = useSaveStatus(3000)
+  const [key, setKey] = useState<string | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  return {
+    busy,
+    at: (k) => (key === k ? status.state : 'idle'),
+    run: async (k, fn) => {
+      setKey(k)
+      setBusy(k)
+      status.reset()
+      try {
+        await fn()
+        status.saved()
+        return true
+      } catch (e) {
+        status.failed(new Error(daemonErrorText(e)))
+        return false
+      } finally {
+        setBusy(null)
+      }
+    },
   }
-  return []
 }
 
-function errText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e)
-}
-
-function parsePeople(raw: unknown): PersonRow[] {
-  return asList(raw, ['users']).flatMap((row) => {
-    const rec = asRecord(row)
-    const username = asString(rec.username)
-    if (!username) return []
-    return [{ id: asString(rec.id), username }]
-  })
-}
-
-function parseRoles(raw: unknown): RoleRow[] {
-  return asList(raw, ['roles']).flatMap((row) => {
-    const rec = asRecord(row)
-    const id = asString(rec.id)
-    const name = asString(rec.name)
-    if (!id || !name) return []
-    return [{ id, name, appId: asString(rec.appId) ?? asString(rec.app_id) }]
-  })
-}
-
-function parseTemplates(raw: unknown): TemplateRow[] {
-  return asList(raw, ['templates']).flatMap((row) => {
-    const rec = asRecord(row)
-    const id = asString(rec.id)
-    const name = asString(rec.name)
-    if (!id || !name) return []
-    const lines = asList(rec.lines, ['lines']).flatMap((line) => {
-      const item = asRecord(line)
-      const lineId = asString(item.id)
-      const kind = asString(item.kind)
-      if (!lineId || !kind) return []
-      const position = item.position
-      return [{
-        id: lineId,
-        templateId: asString(item.templateId) ?? asString(item.template_id) ?? id,
-        kind,
-        roleId: asString(item.roleId) ?? asString(item.role_id),
-        position: typeof position === 'number' ? position : 0,
-      }]
-    })
-    return [{ id, name, lines }]
-  })
-}
-
-function parseApps(raw: unknown): AppOption[] {
-  return asList(raw, ['services']).flatMap((row) => {
-    const rec = asRecord(row)
-    const id = asString(rec.id)
-    const name = asString(rec.name)
-    const kind = asString(rec.kind)
-    if (!id || !name || (kind !== 'cmd' && kind !== 'skin')) return []
-    return [{ id, name, kind }]
-  })
-}
-
-function listButtonClass(active: boolean): string {
-  return `w-full text-left px-3 py-2 no-drag cursor-pointer ${
-    active ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
-  }`
+function linesWords(t: TemplateRow): string {
+  const n = t.lines.length
+  if (n === 0) return 'Nothing in it yet'
+  const apps = t.lines.every((l) => l.kind === 'app')
+  return `${n} ${apps ? (n === 1 ? 'App' : 'Apps') : n === 1 ? 'item' : 'items'}`
 }
 
 export function UserTemplatesSection(): React.JSX.Element {
-  const [people, setPeople] = useState<PersonRow[]>([])
-  const [roles, setRoles] = useState<RoleRow[]>([])
   const [templates, setTemplates] = useState<TemplateRow[]>([])
-  const [apps, setApps] = useState<AppOption[]>([])
-  const [appsLoaded, setAppsLoaded] = useState(false)
-  const [selection, setSelection] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
-  const [templateName, setTemplateName] = useState('')
-  const [lineKind, setLineKind] = useState('')
-  const [lineRole, setLineRole] = useState('')
-  const [applyPerson, setApplyPerson] = useState('')
-  const [applyTargets, setApplyTargets] = useState<Record<string, string>>({})
-  const [applyScopes, setApplyScopes] = useState<Record<string, string>>({})
+  const [roles, setRoles] = useState<RoleRow[]>([])
+  const [people, setPeople] = useState<PersonRow[]>([])
+  const [load, setLoad] = useState<Load>('loading')
+  const [apps, setApps] = useState<AppOption[] | null>(null)
+  const [appsError, setAppsError] = useState<string | null>(null)
+  const [selection, setSelection] = useState<Selection>(null)
+  const writes = useWrites()
 
+  /** The first read shows the loading card; later ones keep the page. */
   const refresh = useCallback(async () => {
-    setError(null)
-    const failures: string[] = []
     try {
-      setTemplates(parseTemplates(await daemonCliGet<unknown>(primaryScope(), 'skin/templates')))
+      const [t, r, u] = await Promise.all([
+        daemonCliGet<unknown>(primaryScope(), 'skin/templates'),
+        daemonCliGet<unknown>(primaryScope(), 'skin/roles'),
+        daemonCliGet<unknown>(primaryScope(), 'skin/users'),
+      ])
+      const next = parseTemplates(t)
+      setTemplates(next)
+      setRoles(parseRoles(r))
+      setPeople(parsePeople(u))
+      setLoad('ready')
+      // Open on the first template, never an empty pane.
+      setSelection((s) => (s === 'new' || (s && next.some((x) => x.id === s)) ? s : next[0]?.id ?? null))
     } catch (e) {
-      failures.push(errText(e))
-      setTemplates([])
+      setLoad({ error: daemonErrorText(e) })
     }
-    try {
-      setRoles(parseRoles(await daemonCliGet<unknown>(primaryScope(), 'skin/roles')))
-    } catch (e) {
-      failures.push(errText(e))
-      setRoles([])
-    }
-    try {
-      setPeople(parsePeople(await daemonCliGet<unknown>(primaryScope(), 'skin/users')))
-    } catch (e) {
-      failures.push(errText(e))
-      setPeople([])
-    }
-    if (failures.length) setError(failures.join(' · '))
-    setLoading(false)
   }, [])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
 
+  // App names: for lines, and for roles made for one App.
+  const needsApps = templates.some((t) => t.lines.some((l) => l.kind === 'app')) || roles.some((r) => r.appId)
   const loadApps = useCallback(async () => {
-    if (appsLoaded) return
-    const projects = await daemonCliGet<unknown>(primaryScope(), 'projects/list')
-    const list = Array.isArray(projects) ? projects : asList(projects, ['projects', 'items'])
-    const workspaces = list.flatMap((row) => {
-      const rec = asRecord(row)
-      const id = asString(rec.id)
-      if (!id) return []
-      return [id]
-    })
-    const next: AppOption[] = []
-    for (const projectId of workspaces) {
-      const listed = await daemonCliGet<unknown>(primaryScope(), 'publish/list', { project: projectId })
-      next.push(...parseApps(listed))
+    setAppsError(null)
+    try {
+      setApps(await fetchApps())
+    } catch (e) {
+      setAppsError(daemonErrorText(e))
     }
-    setApps(next)
-    setAppsLoaded(true)
-  }, [appsLoaded])
-
-  const template = selection ? templates.find((t) => t.id === selection) ?? null : null
-
+  }, [])
   useEffect(() => {
-    const needsApps = lineKind === 'app' || Boolean(template?.lines.some((line) => line.kind === 'app'))
-    if (!needsApps) return
-    void loadApps().catch((e) => setError(errText(e)))
-  }, [lineKind, template, loadApps])
+    if (needsApps && !apps) void loadApps()
+  }, [needsApps, apps, loadApps])
 
-  const addTemplate = useCallback(async () => {
-    const name = templateName.trim()
-    if (!name) return
-    setBusy('add-template')
-    setError(null)
-    try {
-      await daemonCliPost(primaryScope(), 'skin/templates', { name })
-      setTemplateName('')
-      await refresh()
-    } catch (e) {
-      setError(errText(e))
-    } finally {
-      setBusy(null)
-    }
-  }, [templateName, refresh])
+  const create = async (name: string): Promise<boolean> => {
+    let id: string | null = null
+    const ok = await writes.run('create', async () => {
+      id = asString(asRecord(await daemonCliPost<unknown>(primaryScope(), 'skin/templates', { name })).id)
+    })
+    if (!ok) return false
+    await refresh()
+    setSelection((s) => id ?? s)
+    return true
+  }
 
-  const renameTemplate = useCallback(
-    async (id: string, name: string) => {
-      setBusy(id)
-      setError(null)
-      try {
-        await daemonCliPost(primaryScope(), 'skin/templates/update', { id, name })
-        await refresh()
-      } catch (e) {
-        setError(errText(e))
-      } finally {
-        setBusy(null)
-      }
-    },
-    [refresh],
-  )
-
-  const removeTemplate = useCallback(
-    async (id: string) => {
-      setBusy(id)
-      setError(null)
-      try {
-        await daemonCliPost(primaryScope(), 'skin/templates/delete', { id })
-        setSelection(null)
-        await refresh()
-      } catch (e) {
-        setError(errText(e))
-      } finally {
-        setBusy(null)
-      }
-    },
-    [refresh],
-  )
-
-  const addLine = useCallback(async () => {
-    if (!template) return
-    setBusy('add-line')
-    setError(null)
-    try {
-      await daemonCliPost(primaryScope(), 'skin/templates/lines', {
-        templateId: template.id,
-        kind: lineKind,
-        ...(lineKind === 'app' ? { roleId: lineRole } : {}),
-      })
-      await refresh()
-    } catch (e) {
-      setError(errText(e))
-    } finally {
-      setBusy(null)
-    }
-  }, [template, lineKind, lineRole, refresh])
-
-  const removeLine = useCallback(
-    async (id: string) => {
-      setBusy(id)
-      setError(null)
-      try {
-        await daemonCliPost(primaryScope(), 'skin/templates/lines/delete', { id })
-        await refresh()
-      } catch (e) {
-        setError(errText(e))
-      } finally {
-        setBusy(null)
-      }
-    },
-    [refresh],
-  )
-
-  const applyTemplate = useCallback(async () => {
-    if (!template) return
-    const who = people.find((p) => p.id === applyPerson)
-    if (!who?.id) {
-      setError('missing subject id')
-      return
-    }
-    setBusy('apply')
-    setError(null)
-    try {
-      await daemonCliPost(primaryScope(), 'skin/templates/apply', {
-        principalId: who.id,
-        templateId: template.id,
-        lines: template.lines.map((line) => ({
-          lineId: line.id,
-          targetId: applyTargets[line.id] ?? '',
-          ...(line.kind === 'app' ? {} : { scope: (applyScopes[line.id] ?? '').trim() }),
-        })),
-      })
-      await refresh()
-    } catch (e) {
-      setError(errText(e))
-    } finally {
-      setBusy(null)
-    }
-  }, [template, people, applyPerson, applyTargets, applyScopes, refresh])
+  const template = selection && selection !== 'new' ? templates.find((t) => t.id === selection) ?? null : null
+  const ready = load === 'ready'
 
   return (
-    <div className="flex h-full min-h-0">
-      <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0">
-        <div className="px-3 pt-3 pb-2 border-b border-[var(--color-border)]">
-          <h2 className="type-title text-[var(--color-text-primary)]">User Templates</h2>
-          <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            A template is a named recipe. Applying it writes grants. Editing it does not rewrite grants already written.
+    <div className="h-full min-h-0 flex">
+      <aside aria-label="Templates" className="w-72 flex-shrink-0 min-h-0 flex flex-col border-r border-[var(--color-border)]">
+        <div className="flex-shrink-0 px-4 pt-6 pb-3">
+          <h2 className="flex items-center h-7 type-heading text-[var(--color-text-primary)]">User Templates</h2>
+          <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed">
+            Starting sets of access for new people. Apply one to give someone all of it at once.
           </p>
           <AccessAuditLink className="mt-1" />
         </div>
-        <div data-settings-id="user-templates.list" className="flex-1 overflow-y-auto min-h-0">
-          <div className="px-3 pt-2 pb-1">
-            <span className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-              Access templates
-            </span>
-          </div>
-          {loading ? (
-            <p className="px-3 type-hint text-[var(--color-text-muted)]">Loading…</p>
-          ) : templates.length === 0 ? (
-            <p className="px-3 type-hint text-[var(--color-text-muted)]">No access templates yet.</p>
-          ) : (
-            templates.map((row) => (
-              <button
-                key={row.id}
-                type="button"
-                aria-label={`Open template ${row.name}`}
-                className={listButtonClass(selection === row.id)}
-                onClick={() => setSelection(row.id)}
-              >
-                <span className="block type-row text-[var(--color-text-primary)] truncate">{row.name}</span>
-              </button>
-            ))
-          )}
-          <form
-            className="px-3 py-2 space-y-1.5"
-            onSubmit={(e) => {
-              e.preventDefault()
-              void addTemplate()
-            }}
-          >
-            <input
-              className={`${INPUT_CLS} w-full`}
-              aria-label="New access template name"
-              placeholder="template name"
-              value={templateName}
-              onChange={(e) => setTemplateName(e.target.value)}
-            />
-            <button type="submit" className={BTN_ACCENT} disabled={busy === 'add-template' || !templateName.trim()}>
-              Add template
-            </button>
-          </form>
+        <div data-settings-id="user-templates.list" className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-3 [scrollbar-gutter:stable]">
+          {ready && templates.length > 0 ? (
+            <section>
+              <div className="flex items-center h-7 mb-1 type-heading text-[var(--color-text-primary)]">Templates</div>
+              {/* overflow-hidden: a selected or hovered row keeps to the card's corners. */}
+              <Surface chamfer material="tile" className="overflow-hidden divide-y divide-[var(--color-border)]">
+                {templates.map((row) => {
+                  const selected = selection === row.id
+                  return (
+                    <button
+                      key={row.id}
+                      type="button"
+                      aria-label={`Open template ${row.name}`}
+                      aria-current={selected ? 'true' : undefined}
+                      data-template-row={row.id}
+                      data-k2-focus=""
+                      onClick={() => setSelection(row.id)}
+                      className={cx(
+                        'relative w-full flex flex-col px-3 py-2 text-left no-drag cursor-pointer transition-colors outline-none',
+                        selected ? 'bg-[var(--color-accent)]/15' : 'hover:bg-[var(--color-wash-1)]',
+                      )}
+                    >
+                      {selected && <span aria-hidden="true" className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--color-accent)]" />}
+                      <span className="block type-name text-[var(--color-text-primary)] truncate">{row.name}</span>
+                      <span className="block type-hint text-[var(--color-text-secondary)] truncate">{linesWords(row)}</span>
+                    </button>
+                  )
+                })}
+              </Surface>
+            </section>
+          ) : null}
+          {ready && templates.length > 0 ? (
+            <Button variant="quiet" className="w-full justify-center" disabled={selection === 'new'} onClick={() => setSelection('new')}>
+              New template
+            </Button>
+          ) : null}
         </div>
-      </div>
-      <div className="flex-1 overflow-y-auto p-6 min-h-0">
-        {error && (
-          <p role="alert" className="type-hint text-[var(--color-status-error)] mb-3">
-            {error}
-          </p>
-        )}
-        {template ? (
-          <TemplateDetail
-            template={template}
-            people={people}
-            roles={roles}
-            apps={apps}
-            busy={busy}
-            lineKind={lineKind}
-            lineRole={lineRole}
-            applyPerson={applyPerson}
-            applyTargets={applyTargets}
-            applyScopes={applyScopes}
-            onRename={(name) => void renameTemplate(template.id, name)}
-            onDelete={() => void removeTemplate(template.id)}
-            onLineKind={setLineKind}
-            onLineRole={setLineRole}
-            onAddLine={() => void addLine()}
-            onRemoveLine={(id) => void removeLine(id)}
-            onApplyPerson={setApplyPerson}
-            onApplyTarget={(id, value) => setApplyTargets((prev) => ({ ...prev, [id]: value }))}
-            onApplyScope={(id, value) => setApplyScopes((prev) => ({ ...prev, [id]: value }))}
-            onApply={() => void applyTemplate()}
-          />
-        ) : (
-          <p className="type-hint text-[var(--color-text-muted)]">Select an access template.</p>
-        )}
+      </aside>
+
+      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]">
+        <div className="w-full max-w-[52rem] space-y-6 pb-6">
+          {load === 'loading' ? (
+            <SettingsLoadState kind="loading" title="Loading templates…" testId="templates-loading">
+              Reading this server’s templates and roles.
+            </SettingsLoadState>
+          ) : typeof load === 'object' ? (
+            <SettingsLoadState
+              kind="error"
+              title="Couldn’t load templates"
+              detail={load.error}
+              testId="templates-error"
+              action={<Button onClick={() => { setLoad('loading'); void refresh() }}>Try again</Button>}
+            >
+              K2 couldn’t read this server’s templates. Nothing has changed.
+            </SettingsLoadState>
+          ) : selection === 'new' ? (
+            <NewTemplate
+              busy={writes.busy === 'create'}
+              state={writes.at('create')}
+              onCancel={templates.length ? () => setSelection(templates[0].id) : null}
+              onCreate={create}
+            />
+          ) : template ? (
+            <TemplateDetail
+              key={template.id}
+              template={template}
+              people={people}
+              roles={roles}
+              apps={apps}
+              appsError={appsError}
+              created={writes.at('create') === 'saved'}
+              refresh={refresh}
+              onDeleted={() => setSelection(null)}
+            />
+          ) : (
+            <SettingsLoadState
+              kind="empty"
+              title="No templates yet"
+              testId="templates-empty"
+              action={
+                <Button variant="accent" onClick={() => setSelection('new')}>
+                  New template
+                </Button>
+              }
+            >
+              A template is a starting set of access, such as the Shop App as Staff. Make one, then give it to each new person
+              in one step.
+            </SettingsLoadState>
+          )}
+        </div>
       </div>
     </div>
   )
+}
+
+function NewTemplate({
+  busy,
+  state,
+  onCancel,
+  onCreate,
+}: {
+  busy: boolean
+  state: SaveState
+  onCancel: (() => void) | null
+  onCreate: (name: string) => Promise<boolean>
+}): React.JSX.Element {
+  const [name, setName] = useState('')
+  const submit = (): void => {
+    if (name.trim() && !busy) void onCreate(name.trim())
+  }
+  return (
+    <>
+      <header>
+        <h2 className="type-title text-[var(--color-text-primary)]">New template</h2>
+        <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed">
+          Name it for the people it’s for. Next you’ll add the Apps it gives.
+        </p>
+      </header>
+      <SettingsGroup title="Name" card testId="template-new">
+        <SettingRow label="Template name" hint="For example Front desk, or Support team." below={<SaveError state={state} />}>
+          <Input
+            autoFocus
+            value={name}
+            aria-label="New template name"
+            placeholder="Front desk"
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit()
+            }}
+            className={cx(SETTING_FIELD_WIDTH, 'type-control')}
+          />
+        </SettingRow>
+        <div className="px-4 py-3 flex items-center justify-end gap-2">
+          {onCancel ? (
+            <Button variant="quiet" onClick={onCancel}>
+              Cancel
+            </Button>
+          ) : null}
+          <Button variant="accent" disabled={!name.trim() || busy} onClick={submit}>
+            {busy ? 'Creating…' : 'Create template'}
+          </Button>
+        </div>
+      </SettingsGroup>
+    </>
+  )
+}
+
+/** A line in words: "Shop, as Staff" for a role tied to one App, "An App
+ *  you pick, as Reader" for a role that works in any. */
+function lineLabel(line: TemplateLine, role: RoleRow | null, apps: AppOption[] | null): string {
+  if (line.kind !== 'app') return NOTED_KIND[line.kind] ?? line.kind
+  if (!role) return 'An App, with a role that no longer exists'
+  return role.appId ? `${appName(role.appId, apps)}, as ${role.name}` : `An App you pick, as ${role.name}`
 }
 
 function TemplateDetail({
@@ -420,177 +336,355 @@ function TemplateDetail({
   people,
   roles,
   apps,
-  busy,
-  lineKind,
-  lineRole,
-  applyPerson,
-  applyTargets,
-  applyScopes,
-  onRename,
-  onDelete,
-  onLineKind,
-  onLineRole,
-  onAddLine,
-  onRemoveLine,
-  onApplyPerson,
-  onApplyTarget,
-  onApplyScope,
-  onApply,
+  appsError,
+  created,
+  refresh,
+  onDeleted,
 }: {
   template: TemplateRow
   people: PersonRow[]
   roles: RoleRow[]
-  apps: AppOption[]
-  busy: string | null
-  lineKind: string
-  lineRole: string
-  applyPerson: string
-  applyTargets: Record<string, string>
-  applyScopes: Record<string, string>
-  onRename: (name: string) => void
-  onDelete: () => void
-  onLineKind: (value: string) => void
-  onLineRole: (value: string) => void
-  onAddLine: () => void
-  onRemoveLine: (id: string) => void
-  onApplyPerson: (id: string) => void
-  onApplyTarget: (lineId: string, value: string) => void
-  onApplyScope: (lineId: string, value: string) => void
-  onApply: () => void
+  apps: AppOption[] | null
+  appsError: string | null
+  created: boolean
+  refresh: () => Promise<void>
+  onDeleted: () => void
 }): React.JSX.Element {
+  const writes = useWrites()
+  const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState(template.name)
-  useEffect(() => {
-    setName(template.name)
-  }, [template.name])
-  const roleChoices = roles.map((role) => ({ value: role.id, label: role.name }))
+  const [adding, setAdding] = useState(template.lines.length === 0)
+  const [pickRole, setPickRole] = useState('')
+  const roleOf = (id: string | null): RoleRow | null => (id ? roles.find((r) => r.id === id) ?? null : null)
+
+  const rename = async (): Promise<void> => {
+    const next = name.trim()
+    if (!next || next === template.name) {
+      setRenaming(false)
+      return
+    }
+    if (await writes.run('name', () => daemonCliPost(primaryScope(), 'skin/templates/update', { id: template.id, name: next }))) {
+      setRenaming(false)
+      await refresh()
+    }
+  }
+  const remove = async (): Promise<void> => {
+    const ok = await useConfirmDialogStore.getState().confirm({
+      title: `Delete ${template.name}?`,
+      message: 'The template goes away. People it was applied to keep everything it gave them.',
+      confirmLabel: 'Delete template',
+      destructive: true,
+    })
+    if (!ok) return
+    if (await writes.run('delete', () => daemonCliPost(primaryScope(), 'skin/templates/delete', { id: template.id }))) {
+      onDeleted()
+      await refresh()
+    }
+  }
+  const addLine = async (): Promise<void> => {
+    if (!pickRole) return
+    if (await writes.run('lines', () => daemonCliPost(primaryScope(), 'skin/templates/lines', { templateId: template.id, kind: 'app', roleId: pickRole }))) {
+      setPickRole('')
+      setAdding(false)
+      await refresh()
+    }
+  }
+  const removeLine = async (id: string): Promise<void> => {
+    if (await writes.run('lines', () => daemonCliPost(primaryScope(), 'skin/templates/lines/delete', { id }))) await refresh()
+  }
+
   return (
-    <div className="max-w-2xl space-y-4">
-      <SettingsGroup title="Access template">
-        <form
-          className="flex flex-wrap items-center gap-2"
-          onSubmit={(e) => {
-            e.preventDefault()
-            onRename(name.trim())
-          }}
-        >
-          <input
-            className={INPUT_CLS}
-            aria-label={`Template ${template.name} name`}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <button type="submit" className="type-hint text-[var(--color-accent)] hover:underline no-drag cursor-pointer">
-            Save template
-          </button>
-          <button
-            type="button"
-            className="type-hint text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
-            onClick={onDelete}
-          >
-            Delete template
-          </button>
-        </form>
-        <p className="type-hint text-[var(--color-text-muted)]">
-          Saving this name or its lines does not rewrite grants already written.
-        </p>
-        {template.lines.length === 0 ? (
-          <p className="type-hint text-[var(--color-text-muted)]">No lines yet. A line stores kind and, for app, a role. Not a target.</p>
+    <>
+      <header className="flex items-start justify-between gap-4">
+        {renaming ? (
+          <div className="flex items-center gap-2 min-w-0">
+            <Input
+              autoFocus
+              value={name}
+              aria-label={`Template ${template.name} name`}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void rename()
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setName(template.name)
+                  setRenaming(false)
+                }
+              }}
+              className={cx(SETTING_FIELD_WIDTH, 'type-control')}
+            />
+            <Button variant="quiet" onClick={() => { setName(template.name); setRenaming(false) }}>
+              Cancel
+            </Button>
+            <Button variant="accent" disabled={!name.trim() || writes.busy === 'name'} onClick={() => void rename()}>
+              Save name
+            </Button>
+          </div>
         ) : (
-          <div className="divide-y divide-[var(--color-border)]">
-            {template.lines.map((line) => {
-              const role = line.roleId ? roles.find((r) => r.id === line.roleId) : null
-              const targets = apps
-                .filter((app) => !role?.appId || app.id === role.appId)
-                .map((app) => ({ value: app.id, label: `${app.name} (${app.kind})` }))
-              return (
-                <div key={line.id} className="py-2 space-y-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="type-row font-mono text-[var(--color-text-primary)]">
-                      {line.kind}{role ? ` · ${role.name}` : ''}
-                    </span>
-                    <button
-                      type="button"
-                      className="type-hint text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
-                      onClick={() => onRemoveLine(line.id)}
-                    >
-                      Remove line
-                    </button>
-                  </div>
-                  {line.kind === 'app' ? (
-                    <SettingRow label="App">
-                      <SettingDropdown
-                        ariaLabel={`Apply target ${line.id}`}
-                        value={applyTargets[line.id] ?? ''}
-                        placeholder="app"
-                        options={targets}
-                        onChange={(value) => onApplyTarget(line.id, value)}
-                        menuAlign="right"
-                      />
-                    </SettingRow>
-                  ) : (
-                    <>
-                      <SettingRow label="Target">
-                        <input
-                          className={INPUT_CLS}
-                          aria-label={`Apply target ${line.id}`}
-                          value={applyTargets[line.id] ?? ''}
-                          onChange={(e) => onApplyTarget(line.id, e.target.value)}
-                        />
-                      </SettingRow>
-                      <SettingRow label="Scope">
-                        <input
-                          className={INPUT_CLS}
-                          aria-label={`Apply scope ${line.id}`}
-                          value={applyScopes[line.id] ?? ''}
-                          onChange={(e) => onApplyScope(line.id, e.target.value)}
-                        />
-                      </SettingRow>
-                    </>
-                  )}
-                </div>
-              )
-            })}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <h2 className="type-title text-[var(--color-text-primary)] truncate">{template.name}</h2>
+              <SaveNote state={writes.at('name')} />
+            </div>
+            <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed">
+              {created && template.lines.length === 0
+                ? 'Created. Now add the Apps it gives, then apply it to someone.'
+                : 'Changing it later doesn’t change anyone it was already applied to.'}
+            </p>
           </div>
         )}
-        <SettingRow label="Kind">
-          <SettingDropdown
-            ariaLabel="Template line kind"
-            value={lineKind}
-            placeholder="kind"
-            options={KIND_OPTIONS}
-            onChange={onLineKind}
-            menuAlign="right"
+        {!renaming ? (
+          <OverflowMenu
+            label={`More actions for ${template.name}`}
+            items={[
+              { id: 'rename', label: 'Rename…', onSelect: () => setRenaming(true) },
+              { id: 'delete', label: 'Delete template…', danger: true, group: true, hint: 'People keep what it gave them.', onSelect: () => void remove() },
+            ]}
           />
-        </SettingRow>
-        {lineKind === 'app' ? (
-          <SettingRow label="Role">
-            <SettingDropdown
-              ariaLabel="Template line role"
-              value={lineRole}
-              placeholder="role"
-              options={roleChoices}
-              onChange={onLineRole}
-              menuAlign="right"
-            />
+        ) : null}
+      </header>
+      <SaveError state={writes.at('name')} />
+      <SaveError state={writes.at('delete')} />
+
+      <SettingsGroup
+        title="What it gives"
+        hint="Each line is an App and the role a person gets there. The role sets which agents they reach."
+        card
+        testId="template-lines"
+        action={
+          <span className="flex items-center gap-2">
+            <SaveNote state={writes.at('lines')} />
+            {!adding ? <Button onClick={() => setAdding(true)}>Add an App</Button> : null}
+          </span>
+        }
+      >
+        {template.lines.map((line) => {
+          const role = roleOf(line.roleId)
+          return (
+            <SettingRow
+              key={line.id}
+              label={lineLabel(line, role, apps)}
+              hint={line.kind === 'app' ? (role ? reachWords(role, [], false) : 'Remove this line and add the App again with a current role.') : 'Kept as a note. K2 doesn’t enforce it.'}
+              testId={`template-line-${line.id}`}
+            >
+              {line.kind !== 'app' ? <Tag tone="muted">Noted only</Tag> : null}
+              <Button variant="quiet" aria-label={`Remove ${lineLabel(line, role, apps)}`} disabled={writes.busy === 'lines'} onClick={() => void removeLine(line.id)}>
+                Remove
+              </Button>
+            </SettingRow>
+          )
+        })}
+        {template.lines.length === 0 && !adding ? (
+          <SettingRow label="Nothing yet" hint="Add an App and a role, and everyone you apply this to gets it.">
+            {null}
           </SettingRow>
         ) : null}
-        <button type="button" className={BTN_ACCENT} disabled={busy === 'add-line' || !lineKind} onClick={onAddLine}>
-          Add line
-        </button>
-        <SettingRow label="Person">
-          <SettingDropdown
-            ariaLabel="Apply template to"
-            value={applyPerson}
-            placeholder="person"
-            options={people.flatMap((p) => (p.id ? [{ value: p.id, label: p.username }] : []))}
-            onChange={onApplyPerson}
-            menuAlign="right"
-          />
-        </SettingRow>
-        <button type="button" className={BTN_ACCENT} disabled={busy === 'apply' || template.lines.length === 0} onClick={onApply}>
-          Apply template
-        </button>
+        {adding ? (
+          <div data-testid="template-add-line">
+            <SettingRow
+              label="App and role"
+              hint={
+                roles.length
+                  ? 'A role made for one App gives that App. A role for any App lets you pick the App when you apply.'
+                  : 'No roles yet. Roles are made in Settings → Apps.'
+              }
+              field={roles.length > 0}
+            >
+              {roles.length ? (
+                <SettingDropdown
+                  ariaLabel="Role to add"
+                  value={pickRole}
+                  placeholder="Choose a role"
+                  fullWidth
+                  options={roles.map((r) => ({ value: r.id, label: roleLabel(r, apps) }))}
+                  onChange={setPickRole}
+                />
+              ) : (
+                <Button onClick={() => useSettingsStore.getState().setSection('skin-access')}>Open Apps</Button>
+              )}
+            </SettingRow>
+            <div className="px-4 py-3 flex items-center justify-end gap-2">
+              {template.lines.length > 0 ? (
+                <Button variant="quiet" onClick={() => { setAdding(false); setPickRole('') }}>
+                  Cancel
+                </Button>
+              ) : null}
+              <Button variant="accent" disabled={!pickRole || writes.busy === 'lines'} onClick={() => void addLine()}>
+                {writes.busy === 'lines' ? 'Adding…' : 'Add to template'}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+        {typeof writes.at('lines') === 'object' ? (
+          <div className="px-4 py-3">
+            <SaveError state={writes.at('lines')} />
+          </div>
+        ) : null}
       </SettingsGroup>
-    </div>
+
+      <ApplyCard template={template} people={people} roles={roles} apps={apps} appsError={appsError} refresh={refresh} />
+    </>
+  )
+}
+
+/** Apply: pick the person, pick an App for any role that works in any App,
+ *  and give it all at once. Ends by saying what they got, with a way to see
+ *  them in User Access. */
+function ApplyCard({
+  template,
+  people,
+  roles,
+  apps,
+  appsError,
+  refresh,
+}: {
+  template: TemplateRow
+  people: PersonRow[]
+  roles: RoleRow[]
+  apps: AppOption[] | null
+  appsError: string | null
+  refresh: () => Promise<void>
+}): React.JSX.Element {
+  const writes = useWrites()
+  const [who, setWho] = useState('')
+  const [targets, setTargets] = useState<Record<string, string>>({})
+  const [scopes, setScopes] = useState<Record<string, string>>({})
+  const [applied, setApplied] = useState<{ username: string; gave: string[] } | null>(null)
+  const roleOf = (id: string | null): RoleRow | null => (id ? roles.find((r) => r.id === id) ?? null : null)
+  const choosable = people.filter((p) => p.id)
+  const person = choosable.find((p) => p.id === who) ?? null
+
+  /** Where each line goes: fixed by its role, or picked here. */
+  const targetOf = (line: TemplateLine): string => {
+    if (line.kind === 'app') return roleOf(line.roleId)?.appId ?? targets[line.id] ?? ''
+    return (targets[line.id] ?? '').trim()
+  }
+  const missing = template.lines.some((l) => !targetOf(l) || (l.kind !== 'app' && !(scopes[l.id] ?? '').trim()) || (l.kind === 'app' && !roleOf(l.roleId)))
+  const canApply = Boolean(person) && template.lines.length > 0 && !missing
+
+  const apply = async (): Promise<void> => {
+    if (!person?.id) return
+    const gave = template.lines.map((l) => (l.kind === 'app' ? appName(targetOf(l), apps) : `${NOTED_KIND[l.kind] ?? l.kind} ${targetOf(l)}`))
+    const ok = await writes.run('apply', () =>
+      daemonCliPost(primaryScope(), 'skin/templates/apply', {
+        principalId: person.id,
+        templateId: template.id,
+        lines: template.lines.map((line) => ({
+          lineId: line.id,
+          targetId: targetOf(line),
+          ...(line.kind === 'app' ? {} : { scope: (scopes[line.id] ?? '').trim() }),
+        })),
+      }),
+    )
+    if (ok) {
+      setApplied({ username: person.username, gave })
+      setWho('')
+      setTargets({})
+      setScopes({})
+      await refresh()
+    }
+  }
+
+  const appChoices = [{ value: HOST_APP, label: HOST_LABEL }, ...(apps ?? []).map((a) => ({ value: a.id, label: a.name }))]
+
+  return (
+    <SettingsGroup title="Apply to a person" hint="Gives one person everything above at once." card testId="template-apply">
+      {choosable.length === 0 ? (
+        <SettingRow label="No people yet" hint="Add someone in User Access first, then come back to apply this.">
+          <Button onClick={() => useSettingsStore.getState().setSection('people')}>Open User Access</Button>
+        </SettingRow>
+      ) : (
+        <>
+          <SettingRow label="Person" hint="Who gets it. What they already have stays." field>
+            <SettingDropdown
+              ariaLabel="Apply template to"
+              value={who}
+              placeholder="Choose a person"
+              fullWidth
+              options={choosable.map((p) => ({ value: p.id as string, label: p.fullName ? `${p.fullName} (${p.username})` : p.username }))}
+              onChange={(v) => {
+                setWho(v)
+                setApplied(null)
+              }}
+            />
+          </SettingRow>
+          {template.lines.map((line) => {
+            const role = roleOf(line.roleId)
+            if (line.kind === 'app') {
+              if (!role || role.appId) return null
+              return (
+                <SettingRow
+                  key={line.id}
+                  label={`App for ${role.name}`}
+                  hint={appsError ? undefined : `${reachWords(role)} Pick where.`}
+                  below={appsError ? <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">Couldn’t list the Apps: {appsError.replace(/[.\s]+$/, '')}. You can still pick {HOST_LABEL}.</p> : undefined}
+                  field
+                >
+                  <SettingDropdown
+                    ariaLabel={`App for ${role.name}`}
+                    value={targets[line.id] ?? ''}
+                    placeholder="Choose an App"
+                    fullWidth
+                    options={appChoices}
+                    onChange={(v) => setTargets((prev) => ({ ...prev, [line.id]: v }))}
+                  />
+                </SettingRow>
+              )
+            }
+            const kind = NOTED_KIND[line.kind] ?? line.kind
+            return (
+              <SettingRow key={line.id} label={`${kind} (noted only)`} hint="Its name, and the access to note down." testId={`apply-noted-${line.id}`}>
+                <Input
+                  value={targets[line.id] ?? ''}
+                  aria-label={`${kind} name`}
+                  placeholder="Name"
+                  onChange={(e) => setTargets((prev) => ({ ...prev, [line.id]: e.target.value }))}
+                  className="w-28 type-control"
+                />
+                <Input
+                  value={scopes[line.id] ?? ''}
+                  aria-label={`${kind} access`}
+                  placeholder="Access"
+                  onChange={(e) => setScopes((prev) => ({ ...prev, [line.id]: e.target.value }))}
+                  className="w-28 type-control"
+                />
+              </SettingRow>
+            )
+          })}
+          <SettingRow
+            label={applied ? `Applied to ${applied.username}` : 'Apply'}
+            hint={
+              applied
+                ? `${applied.username} can now use ${listWords(applied.gave)}.`
+                : template.lines.length === 0
+                  ? 'Add an App above first.'
+                  : person
+                    ? `${person.username} gets ${listWords(template.lines.map((l) => (l.kind === 'app' ? (targetOf(l) ? appName(targetOf(l), apps) : 'the App you pick') : NOTED_KIND[l.kind] ?? l.kind)))}.`
+                    : 'Choose a person first.'
+            }
+            below={<SaveError state={writes.at('apply')} />}
+            testId="template-apply-row"
+          >
+            {applied ? (
+              <>
+                <SaveNote state={writes.at('apply')} />
+                <Button
+                  onClick={() => {
+                    showPersonNext(applied.username)
+                    useSettingsStore.getState().setSection('people')
+                  }}
+                >
+                  See {applied.username} in User Access
+                </Button>
+              </>
+            ) : (
+              <Button variant="accent" disabled={!canApply || writes.busy === 'apply'} onClick={() => void apply()}>
+                {writes.busy === 'apply' ? 'Applying…' : person ? `Apply to ${person.username}` : 'Apply'}
+              </Button>
+            )}
+          </SettingRow>
+        </>
+      )}
+    </SettingsGroup>
   )
 }

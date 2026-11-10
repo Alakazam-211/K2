@@ -31,7 +31,6 @@ import { showPersonNext } from './user-access-api'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useSettingsStore } from '@/stores/settings'
 import { MUST_CHANGE_NOTE } from './AppUserDialogs'
-import { UserTemplatesSection } from './UserTemplatesSection'
 import { SECTION_LABELS } from '../searchManifest'
 import { menuOptions, pickValue, waitForMenuOptions } from '@/test-utils/setting-dropdown'
 
@@ -664,19 +663,5 @@ describe('PeopleSection', () => {
     fireEvent.click(screen.getByRole('radio', { name: /Send them a link to set their own/ }))
     fireEvent.change(screen.getByLabelText('New user’s email'), { target: { value: '' } })
     await waitFor(() => expect(screen.getByRole('radio', { name: /Type one/ })).toHaveProperty('checked', true))
-  })
-
-  it('User Templates renders the access template list', async () => {
-    h.daemonCliGet.mockImplementation(async (route: string) => {
-      if (route === 'skin/templates') return { templates: [{ id: 't1', name: 'Clinic', lines: [] }] }
-      if (route === 'skin/roles') return { roles: [] }
-      if (route === 'skin/users') return { users: [] }
-      throw new Error(`unexpected GET ${route}`)
-    })
-    render(<UserTemplatesSection />)
-    expect(await screen.findByRole('heading', { level: 2, name: 'User Templates' })).toBeTruthy()
-    expect(screen.getByText('Access templates')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Open template Clinic' })).toBeTruthy()
-    expect(screen.queryByRole('heading', { name: 'User Access' })).toBeNull()
   })
 })

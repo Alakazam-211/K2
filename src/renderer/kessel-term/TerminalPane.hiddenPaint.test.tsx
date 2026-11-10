@@ -15,7 +15,7 @@ import {
 const DELAY = 150
 vi.mock('./hiddenPaint', async (importOriginal) => {
   const real = await importOriginal<typeof import('./hiddenPaint')>()
-  return { ...real, HIDDEN_PAINT_PAUSE_MS: 150 }
+  return { ...real, hiddenPaintPauseDelayMs: (everShown: boolean) => (everShown ? 150 : 0) }
 })
 
 const h = vi.hoisted(() => ({
@@ -181,7 +181,7 @@ vi.mock('@/stores/connect-host', () => ({
 
 
 import { TerminalPane } from './TerminalPane'
-import { shouldPauseHiddenPaint } from './hiddenPaint'
+import { HIDDEN_PAINT_PAUSE_MS, shouldPauseHiddenPaint } from './hiddenPaint'
 import { renderInRoom, fixedStore, testRoom } from '@/test-utils/room'
 import { useTabsStore } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
@@ -313,14 +313,17 @@ const drawn = (): string => document.querySelector('[data-terminal-container]')?
 const spawnCalls = (): number => vi.mocked(globalThis.fetch).mock.calls.length
 
 describe('hiddenPaint rules', () => {
-  it('pauses only a hidden grid, and only when the caller opts in', () => {
-    expect(shouldPauseHiddenPaint({ enabled: true, terminalOnScreen: false })).toBe(true)
-    expect(shouldPauseHiddenPaint({ enabled: true, terminalOnScreen: true })).toBe(false)
-    expect(shouldPauseHiddenPaint({ enabled: false, terminalOnScreen: false })).toBe(false)
+  it('pauses only a hidden grid, in Thread view or when the caller opts in', () => {
+    expect(shouldPauseHiddenPaint({ enabled: true, threadView: false, terminalOnScreen: false })).toBe(true)
+    expect(shouldPauseHiddenPaint({ enabled: false, threadView: true, terminalOnScreen: false })).toBe(true)
+    expect(shouldPauseHiddenPaint({ enabled: true, threadView: true, terminalOnScreen: true })).toBe(false)
+    expect(shouldPauseHiddenPaint({ enabled: false, threadView: false, terminalOnScreen: false })).toBe(false)
   })
-  it('waits 2s', async () => {
+  it('waits 2s once the grid has been shown, and not at all before', async () => {
     const real = await vi.importActual<typeof import('./hiddenPaint')>('./hiddenPaint')
-    expect(real.HIDDEN_PAINT_PAUSE_MS).toBe(2000)
+    expect(HIDDEN_PAINT_PAUSE_MS).toBe(2000)
+    expect(real.hiddenPaintPauseDelayMs(true)).toBe(2000)
+    expect(real.hiddenPaintPauseDelayMs(false)).toBe(0)
   })
 })
 
@@ -417,5 +420,93 @@ describe('A Projects tile’s hidden terminal', () => {
     await frame()
     expect(h.sockets[0].closed).toBe(0)
     expect(h.sockets[0].sent).toEqual(sentBefore)
+  })
+})
+
+describe('Thread view: a terminal you haven’t opened', () => {
+  it('never draws, with no delay', async () => {
+    renderInRoom(room, pane(chrome({ viewTab: 'thread' })))
+    await connected()
+    send(snapshotFrame(['first output']))
+    await frame()
+    send(deltaFrame(1, 'more output'))
+    await frame()
+    expect(drawn()).not.toContain('first output')
+    expect(drawn()).not.toContain('more output')
+  })
+
+  it('opening the terminal paints the current state at once', async () => {
+    const { rerender } = renderInRoom(room, pane(chrome({ viewTab: 'thread' })))
+    await connected()
+    send(snapshotFrame(['first output']))
+    await frame()
+    send(deltaFrame(5, 'latest output'))
+    rerender(pane(chrome({ viewTab: 'thread', terminalRevealed: true })))
+    expect(drawn()).toContain('first output')
+    expect(drawn()).toContain('latest output')
+  })
+
+  it('once opened and closed again, waits the delay before pausing', async () => {
+    const { rerender } = renderInRoom(room, pane(chrome({ viewTab: 'thread', terminalRevealed: true })))
+    await connected()
+    send(snapshotFrame(['tick 1']))
+    await frame()
+    rerender(pane(chrome({ viewTab: 'thread', terminalRevealed: false })))
+    send(deltaFrame(1, 'tick 2'))
+    await frame()
+    expect(drawn()).toContain('tick 2')
+    await wait(DELAY + 20)
+    send(deltaFrame(2, 'tick 3'))
+    await frame()
+    expect(drawn()).not.toContain('tick 3')
+  })
+
+  it('loading in the background never takes focus from the Thread’s message box', async () => {
+    renderInRoom(room, pane(chrome({ viewTab: 'thread' })))
+    const box = document.querySelector<HTMLTextAreaElement>('[data-testid="stub-thread-box"]')
+    expect(box).toBeTruthy()
+    box!.focus()
+    expect(document.activeElement).toBe(box)
+    await connected()
+    send(snapshotFrame(['first output']))
+    await frame()
+    for (let i = 0; i < 5; i++) send(deltaFrame(i, `tick ${i}`))
+    await frame()
+    await wait(50)
+    expect(document.activeElement).toBe(box)
+    expect(h.threadMounts).toBe(1)
+  })
+
+  it('a hidden terminal never takes focus on connect, even with nothing else focused', async () => {
+    renderInRoom(room, pane(chrome({ viewTab: 'thread' })))
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    await connected()
+    send(snapshotFrame(['first output']))
+    await frame()
+    await wait(50)
+    expect(document.activeElement?.closest('[data-terminal-container]') ?? null).toBeNull()
+    expect(document.activeElement === document.body || document.activeElement === null).toBe(true)
+  })
+
+  it('the session is untouched: one socket, open, nothing sent on hide or load', async () => {
+    renderInRoom(room, pane(chrome({ viewTab: 'thread' })))
+    await connected()
+    const sentBefore = h.sockets[0].sent.slice()
+    send(snapshotFrame(['first output']))
+    for (let i = 0; i < 5; i++) send(deltaFrame(i, `tick ${i}`))
+    await frame()
+    expect(h.sockets).toHaveLength(1)
+    expect(h.sockets[0].closed).toBe(0)
+    expect(h.sockets[0].sent).toEqual(sentBefore)
+  })
+
+  it('the Agents page Terminal view is unchanged: it keeps drawing', async () => {
+    renderInRoom(room, pane(chrome({ viewTab: 'terminal' })))
+    await connected()
+    send(snapshotFrame(['tick 1']))
+    await wait(DELAY * 2)
+    send(deltaFrame(1, 'tick 2'))
+    await frame()
+    expect(drawn()).toContain('tick 2')
   })
 })

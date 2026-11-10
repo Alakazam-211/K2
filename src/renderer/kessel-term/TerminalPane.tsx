@@ -149,7 +149,7 @@ import {
 import { computeResyncScrollPx } from './resyncAnchor'
 import { colToTextIndex, runColSpan } from './runCols'
 import { hexToCss, TerminalRow } from './rowRender'
-import { HIDDEN_PAINT_PAUSE_MS, shouldPauseHiddenPaint } from './hiddenPaint'
+import { hiddenPaintPauseDelayMs, shouldPauseHiddenPaint } from './hiddenPaint'
 import { createWebglPainter } from './webgl/webglPainter'
 import type {
   PainterFrame,
@@ -534,11 +534,12 @@ export interface TerminalPaneProps {
    */
   syncSizeOnShow?: boolean
   /**
-   * Stop drawing the grid while it's hidden (Thread, Chatter or Heartbeats
-   * view) for `HIDDEN_PAINT_PAUSE_MS`. Client-only: the grid socket stays
-   * open, every frame still merges into the live grid and is acked, and
-   * nothing about it reaches the daemon. On show the pane commits the live
-   * grid before the first paint. Set by Projects tiles; omitted elsewhere.
+   * Stop drawing the grid whenever it's hidden (`hiddenPaint.ts`), in any
+   * view: a Projects tile's Thread, Chatter or Heartbeats. Thread view
+   * pauses its hidden grid without this. Client-only: the grid socket
+   * stays open, every frame still merges into the live grid and is acked,
+   * and nothing about it reaches the daemon. On show the pane commits the
+   * live grid before the first paint. Set by Projects tiles.
    */
   pauseHiddenPaint?: boolean
 }
@@ -815,6 +816,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // true, frames still merge into `liveGridRef` and are acked, but the
   // rendered `snapshot` (and `scrollPx` state) isn't committed.
   const paintPausedRef = useRef(false)
+  // Whether the grid's column is laid out (`terminalOnScreen` below). A
+  // hidden terminal never takes focus: in Thread view it loads in the
+  // background while the person types in the Thread.
+  const terminalOnScreenRef = useRef(true)
   // S7b pin-to-size — daemon-owned pin state for THIS session,
   // mirrored from the grid-WS `pin_initial`/`pin_changed` frames
   // (set inside `applyPinFrame` in the onmessage handler, reset on
@@ -2786,9 +2791,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     if (!isTabVisible) return
     const el = shadowInputRef.current
     if (!el) return
-    const raf = requestAnimationFrame(() =>
-      focusTerminalShadowIfSafe(el, containerRef.current),
-    )
+    const raf = requestAnimationFrame(() => {
+      if (terminalOnScreenRef.current) focusTerminalShadowIfSafe(el, containerRef.current)
+    })
     return () => cancelAnimationFrame(raf)
   }, [isTabVisible])
 
@@ -2976,22 +2981,34 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // reclaim. `terminalOnScreen` flips in the same commit as a reveal, so the
   // painter is rebuilt before the first frame of the slide.
   const terminalOnScreen = !hidePty || revealShown
+  terminalOnScreenRef.current = terminalOnScreen
   const webglSurfaceActive = useWebgl && isTabVisible && !settingsOpen && terminalOnScreen
 
-  // P4 — a hidden grid stops drawing after HIDDEN_PAINT_PAUSE_MS
-  // (`hiddenPaint.ts`). The socket, the merge into `liveGridRef` and the
-  // acks carry on; only the commits stop. A layout effect, so the commit
-  // that puts the grid back on screen also commits the live grid before
-  // the browser paints: no stale frame, no catch-up.
+  // P4 — a hidden grid stops drawing (`hiddenPaint.ts`): at once if it
+  // has never been on screen, else after HIDDEN_PAINT_PAUSE_MS. The
+  // socket, the merge into `liveGridRef` and the acks carry on; only the
+  // commits stop. A layout effect, so the commit that puts the grid back
+  // on screen also commits the live grid before the browser paints: no
+  // stale frame, no catch-up.
   const wantPaintPause = shouldPauseHiddenPaint({
     enabled: pauseHiddenPaint,
+    threadView: showThreadOnly,
     terminalOnScreen,
   })
+  const gridEverShownRef = useRef(false)
+  useLayoutEffect(() => {
+    if (terminalOnScreen) gridEverShownRef.current = true
+  }, [terminalOnScreen])
   useLayoutEffect(() => {
     if (wantPaintPause) {
+      const delay = hiddenPaintPauseDelayMs(gridEverShownRef.current)
+      if (delay === 0) {
+        paintPausedRef.current = true
+        return
+      }
       const timer = setTimeout(() => {
         paintPausedRef.current = true
-      }, HIDDEN_PAINT_PAUSE_MS)
+      }, delay)
       return () => clearTimeout(timer)
     }
     if (!paintPausedRef.current) return
@@ -3851,7 +3868,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     el.addEventListener('compositionend', onComposeEnd)
     // phase.kind flips ready↔connecting on soft-resync / grid reattach —
     // re-binding handlers is fine; unconditional focus is not (compose bar).
-    focusTerminalShadowIfSafe(el, containerRef.current)
+    if (terminalOnScreenRef.current) focusTerminalShadowIfSafe(el, containerRef.current)
     return () => {
       el.removeEventListener('keydown', onKey)
       el.removeEventListener('paste', onPaste)

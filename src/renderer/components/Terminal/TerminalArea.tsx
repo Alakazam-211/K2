@@ -145,9 +145,10 @@ function ColumnResizeHandle({
       className="flex-shrink-0 hover:bg-[var(--color-accent)] transition-colors"
       data-column-resize-handle=""
       style={{
-        width: 4,
+        // Glass sets these so the handle fills the seam between its tiles.
+        width: 'var(--k2-column-handle-width, 4px)',
         cursor: 'col-resize',
-        backgroundColor: 'var(--color-border)',
+        backgroundColor: 'var(--k2-column-handle-fill, var(--color-border))',
         touchAction: 'none',
       }}
       onPointerDown={handlePointerDown}
@@ -190,6 +191,9 @@ function TabGroupColumn({
       style={style}
       onMouseDown={onFocus}
       data-tab-group-index={groupIndex}
+      // Glass: the column is the tile; its tab strip is the top of it.
+      data-material="tile"
+      data-clip=""
     >
       <TabBar cwd={cwd} groupIndex={groupIndex} />
       <div className="relative flex-1 overflow-hidden" data-toast-host="workspace">

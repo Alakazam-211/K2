@@ -811,6 +811,14 @@
 /* A pane group holds a terminal or editor: keep its contents inside the
    rounded rim. (Menus portal to <body>, so they aren't clipped.) */
 [data-style="glass"] [data-material="tile"][data-clip]:not([data-zen-root] *) { overflow: hidden; }
+/* The only pane in its tab has no rim of its own: its column is the tile.
+   (Doubled attribute to outrank Veil's tile rule above.) */
+[data-style="glass"] [data-material="tile"][data-pane-solo][data-pane-solo]:not([data-zen-root] *) {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
 /* A dialog or sheet floats above the app: tile rim, dialog drop shadow. */
 [data-style="glass"] [data-material][data-floating]:not([data-zen-root] *) {
   box-shadow: var(--tile-sheen), var(--shadow-5);
@@ -829,6 +837,10 @@
 }
 /* Open canvas under every title bar. */
 [data-style="glass"] [data-chrome="bar"]:not([data-zen-root] *) { margin-bottom: var(--gap-pane); }
+/* The bar's outer edges line up with the panes below it. On macOS the left
+   stays padded: the traffic-light spacer is sized to sit after that padding. */
+[data-style="glass"] [data-chrome="bar"]:not([data-zen-root] *) { padding-right: 0; }
+[data-style="glass"] [data-chrome="bar"]:not(:has(.k2-stoplight-spacer)):not([data-zen-root] *) { padding-left: 0; }
 [data-style="glass"] [data-top-bar-cluster]:not([data-zen-root] *),
 [data-style="glass"] [data-page-tabs]:not([data-zen-root] *) {
   padding: 2px 8px;
@@ -1018,9 +1030,9 @@
 
 /* A resize handle shows on hover as a short pill on the edge, not a line down
    the whole column. */
-[data-style="glass"] [data-resize-edge]:not([data-zen-root] *),
-[data-style="glass"] [data-resize-edge]:hover:not([data-zen-root] *) { background: transparent; }
-[data-style="glass"] [data-resize-edge]:not([data-zen-root] *)::after {
+[data-style="glass"] :is([data-resize-edge], [data-column-resize-handle]):not([data-zen-root] *),
+[data-style="glass"] :is([data-resize-edge], [data-column-resize-handle]):hover:not([data-zen-root] *) { background: transparent; }
+[data-style="glass"] :is([data-resize-edge], [data-column-resize-handle]):not([data-zen-root] *)::after {
   content: "";
   position: absolute;
   top: 50%;
@@ -1033,7 +1045,15 @@
   transform: translate(-50%, -50%);
   transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
 }
-[data-style="glass"] [data-resize-edge]:hover:not([data-zen-root] *)::after { opacity: 1; }
+[data-style="glass"] :is([data-resize-edge], [data-column-resize-handle]):hover:not([data-zen-root] *)::after { opacity: 1; }
+/* Between columns the handle fills the one gap between the tiles, in place of
+   a gap on each side of it. */
+[data-style="glass"] [data-column-resize-handle]:not([data-zen-root] *) {
+  --k2-column-handle-width: var(--gap-pane);
+  --k2-column-handle-fill: transparent;
+  position: relative;
+  margin: 0 calc(-1 * var(--gap-pane));
+}
 
 /* The nav's controls: the same small Frost objects as the top bar. */
 [data-style="glass"] [data-nav-control]:not([data-zen-root] *) {
@@ -1089,6 +1109,88 @@
   background: var(--color-bg-elevated);
   padding-inline: 8px;
 }
+/* ── Tab strip and pane: one tile ─────────────────────────────────────────
+   A workspace column is a single tile. Its tab strip is the top of that tile
+   with no rule or gap under it, and the selected tab is a lit pill, as in the
+   drawers' strips. Split panes inside a tab are tiles within the column tile,
+   each with its own strip of the same pills. Terminals stay solid. */
+[data-style="glass"] [data-room-tab-bar]:not([data-zen-root] *) {
+  background: transparent;
+  border-bottom-width: 0;
+  padding: 4px 6px;
+  gap: 2px;
+}
+[data-style="glass"] [data-tab-scroller]:not([data-zen-root] *) { gap: 2px; }
+[data-style="glass"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail]):not([data-zen-root] *) {
+  border-right-width: 0;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+[data-style="glass"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail], [data-selected]):hover:not([data-zen-root] *) { background: var(--color-wash-1); }
+[data-style="glass"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail])[data-selected]:not([data-zen-root] *) {
+  background: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+}
+/* The status badge's mask sits on whatever is behind the tab's slot. */
+[data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id]) :is([data-tab-close-slot], [data-tab-status-slot], [data-pane-tab-close-slot]):not([data-zen-root] *) {
+  --tab-bg: var(--tile-fill);
+  border-radius: var(--radius-pill);
+}
+[data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id])[data-selected] :is([data-tab-close-slot], [data-tab-status-slot], [data-pane-tab-close-slot]):not([data-zen-root] *) {
+  --tab-bg: color-mix(in srgb, var(--color-text-primary) 10%, var(--tile-fill));
+}
+/* Pinned tabs stay opaque so scrolled tabs pass behind them; the pill is drawn
+   above that fill and below the icon. */
+[data-style="glass"] [data-room-tab-bar] [data-tab-rail]:not([data-zen-root] *) {
+  --k2-rail-rest: var(--tile-fill);
+  --k2-rail-lit: var(--tile-fill);
+  border-right-width: 0;
+}
+[data-style="glass"] [data-room-tab-bar] [data-tab-rail]:not([data-zen-root] *)::before {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  z-index: -1;
+  border-radius: var(--radius-pill);
+}
+[data-style="glass"] [data-room-tab-bar] [data-tab-rail]:not([data-selected]):hover:not([data-zen-root] *)::before { background: var(--color-wash-1); }
+[data-style="glass"] [data-room-tab-bar] [data-tab-rail][data-selected]:not([data-zen-root] *)::before {
+  background: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+}
+/* +, split, remove column and the drawer toggle: small round controls. */
+[data-style="glass"] [data-room-tab-bar] > button:not([data-zen-root] *) {
+  width: 28px;
+  border-width: 0;
+  border-radius: var(--radius-pill);
+}
+[data-style="glass"] [data-room-tab-bar] > button:hover:not([data-zen-root] *) { background: var(--color-wash-2); }
+
+/* A split pane's strip: the same pills, a size smaller. */
+[data-style="glass"] [data-pane-tab-bar]:not([data-zen-root] *) {
+  --k2-pane-strip-h: 32px;
+  --k2-pane-tab-h: 24px;
+  --k2-pane-tab-lit: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+  --k2-pane-tab-rule: 0;
+  background: transparent;
+  border-bottom-width: 0;
+  padding: 4px;
+  gap: 2px;
+}
+[data-style="glass"] [data-pane-tab-bar] [data-pane-tab-id]:not([data-zen-root] *) {
+  border-radius: var(--radius-pill);
+  margin-right: 2px;
+}
+[data-style="glass"] [data-pane-tab-bar] [data-pane-tab-id]:not([data-selected]):hover:not([data-zen-root] *) { --k2-pane-tab-rest: var(--color-wash-1); }
+[data-style="glass"] [data-pane-tab-bar] > button:not([data-zen-root] *) { border-radius: var(--radius-pill); }
+
+/* Split panes sit inside the column tile, one even gap from its rim and from
+   each other, their corners following the rim's curve. */
+[data-style="glass"] .mosaic-dark .mosaic-root:not([data-zen-root] *) {
+  inset: 4px;
+  background: transparent;
+}
+[data-style="glass"] .mosaic-dark :is(.mosaic-window, .mosaic-window-body):not([data-zen-root] *) { background: transparent; }
+[data-style="glass"] .mosaic-dark .mosaic-window:not([data-zen-root] *) { border-radius: calc(var(--radius-box) - 8px); }
+[data-style="glass"] .mosaic-dark [data-material="tile"][data-pane-group-id]:not([data-zen-root] *) { border-radius: calc(var(--radius-box) - 8px); }
 
 /* ── Style: Glass Classic (glass-classic) v0.1.0 ── */
 [data-style="glass-classic"] {

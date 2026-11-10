@@ -320,9 +320,11 @@ export function PaneTabBar({
       role2="stripe"
       bordered={false}
       className="flex items-center border-b border-[var(--color-border)] overflow-x-auto"
+      data-pane-tab-bar=""
       style={{
-        height: '24px',
-        minHeight: '24px',
+        // The --k2-pane-* vars are set by Glass only (styles/glass/overrides.css).
+        height: 'var(--k2-pane-strip-h, 24px)',
+        minHeight: 'var(--k2-pane-strip-h, 24px)',
         fontFamily: 'var(--font-ui)',
         fontSize: '11px'
       }}
@@ -342,17 +344,18 @@ export function PaneTabBar({
               key={item.id}
               data-pane-tab-id={item.id}
               data-pane-tab-status={statusView ? statusView.status : undefined}
+              data-selected={isActive ? '' : undefined}
               className={`group/panetab flex items-center cursor-pointer select-none shrink-0 ${
                 isActive
                   ? 'text-[var(--color-text-primary)]'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
               }`}
               style={{
-                height: '24px',
+                height: 'var(--k2-pane-tab-h, 24px)',
                 paddingLeft: '8px',
                 paddingRight: '4px',
-                background: isActive ? 'var(--color-bg-inset)' : 'transparent',
-                borderBottom: isActive ? '1px solid var(--color-accent)' : '1px solid transparent',
+                background: isActive ? 'var(--k2-pane-tab-lit, var(--color-bg-inset))' : 'var(--k2-pane-tab-rest, transparent)',
+                borderBottom: isActive ? 'var(--k2-pane-tab-rule, 1px solid var(--color-accent))' : 'var(--k2-pane-tab-rule, 1px solid transparent)',
                 maxWidth: '160px',
                 // The working badge's mask (TabSlotRest) sits on this tab's
                 // resting background.
@@ -412,7 +415,7 @@ export function PaneTabBar({
       {onClosePane && (
         <button
           className="flex items-center justify-center shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)]"
-          style={{ width: '24px', height: '24px' }}
+          style={{ width: 'var(--k2-pane-tab-h, 24px)', height: 'var(--k2-pane-tab-h, 24px)' }}
           onClick={(e) => {
             e.stopPropagation()
             onClosePane()

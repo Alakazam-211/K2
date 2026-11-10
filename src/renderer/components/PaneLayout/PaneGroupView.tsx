@@ -147,8 +147,9 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
       <div className="flex h-full w-full flex-col">
         <div
           className="flex items-center border-b border-[var(--color-border)]"
+          data-pane-tab-bar=""
           style={{
-            height: '24px',
+            height: 'var(--k2-pane-strip-h, 24px)',
             minHeight: '24px',
             background: 'var(--color-bg-stripe)',
             fontSize: '11px',
@@ -198,7 +199,9 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
   return (
     <>
       {/* ST3: pane tab bar ↔ pane content breathing room (0 in Terminal) */}
-      <div className="flex h-full w-full flex-col gap-[var(--gap-section)]" data-pane-group-id={paneGroupId} data-tab-id={tabId} data-material="tile" data-clip="">
+      {/* data-pane-solo: the only pane in its tab, so in Glass its column's tile
+          is the tile and the pane adds no rim of its own. */}
+      <div className="flex h-full w-full flex-col gap-[var(--gap-section)]" data-pane-group-id={paneGroupId} data-tab-id={tabId} data-material="tile" data-clip="" data-pane-solo={hasSplits ? undefined : ''}>
         {showPaneTabBar && (
           <PaneTabBar
             items={paneGroup.items}

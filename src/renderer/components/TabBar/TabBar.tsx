@@ -1150,6 +1150,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 data-tab-rail=""
                 data-tab-pinned-design={kind === 'design' ? '' : undefined}
                 data-tab-pinned-mobile={kind === 'mobile' ? '' : undefined}
+                data-selected={isActive ? '' : undefined}
                 className={`group sticky z-20 flex h-full w-9 flex-shrink-0 items-center justify-center border-r border-[var(--color-border)] transition-colors select-none cursor-pointer ${
                   isActive
                     ? 'text-[var(--color-text-primary)]'
@@ -1157,9 +1158,11 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 }`}
                 style={{
                   left: railIndex * 36,
+                  // Glass fills these with --k2-rail-* (the lit pill is drawn
+                  // above this opaque cell, so scrolled tabs stay hidden).
                   background: isActive
-                    ? 'color-mix(in srgb, white 8%, var(--color-bg-surface))'
-                    : 'var(--color-bg-surface)',
+                    ? 'var(--k2-rail-lit, color-mix(in srgb, white 8%, var(--color-bg-surface)))'
+                    : 'var(--k2-rail-rest, var(--color-bg-surface))',
                 }}
                 onClick={() => setActiveTabInGroup(groupIndex, tab.id)}
                 onContextMenu={(e) => void handlePinnedFeatureContextMenu(e, kind)}
@@ -1242,6 +1245,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 data-tab-rail=""
                 data-tab-status={chatView?.status}
                 data-tab-working={chatView?.working ? '' : undefined}
+                data-selected={isActive ? '' : undefined}
                 className={`group sticky z-20 flex h-full w-9 flex-shrink-0 items-center justify-center border-r border-[var(--color-border)] transition-colors select-none cursor-pointer ${
                   isActive
                     ? 'text-[var(--color-text-primary)]'
@@ -1249,9 +1253,11 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 }`}
                 style={{
                   left: railIndex * 36,
+                  // Glass fills these with --k2-rail-* (the lit pill is drawn
+                  // above this opaque cell, so scrolled tabs stay hidden).
                   background: isActive
-                    ? 'color-mix(in srgb, white 8%, var(--color-bg-surface))'
-                    : 'var(--color-bg-surface)',
+                    ? 'var(--k2-rail-lit, color-mix(in srgb, white 8%, var(--color-bg-surface)))'
+                    : 'var(--k2-rail-rest, var(--color-bg-surface))',
                 }}
                 onClick={() => setActiveTabInGroup(groupIndex, tab.id)}
                 // Pin-to-size for the pinned agent Chat tab (its
@@ -1278,6 +1284,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               data-tab-id={tab.id}
               data-tab-reorder-index={index}
               data-tab-pinned={isPinnedTab(tab) ? 'true' : undefined}
+              data-selected={isActive ? '' : undefined}
               // Width (Rosson 2026-10-16): the tab is as wide as its
               // content (icon + title + status slot + padding), capped at
               // TAB_MAX_PX where the title truncates, never below

@@ -26,7 +26,10 @@ vi.mock('@/kessel/daemon-ws', () => ({
   daemonWsBase: () => 'ws://127.0.0.1:1',
 }))
 
-vi.mock('@/stores/connect-host', () => ({
+// Partial: modules the split bar pulls in (home-avatars → host-pool-instance)
+// read other connect-host exports at load, so keep the real ones.
+vi.mock('@/stores/connect-host', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/stores/connect-host')>()),
   useConnectHostStore: Object.assign(
     (sel: (s: { activeHost: 'local' }) => unknown) => sel({ activeHost: 'local' }),
     { getState: () => ({ activeHost: 'local' as const, hosts: [] }) },

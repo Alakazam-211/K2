@@ -163,13 +163,25 @@ mod incoming_tests {
             "session_events_ws.rs",
             "awareness_ws.rs",
             "ops_stream_ws.rs",
-            "sim_stream_ws.rs",
         ] {
             let s = std::fs::read_to_string(src.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
             assert!(s.contains("crate::socket_access::IncomingCheck::new("), "{f} builds the check");
             let at = s.find("msg = read.next() => {").unwrap_or_else(|| panic!("{f}: its read branch"));
             let next = &s[at..at + 600.min(s.len() - at)];
             assert!(next.contains("if !incoming.frame_ok(&msg)"), "{f}: the check runs first in the read branch");
+        }
+        // Stream routes on the engine (fix 10): the engine's read branch asks
+        // the route's `Auth::frame` before acting on a client frame (it is a
+        // required field, so a new stream route must give one), and each
+        // route builds that from the check.
+        let engine = std::fs::read_to_string(src.join("stream/viewer.rs")).expect("stream/viewer.rs");
+        let at = engine.find("msg = read.next() => {").expect("stream/viewer.rs: its read branch");
+        let next = &engine[at..at + 600.min(engine.len() - at)];
+        assert!(next.contains("(auth.frame)(&msg)"), "stream/viewer.rs: the route's frame check runs first in the read branch");
+        for f in ["sim_stream_ws.rs"] {
+            let s = std::fs::read_to_string(src.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
+            assert!(s.contains("crate::socket_access::IncomingCheck::new("), "{f} builds the check");
+            assert!(s.contains("if incoming.frame_ok(f)"), "{f}: its Auth::frame asks the check");
         }
     }
 }

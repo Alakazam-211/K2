@@ -157,7 +157,7 @@ const CI_TABLES: &[&str] = &[
     "compute_seats",
     "compute_owner_trust",
     "compute_key_revocations",
-    // 0284 (the 11-07 trust review): the re-key chain and the taint memory.
+    // 0286 (the 11-07 trust review): the re-key chain and the taint memory.
     "compute_key_rotations",
     "compute_tainted_keys",
 ];

@@ -163,7 +163,7 @@ pub fn statement_taint(st: &NodeStatement) -> Option<&'static str> {
     }
 }
 
-/// Remember, for good, that a key was seen tainted (0284; 11-07 review
+/// Remember, for good, that a key was seen tainted (0286; 11-07 review
 /// M4). A later statement saying "clean" never clears it: only a new key.
 pub fn remember_taint(conn: &Connection, node_fp: &str, why: &str, at: i64) {
     let _ = conn.execute("INSERT OR IGNORE INTO compute_tainted_keys (node_fp, why, at) VALUES (?1, ?2, ?3)", params![node_fp, why, at]);
@@ -1030,7 +1030,7 @@ fn revocation_row(conn: &Connection, node_fp: &str) -> Option<(String, i64)> {
 }
 
 /// Was this node key revoked by its owner's roster (and why)? A key one of
-/// whose ancestors (the keys that handed over to it by re-keys, 0284) was
+/// whose ancestors (the keys that handed over to it by re-keys, 0286) was
 /// revoked as compromised counts as revoked as compromised too (11-07
 /// review H2): a thief who re-keyed before the revoke doesn't survive it.
 pub fn key_revoked(conn: &Connection, node_fp: &str) -> Option<RevokeReason> {
@@ -1074,7 +1074,7 @@ pub fn receipt_void(conn: &Connection, node_fp: &str, started_at: Option<i64>) -
     }
 }
 
-/// Record a re-key this server applied (0284).
+/// Record a re-key this server applied (0286).
 pub fn record_rotation(conn: &Connection, old_fp: &str, new_fp: &str, node_id: Option<&str>, new_epoch: u32, at: i64) -> Result<(), String> {
     conn.execute(
         "INSERT INTO compute_key_rotations (new_fp, old_fp, node_id, new_epoch, at) VALUES (?1, ?2, ?3, ?4, ?5) \
@@ -1182,7 +1182,7 @@ pub fn check_rotation(conn: &Connection, node: &NodeRow, rot: &KeyRotation) -> R
 }
 
 /// [`check_rotation`], then move the row to the new key **in place** (same
-/// id, so grants and jobs keep working) and record the hand-over (0284).
+/// id, so grants and jobs keep working) and record the hand-over (0286).
 /// Called only once a person approved it (or, for a seat node on a client,
 /// once the owner's roster lists the new key).
 pub fn apply_rotation(conn: &Connection, node: &NodeRow, rot: &KeyRotation, at: i64) -> Result<NodeRow, (&'static str, String)> {

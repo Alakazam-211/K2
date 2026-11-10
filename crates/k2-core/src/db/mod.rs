@@ -1886,11 +1886,11 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // migration-order tests). The store is
         // `crate::product_feedback::store`.
         ("0285_product_feedback", include_str!("../../drizzle_sql/0285_product_feedback.sql")),
-        // 0284 — the node key chain and the taint memory (0.46.11, the 11-07
+        // 0286 — the node key chain and the taint memory (0.46.11, the 11-07
         // trust review H2 + M4). Tables only. Renumber freely on a slip
         // (and edit the migration-order tests). The store is
         // `crate::compute::trust`.
-        ("0284_compute_key_chain", include_str!("../../drizzle_sql/0284_compute_key_chain.sql")),
+        ("0286_compute_key_chain", include_str!("../../drizzle_sql/0286_compute_key_chain.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2570,7 +2570,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0284_compute_key_chain",
+            last_name, "0286_compute_key_chain",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2802,7 +2802,7 @@ mod tests {
                 // 0.46.11: the Send feedback to K2 outbox.
                 "0285_product_feedback",
                 // 0.46.11: the node key chain and taint memory (trust review).
-                "0284_compute_key_chain",
+                "0286_compute_key_chain",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2970,7 +2970,7 @@ mod tests {
                 // 0.46.11: the Send feedback to K2 outbox.
                 "0285_product_feedback",
                 // 0.46.11: the node key chain and taint memory (trust review).
-                "0284_compute_key_chain",
+                "0286_compute_key_chain",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3243,7 +3243,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0284_compute_key_chain", "0284 (0.46.11) runs last");
+        assert_eq!(top, "0286_compute_key_chain", "0286 (0.46.11) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3312,9 +3312,9 @@ mod tests {
                 "0281_desktop",
                 "0282_project_group_default_view",
                 "0285_product_feedback",
-                "0284_compute_key_chain"
+                "0286_compute_key_chain"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0285 and 0284)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0285 and 0286)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -4156,9 +4156,9 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
-            // 0284 (the node key chain, 0.46.11) is the newest: its record
+            // 0286 (the node key chain, 0.46.11) is the newest: its record
             // goes (its tables and indexes are IF NOT EXISTS).
-            conn.execute("DELETE FROM _migrations WHERE name = '0284_compute_key_chain'", []).unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0286_compute_key_chain'", []).unwrap();
             // 0285 (the Send feedback to K2 outbox, 0.46.11) came before it:
             // its record goes (its tables and indexes are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0285_product_feedback'", []).unwrap();

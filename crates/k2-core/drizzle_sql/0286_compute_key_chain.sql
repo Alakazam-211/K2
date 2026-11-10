@@ -1,4 +1,4 @@
--- 0284: the node key chain and the taint memory (0.46.11, the 11-07 trust
+-- 0286: the node key chain and the taint memory (0.46.11, the 11-07 trust
 -- and secrets review, fix list ci-trust-review-fixes-0.46.11 H2 + M4).
 -- Renumber freely on a slip (and edit the migration-order tests). The store
 -- is `crate::compute::trust`.

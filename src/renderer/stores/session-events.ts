@@ -866,6 +866,15 @@ export interface DocCoresChangedEvent {
   by: string
 }
 
+/** APP-LEVEL — the Org Chart changed (prd-org-chart-v1 §6.2): an org,
+ *  member, head, line, placement or bulletin was written by anyone. The
+ *  revision is the chart's after the write; the tab refetches
+ *  `organization/chart` when it is newer than what it shows. */
+export interface OrgChartChangedEvent {
+  kind: 'org_chart_changed'
+  revision: number
+}
+
 /** APP-LEVEL — the daemon's hook installer could not update an agent CLI
  *  config (it did not parse, so it was left untouched) or hit a write
  *  error (prd-daemon-activity-and-thread-working-v1 A11). At most once per
@@ -1014,6 +1023,7 @@ export type SessionEventMessage =
   | GrokbotsChangedEvent
   | ProductFeedbackStatusEvent
   | DocCoresChangedEvent
+  | OrgChartChangedEvent
   | HooksInstallFailedEvent
   | ActivityChangedEvent
   | ReviewQueueChangedEvent
@@ -1505,6 +1515,7 @@ type GardenDataChangedHandler = (space: string, rev: number) => void
 type GrokbotsChangedHandler = (e: GrokbotsChangedEvent) => void
 type ProductFeedbackStatusHandler = (e: ProductFeedbackStatusEvent) => void
 type DocCoresChangedHandler = (e: DocCoresChangedEvent) => void
+type OrgChartChangedHandler = (e: OrgChartChangedEvent) => void
 type HooksInstallFailedHandler = (e: HooksInstallFailedEvent) => void
 type ActivityChangedHandler = (e: ActivityChangedEvent) => void
 type FsChangedHandler = (e: FsChangedEvent) => void
@@ -1609,6 +1620,7 @@ interface AppBusHandlers {
   grokbotsChanged: Set<GrokbotsChangedHandler>
   productFeedbackStatus: Set<ProductFeedbackStatusHandler>
   docCoresChanged: Set<DocCoresChangedHandler>
+  orgChartChanged: Set<OrgChartChangedHandler>
   hooksInstallFailed: Set<HooksInstallFailedHandler>
   activityChanged: Set<ActivityChangedHandler>
 }
@@ -1675,6 +1687,7 @@ function createBusState(scopeId: string): BusState {
       grokbotsChanged: new Set(),
       productFeedbackStatus: new Set(),
       docCoresChanged: new Set(),
+      orgChartChanged: new Set(),
       hooksInstallFailed: new Set(),
       activityChanged: new Set(),
     },
@@ -1934,6 +1947,12 @@ export function onProductFeedbackStatus(scope: ServerScope, fn: ProductFeedbackS
  *  Refetch `GET /cli/docs/cores`. */
 export function onDocCoresChanged(scope: ServerScope, fn: DocCoresChangedHandler): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.docCoresChanged, fn)
+}
+
+/** Org Chart — subscribe to APP-LEVEL `org_chart_changed` on `scope`'s
+ *  server. Refetch `GET /cli/organization/chart` when the revision is newer. */
+export function onOrgChartChanged(scope: ServerScope, fn: OrgChartChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.orgChartChanged, fn)
 }
 
 /** A11 — subscribe to APP-LEVEL `hooks_install_failed` (the daemon could
@@ -2331,6 +2350,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   doc_cores_changed: (h, m) => {
     for (const fn of h.docCoresChanged) fn(m)
+  },
+  org_chart_changed: (h, m) => {
+    for (const fn of h.orgChartChanged) fn(m)
   },
   hooks_install_failed: (h, m) => {
     for (const fn of h.hooksInstallFailed) fn(m)

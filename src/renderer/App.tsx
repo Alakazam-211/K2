@@ -60,6 +60,7 @@ import { ensureZenBuiltins } from './components/Zen/widgets/builtins'
 import { installAccountDbBaseLoader } from './components/Settings/lib/account-db-daemon'
 import ProjectsPage from './components/Projects/ProjectsPage'
 import WikiPage from './components/Wiki/WikiPage'
+import OrgChartPage from './components/OrgChart/OrgChartPage'
 import { usePageViewStore, isRoomPage, primaryRoomPageLive } from './stores/page-view'
 import { initFeedbackEvents } from './stores/feedback'
 import { initAppApprovalsEvents } from './stores/app-approvals'
@@ -1155,6 +1156,7 @@ function AppRoot(): React.JSX.Element {
       {!settingsOpen && <FeedbackPage />}
       {!settingsOpen && <ProjectsPage />}
       {!settingsOpen && <WikiPage />}
+      {!settingsOpen && <OrgChartPage />}
       <ContextMenu />
       <ConfirmDialog />
       {/* Send feedback to K2: one dialog per window, opened by the top-bar

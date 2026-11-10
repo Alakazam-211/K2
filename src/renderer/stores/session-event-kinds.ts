@@ -180,6 +180,10 @@ export const SESSION_EVENT_ROUTES = {
   // or off. Settings → Cores → Multiplayer refetches `docs/cores`. Not
   // carried: the page reads only the window's server.
   doc_cores_changed: { class: 'app', app: true },
+  // prd-org-chart-v1 §6.2: the Org Chart changed (any write; `revision`).
+  // The Org Chart tab refetches `organization/chart`. Not carried: the tab
+  // reads only the window's server.
+  org_chart_changed: { class: 'app', app: true },
   // prd-daemon-activity-and-thread-working-v1 A11/A27: the daemon's hook
   // installer could not update an agent CLI config. Carried, so a room's
   // server can say so too.

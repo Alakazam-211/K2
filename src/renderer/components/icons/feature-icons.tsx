@@ -15,6 +15,7 @@ import {
   AgentsIcon,
   BoardIcon,
   HomeIcon,
+  OrgChartIcon,
   PaletteIcon,
   ProjectsIcon,
   SettingsIcon,
@@ -31,6 +32,7 @@ export const FEATURE_ICONS = {
   projects: ProjectsIcon,
   tickets: TicketsIcon,
   wiki: WikiIcon,
+  orgChart: OrgChartIcon,
   settings: SettingsIcon,
   // Tab kinds (the tab strip, the + menu, the split-pane rows).
   terminal: ShellTabIcon,

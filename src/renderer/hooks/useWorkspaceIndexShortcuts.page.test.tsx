@@ -393,8 +393,11 @@ describe('the digit chords already there are unchanged', () => {
 
 describe('labels', () => {
   it('the defaults per platform, in top-bar order', () => {
-    expect(PAGE_SHORTCUTS.map((s) => s.target)).toEqual(['home', 'agents', 'projects', 'feedback', 'wiki', 'settings'])
-    expect(PAGE_SHORTCUTS.map((s) => s.zenView)).toEqual(['home', 'agents', 'projects', 'tickets', null, null])
+    expect(PAGE_SHORTCUTS.map((s) => s.target)).toEqual(['home', 'agents', 'projects', 'feedback', 'wiki', 'orgChart', 'settings'])
+    expect(PAGE_SHORTCUTS.map((s) => s.zenView)).toEqual(['home', 'agents', 'projects', 'tickets', null, null, null])
+    // The Org Chart has no default chord (⌃⌘6 stays Settings); it can be bound.
+    expect(getDefaultKeybindings(true).goToOrgChart).toBe('')
+    expect(getDefaultKeybindings(false).goToOrgChart).toBe('')
     expect(pageShortcutsSummary({}, true)).toBe('⌃⌘1–4')
     expect(pageShortcutsSummary({}, false)).toBe('Ctrl+Alt+1–4')
     expect(pageShortcutsSummary({ goToAgents: 'Ctrl+Meta+A' }, true)).toBe('⌃⌘1 / ⌃⌘A / ⌃⌘3 / ⌃⌘4')

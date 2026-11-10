@@ -163,6 +163,8 @@ export type SettingsSection =
    *  §8): the switch, hidden apps, grants, viewers, the access log. Needs
    *  `remote-desktop-v1`. */
   | 'remote-desktop'
+  /** Settings → Org Chart (prd-org-chart-v1 §6.5): the server's switch and the night times. */
+  | 'org-chart'
 
 export interface TerminalSettings {
   fontFamily: string
@@ -265,6 +267,10 @@ interface SettingsState {
   voiceRoomsPreview: boolean
   /** Board files in a tab (the `board_file_preview` setting). Off by default. */
   boardFilePreview: boolean
+  // The Org Chart on the focused server (prd-org-chart-v1): the top-bar tab
+  // shows only while it is on. DEFAULTS OFF; Owner or Admin turns it on in
+  // Settings → Org Chart (the daemon enforces the Admin floor).
+  orgChart: boolean
   /** Video in voice rooms (the `video_rooms_preview` setting): camera and screen share in the call panel. On by default (the owner can turn it off). */
   videoRoomsPreview: boolean
 
@@ -574,6 +580,7 @@ async function persistAndApply(
       computePreview: result.computePreview ?? false,
       voiceRoomsPreview: result.voiceRoomsPreview ?? false,
       boardFilePreview: result.boardFilePreview ?? false,
+      orgChart: result.orgChart === true,
       videoRoomsPreview: result.videoRoomsPreview ?? true,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
@@ -626,6 +633,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   computePreview: false,
   voiceRoomsPreview: false,
   boardFilePreview: false,
+  orgChart: false,
   videoRoomsPreview: true,
   apps: true,
   apiEnabled: false,
@@ -1033,6 +1041,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       computePreview: result.computePreview ?? false,
       voiceRoomsPreview: result.voiceRoomsPreview ?? false,
       boardFilePreview: result.boardFilePreview ?? false,
+      orgChart: result.orgChart === true,
       videoRoomsPreview: result.videoRoomsPreview ?? true,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,
@@ -1103,6 +1112,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       computePreview: result.computePreview ?? false,
       voiceRoomsPreview: result.voiceRoomsPreview ?? false,
       boardFilePreview: result.boardFilePreview ?? false,
+      orgChart: result.orgChart === true,
       videoRoomsPreview: result.videoRoomsPreview ?? true,
       apps: appsSwitchFrom(result),
       apiEnabled: result.apiEnabled ?? false,

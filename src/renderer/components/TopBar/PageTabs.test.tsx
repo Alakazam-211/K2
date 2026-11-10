@@ -18,6 +18,8 @@ const h = vi.hoisted(() => {
       settings.settingsOpen = false
     }),
     keybindings: {} as Record<string, string> | undefined,
+    // prd-org-chart-v1: the server's Org Chart switch (off by default).
+    orgChart: false,
   }
   const feedback = {
     waitingCount: 0,
@@ -61,7 +63,7 @@ vi.mock('@/stores/projects', () => ({
   useProjectsStore: hookOf(h.projects),
 }))
 
-import PageTabs, { PAGE_TAB_ICON_PX, PAGE_TAB_ITEMS, settingsTabTitle } from './PageTabs'
+import PageTabs, { ORG_CHART_TAB, PAGE_TAB_ICON_PX, PAGE_TAB_ITEMS, settingsTabTitle } from './PageTabs'
 import { currentShortcutOs } from '@/lib/shortcut-label'
 import { usePageViewStore, isRoomPage, type AppPage } from '@/stores/page-view'
 
@@ -72,6 +74,7 @@ afterEach(() => {
   h.unread.byKey = {}
   h.projects.projects = []
   h.settings.keybindings = {}
+  h.settings.orgChart = false
   usePageViewStore.getState().setPage('agents')
 })
 
@@ -330,5 +333,46 @@ describe('PageTabs — malformed store values never crash the top bar', () => {
     h.unread.byKey = { bad: null as unknown as (typeof h.unread.byKey)[string] }
     const { container } = render(<PageTabs />)
     expect(tabs(container)).toHaveLength(6)
+  })
+})
+
+// prd-org-chart-v1 §6.5 (Rosson 2026-11-10): off by default, turned on in
+// Settings; when on, a tab just left of the cog. No default chord.
+describe('PageTabs — Org Chart tab', () => {
+  it('is not there while the Org Chart is off (the default)', () => {
+    const { container } = render(<PageTabs />)
+    expect(screen.queryByRole('button', { name: 'Org Chart' })).toBeNull()
+    expect(tabs(container)).toHaveLength(6)
+  })
+
+  it('with the switch on: one tab between Wiki and the cog, org-tree icon, no chord in its tooltip', () => {
+    h.settings.orgChart = true
+    const { container } = render(<PageTabs />)
+    const list = tabs(container)
+    const org = screen.getByRole('button', { name: 'Org Chart' })
+    expect(list).toHaveLength(7)
+    expect(list.at(-2)).toBe(org)
+    expect(list.at(-3)).toBe(screen.getByRole('button', { name: 'Wiki' }))
+    expect(org.querySelector('svg')?.getAttribute('data-k2-icon')).toBe('org-chart')
+    expect(org.querySelector('svg')?.getAttribute('width')).toBe(String(PAGE_TAB_ICON_PX))
+    expect(org.getAttribute('title')).toBe(ORG_CHART_TAB.title)
+  })
+
+  it('a bound goToOrgChart chord shows in its tooltip', () => {
+    h.settings.orgChart = true
+    h.settings.keybindings = { goToOrgChart: 'Ctrl+Meta+7' }
+    render(<PageTabs />)
+    expect(screen.getByRole('button', { name: 'Org Chart' }).getAttribute('title')).toMatch(/^Org Chart — .* \((⌃⌘7|Ctrl\+Meta\+7|Ctrl\+Super\+7)\)$/)
+  })
+
+  it('a click opens the Org Chart page (closing Settings first) and marks the tab', () => {
+    h.settings.orgChart = true
+    h.settings.settingsOpen = true
+    const { rerender } = render(<PageTabs />)
+    fireEvent.click(screen.getByRole('button', { name: 'Org Chart' }))
+    expect(h.settings.closeSettings).toHaveBeenCalled()
+    expect(usePageViewStore.getState().page).toBe('orgChart')
+    rerender(<PageTabs />)
+    expect(screen.getByRole('button', { name: 'Org Chart' }).getAttribute('aria-pressed')).toBe('true')
   })
 })

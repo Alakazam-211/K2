@@ -19,7 +19,9 @@
 import { create } from 'zustand'
 import { readWikiViewPref, writeWikiViewPref, type WikiView } from '@/lib/wiki-view-pref'
 
-export type AppPage = 'home' | 'agents' | 'projects' | 'feedback' | 'wiki'
+// 'orgChart' (prd-org-chart-v1 §6.5): an overlay page, shown only while the
+// server's Org Chart switch is on (Settings → Org Chart).
+export type AppPage = 'home' | 'agents' | 'projects' | 'feedback' | 'wiki' | 'orgChart'
 
 // ── Start page (Rosson 2026-10-30) ──────────────────────────────────────
 // The page this window opens on: Agents (the default, as before) or Home.

@@ -57,6 +57,20 @@ export const PAGE_TAB_LABELS = {
   wiki: { name: 'Wiki', title: 'Wiki' },
 } as const
 
+/** The Org Chart tab (prd-org-chart-v1 §6.5, Rosson 2026-11-10): just left
+ *  of the cog, only while the server's Org Chart switch is on. No default
+ *  chord (⌃⌘6 stays Settings); `goToOrgChart` can be bound. */
+export const ORG_CHART_TAB = {
+  name: 'Org Chart',
+  title: 'Org Chart — your agents, their orgs and the lines between them',
+} as const
+
+/** The Org Chart tab's tooltip, with its chord when one is bound. */
+export function orgChartTabTitle(keybindings: Record<string, string>, isMac: boolean): string {
+  const chord = pageShortcutLabel('orgChart', keybindings, isMac)
+  return chord ? `${ORG_CHART_TAB.title} (${chord})` : ORG_CHART_TAB.title
+}
+
 /** 0.46.0 experiment (Rosson 2026-10-16): the page tabs are icons, not
  *  words. The word stays as the tooltip and the accessible name. Icon
  *  style A3 (`components/icons/K2Icons.tsx`): one 16px size for every
@@ -98,6 +112,7 @@ export default function PageTabs(): React.JSX.Element {
   const setPage = usePageViewStore((s) => s.setPage)
   const settingsOpen = useSettingsStore((s) => s.settingsOpen)
   const keybindings = useSettingsStore((s) => s.keybindings)
+  const orgChartOn = useSettingsStore((s) => s.orgChart) === true
   const waitingCount = useFeedbackStore((s) => s.waitingCount)
   const waitingStale = useFeedbackStore((s) => s.waitingStale)
   const waitingUnsupported = useFeedbackStore((s) => s.waitingUnsupported)
@@ -176,6 +191,16 @@ export default function PageTabs(): React.JSX.Element {
           </PageTab>
         )
       })}
+      {orgChartOn && (
+        <PageTab
+          selected={!settingsOpen && page === 'orgChart'}
+          onSelect={() => select('orgChart')}
+          title={orgChartTabTitle(keybindings ?? {}, isMacPlatform())}
+          ariaLabel={ORG_CHART_TAB.name}
+        >
+          <FEATURE_ICONS.orgChart size={PAGE_TAB_ICON_PX} />
+        </PageTab>
+      )}
       {/* 0.46.3 (Rosson 2026-10-21): the cog is last, right of the Wiki
           (library) tab, so DOM, Tab-key and visual order all agree. */}
       <PageTab

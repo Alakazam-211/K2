@@ -5,7 +5,7 @@
 //
 //   Home, Agents, Projects, Tickets, Wiki, Server, Admin, Run, Drawer,
 //   Clock, Mug, Help, Pin, PinOff, Palette, Board, Smartphone, SmartphoneOff,
-//   Pencil, Trash, ArrowUp, Feedback
+//   Pencil, Trash, ArrowUp, Feedback, OrgChart
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `library`,
 //     `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`,
 //     `circle-help`, `pin`, `pin-off`, `palette`, `presentation`,
@@ -124,6 +124,21 @@ export function WikiIcon(props: K2IconProps = {}): React.JSX.Element {
       <path d="M12 6v14" />
       <path d="M8 8v12" />
       <path d="M4 4v16" />
+    </svg>
+  )
+}
+
+/** Org Chart (prd-org-chart-v1 §6.5): Lucide `network`, squared (the
+ *  boxes lose their corner radius, the elbow its rounded corners): one card
+ *  above two, joined top to bottom. */
+export function OrgChartIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('org-chart', props)}>
+      <rect x="9" y="2" width="6" height="6" />
+      <rect x="2" y="16" width="6" height="6" />
+      <rect x="16" y="16" width="6" height="6" />
+      <path d="M5 16v-4h14v4" />
+      <path d="M12 12V8" />
     </svg>
   )
 }

@@ -196,6 +196,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   compute: 'Compute',
   multiplayer: 'Multiplayer',
   'remote-desktop': 'Remote Desktop',
+  'org-chart': 'Org Chart',
 }
 
 /** Suppress unused-type warning since IndexedEntry is reserved for future optimization. */

@@ -80,6 +80,9 @@ export const HOTKEYS: HotkeyDefinition[] = [
   { id: 'goToTickets', label: 'Go to Tickets', defaultKey: 'Ctrl+Meta+4', defaultKeyOther: 'Ctrl+Alt+4', category: 'Navigation' },
   { id: 'goToWiki', label: 'Go to Wiki', defaultKey: 'Ctrl+Meta+5', defaultKeyOther: 'Ctrl+Alt+5', category: 'Navigation' },
   { id: 'goToSettings', label: 'Go to Settings', defaultKey: 'Ctrl+Meta+6', defaultKeyOther: 'Ctrl+Alt+6', category: 'Navigation' },
+  // The Org Chart tab (prd-org-chart-v1 §6.5): bindable, no default chord
+  // (⌃⌘6 stays Settings). Does nothing while the Org Chart is off.
+  { id: 'goToOrgChart', label: 'Go to Org Chart', defaultKey: '', category: 'Navigation' },
 
   // Thread view's terminal (prd-thread-view-focus-v1 §6). Ctrl+` was free
   // (checked against this list, the native menu's accelerators and every

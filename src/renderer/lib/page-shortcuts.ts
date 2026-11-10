@@ -45,7 +45,7 @@ import type { ZenPageKeys } from '@/lib/zen/zen-theme-switch'
 import { exitZen, zenOnNow, zenShownNow, zenSwitchView } from '@/lib/zen/zen-view'
 import { openWikiTab } from '@/lib/wiki-open'
 
-export type PageShortcutId = 'goToHome' | 'goToAgents' | 'goToProjects' | 'goToTickets' | 'goToWiki' | 'goToSettings'
+export type PageShortcutId = 'goToHome' | 'goToAgents' | 'goToProjects' | 'goToTickets' | 'goToWiki' | 'goToOrgChart' | 'goToSettings'
 
 /** What a chord opens: a top-bar page, or Settings (the cog). */
 export type PageShortcutTarget = AppPage | 'settings'
@@ -59,13 +59,15 @@ export interface PageShortcut {
   zenView: ZenRailView | null
 }
 
-/** In top-bar order (⌃⌘1 … ⌃⌘6). */
+/** In top-bar order (⌃⌘1 … ⌃⌘6; the Org Chart, between Wiki and Settings, has no default). */
 export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
   { id: 'goToHome', target: 'home', zenView: 'home' },
   { id: 'goToAgents', target: 'agents', zenView: 'agents' },
   { id: 'goToProjects', target: 'projects', zenView: 'projects' },
   { id: 'goToTickets', target: 'feedback', zenView: 'tickets' },
   { id: 'goToWiki', target: 'wiki', zenView: null },
+  // The Org Chart (prd-org-chart-v1): no default chord; only while it is on.
+  { id: 'goToOrgChart', target: 'orgChart', zenView: null },
   { id: 'goToSettings', target: 'settings', zenView: null },
 ]
 
@@ -99,6 +101,14 @@ export function runPageShortcut(s: PageShortcut): void {
     // ⌘, (App.tsx): `openSettings()`, in Zen or not. Already open: leave
     // it on the page it shows, as the cog does.
     if (!useSettingsStore.getState().settingsOpen) useSettingsStore.getState().openSettings()
+    return
+  }
+  if (s.target === 'orgChart') {
+    // A rebound chord on a server with the Org Chart off: nothing to open.
+    if (!useSettingsStore.getState().orgChart) return
+    if (zenOnNow()) exitZen()
+    if (useSettingsStore.getState().settingsOpen) useSettingsStore.getState().closeSettings()
+    usePageViewStore.getState().setPage('orgChart')
     return
   }
   if (s.target === 'wiki') {

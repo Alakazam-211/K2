@@ -48,6 +48,7 @@ import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSecti
 import { DataSection, DATA_MANIFEST } from './sections/DataSection'
 import { ComputeSection, COMPUTE_MANIFEST } from './sections/ComputeSection'
 import { MultiplayerSection, MULTIPLAYER_MANIFEST } from './sections/MultiplayerSection'
+import { OrgChartSection, ORG_CHART_MANIFEST } from './sections/OrgChartSection'
 import { multiplayerCoresAvailable } from './sections/multiplayer-cores-api'
 import { SewSection, SEW_MANIFEST } from './sections/SewSection'
 import { VoiceRoomsSection, VOICE_ROOMS_MANIFEST } from './sections/VoiceRoomsSection'
@@ -212,6 +213,8 @@ export function settingsNav({
     { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
     { kind: 'item', id: 'project-groups', label: 'Projects' },
     { kind: 'item', id: 'tickets', label: 'Tickets' },
+    // prd-org-chart-v1 §6.5: the Org Chart's switch (off by default) and its night.
+    { kind: 'item', id: 'org-chart', label: 'Org Chart', beta: true },
     // 0.46.3 (Rosson 2026-10-23): Gardens is one page, beneath Tickets; each
     // Garden's pane holds its Local Data and External Data, and "Not in a
     // Garden" the rest (see gardens-landing.ts).
@@ -357,6 +360,7 @@ export default function Settings(): React.JSX.Element {
       ...PROJECTS_MANIFEST,
       ...PROJECT_GROUPS_MANIFEST,
       ...TICKETS_MANIFEST,
+      ...ORG_CHART_MANIFEST,
       ...(threadPushAvailable() ? NOTIFICATIONS_MANIFEST : []),
       ...CONTEXT_CATALOG_MANIFEST,
       ...(zenAvailable() ? ZEN_GARDENS_MANIFEST : []),
@@ -827,6 +831,9 @@ export default function Settings(): React.JSX.Element {
         {remoteDesktopPageShown && activeSection === 'remote-desktop' && (
           <SectionErrorBoundary>
             <RemoteDesktopSection scope={settingsPrimaryScope()} />
+        {activeSection === 'org-chart' && (
+          <SectionErrorBoundary>
+            <OrgChartSection />
           </SectionErrorBoundary>
         )}
         {multiplayerPageShown && activeSection === 'multiplayer' && (

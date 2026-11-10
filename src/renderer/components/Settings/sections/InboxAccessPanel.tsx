@@ -25,6 +25,7 @@
 import React, { useCallback, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { Toggle } from '@/components/ui'
+import { InboxWakePanel } from './InboxWakePanel'
 import { SettingDropdown } from '../controls/SettingControls'
 import {
   grantInboxAccess,
@@ -555,6 +556,8 @@ export function InboxAccessPanel({
       {error && (
         <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
       )}
+
+      <InboxWakePanel inbox={inbox} canMutate={canMutate} />
     </div>
   )
 }

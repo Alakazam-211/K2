@@ -45,6 +45,7 @@ import { CodeEditor } from '@/components/FileViewerPane/CodeEditor'
 import { CustomThemeCreator } from '../CustomThemeCreator'
 import { AVATAR_ROUND, SETTING_FIELD_WIDTH, SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingDropdown, SettingRow, SettingSwitchRow, SettingsGroup } from '../controls/SettingControls'
 import { RemindersList } from '@/components/HeartbeatsPanel/RemindersList'
+import { MailWatchPanel } from './MailWatchPanel'
 import { showContextMenu } from '@/lib/context-menu'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import type { SettingEntry } from '../searchManifest'
@@ -1549,6 +1550,7 @@ function ProjectDetail({
     connections: 'Connections',
     skills: 'Skills',
     schedule: 'Heartbeats',
+    mail: 'Mail',
     advanced: 'Advanced',
   }
   // Header + tab strip span the settings column. Forms keep the shared
@@ -1778,6 +1780,8 @@ function ProjectDetail({
             {settingsTab === 'skills' && (
               <ProjectSkillsPanel projectPath={project.path} onOpenEditor={(name) => { setAgentEditorName(name); setAgentEditorOpen(true) }} />
             )}
+
+            {settingsTab === 'mail' && <MailWatchPanel projectPath={project.path} />}
 
             {settingsTab === 'advanced' && (
               <>

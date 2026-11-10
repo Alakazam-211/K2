@@ -387,6 +387,8 @@ export interface OverlayDoc {
    *  for one agent turn, read from git at the turn's start and end (never
    *  the transcript). `body` is the plain line for older renderers. */
   changes?: ThreadChangesDoc | null
+  /** 0.46.11: a mail notice, drawn by NoticeCard as plain text. */
+  notice?: unknown
   /** post-idempotency-v1 (0.46.8): the id the sender gave its post. This
    *  window's pending bubble for the post is matched by it. Absent on posts
    *  sent without one and on older servers. */
@@ -1340,6 +1342,7 @@ function coerceItem(row: unknown): OverlayThreadItem | null {
       // Chatter (0.46.3): the one line for people, and whose it is.
       ...(typeof d.summary === 'string' && d.summary.trim() ? { summary: d.summary } : {}),
       ...(d.summarySource === 'sender' || d.summarySource === 'derived' ? { summarySource: d.summarySource } : {}),
+      ...(d.notice ? { notice: d.notice } : {}),
       ...docExtras(d),
     },
   }

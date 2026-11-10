@@ -11,6 +11,7 @@ export type WorkspaceSettingsTab =
   | 'connections'
   | 'skills'
   | 'schedule'
+  | 'mail'
   | 'advanced'
 
 export const WORKSPACE_SETTINGS_TABS: WorkspaceSettingsTab[] = [
@@ -20,6 +21,7 @@ export const WORKSPACE_SETTINGS_TABS: WorkspaceSettingsTab[] = [
   'connections',
   'skills',
   'schedule',
+  'mail',
   'advanced',
 ]
 

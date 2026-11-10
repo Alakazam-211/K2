@@ -26,6 +26,7 @@ import { ChoiceCard } from '@/components/SessionView/ChoiceCard'
 import { SecretCard } from '@/components/SessionView/SecretCard'
 import { HandoffCard } from '@/components/SessionView/HandoffCard'
 import { ChangesCard } from '@/components/SessionView/ChangesCard'
+import { NoticeCard, coerceNotice } from '@/components/SessionView/NoticeCard'
 import type { HandoffDecideBody, HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
 import { coerceChanges, coerceHandoff, sameThreadItem, type OverlayStashOffer, type OverlayThreadItem, type ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
@@ -371,6 +372,8 @@ export function threadBubbleText(item: OverlayThreadItem): string {
   if (d.kind === 'stash.offer') return threadStashOffer(item) ? '' : d.body || ''
   // A changes card (workbench-v1 B7) draws itself; `body` is for old renderers.
   if (d.kind === 'changes') return coerceChanges(d.changes) ? '' : d.body || ''
+  // A mail notice draws itself; its `body` is only for older renderers.
+  if (coerceNotice(d.notice)) return ''
   return d.body || ''
 }
 
@@ -604,6 +607,8 @@ export const ThreadBubble = memo(function ThreadBubble({
   // coerced here like a snapshot row: no `hosts` must never crash a bubble.
   const handoff = useMemo(() => (kind === 'handoff' ? coerceHandoff(item.doc.handoff) : null), [kind, item.doc.handoff])
   const changes = useMemo(() => (kind === 'changes' ? coerceChanges(item.doc.changes) : null), [kind, item.doc.changes])
+  // A mail notice draws itself as plain text, never through Markdown (W34).
+  const notice = useMemo(() => coerceNotice(item.doc.notice), [item.doc.notice])
   const text = threadBubbleText(item)
   const files = item.doc.attachments ?? []
   // A post that is only files (`k2 thread <addr> --file …`) has no bubble.
@@ -747,6 +752,7 @@ export const ThreadBubble = memo(function ThreadBubble({
         <StashOfferCard docId={item.id} offer={offer} scope={source?.scope ?? null} agent={item.doc.from || null} agentName={author} />
       )}
       {changes && <ChangesCard changes={changes} />}
+      {notice && <NoticeCard notice={notice} />}
       {handoff && (
         <div style={{ marginTop: 6 }}>
           <HandoffCard

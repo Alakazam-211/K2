@@ -608,6 +608,19 @@ async fn the_person_opens_their_own_mailbox() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_log_means_no_access() {
     let fx = Fx::start().await;
+    // Put the table back when this test ends, pass or fail: the daemon's
+    // database is shared, and under a plain `cargo test` the next test in
+    // this process would otherwise find no access log.
+    struct RestoreLog;
+    impl Drop for RestoreLog {
+        fn drop(&mut self) {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute_batch(include_str!("../../../k2-core/drizzle_sql/0284_mail_reader_audit.sql"))
+                .expect("restore the access log");
+        }
+    }
+    let _restore = RestoreLog;
     {
         let db = k2_core::db::shared();
         let conn = db.lock();

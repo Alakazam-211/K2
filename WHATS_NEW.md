@@ -15,6 +15,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Agents can send too:** `k2 send-feedback "<text>"` (`k2 study send-feedback`). At most 1 a minute and 3 a day per workspace and 10 a day per server, never with a contact email, and with K2 details only after the owner or an admin turns on "Agents may include K2 details" (off by default). Settings → General → Send feedback has the switches, and turns sending off for the whole server.
 - **Needs K2 Connect.** A server that isn't paired with K2 Connect, or is air-gapped, doesn't send: the dialog says so and offers Copy as text and hello@alakazamlabs.com. What your server sends, and to whom, is in `docs/product-feedback-wire-v1.md`.
 
+### Chat / Voice Hosting
+- **K2 installs and upgrades to Sew 0.9.0,** which lets Apps record calls: an App can turn recording on and say who may start it, and each person in a call still says yes for themselves. Everything starts off, and nothing changes until someone turns it on. Sew 0.9.0 also updates its WebRTC parts. Upgrade with `k2 hostchat upgrade`: it upgrades Sew, then its voice engine, then the recorder where one is installed. Going back to an older Sew needs `k2 hostchat rollback --accept-data-loss`, because 0.9.0 changes Sew's data. Sew tested upgrades from 0.8.3, 0.8.2, 0.8.1 and 0.7.4; a server already on Sew 0.8.3 upgrades like any other. Sew hasn't published its speech model yet, so `k2 hostchat recording enable` says so (`recording_model_unpinned`) until a K2 update pins it.
+
 ## 0.46.10 — K2 is MIT; Voice & Chat only logins
 
 ### When you update

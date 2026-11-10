@@ -806,6 +806,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/vault/ask",
         "/cli/vault/asks",
         "/cli/vault/unsend",
+        // 0.46.11: an agent reads which person-given secrets it may send to
+        // another server without asking; adding or removing one is refused
+        // in the handler (an Owner's or Admin's, with the vault confirm).
+        "/cli/vault/send-allow",
         // `k2 job` (prd-vault-gaps-v1 item 5, Q14): an agent manages its
         // own workspace's jobs; the handler pins the workspace, refuses a
         // job run's own passport and keeps `pause --all` for people.

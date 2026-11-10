@@ -2357,6 +2357,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/run", Member),
     get("/cli/vault/run-helper", Member),
     post("/cli/vault/send", Member),
+    // 0.46.11: standing send grants. Reading is the agent's own or a
+    // person's; adding or removing one is an Owner's or Admin's (with the
+    // vault confirm to add). Passports reach GET only (the handler refuses
+    // their POST).
+    split("/cli/vault/send-allow", Member, Admin),
     get("/cli/vault/sent", Member),
     both("/cli/vault/service", Member),
     post("/cli/vault/set", Member),

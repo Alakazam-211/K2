@@ -80,7 +80,9 @@ pub(crate) fn ctx_of(req: &PermissionRequest) -> Ctx {
 /// action where it follows the values (`vault.use`: a click unless the
 /// grantee could read the value).
 pub(crate) fn proof_for(spec: &ActionSpec, ctx: &Ctx) -> Proof {
-    super::actions::vault::use_proof(spec.id, ctx).unwrap_or(spec.proof)
+    super::actions::vault::use_proof(spec.id, ctx)
+        .or_else(|| super::actions::vault_grant_server::proof(spec.id, ctx))
+        .unwrap_or(spec.proof)
 }
 
 /// The K2-written words of one request, rendered from the catalog.
@@ -166,7 +168,9 @@ fn words_raw(spec: &ActionSpec, ctx: &Ctx) -> Words {
         .or_else(|| super::actions::box_login_grant::with_computed(spec.id, ctx))
         .or_else(|| super::actions::chat_refresh::with_computed(spec.id, ctx))
         .or_else(|| super::actions::compute::with_computed(spec.id, ctx))
-        .or_else(|| super::actions::vault_incoming::with_computed(spec.id, ctx));
+        .or_else(|| super::actions::vault_incoming::with_computed(spec.id, ctx))
+        .or_else(|| super::actions::vault_send::with_computed(spec.id, ctx))
+        .or_else(|| super::actions::vault_grant_server::with_computed(spec.id, ctx));
     let ctx = computed.as_ref().unwrap_or(ctx);
     let what = fill(spec.words.what_changes, ctx);
     let what_trim = what.trim().trim_end_matches('.').to_string();
@@ -453,6 +457,9 @@ pub(crate) fn prompt_and_options(reqs: &[PermissionRequest], batch: bool) -> (St
         }
         if super::actions::chat_refresh::offers_always(first) {
             options.push(super::actions::chat_refresh::ALWAYS_LABEL.to_string());
+        }
+        if super::actions::vault_send::offers_always(first) {
+            options.push(super::actions::vault_send::ALWAYS_LABEL.to_string());
         }
         return (prompt, options);
     }

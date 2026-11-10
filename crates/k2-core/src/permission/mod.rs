@@ -81,6 +81,9 @@ pub mod label {
     pub const ALWAYS: &str = "Allow, and let it manage its Apps' users from now on";
     /// `chat.refresh`: Allow, then turn on "Can refresh its own pinned chat".
     pub const ALWAYS_CHAT_REFRESH: &str = "Allow, and let it refresh its chat from now on";
+    /// `vault.send` (0.46.11): send now, then let the agent send the same
+    /// secrets to the same agent itself (a standing send grant).
+    pub const ALWAYS_VAULT_SEND: &str = "Allow, and let it send this itself from now on";
 }
 
 /// Access Audit events (PRD §6.5).

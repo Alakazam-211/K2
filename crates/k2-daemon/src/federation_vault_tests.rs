@@ -20,11 +20,11 @@ use super::*;
 use crate::test_support::with_temp_home;
 use crate::vault::actor::{Channel, VaultCaller};
 
-fn sentinel() -> String {
+pub(crate) fn sentinel() -> String {
     format!("k2test_FED_HANDOFF_{}", uuid::Uuid::new_v4().simple())
 }
 
-fn other_vault(tag: &str) -> (TestDir, Arc<LocalVault>) {
+pub(crate) fn other_vault(tag: &str) -> (TestDir, Arc<LocalVault>) {
     let d = TestDir::new(tag);
     let ks: Arc<dyn KeyStore> = Arc::new(FakeKeyStore::new());
     let v = Arc::new(LocalVault::open(d.path().join("vault"), ks, OpenOptions { kdf: KdfCost::Floor }).expect("open"));
@@ -270,17 +270,17 @@ fn vault_recipient_answers_a_statement_bound_to_the_asking_peer() {
 
 /// What the stub peer saw.
 #[derive(Default)]
-struct Seen {
-    recipient_hits: usize,
-    handoff_bodies: Vec<Vec<u8>>,
-    inbound_hits: usize,
-    opened: Vec<(String, String, Vec<u8>)>,
+pub(crate) struct Seen {
+    pub(crate) recipient_hits: usize,
+    pub(crate) handoff_bodies: Vec<Vec<u8>>,
+    pub(crate) inbound_hits: usize,
+    pub(crate) opened: Vec<(String, String, Vec<u8>)>,
 }
 
 /// A peer that answers the roster (agent `bob` in `ws-b`), and either 404s
 /// the vault routes (an old K2) or answers them for real with its own vault
 /// (`receiver`) and federation key.
-fn spawn_stub(
+pub(crate) fn spawn_stub(
     old: bool,
     peer_key: Arc<rcgen::KeyPair>,
     receiver: Arc<LocalVault>,
@@ -381,7 +381,7 @@ fn sales_with_secret(v: &LocalVault, name: &str, value: &str, by: &Actor) -> (St
     (id, label)
 }
 
-fn send(v: &Arc<LocalVault>, c: &VaultCaller, b: Value) -> (u16, Value, String) {
+pub(crate) fn send(v: &Arc<LocalVault>, c: &VaultCaller, b: Value) -> (u16, Value, String) {
     let r = crate::vault_handoff_routes::handle(v, crate::vault_handoff_routes::SEND, c, b.to_string().as_bytes(), &HashMap::new(), "test");
     (r.status[..3].parse().unwrap(), serde_json::from_str(&r.body).unwrap_or(Value::Null), r.body)
 }

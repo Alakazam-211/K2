@@ -16,7 +16,24 @@
 //! A same-sender re-send of the same secret is a new version.
 
 use super::*;
-use crate::handoff::{self as h, AcceptEntry, Decision, HandoffItem, HandoffRecord, Incoming, PeerVault, Received};
+use crate::handoff::{self as h, AcceptEntry, Decision, HandoffItem, HandoffRecord, Incoming, PeerVault, Received, SendAllowEntry};
+
+fn send_allow_mac_input(a: &SendAllowEntry) -> Vec<u8> {
+    let mut e = Enc::new("handoff-send-allow");
+    e.str(&a.workspace_id).str(&a.secret_id).str(&a.to).str(&a.added_by).str(&a.added_at);
+    e.finish().to_vec()
+}
+
+/// Only an Owner or Admin person writes a standing send grant.
+fn send_allow_person(actor: &Actor) -> Result<()> {
+    if actor.is_admin_human() {
+        return Ok(());
+    }
+    Err(VaultError::forbidden(
+        "handoff_person_only",
+        "only an Owner or Admin on this server decides which secrets an agent may send to another server",
+    ))
+}
 
 fn record_mac_input(r: &HandoffRecord, item_json: &str) -> Vec<u8> {
     let mut e = Enc::new("handoff");
@@ -469,6 +486,26 @@ impl LocalVault {
             }
             let m2 = hmac(&new.row, &peer_vault_mac_input(&p, &features_json));
             tx.execute("UPDATE peer_vault SET row_mac = ?2 WHERE peer_fp = ?1", params![peer_fp, m2.to_vec()])?;
+        }
+        let allows: Vec<(SendAllowEntry, Vec<u8>)> = {
+            let mut st = tx.prepare("SELECT workspace_id, secret_id, peer_addr, added_by, added_at, row_mac FROM handoff_send_allow")?;
+            let it = st.query_map([], |r| {
+                Ok((
+                    SendAllowEntry { workspace_id: r.get(0)?, secret_id: r.get(1)?, to: r.get(2)?, added_by: r.get(3)?, added_at: r.get(4)? },
+                    r.get::<_, Vec<u8>>(5)?,
+                ))
+            })?;
+            it.collect::<std::result::Result<_, _>>()?
+        };
+        for (a, mac) in allows {
+            if !hmac_verify(&old.row, &send_allow_mac_input(&a), &mac) {
+                return Err(VaultError::tamper(format!("send grant {}/{} failed its integrity check; rekey stopped", a.workspace_id, a.to)));
+            }
+            let m2 = hmac(&new.row, &send_allow_mac_input(&a));
+            tx.execute(
+                "UPDATE handoff_send_allow SET row_mac = ?4 WHERE workspace_id = ?1 AND secret_id = ?2 AND peer_addr = ?3",
+                params![a.workspace_id, a.secret_id, a.to, m2.to_vec()],
+            )?;
         }
         Ok(())
     }
@@ -1071,6 +1108,90 @@ impl LocalVault {
         self.mutate(true, |tx, _| {
             let n = tx.execute("DELETE FROM handoff_accept WHERE workspace_id = ?1 AND sender = ?2", params![ws, sender])?;
             let e = Entry::new("accept-from-remove", &stamp, if n > 0 { "ok" } else { "ok:absent" }).consumer(format!("ws:{ws}<-{sender}"));
+            Ok((n > 0, vec![e]))
+        })
+    }
+
+    // ── standing send grants (0.46.11) ──────────────────────────────
+
+    /// The standing send grants of a workspace (or every workspace). A row
+    /// that fails its MAC is dropped (and reported once), never honoured.
+    pub fn send_allow(&self, workspace: Option<&str>) -> Result<Vec<SendAllowEntry>> {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        let mut st = conn.prepare(
+            "SELECT workspace_id, secret_id, peer_addr, added_by, added_at, row_mac FROM handoff_send_allow ORDER BY workspace_id, added_at, peer_addr",
+        )?;
+        let it = st.query_map([], |r| {
+            Ok((
+                SendAllowEntry { workspace_id: r.get(0)?, secret_id: r.get(1)?, to: r.get(2)?, added_by: r.get(3)?, added_at: r.get(4)? },
+                r.get::<_, Vec<u8>>(5)?,
+            ))
+        })?;
+        let mut out = vec![];
+        for row in it {
+            let (a, mac) = row?;
+            if !hmac_verify(&keys.row, &send_allow_mac_input(&a), &mac) {
+                self.tamper_once(format!("send grant {}/{} failed its integrity check", a.workspace_id, a.to));
+                continue;
+            }
+            if workspace.is_some_and(|w| w != a.workspace_id) {
+                continue;
+            }
+            out.push(a);
+        }
+        Ok(out)
+    }
+
+    /// The grant that lets `workspace` send `secret_id` to any of `to`
+    /// (already normalised), if a person gave one.
+    pub fn send_allowed(&self, workspace: &str, secret_id: &str, to: &[String]) -> Option<SendAllowEntry> {
+        self.send_allow(Some(workspace)).ok()?.into_iter().find(|a| a.secret_id == secret_id && to.iter().any(|t| t == &a.to))
+    }
+
+    /// A person lets `workspace`'s agent send `secret_id` to `to` from now
+    /// on. The secret must be that workspace's own. The route checks the
+    /// vault confirm; this checks it's an Owner or Admin person.
+    pub fn send_allow_add(&self, workspace: &str, secret_id: &str, to: &str, actor: &Actor) -> Result<SendAllowEntry> {
+        send_allow_person(actor)?;
+        Scope::workspace(workspace).validate()?;
+        let to = h::normalise_remote_agent(to)?;
+        let owned = {
+            let keys = self.keys.read();
+            let conn = self.conn.lock();
+            self.find_row(&conn, &keys, &Selector::Id(secret_id.to_string()))?.meta
+        };
+        if owned.scope.kind != ScopeKind::Workspace || owned.scope.id != workspace {
+            return Err(VaultError::not_found("that secret isn't in this workspace"));
+        }
+        let a = SendAllowEntry { workspace_id: workspace.to_string(), secret_id: secret_id.to_string(), to, added_by: actor.stamp(), added_at: ts(now()) };
+        let a2 = a.clone();
+        let stamp = actor.stamp();
+        self.mutate(true, |tx, keys| {
+            let mac = hmac(&keys.row, &send_allow_mac_input(&a2));
+            tx.execute(
+                "INSERT INTO handoff_send_allow (workspace_id, secret_id, peer_addr, added_by, added_at, row_mac) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (workspace_id, secret_id, peer_addr) DO UPDATE SET added_by = excluded.added_by, added_at = excluded.added_at, row_mac = excluded.row_mac",
+                params![a2.workspace_id, a2.secret_id, a2.to, a2.added_by, a2.added_at, mac.to_vec()],
+            )?;
+            let e = Entry::new("send-allow-add", &stamp, "ok").secret(&a2.secret_id, None).consumer(format!("ws:{}->{}", a2.workspace_id, a2.to));
+            Ok(((), vec![e]))
+        })?;
+        Ok(a)
+    }
+
+    /// A person takes a standing send grant back; `false` when there was none.
+    pub fn send_allow_remove(&self, workspace: &str, secret_id: &str, to: &str, actor: &Actor) -> Result<bool> {
+        send_allow_person(actor)?;
+        let to = h::normalise_remote_agent(to)?;
+        let stamp = actor.stamp();
+        let (ws, sid) = (workspace.to_string(), secret_id.to_string());
+        self.mutate(true, |tx, _| {
+            let n = tx.execute(
+                "DELETE FROM handoff_send_allow WHERE workspace_id = ?1 AND secret_id = ?2 AND peer_addr = ?3",
+                params![ws, sid, to],
+            )?;
+            let e = Entry::new("send-allow-remove", &stamp, if n > 0 { "ok" } else { "ok:absent" }).secret(&sid, None).consumer(format!("ws:{ws}->{to}"));
             Ok((n > 0, vec![e]))
         })
     }

@@ -358,9 +358,14 @@ pub(crate) fn confirm_reason(action: &str, request: Option<&str>) -> Option<Resu
     if action != SHARE_CONFIRM {
         return None;
     }
-    let found = request.and_then(|id| crate::permission::store::get(id).ok().flatten()).filter(|r| (r.action == SHARE_ACTION || r.action == USE_ACTION) && r.is_answerable());
+    let (send, server) = (super::vault_send::ACTION, super::vault_grant_server::ACTION);
+    let found = request
+        .and_then(|id| crate::permission::store::get(id).ok().flatten())
+        .filter(|r| [SHARE_ACTION, USE_ACTION, send, server].contains(&r.action.as_str()) && r.is_answerable());
     Some(match found {
         None => Err("that card isn't waiting for an answer".to_string()),
+        Some(r) if r.action == send => Ok(super::vault_send::confirm_words(&crate::permission::present::ctx_of(&r))),
+        Some(r) if r.action == server => Ok(super::vault_grant_server::confirm_words(&crate::permission::present::ctx_of(&r))),
         Some(r) => {
             let ctx = crate::permission::present::ctx_of(&r);
             let words = if r.action == USE_ACTION { "let {ws} read {secret} ({from}) as {as} {lasts}" } else { "share {secret} with {service} as {how}" };

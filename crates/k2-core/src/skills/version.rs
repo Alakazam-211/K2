@@ -345,7 +345,9 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 53;
 /// `compute.packages-policy`).
 /// v11 = 0.46.10: "GitHub access for compute jobs" (`compute.git-access-setup`).
 /// v12 = 0.46.10: "A secret another agent sent you" (`vault.incoming.accept`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 12;
+/// v13 = 0.46.11: "A person's secret, to another server" (`vault.send`) and
+/// "A server secret you need" (`vault.grant-server`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 13;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

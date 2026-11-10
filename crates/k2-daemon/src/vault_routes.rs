@@ -205,6 +205,9 @@ fn refuse_policy(e: &VaultError, c: &VaultCaller, body: &[u8]) -> CliResponse {
 /// can teach `k2 permission request vault.share-service …`. Every other
 /// refusal, and this one with cards off, is byte for byte what it was.
 fn refuse_grant(vault: &LocalVault, c: &VaultCaller, body: &[u8], e: &VaultError) -> CliResponse {
+    if let Some(r) = grant_out_of_reach(c, body, e) {
+        return r;
+    }
     if e.code != "vault_owner_confirm_required" || !c.is_passport() {
         return refuse(e);
     }
@@ -228,6 +231,53 @@ fn refuse_grant(vault: &LocalVault, c: &VaultCaller, body: &[u8], e: &VaultError
         Some(error) => CliResponse { status: status_line(e.status), content_type: "application/json", body: json!({ "error": error }).to_string() },
         None => refuse(e),
     }
+}
+
+/// The refusal code for an agent's `k2 vault grant NAME --to ws:<itself>`
+/// of a secret it can't see (0.46.11): the card `vault.grant-server` asks a
+/// person to share a server secret with it.
+pub const GRANT_OUT_OF_REACH: &str = "grant_out_of_reach";
+
+/// An agent granting itself a secret it can't see: a server secret no one
+/// shared with it, or a name that isn't anywhere it can look. One answer
+/// whether or not the server secret exists (V20): this never reads the
+/// vault. A secret in the agent's own workspace that isn't there gets the
+/// same words (asking for a server secret is the only grant to itself that
+/// means anything). `None`: any other refusal, unchanged.
+fn grant_out_of_reach(c: &VaultCaller, body: &[u8], e: &VaultError) -> Option<CliResponse> {
+    if e.code != "not_found" || e.hint != "no such secret" {
+        return None;
+    }
+    let own = c.workspace_id()?;
+    let b: GrantBody = parse(body).ok()?;
+    if b.sel.id.as_deref().is_some_and(|x| !x.is_empty()) || b.sel.reference.as_deref().is_some_and(|x| !x.is_empty()) {
+        return None;
+    }
+    let Ok(Selector::Name { namespace: Namespace::User, scope, name }) = selector(c, &b.sel) else { return None };
+    if !(scope.kind == ScopeKind::Server || (scope.kind == ScopeKind::Workspace && scope.id == own)) {
+        return None;
+    }
+    let to = b.to.as_deref()?.trim().strip_prefix("ws:")?;
+    if to != own && crate::vault::workspace_id(to).as_deref() != Some(own) {
+        return None;
+    }
+    let how = b.delivery.as_deref().filter(|d| crate::permission::actions::vault_grant_server::HOWS.contains(d));
+    let label = crate::vault::workspace_label(own);
+    let as_flag = how.map(|d| format!(" --as {d}")).unwrap_or_default();
+    let hint = if k2_core::permission::gate::enabled_for(own) {
+        format!(
+            "you can't see a server secret named {name}: no one shared it with you, or there is none (a secret in your own workspace is yours already). A person can share it with you on a card: run the line below. Then K2 says how to use it."
+        )
+    } else {
+        format!(
+            "you can't see a server secret named {name}: no one shared it with you, or there is none (a secret in your own workspace is yours already). Ask your person (an Owner or Admin) to share it with you: in Settings → Vault, Share on {name}, with {label}; or from their own terminal (Terminal or iTerm, not a K2 terminal): k2 vault grant {name} --scope server --to ws:{label}{as_flag}"
+        )
+    };
+    let mut error = json!({ "code": GRANT_OUT_OF_REACH, "hint": hint, "secret": name });
+    if let Some(d) = how {
+        error["as"] = json!(d);
+    }
+    Some(CliResponse { status: status_line(403), content_type: "application/json", body: json!({ "error": error }).to_string() })
 }
 
 fn ok(v: Value) -> CliResponse {
@@ -1753,6 +1803,18 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
     let sel = selector(c, &b.sel)?;
     let to = b.to.as_deref().ok_or_else(|| err("consumer_required", 400, "who gets it? --to ws:<name>"))?;
     let consumer = consumer_for(c, to)?;
+    // 0.46.11: an agent granting itself a server secret it can't see gets
+    // one answer whether or not it exists (V20), before anything else about
+    // the secret is checked; `refuse_grant` turns it into the card's wall.
+    if let (Some(own), Selector::Name { namespace: Namespace::User, scope, .. }) = (c.workspace_id(), &sel) {
+        if scope.kind == ScopeKind::Server && consumer.kind == ConsumerKind::Workspace && consumer.id == own {
+            if let Err(e) = vault.meta(&sel, &c.actor) {
+                if e.code == "not_found" {
+                    return Err(VaultError::not_found("no such secret"));
+                }
+            }
+        }
+    }
     let delivery = grant_delivery(&b, || Ok(vault.meta(&sel, &c.actor)?.default_delivery))?;
     if consumer.kind == ConsumerKind::Session && c.actor.agent().is_some_and(|a| a.vault_manage) {
         let scope = vault.meta(&sel, &c.actor)?.scope.kind;

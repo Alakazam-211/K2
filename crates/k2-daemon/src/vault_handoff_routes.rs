@@ -40,10 +40,14 @@ pub const ASK: &str = "/cli/vault/ask";
 pub const ASKS: &str = "/cli/vault/asks";
 /// H5: take back a delivery (not a revoke: the key may be in use).
 pub const UNSEND: &str = "/cli/vault/unsend";
+/// 0.46.11: the person-given secrets an agent may send to another server
+/// without asking (GET: the agent's own, or a person's view; POST: an
+/// Owner or Admin adds, with the vault confirm, or removes one).
+pub const SEND_ALLOW: &str = "/cli/vault/send-allow";
 
 /// Routes this module serves.
-pub const ROUTES: &[&str] = &[SEND, INCOMING, DECIDE, SENT, ACCEPT_FROM, ASK, ASKS, UNSEND];
-/// POST-only routes among them (`accept-from` serves both).
+pub const ROUTES: &[&str] = &[SEND, INCOMING, DECIDE, SENT, ACCEPT_FROM, ASK, ASKS, UNSEND, SEND_ALLOW];
+/// POST-only routes among them (`accept-from` and `send-allow` serve both).
 pub const POST_ROUTES: &[&str] = &[SEND, DECIDE, ASK, UNSEND];
 
 /// The auth-audit event every handoff line uses (Settings → Logs → Access
@@ -73,6 +77,8 @@ pub fn handle(
         DECIDE => decide(vault, c, body, ingress),
         ACCEPT_FROM if body.iter().all(|b| b.is_ascii_whitespace()) => accept_from_get(vault, c, params),
         ACCEPT_FROM => accept_from_post(vault, c, body, ingress),
+        SEND_ALLOW if body.iter().all(|b| b.is_ascii_whitespace()) => send_allow_get(vault, c, params),
+        SEND_ALLOW => send_allow_post(vault, c, body, ingress),
         ASK => ask(vault, c, body, ingress),
         ASKS => asks(vault, c, params),
         UNSEND => unsend(vault, c, body, ingress),
@@ -110,8 +116,10 @@ pub(crate) struct SendBody {
     note: String,
     ttl_secs: Option<i64>,
     reply_to: Option<String>,
-    /// People: which secret (`--scope ws:<name>`).
+    /// People: which secret (`--scope ws:<name>`), or its id (a
+    /// `vault.send` card's send, exactly the secret the card named).
     scope: Option<String>,
+    id: Option<String>,
     workspace: Option<String>,
     /// `--stdin` (person channel, cross server only).
     value_b64: Option<String>,
@@ -321,7 +329,7 @@ fn prepare_named(vault: &Arc<LocalVault>, c: &VaultCaller, b: &SendBody, as_name
         Some(ws) => Selector::user(Scope::workspace(ws), name),
         None => crate::vault_routes::selector(
             c,
-            &Sel { name: Some(name.to_string()), scope: b.scope.clone(), workspace: b.workspace.clone(), ..Default::default() },
+            &Sel { id: b.id.clone(), name: Some(name.to_string()), scope: b.scope.clone(), workspace: b.workspace.clone(), ..Default::default() },
         )?,
     };
     let meta = vault.meta(&sel, &c.actor).map_err(|e| {
@@ -943,6 +951,117 @@ fn accept_from_post(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &
         _ => return Err(VaultError::bad_request("bad_action", "add or remove")),
     }
     Ok(json!({ "ok": true, "entries": entries_json(vault, Some(&ws))? }))
+}
+
+// ── standing send grants (0.46.11) ──────────────────────────────────
+
+/// One workspace's standing send grants, by the secret's current name. A
+/// grant whose secret is gone (destroyed, moved) is left out: it can never
+/// match a send again.
+fn send_allow_json(vault: &LocalVault, ws: &str) -> Result<Value, VaultError> {
+    let system = Actor::System("send-allow".into());
+    let mut out = Vec::new();
+    for a in vault.send_allow(Some(ws))? {
+        let Ok(m) = vault.meta(&Selector::Id(a.secret_id.clone()), &system) else { continue };
+        if m.status == k2_vault::SecretStatus::Destroyed {
+            continue;
+        }
+        out.push(json!({ "workspaceId": a.workspace_id, "secretId": a.secret_id, "name": m.name, "to": a.to, "addedBy": a.added_by, "addedAt": a.added_at }));
+    }
+    Ok(Value::Array(out))
+}
+
+/// The person-given secrets of a workspace (the ones a grant is for): names
+/// and ids only, for Settings' Add picker.
+fn send_allow_candidates(vault: &LocalVault, ws: &str, person: &Actor) -> Result<Value, VaultError> {
+    let list = vault.list(&k2_vault::ListFilter { scope: Some(Scope::workspace(ws)), ..Default::default() }, person)?;
+    Ok(json!(list
+        .iter()
+        .filter(|m| m.human_given && m.namespace == k2_vault::Namespace::User && m.status == k2_vault::SecretStatus::Active)
+        .map(|m| json!({ "id": m.id, "name": m.name }))
+        .collect::<Vec<_>>()))
+}
+
+/// `GET /cli/vault/send-allow?workspace=`: the person-given secrets this
+/// agent may send to another server without asking, and to whom. An agent
+/// reads its own; a person reads any workspace's (plus the secrets a grant
+/// could be for).
+fn send_allow_get(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) -> Result<Value, VaultError> {
+    let ws = workspace_param(c, params)?.ok_or_else(|| VaultError::bad_request("workspace_required", "which agent? (--workspace <name>)"))?;
+    let mut out = json!({ "workspace": crate::vault::workspace_label(&ws), "workspaceId": ws, "entries": send_allow_json(vault, &ws)? });
+    if !c.is_passport() && c.actor.is_admin_human() {
+        out["secrets"] = send_allow_candidates(vault, &ws, &c.actor)?;
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SendAllowBody {
+    workspace: Option<String>,
+    name: Option<String>,
+    secret_id: Option<String>,
+    to: Option<String>,
+    #[serde(default)]
+    action: String,
+    /// `add`: the vault confirm a person-given send takes (`handoff-send`,
+    /// bound to the secret's id): the same proof as sending it.
+    confirm_token: Option<String>,
+}
+
+/// `POST /cli/vault/send-allow` (people only: an Owner or Admin): `add`
+/// lets the agent send one person-given secret to one agent on another
+/// server from now on (with the vault confirm); `remove` takes it back.
+pub(crate) fn send_allow_post(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Result<Value, VaultError> {
+    let stamp = c.actor.stamp();
+    let b: SendAllowBody = parse(body)?;
+    if c.is_passport() || !c.actor.is_admin_human() {
+        let e = VaultError::forbidden(
+            "handoff_person_only",
+            "only an Owner or Admin on this server decides which secrets an agent may send to another server (to ask: k2 vault send it, and run the Ask with: line)",
+        );
+        audit(&stamp, &format!("deny send-allow {}: {}", b.action, e.code), ingress);
+        return Err(e);
+    }
+    let w = b.workspace.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| VaultError::bad_request("workspace_required", "which agent? (workspace)"))?;
+    let ws = crate::vault::workspace_id(w).ok_or_else(|| VaultError::not_found(format!("no workspace named {w}")))?;
+    let to = k2_vault::handoff::normalise_remote_agent(b.to.as_deref().unwrap_or(""))?;
+    // Adding: the host as the paired server names itself. Removing: exactly
+    // the row listed.
+    let to = if b.action == "remove" { to } else { crate::federation_vault::canonical_remote_agent(&to) };
+    let sel = match (b.secret_id.as_deref().map(str::trim).filter(|s| !s.is_empty()), b.name.as_deref().map(str::trim).filter(|s| !s.is_empty())) {
+        (Some(id), _) => Selector::Id(id.to_string()),
+        (None, Some(n)) => Selector::user(Scope::workspace(&ws), n),
+        (None, None) => return Err(VaultError::bad_request("name_required", "name the secret")),
+    };
+    let m = vault.meta(&sel, &c.actor)?;
+    if m.scope.kind != k2_vault::ScopeKind::Workspace || m.scope.id != ws {
+        return Err(VaultError::not_found("that secret isn't in this workspace"));
+    }
+    let label = crate::vault::workspace_label(&ws);
+    match b.action.as_str() {
+        "add" | "" => {
+            if !m.human_given {
+                return Err(VaultError::bad_request(
+                    "not_needed",
+                    format!("{label} gave {} itself, so it sends it without asking; there is nothing to allow", m.name),
+                ));
+            }
+            handoff::check_sendable(&m)?;
+            let token = b.confirm_token.as_deref().filter(|t| !t.trim().is_empty()).ok_or_else(|| {
+                VaultError::forbidden("confirm_required", "confirm it's you first (vault confirm: handoff-send, for this secret)")
+            })?;
+            vault.confirm.take(token, crate::vault_routes::HANDOFF_CONFIRM_ACTION, Some(&m.id), &stamp)?;
+            vault.send_allow_add(&ws, &m.id, &to, &c.actor)?;
+            audit(&stamp, &format!("ok send-allow add {} for {label} to {to}", m.name), ingress);
+        }
+        "remove" => {
+            let removed = vault.send_allow_remove(&ws, &m.id, &to, &c.actor)?;
+            audit(&stamp, &format!("ok send-allow remove {} for {label} to {to}{}", m.name, if removed { "" } else { " (was not listed)" }), ingress);
+        }
+        _ => return Err(VaultError::bad_request("bad_action", "add or remove")),
+    }
+    Ok(json!({ "ok": true, "workspace": label, "workspaceId": ws, "entries": send_allow_json(vault, &ws)? }))
 }
 
 // ── asks and unsend (H5) ────────────────────────────────────────────

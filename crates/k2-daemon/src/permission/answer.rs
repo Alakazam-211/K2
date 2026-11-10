@@ -213,7 +213,7 @@ enum Decision {
 fn decision_of(label_text: &str) -> Option<Decision> {
     match label_text {
         label::ALLOW => Some(Decision::Allow),
-        label::ALWAYS | label::ALWAYS_CHAT_REFRESH => Some(Decision::Always),
+        label::ALWAYS | label::ALWAYS_CHAT_REFRESH | label::ALWAYS_VAULT_SEND => Some(Decision::Always),
         label::DENY => Some(Decision::Deny),
         label::CLOSE => Some(Decision::Close),
         _ => None,
@@ -284,6 +284,8 @@ pub(crate) fn answer(
         };
         let offered = if answer == label::ALWAYS_CHAT_REFRESH {
             super::actions::chat_refresh::offers_always(&reqs[0])
+        } else if answer == label::ALWAYS_VAULT_SEND {
+            super::actions::vault_send::offers_always(&reqs[0])
         } else {
             crate::apps::held_cards::offers_always(&reqs[0])
         };
@@ -495,6 +497,8 @@ fn decide_one(
                 // undoes the one-off: the card says what happened.
                 let turned = if req.action == super::actions::chat_refresh::REFRESH.id {
                     super::actions::chat_refresh::turn_on_always(&ctx, who)
+                } else if req.action == super::actions::vault_send::ACTION {
+                    super::actions::vault_send::turn_on_always(&ctx, who)
                 } else {
                     crate::apps::held_cards::turn_on_always(&ctx, who)
                 };

@@ -615,6 +615,30 @@ pub struct AcceptEntry {
     pub added_at: String,
 }
 
+/// A person's standing yes (0.46.11): the agent of `workspace_id` may send
+/// the person-given secret `secret_id` to `to` (`agent::host`, an agent on
+/// another server) without asking each time. Only an Owner or Admin person
+/// writes one; any send under it is still sealed to that server's vault.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SendAllowEntry {
+    pub workspace_id: String,
+    pub secret_id: String,
+    pub to: String,
+    pub added_by: String,
+    pub added_at: String,
+}
+
+/// An agent on another server: `agent::host` (or `agent@host`), lowercased.
+pub fn normalise_remote_agent(s: &str) -> Result<String> {
+    let bad = || VaultError::bad_request("bad_address", "name an agent on another server: agent::host");
+    let t = s.trim();
+    if t.starts_with("ws:") || t.starts_with("team:") {
+        return Err(bad());
+    }
+    normalise_sender(t).map_err(|_| bad())
+}
+
 /// A peer's vault, learned from its signed vault-recipient statement (H3).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

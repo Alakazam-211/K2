@@ -603,6 +603,50 @@ fn passports_guests_and_system_cannot_decide_or_edit_accept_from() {
     assert!(!v.accepts_from("ws-ops", &["sales::rosson.k2.dev".into()]));
 }
 
+/// 0.46.11: a standing send grant is a person's (Owner or Admin), for one
+/// secret of that workspace and one agent on another server; a tampered row
+/// is never honoured.
+#[test]
+fn only_an_owner_or_admin_writes_a_send_grant_and_a_tampered_one_is_ignored() {
+    let t = open("ho-send-allow");
+    let v = &t.v;
+    let m = put(v, "ws-ops", "GIVEN", SENTINEL, &Actor::Owner);
+    let other = put(v, "ws-sales", "THEIRS", SENTINEL, &Actor::Owner);
+    let member = Actor::Login { username: "dana".into(), role: Role::Member };
+    let shell = Actor::Agent(AgentActor { workspace_id: "ws-ops".into(), session_id: None, shell: true, vault_manage: true });
+    for a in [agent("ws-ops"), shell, member, Actor::System("x".into()), Actor::Guest { username: "g".into(), workspace_id: "ws-ops".into() }] {
+        assert_eq!(v.send_allow_add("ws-ops", &m.id, "bob::other.k2.dev", &a).expect_err("not an Owner or Admin").code, "handoff_person_only");
+        assert_eq!(v.send_allow_remove("ws-ops", &m.id, "bob::other.k2.dev", &a).expect_err("not an Owner or Admin").code, "handoff_person_only");
+    }
+    assert!(v.send_allow(Some("ws-ops")).expect("list").is_empty());
+    // Only the workspace's own secret, and only an agent on another server.
+    assert_eq!(v.send_allow_add("ws-ops", &other.id, "bob::other.k2.dev", &Actor::Owner).expect_err("another workspace's").code, "not_found");
+    for to in ["ws:ws-sales", "team:t1", "bob", "*"] {
+        assert_eq!(v.send_allow_add("ws-ops", &m.id, to, &Actor::Owner).expect_err(to).code, "bad_address", "{to}");
+    }
+    let admin = Actor::Login { username: "maya".into(), role: Role::Admin };
+    let a = v.send_allow_add("ws-ops", &m.id, "Bob::Other.K2.dev", &admin).expect("an Admin adds");
+    assert_eq!((a.to.as_str(), a.added_by.as_str()), ("bob::other.k2.dev", "connect:maya"));
+    assert_eq!(v.send_allowed("ws-ops", &m.id, &["bob::other.k2.dev".into()]).expect("allowed").added_by, "connect:maya");
+    assert!(v.send_allowed("ws-ops", &m.id, &["carol::other.k2.dev".into()]).is_none(), "another agent still asks");
+    assert!(v.send_allowed("ws-sales", &m.id, &["bob::other.k2.dev".into()]).is_none(), "another workspace still asks");
+    // A row edited outside K2 fails its MAC and allows nothing.
+    {
+        let c = rusqlite::Connection::open(t._d.path().join("vault/vault.db")).expect("db");
+        c.execute("UPDATE handoff_send_allow SET peer_addr = 'eve::evil.k2.dev'", []).expect("tamper");
+    }
+    assert!(v.send_allowed("ws-ops", &m.id, &["eve::evil.k2.dev".into()]).is_none(), "a tampered row is never honoured");
+    assert!(v.send_allow(Some("ws-ops")).expect("list").is_empty());
+    {
+        let c = rusqlite::Connection::open(t._d.path().join("vault/vault.db")).expect("db");
+        c.execute("DELETE FROM handoff_send_allow", []).expect("clear");
+    }
+    v.send_allow_add("ws-ops", &m.id, "bob::other.k2.dev", &Actor::Owner).expect("again");
+    assert!(v.send_allow_remove("ws-ops", &m.id, "bob@other.k2.dev", &admin).expect("remove"));
+    assert!(!v.send_allow_remove("ws-ops", &m.id, "bob::other.k2.dev", &admin).expect("twice"));
+    assert!(v.send_allowed("ws-ops", &m.id, &["bob::other.k2.dev".into()]).is_none());
+}
+
 // ── 5. durable replay ───────────────────────────────────────────────
 
 #[test]
@@ -658,7 +702,7 @@ fn tables_are_created_on_open_and_user_version_stays_one() {
     let conn = rusqlite::Connection::open(dir.join("vault.db")).expect("sqlite");
     let ver: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).expect("version");
     assert_eq!(ver, 1, "H22: no bump, so a 0.46.0 daemon still opens this vault");
-    for t in ["handoff", "handoff_value", "handoff_accept", "peer_vault"] {
+    for t in ["handoff", "handoff_value", "handoff_accept", "peer_vault", "handoff_send_allow"] {
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", [t], |r| r.get(0)).expect("q");
         assert_eq!(n, 1, "{t}");
     }
@@ -943,6 +987,7 @@ fn fill_every_table(v: &LocalVault, other: &LocalVault) {
     .expect("placement");
     v.handoff_receive(incoming("ws-ops", item("PENDING_KEY"), "sales", false), SecretBytes::from_slice(SENTINEL.as_bytes())).expect("pend");
     v.accept_from_add("ws-ops", "Sales::Rosson.K2.dev", &owner).expect("accept-from");
+    v.send_allow_add("ws-ops", &a.id, "Bob::Other.K2.dev", &owner).expect("send grant");
     v.peer_vault_put(&PeerVault {
         peer_fp: "fp-rekey".into(),
         vault_id: "v-peer".into(),
@@ -981,6 +1026,7 @@ fn rekey_stops_on_a_tampered_row_in_every_macd_table() {
         ("handoff", "UPDATE handoff SET note = 'tampered'"),
         ("handoff_value", "UPDATE handoff_value SET ciphertext = x'00'"),
         ("handoff_accept", "UPDATE handoff_accept SET added_by = 'tampered'"),
+        ("handoff_send_allow", "UPDATE handoff_send_allow SET peer_addr = 'eve::evil.k2.dev'"),
         ("peer_vault", "UPDATE peer_vault SET fetched_at = 'tampered'"),
         ("agent_policy", "UPDATE agent_policy SET updated_by = 'tampered'"),
         ("agent_socket", "UPDATE agent_socket SET workspace_id = 'tampered'"),

@@ -161,7 +161,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 63] = [
+pub(crate) const V1_ACTIONS: [&str; 65] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -273,6 +273,11 @@ pub(crate) const V1_ACTIONS: [&str; 63] = [
     "sew.recording-enable",
     // 0.46.11 (prd-org-chart-v1 §7): "Manage the org chart" (Owner).
     "organization.manage",
+    // 0.46.11: a person sends a person-given secret to an agent on another
+    // server for the agent (once, or lets it from now on).
+    "vault.send",
+    // 0.46.11: share a server secret with the asking workspace.
+    "vault.grant-server",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -720,6 +725,24 @@ pub(crate) const ROWS: &[Row] = &[
         ],
         fixed: &[("for", "1h")],
         ..row(ask("vault.use", Floor::Admin), code(403, crate::vault_use_routes::OUT_OF_REACH), "/cli/vault/", POST)
+    },
+    // `k2 vault send NAME --to agent::host` of a secret a person gave (R3,
+    // 0.46.11): the refusal names the secret, the target and the note.
+    Row {
+        params: &[
+            ("secret", &[ParamFrom::Response("/error/secret")]),
+            ("to", &[ParamFrom::Response("/error/to")]),
+            ("note", &[ParamFrom::Response("/error/note")]),
+        ],
+        optional: &["note"],
+        ..row(ask("vault.send", Floor::Admin), code(403, "held"), "/cli/vault/send", POST)
+    },
+    // An agent's `k2 vault grant NAME --scope server --to ws:<itself>` of a
+    // secret it can't see (0.46.11): one answer whether or not it exists.
+    Row {
+        params: &[("secret", &[ParamFrom::Response("/error/secret")]), ("as", &[ParamFrom::Response("/error/as")])],
+        optional: &["as"],
+        ..row(ask("vault.grant-server", Floor::Admin), code(403, crate::vault_routes::GRANT_OUT_OF_REACH), "/cli/vault/grant", POST)
     },
     // ── Gardens and sources ────────────────────────────────────────────
     row(ask("gardens.manage", Floor::Admin), code(403, "person_only"), "/cli/sources/", ANY),
@@ -1382,6 +1405,9 @@ mod tests {
             (403, "POST", "/cli/vault/grant", vec![], Some(json!({"name":"PIN","to":"service:svc","as":"file"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"PIN","service":"svc","as":"file"}}), "vault.share-service"),
             // 0.46.11: a secret on the server or in another workspace it can't see.
             (403, "POST", "/cli/vault/fetch", vec![], None, json!({"error":{"code":"secret_out_of_reach","hint":"x","secret":"STRIPE","from":"server","as":"fetch"}}), "vault.use"),
+            // 0.46.11: `k2 vault send NAME --to agent::host` of a secret a person gave.
+            (403, "POST", "/cli/vault/send", vec![], None, json!({"error":{"code":"held","hint":"x","secret":"FLEET_DB","to":"argus::other.k2.dev"},"status":"held"}), "vault.send"),
+            (403, "POST", "/cli/vault/grant", vec![], None, json!({"error":{"code":"grant_out_of_reach","hint":"x","secret":"SHARED_DB","as":"env"}}), "vault.grant-server"),
             // 0.46.7: an agent turning its own App's chat key on (cards on), and switching a Space's governance.
             (403, "POST", "/cli/app/chat-key", vec![], Some(json!({"app":"jobs"})), json!({"error":{"code":"owner_only","hint":"x","app":"jobs"}}), "apps.chat-key"),
             (403, "POST", "/cli/app/recording/set", vec![], Some(json!({"app":"jobs","serverRead":true})), json!({"error":{"code":"owner_only","hint":"x","app":"jobs","serverRead":"on"}}), "apps.recording"),
@@ -1935,7 +1961,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 63);
+        assert_eq!(V1_ACTIONS.len(), 65);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

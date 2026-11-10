@@ -29,6 +29,8 @@
 //! | `chat_refresh.rs` | 0.46.8 | `chat.refresh` (a new pinned chat on the same harness, once or from now on) |
 //! | `vault_incoming.rs` | 0.46.10 | `vault.incoming.accept` (accept or decline a secret another agent sent; K2 presents it) |
 //! | `recording.rs` | 0.46.11 | `apps.recording` (its App requires recording, or its server reads transcripts; the owner only) |
+//! | `vault_send.rs` | 0.46.11 | `vault.send` (a person sends a person-given secret to an agent on another server for the agent, once or from now on) |
+//! | `vault_grant_server.rs` | 0.46.11 | `vault.grant-server` (share a server secret with the asking workspace, until removed) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -58,6 +60,8 @@ pub(crate) mod sew;
 pub(crate) mod switches;
 pub(crate) mod vault;
 pub(crate) mod vault_incoming;
+pub(crate) mod vault_grant_server;
+pub(crate) mod vault_send;
 pub(crate) mod workbench;
 
 /// The asking side, fixed at request time.
@@ -150,6 +154,8 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(chat_refresh::actions());
     out.extend(vault_incoming::actions());
     out.extend(recording::actions());
+    out.extend(vault_send::actions());
+    out.extend(vault_grant_server::actions());
     out
 }
 
@@ -177,6 +183,8 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(chat_refresh::not_cardable());
     out.extend(vault_incoming::not_cardable());
     out.extend(recording::not_cardable());
+    out.extend(vault_send::not_cardable());
+    out.extend(vault_grant_server::not_cardable());
     out
 }
 

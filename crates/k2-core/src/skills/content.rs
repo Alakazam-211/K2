@@ -1409,6 +1409,22 @@ When another agent sends you a secret (`k2 vault send NAME --to <you>`) and it w
 
 Add `as=<NEW_NAME>` when your workspace already has a secret of that name, or `replace=yes` for a new version of one it sent you before. Only your own deliveries can be asked for. When the `[permission:]` turn says approved, the secret is in your vault and the turn says how to use it. Denied: it was declined and the copy deleted; ask the sender to send it again if you still need it.
 
+## A person's secret, to another server
+
+A secret a person gave you leaves this server only when a person says so. So `k2 vault send NAME --to <agent>::<host>` is refused (`held`) and ends with the line to ask with:
+
+    k2 permission request vault.send secret=NAME to=<agent>::<host> --why "<what you need it for>"
+
+Several secrets for the same agent go on one card: `secret=A,B,C`. The owner or an admin confirms it's them and K2 sends it as them, so don't run the send again when the `[permission:]` turn says approved. They may also let you send those secrets to that agent yourself from now on: then a later `k2 vault send` of them there just works, and any other secret or agent still asks. `k2 vault send-allow` lists what you may send without asking. Denied: nothing was sent.
+
+## A server secret you need
+
+`k2 vault grant NAME --scope server --to ws:<you>` of a server secret no one shared with you is refused (`grant_out_of_reach`, the same whether or not it exists) and ends with the line to ask with:
+
+    k2 permission request vault.grant-server secret=NAME --why "<what you need it for>"
+
+Add `as=fetch`, `as=file` or `as=env` to ask for one way to get it; without it you get it the way the owner set it up. The owner or an admin allows it, and the `[permission:]` turn says how to use it. An environment variable reaches new sessions only: for `$NAME` in your chat, run `k2 agent refresh`; until then `k2 vault env-file --secret NAME --scope server` works at once.
+
 ## Logins on your own App
 
 `k2 app grant add` and `k2 app grant rm` are the owner's. For a login on one of your own Apps (`--kind app`, a person who already exists, a role from `k2 app role list`), the refusal ends with the line to ask with:

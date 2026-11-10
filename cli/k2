@@ -33789,7 +33789,7 @@ k2 vault — secrets for agents, without showing them the value
   k2 publish secret add|remove|list <service> NAME [--as file|env]   secrets a service gets at start
   k2 vault doctor                          plaintext .env files, due rotations, problems
   k2 vault send NAME --to <agent>[::<host>] [--note …]   hand a secret to another agent by name
-  k2 vault incoming | sent | accept-from   handoffs to and from this agent (k2 vault send --help)
+  k2 vault incoming | sent | accept-from | send-allow   handoffs to and from this agent (k2 vault send --help)
   k2 vault placement add NAME --where <host>:<path> [--note …] | done ID | rm ID
                                            note a place the value lives that K2 doesn't write
   k2 vault placements [NAME]               where values live outside the vault (due after a rotate)
@@ -34321,18 +34321,29 @@ k2 vault send — hand a vault secret to another agent by name (you never see th
   incoming puts it up, or ask for one (permission cards on):
   k2 permission request vault.incoming.accept id=<delivery-id> [as=NEW|replace=yes] --why "…"
 
+  A secret a person gave you, to another server (an agent):
+  the send is refused (held, exit 3). Permission cards on: run the Ask with:
+  line it prints (several for one agent: secret=A,B,C):
+  k2 permission request vault.send secret=NAME to=<agent>::<host> --why "…"
+  An Owner or Admin sends it from the card, or lets you send it there from
+  now on. Cards off: ask them to add it in Settings → Workspaces → <you> →
+  Permissions → Secrets it may send to other servers.
+  k2 vault send-allow [--workspace <ws>]            what you may send to another server without asking
+
   People only (your own terminal, not a K2 terminal; the card does the same):
   k2 vault incoming accept <id> [--as NEW] [--replace] [--always]
   k2 vault incoming decline <id>
   k2 vault accept-from add|remove <ws:agent|agent|agent::host|team:id> --workspace <ws>
+  k2 vault send-allow add|remove NAME --to <agent>::<host> --workspace <ws>   (add asks for the vault confirm)
   printf '%s' "$KEY" | k2 vault send NAME --to <agent>::<host> --stdin [--kind api_key] [--for host]
                                     a value you type in, to another server only
 
 Secrets arrive pending: a person on the receiving server accepts them on
 the card K2 puts on the receiving agent's Thread, unless that agent
 accepts from you (k2 vault accept-from) or you answer its ask. A same-named secret is never overwritten; re-sending the
-same secret makes a new version. A secret a person gave needs a person
-to send it to another server. Server-wide secrets aren't sent (the owner
+same secret makes a new version. A secret a person gave needs a person's
+yes to go to another server (the vault.send card above, or a standing yes
+from k2 vault send-allow). Server-wide secrets aren't sent (the owner
 shares them with k2 vault grant).
 
 The copy keeps the sender's delivery (or --delivery), at most env and
@@ -34401,6 +34412,10 @@ try:
         print(str(e or raw[:300]), file=sys.stderr)
 except Exception:
     print(raw[:300] or "the daemon did not answer", file=sys.stderr)'
+    # Permission cards on: the refusal's closing line (`Ask with: k2
+    # permission request vault.send …`, 0.46.11), printed by the EXIT trap
+    # after the line above. Cards off: no `permission` object, nothing.
+    _permission_note "$body"
     exit "$(_vault_handoff_exit "$status" "$code")"
 }
 
@@ -34645,6 +34660,56 @@ e = v.get("entries") or []
 if not e: print("accepts from no one yet (every secret waits for a person)")
 for a in e:
     print("%-40s added by %s at %s" % (a.get("senderLabel") and ("%s (%s)" % (a["sender"], a["senderLabel"])) or a.get("sender"), a.get("addedBy"), a.get("addedAt")))'
+            ;;
+        send-allow)
+            # 0.46.11: the person-given secrets this agent may send to an
+            # agent on another server without asking. Add/remove are an
+            # Owner's or Admin's (Settings → Workspaces → <agent> →
+            # Permissions, the vault.send card, or here from their own
+            # terminal; add asks for the vault confirm).
+            local verb="${pos[0]:-list}"
+            case "$verb" in
+                list)
+                    _vault_handoff_call GET "send-allow" "$q"
+                    [ "$_SC_STATUS" = "200" ] || _vault_handoff_fail "$_SC_STATUS" "$_SC_BODY"
+                    ;;
+                add|remove)
+                    local sname="${pos[1]:-}"
+                    [ -n "$sname" ] && [ -n "$to" ] && [ -n "$workspace" ] || { echo "usage: k2 vault send-allow $verb NAME --to <agent>::<host> --workspace <ws>" >&2; exit 2; }
+                    if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ]; then
+                        echo "handoff_person_only: an Owner or Admin decides which secrets you may send to another server. To ask, run k2 vault send $sname --to $to and run the Ask with: line it prints." >&2
+                        exit 3
+                    fi
+                    _vault_person_guard
+                    local sbody
+                    sbody="$(python3 -c 'import json,sys; print(json.dumps({"workspace": sys.argv[1], "name": sys.argv[2], "to": sys.argv[3], "action": sys.argv[4]}))' "$workspace" "$sname" "$to" "$verb")"
+                    if [ "$verb" = "add" ]; then
+                        # The same vault confirm as sending it (handoff-send, bound to the secret).
+                        _vault_sock_call GET "send-allow?${q}"
+                        [ "$_SC_STATUS" = "200" ] || _vault_handoff_fail "$_SC_STATUS" "$_SC_BODY"
+                        local ssid stok
+                        ssid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys
+n = sys.argv[1]
+print(next((s["id"] for s in json.load(sys.stdin).get("secrets") or [] if s.get("name") == n), ""))' "$sname")"
+                        [ -n "$ssid" ] || { echo "not_found: $workspace has no secret a person gave named $sname (k2 vault list --scope ws:$workspace)" >&2; exit 4; }
+                        stok="$(_vault_confirm_token handoff-send "$ssid" "let $workspace send $sname to $to")" || exit 3
+                        sbody="$(python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["confirmToken"]=sys.argv[2]; o["secretId"]=sys.argv[3]; print(json.dumps(o))' "$sbody" "$stok" "$ssid")"
+                        stok=""
+                    fi
+                    _vault_sock_call POST "send-allow" "$sbody"
+                    [ "$_SC_STATUS" = "200" ] || _vault_handoff_fail "$_SC_STATUS" "$_SC_BODY"
+                    ;;
+                *) echo "usage: k2 vault send-allow list|add|remove …" >&2; exit 2 ;;
+            esac
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+e = v.get("entries") or []
+ws = v.get("workspace") or "this agent"
+if not e: print("%s may send no person-given secret to another server without asking yet" % ws)
+for a in e:
+    print("may send %-28s to %-36s added by %s at %s" % (a.get("name"), a.get("to"), a.get("addedBy"), a.get("addedAt")))'
             ;;
     esac
 }
@@ -36793,7 +36858,7 @@ cmd_migrate() {
 # new verb goes here too: a word not listed is an unknown verb, with or
 # without --help (prd-vault-for-agents-v1 X9: `k2 vault exec --help` used to
 # print the top help and exit 0, so an agent took the guess as real).
-_VAULT_VERBS=" status list ls show set rotate hosts sign public-key agent-limit delivery grant revoke open disable enable destroy get audit requests presets doctor env-file file proxy-url sync import service reveal recovery confirm-password kek rekey rollback recipient carry backup restore systemd-cred placement placements fetch send incoming sent accept-from ask asks unsend run "
+_VAULT_VERBS=" status list ls show set rotate hosts sign public-key agent-limit delivery grant revoke open disable enable destroy get audit requests presets doctor env-file file proxy-url sync import service reveal recovery confirm-password kek rekey rollback recipient carry backup restore systemd-cred placement placements fetch send incoming sent accept-from send-allow ask asks unsend run "
 
 # k2 vault run (prd-vault-for-agents-v1 A1): parse the flags before `--`, ask
 # the daemon where its binary is, and exec that as the helper. Policy, audit
@@ -36870,7 +36935,7 @@ cmd_vault() {
         return
     fi
     case "$sub" in
-        send|incoming|sent|accept-from|ask|asks|unsend) _vault_handoff "$sub" "$@"; return ;;
+        send|incoming|sent|accept-from|send-allow|ask|asks|unsend) _vault_handoff "$sub" "$@"; return ;;
     esac
     if _wants_help "$@"; then
         _vault_sub_usage "$sub"
@@ -87062,6 +87127,22 @@ When another agent sends you a secret (`k2 vault send NAME --to <you>`) and it w
     k2 permission request vault.incoming.accept id=<hd_… id> --why "<what you need it for>"
 
 Add `as=<NEW_NAME>` when your workspace already has a secret of that name, or `replace=yes` for a new version of one it sent you before. Only your own deliveries can be asked for. When the `[permission:]` turn says approved, the secret is in your vault and the turn says how to use it. Denied: it was declined and the copy deleted; ask the sender to send it again if you still need it.
+
+## A person's secret, to another server
+
+A secret a person gave you leaves this server only when a person says so. So `k2 vault send NAME --to <agent>::<host>` is refused (`held`) and ends with the line to ask with:
+
+    k2 permission request vault.send secret=NAME to=<agent>::<host> --why "<what you need it for>"
+
+Several secrets for the same agent go on one card: `secret=A,B,C`. The owner or an admin confirms it's them and K2 sends it as them, so don't run the send again when the `[permission:]` turn says approved. They may also let you send those secrets to that agent yourself from now on: then a later `k2 vault send` of them there just works, and any other secret or agent still asks. `k2 vault send-allow` lists what you may send without asking. Denied: nothing was sent.
+
+## A server secret you need
+
+`k2 vault grant NAME --scope server --to ws:<you>` of a server secret no one shared with you is refused (`grant_out_of_reach`, the same whether or not it exists) and ends with the line to ask with:
+
+    k2 permission request vault.grant-server secret=NAME --why "<what you need it for>"
+
+Add `as=fetch`, `as=file` or `as=env` to ask for one way to get it; without it you get it the way the owner set it up. The owner or an admin allows it, and the `[permission:]` turn says how to use it. An environment variable reaches new sessions only: for `$NAME` in your chat, run `k2 agent refresh`; until then `k2 vault env-file --secret NAME --scope server` works at once.
 
 ## Logins on your own App
 

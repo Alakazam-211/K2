@@ -455,6 +455,78 @@ fn refused_error(status: u16, code: &str, hint: &str, host: &str) -> VaultError 
     }
 }
 
+/// Where a person reviews and adds standing send grants (Settings).
+pub(crate) fn send_allow_settings_path(ws_label: &str) -> String {
+    format!("Settings → Workspaces → {ws_label} → Permissions → Secrets it may send to other servers")
+}
+
+/// The addresses a standing send grant may name for this send: what the
+/// agent typed and the peer's own host (the same agent, either spelling).
+pub(crate) fn send_allow_keys(agent: &str, typed_host: &str, peer_host: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for h in [typed_host, peer_host] {
+        if let Ok(k) = k2_vault::handoff::normalise_remote_agent(&format!("{agent}::{h}")) {
+            if !out.contains(&k) {
+                out.push(k);
+            }
+        }
+    }
+    out
+}
+
+/// `agent::host` with the host as the paired peer names itself (the form a
+/// standing send grant is stored in); unchanged when no paired server
+/// matches. `to` is already normalised.
+pub(crate) fn canonical_remote_agent(to: &str) -> String {
+    let Some((agent, host)) = to.split_once("::") else { return to.to_string() };
+    let Ok(store) = PeerStore::load() else { return to.to_string() };
+    let found = store.list().iter().find(|p| crate::federation_routes::peer_matches_user_host(p, host)).cloned();
+    match found {
+        Some(p) => k2_vault::handoff::normalise_remote_agent(&format!("{agent}::{}", crate::federation_routes::peer_host(&p))).unwrap_or_else(|_| to.to_string()),
+        None => to.to_string(),
+    }
+}
+
+/// The `held` refusal for a person-given secret an agent (or a Member) tried
+/// to send to another server (R3). The rule stays; the words say how to get
+/// a person's yes. With permission cards on for the agent, the closing line
+/// (`Ask with: k2 permission request vault.send …`, from the walls map,
+/// which reads `error.secret`, `error.to` and `error.note`) asks, and the
+/// hint never sends anyone to a terminal. Otherwise the hint names both
+/// ways a person does it: Settings, or their own terminal.
+fn held_response(c: &VaultCaller, name: &str, agent: &str, host: &str, note: &str) -> SendError {
+    let to = format!("{agent}::{host}");
+    let label = c.workspace_id().map(crate::vault::workspace_label);
+    let cards = c.workspace_id().is_some_and(k2_core::permission::gate::enabled_for);
+    let hint = match (&label, cards) {
+        (Some(_), true) => format!(
+            "a person gave {name}, so it goes to another server only when a person on this server says so. Ask them with the line below: K2 puts a card on your Thread, and an Owner or Admin sends it from there with their vault confirm (once, or they let you send {name} to {to} yourself from now on). Several secrets for the same agent? Ask once with secret=A,B,C."
+        ),
+        (Some(ws), false) => format!(
+            "a person gave {name}, so it goes to another server only when a person on this server says so. Ask your person (an Owner or Admin) to do one of these: in {path}, add {name} for {to}, then you run this again; or send it themselves from their own terminal (Terminal or iTerm, not a K2 terminal; it asks for their vault confirm): k2 vault send {name} --scope ws:{ws} --to {to}",
+            path = send_allow_settings_path(ws)
+        ),
+        (None, _) => format!(
+            "a person gave {name}, so an Owner or Admin on this server sends it to another server (Members can't): ask one of them to run k2 vault send {name} --to {to} from their own terminal (it asks for their vault confirm)"
+        ),
+    };
+    let mut error = json!({ "code": "held", "hint": hint, "secret": name, "to": to });
+    // The agent's note travels with the card's send (one line, ≤ 200, already
+    // checked against the value and redacted).
+    if !note.trim().is_empty() && note.chars().count() <= k2_vault::handoff::NOTE_MAX && !note.contains(['\n', '\r']) {
+        error["note"] = json!(note);
+    }
+    let who = if cards { "a person on this server allows it on a card" } else { "a person on this server must allow it" };
+    SendError::Response(
+        "held",
+        CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: json!({ "error": error, "status": "held", "who": who }).to_string(),
+        },
+    )
+}
+
 /// Send a prepared secret to `agent::host` (§5.2). Gates in order:
 /// federation on; a pinned Trusted peer; the peer's signed vault recipient
 /// (an old or federation-off peer stops here with `peer_too_old`, before
@@ -510,40 +582,43 @@ pub(crate) fn send_remote(
     // (checked after the peer proved it can take a handoff, so nobody
     // confirms a send that can't happen)
     // confirm (a reveal-class widening to another authority, §7.6).
+    //
+    // 0.46.11: an agent asks on a permission card (`vault.send`); a person
+    // allows it once, or lets it send that secret to that agent from now on
+    // (a standing send grant, `send_allow`), which is honoured here.
+    let mut on_grant: Option<k2_vault::handoff::SendAllowEntry> = None;
     if item.human_given {
         if let Some((secret_id, _)) = &source {
-            if c.is_passport() || !c.actor.is_admin_human() {
-                let hint = format!(
-                    "a person gave {}, so a person on this server must send it to another server: k2 vault send {} --to {agent}::{host} from your own terminal (it asks for a vault confirm)",
-                    item.name, item.name
-                );
-                return Err(SendError::Response(
-                    "held",
-                    CliResponse {
-                        status: "403 Forbidden",
-                        content_type: "application/json",
-                        body: json!({ "error": { "code": "held", "hint": hint }, "status": "held", "who": "a person on this server must send it" }).to_string(),
-                    },
-                ));
-            }
-            match confirm_token {
-                Some(t) => {
-                    vault.confirm.take(t, crate::vault_routes::HANDOFF_CONFIRM_ACTION, Some(secret_id), &stamp)?;
+            let granted = match (c.workspace_id(), &sender_ws) {
+                (Some(ws), Some(sw)) if c.is_passport() && ws == sw => {
+                    vault.send_allowed(ws, secret_id, &send_allow_keys(agent, host, &peer_host))
                 }
-                None => {
-                    return Err(SendError::Response(
-                        "confirm_required",
-                        CliResponse {
-                            status: "403 Forbidden",
-                            content_type: "application/json",
-                            body: json!({
-                                "error": { "code": "confirm_required", "hint": "a person gave this secret; confirm sending it to another server (vault confirm: handoff-send)" },
-                                "action": crate::vault_routes::HANDOFF_CONFIRM_ACTION,
-                                "secretId": secret_id,
-                            })
-                            .to_string(),
-                        },
-                    ));
+                _ => None,
+            };
+            if let Some(g) = granted {
+                on_grant = Some(g);
+            } else if c.is_passport() || !c.actor.is_admin_human() {
+                return Err(held_response(c, &item.name, agent, host, &note));
+            } else {
+                match confirm_token {
+                    Some(t) => {
+                        vault.confirm.take(t, crate::vault_routes::HANDOFF_CONFIRM_ACTION, Some(secret_id), &stamp)?;
+                    }
+                    None => {
+                        return Err(SendError::Response(
+                            "confirm_required",
+                            CliResponse {
+                                status: "403 Forbidden",
+                                content_type: "application/json",
+                                body: json!({
+                                    "error": { "code": "confirm_required", "hint": "a person gave this secret; confirm sending it to another server (vault confirm: handoff-send)" },
+                                    "action": crate::vault_routes::HANDOFF_CONFIRM_ACTION,
+                                    "secretId": secret_id,
+                                })
+                                .to_string(),
+                            },
+                        ));
+                    }
                 }
             }
         }
@@ -664,8 +739,16 @@ pub(crate) fn send_remote(
             let status = v.get("status").and_then(Value::as_str).unwrap_or("unknown").to_string();
             let reason = v.get("reason").and_then(Value::as_str).map(str::to_string);
             let out = vault.handoff_record_out(mk_out(&status, reason), src)?;
-            routes::audit(&stamp, &format!("ok send {} to {to_addr} {delivery_id} {status}", item.name), ingress);
-            Ok(routes::send_answer(&out, &to_addr, true, None))
+            let grant = on_grant.as_ref().map(|g| format!(" on {}'s send grant ({})", g.added_by, g.added_at)).unwrap_or_default();
+            routes::audit(&stamp, &format!("ok send {} to {to_addr} {delivery_id} {status}{grant}", item.name), ingress);
+            if let Some(g) = &on_grant {
+                vault.handoff_audit("send", &stamp, &to_addr, &format!("ok:send-grant:{}", g.added_by));
+            }
+            let mut v = routes::send_answer(&out, &to_addr, true, None);
+            if let Some(g) = &on_grant {
+                v["onGrant"] = json!({ "by": g.added_by, "at": g.added_at });
+            }
+            Ok(v)
         }
     }
 }
@@ -822,4 +905,4 @@ pub(crate) fn peer_missing_feature(item: &handoff::HandoffItem, features: &[Stri
 
 #[cfg(test)]
 #[path = "federation_vault_tests.rs"]
-mod tests;
+pub(crate) mod tests;

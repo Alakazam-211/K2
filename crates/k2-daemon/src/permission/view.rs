@@ -256,7 +256,13 @@ fn current_state(stored: RequestState, request_id: &str, choice_status: &str, an
         "answered" if stored.is_open() || stored == RequestState::Applying => {
             return match answer {
                 Some(a) if a == label::CLOSE => RequestState::AlreadyDone,
-                Some(a) if a == label::ALLOW || a == label::ALWAYS || a == label::ALWAYS_CHAT_REFRESH || a == label::ALLOW_ALL => {
+                Some(a)
+                    if a == label::ALLOW
+                        || a == label::ALWAYS
+                        || a == label::ALWAYS_CHAT_REFRESH
+                        || a == label::ALWAYS_VAULT_SEND
+                        || a == label::ALLOW_ALL =>
+                {
                     RequestState::Approved
                 }
                 Some(a) if a == label::DENY || a == label::DENY_ALL => RequestState::Denied,
@@ -439,6 +445,9 @@ fn approver_options(state: RequestState, answer: Option<&str>, item: &ItemView) 
         _ if super::actions::chat_refresh::offers_always_for(&item.action, &item.request_id) => {
             labels(&[label::ALLOW, label::DENY, label::ALWAYS_CHAT_REFRESH])
         }
+        _ if super::actions::vault_send::offers_always_for(&item.action, &item.request_id) => {
+            labels(&[label::ALLOW, label::DENY, label::ALWAYS_VAULT_SEND])
+        }
         _ => answer_labels(),
     }
 }
@@ -465,7 +474,12 @@ fn project_one(doc: &OverlayDoc, view: PermissionView, viewer: &Viewer, cards: u
     let is_asker = f.person && view.item.asked_for.as_deref() == Some(f.login.as_str());
     // `vault.use` names a secret the agent can't see. Only someone who can
     // answer is told it isn't there, and then only Deny is offered (V20).
-    let missing = if can && state == RequestState::Pending { super::actions::vault::use_missing(&view.item.action, &view.item.request_id) } else { None };
+    let missing = if can && state == RequestState::Pending {
+        super::actions::vault::use_missing(&view.item.action, &view.item.request_id)
+            .or_else(|| super::actions::vault_grant_server::missing(&view.item.action, &view.item.request_id))
+    } else {
+        None
+    };
     let view = match &missing {
         Some(line) => PermissionView { item: ItemView { consequences: line.clone(), ..view.item }, ..view },
         None => view,

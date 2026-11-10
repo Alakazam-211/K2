@@ -137,7 +137,8 @@ CREATE INDEX IF NOT EXISTS audit_secret ON audit (secret_id, seq);
 "#;
 
 /// Agent-to-agent secret handoff (prd-agent-secret-handoff-v1 §12):
-/// four additive tables, created on every open. `user_version` stays 1
+/// additive tables (four, plus `handoff_send_allow` in 0.46.11), created on
+/// every open. `user_version` stays 1
 /// (H22), so a 0.46.0 daemon still opens a vault that has them (it never
 /// reads them). Every row carries a MAC under the row key.
 ///
@@ -196,6 +197,18 @@ CREATE TABLE IF NOT EXISTS peer_vault (
     features TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
     row_mac BLOB NOT NULL
+);
+
+-- 0.46.11: a person's standing yes for one workspace's agent to send one
+-- person-given secret (by id) to one agent on another server (`agent::host`).
+CREATE TABLE IF NOT EXISTS handoff_send_allow (
+    workspace_id TEXT NOT NULL,
+    secret_id TEXT NOT NULL,
+    peer_addr TEXT NOT NULL,
+    added_by TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    row_mac BLOB NOT NULL,
+    PRIMARY KEY (workspace_id, secret_id, peer_addr)
 );
 "#;
 

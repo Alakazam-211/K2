@@ -51298,7 +51298,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs heartbeats mail-watch folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization"
 
 _study_usage() {
     cat <<'EOF'
@@ -51389,6 +51389,7 @@ _study_title() {
         folder-trust) echo "Who may start AI tools in a folder" ;;
         email-notifications) echo "One-way email from senders no agent can read" ;;
         mail-watch) echo "Hear that mail arrived: VIPs, the digest, what's safe" ;;
+        mail-reader) echo "The mail reader: people open inboxes; agents can't; every access logged" ;;
         box-move) echo "Moving a box: the vault and the tunnel token" ;;
         board) echo "The Board Garden: k2 board, grants, the rules" ;;
         chat-refresh) echo "Refreshing your own chat: k2 agent refresh, the note, what carries on" ;;
@@ -51530,6 +51531,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   folder-trust        Folder trust: the card, asking vs deciding, re-scan, honest limits
   email-notifications  Email from senders: K2's resets, an App's email.send, scope, limits
   mail-watch          Hear that mail arrived: VIPs, the digest, what's safe
+  mail-reader         The mail reader: who opens which inbox, peek only, the log; agents refused
   box-move            Move a box: carry the vault (tunnel token too), freeze, undo, who confirms
   board               The Board Garden's whiteboards: k2 board, grants, cascade, no cut values
   chat-refresh        Refresh your own chat: k2 agent refresh, the note, what carries on
@@ -51585,6 +51587,7 @@ _study_page() {
         tauri-voice) _study_page_tauri_voice ;;
         email-notifications) _study_page_email_notifications ;;
         mail-watch) _study_page_mail_watch ;;
+        mail-reader) _study_page_mail_reader ;;
         skins)
             echo "k2 study skins is now k2 study apps — this page still works."
             echo
@@ -53507,6 +53510,58 @@ LIMITS
   digest. Digests list up to 25 messages, then "+N more".
   Hosted inboxes are checked every minute, linked ones every 2 minutes. A
   refused login stops that inbox until it's reconnected.
+EOF
+}
+
+_study_page_mail_reader() {
+    cat <<'EOF'
+k2 study mail-reader — people open this server's inboxes; agents can't
+
+WHO OPENS WHAT
+  The Owner and Admins open every inbox on the server: agents' and people's,
+  hosted and linked. Anyone else opens only their own mailbox: a hosted
+  mailbox that is theirs, or a linked inbox they linked themselves. Asking for
+  any other inbox answers "not found" (exit 1), the same as an address that
+  doesn't exist. Agents are refused on every reader command (exit 3,
+  owner_only).
+
+IF YOU ARE AN AGENT
+  Don't use k2 mail reader. Use k2 mail inboxes / messages / read / move /
+  reply / send on the inboxes your workspace can use. If you need a person's
+  mailbox, ask your human (k2 thread, or k2 feedback ask); they can open it in
+  K2's Mail page or with k2 mail reader, or give your workspace access.
+
+PEEK ONLY
+  Opening a message or a thread never marks it read, for anyone (the agent's
+  own k2 mail read still does). The only way the reader changes read state is
+  k2 mail reader flag <id> --read / --unread.
+
+EVERY ACCESS IS LOGGED
+  Before any mail is fetched, K2 writes who, their role, which inbox, what
+  they did, the message id and where the call came from (never the subject or
+  body). If the log can't be written, nothing opens (audit_unavailable). The
+  mailbox's person isn't notified. --reason "<why>" is kept in the row.
+  k2 mail reader log shows it: Owners and Admins every row; you the rows
+  about your own mailboxes. Settings → Email → Reader log shows the same.
+
+ACTING ON MAIL
+  flag, move, archive, delete (to Trash), reply, draft and send run the same
+  k2 mail command the inbox's own workspace would, so its rules apply: its
+  level (read < draft < send), whether it may organize or delete, and its
+  send rule (off refuses, approval queues it for the owner, on sends). If the
+  workspace may not do it you get exit 3 (not_allowed) and the fix. Reader
+  sends can't attach files yet.
+
+WHAT YOU SEE
+  Plain text by default; --html prints the HTML as K2 cleaned it: no script,
+  no remote pictures, links shown as data, not clickable. Attachments save
+  with attachment <id> <n> --out <file> (up to 25 MB).
+
+EXAMPLES
+  k2 mail reader inboxes
+  k2 mail reader messages sales@acme.com --unread --since 7d
+  k2 mail reader show m_8f2c --reason "customer says they wrote on Monday"
+  k2 mail reader log --inbox pat@acme.com --since 30d
 EOF
 }
 
@@ -80085,6 +80140,352 @@ EOF
 
 
 
+# ── k2 mail reader (prd-ocmail-admin-in-k2-v1 OA7) ─────────────────────
+# The mail reader for PEOPLE: the Owner and Admins open every inbox on the
+# server (hosted and linked, agents' and people's); anyone else only their
+# own mailbox. Opening never marks mail read; every access is logged.
+# Agents are refused (exit 3): they use the rest of `k2 mail`.
+
+cmd_help_mail_reader() {
+    cat <<'EOF'
+k2 mail reader — open this server's inboxes as a person (Owner, Admin, or your own mailbox)
+
+For people, not agents (an agent gets exit 3 and uses the rest of k2 mail).
+The Owner and Admins open every inbox here: agents' and people's, hosted and
+linked. A Member login opens only their own mailbox; any other inbox answers
+"not found" (exit 1), as if it didn't exist. Opening a message never marks it
+read. Every access is logged with who, when and which message (never its
+content), and the mailbox's person isn't notified.
+
+USAGE
+  k2 mail reader <command> [args] [flags]
+
+READ
+  inboxes                         The inboxes you can open (yours marked "you")
+  folders <inbox>                 An inbox's folders
+  messages <inbox>                Newest first, 50 a page (--limit up to 100).
+                                  --folder <name> --unread --query <text>
+                                  --from <text> --since <d> --before <d>
+                                  --offset <n> (the "more:" line gives the next)
+  show <message-id>               One message, plain text (--html for the cleaned HTML)
+  thread <message-id>             The message and its thread, oldest first
+  attachment <message-id> <n> --out <file>
+                                  Save attachment n (1-based, up to 25 MB)
+  log                             Who opened what, newest first (100; --limit up to
+                                  500): --inbox <address> --actor <login> --since <d>.
+                                  Owners and Admins see every row; you see the rows
+                                  about your own mailboxes
+
+ACT (as the inbox's own workspace: its level and send rules apply)
+  flag <message-id> --read|--unread|--star|--unstar
+  move <message-id> <folder>      archive <message-id>      delete <message-id> (to Trash)
+  reply <message-id> --body <text>               (--body - < reply.txt for a file)
+  draft <message-id> --body <text>               (a reply draft)
+  draft --inbox <address> --to <a> --subject <s> --body <text>
+  send --inbox <address> --to <a> [--cc <a>] --subject <s> --body <text>
+                                  The workspace's send rule decides: off refuses
+                                  (exit 3), approval queues it for the owner (prints
+                                  "send pending", exit 0), on sends. No attachments yet
+
+FLAGS (every command)
+  --reason <text>   Why you're looking; kept in the log row
+  --json            The daemon's JSON answer
+
+  <d> is YYYY-MM-DD or an age: 30m, 24h, 7d, 2w. <inbox> is an address from
+  'k2 mail reader inboxes'; message ids (m_…) come from 'messages'. --body -
+  reads the text from stdin.
+
+EXIT CODES
+  0 ok (a send queued for approval is ok)   1 error, or no such inbox/message
+  2 bad usage   3 refused: you're an agent (owner_only), or the inbox's workspace
+                may not do that (not_allowed / gated; the error says the fix)
+More: k2 study mail-reader
+EOF
+}
+
+cmd_mail_reader() {
+    local sub="${1:-}"
+    case "$sub" in
+        --help|-h|help|'') cmd_help_mail_reader; return 0 ;;
+    esac
+    shift
+    case "$sub" in
+        inboxes|folders|messages|show|thread|attachment|log|flag|move|archive|delete|reply|draft|send) ;;
+        *) _mail_err "usage" "unknown command '$sub' — see k2 mail reader --help"; exit 2 ;;
+    esac
+    local MR_JSON=false MR_REASON="" MR_FOLDER="" MR_UNREAD=false MR_QUERY="" MR_FROM=""
+    local MR_SINCE="" MR_BEFORE="" MR_LIMIT="" MR_OFFSET="" MR_HTML=false MR_OUT=""
+    local MR_INBOX="" MR_ACTOR="" MR_READ="" MR_FLAGGED="" MR_BODY="" MR_BODY_SET=false
+    local MR_TO="" MR_CC="" MR_SUBJECT=""
+    local -a pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h) cmd_help_mail_reader; return 0 ;;
+            --json) MR_JSON=true ;;
+            --html) MR_HTML=true ;;
+            --unread)
+                if [ "$sub" = "flag" ]; then MR_READ=false; else MR_UNREAD=true; fi ;;
+            --read) MR_READ=true ;;
+            --star) MR_FLAGGED=true ;;
+            --unstar) MR_FLAGGED=false ;;
+            --reason|--folder|--query|--from|--since|--before|--limit|--offset|--out|--inbox|--actor|--body|--to|--cc|--subject)
+                if [ $# -lt 2 ]; then _mail_err "usage" "$1 needs a value — see k2 mail reader --help"; exit 2; fi
+                case "$1" in
+                    --reason) MR_REASON="$2" ;;
+                    --folder) MR_FOLDER="$2" ;;
+                    --query) MR_QUERY="$2" ;;
+                    --from) MR_FROM="$2" ;;
+                    --since) MR_SINCE="$2" ;;
+                    --before) MR_BEFORE="$2" ;;
+                    --limit) MR_LIMIT="$2" ;;
+                    --offset) MR_OFFSET="$2" ;;
+                    --out) MR_OUT="$2" ;;
+                    --inbox) MR_INBOX="$2" ;;
+                    --actor) MR_ACTOR="$2" ;;
+                    --body)
+                        if [ "$2" = "-" ]; then MR_BODY="$(cat)"; else MR_BODY="$2"; fi
+                        MR_BODY_SET=true ;;
+                    --to) MR_TO="${MR_TO:+$MR_TO
+}$2" ;;
+                    --cc) MR_CC="${MR_CC:+$MR_CC
+}$2" ;;
+                    --subject) MR_SUBJECT="$2" ;;
+                esac
+                shift ;;
+            --*) _mail_err "usage" "unknown flag '$1' for 'k2 mail reader $sub' — see k2 mail reader --help"; exit 2 ;;
+            *) pos+=("$1") ;;
+        esac
+        shift
+    done
+    local need=0
+    case "$sub" in
+        folders|messages|show|thread|flag|archive|delete|reply) need=1 ;;
+        move|attachment) need=2 ;;
+        draft) [ -z "$MR_INBOX" ] && need=1 ;;
+    esac
+    if [ "${#pos[@]}" -lt "$need" ]; then
+        _mail_err "usage" "'k2 mail reader $sub' needs $need argument(s) — see k2 mail reader --help"
+        exit 2
+    fi
+    if [ "${#pos[@]}" -gt "$need" ]; then
+        _mail_err "usage" "unexpected argument '${pos[$need]}' for 'k2 mail reader $sub' — see k2 mail reader --help"
+        exit 2
+    fi
+    if [ "$sub" = "attachment" ] && [ -z "$MR_OUT" ]; then
+        _mail_err "usage" "missing --out <file> — where to save the attachment"
+        exit 2
+    fi
+    if [ "$sub" = "flag" ] && [ -z "$MR_READ" ] && [ -z "$MR_FLAGGED" ]; then
+        _mail_err "usage" "nothing to change — pass --read, --unread, --star or --unstar"
+        exit 2
+    fi
+    case "$sub" in
+        reply|draft|send)
+            if [ "$MR_BODY_SET" != true ]; then _mail_err "usage" "missing --body <text> (or --body - to read stdin)"; exit 2; fi ;;
+    esac
+    if [ "$sub" = "send" ] && [ -z "$MR_INBOX" ]; then
+        _mail_err "usage" "missing --inbox <address> — the inbox to send from"
+        exit 2
+    fi
+    MR_SUB="$sub" MR_A1="${pos[0]:-}" MR_A2="${pos[1]:-}" \
+    MR_JSON="$MR_JSON" MR_REASON="$MR_REASON" MR_FOLDER="$MR_FOLDER" MR_UNREAD="$MR_UNREAD" \
+    MR_QUERY="$MR_QUERY" MR_FROM="$MR_FROM" MR_SINCE="$MR_SINCE" MR_BEFORE="$MR_BEFORE" \
+    MR_LIMIT="$MR_LIMIT" MR_OFFSET="$MR_OFFSET" MR_HTML="$MR_HTML" MR_OUT="$MR_OUT" \
+    MR_INBOX="$MR_INBOX" MR_ACTOR="$MR_ACTOR" MR_READ="$MR_READ" MR_FLAGGED="$MR_FLAGGED" \
+    MR_BODY="$MR_BODY" MR_TO="$MR_TO" MR_CC="$MR_CC" MR_SUBJECT="$MR_SUBJECT" \
+    ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
+import base64, json, os, sys, time
+import urllib.error, urllib.parse, urllib.request
+
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+E = os.environ.get
+sub = E("MR_SUB")
+as_json = E("MR_JSON") == "true"
+
+def dumps(o):
+    return json.dumps(o, ensure_ascii=False, separators=(",", ":"))
+
+def die(err):
+    code = err.get("code", "error") if isinstance(err, dict) else "error"
+    hint = err.get("hint", "") if isinstance(err, dict) else str(err)
+    sys.stderr.write(dumps({"error": {"code": code, "hint": hint}}) + "\n")
+    if code in ("owner_only", "forbidden", "gated", "not_allowed", "role_required"):
+        sys.exit(3)
+    sys.exit(2 if code == "usage" else 1)
+
+def call(method, route, params=None, body=None):
+    q = {k: v for k, v in (params or {}).items() if v not in (None, "", False)}
+    q["token"] = E("ATOKEN", "")
+    url = E("ABASE") + route + "?" + urllib.parse.urlencode(q)
+    data = dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method,
+        headers={"Content-Type": "application/json"} if data else {})
+    try:
+        with urllib.request.urlopen(req, timeout=float(E("K2_MAIL_HTTP_TIMEOUT") or 60)) as r:
+            d = json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace")
+        try:
+            d = json.loads(raw)
+        except Exception:
+            die({"code": "error", "hint": "HTTP %s from %s" % (e.code, route)})
+        if isinstance(d.get("error"), str):
+            # The role gate's shape: {"error":"role_required","message":…}
+            die({"code": d["error"], "hint": d.get("message") or d["error"]})
+    except Exception as e:
+        die({"code": "daemon_unreachable", "hint": "no response from the K2 daemon (is it running?): %s" % e})
+    if isinstance(d.get("error"), dict):
+        die(d["error"])
+    if not d.get("ok"):
+        die({"code": "error", "hint": "unexpected daemon answer: %s" % dumps(d)[:200]})
+    return d
+
+reason = E("MR_REASON") or None
+a1, a2 = E("MR_A1"), E("MR_A2")
+
+def who(a):
+    if not a:
+        return "(unknown)"
+    n, ad = (a.get("name") or "").strip(), a.get("address") or ""
+    return "%s <%s>" % (n, ad) if n else ad
+
+def lst(k):
+    return [x.strip() for x in (E(k) or "").replace(",", "\n").split("\n") if x.strip()]
+
+def print_message(m):
+    print("From:    %s" % who(m.get("from")))
+    if m.get("to"):
+        print("To:      %s" % ", ".join(who(x) for x in m["to"]))
+    if m.get("cc"):
+        print("Cc:      %s" % ", ".join(who(x) for x in m["cc"]))
+    print("Date:    %s" % m.get("date", ""))
+    print("Subject: %s" % m.get("subject", ""))
+    print("Id:      %s" % m.get("id", ""))
+    ar = m.get("authResults") or {}
+    if any(ar.get(k) for k in ("spf", "dkim", "dmarc")):
+        print("Checks:  SPF %s · DKIM %s · DMARC %s" % (ar.get("spf") or "-", ar.get("dkim") or "-", ar.get("dmarc") or "-"))
+    for a in m.get("attachments") or []:
+        print("Attach:  %s. %s (%s, %s bytes)" % (a.get("index"), a.get("filename") or "(no name)", a.get("mime"), a.get("size")))
+    print()
+    if E("MR_HTML") == "true" and m.get("html"):
+        print(m["html"])
+        if m.get("remoteContentBlocked"):
+            print("\n(Remote pictures and styles were taken out. Links are kept as data-k2-link, not href.)")
+    else:
+        print(m.get("text") or "(no text part)")
+
+R = "/cli/mail/reader/"
+if sub == "inboxes":
+    d = call("GET", R + "inboxes", {"reason": reason})
+    if as_json:
+        print(dumps(d)); sys.exit(0)
+    rows = d.get("inboxes") or []
+    if not rows:
+        print("No inboxes you can open." + ("" if (d.get("viewer") or {}).get("opensAny") else " You see only your own mailbox; an Owner or Admin sees every inbox."))
+        sys.exit(0)
+    for i in rows:
+        owner = i.get("person") or i.get("workspace") or "-"
+        tag = " (you)" if i.get("own") else ""
+        print("%-40s %-9s %-6s %s%s" % (i["address"], i.get("provider", ""), i.get("kind", ""), owner, tag))
+elif sub == "folders":
+    d = call("GET", R + "folders", {"inbox": a1, "reason": reason})
+    if as_json:
+        print(dumps(d)); sys.exit(0)
+    for f in d.get("folders") or []:
+        print("%-30s %s" % (f["name"], f.get("role") or ""))
+elif sub == "messages":
+    d = call("GET", R + "messages", {"inbox": a1, "folder": E("MR_FOLDER"), "unread": "1" if E("MR_UNREAD") == "true" else "",
+        "query": E("MR_QUERY"), "from": E("MR_FROM"), "since": E("MR_SINCE"), "before": E("MR_BEFORE"),
+        "limit": E("MR_LIMIT"), "offset": E("MR_OFFSET"), "reason": reason})
+    if as_json:
+        print(dumps(d)); sys.exit(0)
+    items = d.get("items") or []
+    if not items:
+        print("No messages.")
+    for m in items:
+        print("%s %s  %-20s  %-30s  %s" % ("*" if m.get("unread") else " ", m.get("id"), (m.get("date") or "")[:16].replace("T", " "),
+            who(m.get("from"))[:30], m.get("subject") or "(no subject)"))
+    if d.get("nextOffset") is not None:
+        print("more: k2 mail reader messages %s --offset %s" % (a1, d["nextOffset"]))
+elif sub == "show":
+    d = call("GET", R + "message", {"id": a1, "reason": reason})
+    if as_json:
+        print(dumps(d)); sys.exit(0)
+    print_message(d["message"])
+elif sub == "thread":
+    d = call("GET", R + "thread", {"id": a1, "folder": E("MR_FOLDER"), "reason": reason})
+    if as_json:
+        print(dumps(d)); sys.exit(0)
+    for n, m in enumerate(d.get("messages") or []):
+        if n:
+            print("\n" + "─" * 60 + "\n")
+        print_message(m)
+elif sub == "attachment":
+    try:
+        part = int(a2)
+    except ValueError:
+        die({"code": "usage", "hint": "the attachment number is 1, 2, … (from 'k2 mail reader show')"})
+    out = E("MR_OUT")
+    if os.path.exists(out):
+        die({"code": "usage", "hint": "'%s' already exists — pick another --out" % out})
+    d = call("GET", R + "attachment", {"id": a1, "part": str(part), "reason": reason})
+    data = base64.b64decode(d.get("dataBase64") or "")
+    with open(out, "xb") as f:
+        f.write(data)
+    if as_json:
+        d.pop("dataBase64", None); d["savedTo"] = out
+        print(dumps(d)); sys.exit(0)
+    print("saved %s (%s, %d bytes) to %s" % (d.get("filename"), d.get("mime"), len(data), out))
+elif sub == "log":
+    d = call("GET", R + "log", {"inbox": E("MR_INBOX"), "actor": E("MR_ACTOR"), "since": E("MR_SINCE"), "limit": E("MR_LIMIT")})
+    if as_json:
+        print(dumps(d)); sys.exit(0)
+    rows = d.get("rows") or []
+    if not rows:
+        print("No rows.")
+    for r in rows:
+        at = time.strftime("%Y-%m-%d %H:%M", time.localtime(r.get("at") or 0))
+        line = "%s  %-22s %-7s %-18s %-36s %s" % (at, r.get("actor"), r.get("actorRole"), r.get("action"), r.get("address"), r.get("outcome"))
+        if r.get("reason"):
+            line += "  reason: %s" % r["reason"]
+        print(line)
+else:
+    body = {"reason": reason} if reason else {}
+    if sub in ("flag", "move", "archive", "delete", "reply") or (sub == "draft" and a1):
+        body["id"] = a1
+    if sub == "flag":
+        if E("MR_READ"):
+            body["read"] = E("MR_READ") == "true"
+        if E("MR_FLAGGED"):
+            body["flagged"] = E("MR_FLAGGED") == "true"
+    if sub == "move":
+        body["folder"] = a2
+    if sub in ("reply", "draft", "send"):
+        body["body"] = E("MR_BODY")
+    if sub == "send" or (sub == "draft" and not a1):
+        body["inbox"] = E("MR_INBOX")
+        body["to"] = lst("MR_TO")
+        if lst("MR_CC"):
+            body["cc"] = lst("MR_CC")
+        body["subject"] = E("MR_SUBJECT")
+    d = call("POST", R + sub, None, body)
+    if as_json:
+        print(dumps(d)); sys.exit(0)
+    status = d.get("status")
+    if sub == "send" and status:
+        print("send %s%s" % (status, (" — " + d["id"]) if d.get("id") else ""))
+    elif sub == "move":
+        print("moved to %s" % (d.get("folder") or a2))
+    else:
+        print("ok")
+PYEOF
+}
+
 cmd_help_mail() {
     cat <<'EOF'
 Linked inboxes are live IMAP, not a local store; large folders stall; searches use a ≤30-day window.
@@ -80142,6 +80543,12 @@ CONNECT & SHARE
   forward set|add|rm|show|unset|pause|resume
                               A PERSON's own hosted mailbox → up to 100 addresses
                               (agents: k2 hostmail forward; k2 mail forward --help)
+
+FOR PEOPLE → k2 mail reader
+  inboxes · folders · messages · show · thread · attachment · log (and flag,
+  move, archive, delete, reply, draft, send). The Owner and Admins open every
+  inbox; others their own mailbox. Opening never marks mail read; every access
+  is logged. Agents are refused (exit 3). k2 mail reader --help
 
 SERVER ADMIN → k2 hostmail
   status · enable · disable · rotate-admin · password rotate · domain · create · delete · doctor · config · approvals · catchall · alias · forward
@@ -98147,6 +98554,10 @@ case "${1:-help}" in
             sending)     shift 2; cmd_mail_sending "$@" ;;
             # Back-compat: `mail external` → `mail link`.
             external)    shift 2; cmd_mail_external "$@" ;;
+            # The mail reader (prd-ocmail-admin-in-k2-v1 OA7): PEOPLE open
+            # this server's inboxes (Owner/Admin: all; else their own).
+            # Agents exit 3 server-side.
+            reader)      shift 2; cmd_mail_reader "$@" ;;
             # Owner/hosting verbs moved to `k2 hostmail` — redirect.
             # (`delete` is now the message move-to-Trash verb above; the
             # address-retire verb is `k2 hostmail delete`.)

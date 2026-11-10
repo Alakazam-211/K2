@@ -67,6 +67,12 @@ impl AckWindow {
         self.inflight.len()
     }
 
+    /// When the oldest frame still in flight left (the stream engine's
+    /// skip rule reads its age).
+    pub fn oldest_sent(&self) -> Option<Instant> {
+        self.inflight.front().map(|(_, t)| *t)
+    }
+
     pub fn srtt(&self) -> Option<Duration> {
         self.srtt
     }
@@ -432,7 +438,9 @@ mod tests {
         assert!(w.ack(11, t + ms(30)), "acks 10 too");
         assert_eq!(w.in_flight(), 1);
         assert!(!w.ack(10, t + ms(31)), "already cleared");
+        assert_eq!(w.oldest_sent(), Some(t), "12 is the oldest left");
         assert!(w.cancel(12));
+        assert_eq!(w.oldest_sent(), None);
         assert!(!w.cancel(12));
         assert_eq!(w.in_flight(), 0);
         assert_eq!(w.srtt(), Some(ms(30)));

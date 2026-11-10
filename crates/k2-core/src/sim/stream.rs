@@ -69,7 +69,9 @@
 //! capture → emit → daemon receive → hub → encode → send), the daemon-side
 //! time of each `touch` that carried an `id`, and the CPU time of the hub's
 //! capture thread and its layer's encodes. Measurement only; no viewer
-//! asks for it unless its latency readout is on.
+//! asks for it unless its latency readout is on. Since S4 it also counts the
+//! window's skips to the next keyframe by why ([`SkipCounts`]) and the
+//! viewer's catch-up asks (both absent from older daemons: read as 0).
 //!
 //! **Viewer → daemon, text:** JSON [`ViewerMsg`]. Input is in points.
 //! Agents (passports) and App passes are refused before the upgrade; the
@@ -471,6 +473,51 @@ pub struct StreamStats {
     /// encodes for a pixel source), and the encodes of this viewer's layer.
     pub hub_cpu_ms: f32,
     pub encoder_cpu_ms: f32,
+    /// Skips to the next keyframe in the window, by why (S4, R8).
+    #[serde(default)]
+    pub skips: SkipCounts,
+    /// Catch-up keyframe asks this viewer made in the window (one per skip;
+    /// the hub throttles them per layer).
+    #[serde(default)]
+    pub catch_ups: u32,
+}
+
+/// Why a viewer skipped to the next keyframe (PRD remote desktop §3.5, R8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkipReason {
+    /// Its ack window or its hub queue was full (a delta found no room, or
+    /// came after a gap).
+    Window,
+    /// Its oldest unacked frame was older than `max(2 × srtt, 250 ms)`.
+    Age,
+    /// One socket send took longer than 100 ms.
+    Send,
+}
+
+/// Skips by [`SkipReason`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkipCounts {
+    #[serde(default)]
+    pub window: u32,
+    #[serde(default)]
+    pub age: u32,
+    #[serde(default)]
+    pub send: u32,
+}
+
+impl SkipCounts {
+    pub fn add(&mut self, why: SkipReason) {
+        let n = match why {
+            SkipReason::Window => &mut self.window,
+            SkipReason::Age => &mut self.age,
+            SkipReason::Send => &mut self.send,
+        };
+        *n = n.saturating_add(1);
+    }
+
+    pub fn total(&self) -> u32 {
+        self.window.saturating_add(self.age).saturating_add(self.send)
+    }
 }
 
 /// Collects one viewer's stage samples between two [`ServerMsg::Stats`].
@@ -479,6 +526,8 @@ pub struct StatsWindow {
     samples: [Vec<f32>; 8],
     frames: u32,
     inputs: Vec<InputTiming>,
+    skips: SkipCounts,
+    catch_ups: u32,
 }
 
 /// Nearest-rank percentile of sorted samples (`p` in 0..=1).
@@ -509,6 +558,16 @@ impl StatsWindow {
         }
     }
 
+    /// The viewer skipped to the next keyframe.
+    pub fn skip(&mut self, why: SkipReason) {
+        self.skips.add(why);
+    }
+
+    /// The viewer asked the hub for a catch-up keyframe.
+    pub fn catch_up(&mut self) {
+        self.catch_ups = self.catch_ups.saturating_add(1);
+    }
+
     /// The window so far; starts the next one.
     pub fn take(&mut self, hub_cpu_ms: f32, encoder_cpu_ms: f32) -> StreamStats {
         let mut stages = Vec::new();
@@ -521,7 +580,15 @@ impl StatsWindow {
             stages.push(StageSummary { stage: s.as_str().to_string(), n: v.len() as u32, p50: percentile(v, 0.5), p95: percentile(v, 0.95), max: v[v.len() - 1] });
             v.clear();
         }
-        let out = StreamStats { frames: self.frames, stages, inputs: std::mem::take(&mut self.inputs), hub_cpu_ms, encoder_cpu_ms };
+        let out = StreamStats {
+            frames: self.frames,
+            stages,
+            inputs: std::mem::take(&mut self.inputs),
+            hub_cpu_ms,
+            encoder_cpu_ms,
+            skips: std::mem::take(&mut self.skips),
+            catch_ups: std::mem::take(&mut self.catch_ups),
+        };
         self.frames = 0;
         out
     }
@@ -1003,6 +1070,27 @@ mod tests {
         assert_eq!(v["stats"]["inputs"][0], serde_json::json!({"id": 7, "recvMs": 1000.0, "laneMs": 2.5}));
         let t: ViewerMsg = serde_json::from_str(r#"{"t":"touch","phase":"down","x":1,"y":2,"id":9}"#).expect("touch with an id");
         assert!(matches!(t, ViewerMsg::Touch { id: Some(9), .. }));
+    }
+
+    /// S4: the window counts skips by why and catch-up asks, and starts
+    /// over; an older daemon's readout (no such fields) reads as 0.
+    #[test]
+    fn stats_windows_count_skips_by_why_and_catch_up_asks() {
+        let mut w = StatsWindow::default();
+        for why in [SkipReason::Window, SkipReason::Window, SkipReason::Age, SkipReason::Send] {
+            w.skip(why);
+            w.catch_up();
+        }
+        let s = w.take(0.0, 0.0);
+        assert_eq!(s.skips, SkipCounts { window: 2, age: 1, send: 1 });
+        assert_eq!((s.skips.total(), s.catch_ups), (4, 4));
+        let v = serde_json::to_value(ServerMsg::Stats { stats: s }).expect("json");
+        assert_eq!(v["stats"]["skips"], serde_json::json!({"window": 2, "age": 1, "send": 1}));
+        assert_eq!(v["stats"]["catchUps"], 4);
+        let next = w.take(0.0, 0.0);
+        assert_eq!((next.skips, next.catch_ups), (SkipCounts::default(), 0), "the next window starts empty");
+        let old: ServerMsg = serde_json::from_str(r#"{"t":"stats","stats":{"frames":3,"stages":[],"inputs":[],"hubCpuMs":7,"encoderCpuMs":0}}"#).expect("an older readout");
+        assert!(matches!(old, ServerMsg::Stats { stats: StreamStats { frames: 3, catch_ups: 0, skips: SkipCounts { window: 0, age: 0, send: 0 }, .. } }));
     }
 
     #[test]

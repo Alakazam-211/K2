@@ -206,17 +206,49 @@ export function parseApps(raw: unknown): AppOption[] {
   })
 }
 
-/** Every App published on this server: each workspace's list, read together. */
-export async function fetchApps(): Promise<AppOption[]> {
+/** What a read of every App gave: the Apps it could list, and how many
+ *  workspaces it couldn't (with the first reason), so one bad workspace
+ *  never hides the rest. */
+export type AppsRead = { apps: AppOption[]; missed: number; reason: string | null }
+
+/** At most this many workspace reads at once: a server with many workspaces,
+ *  reached through a tunnel, otherwise gets them all in one burst. */
+const APP_READS_AT_ONCE = 4
+
+/** Every App published on this server, workspace by workspace. A workspace
+ *  that fails to answer is counted in `missed`; the others still list.
+ *  Throws only when the list of workspaces itself can't be read. */
+export async function fetchAppsSettled(errorText: (e: unknown) => string = (e) => (e instanceof Error ? e.message : String(e))): Promise<AppsRead> {
   const projects = await daemonCliGet<unknown>(primaryScope(), 'projects/list')
   const list = Array.isArray(projects) ? projects : asList(projects, ['projects', 'items'])
   const ids = list.flatMap((row) => {
     const id = asString(asRecord(row).id)
     return id ? [id] : []
   })
-  const listed = await Promise.all(ids.map((project) => daemonCliGet<unknown>(primaryScope(), 'publish/list', { project })))
+  const listed: AppOption[][] = []
+  let missed = 0
+  let reason: string | null = null
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < ids.length) {
+      const project = ids[next++]
+      try {
+        listed.push(parseApps(await daemonCliGet<unknown>(primaryScope(), 'publish/list', { project })))
+      } catch (e) {
+        missed += 1
+        reason ??= errorText(e)
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(APP_READS_AT_ONCE, ids.length) }, worker))
   const seen = new Set<string>()
-  return listed.flatMap(parseApps).filter((app) => (seen.has(app.id) ? false : (seen.add(app.id), true)))
+  const apps = listed.flat().filter((app) => (seen.has(app.id) ? false : (seen.add(app.id), true)))
+  return { apps: apps.sort((a, b) => a.name.localeCompare(b.name)), missed, reason }
+}
+
+/** Every App published on this server; a workspace that fails is skipped. */
+export async function fetchApps(): Promise<AppOption[]> {
+  return (await fetchAppsSettled()).apps
 }
 
 /** An App grant's target in words: this server's K2 page, the App's name,

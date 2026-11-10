@@ -1822,6 +1822,11 @@ html[data-style="terminal"] .k2-segment[aria-checked="true"]:focus-visible:not([
   white-space: nowrap;
   --k2-tag-fill: transparent;
 }
+/* A tag that carries a name (an App, a role) keeps the name as written. */
+.k2-tag[data-case="as-written"] {
+  text-transform: none;
+  letter-spacing: 0;
+}
 .k2-tag[data-tone="accent"] {
   --k2-tag-ink: color-mix(in srgb, var(--color-accent-text) 75%, var(--color-text-primary));
   --k2-tag-fill: color-mix(in srgb, var(--color-accent) 10%, transparent);

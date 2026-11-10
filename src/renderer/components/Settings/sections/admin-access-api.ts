@@ -176,3 +176,13 @@ export function usernameProblem(raw: string): string | null {
   if (name === 'owner' || name === 'agent') return `“${name}” is kept for K2 itself. Pick another.`
   return null
 }
+
+/** The password rules in a sentence, for the Type one choice. */
+export function policyWords(policy: PasswordPolicy): string {
+  const extra = [
+    policy.requireNumber ? 'a number' : null,
+    policy.requireUppercase ? 'an uppercase letter' : null,
+    policy.requireSpecial ? 'a special character' : null,
+  ].filter(Boolean)
+  return `At least ${policy.minLength} characters${extra.length ? `, with ${extra.join(', ')}` : ''}.`
+}

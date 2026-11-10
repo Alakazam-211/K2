@@ -1,17 +1,22 @@
-// Settings → Access → User Access: who can use this server, and what each
-// person can use. A list and detail like Workspaces / Agents: the list on
-// the left (Everyone, then each person), and on the right either everyone
-// at a glance or one person, in two tabs (What they can use, Account).
+// Settings → Access → User Access: the people who use this server's Apps
+// (App guests), and which Apps each can use. A list and detail like
+// Workspaces / Agents: the list on the left (Everyone, then each person),
+// and on the right either everyone at a glance (by person, or by App) or one
+// person, in two tabs (What they can use, Account).
+//
+// The page reads four parts on their own (user-access-load.ts): people,
+// what each can use, roles and App names. One part failing or slow never
+// blanks the rest; each says so where it shows, with its own Try again.
 //
 // The daemon's words (principals, grants) stay in user-access-api.ts; the
 // page says "people" and "what they can use". Templates live under User
 // Templates; logins for K2 itself under Admin Access (Connect users).
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { primaryScope } from '@/kessel/server-scope'
-import { Button, Input, OverflowMenu, Surface, Tag, Toggle, cx } from '@/components/ui'
+import { Button, Input, OverflowMenu, Segmented, Surface, Tag, Toggle, cx } from '@/components/ui'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useSettingsStore } from '@/stores/settings'
@@ -31,29 +36,19 @@ import type { SettingEntry } from '../searchManifest'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
 import { SewPersonAccess } from './SewAccessParts'
 import type { ChatGrant } from './sew-api'
-import {
-  AddUserDialog,
-  AddedUserDialog,
-  ResetPasswordDialog,
-  SetPasswordDialog,
-  type AddedUser,
-} from './AppUserDialogs'
+import { AddUserDialog, AddedUserDialog, AppUserResetDialog, ResetLinkDialog, type AddedUser } from './AppUserDialogs'
 import {
   HOST_APP,
   HOST_LABEL,
-  appName,
-  fetchApps,
-  parseGrants,
   parsePeople,
-  parseRoles,
   reachWords,
-  roleLabel,
   takePersonHandoff,
   type AppOption,
   type GrantRow,
   type PersonRow,
   type RoleRow,
 } from './user-access-api'
+import { useAccessData, type AppsData, type Part, type PartName } from './user-access-load'
 
 export { parsePeople }
 export type { PersonRow }
@@ -64,7 +59,7 @@ export const PEOPLE_MANIFEST: SettingEntry[] = [
     section: 'people',
     label: 'User Access',
     description: 'Who can use this server’s K2 page, its Apps and chat, and what each person reaches.',
-    keywords: ['people', 'user access', 'full name', 'principal', 'guest', 'username', 'grant', 'password', 'app', 'unlock', 'reset password'],
+    keywords: ['people', 'user access', 'full name', 'principal', 'guest', 'username', 'grant', 'password', 'app', 'unlock', 'reset password', 'role'],
     group: 'People',
   },
 ]
@@ -82,9 +77,9 @@ export function canResetPassword(role: 'owner' | 'admin' | null, row: Pick<Perso
   return role === 'admin' && !row.boxLogin
 }
 
-type Load = 'loading' | 'ready' | { error: string }
 type Selection = 'everyone' | string
 type ViewerRole = 'owner' | 'admin' | null
+type View = 'people' | 'apps'
 
 /** One write at a time on a page: which row it was, whether it's running,
  *  and how it ended (the shared "Saved" note, or why it failed). */
@@ -122,6 +117,30 @@ const displayName = (p: PersonRow): string => p.fullName ?? p.username
  *  the email, so a row never says the same word twice. */
 const secondLine = (p: PersonRow): string => (p.fullName ? p.username : p.email ?? 'No full name yet')
 
+/**
+ * An App's name for the page: this server's K2 page, the App's name, or,
+ * when the name isn't known, why: still loading (null), didn't load, or the
+ * App is no longer published.
+ */
+function nameFor(id: string, apps: Part<AppsData>): string | null {
+  if (id === HOST_APP) return HOST_LABEL
+  const hit = apps.data?.apps.find((a) => a.id === id)
+  if (hit) return hit.name
+  if (apps.status === 'loading' && !apps.data) return null
+  if (apps.status === 'error' || (apps.data?.missed ?? 0) > 0) return 'App name didn’t load'
+  return 'An App that’s no longer published'
+}
+
+/** A grant's role, by name, or null when there's none (or roles didn't load). */
+function roleName(grant: GrantRow, roles: RoleRow[]): string | null {
+  return grant.roleId ? roles.find((r) => r.id === grant.roleId)?.name ?? null : null
+}
+
+/** The roles that fit an App: its own first, then the ones for any App. */
+function rolesFor(app: string, roles: RoleRow[]): RoleRow[] {
+  return [...roles.filter((r) => r.appId === app), ...roles.filter((r) => !r.appId)]
+}
+
 /** The person's tags: locked out, or waiting for their own password. */
 function PersonTags({ person }: { person: PersonRow }): React.JSX.Element | null {
   if (!person.lockedUntil && !person.pendingReset) return null
@@ -133,16 +152,62 @@ function PersonTags({ person }: { person: PersonRow }): React.JSX.Element | null
   )
 }
 
-/** What a person can use, in a few words, for the list of everyone. */
-function accessSummary(person: PersonRow, grants: GrantRow[], apps: AppOption[] | null): string {
-  if (!person.id) return 'Nothing yet'
-  const mine = grants.filter((g) => g.subjectKind === 'principal' && g.subjectId === person.id && g.enabled)
-  const parts: string[] = []
-  if (mine.some((g) => g.kind === 'app' && g.targetId === HOST_APP)) parts.push(HOST_LABEL)
-  for (const g of mine) if (g.kind === 'app' && g.targetId !== HOST_APP) parts.push(appName(g.targetId, apps))
-  const chat = mine.find((g) => g.kind === 'chat')
-  if (chat) parts.push(chat.scope === 'guest' ? 'Chat as a guest' : 'Chat')
-  return parts.length ? parts.join(' · ') : 'Nothing yet'
+/** A person's App grants, this server's K2 page first. */
+function appGrantsOf(person: PersonRow, grants: GrantRow[]): GrantRow[] {
+  if (!person.id) return []
+  const mine = grants.filter((g) => g.subjectKind === 'principal' && g.subjectId === person.id && g.kind === 'app')
+  return [...mine.filter((g) => g.targetId === HOST_APP), ...mine.filter((g) => g.targetId !== HOST_APP)]
+}
+
+/** Each App a person can use, as a chip: "Shop · Staff"; an App turned off
+ *  for them is quieter and says Off. */
+function AccessChips({
+  person,
+  grants,
+  roles,
+  apps,
+}: {
+  person: PersonRow
+  grants: Part<GrantRow[]>
+  roles: RoleRow[]
+  apps: Part<AppsData>
+}): React.JSX.Element {
+  if (!grants.data) {
+    return (
+      <span className="type-hint text-[var(--color-text-secondary)]" data-testid={`summary-${person.username}`}>
+        {grants.status === 'error' ? 'Didn’t load' : 'Loading…'}
+      </span>
+    )
+  }
+  const mine = appGrantsOf(person, grants.data)
+  const chat = person.id ? grants.data.find((g) => g.kind === 'chat' && g.subjectKind === 'principal' && g.subjectId === person.id && g.enabled) : undefined
+  if (mine.length === 0 && !chat) {
+    return (
+      <span className="type-hint text-[var(--color-text-secondary)]" data-testid={`summary-${person.username}`}>
+        No Apps yet
+      </span>
+    )
+  }
+  return (
+    <span className="flex flex-wrap items-center gap-1.5 min-w-0" data-testid={`summary-${person.username}`}>
+      {mine.map((g) => {
+        const name = nameFor(g.targetId, apps) ?? 'Loading…'
+        const role = roleName(g, roles)
+        return (
+          <Tag key={g.id} tone={g.enabled ? 'neutral' : 'muted'} data-case="as-written" data-app-chip={g.targetId}>
+            {name}
+            {role ? ` · ${role}` : ''}
+            {g.enabled ? '' : ' · Off'}
+          </Tag>
+        )
+      })}
+      {chat ? (
+        <Tag tone="neutral" data-case="as-written">
+          {chat.scope === 'guest' ? 'Chat as a guest' : 'Chat'}
+        </Tag>
+      ) : null}
+    </span>
+  )
 }
 
 function PeopleIcon(): React.JSX.Element {
@@ -161,24 +226,43 @@ function Chevron(): React.JSX.Element {
   )
 }
 
+/** A part that failed while the rest of the page shows: what's missing, the
+ *  server's reason, and Try again for that part alone. */
+function PartFailed({
+  part,
+  title,
+  children,
+  onRetry,
+}: {
+  part: Part<unknown>
+  title: string
+  children: React.ReactNode
+  onRetry: () => void
+}): React.JSX.Element | null {
+  if (part.status !== 'error') return null
+  return (
+    <SettingsLoadState kind="error" title={title} detail={part.error} testId="people-part-error" action={<Button onClick={onRetry}>Try again</Button>}>
+      {children}
+    </SettingsLoadState>
+  )
+}
+
 export function PeopleSection(): React.JSX.Element {
-  const [people, setPeople] = useState<PersonRow[]>([])
-  const [roles, setRoles] = useState<RoleRow[]>([])
-  const [grants, setGrants] = useState<GrantRow[]>([])
-  const [load, setLoad] = useState<Load>('loading')
-  const [apps, setApps] = useState<AppOption[] | null>(null)
-  const [appsError, setAppsError] = useState<string | null>(null)
   const [selection, setSelection] = useState<Selection>(() => takePersonHandoff() ?? 'everyone')
+  const [view, setView] = useState<View>('people')
+  const [needApps, setNeedApps] = useState(false)
   // 0.46.6: the daemon lets the Owner manage every App user's password
   // and an Admin those of people who only use Apps (never a box login);
   // adding a person stays the Owner's. Nobody sees actions that would fail.
   const [viewerRole, setViewerRole] = useState<ViewerRole>(null)
   const isOwner = viewerRole === 'owner'
-  const [dialog, setDialog] = useState<{ kind: 'reset' | 'set'; username: string } | null>(null)
+  const [dialog, setDialog] = useState<{ kind: 'reset' | 'link'; username: string } | null>(null)
   const [adding, setAdding] = useState(false)
   // The one-time result of Add person; dropped when its sheet closes.
   const [added, setAdded] = useState<AddedUser | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+
+  const { users, grants, roles, apps, reload, refresh } = useAccessData(needApps || view === 'apps' || adding)
 
   useEffect(() => {
     let live = true
@@ -190,61 +274,25 @@ export function PeopleSection(): React.JSX.Element {
     }
   }, [])
 
-  /** Re-reads everything. The first read shows the loading card; later ones
-   *  keep the page and only report a failure. */
-  const refresh = useCallback(async () => {
-    try {
-      const [u, g, r] = await Promise.all([
-        daemonCliGet<unknown>(primaryScope(), 'skin/users'),
-        daemonCliGet<unknown>(primaryScope(), 'skin/grants'),
-        daemonCliGet<unknown>(primaryScope(), 'skin/roles'),
-      ])
-      setPeople(parsePeople(u))
-      setGrants(parseGrants(g))
-      setRoles(parseRoles(r))
-      setLoad('ready')
-    } catch (e) {
-      setLoad({ error: daemonErrorText(e) })
-    }
-  }, [])
+  const loadApps = useCallback(async (): Promise<void> => {
+    setNeedApps(true)
+    if (apps.status === 'error') await reload('apps')
+  }, [apps.status, reload])
 
-  useEffect(() => {
-    void refresh()
-  }, [refresh])
-
-  /** App names: read once, the first time a page shows an App. */
-  const loadApps = useCallback(async () => {
-    if (apps) return
-    setAppsError(null)
-    try {
-      setApps(await fetchApps())
-    } catch (e) {
-      setAppsError(daemonErrorText(e))
-    }
-  }, [apps])
-
-  const showsApps = grants.some((g) => g.kind === 'app' && g.targetId !== HOST_APP)
-  useEffect(() => {
-    if (showsApps) void loadApps()
-  }, [showsApps, loadApps])
-
+  const people = users.data ?? []
+  const roleRows = roles.data ?? []
   const person = selection !== 'everyone' ? people.find((p) => p.username === selection) ?? null : null
   const dialogPerson = dialog ? people.find((p) => p.username === dialog.username) ?? null : null
   const postHere = (route: string, body: Record<string, unknown>): Promise<unknown> => daemonCliPost(primaryScope(), route, body)
-  // Closing a sheet drops whatever it showed once, and re-reads the list
-  // (a reset or set can change the lock and the tie).
-  const closeDialog = (): void => {
-    setDialog(null)
-    void refresh()
-  }
   const select = (next: Selection): void => {
     setSelection(next)
     setNotice(null)
   }
+  const openDialog = (kind: 'reset' | 'link', username: string): void => setDialog({ kind, username })
 
-  const ready = load === 'ready'
-  const roleChoices = roles.map((r) => ({ value: r.id, label: r.name, appId: r.appId }))
-  const appChoices = (apps ?? []).map((a) => ({ value: a.id, label: `${a.name} (${a.kind === 'skin' ? 'app' : a.kind})` }))
+  const ready = users.data != null
+  const roleChoices = roleRows.map((r) => ({ value: r.id, label: r.name, appId: r.appId }))
+  const appChoices = (apps.data?.apps ?? []).map((a) => ({ value: a.id, label: `${a.name} (${a.kind === 'skin' ? 'app' : a.kind})` }))
 
   return (
     <div className="h-full min-h-0 flex">
@@ -252,7 +300,7 @@ export function PeopleSection(): React.JSX.Element {
         <div className="flex-shrink-0 px-4 pt-6 pb-3">
           <h2 className="flex items-center h-7 type-heading text-[var(--color-text-primary)]">User Access</h2>
           <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed">
-            Who can use this server, and what each person can use.
+            The people who use your Apps, and what each one can use.
           </p>
           <AccessAuditLink className="mt-1" />
         </div>
@@ -288,24 +336,28 @@ export function PeopleSection(): React.JSX.Element {
 
       <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]">
         <div className="w-full max-w-[52rem] space-y-6 pb-6">
-          {load === 'loading' ? (
+          {!ready && users.status !== 'error' ? (
             <>
               <EveryoneHeader isOwner={false} onAdd={() => setAdding(true)} waiting />
-              <SettingsLoadState kind="loading" title="Loading people…" testId="people-loading">
-                Reading who can use this server.
+              <SettingsLoadState
+                kind="loading"
+                title={users.waiting ? 'Waiting for the server to reconnect…' : 'Loading people…'}
+                testId="people-loading"
+              >
+                {users.waiting ? 'The list loads by itself once the server is back.' : 'Reading who can use your Apps.'}
               </SettingsLoadState>
             </>
-          ) : typeof load === 'object' ? (
+          ) : !ready ? (
             <>
               <EveryoneHeader isOwner={false} onAdd={() => setAdding(true)} waiting />
               <SettingsLoadState
                 kind="error"
                 title="Couldn’t load people"
-                detail={load.error}
+                detail={users.error}
                 testId="people-error"
-                action={<Button onClick={() => { setLoad('loading'); void refresh() }}>Try again</Button>}
+                action={<Button onClick={() => void refresh()}>Try again</Button>}
               >
-                K2 couldn’t read who can use this server. Nothing has changed.
+                K2 couldn’t read who can use your Apps. Nothing has changed.
               </SettingsLoadState>
             </>
           ) : person ? (
@@ -315,11 +367,12 @@ export function PeopleSection(): React.JSX.Element {
               grants={grants}
               roles={roles}
               apps={apps}
-              appsError={appsError}
               viewerRole={viewerRole}
+              notice={notice}
               loadApps={loadApps}
+              reload={reload}
               refresh={refresh}
-              onDialog={(kind) => setDialog({ kind, username: person.username })}
+              onDialog={(kind) => openDialog(kind, person.username)}
               onRemoved={(username) => {
                 setSelection('everyone')
                 setNotice(`${username} was removed. They can no longer sign in here.`)
@@ -328,27 +381,45 @@ export function PeopleSection(): React.JSX.Element {
           ) : (
             <Everyone
               people={people}
+              users={users}
               grants={grants}
+              roles={roles}
               apps={apps}
-              isOwner={isOwner}
+              view={view}
+              onView={setView}
+              viewerRole={viewerRole}
               notice={notice}
               onAdd={() => setAdding(true)}
               onOpen={select}
+              onDialog={openDialog}
+              reload={reload}
             />
           )}
         </div>
       </div>
 
       {dialogPerson && dialog?.kind === 'reset' ? (
-        <ResetPasswordDialog key={`reset:${dialogPerson.username}`} person={dialogPerson} onClose={closeDialog} post={postHere} />
-      ) : null}
-      {dialogPerson && dialog?.kind === 'set' ? (
-        <SetPasswordDialog
-          key={`set:${dialogPerson.username}`}
+        <AppUserResetDialog
+          key={`reset:${dialogPerson.username}`}
           person={dialogPerson}
-          onClose={closeDialog}
           post={postHere}
-          onReset={() => setDialog({ kind: 'reset', username: dialogPerson.username })}
+          onDone={() => {
+            setNotice(`${dialogPerson.username}’s password was reset. Send them the new one if you haven’t yet.`)
+            void refresh()
+          }}
+          onClose={() => setDialog(null)}
+          onLink={() => setDialog({ kind: 'link', username: dialogPerson.username })}
+        />
+      ) : null}
+      {dialogPerson && dialog?.kind === 'link' ? (
+        <ResetLinkDialog
+          key={`link:${dialogPerson.username}`}
+          person={dialogPerson}
+          post={postHere}
+          onClose={() => {
+            setDialog(null)
+            void refresh()
+          }}
         />
       ) : null}
       {adding ? (
@@ -420,7 +491,7 @@ function EveryoneHeader({ isOwner, onAdd, waiting = false }: { isOwner: boolean;
       <div className="min-w-0">
         <h2 className="type-title text-[var(--color-text-primary)]">Everyone</h2>
         <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed">
-          {waiting ? 'What each person can use on this server.' : 'What each person can use on this server. Pick someone to change it.'}
+          {waiting ? 'Which Apps each person can use.' : 'Which Apps each person can use. Pick someone to change it or reset their password.'}
         </p>
       </div>
       {isOwner ? (
@@ -432,32 +503,46 @@ function EveryoneHeader({ isOwner, onAdd, waiting = false }: { isOwner: boolean;
   )
 }
 
-/** Everyone at a glance: each person and what they can use, or how people
- *  get here when there's no one yet. */
+/** Everyone at a glance, by person (each with their Apps as chips) or by
+ *  App (each App with its people); or how people get here when there's no
+ *  one yet. Parts that failed or are still loading say so in place. */
 function Everyone({
   people,
+  users,
   grants,
+  roles,
   apps,
-  isOwner,
+  view,
+  onView,
+  viewerRole,
   notice,
   onAdd,
   onOpen,
+  onDialog,
+  reload,
 }: {
   people: PersonRow[]
-  grants: GrantRow[]
-  apps: AppOption[] | null
-  isOwner: boolean
+  users: Part<PersonRow[]>
+  grants: Part<GrantRow[]>
+  roles: Part<RoleRow[]>
+  apps: Part<AppsData>
+  view: View
+  onView: (v: View) => void
+  viewerRole: ViewerRole
   notice: string | null
   onAdd: () => void
   onOpen: (username: string) => void
+  onDialog: (kind: 'reset' | 'link', username: string) => void
+  reload: (part: PartName) => Promise<void>
 }): React.JSX.Element {
+  const isOwner = viewerRole === 'owner'
   if (people.length === 0) {
     return (
       <>
         <EveryoneHeader isOwner={false} onAdd={onAdd} waiting />
         <SettingsLoadState
           kind="empty"
-          title="No one can use this server yet"
+          title="No one uses your Apps yet"
           testId="people-empty"
           action={
             <>
@@ -478,6 +563,7 @@ function Everyone({
       </>
     )
   }
+  const roleRows = roles.data ?? []
   return (
     <>
       <EveryoneHeader isOwner={isOwner} onAdd={onAdd} />
@@ -486,39 +572,211 @@ function Everyone({
           {notice}
         </p>
       ) : null}
+      <PartFailed part={users} title="Couldn’t refresh the list" onRetry={() => void reload('users')}>
+        This is the list as it was. Changes since then may be missing.
+      </PartFailed>
+      <PartFailed part={grants} title="Couldn’t load which Apps each person can use" onRetry={() => void reload('grants')}>
+        The people are listed; their Apps show once this loads.
+      </PartFailed>
+      <PartFailed part={roles} title="Couldn’t load the roles" onRetry={() => void reload('roles')}>
+        Each person’s Apps are shown without their role until this loads.
+      </PartFailed>
+      <PartFailed part={apps} title="Couldn’t load the App names" onRetry={() => void reload('apps')}>
+        Apps are shown without their names until this loads.
+      </PartFailed>
+      {apps.status === 'ready' && (apps.data?.missed ?? 0) > 0 ? (
+        <SettingsLoadState
+          kind="error"
+          title="Some App names didn’t load"
+          detail={apps.data?.reason}
+          testId="people-apps-missed"
+          action={<Button onClick={() => void reload('apps')}>Try again</Button>}
+        >
+          {apps.data?.missed === 1 ? 'One workspace didn’t answer' : `${apps.data?.missed} workspaces didn’t answer`}, so
+          its Apps show without a name. Everything else is listed.
+        </SettingsLoadState>
+      ) : null}
       <section data-testid="people-overview">
-        <div className="mb-2">
-          <h3 className="flex items-center min-h-[1.5rem] type-heading text-[var(--color-text-primary)]">People</h3>
-          <p className={SETTING_ROW_HINT}>Where each person can sign in. Pick someone to see more or change it.</p>
+        <div className="mb-2 flex items-end justify-between gap-4">
+          <div className="min-w-0">
+            <h3 className="flex items-center min-h-[1.5rem] type-heading text-[var(--color-text-primary)]">
+              {view === 'people' ? 'People' : 'Apps'}
+            </h3>
+            <p className={SETTING_ROW_HINT}>
+              {view === 'people' ? 'Each person and the Apps they can use.' : 'Each App and the people who can use it.'}
+            </p>
+          </div>
+          <Segmented<View>
+            aria-label="Show by"
+            value={view}
+            onChange={onView}
+            options={[
+              { value: 'people', label: 'By person' },
+              { value: 'apps', label: 'By App' },
+            ]}
+          />
         </div>
-        {/* overflow-hidden: a hovered row keeps to the card's corners. */}
-        <Surface chamfer material="tile" className="overflow-hidden divide-y divide-[var(--color-border)]">
-        {people.map((row) => (
-          <button
-            key={row.username}
-            type="button"
-            aria-label={`See what ${row.username} can use`}
-            data-overview-row={row.username}
-            data-k2-focus=""
-            onClick={() => onOpen(row.username)}
-            className="relative w-full flex items-center gap-4 px-4 py-3 text-left no-drag cursor-pointer transition-colors outline-none hover:bg-[var(--color-wash-1)]"
-          >
-            <span className="min-w-0 w-56 flex-shrink-0">
-              <span className="block type-name text-[var(--color-text-primary)] truncate">{displayName(row)}</span>
-              <span className="flex items-center gap-2 min-w-0">
-                <span className="type-hint text-[var(--color-text-secondary)] truncate">{secondLine(row)}</span>
-                <PersonTags person={row} />
-              </span>
-            </span>
-            <span className="min-w-0 flex-1 type-row text-[var(--color-text-secondary)] truncate" data-testid={`summary-${row.username}`}>
-              {accessSummary(row, grants, apps)}
-            </span>
-            <Chevron />
-          </button>
-        ))}
-        </Surface>
+        {view === 'people' ? (
+          // overflow-hidden: a hovered row keeps to the card's corners.
+          <Surface chamfer material="tile" className="overflow-hidden divide-y divide-[var(--color-border)]">
+            {people.map((row) => (
+              <EveryoneRow
+                key={row.username}
+                person={row}
+                grants={grants}
+                roles={roleRows}
+                apps={apps}
+                viewerRole={viewerRole}
+                onOpen={onOpen}
+                onDialog={onDialog}
+              />
+            ))}
+          </Surface>
+        ) : (
+          <ByApp people={people} grants={grants} roles={roleRows} apps={apps} onOpen={onOpen} />
+        )}
       </section>
     </>
+  )
+}
+
+/** One person in the list of everyone: name, their Apps, and a menu with
+ *  Reset password. The row opens the person; the menu sits beside it. */
+function EveryoneRow({
+  person,
+  grants,
+  roles,
+  apps,
+  viewerRole,
+  onOpen,
+  onDialog,
+}: {
+  person: PersonRow
+  grants: Part<GrantRow[]>
+  roles: RoleRow[]
+  apps: Part<AppsData>
+  viewerRole: ViewerRole
+  onOpen: (username: string) => void
+  onDialog: (kind: 'reset' | 'link', username: string) => void
+}): React.JSX.Element {
+  const canReset = canResetPassword(viewerRole, person)
+  const why = !canReset && viewerRole === 'admin' ? BOX_LOGIN_REASON : undefined
+  return (
+    <div className="relative flex items-center gap-2 pr-3 transition-colors hover:bg-[var(--color-wash-1)]" data-overview-item={person.username}>
+      <button
+        type="button"
+        aria-label={`See what ${person.username} can use`}
+        data-overview-row={person.username}
+        data-k2-focus=""
+        onClick={() => onOpen(person.username)}
+        className="relative min-w-0 flex-1 flex items-center gap-4 pl-4 pr-1 py-3 text-left no-drag cursor-pointer outline-none"
+      >
+        <span className="min-w-0 w-52 flex-shrink-0">
+          <span className="block type-name text-[var(--color-text-primary)] truncate">{displayName(person)}</span>
+          <span className="flex items-center gap-2 min-w-0">
+            <span className="type-hint text-[var(--color-text-secondary)] truncate">{secondLine(person)}</span>
+            <PersonTags person={person} />
+          </span>
+        </span>
+        <span className="min-w-0 flex-1">
+          <AccessChips person={person} grants={grants} roles={roles} apps={apps} />
+        </span>
+        <Chevron />
+      </button>
+      {viewerRole ? (
+        <OverflowMenu
+          label={`More actions for ${person.username}`}
+          items={[
+            { id: 'open', label: 'See what they can use', onSelect: () => onOpen(person.username) },
+            { id: 'reset', label: 'Reset password…', group: true, disabled: !canReset, hint: why, onSelect: () => onDialog('reset', person.username) },
+            { id: 'link', label: 'Send a reset link…', disabled: !canReset, onSelect: () => onDialog('link', person.username) },
+          ]}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+/** Each App and the people who can use it: this server's K2 page, then each
+ *  published App, then any App someone has that's no longer listed. */
+function ByApp({
+  people,
+  grants,
+  roles,
+  apps,
+  onOpen,
+}: {
+  people: PersonRow[]
+  grants: Part<GrantRow[]>
+  roles: RoleRow[]
+  apps: Part<AppsData>
+  onOpen: (username: string) => void
+}): React.JSX.Element {
+  if (!grants.data) {
+    return grants.status === 'error' ? (
+      <SettingsLoadState kind="error" title="Nothing to group yet" testId="people-by-app-error">
+        Which Apps each person can use didn’t load. Try again above.
+      </SettingsLoadState>
+    ) : (
+      <SettingsLoadState kind="loading" title="Loading Apps…" testId="people-by-app-loading">
+        Reading which Apps each person can use.
+      </SettingsLoadState>
+    )
+  }
+  const appGrants = grants.data.filter((g) => g.kind === 'app' && g.subjectKind === 'principal')
+  const ids = [HOST_APP, ...(apps.data?.apps ?? []).map((a) => a.id)]
+  for (const g of appGrants) if (!ids.includes(g.targetId)) ids.push(g.targetId)
+  return (
+    <div className="space-y-4" data-testid="people-by-app">
+      {apps.status === 'loading' && !apps.data ? (
+        <SettingsLoadState kind="loading" title="Loading the list of Apps…" testId="people-apps-loading">
+          Apps that people already use are shown below.
+        </SettingsLoadState>
+      ) : null}
+      {ids.map((id) => {
+        const rows = appGrants.filter((g) => g.targetId === id)
+        const name = nameFor(id, apps) ?? 'Loading…'
+        return (
+          <SettingsGroup
+            key={id}
+            title={name}
+            hint={rows.length === 0 ? undefined : `${rows.length} ${rows.length === 1 ? 'person' : 'people'}`}
+            card
+            testId={`by-app-${id}`}
+          >
+            {rows.length === 0 ? (
+              <SettingRow label="No one can use this App yet" hint="Pick a person and give them access to it.">
+                {null}
+              </SettingRow>
+            ) : (
+              rows.map((g) => {
+                const who = people.find((p) => p.id === g.subjectId)
+                if (!who) return null
+                const role = roleName(g, roles)
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    aria-label={`See what ${who.username} can use`}
+                    data-k2-focus=""
+                    onClick={() => onOpen(who.username)}
+                    className="relative w-full flex items-center gap-4 px-4 py-3 text-left no-drag cursor-pointer transition-colors outline-none hover:bg-[var(--color-wash-1)]"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block type-name text-[var(--color-text-primary)] truncate">{displayName(who)}</span>
+                      <span className="block type-hint text-[var(--color-text-secondary)] truncate">{secondLine(who)}</span>
+                    </span>
+                    <span className="type-row text-[var(--color-text-secondary)]">{role ?? 'No role'}</span>
+                    {g.enabled ? null : <Tag tone="muted">Off</Tag>}
+                    <Chevron />
+                  </button>
+                )
+              })
+            )}
+          </SettingsGroup>
+        )
+      })}
+    </div>
   )
 }
 
@@ -530,28 +788,30 @@ function PersonDetail({
   grants,
   roles,
   apps,
-  appsError,
   viewerRole,
+  notice,
   loadApps,
+  reload,
   refresh,
   onDialog,
   onRemoved,
 }: {
   person: PersonRow
-  grants: GrantRow[]
-  roles: RoleRow[]
-  apps: AppOption[] | null
-  appsError: string | null
+  grants: Part<GrantRow[]>
+  roles: Part<RoleRow[]>
+  apps: Part<AppsData>
   viewerRole: ViewerRole
+  notice: string | null
   loadApps: () => Promise<void>
+  reload: (part: PartName) => Promise<void>
   refresh: () => Promise<void>
-  onDialog: (kind: 'reset' | 'set') => void
+  onDialog: (kind: 'reset' | 'link') => void
   onRemoved: (username: string) => void
 }): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('access')
   const writes = useRowWrites()
   const canReset = canResetPassword(viewerRole, person)
-  const mine = person.id ? grants.filter((g) => g.subjectKind === 'principal' && g.subjectId === person.id) : []
+  const mine = person.id && grants.data ? grants.data.filter((g) => g.subjectKind === 'principal' && g.subjectId === person.id) : []
   const chatGrant = mine.find((g) => g.kind === 'chat')
   const sewGrant: ChatGrant | null = chatGrant
     ? { id: chatGrant.id, subjectKind: chatGrant.subjectKind, subjectId: chatGrant.subjectId, scope: chatGrant.scope, enabled: chatGrant.enabled, hookState: chatGrant.hookState, hookError: chatGrant.hookError }
@@ -570,6 +830,16 @@ function PersonDetail({
               {[person.fullName ? person.username : null, person.email].filter(Boolean).join(' · ') || 'No full name or email yet'}
             </p>
           </div>
+          {viewerRole ? (
+            <Button
+              className="flex-shrink-0"
+              disabled={!canReset}
+              title={canReset ? undefined : BOX_LOGIN_REASON}
+              onClick={() => onDialog('reset')}
+            >
+              Reset password…
+            </Button>
+          ) : null}
         </div>
         <div role="tablist" aria-label={`${person.username}’s settings`} className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] w-full">
           {(Object.keys(TAB_LABEL) as Tab[]).map((id) => {
@@ -595,12 +865,27 @@ function PersonDetail({
           })}
         </div>
       </header>
+      {notice ? (
+        <p role="status" data-testid="person-notice" className="type-hint text-[var(--color-status-ok-soft)]">
+          {notice}
+        </p>
+      ) : null}
 
       {tab === 'access' ? (
         <>
-          {person.tiedTo ? <ResetPanel person={person} onReset={canReset ? () => onDialog('reset') : null} /> : null}
-          <SignInCard person={person} grants={mine} roles={roles} apps={apps} appsError={appsError} loadApps={loadApps} refresh={refresh} writes={writes} />
-          <SewPersonAccess principalId={person.id} username={person.username} grant={sewGrant} onChanged={refresh} />
+          {person.tiedTo ? <ResetPanel person={person} onReset={canReset ? () => onDialog('link') : null} /> : null}
+          <SignInCard
+            person={person}
+            grants={grants}
+            mine={mine}
+            roles={roles}
+            apps={apps}
+            loadApps={loadApps}
+            reload={reload}
+            refresh={refresh}
+            writes={writes}
+          />
+          {grants.data ? <SewPersonAccess principalId={person.id} username={person.username} grant={sewGrant} onChanged={refresh} /> : null}
           <NotedCard person={person} grants={mine} refresh={refresh} writes={writes} />
         </>
       ) : (
@@ -613,11 +898,11 @@ function PersonDetail({
 /**
  * agent-app-users §5.5: a person an agent set up is tied to that agent's
  * workspace. When you gave them more, the extra waits until they choose their
- * own password, through the App or the owner's Reset password (a one-time link,
+ * own password, through the App or the owner's reset link (a one-time link,
  * or mailed to an address you give). The stored email is never used for the
  * owner's reset: an agent could have chosen it. Nothing for an untied person.
- * `onReset` opens the Reset password sheet (the owner, or an Admin for someone
- * who only uses Apps; null hides it).
+ * `onReset` opens Send a reset link (the owner, or an Admin for someone who
+ * only uses Apps; null hides it).
  */
 export function ResetPanel({ person, onReset }: { person: PersonRow; onReset: (() => void) | null }): React.JSX.Element | null {
   if (!person.tiedTo) return null
@@ -636,7 +921,7 @@ export function ResetPanel({ person, onReset }: { person: PersonRow; onReset: ((
           </>
         }
       >
-        {onReset ? <Button onClick={onReset}>Reset password…</Button> : null}
+        {onReset ? <Button onClick={onReset}>Send a reset link…</Button> : null}
       </SettingRow>
     </SettingsGroup>
   )
@@ -645,34 +930,40 @@ export function ResetPanel({ person, onReset }: { person: PersonRow; onReset: ((
 type Writes = ReturnType<typeof useRowWrites>
 
 /** Where they can sign in: this server's K2 page, then each App, each with
- *  the role that sets which agents they reach. */
+ *  its role (changed in place, saved at once), on/off, and Remove. */
 function SignInCard({
   person,
   grants,
+  mine,
   roles,
   apps,
-  appsError,
   loadApps,
+  reload,
   refresh,
   writes,
 }: {
   person: PersonRow
-  grants: GrantRow[]
-  roles: RoleRow[]
-  apps: AppOption[] | null
-  appsError: string | null
+  grants: Part<GrantRow[]>
+  mine: GrantRow[]
+  roles: Part<RoleRow[]>
+  apps: Part<AppsData>
   loadApps: () => Promise<void>
+  reload: (part: PartName) => Promise<void>
   refresh: () => Promise<void>
   writes: Writes
 }): React.JSX.Element {
   const [adding, setAdding] = useState(false)
   const [pickApp, setPickApp] = useState('')
   const [pickRole, setPickRole] = useState('')
-  const host = grants.find((g) => g.kind === 'app' && g.targetId === HOST_APP)
-  const appGrants = grants.filter((g) => g.kind === 'app' && g.targetId !== HOST_APP)
-  const roleOf = (id: string | null): RoleRow | null => (id ? roles.find((r) => r.id === id) ?? null : null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const roleRows = roles.data ?? []
+  const host = mine.find((g) => g.kind === 'app' && g.targetId === HOST_APP)
+  const appGrants = mine.filter((g) => g.kind === 'app' && g.targetId !== HOST_APP)
+  const roleOf = (id: string | null): RoleRow | null => (id ? roleRows.find((r) => r.id === id) ?? null : null)
   const hostRole = roleOf(host?.roleId ?? person.roleId)
   const first = person.fullName?.split(' ')[0] ?? person.username
+  const name = (id: string): string => nameFor(id, apps) ?? 'Loading…'
+  const said = (text: string): void => setNotice(text)
 
   const setHost = async (on: boolean): Promise<void> => {
     if (!on) {
@@ -684,24 +975,38 @@ function SignInCard({
       })
       if (!ok) return
     }
+    setNotice(null)
     if (await writes.run('host', () => daemonCliPost(primaryScope(), 'skin/grants/host', { username: person.username, present: on }))) await refresh()
   }
   const setEnabled = async (grant: GrantRow, on: boolean): Promise<void> => {
+    setNotice(null)
     if (await writes.run(grant.id, () => daemonCliPost(primaryScope(), 'skin/grants/enabled', { id: grant.id, enabled: on }))) await refresh()
   }
+  const setRole = async (grant: GrantRow, role: string): Promise<void> => {
+    if (role === grant.roleId) return
+    setNotice(null)
+    if (await writes.run(grant.id, () => daemonCliPost(primaryScope(), 'skin/grants/role', { id: grant.id, role }))) await refresh()
+  }
   const remove = async (grant: GrantRow): Promise<void> => {
-    const name = appName(grant.targetId, apps)
+    const app = name(grant.targetId)
     const ok = await useConfirmDialogStore.getState().confirm({
-      title: `Remove ${person.username}’s access to ${name}?`,
-      message: `${person.username} is signed out of ${name} and loses the role you gave them there. You can give it back later.`,
+      title: `Remove ${person.username}’s access to ${app}?`,
+      message: `${person.username} is signed out of ${app} and loses the role you gave them there. You can give it back later.`,
       confirmLabel: 'Remove access',
       destructive: true,
     })
     if (!ok) return
-    if (await writes.run('apps', () => daemonCliPost(primaryScope(), 'skin/grants/delete', { id: grant.id }))) await refresh()
+    setNotice(null)
+    if (await writes.run('apps', () => daemonCliPost(primaryScope(), 'skin/grants/delete', { id: grant.id }))) {
+      said(`${person.username} can no longer sign in to ${app}.`)
+      await refresh()
+    }
   }
   const add = async (): Promise<void> => {
     if (!person.id || !pickApp || !pickRole) return
+    const app = name(pickApp)
+    const role = roleOf(pickRole)?.name
+    setNotice(null)
     const done = await writes.run('apps', () =>
       daemonCliPost(primaryScope(), 'skin/grants', { subjectKind: 'principal', subjectId: person.id, kind: 'app', targetId: pickApp, roleId: pickRole }),
     )
@@ -709,18 +1014,48 @@ function SignInCard({
       setAdding(false)
       setPickApp('')
       setPickRole('')
+      said(`${person.username} can now sign in to ${app}${role ? ` as ${role}` : ''}.`)
       await refresh()
     }
   }
 
   const openForm = (): void => {
     setAdding(true)
+    setNotice(null)
     void loadApps()
   }
-  const free = (apps ?? []).filter((a) => !appGrants.some((g) => g.targetId === a.id))
-  const roleChoices = roles
-    .filter((r) => !r.appId || !pickApp || r.appId === pickApp)
-    .map((r) => ({ value: r.id, label: roleLabel(r, apps) }))
+  const appList: AppOption[] = apps.data?.apps ?? []
+  const free = appList.filter((a) => !appGrants.some((g) => g.targetId === a.id))
+  const pickRoles = pickApp ? rolesFor(pickApp, roleRows) : []
+  const roleOptions = (app: string): { value: string; label: string }[] => rolesFor(app, roleRows).map((r) => ({ value: r.id, label: r.name }))
+
+  /** The role picker on a row: saves as soon as it's changed. */
+  const rolePicker = (grant: GrantRow, label: string): React.ReactNode => (
+    <SettingDropdown
+      ariaLabel={`Role in ${label} for ${person.username}`}
+      value={grant.roleId ?? ''}
+      placeholder={roles.status === 'error' ? 'Roles didn’t load' : roles.data ? 'No role' : 'Loading…'}
+      disabled={!roles.data || writes.busy === grant.id}
+      options={roleOptions(grant.targetId)}
+      onChange={(v) => void setRole(grant, v)}
+    />
+  )
+
+  const body = !grants.data ? (
+    grants.status === 'error' ? (
+      <SettingsLoadState
+        kind="error"
+        title={`Couldn’t load what ${first} can use`}
+        detail={grants.error}
+        testId="person-grants-error"
+        action={<Button onClick={() => void reload('grants')}>Try again</Button>}
+      >
+        Nothing has changed.
+      </SettingsLoadState>
+    ) : (
+      <SettingsLoadState kind="loading" title={`Loading what ${first} can use…`} testId="person-grants-loading" />
+    )
+  ) : null
 
   return (
     <SettingsGroup
@@ -728,17 +1063,31 @@ function SignInCard({
       hint={`Where ${first} can sign in, and the role that sets which agents they reach there.`}
       card
       testId="person-sign-in"
+      state={body}
       action={
         <span className="flex items-center gap-2">
           <SaveNote state={writes.at('apps')} />
           {!adding ? (
-            <Button onClick={openForm} disabled={!person.id}>
-              Add an App
+            <Button onClick={openForm} disabled={!person.id || !grants.data}>
+              Give access to an App
             </Button>
           ) : null}
         </span>
       }
     >
+      {notice ? (
+        <p role="status" data-testid="person-sign-in-notice" className="px-4 py-2.5 type-hint text-[var(--color-status-ok-soft)]">
+          {notice}
+        </p>
+      ) : null}
+      {roles.status === 'error' ? (
+        <SettingRow
+          label="Roles didn’t load"
+          hint={`Each App is listed, but its role can’t be shown or changed until they load. The server said: ${(roles.error ?? '').replace(/[.\s]+$/, '')}.`}
+        >
+          <Button onClick={() => void reload('roles')}>Try again</Button>
+        </SettingRow>
+      ) : null}
       <SettingRow
         label={HOST_LABEL}
         hint={host ? `Signs in to this server’s own K2 page. ${reachWords(hostRole, person.defaultRoomHandles)}` : 'Off. They can’t sign in to this server’s own K2 page.'}
@@ -754,24 +1103,25 @@ function SignInCard({
         />
       </SettingRow>
       {appGrants.map((grant) => {
-        const name = appName(grant.targetId, apps)
+        const label = name(grant.targetId)
         return (
           <SettingRow
             key={grant.id}
-            label={name}
-            hint={grant.enabled ? reachWords(roleOf(grant.roleId)) : `Off. ${reachWords(roleOf(grant.roleId)).replace(/\.$/, '')} when turned on.`}
+            label={label}
+            hint={grant.enabled ? reachWords(roleOf(grant.roleId), [], false) : 'Off. They can’t sign in to it until you turn it back on.'}
             below={<SaveError state={writes.at(grant.id)} />}
             testId={`person-app-${grant.targetId}`}
           >
             <SaveNote state={writes.at(grant.id)} />
+            {rolePicker(grant, label)}
             {/* Before the switch, so every switch in the card shares one edge. */}
             <OverflowMenu
-              label={`More actions for ${name}`}
+              label={`More actions for ${label}`}
               items={[{ id: 'remove', label: 'Remove access…', danger: true, onSelect: () => void remove(grant) }]}
             />
             <Toggle
               checked={grant.enabled}
-              aria-label={`${name} for ${person.username}`}
+              aria-label={`${label} for ${person.username}`}
               disabled={writes.busy === grant.id}
               onChange={(on) => void setEnabled(grant, on)}
             />
@@ -779,7 +1129,7 @@ function SignInCard({
         )
       })}
       {appGrants.length === 0 && !adding ? (
-        <SettingRow label="No Apps yet" hint={`Add an App to let ${first} sign in to it.`}>
+        <SettingRow label="No Apps yet" hint={`Give ${first} access to an App to let them sign in to it.`}>
           {null}
         </SettingRow>
       ) : null}
@@ -787,36 +1137,45 @@ function SignInCard({
         <div data-testid="person-add-app">
           <SettingRow
             label="App"
-            hint={appsError ? undefined : apps && free.length === 0 ? 'Every App on this server is already listed above.' : 'Published Apps on this server.'}
-            below={appsError ? <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">Couldn’t list the Apps: {appsError.replace(/[.\s]+$/, '')}. Try again in a moment.</p> : undefined}
+            hint={apps.status === 'error' ? undefined : apps.data && free.length === 0 ? `${first} can already use every App on this server.` : 'The Apps published on this server.'}
+            below={
+              apps.status === 'error' ? (
+                <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
+                  Couldn’t list the Apps: {(apps.error ?? '').replace(/[.\s]+$/, '')}.{' '}
+                  <button type="button" className="k2-focus underline cursor-pointer" onClick={() => void reload('apps')}>
+                    Try again
+                  </button>
+                </p>
+              ) : undefined
+            }
             field
           >
             <SettingDropdown
               ariaLabel="App to add"
               value={pickApp}
-              placeholder={apps ? 'Choose an App' : 'Loading Apps…'}
-              disabled={!apps || free.length === 0}
+              placeholder={apps.data ? 'Choose an App' : 'Loading Apps…'}
+              disabled={!apps.data || free.length === 0}
               fullWidth
               options={free.map((a) => ({ value: a.id, label: a.name }))}
               onChange={(v) => {
                 setPickApp(v)
-                const role = roleOf(pickRole)
-                if (role?.appId && role.appId !== v) setPickRole('')
+                // The App's own role first; any role still fits.
+                setPickRole(rolesFor(v, roleRows)[0]?.id ?? '')
               }}
             />
           </SettingRow>
           <SettingRow
             label="Role"
-            hint={roles.length ? 'Sets which agents they reach in this App.' : 'No roles yet. Make one in Settings → Apps first.'}
+            hint={roleRows.length ? 'Sets which agents they reach in this App.' : 'No roles yet. Make one in Settings → Apps first.'}
             field
           >
             <SettingDropdown
               ariaLabel="Role in the App"
               value={pickRole}
-              placeholder="Choose a role"
-              disabled={roleChoices.length === 0}
+              placeholder={pickApp ? 'Choose a role' : 'Choose an App first'}
+              disabled={pickRoles.length === 0}
               fullWidth
-              options={roleChoices}
+              options={pickRoles.map((r) => ({ value: r.id, label: r.name }))}
               onChange={setPickRole}
             />
           </SettingRow>
@@ -825,7 +1184,7 @@ function SignInCard({
               Cancel
             </Button>
             <Button variant="accent" disabled={!pickApp || !pickRole || writes.busy === 'apps'} onClick={() => void add()}>
-              {writes.busy === 'apps' ? 'Adding…' : 'Add App'}
+              {writes.busy === 'apps' ? 'Giving access…' : 'Give access'}
             </Button>
           </div>
         </div>
@@ -898,7 +1257,7 @@ function AccountTab({
   canReset: boolean
   refresh: () => Promise<void>
   writes: Writes
-  onDialog: (kind: 'reset' | 'set') => void
+  onDialog: (kind: 'reset' | 'link') => void
   onRemoved: (username: string) => void
 }): React.JSX.Element {
   const [draft, setDraft] = useState(person.fullName ?? '')
@@ -988,14 +1347,17 @@ function AccountTab({
               <SaveNote state={writes.at('unlock')} />
             </SettingRow>
           ) : null}
-          <SettingRow label="Reset password" hint="Send them a link to choose a new one, or get a one-time link to pass on.">
+          <SettingRow label="Reset password" hint="Make a new password, or type one, and send it to them. Signs them out everywhere.">
             <Button disabled={!canReset} onClick={() => onDialog('reset')}>
               Reset password…
             </Button>
           </SettingRow>
-          <SettingRow label="Set a password" hint="Type or generate one and give it to them yourself. Signs them out everywhere.">
-            <Button disabled={!canReset} onClick={() => onDialog('set')}>
-              Set password…
+          <SettingRow
+            label="Send a reset link"
+            hint="They choose their own password from a one-time link. This also lifts an agent’s hold on them."
+          >
+            <Button disabled={!canReset} onClick={() => onDialog('link')}>
+              Send a reset link…
             </Button>
           </SettingRow>
         </SettingsGroup>

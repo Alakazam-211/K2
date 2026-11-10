@@ -1,26 +1,29 @@
 // Settings → User Access (0.46.6): the App users list's per-person password
-// actions and the Add user sheet. Thin client: each action is one daemon
+// actions and the Add person sheet. Thin client: each action is one daemon
 // route, and the daemon decides who may and says why not.
 //
-// - Reset password → POST skin/users/reset-link (the owner's reset): `code`
-//   for a one-time link shown here, or `to` (+ `from`) to mail it. Using it
-//   ends the person's sessions and drops an agent's tie.
-// - Set password → POST skin/users/password: typed, or `generate: true`
-//   (the daemon makes it and returns it once). Ends their sessions.
+// - Reset password → POST skin/users/password: made by the daemon
+//   (`generate: true`, returned once) or typed. Ends their sessions. The
+//   dialog is the one Admin Access uses (AccessDialogs.tsx).
+// - Send a reset link → POST skin/users/reset-link (the owner's reset):
+//   `code` for a one-time link shown here, or `to` (+ `from`) to mail it.
+//   Using it ends the person's sessions and drops an agent's tie.
 // - Unlock → POST skin/users/unlock (PeopleSection calls it from the row).
-// - Add user → POST skin/users (typed or `generate: true`) + full name, or
+// - Add person → POST skin/users (typed or `generate: true`) + full name, or
 //   POST skin/users/invite (a link to set their own; needs an email and an
 //   App).
 //
 // A one-time link or password lives only in the open sheet's state: closing
 // the sheet unmounts it and drops it. Never logged, never sent to a Thread.
 
-import React, { useEffect, useId, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { daemonErrorText } from '@/lib/daemon-error'
-import { Button, DialogFrame, DialogScrim, Input, Radio } from '@/components/ui'
+import { Button, Input, Radio } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
-import { settingMenuOpen } from '../settings-esc'
+import { AccessSheet, FailedNote, MUST_CHANGE_NOTE, PasswordResetDialog } from './AccessDialogs'
 import type { PersonRow } from './user-access-api'
+
+export { MUST_CHANGE_NOTE }
 
 /** POST one `/cli/*` route on the window's server (PeopleSection passes it). */
 export type DaemonPost = (route: string, body: Record<string, unknown>) => Promise<unknown>
@@ -48,59 +51,74 @@ export function expiryWords(expiresAt: number | null, ttlSecs: number | null): s
   return null
 }
 
-function Sheet({
-  title,
-  onClose,
-  children,
-  testId,
-}: {
-  title: string
-  onClose: () => void
-  children: React.ReactNode
-  testId: string
-}): React.JSX.Element {
-  const titleId = useId()
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        // An open K2 menu (App, Role) closes first; the dialog stays.
-        if (settingMenuOpen()) return
-        e.preventDefault()
-        e.stopPropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+/** The page's sheets: the shared Access dialog frame. */
+function Sheet({ title, onClose, children, testId }: { title: string; onClose: () => void; children: React.ReactNode; testId: string }): React.JSX.Element {
   return (
-    <>
-      <DialogScrim onMouseDown={onClose} />
-      <DialogFrame
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        data-testid={testId}
-        className="w-[min(30rem,calc(100vw-2.5rem))] max-h-[calc(100vh-3rem)] flex flex-col"
-      >
-        {/* The frame stays still (its chamfer); the content scrolls inside. */}
-        <div className="min-h-0 overflow-y-auto p-4 space-y-3">
-          <h3 id={titleId} className="type-heading text-[var(--color-text-primary)]">
-            {title}
-          </h3>
-          {children}
-        </div>
-      </DialogFrame>
-    </>
+    <AccessSheet title={title} onClose={onClose} testId={testId}>
+      {children}
+    </AccessSheet>
   )
 }
 
-/**
- * A password someone else set is temporary (0.46.6 must-change): said
- * wherever Settings shows or confirms one, when the daemon says so
- * (`passwordMustChange` on the reply).
- */
-export const MUST_CHANGE_NOTE = 'It’s temporary: the next time they sign in, K2 asks them to choose their own.'
+/** An App user's password can be anything up to 256 characters. */
+const APP_PASSWORD_MAX = 256
+
+/** Reset an App user's password: the shared dialog, made by the daemon
+ *  (shown once) or typed. */
+export function AppUserResetDialog({
+  person,
+  onClose,
+  onDone,
+  onLink,
+  post,
+}: {
+  person: PersonRow
+  onClose: () => void
+  onDone: () => void
+  /** Switch to Send a reset link (the only reset that lifts an agent's hold). */
+  onLink: () => void
+  post: DaemonPost
+}): React.JSX.Element {
+  const who = person.username
+  return (
+    <PasswordResetDialog
+      who={who}
+      intro={`${who}’s current password stops working right away, and they’re signed out of every App and device.`}
+      rules={`Any password up to ${APP_PASSWORD_MAX} characters.`}
+      problem={(pw) => (new TextEncoder().encode(pw.trim()).length > APP_PASSWORD_MAX ? `Use at most ${APP_PASSWORD_MAX} characters.` : null)}
+      makeHint={`K2 shows it once, after the reset, for you to copy and send to ${who}.`}
+      signIn="They sign in to their Apps with it."
+      extra={
+        person.tiedTo ? (
+          <div className="space-y-2" data-testid="reset-tied-note">
+            <p className={MUTED}>
+              The {person.tiedTo} agent set {who} up, so they reach only {person.tiedTo} until they choose their own
+              password. A new password from you doesn’t lift that; a reset link they use does.
+            </p>
+            <Button onClick={onLink}>Send a reset link instead…</Button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <p className={MUTED}>Rather they choose it themselves? Send them a link instead.</p>
+            <Button variant="quiet" className="flex-shrink-0" onClick={onLink}>
+              Send a reset link…
+            </Button>
+          </div>
+        )
+      }
+      onClose={onClose}
+      onDone={onDone}
+      submit={async (typed) => {
+        try {
+          const r = rec(await post('skin/users/password', typed == null ? { username: who, generate: true } : { username: who, password: typed }))
+          return { password: typed == null ? str(r.generatedPassword) : typed, temporary: r.passwordMustChange === true }
+        } catch (e) {
+          throw new Error(daemonErrorText(e))
+        }
+      }}
+    />
+  )
+}
 
 /** A secret shown once: the value, Copy, and how long it lasts. */
 export function OneTimeSecret({
@@ -144,13 +162,10 @@ export function OneTimeSecret({
   )
 }
 
-function ErrorLine({ text }: { text: string | null }): React.JSX.Element | null {
+/** A failed write in a sheet: what failed, what now, the server's reason. */
+function ErrorLine({ text, what, next }: { text: string | null; what: string; next: string }): React.JSX.Element | null {
   if (!text) return null
-  return (
-    <p role="alert" className="type-hint leading-relaxed text-[var(--color-status-error-soft)]">
-      {text}
-    </p>
-  )
+  return <FailedNote what={what} detail={text} next={next} />
 }
 
 function tieLine(person: PersonRow): string | null {
@@ -166,8 +181,8 @@ type ResetResult =
   | { kind: 'sent'; to: string; from: string | null; expiry: string | null }
   | { kind: 'held'; hint: string }
 
-/** Reset password: a one-time link for you to pass on, or the link by email. */
-export function ResetPasswordDialog({
+/** Send a reset link: a one-time link for you to pass on, or the link by email. */
+export function ResetLinkDialog({
   person,
   onClose,
   post,
@@ -212,7 +227,7 @@ export function ResetPasswordDialog({
 
   const tie = tieLine(person)
   return (
-    <Sheet title={`Reset password for ${person.username}`} onClose={onClose} testId="reset-password-dialog">
+    <Sheet title={`Send ${person.username} a reset link`} onClose={onClose} testId="reset-link-dialog">
       {result ? (
         <>
           {result.kind === 'link' ? (
@@ -238,7 +253,7 @@ export function ResetPasswordDialog({
             <p className={NOTE}>{result.hint}</p>
           )}
           <div className="flex justify-end">
-            <Button variant="accent" onClick={onClose}>
+            <Button variant="accent" size="md" onClick={onClose} autoFocus>
               Done
             </Button>
           </div>
@@ -305,18 +320,23 @@ export function ResetPasswordDialog({
               </label>
             </div>
           ) : null}
-          <ErrorLine text={error} />
-          <div className="flex justify-end gap-2">
-            <Button variant="quiet" onClick={onClose}>
+          <ErrorLine
+            text={error}
+            what={mode === 'link' ? 'Couldn’t make a reset link.' : 'Couldn’t send the reset link.'}
+            next="Their current password still works. Check the details, then try again."
+          />
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
               Cancel
             </Button>
             {mode === 'link' ? (
-              <Button variant="accent" disabled={busy} onClick={() => void run({ code: true })}>
+              <Button variant="accent" size="md" disabled={busy} onClick={() => void run({ code: true })}>
                 Get link
               </Button>
             ) : (
               <Button
                 variant="accent"
+                size="md"
                 disabled={busy || !to.trim()}
                 onClick={() => void run({ to: to.trim(), ...(from.trim() ? { from: from.trim() } : {}) })}
               >
@@ -324,118 +344,6 @@ export function ResetPasswordDialog({
               </Button>
             )}
           </div>
-        </>
-      )}
-    </Sheet>
-  )
-}
-
-/** Set password: typed (show/hide) or generated by K2, shown once. */
-export function SetPasswordDialog({
-  person,
-  onClose,
-  onReset,
-  post,
-}: {
-  person: PersonRow
-  onClose: () => void
-  post: DaemonPost
-  /** Switch to Reset password (for a person an agent set up). */
-  onReset: () => void
-}): React.JSX.Element {
-  const [password, setPassword] = useState('')
-  const [shown, setShown] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [done, setDone] = useState<{ generated: string | null; mustChange: boolean } | null>(null)
-
-  const submit = async (generate: boolean): Promise<void> => {
-    setBusy(true)
-    setError(null)
-    try {
-      const body = generate ? { username: person.username, generate: true } : { username: person.username, password }
-      const r = rec(await post('skin/users/password', body))
-      setPassword('')
-      setDone({ generated: generate ? str(r.generatedPassword) : null, mustChange: r.passwordMustChange === true })
-    } catch (e) {
-      setError(daemonErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Sheet title={`Set password for ${person.username}`} onClose={onClose} testId="set-password-dialog">
-      {done ? (
-        <>
-          {done.generated ? (
-            <OneTimeSecret
-              label={`New password for ${person.username}. Give it to them yourself. They’re signed out of every App and device.${done.mustChange ? ` ${MUST_CHANGE_NOTE}` : ''}`}
-              value={done.generated}
-              copyLabel="Copy password"
-            />
-          ) : (
-            <p className={NOTE}>
-              Password set. Give it to {person.username} yourself. They’re signed out of every App and device.
-              {done.mustChange ? ` ${MUST_CHANGE_NOTE}` : ''}
-            </p>
-          )}
-          <div className="flex justify-end">
-            <Button variant="accent" onClick={onClose}>
-              Done
-            </Button>
-          </div>
-        </>
-      ) : (
-        <>
-          <p className={NOTE}>
-            Setting a password signs {person.username} out everywhere: every App and every device. It doesn’t
-            clear a lock from wrong passwords; use Unlock for that.
-          </p>
-          {person.tiedTo ? (
-            <p className={NOTE}>
-              The {person.tiedTo} agent set {person.username} up, so they reach only {person.tiedTo}. Setting a password
-              here doesn’t lift that limit; only a reset link they use does.
-            </p>
-          ) : null}
-          {person.tiedTo ? (
-            <div>
-              <Button onClick={onReset}>Reset password instead…</Button>
-            </div>
-          ) : null}
-          <form
-            className="space-y-2"
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (password.trim()) void submit(false)
-            }}
-          >
-            <div className="flex items-center gap-2">
-              <Input
-                type={shown ? 'text' : 'password'}
-                className={FIELD_CLS}
-                aria-label={`New password for ${person.username}`}
-                autoComplete="new-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-              <Button variant="quiet" className="flex-shrink-0" onClick={() => setShown((s) => !s)}>
-                {shown ? 'Hide' : 'Show'}
-              </Button>
-            </div>
-            <ErrorLine text={error} />
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button variant="quiet" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button disabled={busy} onClick={() => void submit(true)}>
-                Generate a password and set it
-              </Button>
-              <Button type="submit" variant="accent" disabled={busy || !password.trim()}>
-                Set password and sign them out
-              </Button>
-            </div>
-          </form>
         </>
       )}
     </Sheet>
@@ -678,12 +586,12 @@ export function AddUserDialog({
             </label>
           </div>
         ) : null}
-        <ErrorLine text={error} />
-        <div className="flex justify-end gap-2">
-          <Button variant="quiet" onClick={onClose}>
+        <ErrorLine text={error} what="Couldn’t add this person." next="Nothing was added. Check the details above, then try again." />
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button type="submit" variant="accent" disabled={!ready || busy}>
+          <Button type="submit" variant="accent" size="md" disabled={!ready || busy}>
             {mode === 'invite' ? 'Add and send link' : 'Add person'}
           </Button>
         </div>
@@ -710,7 +618,7 @@ export function AddedUserDialog({ added, onClose }: { added: AddedUser; onClose:
       ) : null}
       {added.note ? <p className={NOTE}>{added.note}</p> : null}
       <div className="flex justify-end">
-        <Button variant="accent" onClick={onClose}>
+        <Button variant="accent" size="md" onClick={onClose} autoFocus>
           Done
         </Button>
       </div>

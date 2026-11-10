@@ -1,19 +1,29 @@
 // Settings → Admin Access dialogs: Add a person, Reset password, and Name
-// and picture. Each is the shared Dialog (scrim + frame) with labelled
-// full-width fields, the server's reason when a write fails, and a done
-// step that says what happened and what the person does next. A password
-// K2 makes is shown once, in the open dialog only: closing drops it.
+// and picture. The frame, fields and the Reset password dialog itself are
+// shared with User Access (AccessDialogs.tsx), so the two pages can't
+// drift. A password K2 makes is shown once, in the open dialog only:
+// closing drops it.
 
-import React, { useEffect, useId, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { Button, Callout, Checkbox, DialogFrame, DialogScrim, Input, Radio, Surface } from '@/components/ui'
-import { useDialogEscape } from '../settings-esc'
+import React, { useEffect, useId, useState } from 'react'
+import { Button, Callout, Checkbox, Input, Radio, Surface } from '@/components/ui'
 import { SETTING_ROW_LABEL } from '../controls/SettingControls'
-import { MUST_CHANGE_NOTE } from './AppUserDialogs'
 import { PERSON_NAME_MAX, realName } from '@/lib/person-name'
 import { PresenceChip } from '@/components/Presence/PresenceChip'
 import { PersonPictureControl } from '@/components/Presence/PersonPictureControl'
 import { primaryScope } from '@/kessel/server-scope'
+import {
+  AccessSheet as AdminSheet,
+  ConfirmSheet,
+  CopyLine,
+  DIALOG_FIELD as FIELD,
+  DIALOG_LABEL as LABEL,
+  DIALOG_MUTED as MUTED,
+  FailedNote,
+  Field,
+  MUST_CHANGE_NOTE,
+  PasswordChoice,
+  PasswordResetDialog,
+} from './AccessDialogs'
 import {
   addUserBody,
   splitShareList,
@@ -26,10 +36,13 @@ import {
   errText,
   makePassword,
   passwordProblem,
+  policyWords,
   userPost,
   usernameProblem,
   type PasswordPolicy,
 } from './admin-access-api'
+
+export { ConfirmSheet }
 
 /** What each role may do, in plain words (the add form and the role menu). */
 export const ROLE_HELP: Record<K2Role, string> = {
@@ -39,210 +52,6 @@ export const ROLE_HELP: Record<K2Role, string> = {
   voice_chat: 'Can join voice rooms and talk only with the agents and Gardens you share. Nothing else.',
 }
 
-const LABEL = 'block type-row text-[var(--color-text-primary)] mb-1'
-const FIELD = 'w-full type-control'
-const MUTED = 'type-hint text-[var(--color-text-secondary)] leading-relaxed'
-
-/** The shared Dialog with a title, a body that scrolls, and Esc to close
- *  (off while a write is in flight). */
-function AdminSheet({
-  title,
-  intro,
-  onClose,
-  busy = false,
-  testId,
-  children,
-}: {
-  title: string
-  intro?: React.ReactNode
-  onClose: () => void
-  busy?: boolean
-  testId: string
-  children: React.ReactNode
-}): React.JSX.Element {
-  const titleId = useId()
-  useDialogEscape(onClose, !busy)
-  // Portalled to <body>, so the scrim covers the whole window, not just the
-  // Settings panel it opens from. Every dialog on this page is one width
-  // with its top edge in one place, whatever its height: a tall form and a
-  // short confirmation open at the same spot, and a form that grows (an
-  // error, the done step) grows downward.
-  return createPortal(
-    <>
-      <DialogScrim />
-      <DialogFrame
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        data-testid={testId}
-        placement="top"
-        className="w-[min(36rem,calc(100vw-2.5rem))] max-h-[calc(100vh-var(--dialog-top)-1rem)] flex flex-col"
-      >
-        <div className="min-h-0 overflow-y-auto p-5 space-y-4">
-          <div>
-            <h3 id={titleId} className="type-heading text-[var(--color-text-primary)]">
-              {title}
-            </h3>
-            {intro ? <p className={`${MUTED} mt-1`}>{intro}</p> : null}
-          </div>
-          {children}
-        </div>
-      </DialogFrame>
-    </>,
-    document.body,
-  )
-}
-
-/** A labelled field with its hint or problem under it. */
-function Field({
-  label,
-  hint,
-  problem,
-  children,
-  htmlFor,
-}: {
-  label: string
-  hint?: React.ReactNode
-  problem?: string | null
-  children: React.ReactNode
-  htmlFor: string
-}): React.JSX.Element {
-  return (
-    <div>
-      <label htmlFor={htmlFor} className={LABEL}>
-        {label}
-      </label>
-      {children}
-      {problem ? (
-        <p className="type-hint text-[var(--color-status-error-soft)] mt-1" data-field-problem="">
-          {problem}
-        </p>
-      ) : hint ? (
-        <p className={`${MUTED} mt-1`}>{hint}</p>
-      ) : null}
-    </div>
-  )
-}
-
-/** A failed write: what failed, what to do now, then the server's own
- *  reason, quietly. */
-function FailedNote({ what, detail, next }: { what: string; detail: string; next: string }): React.JSX.Element {
-  // At the foot of a long form: bring it into view so the failure is seen.
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    ref.current?.scrollIntoView?.({ block: 'nearest' })
-  }, [detail])
-  return (
-    <div ref={ref}>
-      <Callout tone="error" role="alert" className="type-hint space-y-0.5" data-testid="dialog-error">
-        <p className="font-medium">{what}</p>
-        <p>{next}</p>
-        <p>The server said: {detail.trim().replace(/[.\s]+$/, '')}.</p>
-      </Callout>
-    </div>
-  )
-}
-
-/** A value to hand over (address, username, password) with Copy. */
-function CopyLine({ label, value, mono = true, testId }: { label: string; value: string; mono?: boolean; testId?: string }): React.JSX.Element {
-  const [copy, setCopy] = useState<'idle' | 'done' | 'failed'>('idle')
-  const doCopy = (): void => {
-    const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
-    if (!clip) return setCopy('failed')
-    clip.writeText(value).then(
-      () => setCopy('done'),
-      () => setCopy('failed'),
-    )
-  }
-  return (
-    <div className="flex items-center justify-between gap-4 px-4 py-2.5">
-      <div className="min-w-0">
-        <p className="type-hint text-[var(--color-text-secondary)]">{label}</p>
-        <p data-testid={testId} className={`type-row ${mono ? 'font-mono' : ''} break-all select-all text-[var(--color-text-primary)]`}>
-          {value}
-        </p>
-        {copy === 'failed' ? <p className={MUTED}>Couldn’t copy. Select the text and copy it yourself.</p> : null}
-      </div>
-      <Button className="flex-shrink-0" aria-label={`Copy ${label.toLowerCase()}`} onClick={doCopy}>
-        {copy === 'done' ? 'Copied' : 'Copy'}
-      </Button>
-    </div>
-  )
-}
-
-/** Make one / Type one, and the typed field with Show. */
-function PasswordChoice({
-  name,
-  makeHint,
-  mode,
-  setMode,
-  password,
-  setPassword,
-  policy,
-  problem,
-}: {
-  name: string
-  /** What happens to a password K2 makes, in this dialog's words. */
-  makeHint: string
-  mode: 'make' | 'type'
-  setMode: (m: 'make' | 'type') => void
-  password: string
-  setPassword: (v: string) => void
-  policy: PasswordPolicy
-  problem: string | null
-}): React.JSX.Element {
-  const [shown, setShown] = useState(false)
-  const id = useId()
-  return (
-    <fieldset className="space-y-2">
-      <legend className={LABEL}>Password</legend>
-      <div role="radiogroup" aria-label="How to set the password" className="space-y-2">
-        <label className="flex items-start gap-2 cursor-pointer">
-          <Radio name={name} className="mt-0.5" checked={mode === 'make'} onChange={() => setMode('make')} aria-label="Make one for me" />
-          <span>
-            <span className={SETTING_ROW_LABEL}>Make one for me</span>
-            <span className={`block ${MUTED}`}>{makeHint}</span>
-          </span>
-        </label>
-        <label className="flex items-start gap-2 cursor-pointer">
-          <Radio name={name} className="mt-0.5" checked={mode === 'type'} onChange={() => setMode('type')} aria-label="Type one" />
-          <span>
-            <span className={SETTING_ROW_LABEL}>Type one</span>
-            <span className={`block ${MUTED}`}>
-              At least {policy.minLength} characters
-              {policy.requireNumber ? ', with a number' : ''}
-              {policy.requireUppercase ? ', an uppercase letter' : ''}
-              {policy.requireSpecial ? ', a special character' : ''}.
-            </span>
-          </span>
-        </label>
-      </div>
-      {mode === 'type' ? (
-        <div className="pl-6">
-          <label htmlFor={id} className="sr-only">
-            Password
-          </label>
-          <div className="flex items-center gap-2">
-            <Input
-              id={id}
-              type={shown ? 'text' : 'password'}
-              autoComplete="new-password"
-              className={FIELD}
-              aria-label="Password"
-              aria-invalid={problem ? true : undefined}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <Button variant="quiet" className="flex-shrink-0" onClick={() => setShown((s) => !s)}>
-              {shown ? 'Hide' : 'Show'}
-            </Button>
-          </div>
-          {problem ? <p className="type-hint text-[var(--color-status-error-soft)] mt-1">{problem}</p> : null}
-        </div>
-      ) : null}
-    </fieldset>
-  )
-}
 
 /** What the done step shows after a person is added. */
 interface Added {
@@ -461,7 +270,7 @@ export function AddPersonDialog({
           setMode={setMode}
           password={password}
           setPassword={setPassword}
-          policy={policy}
+          rules={policyWords(policy)}
           problem={pwProblem}
         />
         <label className="flex items-start gap-2 cursor-pointer" data-testid="new-user-temporary">
@@ -489,7 +298,9 @@ export function AddPersonDialog({
   )
 }
 
-/** Reset someone's password: made by K2 (shown once) or typed. */
+
+/** Reset someone's K2 login password: the shared dialog, made by K2 (shown
+ *  once) or typed, against this server's password rules. */
 export function ResetPasswordDialog({
   user,
   policy,
@@ -505,137 +316,29 @@ export function ResetPasswordDialog({
   onDone: () => void
 }): React.JSX.Element {
   const who = user.username
-  const [mode, setMode] = useState<'make' | 'type'>('make')
-  const [password, setPassword] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [done, setDone] = useState<{ password: string | null; temporary: boolean } | null>(null)
-  const pwProblem = mode === 'type' && password ? passwordProblem(password, policy) : null
-  const ready = mode === 'make' || (!!password && !pwProblem)
-
-  const submit = async (): Promise<void> => {
-    if (!ready || busy) return
-    setBusy(true)
-    setError(null)
-    const pw = mode === 'make' ? makePassword(policy) : password
-    try {
-      // No flag: the daemon decides (temporary, except the owner's own
-      // linked login) and says which in its answer.
-      const res = await userPost('/set-password', { username: who, password: pw })
-      if (!res.ok) {
-        setError(await errText(res))
-        return
-      }
-      const temporary = await answeredTemporary(res, false)
-      setPassword('')
-      setDone({ password: mode === 'make' ? pw : null, temporary })
-      onDone()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  if (done) {
-    return (
-      <AdminSheet title={`New password for ${who}`} onClose={onClose} testId="reset-done-dialog">
-        <p className={MUTED} data-testid="reset-password-msg">
-          {done.temporary ? `Password reset for ${who}. ${MUST_CHANGE_NOTE}` : `Password reset for ${who}.`}
-        </p>
-        {done.password ? (
-          <>
-            <Surface chamfer material="tile">
-              <CopyLine label="Password" value={done.password} testId="one-time-secret" />
-            </Surface>
-            <p className={MUTED}>Send it to {who} yourself. K2 won’t show it again: once you close this, it’s gone.</p>
-          </>
-        ) : null}
-        <div className="flex justify-end">
-          <Button variant="accent" size="md" onClick={onClose} autoFocus>
-            Done
-          </Button>
-        </div>
-      </AdminSheet>
-    )
-  }
-
   return (
-    <AdminSheet
-      title={`Reset ${who}’s password`}
+    <PasswordResetDialog
+      who={who}
       intro={
         ownLogin
           ? 'This is your own login. Your current password stops working, and you keep the new one.'
           : `${who}’s current password stops working right away. The new one is temporary: when they next sign in, K2 asks them to choose their own.`
       }
+      rules={policyWords(policy)}
+      problem={(pw) => passwordProblem(pw, policy)}
+      makeHint={`K2 shows it once, after the reset, for you to copy and send to ${who}.`}
+      signIn={`They sign in to this server from their K2 app with it.`}
       onClose={onClose}
-      busy={busy}
-      testId={`reset-form-${who}`}
-    >
-      <form
-        className="space-y-4"
-        onSubmit={(e) => {
-          e.preventDefault()
-          void submit()
-        }}
-      >
-        <PasswordChoice
-          name="reset-password"
-          makeHint={`K2 shows it once, after the reset, for you to copy and send to ${who}.`}
-          mode={mode}
-          setMode={setMode}
-          password={password}
-          setPassword={setPassword}
-          policy={policy}
-          problem={pwProblem}
-        />
-        {error ? <FailedNote what={`Couldn’t reset ${who}’s password.`} detail={error} next={`Their current password still works. Try again in a moment.`} /> : null}
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="accent" size="md" disabled={!ready || busy}>
-            {busy ? 'Resetting…' : 'Reset password'}
-          </Button>
-        </div>
-      </form>
-    </AdminSheet>
-  )
-}
-
-/** A yes/no question before a change (remove someone, make someone an
- *  Owner), in the same frame and place as the page's other dialogs. Cancel
- *  has the focus, so Enter on a destructive question never confirms by
- *  accident. */
-export function ConfirmSheet({
-  title,
-  message,
-  confirmLabel,
-  destructive = false,
-  onConfirm,
-  onCancel,
-  testId,
-}: {
-  title: string
-  message: React.ReactNode
-  confirmLabel: string
-  destructive?: boolean
-  onConfirm: () => void
-  onCancel: () => void
-  testId: string
-}): React.JSX.Element {
-  return (
-    <AdminSheet title={title} onClose={onCancel} testId={testId}>
-      <p className={MUTED}>{message}</p>
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="md" onClick={onCancel} autoFocus>
-          Cancel
-        </Button>
-        <Button variant={destructive ? 'danger-muted' : 'accent'} size="md" onClick={onConfirm}>
-          {confirmLabel}
-        </Button>
-      </div>
-    </AdminSheet>
+      onDone={onDone}
+      submit={async (typed) => {
+        const pw = typed ?? makePassword(policy)
+        // No flag: the daemon decides (temporary, except the owner's own
+        // linked login) and says which in its answer.
+        const res = await userPost('/set-password', { username: who, password: pw })
+        if (!res.ok) throw new Error(await errText(res))
+        return { password: pw, temporary: await answeredTemporary(res, false) }
+      }}
+    />
   )
 }
 

@@ -175,6 +175,7 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/K2ConnectSection.tsx',
   'components/Settings/sections/LocalGrokBotsSection.tsx',
   'components/Settings/sections/PeopleSection.tsx',
+  'components/Settings/sections/user-access-load.ts',
   'components/Settings/sections/ProjectsSection.tsx',
   'components/Settings/sections/RoleSkillEditor.tsx',
   'components/Settings/sections/SkinAccessSection.tsx',

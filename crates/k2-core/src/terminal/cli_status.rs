@@ -1,17 +1,23 @@
 //! Which agent CLIs are installed (`GET /cli/agents/cli-status`).
 //!
 //! Read only: it never installs anything and never touches the network.
-//! For each harness in [`super::ensure_cli::HARNESSES`] it reports:
+//! For each harness K2 can launch ([`launchable_harnesses`]: the built-in
+//! agent presets, `db::BUILT_IN_AGENT_PRESETS`, in launch-bar order) it
+//! reports:
 //!
 //! - `path`: the binary K2 found on the spawn PATH, by the rule
 //!   [`super::ensure_cli::ensure_cli`] uses to decide "already installed";
 //! - `launches`: whether an agent launch would run that same file
 //!   ([`super::daemon_pty::preflight_program`] with the default, empty
 //!   preset env, the resolution every agent spawn makes);
-//! - `version`: what `<path> --version` printed, run with stdin closed,
-//!   the spawn PATH and a [`PROBE_TIMEOUT`] cap;
-//! - `error`: why a binary that exists did not answer `--version`
+//! - `version`: what `<path> <flag>` printed ([`version_flag`], `--version`
+//!   for all but one), run with stdin closed, the spawn PATH and a
+//!   [`PROBE_TIMEOUT`] cap;
+//! - `error`: why a binary that exists did not answer its version flag
 //!   (it exited non-zero, timed out, could not start, or printed nothing).
+//!
+//! A harness with no version flag K2 can rely on is never run: installed,
+//! `version: null`, no error.
 //!
 //! The three states:
 //!
@@ -91,15 +97,50 @@ fn global_cache() -> &'static ProbeCache {
     CACHE.get_or_init(|| ProbeCache::new(CACHE_TTL))
 }
 
-/// Production entry: every harness, on the spawn PATH, with the shared
-/// cache.
+/// Every harness K2 can launch: the program (first word of the command)
+/// of each built-in agent preset, in launch-bar order, once each. The same
+/// table the boot seed and Reset Built-ins write, so the route never
+/// reports a harness K2 can't launch or misses one it can.
+pub fn launchable_harnesses() -> Vec<&'static str> {
+    let mut rows: Vec<_> = crate::db::BUILT_IN_AGENT_PRESETS.iter().collect();
+    rows.sort_by_key(|r| r.4);
+    let mut out: Vec<&'static str> = Vec::new();
+    for r in rows {
+        if let Some(program) = r.2.split_whitespace().next() {
+            if !out.contains(&program) {
+                out.push(program);
+            }
+        }
+    }
+    out
+}
+
+/// The flag that makes `program` print its version and exit, or `None`
+/// when K2 doesn't run it at all. The presets carry no version flag, so
+/// this table is that definition. Every launchable harness answers
+/// `--version` (checked against claude, codex, grok, gemini, cursor-agent,
+/// pi and ollama; opencode, goose, aider, copilot and interpreter document
+/// it) except:
+/// - `hermes`: K2 hasn't confirmed a flag that prints a version and exits
+///   without starting the agent, so it is never probed and reports
+///   installed with `version: null` and no error.
+pub fn version_flag(program: &str) -> Option<&'static str> {
+    match program {
+        "hermes" => None,
+        _ => Some("--version"),
+    }
+}
+
+/// Production entry: every launchable harness, on the spawn PATH, with
+/// the shared cache.
 pub fn cli_status() -> Vec<CliStatus> {
+    let programs = launchable_harnesses();
     let path = super::ensure_cli::spawn_resolve_path();
     let launch = |program: &str| -> Option<PathBuf> {
         super::daemon_pty::preflight_program(program, &HashMap::new()).ok()
     };
     cli_status_with(
-        super::ensure_cli::HARNESSES,
+        &programs,
         &path,
         &launch,
         global_cache(),
@@ -161,10 +202,13 @@ fn one(
         };
     };
     let launches = launch(program).is_some_and(|l| same_file(&l, &found));
-    let answer = probe_cached(cache, &found, search_path, timeout, guard);
-    let (version, error) = match answer {
-        Ok(v) => (Some(v), None),
-        Err(e) => (None, Some(e)),
+    let (version, error) = match version_flag(program) {
+        // No flag to ask: installed, version unknown, nothing wrong.
+        None => (None, None),
+        Some(flag) => match probe_cached(cache, &found, flag, search_path, timeout, guard) {
+            Ok(v) => (Some(v), None),
+            Err(e) => (None, Some(e)),
+        },
     };
     CliStatus {
         program: program.to_string(),
@@ -189,6 +233,7 @@ fn fingerprint(p: &Path) -> Option<Fingerprint> {
 fn probe_cached(
     cache: &ProbeCache,
     bin: &Path,
+    flag: &str,
     search_path: &str,
     timeout: Duration,
     guard: &GuardEnv,
@@ -205,7 +250,7 @@ fn probe_cached(
             }
         }
     }
-    let answer = probe_version(bin, search_path, timeout, guard);
+    let answer = probe_version(bin, flag, search_path, timeout, guard);
     cache
         .entries
         .lock()
@@ -214,11 +259,12 @@ fn probe_cached(
     answer
 }
 
-/// `<bin> --version` → the version it printed, or a short reason it
-/// didn't. Refused (never started) when the agent spawn guard would
-/// refuse to launch `bin`.
+/// `<bin> <flag>` → the version it printed, or a short reason it didn't.
+/// Refused (never started) when the agent spawn guard would refuse to
+/// launch `bin`.
 fn probe_version(
     bin: &Path,
+    flag: &str,
     search_path: &str,
     timeout: Duration,
     guard: &GuardEnv,
@@ -231,7 +277,7 @@ fn probe_version(
         Err(e) => return Err(format!("not checked: {}", clip(&e))),
     }
     let (prog, args) =
-        super::win_cmd::resolve_spawn(&program, &["--version".to_string()], search_path);
+        super::win_cmd::resolve_spawn(&program, &[flag.to_string()], search_path);
     let mut cmd = crate::bg_proc::command(&prog);
     cmd.args(&args)
         .stdin(Stdio::null())
@@ -254,25 +300,33 @@ fn probe_version(
         let _ = tx.send(child.wait_with_output());
     });
     match rx.recv_timeout(timeout) {
-        Ok(Ok(out)) => read_answer(out.status.success(), out.status.code(), &out.stdout, &out.stderr),
+        Ok(Ok(out)) => {
+            read_answer(flag, out.status.success(), out.status.code(), &out.stdout, &out.stderr)
+        }
         Ok(Err(e)) => Err(format!("could not run: {e}")),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             kill_tree(pid);
-            Err(format!("--version timed out after {}", human(timeout)))
+            Err(format!("{flag} timed out after {}", human(timeout)))
         }
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err("--version: waiter dropped".to_string()),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(format!("{flag}: waiter dropped")),
     }
 }
 
-fn read_answer(ok: bool, code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Result<String, String> {
+fn read_answer(
+    flag: &str,
+    ok: bool,
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<String, String> {
     let out = String::from_utf8_lossy(stdout);
     let err = String::from_utf8_lossy(stderr);
     let first_line = |s: &str| s.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string);
     let line = first_line(&out).or_else(|| first_line(&err));
     if !ok {
         let why = match code {
-            Some(c) => format!("--version exited {c}"),
-            None => "--version was killed by a signal".to_string(),
+            Some(c) => format!("{flag} exited {c}"),
+            None => format!("{flag} was killed by a signal"),
         };
         return Err(match first_line(&err).or(line) {
             Some(l) => clip(&format!("{why}: {l}")),
@@ -281,7 +335,7 @@ fn read_answer(ok: bool, code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Res
     }
     match line {
         Some(l) => Ok(parse_version(&l).unwrap_or_else(|| clip(&l))),
-        None => Err("--version printed nothing".to_string()),
+        None => Err(format!("{flag} printed nothing")),
     }
 }
 
@@ -376,17 +430,17 @@ mod tests {
 
     #[test]
     fn exit_codes_and_empty_output_are_broken() {
-        assert_eq!(read_answer(true, Some(0), b"\n  1.4.0 \n", b""), Ok("1.4.0".to_string()));
-        assert_eq!(read_answer(true, Some(0), b"", b"Mytool 2.1\n"), Ok("2.1".to_string()));
-        assert_eq!(read_answer(true, Some(0), b"dev build\n", b""), Ok("dev build".to_string()));
-        assert_eq!(read_answer(true, Some(0), b"", b""), Err("--version printed nothing".to_string()));
+        assert_eq!(read_answer("--version", true, Some(0), b"\n  1.4.0 \n", b""), Ok("1.4.0".to_string()));
+        assert_eq!(read_answer("--version", true, Some(0), b"", b"Mytool 2.1\n"), Ok("2.1".to_string()));
+        assert_eq!(read_answer("--version", true, Some(0), b"dev build\n", b""), Ok("dev build".to_string()));
+        assert_eq!(read_answer("--version", true, Some(0), b"", b""), Err("--version printed nothing".to_string()));
         assert_eq!(
-            read_answer(false, Some(3), b"", b"node: not found\n"),
+            read_answer("--version", false, Some(3), b"", b"node: not found\n"),
             Err("--version exited 3: node: not found".to_string())
         );
-        assert_eq!(read_answer(false, None, b"", b""), Err("--version was killed by a signal".to_string()));
+        assert_eq!(read_answer("--version", false, None, b"", b""), Err("--version was killed by a signal".to_string()));
         let long = "e".repeat(400);
-        let err = read_answer(false, Some(1), b"", long.as_bytes()).unwrap_err();
+        let err = read_answer("--version", false, Some(1), b"", long.as_bytes()).unwrap_err();
         assert!(err.chars().count() <= MAX_TEXT + 1, "clipped: {}", err.len());
     }
 
@@ -565,17 +619,72 @@ mod tests {
             test_build: true,
         };
         let real = Path::new("/usr/local/bin/claude");
-        let got = probe_version(real, "", PROBE_TIMEOUT, &test_build).unwrap_err();
+        let got = probe_version(real, "--version", "", PROBE_TIMEOUT, &test_build).unwrap_err();
         assert!(got.starts_with("not checked:"), "{got}");
         let shims = GuardEnv { shim_dirs: Some(vec![std::env::temp_dir()]), ..test_build };
-        let got = probe_version(real, "", PROBE_TIMEOUT, &shims).unwrap_err();
+        let got = probe_version(real, "--version", "", PROBE_TIMEOUT, &shims).unwrap_err();
         assert!(got.starts_with("not checked:"), "{got}");
     }
 
     #[test]
-    fn the_route_reports_every_harness() {
-        assert_eq!(super::super::ensure_cli::HARNESSES.len(), 4);
+    fn the_route_reports_every_launchable_harness_in_launch_bar_order() {
+        assert_eq!(
+            launchable_harnesses(),
+            [
+                "claude", "codex", "grok", "gemini", "cursor-agent", "pi", "hermes", "opencode",
+                "goose", "aider", "ollama", "copilot", "interpreter",
+            ]
+        );
+        // Stable: the same list, in the same order, every call.
+        assert_eq!(launchable_harnesses(), launchable_harnesses());
+        // The spawn guard's agent list is the presets plus the `cursor`
+        // alias: the two never drift apart.
+        let mut guard: Vec<&str> = super::super::agent_spawn_guard::AGENT_CLIS
+            .iter()
+            .copied()
+            .filter(|p| *p != "cursor")
+            .collect();
+        let mut ours = launchable_harnesses();
+        guard.sort_unstable();
+        ours.sort_unstable();
+        assert_eq!(ours, guard);
+        // Everything ensure-cli can install is launchable.
+        for p in super::super::ensure_cli::HARNESSES {
+            assert!(launchable_harnesses().contains(p), "{p}");
+        }
         assert_eq!(CACHE_TTL, Duration::from_secs(60));
-        assert!(PROBE_TIMEOUT <= Duration::from_secs(5));
+        assert_eq!(PROBE_TIMEOUT, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn every_harness_but_hermes_answers_dash_dash_version() {
+        for p in launchable_harnesses() {
+            let want = if p == "hermes" { None } else { Some("--version") };
+            assert_eq!(version_flag(p), want, "{p}");
+        }
+    }
+
+    /// A harness with no version flag is installed with an unknown
+    /// version and no error, and is never run.
+    #[cfg(unix)]
+    #[test]
+    fn a_harness_without_a_version_flag_is_never_run() {
+        let _lock = crate::test_env::lock();
+        let (dir, bin) = bin_dir("noflag");
+        let hermes = fake(&bin, "hermes", "echo 9.9.9");
+        let got = status(&["hermes"], &bin, &ProbeCache::new(CACHE_TTL), PROBE_TIMEOUT);
+        assert_eq!(
+            got[0],
+            CliStatus {
+                program: "hermes".into(),
+                installed: true,
+                version: None,
+                path: Some(hermes.to_string_lossy().into_owned()),
+                launches: true,
+                error: None,
+            }
+        );
+        assert_eq!(runs(&bin, "hermes"), 0, "no version flag: never started");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -34,14 +34,23 @@ fn cli_status_arm_is_exact_and_off_the_async_worker() {
     assert!(window.contains("spawn_blocking"), "probes spawn processes: {window}");
 }
 
-/// Every row has all six keys, one row per harness in order.
+/// Every row has all six keys, one row per launchable harness, in
+/// launch-bar order.
 fn assert_shape(body: &str) {
     let v: serde_json::Value = serde_json::from_str(body).unwrap_or_else(|e| panic!("json: {e}: {body}"));
     assert_eq!(v["ok"], serde_json::json!(true), "{body}");
     assert_eq!(v["cacheSecs"], serde_json::json!(60), "{body}");
     let tools = v["tools"].as_array().unwrap_or_else(|| panic!("tools array: {body}"));
     let programs: Vec<&str> = tools.iter().map(|t| t["program"].as_str().expect("program")).collect();
-    assert_eq!(programs, k2_core::terminal::ensure_cli::HARNESSES, "{body}");
+    assert_eq!(programs, k2_core::terminal::cli_status::launchable_harnesses(), "{body}");
+    assert_eq!(
+        programs,
+        [
+            "claude", "codex", "grok", "gemini", "cursor-agent", "pi", "hermes", "opencode", "goose",
+            "aider", "ollama", "copilot", "interpreter",
+        ],
+        "exactly the launchable harnesses, in a stable order: {body}"
+    );
     for t in tools {
         let obj = t.as_object().expect("row object");
         let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
@@ -49,7 +58,10 @@ fn assert_shape(body: &str) {
         assert_eq!(keys, ["error", "installed", "launches", "path", "program", "version"], "{t}");
         let installed = t["installed"].as_bool().expect("installed bool");
         assert!(t["launches"].is_boolean(), "{t}");
-        if installed {
+        if installed && t["program"] == "hermes" {
+            // No version flag: never run, so no version and no error.
+            assert!(t["path"].is_string() && t["version"].is_null() && t["error"].is_null(), "{t}");
+        } else if installed {
             assert!(t["path"].is_string(), "{t}");
             // Test build: a real CLI is found but never run.
             let err = t["error"].as_str().unwrap_or_else(|| panic!("a real CLI must not be probed: {t}"));

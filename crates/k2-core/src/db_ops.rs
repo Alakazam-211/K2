@@ -29,23 +29,9 @@ use crate::project_config;
 // Lives here (instead of the daemon-side route module) because it's
 // pure data — both the Tauri shim and the daemon route call the same
 // `presets_reset_built_ins` here. Originally lived in
-// `src-tauri/src/commands/agents.rs`; moved verbatim so the IDs +
-// order still match `db::seed_agent_presets` exactly.
-const BUILT_IN_PRESETS: &[(&str, &str, &str, &str, i64)] = &[
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456001", "Claude", "claude --dangerously-skip-permissions", "", 0),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456002", "Codex", "codex --yolo", "", 1),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456014", "Grok", "grok --always-approve", "", 2),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456003", "Gemini", "gemini --yolo", "", 3),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", "", 4),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456012", "Pi", "pi", "", 5),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456013", "Hermes", "hermes", "", 6),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456007", "OpenCode", "opencode", "", 7),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456011", "Goose", "goose", "", 8),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456005", "Aider", "aider", "", 9),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456009", "Ollama", "ollama run llama3.2", "", 10),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456004", "Copilot", "copilot --allow-all", "", 11),
-    ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", "", 12),
-];
+// `src-tauri/src/commands/agents.rs`. Now the same table the boot seed
+// uses (`db::BUILT_IN_AGENT_PRESETS`), so IDs and order can't drift.
+const BUILT_IN_PRESETS: &[(&str, &str, &str, &str, i64)] = db::BUILT_IN_AGENT_PRESETS;
 
 // Workspace States ops retired with the product feature. Schema layer
 // (`WorkspaceState` + `workspace_states` table) retained for migrations.

@@ -28,10 +28,10 @@ pub struct EnsureCliResult {
     pub installed: bool,
 }
 
-/// The agent CLIs K2 knows how to install: the list
-/// [`super::cli_status`] reports on. Every entry has a
+/// The agent CLIs K2 knows how to install. Every entry has a
 /// [`fixed_install_command`] (on Windows, all but `grok`); a test pins the
-/// two together.
+/// two together. [`super::cli_status`] reports on every launchable
+/// harness, a superset of these.
 pub const HARNESSES: &[&str] = &["claude", "codex", "grok", "gemini"];
 
 /// Fixed installer for one basename. `None` for anything else — callers

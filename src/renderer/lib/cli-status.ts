@@ -9,6 +9,7 @@ import type { ServerScope } from '@/kessel/server-scope'
  * - installed: `installed: true`, `version` set, `error: null`;
  * - broken: `installed: true`, `version: null`, `error` says why its
  *   `--version` failed (exited non-zero, timed out, couldn't start).
+ *   `version: null` with no error is a harness K2 doesn't ask (hermes).
  * `launches` is whether an agent launch runs the file at `path`.
  */
 export interface CliStatus {
@@ -51,9 +52,10 @@ function isCliStatus(v: unknown): v is CliStatus {
  * Which agent CLIs `scope`'s server has. Never throws: a server without
  * the route (404: `route not found` / `route_unclassified`) is
  * `unsupported`; any other failure or an unexpected body is `error`.
- * Only claude, codex, grok and gemini are reported (the CLIs K2 can
- * install); any other program is not in `byProgram`, which means unknown,
- * not missing.
+ * Every harness K2 can launch (its built-in agent presets) is reported,
+ * in launch-bar order; a program that isn't in `byProgram` is one K2
+ * can't launch. A harness with no version flag (hermes) comes back
+ * installed with `version: null` and no error.
  */
 export async function fetchCliStatus(scope: ServerScope): Promise<CliStatusResult> {
   let body: unknown

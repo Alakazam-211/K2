@@ -557,10 +557,13 @@ pub fn handle_agents_delegate(
 /// ]}
 /// ```
 ///
-/// One row per [`k2_core::terminal::ensure_cli::HARNESSES`] entry, in
-/// that order. `installed` with an `error` is a broken binary (its
-/// `--version` failed or timed out); `launches` says whether an agent
-/// launch runs that same file. See [`k2_core::terminal::cli_status`].
+/// One row per harness K2 can launch
+/// ([`k2_core::terminal::cli_status::launchable_harnesses`]: the built-in
+/// agent presets, in launch-bar order). `installed` with an `error` is a
+/// broken binary (its `--version` failed or timed out); a harness with no
+/// version flag (hermes) is installed with `version: null` and no error.
+/// `launches` says whether an agent launch runs that same file. See
+/// [`k2_core::terminal::cli_status`].
 pub fn handle_cli_status() -> CliResponse {
     let tools = k2_core::terminal::cli_status::cli_status();
     CliResponse::ok_json(

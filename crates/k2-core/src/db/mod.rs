@@ -1998,6 +1998,26 @@ pub fn mark_code_migration_applied(conn: &Connection, id: &str, notes: Option<&s
     );
 }
 
+/// The built-in agent presets: `(id, label, command, icon, sort_order)`,
+/// in launch-bar order. The one list of harnesses K2 ships a launch for:
+/// the boot seed, Reset Built-ins (`db_ops::presets_reset_built_ins`) and
+/// `terminal::cli_status` all read it.
+pub const BUILT_IN_AGENT_PRESETS: &[(&str, &str, &str, &str, i64)] = &[
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456001", "Claude", "claude --dangerously-skip-permissions", "", 0),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456002", "Codex", "codex --yolo", "", 1),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456014", "Grok", "grok --always-approve", "", 2),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456003", "Gemini", "gemini --yolo", "", 3),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", "", 4),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456012", "Pi", "pi", "", 5),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456013", "Hermes", "hermes", "", 6),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456007", "OpenCode", "opencode", "", 7),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456011", "Goose", "goose", "", 8),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456005", "Aider", "aider", "", 9),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456009", "Ollama", "ollama run llama3.2", "", 10),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456004", "Copilot", "copilot --allow-all", "", 11),
+    ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", "", 12),
+];
+
 /// Seed built-in agent presets.
 ///
 /// Existing users may have re-ordered or customized their presets — to
@@ -2017,21 +2037,7 @@ pub(crate) fn seed_agent_presets(conn: &Connection) -> Result<()> {
     // Default order for fresh installs. Existing built-ins keep their
     // current sort_order — `INSERT … WHERE NOT EXISTS` only inserts
     // entries the user is missing entirely (e.g. Pi on upgrade).
-    let presets: &[(&str, &str, &str, &str, i64)] = &[
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456001", "Claude", "claude --dangerously-skip-permissions", "", 0),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456002", "Codex", "codex --yolo", "", 1),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456014", "Grok", "grok --always-approve", "", 2),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456003", "Gemini", "gemini --yolo", "", 3),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456006", "Cursor Agent", "cursor-agent", "", 4),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456012", "Pi", "pi", "", 5),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456013", "Hermes", "hermes", "", 6),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456007", "OpenCode", "opencode", "", 7),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456011", "Goose", "goose", "", 8),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456005", "Aider", "aider", "", 9),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456009", "Ollama", "ollama run llama3.2", "", 10),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456004", "Copilot", "copilot --allow-all", "", 11),
-        ("b0a1c2d3-e4f5-6789-abcd-ef0123456010", "Interpreter", "interpreter", "", 12),
-    ];
+    let presets = BUILT_IN_AGENT_PRESETS;
 
     for (id, label, command, icon, sort_order) in presets {
         conn.execute(

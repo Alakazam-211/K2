@@ -28,7 +28,7 @@ import {
   type StyleScheme,
 } from '@/styles.generated'
 import type { SettingEntry } from '../searchManifest'
-import { Slider } from '@/components/ui'
+import { Segmented, Slider } from '@/components/ui'
 
 /** Registry terminal colors are 0xRRGGBB ints (Kessel's format). */
 const intToHex = (n: number): string => `#${n.toString(16).padStart(6, '0')}`
@@ -50,6 +50,25 @@ const SCHEME_OPTIONS: { id: 'light' | 'dark' | 'auto'; label: string }[] = [
   { id: 'dark', label: 'Dark' },
   { id: 'auto', label: 'Auto' },
 ]
+
+/** Small shapes inside a card: square on Terminal; on Glass a third of the
+ *  card's radius, so they sit concentric within its padding. */
+const SWATCH_SHAPE = 'rounded-[calc(var(--radius-box)/3)]'
+
+/** A row of colour chips sharing the card's inner width evenly. */
+function SwatchRow({ colors, className }: { colors: readonly string[]; className: string }): React.JSX.Element {
+  return (
+    <div className={`flex gap-1 ${className}`}>
+      {colors.map((c, i) => (
+        <span
+          key={i}
+          className={`h-5 min-w-0 flex-1 border border-[var(--color-border)] ${SWATCH_SHAPE}`}
+          style={{ backgroundColor: c }}
+        />
+      ))}
+    </div>
+  )
+}
 
 function capitalize(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s
@@ -242,22 +261,18 @@ export function StylesSection(): React.JSX.Element {
                 </div>
                 <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">by {style.author}</div>
                 {/* Mini swatch strip — 5 chips from the style's default palette */}
-                <div className="flex gap-1 mt-2">
-                  {swatchPalette &&
-                    ([
+                {swatchPalette && (
+                  <SwatchRow
+                    className="mt-2"
+                    colors={[
                       swatchPalette.swatch.bg,
                       swatchPalette.swatch.surface,
                       swatchPalette.swatch.elevated,
                       swatchPalette.swatch.accent,
                       swatchPalette.swatch.textPrimary,
-                    ] as const).map((c, i) => (
-                      <span
-                        key={i}
-                        className="w-4 h-4 border border-[var(--color-border)] flex-shrink-0"
-                        style={{ backgroundColor: c }}
-                      />
-                    ))}
-                </div>
+                    ]}
+                  />
+                )}
               </button>
             )
           })}
@@ -302,17 +317,9 @@ export function StylesSection(): React.JSX.Element {
                       : 'border-[var(--color-border)] bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-elevated)]'
                   } ${!supportsScheme ? 'opacity-50' : ''}`}
                 >
-                  <div className="flex gap-1 mb-1.5">
-                    {([p.swatch.bg, p.swatch.surface, p.swatch.elevated, p.swatch.accent] as const).map((c, i) => (
-                      <span
-                        key={i}
-                        className="w-5 h-5 border border-[var(--color-border)] flex-shrink-0"
-                        style={{ backgroundColor: c }}
-                      />
-                    ))}
-                  </div>
+                  <SwatchRow className="mb-1.5" colors={[p.swatch.bg, p.swatch.surface, p.swatch.elevated, p.swatch.accent]} />
                   {/* ANSI-16 strip — terminal colors are what this audience judges first */}
-                  <div className="flex mb-2 border border-[var(--color-border)]">
+                  <div className={`flex mb-2 overflow-hidden border border-[var(--color-border)] ${SWATCH_SHAPE}`}>
                     {p.terminal.palette.map((n, i) => (
                       <span key={i} className="h-1.5 flex-1" style={{ backgroundColor: intToHex(n) }} />
                     ))}
@@ -334,33 +341,29 @@ export function StylesSection(): React.JSX.Element {
           <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
             Scheme
           </div>
-          <div className="inline-flex border border-[var(--color-border)]">
-            {SCHEME_OPTIONS.map((opt) => {
+          {/* Manual activation: arrows only move focus, because a choice here
+              commits a style change. No value while browsing another style. */}
+          <Segmented
+            aria-label="Scheme"
+            activation="manual"
+            value={selectedIsActive ? schemeMode : null}
+            onChange={handleSchemeClick}
+            options={SCHEME_OPTIONS.map((opt) => {
               const disabledReason = schemeDisabled(opt.id)
-              const isCurrent = selectedIsActive && schemeMode === opt.id
-              return (
-                <button
-                  key={opt.id}
-                  disabled={disabledReason !== null}
-                  title={disabledReason ?? undefined}
-                  onClick={() => handleSchemeClick(opt.id)}
-                  onMouseEnter={() => {
+              return {
+                value: opt.id,
+                label: opt.label,
+                disabled: disabledReason !== null,
+                buttonProps: {
+                  title: disabledReason ?? undefined,
+                  onMouseEnter: () => {
                     if (!disabledReason) preview({ ...baseSel, schemeMode: opt.id })
-                  }}
-                  onMouseLeave={endPreview}
-                  className={`px-3 py-1 text-[11px] no-drag transition-colors ${
-                    isCurrent
-                      ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
-                      : disabledReason
-                        ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
-                        : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              )
+                  },
+                  onMouseLeave: endPreview,
+                },
+              }
             })}
-          </div>
+          />
           {schemeMode === 'auto' && selectedIsActive && (
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
               Following the OS appearance — currently {resolvedScheme}.
@@ -374,26 +377,20 @@ export function StylesSection(): React.JSX.Element {
             <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
               Density
             </div>
-            <div className="inline-flex border border-[var(--color-border)]">
-              {densityOptions(selectedStyle).map((opt) => {
-                const isCurrent = selectedIsActive && gapsPreset === opt.id
-                return (
-                  <button
-                    key={opt.id || 'base'}
-                    onClick={() => handleDensityClick(opt.id)}
-                    onMouseEnter={() => preview({ ...baseSel, gapsPreset: opt.id })}
-                    onMouseLeave={endPreview}
-                    className={`px-3 py-1 text-[11px] no-drag cursor-pointer transition-colors ${
-                      isCurrent
-                        ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
-                        : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                )
-              })}
-            </div>
+            <Segmented
+              aria-label="Density"
+              activation="manual"
+              value={selectedIsActive ? gapsPreset : null}
+              onChange={handleDensityClick}
+              options={densityOptions(selectedStyle).map((opt) => ({
+                value: opt.id,
+                label: opt.label,
+                buttonProps: {
+                  onMouseEnter: () => preview({ ...baseSel, gapsPreset: opt.id }),
+                  onMouseLeave: endPreview,
+                },
+              }))}
+            />
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
               Gaps between panes, tiles and sections. Compact is {selectedStyle.name}&apos;s flush default.
             </div>
@@ -497,7 +494,8 @@ export function StylesSection(): React.JSX.Element {
             Preview
           </div>
           <div
-            className="border border-[var(--color-border)] max-w-xl overflow-hidden"
+            data-k2-chamfer="surface"
+            className="border border-[var(--color-border)] max-w-xl"
             style={{
               backgroundColor: 'var(--color-bg-canvas)',
               borderRadius: 'var(--radius-box)',
@@ -509,22 +507,32 @@ export function StylesSection(): React.JSX.Element {
               className="flex items-center border border-[var(--color-border)]"
               style={{
                 backgroundColor: 'var(--color-bg-surface)',
-                borderTopLeftRadius: 'var(--radius-box)',
-                borderTopRightRadius: 'var(--radius-box)',
-                marginBottom: 'var(--gap-section)',
+                borderRadius: 'var(--radius-box)',
+                // Rounded shapes can't butt together: on a rounded style the
+                // strip floats clear of the tiles, and Terminal stays flush.
+                marginBottom: 'calc(var(--gap-section) + var(--radius-box) / 2)',
               }}
             >
               {['zsh', 'claude', 'logs'].map((t, i) => (
                 <div
                   key={t}
-                  className="px-3 py-1 text-[10px]"
-                  style={
-                    i === 0
-                      ? { color: 'var(--color-text-primary)', boxShadow: 'inset 0 -2px 0 0 var(--color-accent)' }
-                      : { color: 'var(--color-text-muted)' }
-                  }
+                  className="relative px-3 py-1 text-[10px]"
+                  style={{ color: i === 0 ? 'var(--color-text-primary)' : 'var(--color-text-muted)' }}
                 >
                   {t}
+                  {/* Under the label on a rounded strip, clear of its curve;
+                      the tab's full width and flush on a square one. */}
+                  {i === 0 && (
+                    <span
+                      className="absolute h-0.5 rounded-[var(--radius-pill)]"
+                      style={{
+                        left: 'min(var(--radius-box), 12px)',
+                        right: 'min(var(--radius-box), 12px)',
+                        bottom: 'min(var(--radius-box), 2px)',
+                        backgroundColor: 'var(--color-accent)',
+                      }}
+                    />
+                  )}
                 </div>
               ))}
               <div className="ml-auto flex items-center gap-1.5 px-3">
@@ -550,12 +558,18 @@ export function StylesSection(): React.JSX.Element {
                 className="border border-[var(--color-border)] p-2 leading-relaxed"
                 style={{ backgroundColor: 'var(--term-bg)', borderRadius: 'var(--radius-box)' }}
               >
-                <div className="text-[9px]" style={{ color: 'var(--term-ansi-13)' }}>▍agent</div>
+                <div className="text-[9px]" style={{ color: 'var(--term-ansi-13)' }}>
+                  <span
+                    className="inline-block w-[3px] h-[10px] mr-1 align-middle rounded-[calc(var(--radius-box)/8)]"
+                    style={{ backgroundColor: 'var(--term-ansi-13)' }}
+                  />
+                  agent
+                </div>
                 <div className="text-[9px]" style={{ color: 'var(--term-fg)' }}>Refactor complete.</div>
                 <div className="text-[9px]">
                   <span style={{ color: 'var(--term-fg)' }}>$ </span>
                   <span
-                    className="inline-block w-[6px] h-[10px] align-middle"
+                    className="inline-block w-[6px] h-[10px] align-middle rounded-[calc(var(--radius-box)/8)]"
                     style={{ backgroundColor: 'var(--term-cursor)' }}
                   />
                 </div>

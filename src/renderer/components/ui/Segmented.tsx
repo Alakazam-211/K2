@@ -11,9 +11,14 @@ export interface SegmentedOption<T extends string> {
 }
 
 export interface SegmentedProps<T extends string> {
-  value: T
+  /** The chosen option, or null for none (no segment is checked). */
+  value: T | null
   onChange: (next: T) => void
   options: readonly SegmentedOption<T>[]
+  /** 'auto' (default) chooses as the arrow keys move. 'manual' only moves focus
+   *  and leaves choosing to click, Enter or Space: for a picker whose choice is
+   *  expensive or visible beyond itself. */
+  activation?: 'auto' | 'manual'
   /** Names the group for screen readers. */
   'aria-label': string
   disabled?: boolean
@@ -28,6 +33,7 @@ export function Segmented<T extends string>({
   value,
   onChange,
   options,
+  activation = 'auto',
   'aria-label': ariaLabel,
   disabled,
   className,
@@ -72,7 +78,7 @@ export function Segmented<T extends string>({
     const at = usable.findIndex((o) => o.value === from)
     if (at < 0 || usable.length === 0) return
     const next = usable[(at + step + usable.length) % usable.length]
-    onChange(next.value)
+    if (activation === 'auto') onChange(next.value)
     Array.from(group.current?.querySelectorAll<HTMLElement>('[data-k2-segment]') ?? [])
       .find((el) => el.dataset.k2Segment === next.value)
       ?.focus()

@@ -87,6 +87,25 @@ describe('Segmented', () => {
     fireEvent.keyDown(screen.getByRole('radio', { name: 'A' }), { key: 'ArrowLeft' })
     expect(onChange).toHaveBeenLastCalledWith('c')
   })
+
+  it('with manual activation, arrows move focus and choose nothing', () => {
+    const onChange = vi.fn()
+    render(<Segmented aria-label="Pick" activation="manual" value="a" onChange={onChange} options={options} />)
+    const a = screen.getByRole('radio', { name: 'A' })
+    a.focus()
+    fireEvent.keyDown(a, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'C' }))
+    expect(onChange).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('radio', { name: 'C' }))
+    expect(onChange).toHaveBeenCalledWith('c')
+  })
+
+  it('with no value, nothing is checked, the indicator hides and the first usable option is the tab stop', () => {
+    const { container } = render(<Segmented aria-label="Pick" value={null} onChange={() => {}} options={options} />)
+    expect(screen.getAllByRole('radio').filter((r) => r.getAttribute('aria-checked') === 'true')).toHaveLength(0)
+    expect(container.querySelector<HTMLElement>('.k2-segment-thumb')!.hidden).toBe(true)
+    expect(screen.getByRole('radio', { name: 'A' }).getAttribute('tabindex')).toBe('0')
+  })
 })
 
 describe('press spring', () => {

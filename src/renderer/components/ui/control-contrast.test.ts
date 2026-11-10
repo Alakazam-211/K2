@@ -220,6 +220,44 @@ describe('Keyboard focus', () => {
     expect(cut).toMatch(/clip-path: polygon\(evenodd, /)
   })
 
+  it('in Terminal a filled button rings in the accent with a white inner line; the others ring in the accent alone', () => {
+    const button = readFileSync(join(__dirname, 'Button.tsx'), 'utf8')
+    for (const v of ['accent', 'danger', "'danger-muted'"]) {
+      const cls = new RegExp(`\\n  ${v}:\\s*'([^']+)'`).exec(button)![1]
+      expect(cls, v).toContain('[--k2-ch-focus-inner:var(--color-on-accent)]')
+      expect(cls, v).not.toContain('[--k2-ch-focus:')
+    }
+    for (const v of ['default', 'ghost', 'quiet', "'danger-quiet'"]) {
+      const cls = new RegExp(`\\n  ${v}:\\s*'([^']+)'`).exec(button)![1]
+      expect(cls, v).not.toContain('--k2-ch-focus')
+    }
+    const sel = 'html[data-style="terminal"] :where(button[data-k2-chamfer]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *))'
+    expect(rule(globals, `${sel}::after`)).toContain('background: var(--k2-ch-focus, var(--color-accent-text))')
+    const inner = rule(globals, `${sel}::before`)
+    expect(inner).toContain('--k2-ch-fr: 3px')
+    expect(inner).toContain('background: var(--k2-ch-focus-inner, transparent)')
+    expect(inner).toMatch(/clip-path: polygon\(evenodd, /)
+  })
+
+  it.each([['charcoal'], ['paper']])('Terminal %s: every Button variant\'s ring holds 3:1 on the page and on the button', (id) => {
+    const p = palette('terminal', id)
+    const ring = resolve('terminal', id, 'var(--color-accent)')
+    const white = hex(p['on-accent'])
+    for (const ground of ['bg', 'bg-surface', 'bg-elevated']) {
+      expect(contrast(ring, hex(p[ground])), `${id} ring on ${ground}`).toBeGreaterThanOrEqual(3)
+    }
+    // Filled: the white line sits between the ring and the fill.
+    for (const fill of ['var(--color-accent-fill)', 'var(--color-danger)', 'var(--color-danger-muted)']) {
+      const f = resolve('terminal', id, fill)
+      expect(contrast(white, f), `${id} inner line on ${fill}`).toBeGreaterThanOrEqual(3)
+      expect(contrast(white, ring), `${id} inner line against the ring`).toBeGreaterThanOrEqual(3)
+    }
+    // Outlined: the ring sits on the button's own face (default is raised, the rest are clear).
+    for (const face of ['bg-elevated', 'bg-surface', 'bg']) {
+      expect(contrast(ring, hex(p[face])), `${id} ring on a ${face} button`).toBeGreaterThanOrEqual(3)
+    }
+  })
+
   it.each(LOOKS)('the readable accent clears 3:1 as a ring on a card and a raised control (%s %s)', (style, id) => {
     const p = palette(style, id)
     // Veil darkens it in overrides.css (80% accent, 20% black); elsewhere it is the accent.

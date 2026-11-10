@@ -1262,14 +1262,25 @@ html[data-style="terminal"] :where([data-k2-chamfer-float] > [data-k2-chamfer]:n
   box-shadow: none;
 }
 html[data-style="terminal"] :where(button[data-k2-chamfer]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)) { --k2-ch-fr: 2px; outline: none; }
-html[data-style="terminal"] :where(button[data-k2-chamfer]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *))::before { border-color: transparent; }
+/* The ring is 2px of --k2-ch-focus (the accent) at the edge. A filled button
+   (accent, danger) also sets --k2-ch-focus-inner: ::before then paints a 3px
+   band of it under the ring, leaving a 1px inner line between ring and fill.
+   So the ring reads on the page and the line reads on the fill, in both
+   palettes: Paper's accent is the fill itself, and a white ring alone
+   vanished on its near-white page. */
+html[data-style="terminal"] :where(button[data-k2-chamfer]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *))::before {
+  --k2-ch-fr: 3px;
+  border: 0;
+  background: var(--k2-ch-focus-inner, transparent);
+  clip-path: polygon(evenodd, var(--k2-ch-cut) 0, calc(100% - var(--k2-ch-cut)) 0, 100% var(--k2-ch-cut), 100% calc(100% - var(--k2-ch-cut)), calc(100% - var(--k2-ch-cut)) 100%, var(--k2-ch-cut) 100%, 0 calc(100% - var(--k2-ch-cut)), 0 var(--k2-ch-cut), var(--k2-ch-cut) 0, calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr)) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr)) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), var(--k2-ch-fr) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), var(--k2-ch-fr) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr));
+}
 html[data-style="terminal"] :where(button[data-k2-chamfer]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *))::after {
   content: '';
   position: absolute;
   inset: calc(-1 * var(--k2-ch-w));
   z-index: 1;
   pointer-events: none;
-  background: var(--k2-ch-focus, var(--color-accent));
+  background: var(--k2-ch-focus, var(--color-accent-text));
   clip-path: polygon(evenodd, var(--k2-ch-cut) 0, calc(100% - var(--k2-ch-cut)) 0, 100% var(--k2-ch-cut), 100% calc(100% - var(--k2-ch-cut)), calc(100% - var(--k2-ch-cut)) 100%, var(--k2-ch-cut) 100%, 0 calc(100% - var(--k2-ch-cut)), 0 var(--k2-ch-cut), var(--k2-ch-cut) 0, calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr)) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr)) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), var(--k2-ch-fr) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), var(--k2-ch-fr) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr));
 }
 

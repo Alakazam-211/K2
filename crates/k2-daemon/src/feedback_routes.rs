@@ -3619,7 +3619,7 @@ mod tests {
     //
     // Only `owner` and uuid names here: the in-file tests read the real
     // HOME's user store (read-only), so a Connect user is proved in
-    // tests/ticket_brief_integration.rs under a temp HOME instead.
+    // tests/it_chat/ticket_brief_integration.rs under a temp HOME instead.
 
     use k2_core::feedback_brief::{with_assignee_policy_override, AssigneePolicy};
 

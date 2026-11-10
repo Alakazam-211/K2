@@ -248,7 +248,7 @@ loop daemon-latent     "$DAEMON" sql:: federation_routes:: tunnel_tls_listener::
 # a grouped binary (crates/k2-daemon/tests/it_*), looped with a `<module>::`
 # filter so the process holds the same tests its own binary did. A binary
 # missing from the build fails the soak instead of skipping its loop.
-for spec in login_lock_clear agents_routes_integration triage_integration tunnel_disable_unpair_integration zen_headless_integration; do
+for spec in it_misc/login_lock_clear it_sessions/agents_routes_integration it_sessions/triage_integration it_misc/tunnel_disable_unpair_integration it_zen/zen_headless_integration; do
   t=${spec%%/*}; filter=()
   [ "$spec" != "$t" ] && filter=("${spec#*/}::")
   b=$(bin_of "$t")

@@ -152,7 +152,7 @@ describe('the pool against two real daemons', () => {
     })
     expect(kick.status).toBe(200)
     // The client's event socket would deliver this close code (the daemon
-    // half is pinned in crates/k2-daemon/tests/home_two_daemons_integration).
+    // half is pinned in crates/k2-daemon/tests/it_zen/home_two_daemons_integration).
     pool.noteSocketClose(B_KEY, 4001)
     const b = await pool.check(B_KEY)
     expect(b.auth).toBe('kicked')

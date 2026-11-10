@@ -2,7 +2,7 @@
 # k2 ci (0.46.10, prd-ci-on-compute-for-clients-v1 C6a): the thin CLI over
 # /cli/ci/*. A python stub daemon on loopback records every request and
 # answers like the daemon; the daemon side (the engine, refusals, the
-# vault token, statuses) is crates/k2-daemon/tests/ci_integration.rs.
+# vault token, statuses) is crates/k2-daemon/tests/it_compute/ci_integration.rs.
 #
 # Covers: help and the study page with no daemon (what a blind agent reads
 # first), usage errors (exit 2, nothing sent), each verb's request body

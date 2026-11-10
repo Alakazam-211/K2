@@ -130,22 +130,22 @@ part_rust_test() {
 
     step "cargo nextest verb catalog + Zen"
     cargo nextest run --profile ci -p k2-core --lib contract:: zen:: app_surface::
-    cargo nextest run --profile ci -p k2-daemon --test contract_routes --test app_api_integration
+    cargo nextest run --profile ci -p k2-daemon --test it_contract -E 'test(/^(contract_routes|app_api_integration)::/)'
 
     step "cargo nextest compute nodes"
     cargo nextest run --profile ci -p k2-node-proto -p k2-node -p k2-redact
     cargo nextest run --profile ci -p k2-core --lib compute::
-    cargo nextest run --profile ci -p k2-daemon --lib --test compute_integration --test compute_results_integration --test compute_secret_integration --test compute_place_integration -E 'kind(test) | test(compute_) | test(route_policy)'
+    cargo nextest run --profile ci -p k2-daemon --lib --test it_compute -E '(kind(lib) & (test(compute_) | test(route_policy))) | (kind(test) & test(/^(compute_integration|compute_results_integration|compute_secret_integration|compute_place_integration)::/))'
     cargo nextest run --profile ci -p k2-vault --test compute_grant --test redact_pin
 
     step "cargo nextest App runtime"
     cargo nextest run --profile ci -p k2-core --lib deploy:: app_audit skin_link app_door app_grace::requests
-    cargo nextest run --profile ci -p k2-daemon --lib --test apps_runtime_integration --test apps_door_integration --test apps_gateway_link_integration -E 'kind(test) | test(apps::)'
+    cargo nextest run --profile ci -p k2-daemon --lib --test it_apps -E '(kind(lib) & test(apps::)) | (kind(test) & test(/^(apps_runtime_integration|apps_door_integration|apps_gateway_link_integration)::/))'
     cargo nextest run --profile ci -p k2-app-engine
 
     step "cargo nextest Sew (grant hook, chat pass)"
     cargo nextest run --profile ci -p k2-core --lib tool_hook:: sew_revoke:: skin::sew_tests connect_users::
-    cargo nextest run --profile ci -p k2-daemon --lib --test chat_pass_integration --test chat_pass_mint_integration --test grant_hook_integration -E 'kind(test) | test(chat_pass::) | test(tool_hook_worker::) | test(sew_mgmt::)'
+    cargo nextest run --profile ci -p k2-daemon --lib --test it_chat --test grant_hook_integration -E '(kind(lib) & (test(chat_pass::) | test(tool_hook_worker::) | test(sew_mgmt::))) | binary(grant_hook_integration) | (kind(test) & test(/^(chat_pass_integration|chat_pass_mint_integration)::/))'
     unset RUSTFLAGS
 }
 

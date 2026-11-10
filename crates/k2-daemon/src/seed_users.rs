@@ -14,7 +14,7 @@
 //! ```
 //!
 //! Contract (all enforced here, tested in
-//! `tests/provision_users_integration.rs`):
+//! `tests/it_misc/provision_users_integration.rs`):
 //!
 //! - The file is DELETED in every outcome — parse failure, per-user
 //!   failures, success — immediately after it is read, so plaintext

@@ -47,7 +47,9 @@ case "$cmd" in
     cargo build -p k2-ptyd --bins >"$log" 2>&1 || rc=$?
     report "$rc"
     if [ "$rc" -eq 0 ]; then
-      cargo test -p k2-daemon --test mail_manage_integration --test cell_server_uds_integration >"$log" 2>&1 || rc=$?
+      # Modules of it_mail, one at a time (each expects a process of its own).
+      { cargo test -p k2-daemon --test it_mail -- mail_manage_integration:: \
+          && cargo test -p k2-daemon --test it_mail -- cell_server_uds_integration::; } >"$log" 2>&1 || rc=$?
       report "$rc"
     fi
     ;;

@@ -1471,7 +1471,7 @@ mod tests {
     /// PRD boot-status-ghost §2.1: loopback is always full; elsewhere the
     /// owner token is full and no / an empty / a junk token gets the
     /// configured public view. (Sessions, passports and keys need the
-    /// stores; `tests/boot_status_views_integration.rs` covers each.)
+    /// stores; `tests/it_sessions/boot_status_views_integration.rs` covers each.)
     #[test]
     fn view_for_table_without_stores() {
         use crate::routes::dispatcher::Ingress;

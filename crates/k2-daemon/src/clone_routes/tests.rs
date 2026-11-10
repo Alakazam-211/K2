@@ -326,7 +326,7 @@ fn unpack_applies_pinned_chat_and_chat_pins() {
 fn unpack_handler_400s_on_missing_bundle() {
     // The token gate lives in the dispatcher, not the handler (the
     // garbage-token → 403 path is covered end-to-end in
-    // clone_routes_integration.rs). This asserts the HANDLER itself
+    // it_misc/clone_routes_integration.rs). This asserts the HANDLER itself
     // produces a clean 400 on a nonexistent bundle path rather than
     // panicking.
     let body = serde_json::json!({

@@ -3,7 +3,7 @@
 // (updatedAt, deviceId), tombstones, live-before-tombstones, the last-Home
 // rule, a per-person cursor, devices and 410 after removal). Lets the
 // renderer tests run two devices against one "server" without a daemon.
-// The daemon's own tests (`homes_sync_integration.rs`, `homes_sync.rs`) are
+// The daemon's own tests (`it_misc/homes_sync_integration.rs`, `homes_sync.rs`) are
 // the truth for the real server.
 
 import type { HomesSyncTransport } from './runner'

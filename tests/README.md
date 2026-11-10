@@ -113,17 +113,17 @@ Each file corresponds to one feature area.
 | `terminal_routes_integration.rs` | 17 | `/cli/terminal/read,write,spawn,spawn-background,agents/running` |
 | `watchdog_integration.rs` | 6 | Daemon harness-watchdog escalation ladder |
 | `sessions_ws_integration.rs` | 6 | `/cli/sessions/subscribe` WS loopback |
-| `agents_routes_integration.rs` | 5 | `/cli/agents/launch,delegate` (H5) |
-| `triage_integration.rs` | 4 | Triage read-only summary + scheduler-fire dispatch |
+| `it_sessions/agents_routes_integration.rs` | 5 | `/cli/agents/launch,delegate` (H5) |
+| `it_sessions/triage_integration.rs` | 4 | Triage read-only summary + scheduler-fire dispatch |
 | `scheduler_wake_integration.rs` | 4 | `DaemonWakeProvider` auto-launch |
 | `companion_routes_integration.rs` | 4 | `/cli/companion/sessions,projects-summary` (H4) |
 | `spawn_to_signal_e2e.rs` | 3 | HTTP spawn → signal → inject end-to-end |
 | `pending_live_durability.rs` | 3 | F3 pending-live queue + boot replay |
 | `providers_inject_integration.rs` | 2 | `DaemonInjectProvider` → real PTY |
-| `awareness_ws_integration.rs` | 2 | `/cli/awareness/subscribe` WS loopback |
-| `heartbeat_port_claim_integration.rs` | 1 | Daemon eagerly owns heartbeat.port (H7) |
-| `heartbeat_fire_v2_integration.rs` | (varies) | 0.37.0 v2-retirement: wake_headless registers in v2_session_map + writes workspace_sessions row |
-| `workspace_msg_integration.rs` | 7 | 0.37.0 simplified-msg: `workspace_msg::resolve_workspace` (name/path/UUID) + `deliver_to_inbox` |
+| `it_sessions/awareness_ws_integration.rs` | 2 | `/cli/awareness/subscribe` WS loopback |
+| `it_sessions/heartbeat_port_claim_integration.rs` | 1 | Daemon eagerly owns heartbeat.port (H7) |
+| `it_sessions/heartbeat_fire_v2_integration.rs` | (varies) | 0.37.0 v2-retirement: wake_headless registers in v2_session_map + writes workspace_sessions row |
+| `it_chat/workspace_msg_integration.rs` | 7 | 0.37.0 simplified-msg: `workspace_msg::resolve_workspace` (name/path/UUID) + `deliver_to_inbox` |
 
 ### Running
 
@@ -131,8 +131,13 @@ Each file corresponds to one feature area.
 # All daemon tests.
 cargo test -p k2so-daemon
 
-# Just one file.
+# Just one file (tests/<file>.rs).
 cargo test -p k2so-daemon --test terminal_routes_integration
+
+# A grouped file (tests/it_<area>/<file>.rs) is a module of its group's
+# binary: run the group under cargo-nextest, or the module on its own.
+cargo nextest run -p k2-daemon --test it_sessions
+cargo test -p k2-daemon --test it_sessions -- triage_integration::
 ```
 
 ---

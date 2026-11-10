@@ -132,7 +132,23 @@ module at a time. A whole-group `cargo test` fails on purpose: its
 in a group: add the file to `tests/it_<area>/` and `mod <name>;` to its
 `main.rs`, and use support as `use crate::support::<name>;`.
 `scripts/check-daemon-test-targets.sh` (in `checks.sh web`) fails on a module
-file that `main.rs` doesn't declare.
+file that `main.rs` doesn't declare. A module that changes env or other
+process state holds its lock through `k2_core::test_env::serial(&LOCK)`,
+which takes the shared env lock first, so modules in one process never
+change `$HOME` under each other.
+
+The files still at `tests/<file>.rs` stay their own binaries on purpose:
+- the security tests (`permission_*`, `auth_routes`, `security_0444`,
+  `app_path_scope`, `grant_hook`, `remote_session_grants`, `vault_*`,
+  `design_notes`, `passport_restart` and the role-gate and security-review
+  files), which move only with their own sign-off;
+- `ptyd_survival_integration`, which the release compat scripts run by name
+  (`scripts/ptyd-survival/`), and `live_access_fanout`, the ignored night run;
+- the files that set `$HOME` or `K2_*` with no lock at all (`zen_lock`,
+  `zen_sync`, `thread_latest`, `thread_sync`, `presence_summary*`,
+  `ptyd_p76`, `ptyd_upgrade_attached`, `hook_event`, `sandbox_open_route`,
+  `docs_live_ws`, `push_read_hints`, `box_move_two_daemons`): in a group
+  they would change another module's env.
 
 A route arm in `routes/dispatcher.rs` that answers on a keep-alive socket must
 consume the peeked request on EVERY branch (GET included), or the loop answers

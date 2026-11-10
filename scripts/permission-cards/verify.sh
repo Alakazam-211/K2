@@ -16,5 +16,6 @@ if [ "${1:-}" = "--update" ]; then
 else
   cargo test -p k2-daemon --lib permission_samples
 fi
-cargo test -p k2-daemon --test permission_guest_hidden_integration --test contract_routes
+cargo test -p k2-daemon --test permission_guest_hidden_integration
+cargo test -p k2-daemon --test it_contract -- contract_routes::
 cargo test -p k2-core --lib contract::

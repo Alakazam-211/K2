@@ -591,7 +591,7 @@ fn persist_session_id_for_resume(project_id: &str, session_id: &str) {
 // armed-timer map a live reaper would and exposes one pass at a time —
 // it exercises the exact `reconcile_pass` code path the daemon runs.
 // `#[allow(dead_code)]`: consumed by the integration test
-// (`tests/active_reaper_integration.rs`) via the test-facing lib, but
+// (`tests/it_sessions/active_reaper_integration.rs`) via the test-facing lib, but
 // the BINARY compilation never references it — same pattern as the
 // `test_harness` module in `lib.rs`.
 #[doc(hidden)]

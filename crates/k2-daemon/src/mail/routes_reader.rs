@@ -582,7 +582,7 @@ fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
         Ok(s) => s,
         Err(e) => return crate::mail::routes_messages::list_error_response(e),
     };
-    let more = summaries.len() >= limit;
+    let next_offset = (summaries.len() >= limit).then_some(offset + limit);
     let items: Vec<serde_json::Value> = summaries.iter().map(|s| summary_json(&inbox.address, s)).collect();
     let folder_label = match &folder {
         MailFolder::Inbox => "inbox".to_string(),
@@ -597,7 +597,7 @@ fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
         "limit": limit,
         "count": items.len(),
         "items": items,
-        "nextOffset": if more { Some(offset + limit) } else { None },
+        "nextOffset": next_offset,
     });
     if let Some(w) = search_window {
         body["searchWindow"] = w.to_json();

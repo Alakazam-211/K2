@@ -363,6 +363,87 @@ pub(crate) fn answer(
     CliResponse::ok_json(out.to_string())
 }
 
+/// A person dismissed a permission or batch card without answering it
+/// (prd-popup-close-and-card-dismiss-v1 B6): every open request on it turns
+/// `dismissed` (each its own compare-and-set), nothing is applied and
+/// nothing is denied (no `on_denied`: a held compute request, an incoming
+/// secret or a Garden ask stays open in Settings; no re-ask block). The
+/// person must be at the floor of every open request, as for Deny all. One
+/// `permission-answer` audit line per request says `dismissed`, and the
+/// agent gets one `[permission:]` turn each.
+pub(crate) fn dismiss(
+    params: &HashMap<String, String>,
+    card: CardRef<'_>,
+    action: &CardAction,
+    who: &Answerer,
+    by: Option<PostAuthor>,
+    reason: Option<&str>,
+) -> CliResponse {
+    let reqs = match store::for_card(card.conversation_id, card.card_id) {
+        Ok(r) => r,
+        Err(e) => return err(500, "db", e),
+    };
+    let open: Vec<&PermissionRequest> = reqs.iter().filter(|r| r.is_answerable()).collect();
+    if open.is_empty() {
+        return err(409, code::REQUEST_NOT_PENDING, "nothing on this card is waiting for an answer");
+    }
+    for r in &open {
+        if !present::meets_floor(present::floor_of(&r.floor), who) {
+            return below_floor(present::floor_of(&r.floor).as_str());
+        }
+    }
+    let via = via_of(params, who);
+    let by_name = who_name(who);
+    let now = k2_core::overlay::now_secs();
+    let mut decided: Vec<PermissionRequest> = Vec::new();
+    for r in open {
+        match store::cas_open_to(r.id.as_str(), RequestState::Dismissed) {
+            Ok(true) => {}
+            // Someone answered it first: it keeps that answer.
+            Ok(false) => continue,
+            Err(e) => return err(500, "db", e),
+        }
+        let msg = "Dismissed: nothing was applied.";
+        if let Err(e) = store::decide(r.id.as_str(), &Decided { state: RequestState::Dismissed, by: Some(&by_name), via: Some(&via), reason, message: Some(msg), at: now }) {
+            return err(500, "db", e);
+        }
+        match store::get(r.id.as_str()) {
+            Ok(Some(done)) => decided.push(done),
+            Ok(None) => return err(500, "db", "the request vanished"),
+            Err(e) => return err(500, "db", e),
+        }
+    }
+    if decided.is_empty() {
+        return err(409, code::REQUEST_NOT_PENDING, "someone answered first, or the request closed");
+    }
+    let cb = present::refresh_card(card.conversation_id, card.card_id, CardClose::Dismiss { by, reason });
+    let (user, kind) = who_label(who);
+    for r in &decided {
+        audit(audit_event::ANSWER, &user, kind, r);
+        inject::send_outcome(r);
+    }
+    let (status, closed_as, seq) = match &cb {
+        Some(cb) => {
+            let c = cb.doc.choice.as_ref();
+            (c.map(|c| c.status.clone()).unwrap_or_default(), c.and_then(|c| c.closed_as.clone()), cb.seq)
+        }
+        None => (String::new(), None, 0),
+    };
+    CliResponse::ok_json(
+        json!({
+            "ok": true,
+            "id": card.card_id,
+            "seq": seq,
+            "kind": "choice",
+            "status": status,
+            "closedAs": closed_as,
+            "action": { "id": action.id },
+            "decided": decided.iter().map(|r| json!({ "id": r.display_id(), "state": r.state.as_str() })).collect::<Vec<_>>(),
+        })
+        .to_string(),
+    )
+}
+
 /// Decide one request: the compare-and-set, the current-state check, the
 /// apply, the stored decision. Returns the request as decided. `single`:
 /// the card is this request's alone, so the "applying" view is drawn.

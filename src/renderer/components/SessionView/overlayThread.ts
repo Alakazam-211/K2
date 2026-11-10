@@ -168,7 +168,15 @@ export interface OverlayChoice {
    *  with id `permission` / `permission.batch` and a readable `view`).
    *  Absent on every other card and on the fallback. */
   permission?: PermissionCardData
+  /** 0.46.11: how a `voided` card closed: a person dismissed it, or its
+   *  agent withdrew it. Absent on a daemon close and on older cards. */
+  closedAs?: CardClosedAs
+  /** The one-line reason given with the dismiss or withdraw. */
+  closeReason?: string
 }
+
+/** `closedAs` (prd-popup-close-and-card-dismiss-v1 B1). */
+export type CardClosedAs = 'dismissed' | 'withdrawn'
 
 export interface OverlaySecret {
   name: string
@@ -205,6 +213,10 @@ export interface OverlaySecret {
   replaces?: boolean
   /** A one-time code: read once with `k2 vault file`, then deleted. */
   once?: boolean
+  /** As `OverlayChoice.closedAs`. */
+  closedAs?: CardClosedAs
+  /** As `OverlayChoice.closeReason`. */
+  closeReason?: string
 }
 
 /** How K2 sends a secret: `dst` is `basic`, `header:<Name>` or
@@ -1305,7 +1317,11 @@ export function releaseOverlayWebSocket(ws: {
   }
 }
 
+/** A card the daemon closed on its own (a newer card replaced it, a switch
+ *  turned off): hidden. A card a person dismissed or its agent withdrew
+ *  (`closedAs`) stays in the history, drawn closed. */
 export function isVoidedHitl(doc: OverlayDoc): boolean {
+  if (cardClosedAs(doc)) return false
   if (doc.kind === 'choice' && doc.choice?.status === 'voided') return true
   if (doc.kind === 'secret' && doc.secret?.status === 'voided') return true
   return false
@@ -1410,13 +1426,33 @@ function actionResultMessage(src: Record<string, unknown>): Pick<OverlayChoice, 
  *  (left off otherwise, so an older card coerces as before). */
 function closedExtras(
   src: Record<string, unknown>,
-): Pick<OverlayChoice, 'answeredBy' | 'answeredAt' | 'expiresAt'> {
-  const out: Pick<OverlayChoice, 'answeredBy' | 'answeredAt' | 'expiresAt'> = {}
+): Pick<OverlayChoice, 'answeredBy' | 'answeredAt' | 'expiresAt' | 'closedAs' | 'closeReason'> {
+  const out: Pick<OverlayChoice, 'answeredBy' | 'answeredAt' | 'expiresAt' | 'closedAs' | 'closeReason'> = {}
   const by = parseThreadAuthor(src.answeredBy)
   if (by) out.answeredBy = by
   if (typeof src.answeredAt === 'number') out.answeredAt = src.answeredAt
   if (typeof src.expiresAt === 'number') out.expiresAt = src.expiresAt
+  if (src.closedAs === 'dismissed' || src.closedAs === 'withdrawn') out.closedAs = src.closedAs
+  if (typeof src.closeReason === 'string' && src.closeReason.trim()) out.closeReason = src.closeReason.trim()
   return out
+}
+
+/** How a closed card closed, when a person dismissed it or its agent
+ *  withdrew it (prd-popup-close-and-card-dismiss-v1 B1; the daemon's
+ *  `closedAs`), else null (answered, expired, or a daemon close). */
+export function cardClosedAs(doc: OverlayDoc): CardClosedAs | null {
+  const c = doc.kind === 'secret' ? doc.secret : doc.kind === 'choice' ? doc.choice : null
+  if (!c || c.status !== 'voided') return null
+  return c.closedAs === 'dismissed' || c.closedAs === 'withdrawn' ? c.closedAs : null
+}
+
+/** "Dismissed by Baden: Shipped yesterday" / "Withdrawn by sales" for a
+ *  card's closed line. `who`: the answerer label ("You", a login), `agent`:
+ *  the card's sender. */
+export function closedCardLine(closedAs: CardClosedAs, who: string | null, agent: string, reason?: string | null): string {
+  const head = closedAs === 'dismissed' ? `Dismissed${who ? ` by ${who}` : ''}` : `Withdrawn${agent ? ` by ${agent}` : ''}`
+  const why = reason?.trim()
+  return why ? `${head}: ${why}` : head
 }
 
 const plural = (n: number, unit: string): string => `${n} ${unit}${n === 1 ? '' : 's'}`

@@ -35,7 +35,26 @@ pub struct ChoiceBody {
     /// Garden widget or an App guest is refused. None on every other card.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<CardAction>,
+    /// How a `voided` card was closed (prd-popup-close-and-card-dismiss-v1
+    /// B1): [`CLOSED_DISMISSED`] (a person it was for) or
+    /// [`CLOSED_WITHDRAWN`] (the agent that asked). None while pending, on
+    /// the daemon's own closes (a newer card replaced it, a switch turned
+    /// off) and on cards from before 0.46.11. The status stays `voided` so
+    /// every client already draws it closed.
+    #[serde(default, rename = "closedAs", skip_serializing_if = "Option::is_none")]
+    pub closed_as: Option<String>,
+    /// The one-line reason given with a dismiss or withdraw.
+    #[serde(default, rename = "closeReason", skip_serializing_if = "Option::is_none")]
+    pub close_reason: Option<String>,
 }
+
+/// [`ChoiceBody::closed_as`] / [`SecretBody::closed_as`]: a person the card
+/// was for closed it without answering.
+pub const CLOSED_DISMISSED: &str = "dismissed";
+/// The agent that asked took the card back.
+pub const CLOSED_WITHDRAWN: &str = "withdrawn";
+/// The longest dismiss or withdraw reason (one line).
+pub const CLOSE_REASON_MAX_CHARS: usize = 200;
 
 /// What an action card does when a person answers it: the daemon's action
 /// `id` (e.g. `zen.widget.keep`) with its `params`. `dedupe` keys "one
@@ -121,6 +140,12 @@ pub struct SecretBody {
     /// other way to keep it. Display only: the vault request is what binds.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub once: bool,
+    /// As [`ChoiceBody::closed_as`].
+    #[serde(default, rename = "closedAs", skip_serializing_if = "Option::is_none")]
+    pub closed_as: Option<String>,
+    /// As [`ChoiceBody::close_reason`].
+    #[serde(default, rename = "closeReason", skip_serializing_if = "Option::is_none")]
+    pub close_reason: Option<String>,
 }
 
 /// How a secret card says K2 sends the secret: the vault's injection
@@ -783,6 +808,8 @@ impl OverlayDoc {
                 answered_at: None,
                 expires_at: None,
                 action: None,
+                closed_as: None,
+                close_reason: None,
             }),
             secret: None,
             widget: None,
@@ -836,6 +863,8 @@ impl OverlayDoc {
                 env_name: proposal.env_name,
                 replaces: proposal.replaces,
                 once: proposal.once,
+                closed_as: None,
+                close_reason: None,
             }),
             widget: None,
             design: None,

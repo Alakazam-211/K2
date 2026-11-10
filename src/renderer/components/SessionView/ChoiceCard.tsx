@@ -10,7 +10,8 @@
 import { SitePinForm } from '@/components/WorkspacePanel/SitePinForm'
 import type { ServerScope } from '@/kessel/server-scope'
 import { useState, type JSX } from 'react'
-import { cardExpiryLabel } from './overlayThread'
+import { CardDismiss } from './CardDismiss'
+import { cardExpiryLabel, closedCardLine, type CardClosedAs } from './overlayThread'
 import { PermissionBatchCard, PermissionCard } from './PermissionCard'
 import type { PermissionCardActions, PermissionCardData } from './permissionCardView'
 import { CHAMFER_CUT, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
@@ -34,17 +35,28 @@ export function ChoiceCard(props: ChoiceCardProps): JSX.Element {
   if (p) {
     const actions = props.permissionActions ?? null
     const from = props.from ?? ''
-    return p.view.kind === 'batch' ? (
-      <PermissionBatchCard view={p.view} from={from} actions={actions} nowSec={props.nowSec} />
-    ) : (
-      <PermissionCard
-        view={p.view}
-        resultMessage={p.result?.message || null}
-        from={from}
-        actions={actions}
-        options={props.options}
-        nowSec={props.nowSec}
-      />
+    const card =
+      p.view.kind === 'batch' ? (
+        <PermissionBatchCard view={p.view} from={from} actions={actions} nowSec={props.nowSec} />
+      ) : (
+        <PermissionCard
+          view={p.view}
+          resultMessage={p.result?.message || null}
+          from={from}
+          actions={actions}
+          options={props.options}
+          nowSec={props.nowSec}
+        />
+      )
+    // Dismiss (0.46.11): for a person who may answer it, while it waits. A
+    // dismiss applies nothing and is not a denial (the daemon's rule).
+    const dismissable = props.status === 'pending' && !!props.onDismiss && !!actions && p.view.viewer.canAnswer
+    if (!dismissable || !props.onDismiss) return card
+    return (
+      <div className="flex flex-col gap-1">
+        {card}
+        <CardDismiss onDismiss={props.onDismiss} />
+      </div>
     )
   }
   return <PlainChoiceCard {...props} />
@@ -80,6 +92,14 @@ export interface ChoiceCardProps {
   permissionActions?: PermissionCardActions | null
   /** The doc's sender, for a permission card without the agent's name. */
   from?: string
+  /** 0.46.11: close the waiting card without answering it (a person's
+   *  Dismiss, with an optional reason). Absent: no Dismiss (a view that
+   *  can't, or a settings card only its owner answers). Throws the
+   *  daemon's refusal. */
+  onDismiss?: (reason?: string) => unknown
+  /** How a `voided` card closed (`closedAs`) and why (`closeReason`). */
+  closedAs?: CardClosedAs | null
+  closeReason?: string | null
 }
 
 function PlainChoiceCard({
@@ -95,8 +115,13 @@ function PlainChoiceCard({
   openPinForm,
   pinScope,
   onPick,
+  onDismiss,
+  closedAs,
+  closeReason,
+  from,
 }: ChoiceCardProps): JSX.Element {
   const pending = status === 'pending'
+  const closedLine = status === 'voided' && closedAs ? closedCardLine(closedAs, answeredBy ?? null, from ?? '', closeReason) : null
   const [pinClosed, setPinClosed] = useState(false)
   const expiry =
     status === 'expired'
@@ -188,6 +213,15 @@ function PlainChoiceCard({
           {error}
         </div>
       ) : null}
+      {closedLine && (
+        <div
+          data-testid="thread-choice-closed"
+          data-closed-as={closedAs ?? undefined}
+          className="text-[10px] text-[var(--thread-card-muted,var(--color-text-muted))]"
+        >
+          {closedLine}
+        </div>
+      )}
       {status === 'answered' && answeredBy && (
         <div
           data-testid="thread-choice-answered-by"
@@ -216,6 +250,7 @@ function PlainChoiceCard({
           </button>
         </div>
       )}
+      {pending && onDismiss && <CardDismiss onDismiss={onDismiss} />}
     </div>
   )
 }

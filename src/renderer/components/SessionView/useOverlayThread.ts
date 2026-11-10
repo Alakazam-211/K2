@@ -85,6 +85,7 @@ import {
   threadAnswerBody,
   threadCardsParams,
   threadCardsQuery,
+  type CardClosedAs,
   type OverlayThreadItem,
   type OverlayWsFrame,
   type ThreadAnswerPayload,
@@ -173,7 +174,7 @@ export function useOverlayThread(opts: {
    *  objects, and then `text` may be empty. */
   post: (text: string, attachments?: ThreadPostAttachment[]) => Promise<void>
   answer: (id: string, payload: ThreadAnswerPayload) => Promise<void>
-  voidCard: (id: string) => Promise<void>
+  voidCard: (id: string, reason?: string) => Promise<void>
   hasMore: boolean
   loadOlder: () => Promise<void>
   /** Every older page, to the Thread's start (a search). */
@@ -787,23 +788,29 @@ export function useOverlayThread(opts: {
     [scope, addr],
   )
 
+  // prd-popup-close-and-card-dismiss-v1 B8: a person's Dismiss (with an
+  // optional one-line reason). The card stays in the history as closed;
+  // the daemon's answer says how it closed (`closedAs`).
   const voidCard = useCallback(
-    async (id: string) => {
+    async (id: string, reason?: string) => {
       if (!addr.trim() || !id) return
-      await daemonCliPost(scope, 'thread/void', { addr, id })
+      const why = reason?.trim()
+      const r = await daemonCliPost<{ closedAs?: unknown; reason?: unknown }>(scope, 'thread/void', why ? { addr, id, reason: why } : { addr, id })
+      const closedAs: CardClosedAs = r?.closedAs === 'withdrawn' ? 'withdrawn' : 'dismissed'
+      const closed = { closedAs, ...(why ? { closeReason: why } : {}) }
       setItems((prev) =>
         prev.map((it) => {
           if (it.id !== id) return it
           if (it.doc.kind === 'choice' && it.doc.choice) {
             return {
               ...it,
-              doc: { ...it.doc, choice: { ...it.doc.choice, status: 'voided', answer: null } },
+              doc: { ...it.doc, choice: { ...it.doc.choice, status: 'voided', answer: null, ...closed } },
             }
           }
           if (it.doc.kind === 'secret' && it.doc.secret) {
             return {
               ...it,
-              doc: { ...it.doc, secret: { ...it.doc.secret, status: 'voided' } },
+              doc: { ...it.doc, secret: { ...it.doc.secret, status: 'voided', ...closed } },
             }
           }
           return it

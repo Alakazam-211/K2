@@ -608,8 +608,11 @@ fn with_wait(
         };
         match req.status.as_str() {
             "pending" => {}
-            // Only a person closes a secret card (`handle_void`).
-            "void" => return Err(VaultError::forbidden("card_declined", "a person declined; nothing was saved")),
+            // A person dismissed it, or the asking agent withdrew it
+            // (prd-popup-close-and-card-dismiss-v1 B5): 410 with who and
+            // why, so the wait ends with its own exit code (5). A close with
+            // no `closedAs` (a card from before 0.46.11) stays `card_declined`.
+            "void" => return Err(closed_card_error(&req.card_id)),
             "expired" => return Err(VaultError::forbidden("card_expired", "the card expired before anyone saved it; nothing was saved")),
             // Saved, and still refused: the answer says why (its delivery,
             // its scope). Nothing more will change while we wait.
@@ -624,6 +627,27 @@ fn with_wait(
             return Ok(json!({ "ok": true, "waiting": true, "card": req.card_id, "waitSecs": wait_secs }));
         }
         vault.wait_card_change(seen, left);
+    }
+}
+
+/// Why a waited-on secret card closed without a value: `card_dismissed`
+/// (a person, with their reason) or `card_withdrawn` (the asking agent),
+/// both 410; else the older `card_declined` (403).
+fn closed_card_error(card_id: &str) -> VaultError {
+    let secret = k2_core::overlay::store::get_doc(card_id).ok().flatten().and_then(|d| d.secret);
+    let Some(s) = secret else {
+        return VaultError::forbidden("card_declined", "a person declined; nothing was saved");
+    };
+    let why = s.close_reason.as_deref().map(|r| format!(": \"{r}\"")).unwrap_or_default();
+    let who = s.answered_by.as_ref().map(|a| a.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| a.login.clone()));
+    match s.closed_as.as_deref() {
+        Some(k2_core::overlay::CLOSED_DISMISSED) => VaultError::new(
+            "card_dismissed",
+            410,
+            format!("{} dismissed card {card_id} without saving a value{why}; nothing was saved", who.unwrap_or_else(|| "a person".to_string())),
+        ),
+        Some(k2_core::overlay::CLOSED_WITHDRAWN) => VaultError::new("card_withdrawn", 410, format!("card {card_id} was withdrawn by the agent that asked{why}; nothing was saved")),
+        _ => VaultError::forbidden("card_declined", "a person declined; nothing was saved"),
     }
 }
 

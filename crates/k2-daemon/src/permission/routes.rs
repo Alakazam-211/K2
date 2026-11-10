@@ -690,12 +690,56 @@ fn cancel(workspace_id: &str, body: &Map<String, Value>) -> CliResponse {
     let msg = format!("Withdrawn by {}.", present::workspace_handle(workspace_id));
     match answer::close_open(std::slice::from_ref(&r), RequestState::Cancelled, &msg).into_iter().next() {
         Some(done) => {
+            stamp_withdrawn(&done, None);
             let mut v = summary(&done);
             v["message"] = json!(format!("Withdrawn {}. Nothing was applied.", done.display_id()));
             ok(v)
         }
         None => err(409, code::REQUEST_NOT_PENDING, format!("{} is {}; only a waiting request can be withdrawn", r.display_id(), r.state.as_str())),
     }
+}
+
+/// The asking agent withdrew `req` (prd-popup-close-and-card-dismiss-v1 B6):
+/// once its card has closed (nothing else on it is open), the card says
+/// "withdrawn" in the history instead of vanishing like a daemon close.
+fn stamp_withdrawn(req: &PermissionRequest, reason: Option<&str>) {
+    let (Some(conv), Some(card)) = (req.conversation_id.as_deref(), req.card_id.as_deref()) else { return };
+    match k2_core::overlay::stamp_voided_card(conv, card, k2_core::overlay::CLOSED_WITHDRAWN, None, reason) {
+        Ok(cb) => crate::overlay_routes::publish_action_frame(&cb),
+        // A batch card with other items still open stays pending.
+        Err(e) => k2_core::log_debug!("[permission] withdrawn stamp on {card}: {e}"),
+    }
+}
+
+/// `k2 thread withdraw <addr> <card-id>` on a permission or batch card
+/// (B7): the asking agent withdraws every open request of ITS OWN on that
+/// card, exactly as `k2 permission cancel` does (no outcome turn). A card
+/// with no request of this workspace's is someone else's: 403
+/// `card_not_yours`, nothing changes.
+pub(crate) fn withdraw_card(workspace_id: &str, conversation_id: &str, card_id: &str, reason: Option<&str>) -> CliResponse {
+    let reqs = match store::for_card(conversation_id, card_id) {
+        Ok(r) => r,
+        Err(e) => return err(500, "db", e),
+    };
+    if !reqs.iter().any(|r| r.workspace_id == workspace_id) {
+        return err(403, "card_not_yours", "an agent withdraws only the cards it asked for");
+    }
+    let mine: Vec<PermissionRequest> = reqs.into_iter().filter(|r| r.workspace_id == workspace_id && r.is_answerable()).collect();
+    let msg = format!("Withdrawn by {}.", present::workspace_handle(workspace_id));
+    let done = answer::close_open(&mine, RequestState::Cancelled, &msg);
+    let Some(first) = done.first() else {
+        return err(409, code::REQUEST_NOT_PENDING, "nothing on this card is waiting; it was already answered or closed");
+    };
+    stamp_withdrawn(first, reason);
+    let doc = k2_core::overlay::get_thread_doc(conversation_id, card_id).ok().flatten();
+    let choice = doc.as_ref().and_then(|d| d.choice.as_ref());
+    ok(json!({
+        "ok": true,
+        "id": card_id,
+        "status": choice.map(|c| c.status.clone()).unwrap_or_default(),
+        "closedAs": choice.and_then(|c| c.closed_as.clone()),
+        "decided": done.iter().map(|r| json!({ "id": r.display_id(), "state": r.state.as_str() })).collect::<Vec<_>>(),
+    }))
 }
 
 /// Once, on a denied request within 7 days (§3.2): a new `why`, the card

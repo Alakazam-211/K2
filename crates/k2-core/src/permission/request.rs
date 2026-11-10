@@ -73,10 +73,14 @@ pub enum RequestState {
     Cancelled,
     /// Closed because a permission-cards switch turned off (§2.5).
     Closed,
+    /// A person it was for closed the card without answering
+    /// (prd-popup-close-and-card-dismiss-v1 B6): nothing applied, and not
+    /// a denial (no re-ask block, held requests stay open).
+    Dismissed,
 }
 
 impl RequestState {
-    pub const ALL: [RequestState; 10] = [
+    pub const ALL: [RequestState; 11] = [
         RequestState::Pending,
         RequestState::AlreadyDone,
         RequestState::Applying,
@@ -87,6 +91,7 @@ impl RequestState {
         RequestState::Failed,
         RequestState::Cancelled,
         RequestState::Closed,
+        RequestState::Dismissed,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -101,6 +106,7 @@ impl RequestState {
             RequestState::Failed => "failed",
             RequestState::Cancelled => "cancelled",
             RequestState::Closed => "closed",
+            RequestState::Dismissed => "dismissed",
         }
     }
 
@@ -119,7 +125,7 @@ impl RequestState {
             RequestState::Pending | RequestState::AlreadyDone | RequestState::Applying => "pending",
             RequestState::Approved | RequestState::Denied | RequestState::Failed | RequestState::Stale => "answered",
             RequestState::Expired => "expired",
-            RequestState::Cancelled | RequestState::Closed => "voided",
+            RequestState::Cancelled | RequestState::Closed | RequestState::Dismissed => "voided",
         }
     }
 }
@@ -335,6 +341,7 @@ mod tests {
                 ("failed", "answered"),
                 ("cancelled", "voided"),
                 ("closed", "voided"),
+                ("dismissed", "voided"),
             ],
             "PRD §17.2.4"
         );

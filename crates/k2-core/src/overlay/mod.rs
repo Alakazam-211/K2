@@ -18,7 +18,7 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{CardAction, ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretInject, SecretProposal, ThreadChangedFile, ThreadChanges, ThreadContext, THREAD_CHANGES_MAX_FILES, WidgetOrigin, WidgetPlacementClaim};
+pub use doc::{CardAction, ChoiceBody, ChoiceOption, CLOSED_DISMISSED, CLOSED_WITHDRAWN, CLOSE_REASON_MAX_CHARS, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretInject, SecretProposal, ThreadChangedFile, ThreadChanges, ThreadContext, THREAD_CHANGES_MAX_FILES, WidgetOrigin, WidgetPlacementClaim};
 pub use attachments::ThreadAttachment;
 pub use options::{check_ask_caps, parse_options_value, split_options_csv};
 pub use store::{ClientIdHit, ExtTxn, OverlayPage, SeqRemap, ThreadDelta};
@@ -947,14 +947,31 @@ pub fn mark_secret(
     })
 }
 
-/// Explicit dismiss (secret X / chrome dismiss) or the asking agent's
-/// `k2 thread void` of its own superseded card. `by`: the person who
-/// dismissed it (`answeredBy`), None for an agent.
+/// The daemon's own close of a pending card (a newer card replaced it, a
+/// permission-cards switch turned off, a request withdrawn by the daemon):
+/// `voided` with no `closedAs`. `by`: who, when a person did it.
 pub fn void_card(
+    conversation_id: &str,
+    project_id: &str,
+    card_id: &str,
+    by: Option<PostAuthor>,
+) -> Result<CardCallback, String> {
+    close_card_as(conversation_id, project_id, card_id, by, None, None)
+}
+
+/// Close a pending choice or secret card as `voided`, stamped with how
+/// (prd-popup-close-and-card-dismiss-v1 B1): `closed_as` is
+/// [`doc::CLOSED_DISMISSED`] (a person it was for), [`doc::CLOSED_WITHDRAWN`]
+/// (the agent that asked) or None (the daemon's own close). `reason` is one
+/// line (callers check its length). The inject line names the card, so the
+/// agent knows which question closed and why.
+pub fn close_card_as(
     conversation_id: &str,
     _project_id: &str,
     card_id: &str,
     by: Option<PostAuthor>,
+    closed_as: Option<&str>,
+    reason: Option<&str>,
 ) -> Result<CardCallback, String> {
     let _guard = WRITE.lock();
     let item = thread_item(conversation_id, card_id)?;
@@ -966,14 +983,22 @@ pub fn void_card(
     if doc.is_due(doc::now_secs()) {
         return Err(CARD_NOT_PENDING.to_string());
     }
+    let reason = closed_as.and(reason).map(str::trim).filter(|r| !r.is_empty());
+    let why = reason.map(|r| format!(": \"{r}\"")).unwrap_or_default();
     let inject_line = if doc.is_pending_choice() {
         if let Some(c) = doc.choice.as_mut() {
             c.status = "voided".to_string();
             c.answer = None;
             c.answered_by = by;
             c.answered_at = at;
+            c.closed_as = closed_as.map(str::to_string);
+            c.close_reason = reason.map(str::to_string);
         }
-        "card voided".to_string()
+        match closed_as {
+            Some(doc::CLOSED_DISMISSED) => format!("dismissed card {card_id} without answering{why}"),
+            Some(doc::CLOSED_WITHDRAWN) => format!("withdrew card {card_id}{why}"),
+            _ => "card voided".to_string(),
+        }
     } else if doc.is_pending_secret() {
         // A pending card never wrote a value, so voiding it deletes
         // nothing: a stored value under the same name belongs to an
@@ -983,8 +1008,14 @@ pub fn void_card(
             s.status = "voided".to_string();
             s.answered_by = by;
             s.answered_at = at;
+            s.closed_as = closed_as.map(str::to_string);
+            s.close_reason = reason.map(str::to_string);
         }
-        format!("secret {name} declined")
+        match closed_as {
+            Some(doc::CLOSED_DISMISSED) => format!("dismissed the secret card for {name} ({card_id}); nothing was saved{why}"),
+            Some(doc::CLOSED_WITHDRAWN) => format!("withdrew the secret card for {name} ({card_id}){why}"),
+            _ => format!("secret {name} declined"),
+        }
     } else {
         return Err(CARD_NOT_PENDING.to_string());
     };
@@ -996,6 +1027,33 @@ pub fn void_card(
         doc,
         inject_line,
     })
+}
+
+/// Stamp an already-`voided` choice card with how it closed: a permission
+/// card whose requests a person dismissed or the agent withdrew closes
+/// through the permission refresh, then this records how, who and why.
+/// Same id, same seq; the caller publishes the frame.
+pub fn stamp_voided_card(
+    conversation_id: &str,
+    card_id: &str,
+    closed_as: &str,
+    by: Option<PostAuthor>,
+    reason: Option<&str>,
+) -> Result<CardCallback, String> {
+    let _guard = WRITE.lock();
+    let item = thread_item(conversation_id, card_id)?;
+    let mut doc = item.doc;
+    let choice = doc.choice.as_mut().ok_or("not a choice card")?;
+    if choice.status != "voided" {
+        return Err("the card isn't closed".to_string());
+    }
+    choice.closed_as = Some(closed_as.to_string());
+    choice.close_reason = reason.map(str::trim).filter(|r| !r.is_empty()).map(str::to_string);
+    if by.is_some() {
+        choice.answered_by = by;
+    }
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
+    Ok(CardCallback { conversation_id: conversation_id.to_string(), doc_id: doc.id.clone(), seq: item.seq, doc, inject_line: String::new() })
 }
 
 /// Close a pending card as `expired` (its time passed, or its vault

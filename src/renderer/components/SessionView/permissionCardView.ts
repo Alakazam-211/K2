@@ -32,6 +32,8 @@ export type PermissionState =
   | 'failed'
   | 'cancelled'
   | 'closed'
+  /** 0.46.11: a person closed the card without answering; not a denial. */
+  | 'dismissed'
 
 const STATES: ReadonlySet<string> = new Set([
   'pending',
@@ -44,6 +46,7 @@ const STATES: ReadonlySet<string> = new Set([
   'failed',
   'cancelled',
   'closed',
+  'dismissed',
 ])
 
 /** The exact labels the daemon matches (§17.3). Never re-cased. */
@@ -364,6 +367,11 @@ export function stateLine(item: PermissionItem, viewer: PermissionViewer, agent:
       return `Withdrawn by ${agent}`
     case 'closed':
       return 'Closed: permission cards were turned off'
+    case 'dismissed': {
+      const why = a?.reason?.trim()
+      const head = a ? `Dismissed by ${byWord(a.by, viewer)}, nothing applied` : 'Dismissed, nothing applied'
+      return why ? `${head}: ${why}` : head
+    }
   }
 }
 

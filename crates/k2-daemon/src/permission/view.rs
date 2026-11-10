@@ -403,6 +403,14 @@ fn state_line(item: &ItemView, state: RequestState, agent: &str, doc: &OverlayDo
             _ => format!("Couldn't apply {what}. Nothing was applied."),
         },
         RequestState::Cancelled => format!("Withdrawn by {agent}: {}.", item.setting),
+        RequestState::Dismissed => {
+            let reason = item.answer.as_ref().and_then(|a| a.reason.clone()).filter(|r| !r.trim().is_empty());
+            let by = answered_by(item, doc);
+            match reason {
+                Some(r) => format!("Dismissed by {by}; nothing was applied: {what}. Reason: {r}"),
+                None => format!("Dismissed by {by}; nothing was applied: {what}."),
+            }
+        }
         RequestState::Closed => format!("Closed: permission cards were turned off. {what} was not applied."),
     }
 }

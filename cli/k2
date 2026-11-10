@@ -22554,7 +22554,7 @@ cmd_thread() {
     for arg in "$@"; do
         if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
         case "$arg" in
-            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format)
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason)
                 skip_next=1
                 continue
                 ;;
@@ -22565,7 +22565,7 @@ cmd_thread() {
     case "$first_pos" in
         ask) cmd_thread_ask "$@"; return $? ;;
         secret) cmd_thread_secret "$@"; return $? ;;
-        void) cmd_thread_void "$@"; return $? ;;
+        void|withdraw|dismiss) cmd_thread_void "$@"; return $? ;;
         export|import|imports) cmd_thread_transfer "$@"; return $? ;;
         unread) cmd_thread_unread "$@"; return $? ;;
         read-all) cmd_thread_read_all "$@"; return $? ;;
@@ -22614,7 +22614,8 @@ cmd_thread() {
         echo "       k2 thread <addr> [--json] [--limit N|--all] [--before-seq N]" >&2
         echo "       k2 thread ask <addr> \"prompt\" --options \"a,b,c\"" >&2
         echo "       k2 thread secret <addr> --name NAME" >&2
-        echo "       k2 thread void <addr> <card-id>" >&2
+        echo "       k2 thread withdraw <addr> <card-id> [--why \"…\"]" >&2
+        echo "       k2 thread dismiss <addr> <card-id> [--why \"…\"]" >&2
         exit 1
     }
 
@@ -22900,30 +22901,41 @@ print(d.get("id",""))
     return $rc
 }
 
+# prd-popup-close-and-card-dismiss-v1 (0.46.11): close a waiting card
+# without answering it. `withdraw` (the asking agent; `void` is its old
+# name) and `dismiss` (a person) hit the same route; the daemon decides
+# which from the caller's credential, never from the verb.
 cmd_thread_void() {
-    local target="" card="" json="false"
+    local target="" card="" json="false" why="" verb="withdraw"
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            void) shift ;;
+            void|withdraw|dismiss) [[ -z "$target" && "$verb" == "withdraw" ]] && verb="$1"; shift ;;
             --json) json="true"; shift ;;
+            --why|--reason)
+                [[ $# -ge 2 ]] || { echo "Error: $1 requires a value (one line, at most 200 characters)" >&2; exit 2; }
+                why="$2"; shift 2 ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
-                exit 1 ;;
+                exit 2 ;;
             *)
                 if [[ -z "$target" ]]; then target="$1"
                 elif [[ -z "$card" ]]; then card="$1"
                 else
                     echo "Error: unexpected extra argument '$1'" >&2
-                    exit 1
+                    exit 2
                 fi
                 shift ;;
         esac
     done
-    [[ -n "$target" ]] || { echo "Error: address required" >&2; echo "Usage: k2 thread void <addr> <card-id>" >&2; exit 1; }
-    [[ -n "$card" ]] || { echo "Error: card id required (the id k2 thread ask / secret printed)" >&2; echo "Usage: k2 thread void <addr> <card-id>" >&2; exit 1; }
+    [[ "$verb" == "void" ]] && verb="withdraw"
+    [[ -n "$target" ]] || { echo "Error: address required" >&2; echo "Usage: k2 thread $verb <addr> <card-id> [--why \"…\"]" >&2; exit 2; }
+    [[ -n "$card" ]] || { echo "Error: card id required (the id k2 thread ask / secret printed)" >&2; echo "Usage: k2 thread $verb <addr> <card-id> [--why \"…\"]" >&2; exit 2; }
     local body
-    body=$(ADDR="$target" CARD="$card" python3 -c 'import json,os
-print(json.dumps({"addr":os.environ["ADDR"],"id":os.environ["CARD"]}))
+    body=$(ADDR="$target" CARD="$card" WHY="$why" python3 -c 'import json,os
+obj={"addr":os.environ["ADDR"],"id":os.environ["CARD"]}
+if os.environ.get("WHY"):
+    obj["reason"]=os.environ["WHY"]
+print(json.dumps(obj))
 ')
     local response
     response=$(cli_send cli_post_json "/cli/thread/void" "$body")
@@ -22942,12 +22954,19 @@ except Exception:
     sys.exit(0)
 if d.get("ok") is not True:
     err=d.get("error") or d
+    code=""
     if isinstance(err, dict):
-        sys.stderr.write("%s: %s\n" % (err.get("code") or "error", err.get("hint") or err))
+        code=err.get("code") or "error"
+        sys.stderr.write("%s: %s\n" % (code, err.get("hint") or err))
     else:
         sys.stderr.write(str(err)+"\n")
+    if code in ("card_not_yours", "action_card_person_only", "forbidden", "card_not_pending", "request_not_pending"):
+        sys.exit(3)
+    if code == "not_found":
+        sys.exit(4)
     sys.exit(2)
-print("%s  %s" % (d.get("id",""), d.get("status","")))
+# "<card-id>  dismissed" / "withdrawn" (an older daemon: "voided").
+print("%s  %s" % (d.get("id",""), d.get("closedAs") or d.get("status","")))
 '
 }
 
@@ -23204,9 +23223,11 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
       The value goes into the K2 vault; you get a k2v:// reference and use it with
       `k2 vault fetch --secret NAME …`. YOU choose the sites, scope, delivery and how
       K2 sends it: the card shows your choice in one sentence and the person just
-      clicks Save. If they say it's wrong, `k2 thread void` it and ask again. Exact
+      clicks Save. If they say it's wrong, `k2 thread withdraw` it and ask again. Exact
       hosts only. All flags: k2 thread secret --help. More: k2 study vault
-  k2 thread void <addr> <card-id>                 # close your own card when it is obsolete
+  k2 thread withdraw <addr> <card-id> [--why "…"] # take back your own card (no longer relevant)
+      (void is the old name and still works)
+  k2 thread dismiss <addr> <card-id> [--why "…"]  # for a PERSON: close a card without answering
   k2 thread unread [--kind thread|project] [--json]  # a PERSON's unread + waiting counts
   k2 thread read-all <agent> [--json]             # mark all of an agent's Thread messages read
       (for you: every chat's Thread of that agent; waiting cards stay waiting)
@@ -23222,14 +23243,27 @@ and App guests get 403, and nobody posts there (message the bot from its chat).
 Post and continue; you get a later turn when they answer. Do not --wait. Do not
 emit widget JSON.
 
-A card stays open until the person taps it (or dismisses it), you void it, or its
-time frame runs out (choice cards: 7 days unless --expires / --no-expiry; secret cards:
-7 days). Pick a time frame that fits the decision. People may discuss a card before
-answering: keep it open and answer their questions in prose;
+A card stays open until the person taps it (or dismisses it), you withdraw it, or
+its time frame runs out (choice cards: 7 days unless --expires / --no-expiry; secret
+cards: 7 days). Pick a time frame that fits the decision. People may discuss a card
+before answering: keep it open and answer their questions in prose;
 never treat their prose as the card's answer; talking never closes or shortens it.
-Void your own card only when the question is truly obsolete (k2 thread void), or
-post a new card if the options changed. An expired card says so on the Thread; ask
-again if you still need it.
+Withdraw your own card only when the question is truly obsolete
+(k2 thread withdraw <addr> <card-id> --why "…"), or post a new card if the options
+changed. A secret card: only one your own session asked for. A permission card:
+your own requests on it (the same as k2 permission cancel).
+
+Closed cards stay on the Thread, marked Dismissed or Withdrawn. When the person
+dismisses your card you get a turn like an answer:
+  [thread:<addr>] dismissed card <id> without answering: "<their reason>"
+It means "not needed now", not yes and not no: don't ask the same thing again unless
+something changed. A dismissed permission card is not a denial: nothing was applied,
+and you may ask again if you still need it. k2 vault file --wait on a dismissed or
+withdrawn secret card exits 5 (card_dismissed / card_withdrawn). An expired card says
+so on the Thread; ask again if you still need it.
+
+withdraw/dismiss exit 0 (prints "<card-id>  withdrawn|dismissed"), 2 bad usage, 3
+refused (not your card, already closed), 4 not found.
 
 Text (and ask prompts) render markdown: **bold**, lists, `code`, fences, links.
 
@@ -23330,8 +23364,8 @@ EXAMPLES
   k2 thread secret ops --name LOGIN_CODE --scope session --delivery file --once
 
 It prints the card id, and on stderr what the card says. Don't wait: you get a
-Thread turn when it is saved. Wrong? k2 thread void <addr> <card-id> and ask
-again. --json prints the whole answer. More: k2 study vault
+Thread turn when it is saved. Wrong? k2 thread withdraw <addr> <card-id> and
+ask again. --json prints the whole answer. More: k2 study vault
 EOF
 }
 
@@ -33932,6 +33966,9 @@ _vault_exit_for() {
         400|413|422) echo 2 ;;
         401|403) echo 3 ;;
         404) echo 4 ;;
+        # A waited-on card closed without a value: card_dismissed /
+        # card_withdrawn (prd-popup-close-and-card-dismiss-v1 B5).
+        410) echo 5 ;;
         *) echo 1 ;;
     esac
 }
@@ -35240,9 +35277,12 @@ vault fetch); the refusal says who can widen it.
 open Thread card for NAME was asked by this session or is in the chat it
 runs, block until a person saves it and print the path. --ttl starts when
 the file is written. Exit 4 at once if no open card asks for NAME (ask with
-k2 thread secret). Exit 3, and the error line says which: card_declined (a
-person dismissed it), card_expired, or no_answer (your time ran out; the
-card stays open and the line names it). Example:
+k2 thread secret). Exit 5 when the card closed without a value:
+card_dismissed (a person dismissed it; the line says who and why) or
+card_withdrawn (it was withdrawn with k2 thread withdraw). Exit 3, and the
+error line says which: card_expired, no_answer (your time ran out; the card
+stays open and the line names it), or card_declined (an older K2 server's
+word for a dismissed card). Example:
 some-cli login --code-stdin < "$(k2 vault file CODE --wait 10m)"
 A one-time code (k2 thread secret --once) is read here once, then deleted.
 
@@ -46480,8 +46520,8 @@ cmd_schema() {
   "commands": [
     {
       "name": "thread",
-      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread <addr> --seq N | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread void <addr> <card-id>",
-      "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). A card stays open while people discuss it (their prose is not the answer); void your own card only when it is obsolete (k2 thread void <addr> <card-id>). Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
+      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread <addr> --seq N | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread withdraw <addr> <card-id> [--why \"…\"] | k2 thread dismiss <addr> <card-id> [--why \"…\"]",
+      "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). A card stays open while people discuss it (their prose is not the answer); withdraw your own card only when it is obsolete (k2 thread withdraw <addr> <card-id>; void is the old name). A person may dismiss a card without answering: you get a [thread:<addr>] dismissed card <id> turn, which means not needed now (never a yes, no or denial). Closed cards stay on the Thread as Dismissed or Withdrawn. Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
       "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output (ask: {id,prompt,options}; secret never includes the value)."},
@@ -46495,7 +46535,8 @@ cmd_schema() {
         {"name": "--option", "arg": "label", "description": "Repeatable choice label. Mix with --options is 400."},
         {"name": "--allow-custom", "arg": null, "description": "Allow a free-text answer on the choice card."},
         {"name": "--expires", "arg": "2h|3d|90m|secs", "description": "How long the choice card stays open (default 7 days). Talking never shortens it."},
-        {"name": "--no-expiry", "arg": null, "description": "Keep the choice card open until answered or voided."},
+        {"name": "--no-expiry", "arg": null, "description": "Keep the choice card open until answered, dismissed or withdrawn."},
+        {"name": "--why", "arg": "text", "description": "withdraw/dismiss: one-line reason (at most 200 characters) shown on the closed card and told to the agent."},
         {"name": "--name", "arg": "NAME", "description": "Required for secret. Vault key. Never printed."},
         {"name": "--prompt", "arg": "text", "description": "Optional secret field prompt."},
         {"name": "--dest", "arg": "vault", "description": "Secret destination. vault only."}
@@ -53963,7 +54004,7 @@ ASKING: YOU MAKE THE CHOICES
   Pick them on the card: --for (sites), --delivery fetch|file|env, --scope,
   --kind; fetch: --inject-dst header:<N>|query:<p>|basic (user:password).
   Prefer fetch with exact sites; file/env only when a tool must read it.
-  Bad card: k2 thread void <addr> <card-id>. Same name: saving replaces it.
+  Bad card: k2 thread withdraw <addr> <card-id>. Same name: saving replaces it.
 
 HOW YOU GET A SECRET (delivery)
   fetch   K2 makes the HTTPS call and adds the key. You never see it.
@@ -54423,8 +54464,9 @@ THREAD
                                 choice card; returns immediately
   `k2 thread secret <addr> --name NAME`
                                 secret field; you never see the value
-  `k2 thread void <addr> <card-id>`
-                                close your own card (obsolete question)
+  `k2 thread withdraw <addr> <card-id> [--why "…"]`
+                                take back your own card (obsolete question;
+                                `void` is the old name)
   `k2 thread <addr> "…" --file docs/report.pdf --file src/a.rs:12-40`
                                 attach the files you mention (≤10)
 
@@ -54435,9 +54477,15 @@ THREAD
 CARDS STAY OPEN WHILE PEOPLE TALK
   A person may discuss a card before answering it. Their messages
   never close it and are never its answer. Keep it open and answer
-  their questions in prose; they tap when ready. Void your own card
-  only when the question is truly obsolete (`k2 thread void`), or post
-  a new card if the options changed.
+  their questions in prose; they tap when ready. Withdraw your own card
+  only when the question is truly obsolete (`k2 thread withdraw`), or
+  post a new card if the options changed.
+
+  They may dismiss a card instead of answering it: you get
+  `[thread:<addr>] dismissed card <id> without answering: "<why>"`.
+  That means "not needed now", not yes and not no; don't ask the same
+  thing again unless something changed. A dismissed permission card is
+  not a denial: nothing was applied, and you may ask again later.
 
   A card is not an open gate forever: a choice card expires after 7
   days unless you pick a time frame that fits the decision
@@ -54611,7 +54659,7 @@ EXIT 3 — STOP LOOPING
                  (`k2 connections add`). Not "try a different username".
   card_person_only  (0.46.4) only a person answers a Thread card. You,
                  a K2 terminal or an App's server never can, your own card
-                 included: close it with `k2 thread void <addr> <id>`.
+                 included: close it with `k2 thread withdraw <addr> <id>`.
                  An App answers with the guest's own pass, never its own.
                  A guest you added, or whose password or email you set,
                  counts as you until the owner takes it over. Known, by

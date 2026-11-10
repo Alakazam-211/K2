@@ -417,7 +417,9 @@ export interface ThreadBubbleProps {
   nowSec?: number
   /** Resolves when the daemon took the answer; throws its refusal. */
   onAnswer?: (payload: ThreadAnswerPayload) => unknown
-  onVoid?: () => void
+  /** Close a waiting card without answering it (a person's Dismiss, with
+   *  an optional one-line reason). Throws (or rejects with) the refusal. */
+  onVoid?: (reason?: string) => unknown
   secret?: ThreadBubbleSecret
   /** A handoff card's decision (`/cli/vault/incoming/decide` on the
    *  card's own server: the room's, or a Garden row's feed). Absent: this
@@ -721,6 +723,9 @@ export const ThreadBubble = memo(function ThreadBubble({
           permission={item.doc.choice.permission ?? null}
           permissionActions={permissionActions}
           from={item.doc.from || ''}
+          onDismiss={onVoid}
+          closedAs={item.doc.choice.closedAs ?? null}
+          closeReason={item.doc.choice.closeReason ?? null}
           error={pickError}
           onPick={(label) => {
             // A refusal (not the owner, already answered, the folder
@@ -753,7 +758,9 @@ export const ThreadBubble = memo(function ThreadBubble({
             onSubmit={async (payload) => {
               await onAnswer?.(payload)
             }}
-            onDismiss={() => onVoid?.()}
+            onDismiss={() => {
+              void Promise.resolve(onVoid?.()).catch((err: unknown) => console.warn('[thread] dismiss failed:', err))
+            }}
             onMoreOptions={secret?.onMoreOptions}
           />
         </div>

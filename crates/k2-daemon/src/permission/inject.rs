@@ -106,6 +106,15 @@ pub(crate) fn outcome_line(req: &PermissionRequest, now: i64) -> Option<String> 
         RequestState::Closed => {
             format!("{p} closed: permission cards were turned off on this server. Nothing was applied. Ask your human the usual way.")
         }
+        // prd-popup-close-and-card-dismiss-v1 B4/B6: not a denial, no block.
+        RequestState::Dismissed => {
+            let reason = match req.reason.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+                Some(r) if r.ends_with(['.', '!', '?']) => format!(": \"{r}\""),
+                Some(r) => format!(": \"{r}.\""),
+                None => ".".to_string(),
+            };
+            format!("{p} dismissed by {by}{reason} Nothing was applied, and it is not a denial: ask again if you still need it.")
+        }
         RequestState::Cancelled | RequestState::Pending | RequestState::Applying => return None,
     };
     Some(line)

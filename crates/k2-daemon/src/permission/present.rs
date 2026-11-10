@@ -313,6 +313,8 @@ fn decision_of(req: &PermissionRequest) -> Option<&'static str> {
         RequestState::Approved | RequestState::Failed | RequestState::Stale => Some("allow"),
         RequestState::AlreadyDone => Some("close"),
         RequestState::Denied => Some("deny"),
+        // prd-popup-close-and-card-dismiss-v1 B6: who closed it, never a deny.
+        RequestState::Dismissed => Some("dismiss"),
         _ => None,
     }
 }
@@ -518,6 +520,9 @@ pub(crate) fn refresh_card(conversation_id: &str, card_id: &str, close: CardClos
                 CardClose::Answer { label, by } => overlay::close_action_card(conversation_id, card_id, label, by),
                 CardClose::Void => overlay::void_card(conversation_id, &project_id, card_id, None),
                 CardClose::Expire => overlay::expire_card(conversation_id, card_id),
+                CardClose::Dismiss { by, reason } => {
+                    overlay::close_card_as(conversation_id, &project_id, card_id, by, Some(overlay::CLOSED_DISMISSED), reason)
+                }
             };
             if let Err(e) = closed {
                 k2_core::log_debug!("[permission] close card {card_id}: {e}");
@@ -537,6 +542,10 @@ pub(crate) enum CardClose<'a> {
     Void,
     /// Its time ran out: `expired`.
     Expire,
+    /// A person it was for dismissed it without answering
+    /// (prd-popup-close-and-card-dismiss-v1 B6): `voided`, `closedAs:
+    /// dismissed`, with who and the reason.
+    Dismiss { by: Option<overlay::PostAuthor>, reason: Option<&'a str> },
 }
 
 /// The words a refusal or a list shows for a direction.

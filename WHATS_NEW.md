@@ -28,6 +28,11 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A sidecar's permission card shows up on the sidecar's own Thread.** When the main agent (or another sidecar) already had the same request waiting, a sidecar's `k2 permission request` was answered with that other card, on the main Thread: the person found nothing on the sidecar's Thread, and the answer went to the session that asked first. Each Thread now gets its own card; once one is allowed, the other says it's already on.
 - **`k2 app domain --help` is clearer about names your own web server serves (`--external`).** The domain only needs `k2 domain add`: pending is fine, and your nameservers can stay where they are. The help now also says where to point the name and how to pass it to your server when K2's front holds :443.
 
+### Popups and cards you can close
+- **Every popup has an × and closes on Esc or a click outside it,** including the prompt before a Garden widget opens a link. Closing does nothing: no link opens, no permission is granted or denied, nothing is saved.
+- **Dismiss a card that no longer matters.** A waiting card in a Thread (an agent's question, a secret request, a permission card) has Dismiss, with an optional one-line reason. The card stays in the history as Dismissed, on every device, and the agent is told so it stops waiting. A dismissed permission card grants nothing and is not a denial: the Access Audit says "dismissed", and the agent may ask again later.
+- **Agents can take a card back** with `k2 thread withdraw <addr> <card-id> --why "…"` (`void` still works); it shows as Withdrawn. `k2 vault file --wait` on a dismissed or withdrawn secret card exits 5.
+
 ## 0.46.10 — K2 is MIT; Voice & Chat only logins
 
 ### When you update

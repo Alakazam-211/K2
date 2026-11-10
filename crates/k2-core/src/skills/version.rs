@@ -325,7 +325,10 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// Bumped to 51 (0.46.8): the k2-cli skill names `k2 sidecar archive`.
 /// Bumped to 52 (0.46.10): K2 is MIT-licensed (was Fair Source, FSL).
 /// Bumped to 53 (0.46.11): the Study topics gain `organization` (the Org Chart).
-pub const SKILL_VERSION_WORKSPACE: u32 = 53;
+/// Bumped to 54 (0.46.11, prd-popup-close-and-card-dismiss-v1): agents
+/// `k2 thread withdraw` their own obsolete cards (`void` is the old name),
+/// and a person's dismiss turn means "not needed now", never a denial.
+pub const SKILL_VERSION_WORKSPACE: u32 = 54;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

@@ -285,7 +285,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   const voidRef = useRef(voidCard)
   voidRef.current = voidCard
   const answerById = useCallback((id: string, payload: ThreadAnswerPayload) => answerRef.current(id, payload), [])
-  const voidById = useCallback((id: string) => void voidRef.current(id), [])
+  const voidById = useCallback((id: string, reason?: string) => voidRef.current(id, reason), [])
   const workspaceName = addr.split('/')[0]
   const cardContext = useMemo<SecretCardContext>(
     () => ({ workspace: workspaceName, server: roomScope.label }),
@@ -633,7 +633,7 @@ interface OverlayRowProps {
   currentAddr?: string
   pastAddresses?: readonly string[]
   answerById: (id: string, payload: ThreadAnswerPayload) => unknown
-  voidById: (id: string) => void
+  voidById: (id: string, reason?: string) => Promise<void>
   cardContext: SecretCardContext
   onHandoffDecide: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
   handoffRemoteHost: string | null
@@ -652,7 +652,7 @@ const OverlayRow = memo(
   function OverlayRow({ item, answerById, voidById, ...rest }: OverlayRowProps): JSX.Element {
     const id = item.id
     const onAnswer = useCallback((payload: ThreadAnswerPayload) => answerById(id, payload), [answerById, id])
-    const onVoid = useCallback(() => voidById(id), [voidById, id])
+    const onVoid = useCallback((reason?: string) => voidById(id, reason), [voidById, id])
     return <ThreadItemRow item={item} onAnswer={onAnswer} onVoid={onVoid} {...rest} />
   },
   (a, b) =>
@@ -701,7 +701,7 @@ export function ThreadItemRow({
   pastAddresses?: readonly string[]
   /** Resolves when the daemon took the answer; throws its refusal. */
   onAnswer?: (payload: ThreadAnswerPayload) => unknown
-  onVoid?: () => void
+  onVoid?: (reason?: string) => unknown
   cardContext?: SecretCardContext
   /** A handoff card's decision on the room's server. */
   onHandoffDecide?: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>

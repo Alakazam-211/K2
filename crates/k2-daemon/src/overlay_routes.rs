@@ -4093,6 +4093,38 @@ fn card_error(e: String) -> CliResponse {
     }
 }
 
+/// The one-line `reason` (or `why`) a dismiss or withdraw carries
+/// (prd-popup-close-and-card-dismiss-v1 B3): trimmed, at most
+/// [`overlay::CLOSE_REASON_MAX_CHARS`] characters, no line breaks.
+fn close_reason_param(params: &HashMap<String, String>) -> Result<Option<String>, CliResponse> {
+    let Some(r) = opt_param(params, "reason").or_else(|| opt_param(params, "why")) else { return Ok(None) };
+    let r = r.trim().to_string();
+    if r.is_empty() {
+        return Ok(None);
+    }
+    if r.chars().count() > overlay::CLOSE_REASON_MAX_CHARS || r.contains(['\n', '\r']) {
+        return Err(usage(format!("a reason is one line of at most {} characters", overlay::CLOSE_REASON_MAX_CHARS)));
+    }
+    Ok(Some(r))
+}
+
+/// `POST /cli/thread/void`: close a waiting card without answering it
+/// (prd-popup-close-and-card-dismiss-v1 B1–B3). The credential decides
+/// which, never the body:
+///
+/// - a **person** (the owner token, a login, an App guest in its room)
+///   **dismisses** it: `closedAs: dismissed`, and the agent that asked is
+///   told on the same lane as an answer. A settings card takes its answer
+///   gate; a permission or batch card the floor of every open request on
+///   it, and a dismiss there applies nothing and denies nothing.
+/// - the **asking agent** (its session passport) **withdraws** its own
+///   card: `closedAs: withdrawn`, no turn to itself. A secret card only
+///   when its vault request came from one of this workspace's sessions; a
+///   permission card withdraws this workspace's open requests on it (as
+///   `k2 permission cancel`); a settings card never.
+///
+/// Anyone else is refused and nothing changes. The daemon's own closes
+/// (expiry, a newer card, the switch-off close) call `overlay` directly.
 fn handle_void(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
     let addr = str_param(params, "addr");
     let card_id = card_id_of(params);
@@ -4112,64 +4144,75 @@ fn handle_void(params: &HashMap<String, String>, session_author: &str) -> CliRes
     if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_POST) {
         return e;
     }
-    // A settings (action) card, keep-as-mine or a permission card, is never
-    // voided through this route, by ANY caller (prd-agent-settings-cards-v1
-    // §6.9, vs-live C13): an agent passport, an App guest with thread:post,
-    // a Garden widget, a Member and the owner alike. Its answer is the
-    // person's (deny it instead); the daemon's own closes (expiry,
-    // supersede, the switch-off close, cancel) call `overlay::void_card`
-    // directly and never come through here. Unswitched (§6.10).
+    let reason = match close_reason_param(params) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let principal = crate::caller_workspace::principal_from_params(params);
+    // §6.10: a sidecar can't close the canonical Thread's cards (its real
+    // stamped `from`, not "k2", decides, as for a post).
+    let caller_from = overlay_sender_from(params, &resolved);
+    // An action card first, for every caller alike (C13): a settings card
+    // refuses every agent the same way, its own workspace's or another's.
     match overlay::card_action(&resolved.conversation_id, &card_id) {
-        Ok(Some(_)) => {
-            return action_card_person_only(
-                "a settings card can't be dismissed: deny it instead (its Deny or \"leave it\" option, from the Thread tab or an owner login)",
-            );
+        Ok(Some(action)) => {
+            return match principal.as_ref() {
+                Some(p) => withdraw_action_card(p, &resolved, &card_id, &action, &caller_from, reason.as_deref()),
+                None => dismiss_action_card(params, &resolved, &card_id, action, session_author, reason.as_deref()),
+            };
         }
         Ok(None) => {}
         Err(e) => return card_error(e),
     }
-    let principal = crate::caller_workspace::principal_from_params(params);
-    // §6.10: a sidecar can't void the canonical Thread's cards (its real
-    // stamped `from`, not "k2", decides, as for a post).
-    let caller_from = overlay_sender_from(params, &resolved);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &caller_from) {
         return e;
     }
-    // §6.10: an agent session voids only a card it posted itself, and never
-    // a secret card (a person's ask for a secret is theirs to dismiss).
-    if principal.is_some() {
-        match overlay::get_thread_doc(&resolved.conversation_id, &card_id) {
-            Ok(Some(doc)) => {
-                if doc.secret.is_some() {
-                    return error_json(
-                        "403 Forbidden",
-                        "card_not_yours",
-                        "an agent never dismisses a secret card; the person answers or dismisses it",
-                    );
+    // An agent session withdraws only a card it asked itself.
+    let closed_as = match principal.as_ref() {
+        Some(p) => {
+            match overlay::get_thread_doc(&resolved.conversation_id, &card_id) {
+                Ok(Some(doc)) => {
+                    if doc.from.trim() != caller_from.trim() {
+                        return error_json("403 Forbidden", "card_not_yours", "an agent withdraws only the cards it asked itself");
+                    }
+                    if doc.secret.is_some() && !agent_asked_secret_card(&card_id, p, &caller_from) {
+                        return error_json(
+                            "403 Forbidden",
+                            "card_not_yours",
+                            "only the session that asked for this secret withdraws its card (K2's own secret cards are the person's): the person answers or dismisses it",
+                        );
+                    }
                 }
-                if doc.from.trim() != caller_from.trim() {
-                    return error_json(
-                        "403 Forbidden",
-                        "card_not_yours",
-                        "an agent dismisses only the cards it posted itself",
-                    );
-                }
+                Ok(None) => return not_found(format!("card not found: {card_id}")),
+                Err(e) => return card_error(e),
             }
-            Ok(None) => return not_found(format!("card not found: {card_id}")),
-            Err(e) => return card_error(e),
+            overlay::CLOSED_WITHDRAWN
         }
-    }
+        None => overlay::CLOSED_DISMISSED,
+    };
     if let Some(r) = refuse_if_expired(&resolved, &card_id) {
         return r;
     }
-    match overlay::void_card(&resolved.conversation_id, &resolved.project_id, &card_id, card_actor_author(params, session_author)) {
+    match overlay::close_card_as(
+        &resolved.conversation_id,
+        &resolved.project_id,
+        &card_id,
+        card_actor_author(params, session_author),
+        Some(closed_as),
+        reason.as_deref(),
+    ) {
         Ok(cb) => {
             if cb.doc.secret.is_some() {
                 void_vault_request(&card_id);
             }
-            let from = card_actor_from(params, &resolved, session_author);
             note_card_reader(params, session_author, &cb);
-            fire_card_callbacks(&resolved, &from, vec![cb.clone()], !principal_is_bound(params));
+            if closed_as == overlay::CLOSED_WITHDRAWN {
+                // The agent did it: every view updates, nobody is woken.
+                publish_card_frame(&cb);
+            } else {
+                let from = card_actor_from(params, &resolved, session_author);
+                fire_card_callbacks(&resolved, &from, vec![cb.clone()], !principal_is_bound(params));
+            }
             let status = cb
                 .doc
                 .choice
@@ -4182,6 +4225,8 @@ fn handle_void(params: &HashMap<String, String>, session_author: &str) -> CliRes
                     "ok": true,
                     "id": cb.doc_id,
                     "status": status,
+                    "closedAs": closed_as,
+                    "reason": reason,
                     "seq": cb.seq,
                     "kind": cb.doc.kind,
                     "conversation_id": resolved.conversation_id,
@@ -4190,7 +4235,137 @@ fn handle_void(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 &resolved,
             ))
         }
+        Err(e) if e == overlay::CARD_NOT_PENDING => card_not_pending_response(&resolved.conversation_id, &card_id),
         Err(e) => card_error(e),
+    }
+}
+
+/// A secret card this agent may withdraw: its vault request came from one
+/// of this workspace's sessions, under this caller's name. K2's own secret
+/// cards (a clone's secrets, an OAuth reconnect) carry the agent's handle
+/// too but no session, so they stay the person's to answer or dismiss.
+fn agent_asked_secret_card(card_id: &str, p: &HookPrincipal, caller_from: &str) -> bool {
+    let Ok(vault) = crate::vault::get() else { return false };
+    let Ok(req) = vault.request_get(card_id) else { return false };
+    req.workspace_id == p.workspace_uuid.trim() && req.session_id.as_deref().is_some_and(|s| !s.is_empty()) && req.requested_by.trim() == caller_from.trim()
+}
+
+/// The asking agent's `k2 thread withdraw` on an action card: a permission
+/// or batch card withdraws this workspace's open requests on it; a settings
+/// card is K2's question for the person, never the agent's to close.
+fn withdraw_action_card(
+    p: &HookPrincipal,
+    resolved: &ResolvedOverlay,
+    card_id: &str,
+    action: &overlay::CardAction,
+    caller_from: &str,
+    reason: Option<&str>,
+) -> CliResponse {
+    if action.id != k2_core::permission::CARD_ACTION_PERMISSION && action.id != k2_core::permission::CARD_ACTION_BATCH {
+        return action_card_person_only("a settings card is the person's: they answer or dismiss it (the Thread tab, an owner login); an agent never can");
+    }
+    if let Err(e) = authorize_write(Some(p), resolved, caller_from) {
+        return e;
+    }
+    if let Some(r) = refuse_if_expired(resolved, card_id) {
+        return r;
+    }
+    let r = crate::permission::routes::withdraw_card(p.workspace_uuid.trim(), &resolved.conversation_id, card_id, reason);
+    with_thread_fields(r, resolved)
+}
+
+/// A person's dismiss of an action card (B2, B6): people only, the same
+/// gate as an answer, and no action runs.
+fn dismiss_action_card(
+    params: &HashMap<String, String>,
+    resolved: &ResolvedOverlay,
+    card_id: &str,
+    action: overlay::CardAction,
+    session_author: &str,
+    reason: Option<&str>,
+) -> CliResponse {
+    if let Err(r) = refuse_action_card_non_person(params, "dismisses") {
+        return r;
+    }
+    let permission = action.id == k2_core::permission::CARD_ACTION_PERMISSION || action.id == k2_core::permission::CARD_ACTION_BATCH;
+    if permission {
+        // Check-on-touch, as for an answer.
+        if let Ok(Some(cb)) = overlay::expire_if_due(&resolved.conversation_id, card_id, overlay::now_secs()) {
+            publish_card_frame(&cb);
+            crate::permission::expiry::on_cards_expired(&[cb]);
+            return error_json("409 Conflict", "card_not_pending", "this card expired");
+        }
+    } else {
+        let gate = if action.id == crate::action_cards::KEEP_WIDGET {
+            require_garden_owner_card_person(params, session_author, "dismisses")
+        } else {
+            require_action_card_person(params, session_author, "dismisses")
+        };
+        if let Err(r) = gate {
+            return r;
+        }
+        if let Some(r) = refuse_if_expired(resolved, card_id) {
+            return r;
+        }
+    }
+    match overlay::get_thread_doc(&resolved.conversation_id, card_id) {
+        Ok(Some(d)) if d.is_pending_choice() => {}
+        Ok(Some(_)) => return card_not_pending_response(&resolved.conversation_id, card_id),
+        Ok(None) => return not_found(format!("card not found: {card_id}")),
+        Err(e) => return card_error(e),
+    }
+    let by = card_actor_author(params, session_author);
+    if permission {
+        let who = crate::permission::present::answerer_for(session_author);
+        let card = crate::permission::answer::CardRef { conversation_id: &resolved.conversation_id, card_id };
+        let r = crate::permission::answer::dismiss(params, card, &action, &who, by, reason);
+        if r.status == "200 OK" {
+            if let Ok(Some(item)) = overlay::find_thread_item(&resolved.conversation_id, card_id) {
+                let cb = CardCallback { conversation_id: resolved.conversation_id.clone(), doc_id: item.id.clone(), seq: item.seq, doc: item.doc, inject_line: String::new() };
+                note_card_reader(params, session_author, &cb);
+            }
+        }
+        return with_thread_fields(r, resolved);
+    }
+    match overlay::close_card_as(&resolved.conversation_id, &resolved.project_id, card_id, by, Some(overlay::CLOSED_DISMISSED), reason) {
+        Ok(cb) => {
+            k2_core::log_debug!("[action-card] {} card {card_id}: {session_author} dismissed it", action.id);
+            let from = card_actor_from(params, resolved, session_author);
+            note_card_reader(params, session_author, &cb);
+            fire_card_callbacks(resolved, &from, vec![cb.clone()], true);
+            CliResponse::ok_json(with_moved_from(
+                serde_json::json!({
+                    "ok": true,
+                    "id": cb.doc_id,
+                    "seq": cb.seq,
+                    "kind": cb.doc.kind,
+                    "status": "voided",
+                    "closedAs": overlay::CLOSED_DISMISSED,
+                    "reason": reason,
+                    "conversation_id": resolved.conversation_id,
+                    "addr": resolved.addr,
+                }),
+                resolved,
+            ))
+        }
+        Err(e) if e == overlay::CARD_NOT_PENDING => card_not_pending_response(&resolved.conversation_id, card_id),
+        Err(e) => card_error(e),
+    }
+}
+
+/// A permission route's 200 gains the Thread's `conversation_id` and
+/// `addr` (and `movedFrom`), as an answer's does.
+fn with_thread_fields(r: CliResponse, resolved: &ResolvedOverlay) -> CliResponse {
+    if r.status != "200 OK" {
+        return r;
+    }
+    match serde_json::from_str::<serde_json::Value>(&r.body) {
+        Ok(mut body) => {
+            body["conversation_id"] = serde_json::json!(resolved.conversation_id);
+            body["addr"] = serde_json::json!(resolved.addr);
+            CliResponse::ok_json(with_moved_from(body, resolved))
+        }
+        Err(_) => r,
     }
 }
 
@@ -7868,7 +8043,7 @@ mod tests {
         assert_eq!(d.status, "200 OK", "{}", d.body);
         let injects = recorded_injects();
         assert!(
-            injects.iter().any(|l| l == &format!("[guest {guest_name}] [thread:{handle}] card voided")),
+            injects.iter().any(|l| l == &format!("[guest {guest_name}] [thread:{handle}] dismissed card {d_card} without answering")),
             "a guest's dismiss has a guest's stamp: {injects:?}"
         );
         assert_eq!(answered_doc_by(&handle, &d_card), serde_json::json!({"kind": "guest", "login": guest_name}));

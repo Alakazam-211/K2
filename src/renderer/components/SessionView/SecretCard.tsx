@@ -39,6 +39,7 @@ import { Radio } from '@/components/ui'
 import { CHAMFER_CUT, chamferVars } from '@/components/Thread/chamfer'
 import {
   cardExpiryLabel,
+  closedCardLine,
   type OverlaySecret,
   type SecretDelivery,
   type SecretInject,
@@ -408,8 +409,14 @@ export function SecretCard({
   const danger = 'text-[var(--color-danger,#e5484d)]'
 
   if (!pending) {
+    // 0.46.11: a dismissed or withdrawn card says who and why
+    // (prd-popup-close-and-card-dismiss-v1 B8).
+    const closed =
+      secret.status === 'voided' && (secret.closedAs === 'dismissed' || secret.closedAs === 'withdrawn')
+        ? closedCardLine(secret.closedAs, answeredBy ?? null, agent, secret.closeReason).replace(/^./, (c) => c.toLowerCase())
+        : null
     const done =
-      secret.status === 'set' ? 'saved' : secret.status === 'expired' ? 'request expired' : 'not given'
+      secret.status === 'set' ? 'saved' : secret.status === 'expired' ? 'request expired' : closed ? `not given: ${closed}` : 'not given'
     return (
       <div data-testid="thread-secret-card" data-status={secret.status} className="mt-1">
         <div className={`text-[11px] ${muted}`} data-testid="thread-secret-set">

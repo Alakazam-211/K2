@@ -2,9 +2,12 @@
 //! vs-live C13). Unswitched: these hold whatever the permission-cards
 //! switches say (named exceptions to "off = today").
 //!
-//! - No caller voids a settings (action) card through the route: not the
-//!   owner, a Member, an agent, a Garden widget or an App guest (C13).
-//! - An agent session voids only a card it posted, and never a secret card.
+//! - No caller but its person closes a settings (action) card through the
+//!   route: not a Member, an agent, a Garden widget or an App guest (C13).
+//!   Since 0.46.11 the owner may dismiss it (prd-popup-close-and-card-
+//!   dismiss-v1 B2; `card_dismiss_tests`); no action runs.
+//! - An agent session voids only a card it posted, and never a secret card
+//!   its own session didn't ask (K2's secret cards stay the person's).
 //! - A sidecar can't answer or void the canonical Thread's cards.
 //! - An agent's answer to an ordinary choice card (only with
 //!   K2_CARD_PERSON_ONLY=off since 0.46.4) is stamped with its name.
@@ -32,7 +35,7 @@ fn choice_of(conv: &str, id: &str) -> k2_core::overlay::doc::ChoiceBody {
 }
 
 #[test]
-fn no_caller_voids_an_action_card_through_the_route() {
+fn no_caller_but_its_person_closes_an_action_card_through_the_route() {
     let handle = format!("ovlhyv{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let (project_id, _) = seed(&handle);
     let conv = uuid::Uuid::new_v4().to_string();
@@ -46,9 +49,8 @@ fn no_caller_voids_an_action_card_through_the_route() {
     };
     let body = serde_json::json!({ "addr": handle, "id": id }).to_string();
     let mut tries: Vec<(&str, CliResponse)> = vec![
-        ("the owner token", void(&HashMap::new(), &handle, &id)),
         ("a Member login", dispatch_post_as("/cli/thread/void", &HashMap::new(), body.as_bytes(), "hyg-member")),
-        ("an Owner login", dispatch_post_as("/cli/thread/void", &HashMap::new(), body.as_bytes(), "hyg-owner")),
+        ("an unlinked login", dispatch_post_as("/cli/thread/void", &HashMap::new(), body.as_bytes(), "hyg-owner")),
         ("its agent", void(&passport_params(&project_id, &handle), &handle, &id)),
         (
             "a Garden widget",
@@ -62,8 +64,8 @@ fn no_caller_voids_an_action_card_through_the_route() {
     let guest = with_request_skin(Some(skin_pass(&[project_id.clone()])), || void(&HashMap::new(), &handle, &id));
     tries.push(("an App guest with thread:post", guest));
     for (who, r) in tries {
-        assert_error_code(&r, "403 Forbidden", "action_card_person_only");
-        assert!(json_body(&r)["error"]["hint"].as_str().expect("hint").contains("deny it instead"), "{who}: {}", r.body);
+        assert_eq!(r.status, "403 Forbidden", "{who}: {}", r.body);
+        assert_eq!(json_body(&r)["error"]["code"], "action_card_person_only", "{who}: {}", r.body);
     }
     assert_eq!(choice_of(&conv, &id).status, "pending", "every refused void leaves the card waiting");
     // The daemon's own close still works (expiry, supersede, switch-off).

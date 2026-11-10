@@ -7,7 +7,7 @@
 // raw refusal, never a silent failure.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 const h = vi.hoisted(() => ({
   calls: [] as string[],
@@ -15,12 +15,15 @@ const h = vi.hoisted(() => ({
   apps: [] as unknown[],
   release: [] as unknown[],
   removeError: null as unknown,
+  invokes: [] as Array<{ cmd: string; args: unknown }>,
+  teardown: [] as Array<{ action: string; path: string; note: string }>,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(async (cmd: string) => {
+  invoke: vi.fn(async (cmd: string, args?: unknown) => {
     h.calls.push(`invoke ${cmd}`)
-    return []
+    h.invokes.push({ cmd, args })
+    return cmd === 'k2so_agents_teardown_workspace' ? h.teardown : []
   }),
 }))
 vi.mock('@/lib/daemon-cli', async () => {
@@ -63,6 +66,8 @@ beforeEach(() => {
   h.apps = []
   h.release = []
   h.removeError = null
+  h.invokes = []
+  h.teardown = []
   useRemoveWorkspaceDialogStore.getState().open({ projectId: 'ws-sales', projectName: 'Sales', projectPath: '/ws/sales' })
 })
 afterEach(() => {
@@ -137,5 +142,50 @@ describe('Remove Workspace with Apps', () => {
     const step = await screen.findByTestId('remove-workspace-apps-step')
     expect(step.textContent).toContain('jobs')
     expect(useRemoveWorkspaceDialogStore.getState().error).toBeNull()
+  })
+})
+
+describe('Remove Workspace teardown modes', () => {
+  it('offers the three modes, Deregister only first and chosen; it runs no teardown', async () => {
+    render(<RemoveWorkspaceDialog />)
+    const radios = screen.getAllByRole('radio') as HTMLInputElement[]
+    expect(radios.map((r) => [r.value, r.checked])).toEqual([
+      ['deregister_only', true],
+      ['keep_current', false],
+      ['restore_original', false],
+    ])
+    fireEvent.click(screen.getByRole('button', { name: 'Remove workspace' }))
+    await waitFor(() => expect(useRemoveWorkspaceDialogStore.getState().isOpen).toBe(false))
+    expect(h.invokes).toEqual([])
+    expect(h.calls).toContain('remove ws-sales')
+  })
+
+  for (const [mode, title, button] of [
+    ['keep_current', 'Keep current context', 'Freeze context & remove'],
+    ['restore_original', 'Restore pre-K2 state', 'Restore originals & remove'],
+  ] as const) {
+    it(`${mode}: tears down the folder in that mode, removes, then shows what K2 did until Done`, async () => {
+      h.teardown = [{ action: 'restored', path: '/ws/sales/CLAUDE.md', note: 'from .k2so/migration' }]
+      render(<RemoveWorkspaceDialog />)
+      fireEvent.click(screen.getByText(title))
+      fireEvent.click(screen.getByRole('button', { name: button }))
+      await screen.findByText('Workspace disconnected')
+      expect(h.invokes).toEqual([{ cmd: 'k2so_agents_teardown_workspace', args: { projectPath: '/ws/sales', mode } }])
+      expect(h.calls.slice(-2)).toEqual(['invoke k2so_agents_teardown_workspace', 'remove ws-sales'])
+      expect(screen.getByText('/ws/sales/CLAUDE.md')).toBeTruthy()
+      expect(useRemoveWorkspaceDialogStore.getState().isOpen).toBe(true)
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+      expect(useRemoveWorkspaceDialogStore.getState().isOpen).toBe(false)
+    })
+  }
+
+  it('a reopened dialog starts on Deregister only again', () => {
+    const { rerender } = render(<RemoveWorkspaceDialog />)
+    fireEvent.click(screen.getByText('Keep current context'))
+    expect(screen.getByRole('button', { name: 'Freeze context & remove' })).toBeTruthy()
+    act(() => useRemoveWorkspaceDialogStore.getState().close())
+    act(() => useRemoveWorkspaceDialogStore.getState().open({ projectId: 'ws-ops', projectName: 'Ops', projectPath: '/ws/ops' }))
+    rerender(<RemoveWorkspaceDialog />)
+    expect(screen.getByRole('button', { name: 'Remove workspace' })).toBeTruthy()
   })
 })

@@ -213,13 +213,14 @@ export function settingsNav({
     { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
     { kind: 'item', id: 'project-groups', label: 'Projects' },
     { kind: 'item', id: 'tickets', label: 'Tickets' },
-    // prd-org-chart-v1 §6.5: the Org Chart's switch (off by default) and its night.
-    { kind: 'item', id: 'org-chart', label: 'Org Chart', beta: true },
     // 0.46.3 (Rosson 2026-10-23): Gardens is one page, beneath Tickets; each
     // Garden's pane holds its Local Data and External Data, and "Not in a
     // Garden" the rest (see gardens-landing.ts).
     ...(zenGardens ? ([{ kind: 'item', id: 'zen-gardens' as const, label: 'Gardens' }] satisfies NavBlock[]) : []),
     { kind: 'item', id: 'context-catalog', label: 'Context Catalog' },
+    // prd-org-chart-v1 §6.5: the Org Chart's switch (off by default) and its
+    // night. Below Context Catalog: Gardens stays directly beneath Tickets.
+    { kind: 'item', id: 'org-chart', label: 'Org Chart', beta: true },
     { kind: 'item', id: 'email-link', label: 'Email Link' },
     ...(webFeatures.permissions
       ? ([{ kind: 'item', id: 'permissions' as const, label: 'Accessibility' }] satisfies NavBlock[])

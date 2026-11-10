@@ -16,8 +16,7 @@
 //! - Downloads: a file token and an attachment token; Range, If-Range,
 //!   ETag, 416, HEAD, `?token=`; a changed file; `files.download`'s etag.
 
-#[path = "support/app_fixture.rs"]
-mod app_fixture;
+use crate::support::app_fixture;
 
 use std::collections::HashMap;
 use std::io::{Read, Write};

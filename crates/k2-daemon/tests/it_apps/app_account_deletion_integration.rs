@@ -13,8 +13,7 @@
 //!   framed view, who may read, retention settings, and a deletion
 //!   taking the person's bundles with it.
 
-#[path = "support/app_fixture.rs"]
-mod app_fixture;
+use crate::support::app_fixture;
 
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};

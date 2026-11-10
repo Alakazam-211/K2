@@ -19,7 +19,6 @@
 //!
 //! Spawn guards: scratch HOME, private XDG_RUNTIME_DIR, `SHELL=/bin/false`, an
 //! empty agent shim dir, control plane on a local stand-in, no real `~/.k2`.
-#![cfg(unix)]
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};

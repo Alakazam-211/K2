@@ -99,6 +99,11 @@ export const FEATURES = {
    *  Incoming/Sent, the Agent tab's "Secrets from other agents" block and
    *  the Access Audit filter. Local is always true. */
   'vault-handoff': '0.46.1',
+  /** Standing send grants (0.46.11): `GET|POST /cli/vault/send-allow`, the
+   *  person-given secrets an agent may send to an agent on another server
+   *  without asking. Gates the Permissions tab's "Secrets it may send to
+   *  other servers" block. Local is always true. */
+  'vault-send-allow': '0.46.11',
   /** GET /cli/usage/turns — owner-only raw per-turn ledger log, keyset-paged
    *  (0.40.150). Gates the Settings → Token usage live log so a pre-150
    *  remote hides the panel instead of hammering 404s. Local is always

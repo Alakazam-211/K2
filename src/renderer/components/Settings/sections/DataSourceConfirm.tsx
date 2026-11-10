@@ -21,7 +21,9 @@ export interface ConfirmStepProps {
    *  `app-approve` / `node-admin` / `vault-move` / `chat-owner-handoff` / `sew-rollback-data-loss` / `vault-share-service` /
    *  `apps-chat-key` / `sew-space-governance` / `sew-recording-enable` / `apps-recording`: a permission card's
    *  confirm action (the same confirm Settings asks, prd-agent-settings-cards-v1 §17.4).
-   *  `app-handover`: giving an App to a workspace (Settings → Apps). */
+   *  `app-handover`: giving an App to a workspace (Settings → Apps).
+   *  `handoff-send`: letting an agent send a person-given secret to another
+   *  server (Settings → Workspaces → Permissions; the secret's id). */
   action:
     | 'source-secret'
     | 'source-batch'
@@ -37,6 +39,7 @@ export interface ConfirmStepProps {
     | 'sew-space-governance'
     | 'sew-recording-enable'
     | 'apps-recording'
+    | 'handoff-send'
   /** The source id, the batch hash, or the guest-rooms change's id. */
   secretId: string
   /** Shown in the Mac's sheet ("source secret deploys"). */

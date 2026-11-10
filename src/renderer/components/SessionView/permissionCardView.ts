@@ -58,6 +58,9 @@ export const PERMISSION_LABEL = {
    *  offers it (`choice.options`). */
   always: "Allow, and let it manage its Apps' users from now on",
   alwaysChatRefresh: 'Allow, and let it refresh its chat from now on',
+  /** `vault.send` (0.46.11): send now, then let the agent send the same
+   *  secrets to the same agent itself (a standing send grant). */
+  alwaysVaultSend: 'Allow, and let it send this itself from now on',
 } as const
 
 /** What "Let this agent manage its Apps' users" covers: the daemon's

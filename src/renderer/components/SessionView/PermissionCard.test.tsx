@@ -202,6 +202,22 @@ describe('PermissionCard: a confirm action (§17.11.3, §17.4)', () => {
     expect(screen.queryByTestId('permission-always-covers')).toBeNull()
   })
 
+  it('the vault send card offers "send now" and "from now on", both behind the confirm', async () => {
+    const always = 'Allow, and let it send this itself from now on'
+    const actions = actionsMock()
+    const view = { ...CONFIRM_VIEW, proof: { kind: 'confirm', action: 'vault-share-service', secretId: 'pr_send' } }
+    draw(permissionDoc({ view, options: ['Allow', 'Deny', always] }), actions)
+    expect(text('permission-allow')).toBe('Allow (needs your confirm)')
+    expect(text('permission-always')).toBe(always)
+    fireEvent.click(screen.getByTestId('permission-always'))
+    expect(actions.answer).not.toHaveBeenCalled()
+    expect(text('permission-always-covers')).toContain('Any other secret or agent still asks')
+    const step = screen.getByTestId('mock-confirm')
+    expect([step.getAttribute('data-action'), step.getAttribute('data-secret')]).toEqual(['vault-share-service', 'pr_send'])
+    fireEvent.click(screen.getByTestId('mock-confirm-ok'))
+    await waitFor(() => expect(actions.answer).toHaveBeenCalledWith({ answer: always, confirmToken: 'tok_1' }))
+  })
+
   it('cancel goes back to the buttons; without a server to confirm on, it says where to', () => {
     const actions = actionsMock()
     draw(permissionDoc({ view: CONFIRM_VIEW }), actions)

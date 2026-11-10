@@ -75,6 +75,7 @@ import { computeErrorMessage, setWorkspaceComputeManage, setWorkspaceComputeOper
 import { metaChordLabel } from '@/lib/shortcut-label'
 import { reorderedZoneIds } from '@/components/Sidebar/row-drag-reorder'
 import { AgentHandoffAcceptFrom } from './HandoffAcceptFrom'
+import { AgentHandoffSendAllow } from './HandoffSendAllow'
 import { AgentAppsAccess } from './AgentAppsAccess'
 import { AgentPermissionCardsRow, AskedChip, PermissionAsksProvider } from './PermissionCardsSection'
 import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
@@ -1786,6 +1787,7 @@ function ProjectDetail({
                   <AgentsManageAgentsToggle project={project} />
                   <AgentsManageVaultToggle project={project} />
                   <AgentHandoffAcceptFrom project={project} />
+                  <AgentHandoffSendAllow project={project} />
                   <AgentPermissionCardsRow project={project} />
                   <AgentsRefreshChatToggle project={project} />
                 </SettingsGroup>

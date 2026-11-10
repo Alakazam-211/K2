@@ -121,6 +121,49 @@ function entries(raw: unknown): AcceptFromEntry[] {
   return out
 }
 
+/** One standing send grant (0.46.11): the agent of `workspaceId` may send
+ *  the person-given secret `name` to `to` (`agent::host`) without asking. */
+export interface SendAllowEntry {
+  workspaceId: string
+  secretId: string
+  name: string
+  to: string
+  addedBy: string
+  addedAt: string
+}
+
+/** What `/cli/vault/send-allow` answers: the grants, and (for a person) the
+ *  person-given secrets a grant could be for. */
+export interface SendAllowList {
+  entries: SendAllowEntry[]
+  secrets: { id: string; name: string }[]
+}
+
+export function coerceSendAllow(raw: unknown): SendAllowList {
+  const o = (raw ?? {}) as { entries?: unknown; secrets?: unknown }
+  const entries: SendAllowEntry[] = []
+  for (const e of Array.isArray(o.entries) ? o.entries : []) {
+    if (!e || typeof e !== 'object') continue
+    const r = e as Record<string, unknown>
+    if (typeof r.secretId !== 'string' || typeof r.to !== 'string') continue
+    entries.push({
+      workspaceId: str(r.workspaceId),
+      secretId: r.secretId,
+      name: str(r.name) || r.secretId,
+      to: r.to,
+      addedBy: str(r.addedBy),
+      addedAt: str(r.addedAt),
+    })
+  }
+  const secrets: { id: string; name: string }[] = []
+  for (const s of Array.isArray(o.secrets) ? o.secrets : []) {
+    if (s && typeof s === 'object' && typeof (s as { id?: unknown }).id === 'string' && typeof (s as { name?: unknown }).name === 'string') {
+      secrets.push({ id: (s as { id: string }).id, name: (s as { name: string }).name })
+    }
+  }
+  return { entries, secrets }
+}
+
 export const handoffApi = {
   incoming: async (workspace?: string, scope: ServerScope = primaryScope()): Promise<HandoffView[]> =>
     views(await daemonCliGet(scope, 'vault/incoming', workspace ? { workspace } : undefined)),
@@ -137,6 +180,15 @@ export const handoffApi = {
     body: { workspace: string; sender: string; action: 'add' | 'remove' },
     scope: ServerScope = primaryScope(),
   ): Promise<AcceptFromEntry[]> => entries(await daemonCliPost(scope, 'vault/accept-from', body)),
+  /** The agent's standing send grants (and, for a person, the secrets a
+   *  grant could be for). */
+  sendAllow: async (workspace: string, scope: ServerScope = primaryScope()): Promise<SendAllowList> =>
+    coerceSendAllow(await daemonCliGet(scope, 'vault/send-allow', { workspace })),
+  /** Add (with the `handoff-send` vault confirm for that secret) or remove one. */
+  editSendAllow: async (
+    body: { workspace: string; secretId: string; to: string; action: 'add' | 'remove'; confirmToken?: string },
+    scope: ServerScope = primaryScope(),
+  ): Promise<SendAllowList> => coerceSendAllow(await daemonCliPost(scope, 'vault/send-allow', body)),
 }
 
 /** `sales::rosson.k2.dev` → `{ agent: 'sales', host: 'rosson.k2.dev' }`. */

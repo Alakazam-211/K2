@@ -50,6 +50,7 @@ const PERMISSION_SETTINGS = new Set([
   'projects.agents-can-manage-agents',
   'projects.agents-can-manage-vault',
   'projects.handoff-accept-from',
+  'projects.handoff-send-allow',
   'projects.agents-can-use-compute',
   'projects.agents-can-operate-compute',
   'projects.agents-can-manage-compute',

@@ -361,6 +361,12 @@ function AnswerControls({
             This also turns on “Let this agent manage its Apps’ users”: {APP_USERS_SWITCH_COVERS}
           </div>
         )}
+        {step.answer === PERMISSION_LABEL.alwaysVaultSend && (
+          <div data-testid="permission-always-covers" style={{ color: TEXT2 }}>
+            This also lets it send these secrets to that agent itself from now on, without a card. Any other secret or agent
+            still asks. Revoke it in Settings → Workspaces → Permissions.
+          </div>
+        )}
         <ConfirmStep
           scope={actions.confirmScope}
           action={confirmAction}
@@ -716,7 +722,14 @@ export function PermissionCard({ view, resultMessage, from, actions, options, no
         nowSec={now}
         batchItem={false}
         offered={offered}
-        always={options?.find((o) => o.label === PERMISSION_LABEL.always || o.label === PERMISSION_LABEL.alwaysChatRefresh)?.label}
+        always={
+          options?.find(
+            (o) =>
+              o.label === PERMISSION_LABEL.always ||
+              o.label === PERMISSION_LABEL.alwaysChatRefresh ||
+              o.label === PERMISSION_LABEL.alwaysVaultSend,
+          )?.label
+        }
         denyOnly={options !== undefined && options.length > 0 && !options.some((o) => o.label === PERMISSION_LABEL.allow)}
         onReveal={view.reveal ? setRevealed : undefined}
       />

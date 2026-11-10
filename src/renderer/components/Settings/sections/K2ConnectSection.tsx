@@ -59,7 +59,7 @@ import {
 } from './OwnerAccountToggle'
 import { threadPushAvailable } from './useNotifyPrefs'
 import { SewAdminAccessState } from './SewAccessParts'
-import { Toggle, Checkbox } from '@/components/ui'
+import { Toggle, Checkbox, Tag } from '@/components/ui'
 import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
 import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
 import { AgentsCanCreateConnectionsRow } from '../shared/AgentsCanCreateConnectionsRow'
@@ -1573,9 +1573,9 @@ export function K2ConnectSection({
         <SettingsGroup
           title="Account"
           badge={
-            <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+            <Tag tone="accent">
               beta
-            </span>
+            </Tag>
           }
         >
           {!session ? (
@@ -2165,19 +2165,19 @@ export function K2ConnectSection({
                           {u.username}
                         </span>
                         {u.disabled && (
-                          <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">
+                          <Tag tone="muted">
                             disabled
-                          </span>
+                          </Tag>
                         )}
                         {u.wasViewer && <WasViewerBadge />}
                         {u.mustChangePassword === true && (
-                          <span
+                          <Tag
+                            tone="warn"
                             data-testid={`temporary-password-${u.username}`}
                             title={MUST_CHANGE_NOTE}
-                            className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-status-warn-text)_10%,transparent)] text-[var(--color-status-warn-text)]"
                           >
                             Temporary password
-                          </span>
+                          </Tag>
                         )}
                       </span>
                       <div className="flex items-center gap-3 flex-shrink-0">
@@ -2199,9 +2199,9 @@ export function K2ConnectSection({
                             }}
                           />
                         ) : (
-                          <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]">
+                          <Tag tone="neutral">
                             {roleLabel(u.role)}
-                          </span>
+                          </Tag>
                         )}
                         <CanCloneToggle
                           username={u.username}

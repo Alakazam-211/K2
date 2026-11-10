@@ -5,7 +5,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { Checkbox, Toggle } from '@/components/ui'
+import { Checkbox, Toggle, Tag } from '@/components/ui'
 import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { primaryScope } from '@/kessel/server-scope'
@@ -1468,12 +1468,13 @@ export function SkinAccessSection(): React.JSX.Element {
                                   {row.handle}
                                 </span>
                                 {row.caps.map((cap) => (
-                                  <span
+                                  <Tag
+                                    tone="neutral"
+                                    className="font-mono"
                                     key={cap}
-                                    className="type-badge font-mono uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]"
                                   >
                                     {cap}
-                                  </span>
+                                  </Tag>
                                 ))}
                               </div>
                             ))
@@ -1781,12 +1782,13 @@ export function SkinAccessSection(): React.JSX.Element {
                             </span>
                           ) : (
                             k.caps.map((cap) => (
-                              <span
+                              <Tag
+                                tone="neutral"
+                                className="font-mono"
                                 key={cap}
-                                className="type-badge font-mono uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]"
                               >
                                 {cap}
-                              </span>
+                              </Tag>
                             ))
                           )}
                         </div>

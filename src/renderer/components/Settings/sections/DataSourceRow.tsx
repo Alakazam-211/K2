@@ -22,6 +22,7 @@ import {
 } from '@/lib/sources/sources-api'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { ageOf, btn, countsLine, dotColor, hhmm, muted, sourcesErrorText } from './data-sources-ui'
+import { Tag } from '@/components/ui/Tag'
 
 export type RowPanel = 'triggers' | 'simulate' | 'try' | null
 
@@ -29,9 +30,9 @@ export const REMOVE_TEXT = 'Gardens on other computers that show this will say r
 
 function Badge({ children, title }: { children: React.ReactNode; title?: string }): React.JSX.Element {
   return (
-    <span title={title} className="px-1 type-badge uppercase tracking-wide border border-[var(--color-border)] text-[var(--color-text-secondary)]">
+    <Tag tone="neutral" title={title}>
       {children}
-    </span>
+    </Tag>
   )
 }
 

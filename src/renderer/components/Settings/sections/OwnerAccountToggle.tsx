@@ -18,6 +18,7 @@ import {
   toggledOwnerAccounts,
   type OwnerAccounts,
 } from './notify-api'
+import { Tag } from '@/components/ui/Tag'
 
 /** The tag on the owner's linked row in Admin Access. */
 export const OWNER_ACCOUNT_TAG = "Owner's account"
@@ -130,12 +131,13 @@ export function useOwnerAccounts(enabled: boolean, initial?: OwnerAccounts): Own
 export function OwnerAccountTag({ username, linked }: { username: string; linked: boolean }): React.JSX.Element | null {
   if (!linked) return null
   return (
-    <span
+    <Tag
+      tone="neutral"
+      className="w-fit select-none"
       data-testid={`owner-account-tag-${username}`}
       title={OWNER_LINK_EXPLAINER}
-      className="inline-flex w-fit items-center px-1.5 py-px type-badge uppercase tracking-wider border border-[var(--color-border)] text-[var(--color-text-secondary)] bg-[var(--color-bg-elevated)] select-none"
     >
       {OWNER_ACCOUNT_TAG}
-    </span>
+    </Tag>
   )
 }

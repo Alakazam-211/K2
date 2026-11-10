@@ -24,7 +24,7 @@
 
 import React, { useCallback, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
-import { Toggle } from '@/components/ui'
+import { Toggle, Tag } from '@/components/ui'
 import { InboxWakePanel } from './InboxWakePanel'
 import { SettingDropdown } from '../controls/SettingControls'
 import {
@@ -447,9 +447,9 @@ export function InboxAccessPanel({
             <span className="type-row text-[var(--color-text-primary)] truncate flex-1 min-w-0">
               {inbox.primary.workspace ?? inbox.primary.projectId}
             </span>
-            <span className="type-badge px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-accent)] bg-[var(--color-accent)]/15 flex-shrink-0">
+            <Tag tone="accent">
               Primary
-            </span>
+            </Tag>
             <SettingDropdown
               value={inbox.primary.level}
               options={options}

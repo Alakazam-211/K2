@@ -20,7 +20,7 @@ import {
   SetPasswordDialog,
   type AddedUser,
 } from './AppUserDialogs'
-import { Toggle } from '@/components/ui'
+import { Toggle, Tag } from '@/components/ui'
 
 export const PEOPLE_MANIFEST: SettingEntry[] = [
   {
@@ -533,14 +533,14 @@ export function PeopleSection(): React.JSX.Element {
                   <span className="block type-row font-mono text-[var(--color-text-primary)] truncate">
                     {row.username}
                     {row.pendingReset ? (
-                      <span className="ml-1.5 type-badge font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-warn)]/20 text-[var(--color-text-secondary)]">
+                      <Tag tone="warn" className="ml-1.5 font-sans">
                         Waiting for reset
-                      </span>
+                      </Tag>
                     ) : null}
                     {row.lockedUntil ? (
-                      <span title="Locked after too many wrong passwords" className="ml-1.5 type-badge font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-error)]/15 text-[var(--color-text-secondary)]">
+                      <Tag tone="danger" className="ml-1.5 font-sans" title="Locked after too many wrong passwords">
                         Locked
-                      </span>
+                      </Tag>
                     ) : null}
                   </span>
                   {row.fullName ? (
@@ -733,12 +733,13 @@ function roleBits(role: RoleRow | null, fallbackHandles: string[]): React.JSX.El
               {room.handle}
             </span>
             {room.caps.map((cap) => (
-              <span
+              <Tag
+                tone="neutral"
+                className="font-mono"
                 key={cap}
-                className="type-badge font-mono uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-text-secondary)]"
               >
                 {cap}
-              </span>
+              </Tag>
             ))}
           </div>
         ))

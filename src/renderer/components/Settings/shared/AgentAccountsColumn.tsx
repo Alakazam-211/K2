@@ -51,7 +51,7 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 import { LlmLoginSheet, type LoginSheetStart } from './LlmLoginSheet'
 import { useDialogEscape } from '../settings-esc'
-import { Button } from '@/components/ui'
+import { Button, Tag } from '@/components/ui'
 
 /** Visible keyboard focus on the tile actions (Button leaves outline to the UA). */
 const ACTION_FOCUS = 'outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)]'
@@ -348,18 +348,18 @@ function AccountRow({
             </span>
           )}
           {account.active && (
-            <span className="type-badge uppercase tracking-wider px-1 py-px border border-[var(--color-accent)] text-[var(--color-accent)] flex-shrink-0">
+            <Tag tone="accent">
               Server default
-            </span>
+            </Tag>
           )}
           {account.addedOutsideK2 && (
-            <span
-              className="type-badge uppercase tracking-wider px-1 py-px border border-[var(--color-border)] text-[var(--color-text-muted)] flex-shrink-0"
+            <Tag
+              tone="muted"
               title="Someone signed in outside K2 (for example /login in a terminal). K2 saved that sign-in as this token. Keep it, or remove it."
               data-testid={`llm-outside-${account.id}`}
             >
               Added outside K2
-            </span>
+            </Tag>
           )}
           <span className="type-hint text-[var(--color-text-muted)]">
             {STATE_LABELS[account.state] ?? account.state}

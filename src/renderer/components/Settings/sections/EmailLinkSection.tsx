@@ -54,6 +54,7 @@ import {
   type OauthConfig,
   type OauthProviderConfig,
 } from './email-api'
+import { Tag } from '@/components/ui/Tag'
 
 export const EMAIL_LINK_MANIFEST: SettingEntry[] = [
   { id: 'email-link.inboxes', section: 'email-link', label: 'Connected Inboxes', description: 'External email accounts your workspaces can read and draft replies for', keywords: ['imap', 'gmail', 'fastmail', 'inbox', 'external', 'connect', 'email', 'account', 'app password', 'link'] },
@@ -239,9 +240,9 @@ export function MicrosoftConnectButton({
     >
       {busy ? 'Starting…' : 'Connect Microsoft (Outlook / 365)'}
       {st.badge && (
-        <span className="px-1.5 py-0.5 type-badge uppercase tracking-wide border border-[var(--color-border)] flex-shrink-0">
+        <Tag tone="neutral">
           {st.badge}
-        </span>
+        </Tag>
       )}
     </button>
   )

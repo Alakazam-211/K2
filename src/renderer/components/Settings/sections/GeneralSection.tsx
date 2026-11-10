@@ -7,7 +7,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
-import { ProgressiveHeaderBlur, Toggle } from '@/components/ui'
+import { ProgressiveHeaderBlur, Toggle, Tag } from '@/components/ui'
 import { restartHostConfirmCopy } from './restart-host'
 import { hostActionGate, refusalCopy } from './host-role'
 import { useActiveHostRole } from './useActiveHostRole'
@@ -216,12 +216,12 @@ export function GeneralSection(): React.JSX.Element {
           <span className="flex items-center gap-2 min-w-0">
             <span className="type-row text-[var(--color-text-secondary)]">K2 by Alakazam Labs</span>
             {isRemote && (
-              <span
-                className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0"
+              <Tag
+                tone="warn"
                 title="The K2 version on this computer. The connected server's version is under Connected server."
               >
                 This computer
-              </span>
+              </Tag>
             )}
           </span>
           <div className="flex items-center gap-3">
@@ -1092,9 +1092,9 @@ function RestartHostRow(): React.JSX.Element | null {
       <div className="flex items-center justify-between gap-4">
         <div className="flex flex-col min-w-0 flex-1">
           <span className="flex items-center gap-2 min-w-0">
-            <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0">
+            <Tag tone="warn">
               Connected server
-            </span>
+            </Tag>
             <span className="type-name text-[var(--color-text-primary)] truncate">
               {hostLabel}
             </span>
@@ -1568,9 +1568,9 @@ export function UpdateHostRow(): React.JSX.Element | null {
       <div className="flex items-center justify-between gap-4">
         <div className="flex flex-col min-w-0 flex-1">
           <span className="flex items-center gap-2 min-w-0">
-            <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0">
+            <Tag tone="warn">
               Connected server
-            </span>
+            </Tag>
             <span className="type-name text-[var(--color-text-primary)] truncate">
               {hostLabel}
             </span>

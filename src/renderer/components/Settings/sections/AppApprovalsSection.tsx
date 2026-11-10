@@ -19,7 +19,7 @@
 // With only the window's server it looks exactly as before.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Callout } from '@/components/ui'
+import { Button, Callout, Tag } from '@/components/ui'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { daemonErrorText } from '@/lib/daemon-error'
 import type { SettingEntry } from '../searchManifest'
@@ -203,9 +203,9 @@ function HistoryBlock({ group: g, multi }: { group: ServerApprovals; multi: bool
 
 function KindBadge({ kind }: { kind: string }): React.JSX.Element {
   return (
-    <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+    <Tag tone="accent">
       {kindLabel(kind)}
-    </span>
+    </Tag>
   )
 }
 

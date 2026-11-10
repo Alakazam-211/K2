@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import type { SettingEntry } from '../searchManifest'
+import { Tag } from '@/components/ui/Tag'
 
 interface PermissionStatus {
   fullDiskAccess: boolean
@@ -28,22 +29,22 @@ function StatusBadge({ kind }: { kind: StatusKind }): React.JSX.Element {
   // accent for "granted".
   if (kind === 'granted') {
     return (
-      <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)] ">
+      <Tag tone="accent">
         Granted
-      </span>
+      </Tag>
     )
   }
   if (kind === 'not-granted') {
     return (
-      <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-muted)] ">
+      <Tag tone="muted">
         Not granted
-      </span>
+      </Tag>
     )
   }
   return (
-    <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-muted)] ">
+    <Tag tone="muted">
       Unknown
-    </span>
+    </Tag>
   )
 }
 

@@ -15,7 +15,7 @@ import { topBarLeftClusterMinWidth, TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/d
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
-import { Surface } from '@/components/ui'
+import { Surface, Tag } from '@/components/ui'
 import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { TerminalSection, TERMINAL_MANIFEST } from './sections/TerminalSection'
 import { CodeEditorSettingsSection, CODE_EDITOR_MANIFEST } from './sections/CodeEditorSettingsSection'
@@ -585,7 +585,7 @@ export default function Settings(): React.JSX.Element {
                       >
                         <span>{it.label}</span>
                         {/* The same right-hand SOON tag as 3rd Party Bots (Rosson 2026-10-15). */}
-                        <span className="ml-auto type-badge uppercase tracking-wider px-1 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>
+                        <Tag tone="muted" className="ml-auto">SOON</Tag>
                       </div>
                     )
                   }
@@ -924,10 +924,10 @@ function SettingsNavButton({
     >
       <span>{label}</span>
       {beta ? (
-        <span className="ml-auto type-badge uppercase tracking-wider px-1 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">BETA</span>
+        <Tag tone="accent" className="ml-auto">BETA</Tag>
       ) : null}
       {comingSoon ? (
-        <span className="ml-auto type-badge uppercase tracking-wider px-1 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>
+        <Tag tone="muted" className="ml-auto">SOON</Tag>
       ) : null}
       {count && count > 0 ? (
         <span

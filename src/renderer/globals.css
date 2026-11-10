@@ -1713,6 +1713,59 @@ html:not([data-style="terminal"]) .k2-segmented { overflow: hidden; }
 .k2-segment[aria-checked="true"]:focus-visible { outline-color: var(--color-on-accent); }
 .k2-segment:disabled { cursor: default; opacity: 0.45; }
 
+/* Tags: the small uppercase labels (BETA, SOON, NEW, ON, OFF…), ui/Tag.tsx.
+   A pill in Glass (--radius-pill) and a chip cut in Terminal (data-k2-chamfer
+   ="chip"; the cut's diagonal inherits the border colour). Each tone is a
+   faint fill, an edge and an ink; the ink is the tone's text colour pulled
+   toward the primary text, so it clears 4.5:1 on the fill on every card and
+   on a selected row, in every palette and with a custom accent. The quiet
+   tone (SOON) has no fill: muted text is AA on every ground, a wash would
+   take it under. */
+.k2-tag {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid var(--k2-tag-edge);
+  border-radius: var(--radius-pill);
+  background-color: var(--k2-tag-fill);
+  color: var(--k2-tag-ink);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  --k2-tag-fill: transparent;
+}
+.k2-tag[data-tone="accent"] {
+  --k2-tag-ink: color-mix(in srgb, var(--color-accent-text) 75%, var(--color-text-primary));
+  --k2-tag-fill: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  --k2-tag-edge: color-mix(in srgb, var(--color-accent) 45%, transparent);
+}
+.k2-tag[data-tone="muted"] {
+  --k2-tag-ink: var(--color-text-muted);
+  --k2-tag-edge: color-mix(in srgb, var(--color-text-muted) 45%, transparent);
+}
+.k2-tag[data-tone="neutral"] {
+  --k2-tag-ink: var(--color-text-secondary);
+  --k2-tag-edge: var(--color-border);
+}
+.k2-tag[data-tone="ok"] {
+  --k2-tag-ink: color-mix(in srgb, var(--color-status-ok) 55%, var(--color-text-primary));
+  --k2-tag-fill: color-mix(in srgb, var(--color-status-ok) 10%, transparent);
+  --k2-tag-edge: color-mix(in srgb, var(--color-status-ok) 45%, transparent);
+}
+.k2-tag[data-tone="warn"] {
+  --k2-tag-ink: color-mix(in srgb, var(--color-status-warn-text) 75%, var(--color-text-primary));
+  --k2-tag-fill: color-mix(in srgb, var(--color-status-warn) 10%, transparent);
+  --k2-tag-edge: color-mix(in srgb, var(--color-status-warn) 45%, transparent);
+}
+.k2-tag[data-tone="danger"] {
+  --k2-tag-ink: color-mix(in srgb, var(--color-status-error-text) 75%, var(--color-text-primary));
+  --k2-tag-fill: color-mix(in srgb, var(--color-status-error) 10%, transparent);
+  --k2-tag-edge: color-mix(in srgb, var(--color-status-error) 45%, transparent);
+}
+/* A pill's round ends need a little more side room. */
+html:not([data-style="terminal"]) .k2-tag { padding-inline: 6px; }
+
 /* Glass: a dialog scrim is plain dim, because Frost is only for floating
    chrome. !important beats the inline blur the dialogs carry for other styles. */
 html[data-style="glass"] [data-scrim]:not([data-zen-root] *) {

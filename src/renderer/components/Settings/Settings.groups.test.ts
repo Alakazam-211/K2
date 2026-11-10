@@ -165,8 +165,7 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
     expect(SECTION_LABELS.sew).toBe('Chat / Voice')
     // Its tag matches the 3rd Party Bots SOON tag: same classes, right-justified.
     const settingsSrc = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
-    const tag =
-      '<span className="ml-auto type-badge uppercase tracking-wider px-1 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>'
+    const tag = '<Tag tone="muted" className="ml-auto">SOON</Tag>'
     expect(settingsSrc.split(tag).length - 1).toBe(2)
     expect(settingsSrc).not.toContain('>\n                          soon\n')
   })

@@ -26,7 +26,7 @@ import {
   type DocCore,
   type DocCores,
 } from './multiplayer-cores-api'
-import { Toggle } from '@/components/ui'
+import { Toggle, Tag } from '@/components/ui'
 
 export const MULTIPLAYER_INTRO =
   "People and agents work in the same file at the same time, with presence, history and everyone's own undo. " +
@@ -246,9 +246,9 @@ function CoreRow({
           <div className="type-name text-[var(--color-text-primary)] flex items-center gap-2">
             <span>{core.name}</span>
             {core.status === 'beta' ? (
-              <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+              <Tag tone="accent">
                 Beta
-              </span>
+              </Tag>
             ) : null}
           </div>
           <div className={`type-hint ${muted} mt-0.5 leading-relaxed`}>{core.description}</div>

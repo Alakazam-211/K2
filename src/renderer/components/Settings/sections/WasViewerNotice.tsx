@@ -3,6 +3,7 @@
 // GET /cli/users entry has `wasViewer: true` and is still disabled.
 
 import { WAS_VIEWER_NOTE } from './connect-user-roles'
+import { Tag } from '@/components/ui/Tag'
 
 export function WasViewerNotice({
   username,
@@ -35,8 +36,8 @@ export function WasViewerNotice({
 /** Small badge next to the username. */
 export function WasViewerBadge(): React.JSX.Element {
   return (
-    <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">
+    <Tag tone="muted">
       was Viewer
-    </span>
+    </Tag>
   )
 }

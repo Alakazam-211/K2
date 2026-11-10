@@ -83,7 +83,7 @@ import {
   type RotatedMailboxPassword,
 } from './email-api'
 import { SettingDropdown } from '../controls/SettingControls'
-import { Checkbox } from '@/components/ui'
+import { Checkbox, Tag } from '@/components/ui'
 
 export const EMAIL_HOSTING_MANIFEST: SettingEntry[] = [
   { id: 'email-hosting.server', section: 'email-hosting', label: 'Email Server', description: 'Enable and supervise the mail server (Linux deployments)', keywords: ['mail', 'email', 'smtp', 'stalwart', 'server', 'enable', 'preflight', 'hosting'] },
@@ -899,19 +899,19 @@ function DomainPanel({
         {/* Catch-all / plus-addressing indicators (§6.1 V1 defaults —
             per-domain values aren't surfaced by the daemon yet). */}
         <div className="flex items-center gap-1.5 mt-2">
-          <span className="type-badge px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-status-ok)] bg-[color-mix(in_srgb,var(--color-status-ok)_12%,transparent)]">
+          <Tag tone="ok">
             Plus-addressing on
-          </span>
-          <span className="type-badge px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-text-muted)] bg-[var(--color-bg-elevated)]">
+          </Tag>
+          <Tag tone="muted">
             Catch-all off
-          </span>
+          </Tag>
           {detail.dmarcNag && (
-            <span
-              className="type-badge px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-status-warn)] bg-[color-mix(in_srgb,var(--color-status-warn)_12%,transparent)]"
+            <Tag
+              tone="warn"
               title="DMARC is strongly recommended — it never blocks verification, but set it."
             >
               Set DMARC
-            </span>
+            </Tag>
           )}
         </div>
       </div>
@@ -1333,9 +1333,9 @@ function AddressesPanel({
                             {r.address}
                           </span>
                           {r.status === 'retired' && (
-                            <span className="type-badge px-1.5 py-0.5 uppercase tracking-wide text-[var(--color-text-muted)] bg-[var(--color-bg-elevated)] flex-shrink-0">
+                            <Tag tone="muted">
                               Retired
-                            </span>
+                            </Tag>
                           )}
                         </div>
                         <p className="type-hint text-[var(--color-text-muted)] truncate">

@@ -4,7 +4,7 @@ import { type RoleSkill, roleSkillLabel } from './canonicalAgentSeeds'
 import { type HarnessProbe, anyHarnessUnified } from './canonicalState'
 import { FanoutConfirmModal } from './FanoutConfirmModal'
 import { primaryScope } from '@/kessel/server-scope'
-import { Toggle } from '@/components/ui'
+import { Toggle, Tag } from '@/components/ui'
 
 // The value-pitch WHY copy relocated VERBATIM from the removed consent page
 // (AddWorkspaceDialog:147-164) into the canonical button subtitle + the skill
@@ -159,13 +159,13 @@ export function CanonicalAgentButton({
               K2 Canonical Agent
             </span>
             {unified ? (
-              <span className="type-badge uppercase tracking-wider px-1 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+              <Tag tone="accent">
                 unified
-              </span>
+              </Tag>
             ) : (
-              <span className="type-badge uppercase tracking-wider px-1 py-0.5 bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)] border border-[var(--color-border)]">
+              <Tag tone="muted">
                 not set up
-              </span>
+              </Tag>
             )}
           </div>
           <p className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-snug">

@@ -34,7 +34,7 @@ import {
   type HireForm,
 } from './api-keys-api'
 import { primaryScope } from '@/kessel/server-scope'
-import { Checkbox } from '@/components/ui'
+import { Checkbox, Tag } from '@/components/ui'
 import { currentShortcutOs } from '@/lib/shortcut-label'
 import { isAirgap } from '@/lib/airgap'
 import { useDialogEscape } from '../settings-esc'
@@ -244,9 +244,9 @@ export function ApiTokensSection(): React.JSX.Element {
                       <span className="type-name text-[var(--color-text-primary)]">
                         {k.label || '(no label)'}
                       </span>
-                      <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)]">
+                      <Tag tone="neutral">
                         Status (read-only)
-                      </span>
+                      </Tag>
                       {stateBadge(state)}
                     </div>
                     <p className="type-hint font-mono text-[var(--color-text-muted)] break-all">{k.id}</p>

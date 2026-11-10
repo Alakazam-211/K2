@@ -19,7 +19,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow, SettingsGroup } from '../controls/SettingControls'
-import { Toggle } from '@/components/ui'
+import { Toggle, Tag } from '@/components/ui'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { formatRelativeTime } from '@/lib/format-relative-time'
@@ -114,9 +114,9 @@ export function requestStateLabel(state: string): string {
 
 function BetaPill(): React.JSX.Element {
   return (
-    <span className="type-badge uppercase tracking-wider px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+    <Tag tone="accent">
       BETA
-    </span>
+    </Tag>
   )
 }
 

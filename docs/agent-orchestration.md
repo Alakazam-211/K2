@@ -98,7 +98,7 @@ Agents can communicate across workspaces. The two daily-tier verbs for live cros
 ```bash
 k2so workspace list --running              # All workspaces with live agents right now
 k2so msg <workspace> "text"                # Live delivery (call/IM — blocks until landed)
-k2so msg <workspace> "text" --inbox        # Email-style drop into the recipient's inbox
+k2so msg <workspace> --inbox-silent --title "..." --body "text"   # Email-style drop into the recipient's inbox (--inbox-wake also wakes them)
 ```
 
 For low-level PTY I/O (internal tier; used by orchestrators that integrate with K2SO):
@@ -161,7 +161,9 @@ k2so inbox search "query"            Search inbox + all folders
 ### Cross-Workspace Messaging
 ```
 k2so msg <workspace> "text"          Live delivery (blocks until landed)
-k2so msg <workspace> "text" --inbox  Drop in their inbox (async, email-style)
+k2so msg <workspace> --inbox-silent --title "..." --body "text"
+                                     Drop in their inbox (async, email-style;
+                                     --inbox-wake also wakes them)
 k2so connections list|add|remove     Cross-workspace links
 ```
 

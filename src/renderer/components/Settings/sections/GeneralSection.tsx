@@ -79,9 +79,12 @@ import { GitToolsRow } from '@/components/GitTools/GitToolsNotice'
 import {
   SETTING_ROW_HINT,
   SETTING_ROW_LABEL,
+  SaveError,
+  SaveNote,
   SettingRow,
   SettingSwitchRow,
   SettingsGroup,
+  useSaveStatus,
 } from '../controls/SettingControls'
 import { HealthWord, StatusDot, type HealthTone } from './ConnectionsParts'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
@@ -103,7 +106,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset all settings', description: "Put this server's settings back to their defaults. Workspaces, agents, chats and files stay. Owner only.", keywords: ['reset', 'defaults', 'factory', 'restore'] },
   { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 server', description: 'The background service that runs agents, terminals and heartbeats: its status, restart and log', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent', 'log', 'restart'] },
   { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'On: the red close button hides the window and agents keep running. Off: it quits everything. Cmd+Q always quits.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
-  { id: 'general.agents-survive-restarts', section: 'general', group: 'Server', label: 'Agents keep running through updates and restarts', description: 'Agent sessions keep running when K2 updates, restarts or crashes. On by default; macOS and Linux.', keywords: ['agents', 'survive', 'restart', 'update', 'crash', 'keep', 'running', 'ptyd', 'session', 'terminal'] },
+  { id: 'general.agents-survive-restarts', section: 'general', group: 'Server', label: 'Agents keep running through updates and restarts', description: 'Agent sessions keep running when K2 updates, restarts or crashes. On by default. Works on macOS and Linux.', keywords: ['agents', 'survive', 'restart', 'update', 'crash', 'keep', 'running', 'ptyd', 'session', 'terminal'] },
   { id: 'general.clone-personal-computers', section: 'general', group: 'Server', label: "Allow cloning agents to people's personal computers", description: "When off, Admins and Members can't clone agents from this server to their own computers. Owner only.", keywords: ['clone', 'copy', 'agent', 'workspace', 'personal', 'computer', 'pull', 'permission', 'migrate'] },
   { id: 'general.restart-host', section: 'general', group: 'Server', label: 'Restart connected server', description: "Restart the server you're connected to, not this computer", keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
   { id: 'general.update-host', section: 'general', group: 'Server', label: 'Update connected server', description: "Update the server you're connected to, not this computer", keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
@@ -203,7 +206,8 @@ export function GeneralSection(): React.JSX.Element {
                 role="tab"
                 aria-selected={active}
                 onClick={() => setTab(t.id)}
-                className={`px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)] ${
+                data-k2-focus=""
+                className={`relative px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px outline-none ${
                   active
                     ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
                     : 'border-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
@@ -217,13 +221,16 @@ export function GeneralSection(): React.JSX.Element {
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0 pt-5 pb-8 w-full [scrollbar-gutter:stable] @container">
+        {/* Side by side, this computer's cards take three parts and the
+            Connected server card two, so the field rows keep room for their
+            hints on one line. */}
         <div className={`w-full ${width} flex flex-col gap-6 @4xl:flex-row @4xl:items-start`}>
-          <div className={`flex-1 min-w-0 w-full ${CONTENT_WIDTH} space-y-6`}>
+          <div className={`min-w-0 w-full ${CONTENT_WIDTH} space-y-6 ${isRemote ? '@4xl:flex-[3]' : 'flex-1'}`}>
             {tab === 'general' && <GeneralTab isRemote={isRemote} />}
             {tab === 'server' && <ServerTab />}
           </div>
           {isRemote && (
-            <div className={`flex-1 min-w-0 w-full ${CONTENT_WIDTH}`}>
+            <div className={`min-w-0 w-full ${CONTENT_WIDTH} @4xl:flex-[2]`}>
               <SectionErrorBoundary>
                 <GeneralRemoteHostPanel />
               </SectionErrorBoundary>
@@ -318,8 +325,8 @@ function ServerTab(): React.JSX.Element {
 // release page. Hosted web has no in-app updater (the edge serves it).
 function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
   const [currentVersion, setCurrentVersion] = useState<string>('')
-  // Set once this page's own check came back with nothing newer.
-  const [upToDate, setUpToDate] = useState(false)
+  // When this page's own check came back with nothing newer.
+  const [upToDateAt, setUpToDateAt] = useState<number | null>(null)
   const updateStatus = useUpdateStore((s) => s.status)
   const updateVersion = useUpdateStore((s) => s.version)
   const updateProgress = useUpdateStore((s) => s.progress)
@@ -335,9 +342,9 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
   }, [])
 
   const handleCheckUpdate = useCallback(async () => {
-    setUpToDate(false)
+    setUpToDateAt(null)
     await checkForUpdate(true)
-    setUpToDate(useUpdateStore.getState().status === 'idle')
+    setUpToDateAt(useUpdateStore.getState().status === 'idle' ? Date.now() : null)
   }, [])
 
   // Auto-check for updates when navigated here from the update toast
@@ -368,12 +375,13 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
   }
 
   const version = currentVersion ? `Version ${currentVersion}.` : 'Reading the version…'
+  const upToDate = updateStatus === 'idle' && upToDateAt !== null
   const last = updateStatus === 'idle' && !upToDate ? readLastUpdateCheck() : null
   const status = !webFeatures.appUpdater
     ? 'Updates come with the web page.'
     : updateStatus === 'idle'
       ? upToDate
-        ? 'Up to date.'
+        ? `Up to date. Checked ${checkedAgo(upToDateAt)}.`
         : last
           ? `Last checked ${checkedAgo(last.at)}.`
           : ''
@@ -490,7 +498,7 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
         </span>
       }
       hint={
-        <span data-testid="app-version-label">
+        <span data-testid="app-version-label" role="status">
           {version}
           {status ? ` ${status}` : ''}
         </span>
@@ -510,6 +518,7 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
  *  on the version's right-click menu before. Thin-client localStorage. */
 function AutoUpdateChecksRow(): React.JSX.Element {
   const [on, setOn] = useState(autoUpdateChecksEnabled)
+  const save = useSaveStatus()
   useEffect(() => {
     const sync = (): void => setOn(autoUpdateChecksEnabled())
     window.addEventListener(AUTO_UPDATE_CHECKS_EVENT, sync)
@@ -519,18 +528,25 @@ function AutoUpdateChecksRow(): React.JSX.Element {
     <SettingSwitchRow
       settingId="general.auto-update-checks"
       control={
-        <Toggle
-          checked={on}
-          onChange={(next) => {
-            setAutoUpdateChecksEnabled(next)
-            setOn(next)
-          }}
-          aria-label="Check for updates automatically"
-        />
+        <>
+          <SaveNote state={save.state} />
+          <Toggle
+            checked={on}
+            onChange={(next) => {
+              setAutoUpdateChecksEnabled(next)
+              const kept = autoUpdateChecksEnabled()
+              setOn(kept)
+              if (kept === next) save.saved()
+              else save.failed("this computer's storage is blocked")
+            }}
+            aria-label="Check for updates automatically"
+          />
+        </>
       }
     >
       <div className={SETTING_ROW_LABEL}>Check for updates automatically</div>
       <div className={SETTING_ROW_HINT}>Every few hours. K2 tells you when a new version is ready.</div>
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }
@@ -684,6 +700,7 @@ function writeDevToolsPref(on: boolean): void {
 function DevToolsRow(): React.JSX.Element {
   const [enabled, setEnabled] = useState(readDevToolsPref)
   const [opening, setOpening] = useState(false)
+  const save = useSaveStatus()
 
   const openDevTools = useCallback(async () => {
     setOpening(true)
@@ -704,10 +721,13 @@ function DevToolsRow(): React.JSX.Element {
     (next: boolean) => {
       setEnabled(next)
       writeDevToolsPref(next)
+      if (readDevToolsPref() === next) save.saved()
+      else save.failed("this computer's storage is blocked, so it lasts until K2 closes")
       // Optionally open immediately when enabled so the toggle is useful
       // without a second click.
       if (next) void openDevTools()
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [openDevTools],
   )
 
@@ -716,6 +736,7 @@ function DevToolsRow(): React.JSX.Element {
       settingId="general.devtools"
       control={
         <>
+          <SaveNote state={save.state} />
           {enabled && (
             <Button variant="quiet" onClick={() => void openDevTools()} disabled={opening}>
               {opening ? 'Opening…' : 'Open inspector'}
@@ -727,6 +748,7 @@ function DevToolsRow(): React.JSX.Element {
     >
       <div className={SETTING_ROW_LABEL}>Developer tools</div>
       <div className={SETTING_ROW_HINT}>Opens the web inspector for this window, for troubleshooting.</div>
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }
@@ -790,13 +812,14 @@ function ConfigLocationRow(): React.JSX.Element {
 export const RESET_ALL_HINT =
   "Shortcuts, fonts, workspace options, sharing and previews go back to their defaults. Workspaces, agents, chats and files stay. Owner only."
 export const RESET_ALL_CONFIRM =
-  "Every setting on this server goes back to its default: shortcuts, fonts, workspace options, sharing and preview switches. The K2 Companion password is cleared, so phones sign in again. Workspaces, agents, chats, files and this computer's look stay. This can't be undone."
+  "Every setting on this server goes back to its default: shortcuts, fonts, workspace options, sharing and preview switches. The K2 Companion password is cleared, so phones sign in again. Workspaces, agents, chats, files and this computer's look stay. This can't be undone. Only this server's owner can reset it."
 
 function ResetAllRow(): React.JSX.Element {
   const resetAllSettings = useSettingsStore((s) => s.resetAllSettings)
   const confirm = useConfirmDialogStore((s) => s.confirm)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState(false)
 
   const reset = async (): Promise<void> => {
     const ok = await confirm({
@@ -808,8 +831,10 @@ function ResetAllRow(): React.JSX.Element {
     if (!ok) return
     setBusy(true)
     setError(null)
+    setDone(false)
     try {
       await resetAllSettings()
+      setDone(true)
       useToastStore.getState().addToast('Settings are back to their defaults.', 'success', 5000)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -829,10 +854,17 @@ function ResetAllRow(): React.JSX.Element {
           <Callout tone="error" role="alert">
             <p className="type-hint">{error}</p>
           </Callout>
+        ) : done ? (
+          <p role="status" className="inline-flex items-center gap-1 type-hint text-[var(--color-status-ok-soft)]">
+            <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+              <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+            </svg>
+            Settings reset to defaults.
+          </p>
         ) : undefined
       }
     >
-      <Button variant="danger-muted" className="flex-shrink-0" onClick={() => void reset()} disabled={busy}>
+      <Button variant="danger-quiet" className="flex-shrink-0" onClick={() => void reset()} disabled={busy}>
         {busy ? 'Resetting…' : 'Reset…'}
       </Button>
     </SettingRow>
@@ -980,9 +1012,11 @@ function DaemonRow(): React.JSX.Element {
           <div className="space-y-2">
             {status?.state === 'unreachable' && !error && (
               <Callout tone="error" role="alert">
-                <p className="type-hint break-words">
-                  The K2 server is installed but isn&apos;t answering{status.reason ? ` (${status.reason})` : ''}. Restart
-                  it; if it still doesn&apos;t answer, the log says why.
+                {/* The raw reason ("connection refused") stays on hover for
+                    troubleshooting; the sentence says it plainly. */}
+                <p className="type-hint break-words" title={status.reason || undefined}>
+                  The K2 server is installed but isn&apos;t answering. Restart it; if it still doesn&apos;t answer, the
+                  log says why.
                 </p>
               </Callout>
             )}
@@ -1037,16 +1071,18 @@ function DaemonRow(): React.JSX.Element {
 }
 
 /** A daemon-settings switch row: reads its value once, saves on flip with
- *  the switch held while the write is out, and says so when either fails
- *  (the switch goes back on a refused write). */
+ *  the switch held while the write is out, shows "Saved" when the write
+ *  lands, and says so when either fails (the switch goes back on a refused
+ *  write). `error` is a failed read; a failed write is in `save`. */
 function useDaemonSwitch(
   read: (s: Awaited<ReturnType<typeof settingsGet>>) => boolean,
   write: (next: boolean) => Parameters<typeof settingsUpdate>[0],
   tag: string,
-): { on: boolean; saving: boolean; error: string | null; flip: () => void } {
+): { on: boolean; saving: boolean; error: string | null; save: ReturnType<typeof useSaveStatus>; flip: () => void } {
   const [on, setOn] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const save = useSaveStatus()
   const readRef = useRef(read)
   readRef.current = read
 
@@ -1064,16 +1100,18 @@ function useDaemonSwitch(
     setOn(next) // optimistic
     setSaving(true)
     setError(null)
+    save.reset()
     settingsUpdate(write(next))
+      .then(() => save.saved())
       .catch((e: unknown) => {
         console.error(`[${tag}]`, e)
         setOn(!next) // revert
-        setError(`Couldn't save the change: ${e instanceof Error ? e.message : String(e)}`)
+        save.failed(e)
       })
       .finally(() => setSaving(false))
   }
 
-  return { on, saving, error, flip }
+  return { on, saving, error, save, flip }
 }
 
 function SwitchError({ error }: { error: string | null }): React.JSX.Element | null {
@@ -1097,7 +1135,7 @@ function SwitchError({ error }: { error: string | null }): React.JSX.Element | n
 const SURVIVE_LABEL = 'Agents keep running through updates and restarts'
 
 function AgentsSurviveRestartsRow(): React.JSX.Element {
-  const { on, saving, error, flip } = useDaemonSwitch(
+  const { on, saving, error, save, flip } = useDaemonSwitch(
     (s) => s.terminal?.ptyd !== 'off',
     // The daemon deep-merges `terminal`, so the font settings stay.
     (next) => ({ terminal: { ptyd: next ? 'on' : 'off' } }),
@@ -1107,15 +1145,21 @@ function AgentsSurviveRestartsRow(): React.JSX.Element {
   return (
     <SettingSwitchRow
       settingId="general.agents-survive-restarts"
-      control={<Toggle checked={on} onChange={flip} disabled={saving} aria-label={SURVIVE_LABEL} />}
+      control={
+        <>
+          <SaveNote state={save.state} />
+          <Toggle checked={on} onChange={flip} disabled={saving} aria-label={SURVIVE_LABEL} />
+        </>
+      }
     >
       <div className={SETTING_ROW_LABEL}>{SURVIVE_LABEL}</div>
       <div className={SETTING_ROW_HINT}>
         {on
-          ? 'New agent sessions keep running when K2 updates, restarts or crashes. Sessions started before you turned this on stop at the next restart. macOS and Linux.'
+          ? 'New agent sessions keep running when K2 updates, restarts or crashes. Sessions started before you turned this on stop at the next restart. Works on macOS and Linux.'
           : 'Updating or restarting K2 stops running agents; they pick up their conversation afterwards.'}
       </div>
       <SwitchError error={error} />
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }
@@ -1135,7 +1179,7 @@ const KEEP_LABEL = 'Keep server running when the window is closed'
 function KeepDaemonOnQuitRow(): React.JSX.Element {
   // Default `true` so the row renders at once; the daemon's value (default
   // true if absent) arrives next tick.
-  const { on, saving, error, flip } = useDaemonSwitch(
+  const { on, saving, error, save, flip } = useDaemonSwitch(
     (s) => s.keepDaemonOnQuit ?? true,
     (next) => ({ keepDaemonOnQuit: next }),
     'keep-daemon-on-quit',
@@ -1144,7 +1188,12 @@ function KeepDaemonOnQuitRow(): React.JSX.Element {
   return (
     <SettingSwitchRow
       settingId="general.keep-daemon-on-quit"
-      control={<Toggle checked={on} onChange={flip} disabled={saving} aria-label={KEEP_LABEL} />}
+      control={
+        <>
+          <SaveNote state={save.state} />
+          <Toggle checked={on} onChange={flip} disabled={saving} aria-label={KEEP_LABEL} />
+        </>
+      }
     >
       <div className={SETTING_ROW_LABEL}>{KEEP_LABEL}</div>
       <div className={SETTING_ROW_HINT}>
@@ -1153,6 +1202,7 @@ function KeepDaemonOnQuitRow(): React.JSX.Element {
           : 'The red close button quits everything, like Cmd+Q. Agents pause and K2 Companion disconnects.'}
       </div>
       <SwitchError error={error} />
+      <SaveError state={save.state} />
     </SettingSwitchRow>
   )
 }
@@ -1194,7 +1244,7 @@ export function GeneralRemoteHostPanel(): React.JSX.Element | null {
           hint={`${hostLabel} runs a K2 too old to restart or update from here${needs ? ` (needs ${needs} or later)` : ''}. Update it on that computer and these controls appear.`}
           testId="remote-host-unsupported"
         >
-          <span className="type-hint text-[var(--color-text-secondary)]">Not available</span>
+          <Tag tone="muted">Not available</Tag>
         </SettingRow>
       )}
     </SettingsGroup>

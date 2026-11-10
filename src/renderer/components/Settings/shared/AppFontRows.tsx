@@ -8,7 +8,7 @@
 import React from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import { EDITOR_FONTS } from '@/components/FileViewerPane/CodeEditor'
-import { SettingDropdown, SettingRow } from '../controls/SettingControls'
+import { SaveError, SaveNote, SettingDropdown, SettingRow, useSaveStatus } from '../controls/SettingControls'
 
 export const APP_FONT_SIZES = [10, 11, 12, 13, 14, 15, 16, 18, 20]
 
@@ -41,6 +41,21 @@ export function AppFontRows({
   const fontSize = useSettingsStore((s) => s.editor.fontSize)
   const updateEditorSettings = useSettingsStore((s) => s.updateEditorSettings)
   const copy = COPY[where]
+  // General's rows say when a change saved, or that it didn't. The store
+  // puts the old value back when the server refuses the write.
+  const familySave = useSaveStatus()
+  const sizeSave = useSaveStatus()
+  const saveEditor = async (
+    partial: { fontFamily: string } | { fontSize: number },
+    save: ReturnType<typeof useSaveStatus>,
+  ): Promise<void> => {
+    save.reset()
+    await Promise.resolve(updateEditorSettings(partial))
+    const now = useSettingsStore.getState().editor
+    const kept = 'fontFamily' in partial ? now.fontFamily === partial.fontFamily : now.fontSize === partial.fontSize
+    if (kept) save.saved()
+    else save.failed('')
+  }
   const familyOptions = EDITOR_FONTS.map((f) => ({ value: f.id, label: f.label }))
   const sizeOptions = APP_FONT_SIZES.map((n) => ({ value: String(n), label: `${n}px` }))
   if (where === 'general') {
@@ -48,22 +63,42 @@ export function AppFontRows({
     // width on the card's right edge, like every other Settings field.
     return (
       <>
-        <SettingRow label={copy.family} hint={copy.familyHint} settingId="general.font-family" field>
+        <SettingRow
+          label={copy.family}
+          hint={
+            <>
+              {copy.familyHint} <SaveNote state={familySave.state} />
+              <SaveError state={familySave.state} />
+            </>
+          }
+          settingId="general.font-family"
+          field
+        >
           <SettingDropdown
             fullWidth
             value={fontFamily}
             ariaLabel={copy.family}
             options={familyOptions}
-            onChange={(v) => updateEditorSettings({ fontFamily: v })}
+            onChange={(v) => saveEditor({ fontFamily: v }, familySave)}
           />
         </SettingRow>
-        <SettingRow label={copy.size} hint={copy.sizeHint} settingId="general.font-size" field>
+        <SettingRow
+          label={copy.size}
+          hint={
+            <>
+              {copy.sizeHint} <SaveNote state={sizeSave.state} />
+              <SaveError state={sizeSave.state} />
+            </>
+          }
+          settingId="general.font-size"
+          field
+        >
           <SettingDropdown
             fullWidth
             value={String(fontSize)}
             ariaLabel={copy.size}
             options={sizeOptions}
-            onChange={(v) => updateEditorSettings({ fontSize: Number(v) })}
+            onChange={(v) => saveEditor({ fontSize: Number(v) }, sizeSave)}
           />
         </SettingRow>
       </>

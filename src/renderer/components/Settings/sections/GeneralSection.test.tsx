@@ -10,6 +10,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 const tauri = vi.hoisted(() => ({
   calls: [] as string[],
   cli: { installed: true, installedVersion: '0.46.11', bundledVersion: '0.46.11', updateAvailable: false } as Record<string, unknown>,
+  daemon: { state: 'running', version: '0.46.11', uptime_secs: 3600, pid: 42, port: 7777 } as Record<string, unknown>,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -17,7 +18,7 @@ vi.mock('@tauri-apps/api/core', () => ({
     tauri.calls.push(cmd)
     if (cmd === 'get_current_version') return '0.46.11'
     if (cmd === 'cli_install_status') return tauri.cli
-    if (cmd === 'daemon_status') return { state: 'running', version: '0.46.11', uptime_secs: 3600, pid: 42, port: 7777 }
+    if (cmd === 'daemon_status') return tauri.daemon
     if (cmd === 'daemon_restart') return null
     return null
   }),
@@ -54,6 +55,7 @@ const reset = vi.fn(async () => {})
 beforeEach(() => {
   tauri.calls = []
   tauri.cli = { installed: true, installedVersion: '0.46.11', bundledVersion: '0.46.11', updateAvailable: false }
+  tauri.daemon = { state: 'running', version: '0.46.11', uptime_secs: 3600, pid: 42, port: 7777 }
   confirm.mockReset().mockResolvedValue(true)
   reset.mockReset().mockResolvedValue(undefined)
   useConfirmDialogStore.setState({ confirm })
@@ -114,14 +116,55 @@ describe('Settings → General', () => {
     expect(row('general.app-version').textContent).toContain('Downloading K2 0.47.0…')
   })
 
-  it('Reset asks first (destructive), then confirms with a toast', async () => {
+  it('Reset is quiet at rest, asks first (destructive, owner only), then says so on the row and in a toast', async () => {
     render(<GeneralSection />)
+    const button = within(row('general.reset-all')).getByRole('button', { name: 'Reset…' })
+    // Present but quiet: an outline with an error label, red only under the pointer.
+    expect(button.className).toContain('text-[var(--color-status-error-text)]')
+    expect(button.className).not.toMatch(/(^|\s)bg-\[var\(--color-danger/)
     await act(async () => {
-      fireEvent.click(within(row('general.reset-all')).getByRole('button', { name: 'Reset…' }))
+      fireEvent.click(button)
     })
     expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: 'Reset all settings?', destructive: true }))
+    expect((confirm.mock.calls[0] as unknown as [{ message: string }])[0].message).toContain("Only this server's owner can reset it.")
     expect(reset).toHaveBeenCalledTimes(1)
+    expect(within(row('general.reset-all')).getByRole('status').textContent).toBe('Settings reset to defaults.')
     expect(useToastStore.getState().toasts.map((t) => t.message)).toContain('Settings are back to their defaults.')
+  })
+
+  it('Check for updates that finds nothing says so on the K2 app row', async () => {
+    useUpdateStore.setState({ checkForUpdate: async () => false } as never)
+    render(<GeneralSection />)
+    await act(async () => {
+      fireEvent.click(within(row('general.app-version')).getByRole('button', { name: 'Check for updates' }))
+    })
+    await waitFor(() => expect(screen.getByTestId('app-version-label').textContent).toContain('Up to date. Checked just now.'))
+  })
+
+  it('the tabs show keyboard focus in the theme\'s shape', () => {
+    render(<GeneralSection />)
+    for (const tab of screen.getAllByRole('tab')) {
+      expect(tab.hasAttribute('data-k2-focus')).toBe(true)
+      expect(tab.className).toContain('relative')
+      expect(tab.className).not.toContain('focus-visible:outline-')
+    }
+  })
+
+  it('a server switch says Saved when the write lands', async () => {
+    render(<GeneralSection />)
+    act(() => void fireEvent.click(screen.getByRole('tab', { name: 'Server' })))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('switch', { name: 'Keep server running when the window is closed' }))
+    })
+    await waitFor(() => expect(row('general.keep-daemon-on-quit').querySelector('[data-save-note]')?.textContent).toBe('Saved'))
+  })
+
+  it('a server that isn\'t answering is said plainly, with no raw error in the sentence', async () => {
+    tauri.daemon = { state: 'unreachable', reason: 'connection refused' }
+    render(<GeneralSection />)
+    act(() => void fireEvent.click(screen.getByRole('tab', { name: 'Server' })))
+    await waitFor(() => expect(within(row('general.daemon')).getByRole('alert').textContent).toContain("isn't answering. Restart it"))
+    expect(within(row('general.daemon')).getByRole('alert').textContent).not.toContain('connection refused')
   })
 
   it('Reset cancelled changes nothing; a refused reset says why on the row', async () => {
@@ -175,6 +218,8 @@ describe('Settings → General, connected to another server', () => {
     render(<GeneralSection />)
     expect(screen.getByRole('heading', { name: 'Connected server' })).toBeTruthy()
     expect(screen.getByTestId('remote-host-unsupported').textContent).toContain('Lab Mac runs a K2 too old to restart or update from here')
+    // The status is a tag, like other rows' states, not bare text.
+    expect(within(screen.getByTestId('remote-host-unsupported')).getByText('Not available').className).toContain('k2-tag')
     // This computer's version is marked so it isn't taken for the server's.
     expect(within(row('general.app-version')).getByText('This computer')).toBeTruthy()
   })

@@ -8,7 +8,7 @@
 import { useState } from 'react'
 import { readStartPage, writeStartPage, type StartPage } from '@/stores/page-view'
 import { Segmented } from '@/components/ui'
-import { SettingRow } from '../controls/SettingControls'
+import { SaveError, SaveNote, SettingRow, useSaveStatus } from '../controls/SettingControls'
 
 const OPTIONS: Array<{ id: StartPage; label: string }> = [
   { id: 'home', label: 'Home' },
@@ -17,12 +17,15 @@ const OPTIONS: Array<{ id: StartPage; label: string }> = [
 
 export function StartPageRow(): React.JSX.Element {
   const [value, setValue] = useState<StartPage>(() => readStartPage())
+  const save = useSaveStatus()
   return (
     <SettingRow
       label="Start page"
       hint="The page K2 opens on when it starts or after you sign in."
       settingId="general.start-page"
+      below={typeof save.state === 'object' ? <SaveError state={save.state} /> : undefined}
     >
+      <SaveNote state={save.state} />
       <Segmented
         aria-label="Start page"
         data-testid="start-page"
@@ -30,6 +33,9 @@ export function StartPageRow(): React.JSX.Element {
         onChange={(next) => {
           writeStartPage(next)
           setValue(next)
+          // Read back: blocked storage keeps it for this window only.
+          if (readStartPage() === next) save.saved()
+          else save.failed("this computer's storage is blocked, so it lasts until K2 closes")
         }}
         options={OPTIONS.map((opt) => ({
           value: opt.id,

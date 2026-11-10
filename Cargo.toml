@@ -158,24 +158,24 @@ vte = { path = "third_party/vte" }
 sew-proto = { path = "third_party/sew-proto" }
 # Native voice (src-tauri's `native-voice` feature, prd-k2-voice-rooms-v1 §14).
 # THE ONE PLACE that says where Sew's crates come from: Sew's public mirror, pinned
-# by commit (Sew release 0.8.2: sew-proto 0.8.2, sew-call-client and
-# tauri-plugin-sew-voice 0.5.0; the mirror has no tags). K2 names them by version,
-# so moving to crates.io later only removes these rows. sew-proto here is 0.8, beside
+# by commit (Sew release 0.9.0: sew-proto 0.9.0, sew-call-client and
+# tauri-plugin-sew-voice 0.6.0; the mirror has no tags). K2 names them by version,
+# so moving to crates.io later only removes these rows. sew-proto here is 0.9, beside
 # the 0.3 above that sew-client uses, hence the rename.
-sew-proto-native = { git = "https://github.com/Alakazam-211/sew-crates", rev = "29beb54159512588b00b1ce074c40da486f095c7", package = "sew-proto" }
-sew-lkproto = { git = "https://github.com/Alakazam-211/sew-crates", rev = "29beb54159512588b00b1ce074c40da486f095c7" }
-sew-mls-crypto = { git = "https://github.com/Alakazam-211/sew-crates", rev = "29beb54159512588b00b1ce074c40da486f095c7" }
-sew-e2ee = { git = "https://github.com/Alakazam-211/sew-crates", rev = "29beb54159512588b00b1ce074c40da486f095c7" }
-sew-lk-compat = { git = "https://github.com/Alakazam-211/sew-crates", rev = "29beb54159512588b00b1ce074c40da486f095c7" }
-sew-call-client = { git = "https://github.com/Alakazam-211/sew-crates", rev = "29beb54159512588b00b1ce074c40da486f095c7" }
-tauri-plugin-sew-voice = { git = "https://github.com/Alakazam-211/sew-crates", rev = "29beb54159512588b00b1ce074c40da486f095c7" }
+sew-proto-native = { git = "https://github.com/Alakazam-211/sew-crates", rev = "c2fbd6bcf2c2f6c55fe7d3224b25fe720832219a", package = "sew-proto" }
+sew-lkproto = { git = "https://github.com/Alakazam-211/sew-crates", rev = "c2fbd6bcf2c2f6c55fe7d3224b25fe720832219a" }
+sew-mls-crypto = { git = "https://github.com/Alakazam-211/sew-crates", rev = "c2fbd6bcf2c2f6c55fe7d3224b25fe720832219a" }
+sew-e2ee = { git = "https://github.com/Alakazam-211/sew-crates", rev = "c2fbd6bcf2c2f6c55fe7d3224b25fe720832219a" }
+sew-lk-compat = { git = "https://github.com/Alakazam-211/sew-crates", rev = "c2fbd6bcf2c2f6c55fe7d3224b25fe720832219a" }
+sew-call-client = { git = "https://github.com/Alakazam-211/sew-crates", rev = "c2fbd6bcf2c2f6c55fe7d3224b25fe720832219a" }
+tauri-plugin-sew-voice = { git = "https://github.com/Alakazam-211/sew-crates", rev = "c2fbd6bcf2c2f6c55fe7d3224b25fe720832219a" }
 # A [patch] applies only from the workspace root: the mirror's fork rows, copied
-# (str0m at 7faf99d1 has Sew 0.8.2's bandwidth estimator fix).
-str0m = { git = "https://github.com/Alakazam-211/str0m", rev = "7faf99d17f34292b5c9f72e67f3d0332cd67c122" }
-str0m-proto = { git = "https://github.com/Alakazam-211/str0m", rev = "7faf99d17f34292b5c9f72e67f3d0332cd67c122" }
-is = { git = "https://github.com/Alakazam-211/str0m", rev = "7faf99d17f34292b5c9f72e67f3d0332cd67c122" }
-str0m-aws-lc-rs = { git = "https://github.com/Alakazam-211/str0m", rev = "7faf99d17f34292b5c9f72e67f3d0332cd67c122" }
-dimpl = { git = "https://github.com/Alakazam-211/dimpl", rev = "a3481943e8e3fa270990e7c05a27d015cfbe4d77" }
+# (Sew 0.8.3 on: str0m at 907e050b, upstream's fixes; dimpl 0.9 comes from crates.io,
+# so the dimpl row is gone).
+str0m = { git = "https://github.com/Alakazam-211/str0m", rev = "907e050bfa212a23394f4482110acef04cba8fc6" }
+str0m-proto = { git = "https://github.com/Alakazam-211/str0m", rev = "907e050bfa212a23394f4482110acef04cba8fc6" }
+is = { git = "https://github.com/Alakazam-211/str0m", rev = "907e050bfa212a23394f4482110acef04cba8fc6" }
+str0m-aws-lc-rs = { git = "https://github.com/Alakazam-211/str0m", rev = "907e050bfa212a23394f4482110acef04cba8fc6" }
 # K2's own audio crate, so one kessel-audio is built and no git source on K2 is locked.
 kessel-audio = { path = "crates/kessel-audio" }
 # kessel-video names the VP8 crates by version only (crates.io); in this

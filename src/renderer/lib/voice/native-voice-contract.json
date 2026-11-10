@@ -38,10 +38,12 @@
   },
   "rejoinReasons": ["admit_lost", "credential_expired"],
   "recording": {
-    "pending": { "recording_id": "77", "auto": false, "my_consent": "pending", "participants": [], "recorder_present": true },
+    "pending": { "recording_id": "77", "auto": false, "trigger": "manual", "required": false, "my_consent": "pending", "participants": [], "recorder_present": true },
     "granted": {
       "recording_id": "77",
       "auto": false,
+      "trigger": "manual",
+      "required": false,
       "started_by": "7",
       "my_consent": "granted",
       "participants": [{ "member_id": "48831765147549699", "consent": "granted", "recorded": true }],

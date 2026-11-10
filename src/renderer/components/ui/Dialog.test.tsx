@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { createPortal } from 'react-dom'
-import { DialogFrame, DialogScrim } from '@/components/ui'
+import { DialogFrame, DialogScrim, useDialogCancel, type DialogCancelOptions } from '@/components/ui'
 
 vi.mock('@/lib/browser-overlay', () => ({ useBrowserOverlay: () => {} }))
 
@@ -135,6 +135,27 @@ describe('DialogFrame onCancel', () => {
     expect(under).not.toHaveBeenCalled()
   })
 
+  it('Esc leaves an open drop-down or menu that has focus alone', () => {
+    const onCancel = vi.fn()
+    render(
+      <DialogFrame onCancel={onCancel}>
+        <button type="button" aria-haspopup="menu" aria-expanded="true" data-testid="trigger">
+          Theme
+        </button>
+        <div role="menu">
+          <button type="button" role="menuitem" data-testid="item">
+            Dark
+          </button>
+        </div>
+      </DialogFrame>,
+    )
+    fireEvent.keyDown(screen.getByTestId('trigger'), { key: 'Escape' })
+    fireEvent.keyDown(screen.getByTestId('item'), { key: 'Escape' })
+    expect(onCancel).not.toHaveBeenCalled()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
   it('without onCancel the frame has no × and ignores Esc and presses', () => {
     render(
       <>
@@ -146,5 +167,47 @@ describe('DialogFrame onCancel', () => {
     const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
     document.body.dispatchEvent(esc)
     expect(esc.defaultPrevented).toBe(false)
+  })
+})
+
+function Custom({ onCancel, options }: { onCancel: () => void; options: DialogCancelOptions }): React.JSX.Element {
+  const cancel = useDialogCancel(onCancel, false, options)
+  return (
+    <>
+      <button type="button" data-testid="outside">Page</button>
+      <div {...cancel} data-testid="box">
+        Box
+      </div>
+    </>
+  )
+}
+
+describe('useDialogCancel options', () => {
+  it('escape: a first step (clear a search) runs instead of cancelling while it says so', () => {
+    const onCancel = vi.fn()
+    let query = 'font'
+    const escape = vi.fn(() => {
+      if (!query) return false
+      query = ''
+      return true
+    })
+    render(<Custom onCancel={onCancel} options={{ escape }} />)
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(query).toBe('')
+    expect(onCancel).not.toHaveBeenCalled()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    // The × and a press outside skip the first step.
+    fireEvent.pointerDown(screen.getByTestId('outside'))
+    expect(onCancel).toHaveBeenCalledTimes(2)
+  })
+
+  it('pressOutside false: a press outside does nothing; Esc still cancels', () => {
+    const onCancel = vi.fn()
+    render(<Custom onCancel={onCancel} options={{ pressOutside: false }} />)
+    fireEvent.pointerDown(screen.getByTestId('outside'))
+    expect(onCancel).not.toHaveBeenCalled()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
   })
 })

@@ -21,13 +21,17 @@
 // - Cancel is the caller's own no-op answer (Cancel, Don't open, Not now):
 //   it must open, grant, deny or save nothing.
 
-import { useCallback, useLayoutEffect, useRef } from 'react'
+import { forwardRef, useCallback, useLayoutEffect, useRef } from 'react'
 import { CloseIcon } from '@/components/icons/K2Icons'
 import { cx } from './cx'
 
 interface Entry {
   id: number
   cancel: () => void
+  /** Esc's own first step (clear a search); true when it did something. */
+  escape: () => boolean
+  /** Whether a press outside cancels right now. */
+  outside: () => boolean
 }
 
 const stack: Entry[] = []
@@ -57,6 +61,7 @@ function onKeyDown(e: KeyboardEvent): void {
   if (document.querySelector(OPEN_SETTING_MENU)) return
   e.preventDefault()
   e.stopImmediatePropagation()
+  if (top.escape()) return
   top.cancel()
 }
 
@@ -72,6 +77,7 @@ function onPressEnd(e: PointerEvent): void {
   // The popup closed itself during the press (its own button did it).
   if (!stack.includes(p.top)) return
   if (pressedInside.get(e)?.has(p.top.id)) return
+  if (!p.top.outside()) return
   p.top.cancel()
 }
 
@@ -92,7 +98,25 @@ export interface DialogCancelProps {
  *  stays on the stack, so Esc and presses outside still belong to it, but
  *  they do nothing until it is released. Returns the props for the popup's
  *  box. */
-export function useDialogCancel(onCancel: (() => void) | undefined, held = false): DialogCancelProps {
+export interface DialogCancelOptions {
+  /** Esc's first step before cancelling (a search box clears first):
+   *  return true when it did something, and the popup stays open. */
+  escape?: () => boolean
+  /** false: a press outside does nothing (Esc and the × still cancel). For
+   *  a sheet whose work goes on in another app (a sign-in in the browser):
+   *  the click that brings K2's window back must not cancel it. */
+  pressOutside?: boolean
+}
+
+export function useDialogCancel(
+  onCancel: (() => void) | undefined,
+  held = false,
+  options: DialogCancelOptions = {},
+): DialogCancelProps {
+  const escape = useRef(options.escape)
+  escape.current = options.escape
+  const pressOutside = useRef(options.pressOutside ?? true)
+  pressOutside.current = options.pressOutside ?? true
   const latest = useRef<(() => void) | undefined>(undefined)
   latest.current = held ? undefined : onCancel
   const id = useRef(0)
@@ -103,7 +127,12 @@ export function useDialogCancel(onCancel: (() => void) | undefined, held = false
 
   useLayoutEffect(() => {
     if (!active) return
-    const entry: Entry = { id: id.current, cancel: () => latest.current?.() }
+    const entry: Entry = {
+      id: id.current,
+      cancel: () => latest.current?.(),
+      escape: () => (latest.current ? (escape.current?.() ?? false) : false),
+      outside: () => pressOutside.current,
+    }
     stack.push(entry)
     return () => {
       const at = stack.indexOf(entry)
@@ -129,9 +158,13 @@ export interface DialogCloseButtonProps extends Omit<React.ButtonHTMLAttributes<
 
 /** The popup's ×: "Close (Esc)". Give it the same cancel as `useDialogCancel`.
  *  App chrome by default; `tone="zen"` for a Garden sheet. */
-export function DialogCloseButton({ size = 14, tone = 'app', className, ...rest }: DialogCloseButtonProps): React.JSX.Element {
+export const DialogCloseButton = forwardRef<HTMLButtonElement, DialogCloseButtonProps>(function DialogCloseButton(
+  { size = 14, tone = 'app', className, ...rest },
+  ref,
+) {
   return (
     <button
+      ref={ref}
       type="button"
       aria-label="Close (Esc)"
       title="Close (Esc)"
@@ -148,4 +181,4 @@ export function DialogCloseButton({ size = 14, tone = 'app', className, ...rest 
       <CloseIcon size={size} />
     </button>
   )
-}
+})

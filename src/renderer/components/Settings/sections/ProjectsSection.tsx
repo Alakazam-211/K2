@@ -1,7 +1,7 @@
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import { floatMaterial } from '@/components/ui/float-material'
 import React from 'react'
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { listen, emit } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
@@ -80,6 +80,7 @@ import { WorkspaceSettingsPage } from './WorkspaceSettingsPage'
 import {
   WORKSPACE_SETTINGS_TABS,
   advancedSectionFor,
+  lastOpenedProject,
   parseWorkspaceSettingsTab,
   rememberOpenedProject,
   type WorkspaceSettingsTab,
@@ -131,7 +132,34 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this server', description: 'Lets this workspace’s agents run k2 hostmail enable/disable and domain list/add/check. Uninstall, domain remove and OAuth stay with the owner', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
 ]
 
+/** Settings pane width (px) from which the workspace list and the selected
+ *  workspace's settings sit side by side. Narrower than this, it is one page
+ *  at a time: the list, then a workspace with All workspaces to go back. The
+ *  list column is 18rem; what's left keeps a settings row (label and hint,
+ *  then a 15rem field) readable. The same in every theme. */
+export const WORKSPACES_TWO_COLUMN_MIN_PX = 840
+
+/** The element's width, kept current as the Settings pane resizes; 0 until
+ *  it has been measured (and in test DOMs, which have no layout). Measured
+ *  before paint, so the first frame already has the right layout. Pass the
+ *  element itself (a callback ref's state): the root changes with the layout. */
+function useElementWidth(el: HTMLElement | null): number {
+  const [width, setWidth] = useState(0)
+  useLayoutEffect(() => {
+    if (!el) return
+    const read = (): void => setWidth(el.clientWidth)
+    read()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(read)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [el])
+  return width
+}
+
 export function ProjectsSection(): React.JSX.Element {
+  const [rootEl, rootRef] = useState<HTMLDivElement | null>(null)
+  const paneWidth = useElementWidth(rootEl)
   const projects = useProjectsStore((s) => s.projects)
   const fetchProjects = useProjectsStore((s) => s.fetchProjects)
 
@@ -143,8 +171,9 @@ export function ProjectsSection(): React.JSX.Element {
   const renameFocusGroup = useFocusGroupsStore((s) => s.renameFocusGroup)
   const assignProjectToGroup = useFocusGroupsStore((s) => s.assignProjectToGroup)
 
-  // One page at a time: the list, one workspace, or the settings for every
-  // workspace. A deep link (`initialProjectId`) opens a workspace directly.
+  // Wide: the list on the left and the selected workspace (or the settings
+  // for every workspace) on the right. Narrow: one page at a time. A deep
+  // link (`initialProjectId`) selects or opens a workspace directly.
   const initialProjectId = useSettingsStore((s) => s.initialProjectId)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProjectId ?? null)
 
@@ -165,6 +194,10 @@ export function ProjectsSection(): React.JSX.Element {
     setShowWorkspaceSettings(false)
     setSelectedProjectId(id)
     rememberOpenedProject(id)
+    // Picking another workspace by hand retires a consumed deep link, so the
+    // same link can select its workspace again later.
+    const linked = useSettingsStore.getState().initialProjectId
+    if (linked && linked !== id) useSettingsStore.setState({ initialProjectId: null })
   }, [])
   const backToList = useCallback(() => {
     setShowWorkspaceSettings(false)
@@ -472,28 +505,68 @@ export function ProjectsSection(): React.JSX.Element {
   }, [reorderProjects, assignProjectToGroup])
 
 
-  // Build flat list of all visible projects for keyboard navigation
-  const allVisibleProjects = useMemo(() => {
-    const result: typeof projects = []
-    result.push(...pinnedProjects)
+  // The list in the order it is painted: pinned, then each focus group, then
+  // the rest. `match` is the search filter (or none).
+  const listedOrder = useCallback((match: (p: typeof projects[number]) => boolean): typeof projects => {
+    const result: typeof projects = projects.filter((p) => p.pinned && match(p))
     if (focusGroupsEnabled) {
       for (const group of focusGroups) {
-        const gp = projects.filter((p) => p.focusGroupId === group.id && !p.pinned && matchesSearch(p))
-        result.push(...gp)
+        result.push(...projects.filter((p) => p.focusGroupId === group.id && !p.pinned && match(p)))
       }
-      result.push(...ungroupedProjects)
+      result.push(...projects.filter((p) => !p.focusGroupId && !p.pinned && match(p)))
     } else {
-      const flat = projects.filter((p) => !p.pinned && matchesSearch(p))
-      result.push(...flat)
+      result.push(...projects.filter((p) => !p.pinned && match(p)))
     }
     return result
-  }, [pinnedProjects, focusGroups, focusGroupsEnabled, projects, ungroupedProjects, matchesSearch])
+  }, [projects, focusGroups, focusGroupsEnabled])
+
+  // Build flat list of all visible projects for keyboard navigation
+  const allVisibleProjects = useMemo(() => listedOrder(matchesSearch), [listedOrder, matchesSearch])
+
+  // Side by side when the pane is wide enough and there is a workspace to
+  // show; otherwise the one-page-at-a-time layout (which also holds the
+  // empty, loading and error states).
+  const twoColumn = paneWidth >= WORKSPACES_TWO_COLUMN_MIN_PX && projects.length > 0
+
+  // Side by side, a workspace is always shown: the one picked, else the one
+  // last viewed, else the first in the list (search doesn't move it).
+  let shownProject: typeof projects[number] | null = null
+  if (!showWorkspaceSettings) {
+    shownProject = selectedProject
+    if (!shownProject && twoColumn) {
+      const last = lastOpenedProject()
+      shownProject = projects.find((p) => p.id === last) ?? listedOrder(() => true)[0] ?? null
+    }
+  }
+  const shownProjectId = shownProject?.id ?? null
+  useEffect(() => {
+    if (shownProjectId) rememberOpenedProject(shownProjectId)
+  }, [shownProjectId])
+
+  // Keep the selected row in view as the selection moves.
+  useEffect(() => {
+    if (!twoColumn || !shownProjectId) return
+    const el = document.querySelector<HTMLElement>(`[data-settings-project-id="${shownProjectId}"]`)
+    el?.scrollIntoView?.({ block: 'nearest' })
+  }, [twoColumn, shownProjectId])
 
   // Reset keyboard index when search changes
   useEffect(() => { setKeyboardIndex(-1) }, [searchQuery])
 
-  // Keyboard navigation in search
+  // Keyboard navigation in search. Side by side, ↑/↓ move the selection
+  // itself; on one page they move a highlight and Enter opens it.
   const handleSearchKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (twoColumn) {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+      e.preventDefault()
+      if (allVisibleProjects.length === 0) return
+      const at = allVisibleProjects.findIndex((p) => p.id === shownProjectId)
+      const next = at < 0
+        ? 0
+        : Math.max(0, Math.min(allVisibleProjects.length - 1, at + (e.key === 'ArrowDown' ? 1 : -1)))
+      selectProject(allVisibleProjects[next].id)
+      return
+    }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setKeyboardIndex((prev) => Math.min(prev + 1, allVisibleProjects.length - 1))
@@ -504,13 +577,22 @@ export function ProjectsSection(): React.JSX.Element {
       e.preventDefault()
       selectProject(allVisibleProjects[keyboardIndex].id)
     }
-  }, [allVisibleProjects, keyboardIndex, selectProject])
+  }, [twoColumn, allVisibleProjects, shownProjectId, keyboardIndex, selectProject])
+
+  // ↑/↓ on a focused row move to the next row (and, side by side, select it).
+  const moveFromRow = useCallback((id: string, delta: 1 | -1) => {
+    const at = allVisibleProjects.findIndex((p) => p.id === id)
+    const next = at < 0 ? undefined : allVisibleProjects[at + delta]
+    if (!next) return
+    if (twoColumn) selectProject(next.id)
+    document.querySelector<HTMLElement>(`[data-settings-project-id="${next.id}"]`)?.focus()
+  }, [allVisibleProjects, twoColumn, selectProject])
 
   // Scroll keyboard-selected item into view
   useEffect(() => {
     if (keyboardIndex >= 0 && allVisibleProjects[keyboardIndex]) {
       const el = document.querySelector(`[data-settings-project-id="${allVisibleProjects[keyboardIndex].id}"]`)
-      el?.scrollIntoView({ block: 'nearest' })
+      el?.scrollIntoView?.({ block: 'nearest' })
     }
   }, [keyboardIndex, allVisibleProjects])
 
@@ -556,30 +638,45 @@ export function ProjectsSection(): React.JSX.Element {
     })
   }
 
-  // Workspace row renderer (called as function, NOT as <Component/>, to avoid unmount/remount flicker)
+  // Workspace row renderer (called as function, NOT as <Component/>, to avoid unmount/remount flicker).
+  // Side by side the row is narrow: the name over its path, the selected row
+  // marked, no chevron (nothing opens on another page).
   const renderProjectRow = (p: typeof projects[number], zone: string, containerSelector: string) => {
     const isDragged = reorderDragId === p.id
     const kbIdx = allVisibleProjects.findIndex((vp) => vp.id === p.id)
-    const isKeyboardHighlighted = kbIdx >= 0 && kbIdx === keyboardIndex
+    const isKeyboardHighlighted = !twoColumn && kbIdx >= 0 && kbIdx === keyboardIndex
+    const isSelected = twoColumn && shownProjectId === p.id
     return (
       <div
         data-settings-project-id={p.id}
+        data-selected={isSelected ? '' : undefined}
         role="button"
         tabIndex={0}
-        aria-label={`Open ${p.name}`}
+        aria-label={twoColumn ? `Show settings for ${p.name}` : `Open ${p.name}`}
+        aria-current={isSelected ? 'true' : undefined}
         onClick={() => selectProject(p.id)}
         onKeyDown={(e) => {
+          // Keys on the pin button are the button's own.
+          if (e.target !== e.currentTarget) return
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()
             selectProject(p.id)
+          } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault()
+            moveFromRow(p.id, e.key === 'ArrowDown' ? 1 : -1)
           }
         }}
         onContextMenu={(e) => handleProjectContextMenu(e, p)}
         onMouseDown={(e) => { if (e.button === 0) handleReorderMouseDown(e, p.id, zone, containerSelector) }}
-        className={`flex items-center gap-3 px-4 py-2.5 transition-colors no-drag cursor-pointer group select-none outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)] active:cursor-grabbing ${
-          isKeyboardHighlighted ? 'bg-[var(--color-wash-1)]' : 'hover:bg-[var(--color-wash-1)]'
+        className={`relative flex items-center gap-3 ${twoColumn ? 'px-3 py-2' : 'px-4 py-2.5'} transition-colors no-drag cursor-pointer group select-none outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)] active:cursor-grabbing ${
+          isSelected
+            ? 'bg-[var(--color-accent)]/15'
+            : isKeyboardHighlighted ? 'bg-[var(--color-wash-1)]' : 'hover:bg-[var(--color-wash-1)]'
         } ${isDragged ? 'opacity-30' : ''}`}
       >
+        {isSelected && (
+          <span aria-hidden="true" className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--color-accent)]" />
+        )}
         <span className={AVATAR_ROUND}>
           <ProjectAvatar
             projectPath={p.path}
@@ -590,8 +687,20 @@ export function ProjectsSection(): React.JSX.Element {
             size={24}
           />
         </span>
-        <span className="type-name text-[var(--color-text-primary)] truncate min-w-0 flex-shrink-0 max-w-[45%]">{p.name}</span>
-        <span className="type-hint text-[var(--color-text-secondary)] truncate min-w-0 flex-1" title={p.path}>{p.path}</span>
+        {twoColumn ? (
+          <span className="min-w-0 flex-1">
+            <span className="block type-name text-[var(--color-text-primary)] truncate">{p.name}</span>
+            {/* Cut from the start: the end of a path is the part that differs. */}
+            <span className="block type-hint text-[var(--color-text-secondary)] truncate [direction:rtl] text-left" title={p.path}>
+              <bdi>{p.path}</bdi>
+            </span>
+          </span>
+        ) : (
+          <>
+            <span className="type-name text-[var(--color-text-primary)] truncate min-w-0 flex-shrink-0 max-w-[45%]">{p.name}</span>
+            <span className="type-hint text-[var(--color-text-secondary)] truncate min-w-0 flex-1" title={p.path}>{p.path}</span>
+          </>
+        )}
         <button
           type="button"
           onClick={(e) => {
@@ -612,9 +721,11 @@ export function ProjectsSection(): React.JSX.Element {
             <path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707l-.71-.71-3.18 3.18a3.5 3.5 0 0 1-.4.3L11 11.106V14.5a.5.5 0 0 1-.854.354L7.5 12.207 4.854 14.854a.5.5 0 0 1-.708-.708L6.793 11.5 4.146 8.854A.5.5 0 0 1 4.5 8h3.394a3.5 3.5 0 0 0 .3-.4l3.18-3.18-.71-.71a.5.5 0 0 1 .354-.854z" />
           </svg>
         </button>
-        <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-secondary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-        </svg>
+        {!twoColumn && (
+          <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-secondary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        )}
       </div>
     )
   }
@@ -633,7 +744,8 @@ export function ProjectsSection(): React.JSX.Element {
 
   /** One zone of rows in a card, with the drop line between rows. */
   const renderZone = (rows: typeof projects, zone: string, selector: string): React.JSX.Element => (
-    <Surface chamfer material="tile">
+    // overflow-hidden: a selected or hovered row keeps to the card's corners.
+    <Surface chamfer material="tile" className="overflow-hidden">
       <div data-reorder-zone={zone} className="divide-y divide-[var(--color-border)]">
         {rows.map((p, idx) => (
           <div key={p.id}>
@@ -646,9 +758,294 @@ export function ProjectsSection(): React.JSX.Element {
     </Surface>
   )
 
+  const searching = searchQuery.trim().length > 0
+  const noMatches = projects.length > 0 && allVisibleProjects.length === 0
+
+  const searchField = (
+    <Input
+      ref={searchInputRef}
+      value={searchQuery}
+      onChange={(e) => setSearchQuery(e.target.value)}
+      onKeyDown={handleSearchKeyDown}
+      placeholder="Search workspaces"
+      aria-label="Search workspaces"
+      className={`${twoColumn ? 'w-full' : 'flex-1'} min-w-0 type-control`}
+    />
+  )
+
+  const focusGroupsSwitch = (
+    <div className="flex items-center gap-2 flex-shrink-0" data-settings-id="projects.focus-groups">
+      <span className="type-row text-[var(--color-text-secondary)]">Focus Groups</span>
+      <Toggle
+        checked={focusGroupsEnabled}
+        aria-label="Focus Groups"
+        onChange={() => setFocusGroupsEnabled(!focusGroupsEnabled)}
+      />
+    </div>
+  )
+
+  const sortMenu = (
+    <OverflowMenu
+      label="Sort workspaces"
+      items={[
+        {
+          id: 'sort-groups',
+          label: 'Sort focus groups A–Z',
+          disabled: !focusGroupsEnabled,
+          hint: focusGroupsEnabled ? undefined : 'Turn on Focus Groups first.',
+          onSelect: async () => {
+            const sorted = [...focusGroups].sort((a, b) => a.name.localeCompare(b.name))
+            await reorderFocusGroups(sorted.map((g) => g.id))
+          },
+        },
+        {
+          id: 'sort-workspaces',
+          label: 'Sort workspaces A–Z',
+          onSelect: async () => {
+            const sorted = [...projects].sort((a, b) => a.name.localeCompare(b.name))
+            await reorderProjects(sorted.map((p) => p.id))
+          },
+        },
+      ]}
+    />
+  )
+
+  /** The groups: no-match note, Pinned, each focus group, Ungrouped, Add group. */
+  const listGroups = (
+    <>
+      {noMatches && (
+        <Surface chamfer material="tile">
+          <div className={`px-4 py-5 flex ${twoColumn ? 'flex-col items-start gap-3' : 'items-center justify-between gap-4'}`} data-testid="workspaces-no-match">
+            <div className="type-row text-[var(--color-text-primary)] min-w-0 break-words">
+              No workspaces match &ldquo;{searchQuery.trim()}&rdquo;
+            </div>
+            <Button variant="quiet" onClick={() => setSearchQuery('')}>Clear search</Button>
+          </div>
+        </Surface>
+      )}
+
+      {/* Pinned first, then each focus group, then the rest. */}
+      {pinnedProjects.length > 0 && (
+        <section>
+          <ListHeading>Pinned</ListHeading>
+          {renderZone(pinnedProjects, 'pinned', "[data-reorder-zone='pinned']")}
+        </section>
+      )}
+
+      {focusGroupsEnabled ? (
+        <>
+          <div data-focus-group-reorder-container className="space-y-5">
+            {focusGroups.map((group, groupIdx) => {
+              const groupProjects = projects.filter((p) => p.focusGroupId === group.id && !p.pinned && matchesSearch(p))
+              const isCollapsed = collapsedGroups.has(group.id)
+              const isDragOver = dragOverGroupId === group.id
+              const zoneId = `group:${group.id}`
+              const isGroupDragged = groupDragId === group.id
+              const showGroupDropBefore = groupDropIndex === groupIdx
+              const showGroupDropAfter = groupDropIndex === focusGroups.length && groupIdx === focusGroups.length - 1
+
+              // Hide empty focus groups when searching
+              if (searching && groupProjects.length === 0) return null
+
+              return (
+                <section key={group.id} className={isGroupDragged ? 'opacity-30' : ''} data-focus-group-reorder-id={group.id}>
+                  {showGroupDropBefore && <div className="h-[2px] bg-[var(--color-accent)] mb-1" />}
+                  <div
+                    data-focus-group-id={group.id}
+                    className={`flex items-center gap-2 h-7 mb-1 cursor-pointer no-drag select-none transition-colors ${
+                      isDragOver ? 'bg-[var(--color-accent)]/15 ring-1 ring-inset ring-[var(--color-accent)]' : ''
+                    }`}
+                    onClick={() => { if (renamingGroupId !== group.id) toggleGroupCollapse(group.id) }}
+                    onMouseDown={(e) => handleGroupReorderMouseDown(e, group.id)}
+                    onContextMenu={(e) => handleGroupContextMenu(e, group.id)}
+                  >
+                    <svg
+                      className={`w-3 h-3 text-[var(--color-text-secondary)] transition-transform flex-shrink-0 ${isCollapsed ? '' : 'rotate-90'}`}
+                      fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                    </svg>
+                    {group.color && (
+                      <span className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)]" style={{ backgroundColor: group.color }} aria-hidden="true" />
+                    )}
+                    {renamingGroupId === group.id ? (
+                      <Input
+                        ref={renameGroupInputRef}
+                        value={renamingGroupName}
+                        aria-label="Group name"
+                        onChange={(e) => setRenamingGroupName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleGroupRenameConfirm()
+                          else if (e.key === 'Escape') { setRenamingGroupId(null); setRenamingGroupName('') }
+                        }}
+                        onBlur={handleGroupRenameConfirm}
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex-1 min-w-0 type-control"
+                      />
+                    ) : (
+                      <span className="type-heading text-[var(--color-text-primary)] flex-1 min-w-0 truncate">{group.name}</span>
+                    )}
+                    {isDragOver ? (
+                      <span className="type-hint text-[var(--color-accent)] flex-shrink-0">Drop here</span>
+                    ) : (
+                      <span className="type-hint text-[var(--color-text-secondary)] tabular-nums flex-shrink-0">
+                        {groupProjects.length}
+                      </span>
+                    )}
+                    <div onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+                      <OverflowMenu
+                        label={`More actions for ${group.name}`}
+                        items={[
+                          {
+                            id: 'rename',
+                            label: 'Rename',
+                            onSelect: () => {
+                              setRenamingGroupId(group.id)
+                              setRenamingGroupName(group.name)
+                              requestAnimationFrame(() => renameGroupInputRef.current?.focus())
+                            },
+                          },
+                          {
+                            id: 'delete',
+                            label: 'Delete group',
+                            danger: true,
+                            group: true,
+                            hint: 'Its workspaces move to Ungrouped.',
+                            onSelect: () => {
+                              void confirmDeleteGroup(group)
+                            },
+                          },
+                        ]}
+                      />
+                    </div>
+                  </div>
+                  {!isCollapsed && (
+                    groupProjects.length > 0 ? (
+                      renderZone(groupProjects, zoneId, `[data-reorder-zone='${zoneId}']`)
+                    ) : (
+                      <Surface chamfer material="tile">
+                        <div className="px-4 py-3 type-hint text-[var(--color-text-secondary)]">Drop workspaces here</div>
+                      </Surface>
+                    )
+                  )}
+                  {showGroupDropAfter && <div className="h-[2px] bg-[var(--color-accent)] mt-1" />}
+                </section>
+              )
+            })}
+          </div>
+
+          {ungroupedProjects.length > 0 && (
+            <section>
+              <ListHeading
+                dataFocusGroupId="__ungrouped__"
+                highlight={dragOverGroupId === '__ungrouped__'}
+              >
+                Ungrouped
+              </ListHeading>
+              {renderZone(ungroupedProjects, 'ungrouped', "[data-reorder-zone='ungrouped']")}
+            </section>
+          )}
+
+          <div className="flex items-center gap-2">
+            <Input
+              value={newGroupName}
+              onChange={(e) => setNewGroupName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleCreateGroup() }}
+              placeholder="New focus group name"
+              aria-label="New focus group name"
+              className={`${twoColumn ? 'flex-1 min-w-0' : SETTING_FIELD_WIDTH} type-control`}
+            />
+            <Button variant="quiet" className="flex-shrink-0" disabled={!newGroupName.trim()} onClick={() => void handleCreateGroup()}>
+              Add group
+            </Button>
+          </div>
+        </>
+      ) : (
+        projects.some((p) => !p.pinned && matchesSearch(p)) && (
+          <section>
+            <ListHeading>Workspaces</ListHeading>
+            {renderZone(projects.filter((p) => !p.pinned && matchesSearch(p)), 'flat', "[data-reorder-zone='flat']")}
+          </section>
+        )
+      )}
+    </>
+  )
+
+  // ── Side by side: the list column, and the selected workspace ──────────
+  if (twoColumn) {
+    return (
+      <div ref={rootRef} className="h-full min-h-0 flex" data-workspaces-layout="two-column">
+        <aside
+          aria-label="Workspaces"
+          data-settings-id="projects.list"
+          className="w-72 flex-shrink-0 min-h-0 flex flex-col border-r border-[var(--color-border)]"
+        >
+          <div className="flex-shrink-0 px-4 pt-6 pb-4 space-y-3">
+            {/* Settings for every workspace: selectable like a workspace. */}
+            <button
+              type="button"
+              data-testid="workspace-settings-entry"
+              aria-current={showWorkspaceSettings ? 'true' : undefined}
+              onClick={() => setShowWorkspaceSettings(true)}
+              data-k2-chamfer="control"
+              className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-selector)] text-left type-control no-drag cursor-pointer transition-colors outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)] ${
+                showWorkspaceSettings
+                  ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-1)]'
+              }`}
+            >
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75} aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              <span className="flex-1 truncate">Workspace settings</span>
+            </button>
+            {searchField}
+            <div className="flex items-center justify-between gap-2">
+              {focusGroupsSwitch}
+              {sortMenu}
+            </div>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-5 [scrollbar-gutter:stable]">
+            {listGroups}
+          </div>
+          <div className="flex-shrink-0 px-4 py-3 border-t border-[var(--color-border)]">
+            <Button variant="quiet" className="w-full justify-center" data-settings-id="projects.add" onClick={() => void addWorkspace()}>
+              New workspace
+            </Button>
+          </div>
+        </aside>
+
+        {showWorkspaceSettings ? (
+          <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]">
+            <div className="w-full max-w-[52rem]">
+              <WorkspaceSettingsPage />
+            </div>
+          </div>
+        ) : shownProject ? (
+          // overflow-hidden: only the tab body scrolls. `relative` holds the
+          // editors that take over this column.
+          <div className="flex-1 min-w-0 min-h-0 overflow-hidden p-6 relative flex flex-col">
+            <ProjectDetail
+              project={shownProject}
+              projects={projects}
+              focusGroups={focusGroups}
+              focusGroupsEnabled={focusGroupsEnabled}
+              assignProjectToGroup={assignProjectToGroup}
+              fetchProjects={fetchProjects}
+              onSwitchProject={selectProject}
+              lastTabRef={lastTabRef}
+            />
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+
+  // ── One page at a time (narrow, or nothing to list yet) ───────────────
   if (showWorkspaceSettings) {
     return (
-      <div className="h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]">
+      <div ref={rootRef} className="h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]" data-workspaces-layout="single">
         <div className="w-full max-w-[52rem]">
           <BackToWorkspaces onBack={backToList} />
           <WorkspaceSettingsPage />
@@ -659,7 +1056,7 @@ export function ProjectsSection(): React.JSX.Element {
 
   if (selectedProject) {
     return (
-      <div className="h-full min-h-0 overflow-hidden p-6 relative flex flex-col">
+      <div ref={rootRef} className="h-full min-h-0 overflow-hidden p-6 relative flex flex-col" data-workspaces-layout="single">
         <ProjectDetail
           project={selectedProject}
           projects={projects}
@@ -677,11 +1074,9 @@ export function ProjectsSection(): React.JSX.Element {
 
   const listError = typeof listState === 'object' ? listState.error : null
   const nothingYet = projects.length === 0
-  const searching = searchQuery.trim().length > 0
-  const noMatches = !nothingYet && allVisibleProjects.length === 0
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]" data-settings-id="projects.list">
+    <div ref={rootRef} className="h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]" data-settings-id="projects.list" data-workspaces-layout="single">
       <div className="w-full max-w-[52rem] space-y-6 pb-6">
         <header className="flex items-start justify-between gap-4">
           <div className="min-w-0">
@@ -737,203 +1132,11 @@ export function ProjectsSection(): React.JSX.Element {
           <>
             {/* Find it first. */}
             <div className="flex items-center gap-3">
-              <Input
-                ref={searchInputRef}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={handleSearchKeyDown}
-                placeholder="Search workspaces"
-                aria-label="Search workspaces"
-                className="flex-1 min-w-0 type-control"
-              />
-              <div className="flex items-center gap-2 flex-shrink-0" data-settings-id="projects.focus-groups">
-                <span className="type-row text-[var(--color-text-secondary)]">Focus Groups</span>
-                <Toggle
-                  checked={focusGroupsEnabled}
-                  aria-label="Focus Groups"
-                  onChange={() => setFocusGroupsEnabled(!focusGroupsEnabled)}
-                />
-              </div>
-              <OverflowMenu
-                label="Sort workspaces"
-                items={[
-                  {
-                    id: 'sort-groups',
-                    label: 'Sort focus groups A–Z',
-                    disabled: !focusGroupsEnabled,
-                    hint: focusGroupsEnabled ? undefined : 'Turn on Focus Groups first.',
-                    onSelect: async () => {
-                      const sorted = [...focusGroups].sort((a, b) => a.name.localeCompare(b.name))
-                      await reorderFocusGroups(sorted.map((g) => g.id))
-                    },
-                  },
-                  {
-                    id: 'sort-workspaces',
-                    label: 'Sort workspaces A–Z',
-                    onSelect: async () => {
-                      const sorted = [...projects].sort((a, b) => a.name.localeCompare(b.name))
-                      await reorderProjects(sorted.map((p) => p.id))
-                    },
-                  },
-                ]}
-              />
+              {searchField}
+              {focusGroupsSwitch}
+              {sortMenu}
             </div>
-
-            {noMatches && (
-              <Surface chamfer material="tile">
-                <div className="px-4 py-5 flex items-center justify-between gap-4" data-testid="workspaces-no-match">
-                  <div className="type-row text-[var(--color-text-primary)]">
-                    No workspaces match &ldquo;{searchQuery.trim()}&rdquo;
-                  </div>
-                  <Button variant="quiet" onClick={() => setSearchQuery('')}>Clear search</Button>
-                </div>
-              </Surface>
-            )}
-
-            {/* Pinned first, then each focus group, then the rest. */}
-            {pinnedProjects.length > 0 && (
-              <section>
-                <ListHeading>Pinned</ListHeading>
-                {renderZone(pinnedProjects, 'pinned', "[data-reorder-zone='pinned']")}
-              </section>
-            )}
-
-            {focusGroupsEnabled ? (
-              <>
-                <div data-focus-group-reorder-container className="space-y-5">
-                  {focusGroups.map((group, groupIdx) => {
-                    const groupProjects = projects.filter((p) => p.focusGroupId === group.id && !p.pinned && matchesSearch(p))
-                    const isCollapsed = collapsedGroups.has(group.id)
-                    const isDragOver = dragOverGroupId === group.id
-                    const zoneId = `group:${group.id}`
-                    const isGroupDragged = groupDragId === group.id
-                    const showGroupDropBefore = groupDropIndex === groupIdx
-                    const showGroupDropAfter = groupDropIndex === focusGroups.length && groupIdx === focusGroups.length - 1
-
-                    // Hide empty focus groups when searching
-                    if (searching && groupProjects.length === 0) return null
-
-                    return (
-                      <section key={group.id} className={isGroupDragged ? 'opacity-30' : ''} data-focus-group-reorder-id={group.id}>
-                        {showGroupDropBefore && <div className="h-[2px] bg-[var(--color-accent)] mb-1" />}
-                        <div
-                          data-focus-group-id={group.id}
-                          className={`flex items-center gap-2 h-7 mb-1 cursor-pointer no-drag select-none transition-colors ${
-                            isDragOver ? 'bg-[var(--color-accent)]/15 ring-1 ring-inset ring-[var(--color-accent)]' : ''
-                          }`}
-                          onClick={() => { if (renamingGroupId !== group.id) toggleGroupCollapse(group.id) }}
-                          onMouseDown={(e) => handleGroupReorderMouseDown(e, group.id)}
-                          onContextMenu={(e) => handleGroupContextMenu(e, group.id)}
-                        >
-                          <svg
-                            className={`w-3 h-3 text-[var(--color-text-secondary)] transition-transform flex-shrink-0 ${isCollapsed ? '' : 'rotate-90'}`}
-                            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true"
-                          >
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                          </svg>
-                          {group.color && (
-                            <span className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)]" style={{ backgroundColor: group.color }} aria-hidden="true" />
-                          )}
-                          {renamingGroupId === group.id ? (
-                            <Input
-                              ref={renameGroupInputRef}
-                              value={renamingGroupName}
-                              aria-label="Group name"
-                              onChange={(e) => setRenamingGroupName(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') handleGroupRenameConfirm()
-                                else if (e.key === 'Escape') { setRenamingGroupId(null); setRenamingGroupName('') }
-                              }}
-                              onBlur={handleGroupRenameConfirm}
-                              onClick={(e) => e.stopPropagation()}
-                              className="flex-1 type-control"
-                            />
-                          ) : (
-                            <span className="type-heading text-[var(--color-text-primary)] flex-1 truncate">{group.name}</span>
-                          )}
-                          {isDragOver ? (
-                            <span className="type-hint text-[var(--color-accent)] flex-shrink-0">Drop here</span>
-                          ) : (
-                            <span className="type-hint text-[var(--color-text-secondary)] tabular-nums flex-shrink-0">
-                              {groupProjects.length}
-                            </span>
-                          )}
-                          <div onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
-                            <OverflowMenu
-                              label={`More actions for ${group.name}`}
-                              items={[
-                                {
-                                  id: 'rename',
-                                  label: 'Rename',
-                                  onSelect: () => {
-                                    setRenamingGroupId(group.id)
-                                    setRenamingGroupName(group.name)
-                                    requestAnimationFrame(() => renameGroupInputRef.current?.focus())
-                                  },
-                                },
-                                {
-                                  id: 'delete',
-                                  label: 'Delete group',
-                                  danger: true,
-                                  group: true,
-                                  hint: 'Its workspaces move to Ungrouped.',
-                                  onSelect: () => {
-                                    void confirmDeleteGroup(group)
-                                  },
-                                },
-                              ]}
-                            />
-                          </div>
-                        </div>
-                        {!isCollapsed && (
-                          groupProjects.length > 0 ? (
-                            renderZone(groupProjects, zoneId, `[data-reorder-zone='${zoneId}']`)
-                          ) : (
-                            <Surface chamfer material="tile">
-                              <div className="px-4 py-3 type-hint text-[var(--color-text-secondary)]">Drop workspaces here</div>
-                            </Surface>
-                          )
-                        )}
-                        {showGroupDropAfter && <div className="h-[2px] bg-[var(--color-accent)] mt-1" />}
-                      </section>
-                    )
-                  })}
-                </div>
-
-                {ungroupedProjects.length > 0 && (
-                  <section>
-                    <ListHeading
-                      dataFocusGroupId="__ungrouped__"
-                      highlight={dragOverGroupId === '__ungrouped__'}
-                    >
-                      Ungrouped
-                    </ListHeading>
-                    {renderZone(ungroupedProjects, 'ungrouped', "[data-reorder-zone='ungrouped']")}
-                  </section>
-                )}
-
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={newGroupName}
-                    onChange={(e) => setNewGroupName(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') handleCreateGroup() }}
-                    placeholder="New focus group name"
-                    aria-label="New focus group name"
-                    className={`${SETTING_FIELD_WIDTH} type-control`}
-                  />
-                  <Button variant="quiet" disabled={!newGroupName.trim()} onClick={() => void handleCreateGroup()}>
-                    Add group
-                  </Button>
-                </div>
-              </>
-            ) : (
-              projects.some((p) => !p.pinned && matchesSearch(p)) && (
-                <section>
-                  <ListHeading>Workspaces</ListHeading>
-                  {renderZone(projects.filter((p) => !p.pinned && matchesSearch(p)), 'flat', "[data-reorder-zone='flat']")}
-                </section>
-              )
-            )}
+            {listGroups}
           </>
         )}
       </div>
@@ -1094,7 +1297,8 @@ function ProjectDetail({
 }: {
   project: ReturnType<typeof useProjectsStore.getState>['projects'][number]
   projects: ReturnType<typeof useProjectsStore.getState>['projects']
-  onBack: () => void
+  /** One page at a time: back to the list. Side by side there is none. */
+  onBack?: () => void
   onSwitchProject: (id: string) => void
   lastTabRef: React.MutableRefObject<WorkspaceSettingsTab>
   focusGroups: ReturnType<typeof useFocusGroupsStore.getState>['focusGroups']
@@ -1358,26 +1562,32 @@ function ProjectDetail({
     useSettingsStore.getState().closeSettings()
   }
 
+  const workspaceActions = (
+    <div className="flex items-center gap-2 flex-shrink-0">
+      <SettingDropdown
+        value={project.id}
+        ariaLabel="Switch workspace"
+        triggerLabel="Switch workspace"
+        options={projects.map((p) => ({ value: p.id, label: p.name }))}
+        onChange={(id) => onSwitchProject(id)}
+      />
+      <Button variant="quiet" onClick={openWorkspace}>
+        Open workspace
+      </Button>
+    </div>
+  )
+
   return (
     <div className="flex flex-col h-full min-h-0 w-full">
       <div className={`flex-shrink-0 w-full space-y-4 ${fillsHeight ? '' : 'max-w-[52rem]'}`}>
-        <div className="flex items-center justify-between gap-3">
-          <Button variant="quiet" onClick={onBack} data-testid="workspaces-back">
-            &larr; All workspaces
-          </Button>
-          <div className="flex items-center gap-2">
-            <SettingDropdown
-              value={project.id}
-              ariaLabel="Switch workspace"
-              triggerLabel="Switch workspace"
-              options={projects.map((p) => ({ value: p.id, label: p.name }))}
-              onChange={(id) => onSwitchProject(id)}
-            />
-            <Button variant="quiet" onClick={openWorkspace}>
-              Open workspace
+        {onBack && (
+          <div className="flex items-center justify-between gap-3">
+            <Button variant="quiet" onClick={onBack} data-testid="workspaces-back">
+              &larr; All workspaces
             </Button>
+            {workspaceActions}
           </div>
-        </div>
+        )}
 
         <div className="flex items-center gap-3 min-w-0">
           <span className={AVATAR_ROUND}>
@@ -1390,10 +1600,12 @@ function ProjectDetail({
               size={36}
             />
           </span>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h2 className="type-title text-[var(--color-text-primary)] truncate">{project.name}</h2>
             <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 truncate" title={project.path}>{project.path}</p>
           </div>
+          {/* Side by side the actions share the name's line. */}
+          {!onBack && workspaceActions}
         </div>
 
         <div

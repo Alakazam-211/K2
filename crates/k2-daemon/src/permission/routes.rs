@@ -397,7 +397,14 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
         super::actions::Check::Needed => {}
     }
     let hash = params_hash(&values);
-    if let Ok(Some(same)) = store::open_same(workspace_id, spec.id, &hash) {
+    // The denial block and ask limits stay per workspace; only the open card
+    // is per session, since its grant goes to the session that asked.
+    let open = if super::actions::vault::asks_for_own_session(spec.id, &values) {
+        store::open_same_in_session(workspace_id, spec.id, &hash, session_id)
+    } else {
+        store::open_same(workspace_id, spec.id, &hash)
+    };
+    if let Ok(Some(same)) = open {
         return ok(json!({
             "status": code::ALREADY_PENDING,
             "id": same.display_id(),

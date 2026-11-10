@@ -469,9 +469,14 @@ pub(crate) fn card_action(reqs: &[PermissionRequest], batch: bool, dedupe: Strin
     CardAction { id: id.to_string(), params, dedupe, result: None, view: view_for(reqs, batch, None) }
 }
 
-/// A single card's dedupe key: `<action>:<first 8 of the values hash>`.
+/// A single card's dedupe key: `<action>:<first 8 of the values hash>`,
+/// plus the session for an ask whose grant goes to that session alone.
 pub(crate) fn single_dedupe(req: &PermissionRequest) -> String {
-    format!("{}:{}", req.action, &req.params_hash[..req.params_hash.len().min(8)])
+    let base = format!("{}:{}", req.action, &req.params_hash[..req.params_hash.len().min(8)]);
+    match (req.params.as_object(), req.session_id.as_deref()) {
+        (Some(values), Some(session)) if super::actions::vault::asks_for_own_session(&req.action, values) => format!("{base}:{session}"),
+        _ => base,
+    }
 }
 
 /// Rebuild the stored view of a card from its rows and write it on the

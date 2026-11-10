@@ -170,13 +170,24 @@ pub(crate) fn open_due(now: i64) -> Result<Vec<PermissionRequest>, String> {
 
 /// The open request for the same (workspace, action, values), if any.
 pub(crate) fn open_same(workspace_id: &str, action: &str, params_hash: &str) -> Result<Option<PermissionRequest>, String> {
+    open_matching(workspace_id, action, params_hash, None)
+}
+
+/// [`open_same`], for an ask whose grant goes to the asking session alone: two
+/// sessions asking the same thing are two asks.
+pub(crate) fn open_same_in_session(workspace_id: &str, action: &str, params_hash: &str, session_id: &str) -> Result<Option<PermissionRequest>, String> {
+    open_matching(workspace_id, action, params_hash, Some(session_id))
+}
+
+fn open_matching(workspace_id: &str, action: &str, params_hash: &str, session_id: Option<&str>) -> Result<Option<PermissionRequest>, String> {
     with_conn(|c| {
         c.query_row(
             &format!(
                 "SELECT {COLS} FROM permission_requests WHERE workspace_id = ?1 AND action = ?2 AND params_hash = ?3 \
+                 AND (?4 IS NULL OR session_id = ?4) \
                  AND state IN ('pending', 'already_done', 'applying') AND answered_at IS NULL ORDER BY created_at DESC LIMIT 1"
             ),
-            params![workspace_id, action, params_hash],
+            params![workspace_id, action, params_hash, session_id],
             from_row,
         )
         .optional()

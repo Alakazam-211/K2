@@ -532,6 +532,12 @@ pub(crate) const USE_FOR: [&str; 5] = ["1h", "2h", "8h", "24h", "session"];
 /// id outlives its process.
 const SESSION_USE_CAP: &str = "7d";
 
+/// `for=session`: the grant goes to the session that asked, so an identical
+/// ask from another session must get its own card.
+pub(crate) fn asks_for_own_session(action: &str, values: &serde_json::Map<String, Value>) -> bool {
+    action == USE_ACTION && values.get("for").and_then(Value::as_str) == Some("session")
+}
+
 pub(crate) static USE: ActionSpec = ActionSpec {
     id: USE_ACTION,
     area: Area::Vault,

@@ -1010,6 +1010,60 @@ async fn a_session_card_reaches_only_the_session_that_asked() {
     assert!(server_grants(&v, &other_name).is_empty());
 }
 
+/// An ask made from `session`, as `ask` does for the kit's own one.
+fn ask_from(ws: &Ws, session: &str, params: Value) -> Value {
+    let body = json!({ "action": USE_ACTION, "params": params, "why": "The owner asked me to finish this today" });
+    let who = crate::compute_routes::Who::Agent { project_id: ws.id.clone(), session_id: session.to_string() };
+    let r = crate::permission::routes::handle_gated(crate::permission::routes::REQUEST, &who, true, body.to_string().as_bytes(), &HashMap::new());
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{e}: {}", r.body))
+}
+
+/// Two sessions asking the same `for=session` thing are two asks: the grant
+/// goes to the session that asked, so they can't share one card (the second
+/// would be told "already pending" and the grant would go to the first). The
+/// same session asking twice still gets its one card, and a plain time box
+/// is still one card for the workspace.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_sessions_asking_for_themselves_get_their_own_cards() {
+    let _home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let v = crate::vault::ensure_test_vault();
+    let ws = seed("vun");
+    let name = uniq("EACH_SESSION");
+    server_secret(&v, &name, Delivery::Fetch, Delivery::Env);
+    let (first, second) = (asking_session(&ws), format!("{}-b", asking_session(&ws)));
+    crate::session_liveness::note_spawning(&first);
+    crate::session_liveness::note_spawning(&second);
+
+    let a = ask_from(&ws, &first, use_params(&name, "server", "fetch", "session"));
+    assert_eq!(a["status"], "pending", "{a}");
+    let b = ask_from(&ws, &second, use_params(&name, "server", "fetch", "session"));
+    assert_eq!(b["status"], "pending", "the second session gets its own card: {b}");
+    assert_ne!(id_of(&a), id_of(&b), "{a} {b}");
+    assert_ne!(card_of(&a), card_of(&b), "{a} {b}");
+    assert_eq!(row(&id_of(&b)).session_id.as_deref(), Some(second.as_str()));
+
+    let again = ask_from(&ws, &second, use_params(&name, "server", "fetch", "session"));
+    assert_eq!((again["status"].as_str(), again["id"].as_str()), (Some("already_pending"), b["id"].as_str()), "the same session: its one card: {again}");
+
+    // Allowing the second session's card reaches the second session alone.
+    let (s, ans) = answer_as("owner", &ws, &card_of(&b), json!({ "answer": "Allow" }));
+    assert_eq!((s.as_str(), &ans["action"]["result"]["outcome"]), ("200 OK", &json!("approved")), "{ans}");
+    let g = server_grants(&v, &name);
+    assert_eq!((g.len(), &g[0].consumer), (1, &k2_vault::Consumer::session(second.clone())), "{g:?}");
+    fetch_with(&v, &name, &session_of(&ws, &second)).expect("the session that asked");
+    assert!(fetch_with(&v, &name, &session_of(&ws, &first)).is_err(), "not the first: its own card is still open");
+    assert_eq!(row(&id_of(&a)).state.as_str(), "pending", "the first card is untouched");
+
+    // A plain time box is for the workspace: still one card.
+    let timed = uniq("ONE_CARD");
+    server_secret(&v, &timed, Delivery::Fetch, Delivery::Env);
+    let one = ask_from(&ws, &first, use_params(&timed, "server", "fetch", "1h"));
+    let two = ask_from(&ws, &second, use_params(&timed, "server", "fetch", "1h"));
+    assert_eq!((two["status"].as_str(), two["id"].as_str()), (Some("already_pending"), one["id"].as_str()), "{two}");
+}
+
 /// A card never takes away access a person already gave.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_time_boxed_card_never_shortens_a_longer_grant() {

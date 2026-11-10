@@ -142,7 +142,7 @@ fn assert_not_dark(r: &Resp, what: &str) {
     assert_ne!(err_code(r).as_deref(), Some(k2_core::compute::CI_PREVIEW_OFF), "{what}: {} {}", r.status, r.body);
 }
 
-/// Every table CI on compute writes (migrations 0273–0275).
+/// Every table CI on compute writes (migrations 0273–0275, 0286 and 0287).
 const CI_TABLES: &[&str] = &[
     "ci_workspaces",
     "ci_seen",
@@ -161,6 +161,9 @@ const CI_TABLES: &[&str] = &[
     "compute_key_rotations",
     "compute_tainted_keys",
     "compute_owner_attestations",
+    // 0287 (k2 ci release): an App update's evidence summary. Release runs
+    // themselves are ci_runs / ci_checks rows, listed above.
+    "app_update_evidence",
 ];
 
 fn ci_rows() -> Vec<(String, i64)> {
@@ -180,7 +183,7 @@ fn ci_routes() -> Vec<(&'static str, &'static str)> {
         assert!(k2_daemon::compute_routes::is_ci_route(p), "{p} is a CI route");
         out.push((*p, if k2_daemon::compute_routes::is_post_route(p) { "POST" } else { "GET" }));
     }
-    assert_eq!(out.len(), 28, "5 `k2 ci` routes + 23 roster/lane/seat/trust/owner/signer routes (seats end/suspend/resume since the 11-07 review): {out:?}");
+    assert_eq!(out.len(), 30, "7 `k2 ci` routes (release and evidence since 0.46.11) + 23 roster/lane/seat/trust/owner/signer routes (seats end/suspend/resume since the 11-07 review): {out:?}");
     out
 }
 

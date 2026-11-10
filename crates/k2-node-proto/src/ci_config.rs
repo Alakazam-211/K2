@@ -132,6 +132,38 @@ pub struct ReleaseBuild {
     /// node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify_label: Option<String>,
+    /// How the verify build's node must differ from the build's (C5, PRD
+    /// §4.6): dimensions of the owner's node roster. Empty = the default,
+    /// [`DEFAULT_INDEPENDENT`]; only with `verify_label`. The controller
+    /// places by it; the signer checks its own policy's list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub independent: Vec<ci::Dimension>,
+    /// The job's limits, as `[checks.<name>]`'s (C6b). The signer doesn't
+    /// read them: they change where and how long it runs, not what it built.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpus: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_gb: Option<u32>,
+}
+
+/// A dual build's independence when `independent` is unset (PRD §4.6:
+/// `independent = ["host"]`; `node` is always implied).
+pub const DEFAULT_INDEPENDENT: &[ci::Dimension] = &[ci::Dimension::Host];
+
+impl ReleaseBuild {
+    /// The dimensions the verify build must differ in (`node` first, always).
+    pub fn independence(&self) -> Vec<ci::Dimension> {
+        let mut out = vec![ci::Dimension::Node];
+        let asked: &[ci::Dimension] = if self.independent.is_empty() { DEFAULT_INDEPENDENT } else { &self.independent };
+        for d in asked {
+            if !out.contains(d) {
+                out.push(*d);
+            }
+        }
+        out
+    }
 }
 
 impl CiConfig {
@@ -202,6 +234,16 @@ impl CiConfig {
                         return Err(format!("release.builds.{name}: {e:?} ({code})"));
                     }
                 }
+                if !b.independent.is_empty() && b.verify_label.is_none() {
+                    return Err(format!("release.builds.{name}: independent goes with verify_label (a dual build)"));
+                }
+                let mut seen = Vec::new();
+                for d in &b.independent {
+                    if seen.contains(d) {
+                        return Err(format!("release.builds.{name}: independent lists {d:?} twice"));
+                    }
+                    seen.push(*d);
+                }
                 labels.push(b.label.as_str());
                 labels.extend(b.verify_label.as_deref());
             }
@@ -248,5 +290,16 @@ mod tests {
         CiConfig::parse(rel).unwrap();
         assert!(CiConfig::parse(&rel.replace("\"V1\"", "\"L1\"")).is_err(), "label twice");
         assert!(CiConfig::parse(&rel.replace("\"V1\"", "\"v1\"")).is_err());
+        // C5: independence, default host; node always first.
+        let c = CiConfig::parse(rel).unwrap();
+        assert_eq!(c.release.as_ref().unwrap().builds["a"].independence(), vec![ci::Dimension::Node, ci::Dimension::Host]);
+        let site = format!("{rel}independent = [\"site\", \"host\"]\n");
+        let c = CiConfig::parse(&site).unwrap();
+        assert_eq!(c.release.as_ref().unwrap().builds["a"].independence(), vec![ci::Dimension::Node, ci::Dimension::Site, ci::Dimension::Host]);
+        assert_eq!(CiConfig::parse(&c.to_toml().unwrap()).unwrap(), c);
+        assert!(CiConfig::parse(&format!("{rel}independent = [\"host\", \"host\"]\n")).is_err());
+        assert!(CiConfig::parse(&format!("{rel}independent = [\"rack\"]\n")).is_err());
+        let single = rel.replace("verify_label = \"V1\"\n", "independent = [\"host\"]\n");
+        assert!(CiConfig::parse(&single).is_err(), "independent without a verify build");
     }
 }

@@ -656,8 +656,11 @@ pub const ROUTES: &[Route] = &[
     // and run are agent verbs (the workspace switch + its own workspace);
     // watch, freeze and init need Admin people or a passport for its own
     // workspace (the handler refuses a Member login `owner_only`).
+    // release and evidence (0.46.11, C5/C6b): agent verbs like run.
+    post("/cli/ci/evidence", Member),
     post("/cli/ci/freeze", Member),
     post("/cli/ci/init", Member),
+    post("/cli/ci/release", Member),
     post("/cli/ci/run", Member),
     // Signer pairing (0.46.10 C3a, vs-live V17; `compute_trust`): a person
     // only (owner or Admin with a fresh confirm; the handler refuses every

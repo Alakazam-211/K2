@@ -420,6 +420,7 @@ pub(crate) fn launch(o: &dyn Ops, ws: &Ws, s: &Start<'_>, p: Prepared, now: i64)
                     statuses: None,
                     created_at: now,
                     ended_at: Some(now),
+                    kind: k2_core::ci_release::kind::CHECKS.to_string(),
                 };
             }
         }

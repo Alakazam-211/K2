@@ -16,6 +16,7 @@ fn runner_guard() {
 }
 
 mod ci_integration;
+mod ci_release_integration;
 mod ci_preview_gate_integration;
 mod compute_admin_integration;
 #[cfg(unix)]

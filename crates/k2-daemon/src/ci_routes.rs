@@ -31,14 +31,16 @@ use crate::ci_engine::{self as engine, Start};
 use crate::compute_manage::Manager;
 use crate::compute_routes::{audit, b, grant_target_ws, json_body, n, need_admin, need_credential, no, passport_gate, s, target_ws, Who, Ws, R};
 
+pub const EVIDENCE: &str = "/cli/ci/evidence";
 pub const FREEZE: &str = "/cli/ci/freeze";
 pub const INIT: &str = "/cli/ci/init";
+pub const RELEASE: &str = "/cli/ci/release";
 pub const RUN: &str = "/cli/ci/run";
 pub const STATUS: &str = "/cli/ci/status";
 pub const WATCH: &str = "/cli/ci/watch";
 
-pub const ROUTES: &[&str] = &[FREEZE, INIT, RUN, STATUS, WATCH];
-pub const POST_ROUTES: &[&str] = &[FREEZE, INIT, RUN, WATCH];
+pub const ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, RELEASE, RUN, STATUS, WATCH];
+pub const POST_ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, RELEASE, RUN, WATCH];
 
 /// Longest freeze (`k2 ci freeze --until`).
 pub const MAX_FREEZE_SECS: i64 = 30 * 86_400;
@@ -51,6 +53,9 @@ pub(crate) fn handle(p: &str, who: &Who, body: &[u8], params: &HashMap<String, S
     match p {
         STATUS => status(who, params),
         RUN => run(who, body),
+        // 0.46.11 (C5/C6b, `ci_release`): a release set and its evidence.
+        RELEASE => crate::ci_release::release(who, body),
+        EVIDENCE => crate::ci_release::evidence(who, body),
         WATCH => watch(who, body, mgr),
         INIT => init(who, body),
         FREEZE => freeze(who, body, mgr),
@@ -144,21 +149,34 @@ fn freeze_view(w: Option<&ci::WorkspaceRow>, now: i64) -> serde_json::Value {
     }
 }
 
-fn run_view(conn: &rusqlite::Connection, r: &ci::RunRow) -> serde_json::Value {
+pub(crate) fn run_view(conn: &rusqlite::Connection, r: &ci::RunRow) -> serde_json::Value {
+    let jobs = if r.kind == k2_core::ci_release::kind::RELEASE { k2_core::ci_release::job_facts(conn, &r.id) } else { Default::default() };
     let checks: Vec<serde_json::Value> = ci::checks_of(conn, &r.id)
         .into_iter()
         .map(|c| {
-            serde_json::json!({
+            let mut v = serde_json::json!({
                 "name": c.name,
                 "job": c.job_id,
                 "state": c.state,
                 "description": c.description,
                 "status": c.posted,
                 "statusError": c.post_error,
-            })
+            });
+            if let Some(j) = jobs.get(&c.name) {
+                v["label"] = j.label.clone().into();
+                v["build"] = j.build.clone().into();
+                v["role"] = j.role.clone().into();
+                v["nodeId"] = j.node_id.clone().into();
+            }
+            v
         })
         .collect();
+    let release = (r.kind == k2_core::ci_release::kind::RELEASE)
+        .then(|| k2_core::ci_release::release_facts(conn, &r.id).map(|(_, f)| f))
+        .flatten();
     serde_json::json!({
+        "kind": r.kind,
+        "release": release,
         "id": r.id,
         "short": r.short(),
         "sha": r.sha,

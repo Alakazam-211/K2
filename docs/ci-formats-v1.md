@@ -398,9 +398,15 @@ the policy's build fails at signing.
 - **`[release.builds.<policy build name>]`:**
   - `argv`, `needs`, `artifacts`;
   - `env` and `secrets` (lane grants);
-  - `label` (`L1`), and `verify_label` (`V1`) for a dual build.
+  - `label` (`L1`), and `verify_label` (`V1`) for a dual build;
+  - `independent` (0.46.11, a dual build only): the roster dimensions the
+    verify node must differ in, default `["host"]` (`node` is implied).
+    `k2 ci release` places by it; the signer checks its own policy's list;
+  - `timeout_secs`, `cpus`, `mem_gb` (0.46.11): the jobs' limits, as for
+    a check. The signer doesn't read them.
 
-  Labels are unique across builds.
+  Labels are unique across builds. Both additions are optional and absent
+  when unset, so a file without them parses as before.
 
 ## 10. Golden vectors
 

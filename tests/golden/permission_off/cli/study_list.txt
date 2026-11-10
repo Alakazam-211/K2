@@ -59,6 +59,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   compute             Run builds/tests on your owner's other machines; logs are data
   compute-shared      A node many K2 servers share: its queue, what's hidden, the wall
   ci                  CI on compute: .k2/ci.toml, k2 ci run/watch, GitHub statuses
+  ci-release          Signed releases: k2 ci release on your seat, evidence, the signer
   vault               Secrets: fetch not paste; references; who sets what
   jobs                Scripts on a schedule: k2 job, job:<name> secrets, logs, kill
   heartbeats          Wake yourself on a schedule or once (routines, reminders, cron)

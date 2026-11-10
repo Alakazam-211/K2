@@ -845,8 +845,12 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // (the workspace switch "Allow compute nodes"; jobs carry the
         // workspace's own grants). watch/freeze/init: its own workspace
         // only (the handler).
+        // 0.46.11 (C5/C6b): an agent builds its own workspace's release set
+        // and reads its evidence (signing is a person's, at the signer).
+        "/cli/ci/evidence",
         "/cli/ci/freeze",
         "/cli/ci/init",
+        "/cli/ci/release",
         "/cli/ci/run",
         "/cli/ci/status",
         "/cli/ci/watch",

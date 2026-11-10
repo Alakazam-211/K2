@@ -335,6 +335,7 @@ pub mod compute_allow;
 pub mod compute_git;
 // `k2 ci` (0.46.10, C6a): CI on compute: the routes and the watch loop.
 pub mod ci_engine;
+pub mod ci_release;
 pub mod ci_routes;
 pub mod compute_rollout;
 // The Compute Garden's node load tile (`compute.nodes`, catalog v49).

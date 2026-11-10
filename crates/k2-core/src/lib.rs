@@ -287,6 +287,7 @@ pub mod heartbeats;
 pub mod jobs;
 // `k2 ci` (0.46.10, C6a): CI runs, the watch, statuses; store + rules (0273).
 pub mod ci;
+pub mod ci_release;
 // Agent hire through the v1 API: one core for every door (0.45.6).
 pub mod hire;
 /// Home avatar cache: `~/.k2/cache/agent-avatars/` (prd-home-picker-and-remote-avatars-v1 S3).

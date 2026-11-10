@@ -44,8 +44,10 @@ pub const MAX_BODY: usize = 1 << 20;
 /// Every compute route (the two sockets included).
 pub const ROUTES: &[&str] = &[
     // `k2 ci` (0.46.10, C6a, `ci_routes`): CI on compute, same callers.
+    crate::ci_routes::EVIDENCE,
     crate::ci_routes::FREEZE,
     crate::ci_routes::INIT,
+    crate::ci_routes::RELEASE,
     crate::ci_routes::RUN,
     crate::ci_routes::STATUS,
     crate::ci_routes::WATCH,
@@ -130,8 +132,10 @@ pub const ROUTES: &[&str] = &[
 
 /// POST-only rows (`require_post` → 405 on GET).
 pub const POST_ROUTES: &[&str] = &[
+    crate::ci_routes::EVIDENCE,
     crate::ci_routes::FREEZE,
     crate::ci_routes::INIT,
+    crate::ci_routes::RELEASE,
     crate::ci_routes::RUN,
     crate::ci_routes::WATCH,
     "/cli/compute/admin/approve",
@@ -1483,6 +1487,17 @@ pub(crate) fn submit_for_ci(ws_id: &str, run_id: &str, body: &serde_json::Value)
     }
     let sub = submit_one(&who, body, &ws, client_id, &request_sha, &SubmitOpts::default())?;
     Ok(submitted_json(&who, &sub))
+}
+
+/// `k2 ci release` (C5): would this job body place, and how soon? The
+/// normal job path's `--plan` as the workspace's CI identity (its own
+/// grants, as [`submit_for_ci`]): nothing is stored. `Ok` = the preview
+/// (`placement.startsNow`, `placement.etaSecs`), `Err` = why not.
+pub(crate) fn plan_for_ci(ws_id: &str, run_id: &str, body: &serde_json::Value) -> R<serde_json::Value> {
+    let ws = ws_by_id(ws_id).ok_or_else(|| no("workspace_not_found", 404, "the workspace is no longer registered"))?;
+    let who = Who::Agent { project_id: ws.id.clone(), session_id: format!("ci-{}", &run_id[..run_id.len().min(8)]) };
+    let sub = submit_one(&who, body, &ws, "ci-release-placement-probe", "", &SubmitOpts { dry: true, ..SubmitOpts::default() })?;
+    Ok(sub.preview.unwrap_or_default())
 }
 
 /// What a prewarm job reserves (it runs `sh -c true` after the install).

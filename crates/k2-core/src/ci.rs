@@ -282,6 +282,9 @@ pub struct RunRow {
     pub statuses: Option<StatusTarget>,
     pub created_at: i64,
     pub ended_at: Option<i64>,
+    /// `checks` (a `[checks.*]` run) or `release` (`k2 ci release`,
+    /// `crate::ci_release`; migration 0287).
+    pub kind: String,
 }
 
 impl RunRow {
@@ -294,7 +297,7 @@ impl RunRow {
     }
 }
 
-const RUN_COLS: &str = "id, workspace_id, sha, ref, trigger, state, detail, created_by, tier, statuses_json, created_at, ended_at";
+const RUN_COLS: &str = "id, workspace_id, sha, ref, trigger, state, detail, created_by, tier, statuses_json, created_at, ended_at, kind";
 
 fn run_of(r: &rusqlite::Row) -> rusqlite::Result<RunRow> {
     let statuses: Option<String> = r.get(9)?;
@@ -311,6 +314,7 @@ fn run_of(r: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         statuses: statuses.and_then(|s| serde_json::from_str(&s).ok()),
         created_at: r.get(10)?,
         ended_at: r.get(11)?,
+        kind: r.get(12)?,
     })
 }
 
@@ -362,7 +366,8 @@ pub fn running_runs(conn: &Connection) -> Vec<RunRow> {
 }
 
 pub fn inflight_count(conn: &Connection, ws: &str) -> u32 {
-    conn.query_row("SELECT COUNT(*) FROM ci_runs WHERE workspace_id = ?1 AND state = 'running'", params![ws], |r| r.get::<_, i64>(0))
+    // Release runs (`k2 ci release`) never hold a watched tip back.
+    conn.query_row("SELECT COUNT(*) FROM ci_runs WHERE workspace_id = ?1 AND state = 'running' AND kind = 'checks'", params![ws], |r| r.get::<_, i64>(0))
         .map(|n| n.clamp(0, u32::MAX as i64) as u32)
         .unwrap_or(0)
 }
@@ -745,6 +750,10 @@ mod tests {
     fn conn() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch(include_str!("../drizzle_sql/0273_ci.sql")).unwrap();
+        c.execute_batch("CREATE TABLE app_update_releases (id TEXT PRIMARY KEY);").unwrap();
+        for stmt in include_str!("../drizzle_sql/0287_ci_release.sql").split("--> statement-breakpoint") {
+            c.execute_batch(stmt).unwrap();
+        }
         c
     }
 
@@ -979,5 +988,16 @@ mod tests {
         .unwrap();
         assert_eq!(skipped.ended_at, Some(6), "a run that never ran ends when it is made");
         assert_eq!(runs_of(&c, ws, 10)[0].id, skipped.id, "newest first");
+        assert_eq!(skipped.kind, "checks");
+        // A release run in flight holds no watched tip back.
+        let rel = insert_run(
+            &c,
+            &NewRun { id: "1111111111111111", workspace_id: ws, sha: &sha, git_ref: None, trigger: "manual", state: run_state::RUNNING, detail: None, created_by: "owner", tier: "ci", statuses: None, at: 7 },
+        )
+        .unwrap();
+        crate::ci_release::mark_release(&c, &rel.id, "1.0.0", "acme", &sha, "seat").unwrap();
+        assert_eq!(run_by_id(&c, &rel.id).unwrap().kind, "release");
+        assert_eq!(running_runs(&c).len(), 1, "the reaper reaps release runs too");
+        assert_eq!(inflight_count(&c, ws), 0);
     }
 }

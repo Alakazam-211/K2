@@ -1897,6 +1897,13 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // (and edit the migration-order tests). The store is
         // `crate::compute::trust`.
         ("0286_compute_key_chain", include_str!("../../drizzle_sql/0286_compute_key_chain.sql")),
+        // 0287 — `k2 ci release` / `k2 ci evidence` (0.46.11, prd-ci-on-
+        // compute-for-clients-v1 C5 + C6b) and `k2 app updates push
+        // --evidence` (C8): release columns on `ci_runs` / `ci_checks`, and
+        // `app_update_evidence`. 0285 is feedback, 0286 the CI trust fixes;
+        // renumber freely on a slip (and edit the migration-order tests).
+        // The stores are `crate::ci` and `crate::ci_release`.
+        ("0287_ci_release", include_str!("../../drizzle_sql/0287_ci_release.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2582,7 +2589,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0286_compute_key_chain",
+            last_name, "0287_ci_release",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2817,6 +2824,8 @@ mod tests {
                 "0285_product_feedback",
                 // 0.46.11: the node key chain and taint memory (trust review).
                 "0286_compute_key_chain",
+                // 0.46.11: k2 ci release and evidence.
+                "0287_ci_release",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2987,6 +2996,8 @@ mod tests {
                 "0285_product_feedback",
                 // 0.46.11: the node key chain and taint memory (trust review).
                 "0286_compute_key_chain",
+                // 0.46.11: k2 ci release and evidence.
+                "0287_ci_release",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3259,7 +3270,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0286_compute_key_chain", "0286 (0.46.11) runs last");
+        assert_eq!(top, "0287_ci_release", "0287 (0.46.11) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3329,9 +3340,10 @@ mod tests {
                 "0282_project_group_default_view",
                 "0284_mail_reader_audit",
                 "0285_product_feedback",
-                "0286_compute_key_chain"
+                "0286_compute_key_chain",
+                "0287_ci_release"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0284, 0285 and 0286)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0284, 0285, 0286 and 0287)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -4173,8 +4185,12 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
-            // 0286 (the node key chain, 0.46.11) is the newest: its record
-            // goes (its tables and indexes are IF NOT EXISTS).
+            // 0287 (k2 ci release, 0.46.11) is the newest: its record goes
+            // (its table is IF NOT EXISTS; its column re-adds are skipped as
+            // duplicates).
+            conn.execute("DELETE FROM _migrations WHERE name = '0287_ci_release'", []).unwrap();
+            // 0286 (the node key chain, 0.46.11) came before it: its
+            // record goes (its tables and indexes are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0286_compute_key_chain'", []).unwrap();
             // 0285 (the Send feedback to K2 outbox, 0.46.11) came before it:
             // its record goes (its tables and indexes are IF NOT EXISTS).
@@ -5794,5 +5810,37 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0282_project_group_default_view'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(once, 1, "0282 is recorded once");
+    }
+
+    /// 0287 (`k2 ci release`, C5 + C6b) on a database from before it (last
+    /// migration 0282): an existing CI run reads as a check run with no
+    /// release facts, its checks have no label, a release row stores its
+    /// facts, and a second run is a no-op.
+    #[test]
+    fn a_0282_database_upgrades_through_0287_ci_release() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0282_project_group_default_view")).unwrap();
+        conn.execute_batch(
+            "INSERT INTO ci_runs (id, workspace_id, sha, trigger, state, created_at) VALUES ('r-old', 'ws', 'abc', 'watch', 'passed', 1);
+             INSERT INTO ci_checks (run_id, name, state) VALUES ('r-old', 'unit', 'success');",
+        )
+        .unwrap();
+        run_migrations(&conn).unwrap();
+        let (kind, version): (String, Option<String>) =
+            conn.query_row("SELECT kind, version FROM ci_runs WHERE id = 'r-old'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((kind.as_str(), version), ("checks", None), "an old run is a check run");
+        let label: Option<String> = conn.query_row("SELECT label FROM ci_checks WHERE run_id = 'r-old'", [], |r| r.get(0)).unwrap();
+        assert_eq!(label, None);
+        conn.execute(
+            "INSERT INTO ci_runs (id, workspace_id, sha, trigger, state, created_at, kind, version, project, tree, seat_id) \
+             VALUES ('r-rel', 'ws', 'abc', 'manual', 'running', 2, 'release', '1.2.3', 'acme', 'def', 'seat-1')",
+            [],
+        )
+        .unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_update_evidence", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+        run_migrations(&conn).unwrap();
+        let once: i64 = conn.query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0287_ci_release'", [], |r| r.get(0)).unwrap();
+        assert_eq!(once, 1, "0287 is recorded once");
     }
 }

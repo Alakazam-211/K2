@@ -1208,6 +1208,28 @@
   --color-bg: var(--tile-fill);
   --k2-strip-fill: color-mix(in srgb, var(--color-text-primary) 6%, var(--tile-fill));
 }
+/* The tile's top edge (its inner sheen, the light catch under the rim) is an
+   inset shadow, which the strip's fill would paint over. Redraw it above the
+   strip, following the rounded corners. Isolated, so the line sits over the
+   strip's pinned tabs but never over anything outside the tile. */
+[data-style="glass"] :is([data-tab-group-index], [data-pane-group-id][data-material="tile"]:not([data-pane-solo])):not([data-zen-root] *) {
+  position: relative;
+  isolation: isolate;
+}
+[data-style="glass"] :is([data-tab-group-index], [data-pane-group-id][data-material="tile"]:not([data-pane-solo])):not([data-zen-root] *)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  border-radius: inherit;
+  box-shadow: var(--tile-sheen);
+  pointer-events: none;
+}
+/* Veil's tiles have no inner sheen; over its tinted strip the top takes the
+   light glass catch instead. */
+[data-style="glass"][data-palette="veil"] :is([data-tab-group-index], [data-pane-group-id][data-material="tile"]:not([data-pane-solo])):not([data-zen-root] *)::after {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
 /* The body under the strip: the pane's surface, rounded at the top. A pane's own
    header band is that surface too, so the wave runs into it. */
 [data-style="glass"] [data-toast-host="workspace"]:not([data-zen-root] *) {

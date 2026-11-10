@@ -48,6 +48,8 @@
     "wash-2": { "$value": "rgba(20, 30, 60, 0.08)", "$type": "color" },
     "wash-3": { "$value": "rgba(20, 30, 60, 0.15)", "$type": "color" },
     "scrim": { "$value": "rgba(18, 24, 40, 0.30)", "$type": "color", "$description": "Lighter than Terminal — the frost itself does half the separation." },
+    "media-label-bg": { "$value": "rgba(0, 0, 0, 0.62)", "$type": "color", "$description": "Behind a name or time drawn on video (any picture, either scheme)." },
+    "media-label-text": { "$value": "#ffffff", "$type": "color" },
     "diff-add-text": { "$value": "#47691a", "$type": "color" },
     "diff-remove-text": { "$value": "#9c2c2c", "$type": "color" },
     "diff-modified-border": { "$value": "#3fa06a", "$type": "color" },

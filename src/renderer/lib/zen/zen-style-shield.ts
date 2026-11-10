@@ -104,6 +104,9 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--color-overlay-soft-bg': mix('text', 6),
   '--color-overlay-soft-border': mix('text', 8),
   '--color-scrim': 'rgba(0, 0, 0, 0.32)',
+  // Labels on video: the picture is the call's, never the theme's.
+  '--color-media-label-bg': 'rgba(0, 0, 0, 0.62)',
+  '--color-media-label-text': '#ffffff',
   '--color-scrollbar-thumb': mix('text-muted', 30),
   '--color-scrollbar-thumb-hover': mix('text-muted', 50),
   '--color-scrollbar-thumb-strong': mix('text-muted', 45),

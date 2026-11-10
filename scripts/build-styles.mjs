@@ -55,6 +55,8 @@ const REQUIRED_COLOR_SLOTS = [
   'status-warn-text', 'status-needs-you', 'status-warn-amber', 'status-warn-amber-soft', 'status-warn-amber-bright',
   'status-ok-hover', 'danger', 'danger-active',
   'wash-1', 'wash-2', 'wash-3', 'scrim', 'danger-muted',
+  // A name or time drawn on video (the call's tiles): readable on any picture.
+  'media-label-bg', 'media-label-text',
   'diff-add-text', 'diff-remove-text', 'diff-modified-border',
   'code-inline', 'danger-hover',
   'overlay-soft-bg', 'overlay-soft-border',

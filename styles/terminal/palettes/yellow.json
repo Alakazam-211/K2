@@ -234,6 +234,15 @@
       "$value": "rgba(8, 7, 5, 0.55)",
       "$type": "color"
     },
+    "media-label-bg": {
+      "$value": "rgba(0, 0, 0, 0.62)",
+      "$type": "color",
+      "$description": "Behind a name or time drawn on video (any picture, either scheme)."
+    },
+    "media-label-text": {
+      "$value": "#ffffff",
+      "$type": "color"
+    },
     "danger-muted": {
       "$value": "#a83636",
       "$type": "color"

@@ -107,6 +107,8 @@
   --color-wash-3: rgba(255, 255, 255, 0.2);
   --color-scrim: rgba(0, 0, 0, 0.5);
   --color-danger-muted: #c53030;
+  --color-media-label-bg: rgba(0, 0, 0, 0.62);
+  --color-media-label-text: #ffffff;
   --color-diff-add-text: #a3e635;
   --color-diff-remove-text: #fca5a5;
   --color-diff-modified-border: #86efac;
@@ -252,6 +254,8 @@
   --color-wash-3: rgba(255, 250, 235, 0.16);
   --color-scrim: rgba(8, 7, 5, 0.55);
   --color-danger-muted: #a83636;
+  --color-media-label-bg: rgba(0, 0, 0, 0.62);
+  --color-media-label-text: #ffffff;
   --color-diff-add-text: #a9d16f;
   --color-diff-remove-text: #f9b0b0;
   --color-diff-modified-border: #7ad494;
@@ -336,6 +340,8 @@
   --color-wash-3: rgba(30, 26, 16, 0.16);
   --color-scrim: rgba(30, 25, 12, 0.40);
   --color-danger-muted: #a03029;
+  --color-media-label-bg: rgba(0, 0, 0, 0.62);
+  --color-media-label-text: #ffffff;
   --color-diff-add-text: #4a6b12;
   --color-diff-remove-text: #9c2c24;
   --color-diff-modified-border: #3f9e63;
@@ -484,6 +490,8 @@
   --color-wash-3: rgba(255, 255, 255, 0.20);
   --color-scrim: rgba(0, 0, 0, 0.6);
   --color-danger-muted: #b3382f;
+  --color-media-label-bg: rgba(0, 0, 0, 0.62);
+  --color-media-label-text: #ffffff;
   --color-diff-add-text: #7ee787;
   --color-diff-remove-text: #ffb0aa;
   --color-diff-modified-border: #30d158;
@@ -576,6 +584,8 @@
   --color-wash-3: rgba(60, 60, 67, 0.16);
   --color-scrim: rgba(30, 30, 35, 0.32);
   --color-danger-muted: #c0392b;
+  --color-media-label-bg: rgba(0, 0, 0, 0.62);
+  --color-media-label-text: #ffffff;
   --color-diff-add-text: #1a7f37;
   --color-diff-remove-text: #c0392b;
   --color-diff-modified-border: #34c759;
@@ -668,6 +678,8 @@
   --color-wash-3: rgba(255, 250, 235, 0.16);
   --color-scrim: rgba(8, 7, 5, 0.55);
   --color-danger-muted: #a83636;
+  --color-media-label-bg: rgba(0, 0, 0, 0.62);
+  --color-media-label-text: #ffffff;
   --color-diff-add-text: #a9d16f;
   --color-diff-remove-text: #f9b0b0;
   --color-diff-modified-border: #7ad494;
@@ -1589,6 +1601,8 @@
   --color-wash-3: rgba(255, 255, 255, 0.20);
   --color-scrim: rgba(3, 5, 10, 0.40);
   --color-danger-muted: #b53a44;
+  --color-media-label-bg: rgba(0, 0, 0, 0.62);
+  --color-media-label-text: #ffffff;
   --color-diff-add-text: #a5e075;
   --color-diff-remove-text: #ffb3b3;
   --color-diff-modified-border: #6ee7a0;
@@ -1669,6 +1683,8 @@
   --color-wash-3: rgba(20, 30, 60, 0.15);
   --color-scrim: rgba(18, 24, 40, 0.30);
   --color-danger-muted: #ab3535;
+  --color-media-label-bg: rgba(0, 0, 0, 0.62);
+  --color-media-label-text: #ffffff;
   --color-diff-add-text: #47691a;
   --color-diff-remove-text: #9c2c2c;
   --color-diff-modified-border: #3fa06a;
@@ -1749,6 +1765,8 @@
   --color-wash-3: rgba(255, 250, 235, 0.16);
   --color-scrim: rgba(8, 7, 5, 0.55);
   --color-danger-muted: #a83636;
+  --color-media-label-bg: rgba(0, 0, 0, 0.62);
+  --color-media-label-text: #ffffff;
   --color-diff-add-text: #a9d16f;
   --color-diff-remove-text: #f9b0b0;
   --color-diff-modified-border: #7ad494;
@@ -1963,6 +1981,8 @@
   --color-wash-3: rgba(255, 255, 255, 0.2);
   --color-scrim: rgba(0, 0, 0, 0.5);
   --color-danger-muted: #c53030;
+  --color-media-label-bg: rgba(0, 0, 0, 0.62);
+  --color-media-label-text: #ffffff;
   --color-diff-add-text: #a3e635;
   --color-diff-remove-text: #fca5a5;
   --color-diff-modified-border: #86efac;
@@ -2044,6 +2064,8 @@
   --color-wash-3: rgba(40, 32, 16, 0.16);
   --color-scrim: rgba(30, 24, 12, 0.42);
   --color-danger-muted: #a03029;
+  --color-media-label-bg: rgba(0, 0, 0, 0.62);
+  --color-media-label-text: #ffffff;
   --color-diff-add-text: #4a6b12;
   --color-diff-remove-text: #9c2c24;
   --color-diff-modified-border: #3f9e63;
@@ -2125,6 +2147,8 @@
   --color-wash-3: rgba(255, 250, 235, 0.16);
   --color-scrim: rgba(8, 7, 5, 0.55);
   --color-danger-muted: #a83636;
+  --color-media-label-bg: rgba(0, 0, 0, 0.62);
+  --color-media-label-text: #ffffff;
   --color-diff-add-text: #a9d16f;
   --color-diff-remove-text: #f9b0b0;
   --color-diff-modified-border: #7ad494;

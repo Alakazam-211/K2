@@ -13,6 +13,8 @@ static RELAUNCH_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 
 
 mod agent_hooks;
+// The call's own window (pop out).
+mod call_window;
 mod commands;
 mod tray;
 // Editor discovery ("Open in …") lives in k2-client. Re-exported so
@@ -1432,6 +1434,8 @@ pub fn run() {
             menu::window_system_menu,
             // Tickets "Open in window" — one window per ticket.
             menu::window_open_ticket,
+            // A voice call's own window (pop out); closing it never hangs up.
+            call_window::window_open_call,
             // prd-zen-mode-v1 Z53: the View menu's Enter/Exit Zen Mode text.
             menu::set_zen_menu_label,
             // 0.39.x (Issue #6): webview liveness watchdog heartbeat

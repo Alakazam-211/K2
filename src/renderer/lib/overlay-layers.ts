@@ -34,3 +34,8 @@ export const ADD_WORKSPACE_Z = 1000
  *  where the top bar's call controls take over, and below every modal, menu
  *  and toast. It steps aside while a menu or popover overlaps it. */
 export const CALL_TILE_Z = 160
+
+/** The call's video full screen (Voice/CallFullscreen): over everything in
+ *  the window, Settings and modals included, since it is the whole screen
+ *  while it's on; below toasts (9999), so a call notice still shows. */
+export const CALL_FULLSCREEN_Z = 9000

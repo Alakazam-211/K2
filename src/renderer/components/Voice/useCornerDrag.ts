@@ -113,6 +113,9 @@ export interface CornerDrag {
   moving: boolean
   /** Spots may have moved (a composer came or went): glide to the new one. */
   relayout(): void
+  /** The tile changed size (a resize): stand on its corner's spot now, no
+   *  glide, so the corner it's anchored to stays put. */
+  reanchor(): void
   handlers: {
     onPointerDown(e: ReactPointerEvent): void
     onPointerMove(e: ReactPointerEvent): void
@@ -259,6 +262,15 @@ export function useCornerDrag(ref: RefObject<HTMLElement | null>, opts: CornerDr
     settle(cornerRef.current, spots, { x: 0, y: 0 })
   }
 
+  const reanchor = (): void => {
+    const el = ref.current
+    if (!el || press.current) return
+    stop()
+    anchor(el, o.current.spots()[cornerRef.current])
+    draw(REST)
+    if (motion.current) endMotion()
+  }
+
   const capture = (el: Element, id: number): void => {
     try {
       el.setPointerCapture?.(id)
@@ -330,7 +342,7 @@ export function useCornerDrag(ref: RefObject<HTMLElement | null>, opts: CornerDr
     e.stopPropagation()
   }
 
-  return { corner, held, moving, relayout, handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onClickCapture } }
+  return { corner, held, moving, relayout, reanchor, handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onClickCapture } }
 }
 
 /** The tile comes in with a short fade (none with reduced motion). */

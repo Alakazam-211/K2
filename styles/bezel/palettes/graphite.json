@@ -48,6 +48,8 @@
     "wash-2": { "$value": "rgba(255, 250, 235, 0.08)", "$type": "color" },
     "wash-3": { "$value": "rgba(255, 250, 235, 0.16)", "$type": "color" },
     "scrim": { "$value": "rgba(8, 7, 5, 0.55)", "$type": "color" },
+    "media-label-bg": { "$value": "rgba(0, 0, 0, 0.62)", "$type": "color", "$description": "Behind a name or time drawn on video (any picture, either scheme)." },
+    "media-label-text": { "$value": "#ffffff", "$type": "color" },
     "diff-add-text": { "$value": "#a9d16f", "$type": "color" },
     "diff-remove-text": { "$value": "#f9b0b0", "$type": "color" },
     "diff-modified-border": { "$value": "#7ad494", "$type": "color" },

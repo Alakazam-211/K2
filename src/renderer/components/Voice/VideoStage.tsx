@@ -2,6 +2,8 @@
 // that stays while the headset's list is closed. Screens draw large; with no
 // screen shared, the last person who spoke draws large (3 or more tiles). The
 // speaker's tile has the accent outline. Your own camera is the mirrored self-view.
+// In a call, its header also has Full screen and Pop out (the call in its own
+// window), and the call's window draws the same grid (`StageGrid`).
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from 'zustand'
@@ -10,6 +12,7 @@ import { videoTiles, withSpeakerEmphasis, type CallPerson } from '@/lib/voice/vi
 import type { VideoController } from '@/stores/video-core'
 import VideoTile from './VideoTile'
 import { ScreenPicker, VideoCallButtons, VideoNoticeLine } from './VideoControls'
+import { FullscreenButton, PopOutButton, useFullscreenChordLabel } from './CallViewButtons'
 
 const SMALL_BTN =
   'border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-50'
@@ -26,13 +29,39 @@ export function gridColumns(n: number): number {
 }
 
 /** The last person who spoke, kept until someone else does. */
-function useLastSpeaker(people: readonly CallPerson[]): string | null {
+export function useLastSpeaker(people: readonly CallPerson[]): string | null {
   const [last, setLast] = useState<string | null>(null)
   const now = people.find((p) => p.speaking && !p.isSelf && p.memberId)?.memberId ?? null
   useEffect(() => {
     if (now !== null && now !== last) setLast(now)
   }, [now, last])
   return last
+}
+
+/** The call's tiles as the stage draws them: the last speaker large (3 or
+ *  more tiles). */
+export function useStageTiles(ctl: VideoController, people: readonly CallPerson[]): ReturnType<typeof videoTiles> {
+  const tracks = useStore(ctl.store, (s) => s.tracks)
+  const local = useStore(ctl.store, (s) => s.local)
+  const lastSpeaker = useLastSpeaker(people)
+  return useMemo(() => withSpeakerEmphasis(videoTiles(tracks, local, people), lastSpeaker), [tracks, local, people, lastSpeaker])
+}
+
+/** The grid of tiles. */
+export function StageGrid({ tiles, ctl, className = '' }: { tiles: ReturnType<typeof videoTiles>; ctl: VideoController; className?: string }): React.JSX.Element {
+  const columns = gridColumns(tiles.reduce((n, t) => n + (t.large ? 4 : 1), 0))
+  return (
+    <div
+      data-testid="video-grid"
+      data-columns={columns}
+      className={`grid min-h-0 gap-1 overflow-y-auto p-1 ${className}`}
+      style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+    >
+      {tiles.map((t) => (
+        <VideoTile key={t.key} tile={t} ctl={ctl} />
+      ))}
+    </div>
+  )
 }
 
 export interface VideoStageProps {
@@ -48,14 +77,14 @@ export interface VideoStageProps {
   /** The call's view hides back to the floating tile (CallLayer). Without
    *  this or `onClose`, it hides to a pill. */
   onHide?: () => void
+  /** A call's view (not the demo): Full screen and Pop out in the header. */
+  viewButtons?: boolean
 }
 
-export default function VideoStage({ ctl, people, title, footerStart, footer, onClose, onHide }: VideoStageProps): React.JSX.Element | null {
-  const tracks = useStore(ctl.store, (s) => s.tracks)
-  const local = useStore(ctl.store, (s) => s.local)
+export default function VideoStage({ ctl, people, title, footerStart, footer, onClose, onHide, viewButtons = false }: VideoStageProps): React.JSX.Element | null {
   const availability = useStore(ctl.store, (s) => s.availability)
-  const lastSpeaker = useLastSpeaker(people)
-  const tiles = useMemo(() => withSpeakerEmphasis(videoTiles(tracks, local, people), lastSpeaker), [tracks, local, people, lastSpeaker])
+  const tiles = useStageTiles(ctl, people)
+  const chord = useFullscreenChordLabel()
   const [hidden, setHidden] = useState(false)
   const [wide, setWide] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -74,7 +103,6 @@ export default function VideoStage({ ctl, people, title, footerStart, footer, on
     )
   }
 
-  const columns = gridColumns(tiles.reduce((n, t) => n + (t.large ? 4 : 1), 0))
   return (
     <div
       ref={rootRef}
@@ -88,6 +116,8 @@ export default function VideoStage({ ctl, people, title, footerStart, footer, on
     >
       <header className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-1 text-[12px] text-[var(--color-text-primary)]">
         <span className="min-w-0 flex-1 truncate">{title}</span>
+        {viewButtons ? <PopOutButton testId="video-stage-popout" look="panel" /> : null}
+        {viewButtons ? <FullscreenButton testId="video-stage-fullscreen" look="panel" chord={chord} /> : null}
         <button type="button" data-testid="video-stage-size" className={SMALL_BTN} onClick={() => setWide(!wide)}>
           {wide ? 'Smaller' : 'Bigger'}
         </button>
@@ -95,16 +125,7 @@ export default function VideoStage({ ctl, people, title, footerStart, footer, on
           {onClose ? 'Close' : 'Hide'}
         </button>
       </header>
-      <div
-        data-testid="video-grid"
-        data-columns={columns}
-        className="grid min-h-0 gap-1 overflow-y-auto p-1"
-        style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
-      >
-        {tiles.map((t) => (
-          <VideoTile key={t.key} tile={t} ctl={ctl} />
-        ))}
-      </div>
+      <StageGrid tiles={tiles} ctl={ctl} />
       <footer className="border-t border-[var(--color-border)] px-2 py-1">
         <div className="flex items-center gap-1.5">
           {footerStart}

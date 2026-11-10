@@ -1,8 +1,11 @@
 // Video in voice rooms: one tile. A canvas the tile's sink draws on, the
-// person's name and mic, and in place of the picture: their avatar while the
-// camera's off, or a line saying why it's paused.
+// person's name and mic at its bottom left, and in place of the picture: their
+// avatar while the camera's off, or a line saying why it's paused. A tile may
+// carry one more label at its bottom right (the floating tile's and full
+// screen's call time). Labels sit on the picture on a chip of their own
+// (`--color-media-label-*`), readable on any video in every Style.
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import PresenceAvatar from '@/components/Presence/PresenceAvatar'
 import { MicOffIcon } from '@/components/icons/K2Icons'
 import { pausedText, type VideoTile as Tile } from '@/lib/voice/video-labels'
@@ -23,7 +26,21 @@ function placeholderLine(t: Tile): string | null {
   }
 }
 
-export default function VideoTile({ tile, ctl }: { tile: Tile; ctl: VideoController }): React.JSX.Element {
+/** A label drawn on the picture: the name's chip, the time's. */
+export const MEDIA_LABEL =
+  'flex max-w-full items-center gap-1 bg-[var(--color-media-label-bg)] px-1.5 py-0.5 text-[11px] leading-[14px] text-[var(--color-media-label-text)]'
+
+export interface VideoTileProps {
+  tile: Tile
+  ctl: VideoController
+  /** At the bottom right, on the picture (the call's time). */
+  corner?: ReactNode
+  /** Fill the box it's given (full screen) instead of keeping 16:9 itself;
+   *  the picture is letterboxed inside. */
+  fill?: boolean
+}
+
+export default function VideoTile({ tile, ctl, corner, fill = false }: VideoTileProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const held = tile.state !== 'live'
   // Off and unsupported tracks never need a sink; paused ones keep theirs, held.
@@ -53,8 +70,8 @@ export default function VideoTile({ tile, ctl }: { tile: Tile; ctl: VideoControl
       data-self={tile.self ? 'true' : 'false'}
       className={`relative min-h-0 min-w-0 overflow-hidden border bg-black ${
         tile.speaking ? 'border-[var(--color-accent)] outline outline-2 outline-[var(--color-accent)]' : 'border-[var(--color-border)]'
-      } ${tile.large ? 'col-span-2 row-span-2' : ''}`}
-      style={{ aspectRatio: '16 / 9' }}
+      } ${tile.large && !fill ? 'col-span-2 row-span-2' : ''} ${fill ? 'h-full w-full' : ''}`}
+      style={fill ? undefined : { aspectRatio: '16 / 9' }}
     >
       <canvas
         ref={canvasRef}
@@ -70,7 +87,7 @@ export default function VideoTile({ tile, ctl }: { tile: Tile; ctl: VideoControl
           </span>
         </div>
       ) : null}
-      <div className="absolute bottom-0 left-0 flex max-w-full items-center gap-1 bg-black/60 px-1.5 py-0.5 text-[11px] text-white">
+      <div data-testid="video-tile-label" data-at="bottom-left" className={`absolute bottom-0 left-0 ${MEDIA_LABEL} ${corner ? 'max-w-[60%]' : ''}`}>
         {tile.audioMuted ? (
           <span data-testid="video-tile-muted" title="Microphone off" className="flex">
             <MicOffIcon size={12} />
@@ -80,6 +97,11 @@ export default function VideoTile({ tile, ctl }: { tile: Tile; ctl: VideoControl
           {tile.name}
         </span>
       </div>
+      {corner ? (
+        <div data-testid="video-tile-corner" data-at="bottom-right" className={`absolute bottom-0 right-0 ${MEDIA_LABEL}`}>
+          {corner}
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -27,6 +27,8 @@ import HeartbeatScheduleDialog from './components/HeartbeatScheduleDialog/Heartb
 import MergeDialog from './components/MergeDialog/MergeDialog'
 import Toast from './components/Toast/Toast'
 import CallLayer from './components/Voice/CallLayer'
+import CallWindow from './components/Voice/CallWindow'
+import { isCallWindow } from './lib/voice/call-view'
 import TransferProgress from './components/TransferProgress/TransferProgress'
 import { useProjectsStore } from './stores/projects'
 import GateChrome from './components/TopBar/GateChrome'
@@ -379,6 +381,16 @@ function AppRoot(): React.JSX.Element {
       label = null
     }
     return parseTicketWindowId(window.location.hash, label)
+  }, [])
+  // A voice call in its own window (Pop out): this window shows the call.
+  const callWindow = useMemo(() => {
+    let label: string | null = null
+    try {
+      label = getCurrentTauriWindow().label
+    } catch {
+      label = null
+    }
+    return isCallWindow(window.location.hash, label)
   }, [])
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const activeWorkspaceId = useProjectsStore((s) => s.activeWorkspaceId)
@@ -1087,7 +1099,11 @@ function AppRoot(): React.JSX.Element {
       </RoomProvider>
 
       {/* Focus mode: workspace header above sidebar tabs, no primary sidebar */}
-      {ticketWindowId ? (
+      {callWindow ? (
+        <div className="h-full w-full" style={settingsOpen ? { display: 'none' } : undefined}>
+          <CallWindow />
+        </div>
+      ) : ticketWindowId ? (
         <div className="h-full w-full" style={settingsOpen ? { display: 'none' } : undefined}>
           <TicketWindow ticketId={ticketWindowId} />
         </div>

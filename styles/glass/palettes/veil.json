@@ -209,6 +209,15 @@
       "$value": "rgba(30, 30, 35, 0.32)",
       "$type": "color"
     },
+    "media-label-bg": {
+      "$value": "rgba(0, 0, 0, 0.62)",
+      "$type": "color",
+      "$description": "Behind a name or time drawn on video (any picture, either scheme)."
+    },
+    "media-label-text": {
+      "$value": "#ffffff",
+      "$type": "color"
+    },
     "diff-add-text": {
       "$value": "#1a7f37",
       "$type": "color"

@@ -14,9 +14,15 @@
 // theme's tokens).
 //
 // A press that never drags is a click: a button's is the button's; anywhere
-// else on the tile opens the call view over the current page.
+// else on the tile opens the call view over the current page. A double-click
+// (or the tile's Full screen button, or ⌃⌘V) puts the video full screen
+// (CallFullscreen); Pop out moves the call to its own window. The name sits
+// at the picture's bottom left and the call's time at its bottom right, on
+// the picture itself (Rosson 2026-11-10: no band under it). The tile resizes
+// from its two inward edges and the corner between them, keeping 16:9, and
+// the width is remembered per client.
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { useStore } from 'zustand'
 import { Surface } from '@/components/ui/Surface'
@@ -28,20 +34,34 @@ import { DRAWER_ANIM_MS } from '@/components/Layout/drawer-motion'
 import { holdLeft, nextSpeaker, NO_SPEAKER, speakingIds, tilePicture, videoLive, type SpeakerHold } from '@/lib/voice/call-tile-picture'
 import { videoTiles, type CallPerson, type VideoTile as Tile } from '@/lib/voice/video-labels'
 import { getWindowLabel } from '@/lib/window-chrome'
+import {
+  CALL_TILE_DEFAULT_WIDTH,
+  clampTileWidth,
+  DOUBLE_CLICK_MS,
+  inwardEdges,
+  readTileWidth,
+  resizedWidth,
+  writeTileWidth,
+  type ResizeHandle,
+  type TileRoom,
+} from '@/lib/voice/call-view'
+import { enterCallFullscreen } from '@/stores/call-fullscreen'
 import { useCallScreen } from '@/stores/call-screen'
 import type { VideoController } from '@/stores/video-core'
 import type { VoiceCall } from '@/stores/voice-core'
 import CallControls, { type CallControlsProps } from './CallControls'
+import { FullscreenButton, PopOutButton, useFullscreenChordLabel } from './CallViewButtons'
 import { ScreenPicker, VideoNoticeLine } from './VideoControls'
 import { callDuration } from './voice-labels'
 import { reduceMotion, useCornerDrag, useFadeIn } from './useCornerDrag'
 import VideoTile from './VideoTile'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 
-/** The tile's width (px); the picture is 16:9 inside it. */
-export const CALL_TILE_WIDTH = 240
-/** The band under the picture that carries the call's time (px). */
-export const DURATION_BAND = 22
+/** The tile's first width (px); the picture is 16:9 inside it. The person
+ *  resizes it from its inward edges (remembered per client, call-view.ts). */
+export const CALL_TILE_WIDTH = CALL_TILE_DEFAULT_WIDTH
+/** Between the picture and the control strip (px). */
+export const CALL_TILE_STRIP_GAP = 6
 /** Clear of the window's edges, the top bar and what the tile avoids (px). */
 export const CALL_TILE_INSETS = { top: TOPBAR_HEIGHT + 12, bottom: 12, side: 12, gap: 8 }
 /** What the tile never covers: composers (the Thread's and the terminal's
@@ -180,17 +200,76 @@ export interface CallTileProps {
   actions: CallControlsProps['actions']
 }
 
+/** The room the tile may take now: the free content area, less the insets,
+ *  and the strip under the picture. */
+function measureRoom(strip: HTMLElement | null): TileRoom {
+  const area = measureCallTileArea()
+  const view = { width: window.innerWidth, height: window.innerHeight }
+  const left = Math.max(0, area.left) + CALL_TILE_INSETS.side
+  const right = Math.min(view.width, area.right) - CALL_TILE_INSETS.side
+  const top = Math.max(CALL_TILE_INSETS.top, area.top + CALL_TILE_INSETS.gap)
+  const bottom = Math.min(view.height, area.bottom) - CALL_TILE_INSETS.bottom
+  return { width: right - left, height: bottom - top, below: (strip?.offsetHeight ?? 0) + CALL_TILE_STRIP_GAP }
+}
+
+interface Resize {
+  id: number
+  x: number
+  y: number
+  from: number
+  handle: ResizeHandle
+}
+
+const RESIZE_CURSOR: Record<ResizeHandle, string> = { x: 'cursor-ew-resize', y: 'cursor-ns-resize', corner: '' }
+
+/** The tile's resize handles: on the two edges away from the corner it's
+ *  anchored to, and the corner between them. */
+function ResizeHandles({ corner, onDown }: { corner: Corner; onDown: (e: React.PointerEvent, h: ResizeHandle) => void }): React.JSX.Element {
+  const edges = inwardEdges(corner)
+  const xSide = edges.x === -1 ? 'left-0' : 'right-0'
+  const ySide = edges.y === -1 ? 'top-0' : 'bottom-0'
+  // The corner handle's diagonal: top-left and bottom-right, or the other two.
+  const diag = (edges.x === -1) === (edges.y === -1) ? 'cursor-nwse-resize' : 'cursor-nesw-resize'
+  const grip = (h: ResizeHandle, cls: string): React.JSX.Element => (
+    <div
+      aria-hidden
+      title="Drag to resize"
+      data-testid={`call-tile-resize-${h}`}
+      data-resize={h}
+      className={`pointer-events-auto absolute ${cls} ${h === 'corner' ? diag : RESIZE_CURSOR[h]}`}
+      style={{ touchAction: 'none' }}
+      onPointerDown={(e) => onDown(e, h)}
+    />
+  )
+  return (
+    <>
+      {grip('x', `${xSide} inset-y-0 w-1.5`)}
+      {grip('y', `${ySide} inset-x-0 h-1.5`)}
+      {grip('corner', `${xSide} ${ySide} h-3 w-3`)}
+    </>
+  )
+}
+
 function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
+  const stripRef = useRef<HTMLDivElement>(null)
   const people = call.participants
   const tiles = useCallTiles(video, people)
   const speaker = useActiveSpeaker(people)
   const picture = tilePicture(tiles, speaker)
   const time = useCallDuration(call.connectedAt)
+  const chord = useFullscreenChordLabel()
   const windowLabel = useMemo(getWindowLabel, [])
+  // The width this person chose (per client), and the one that fits now.
+  const [wanted, setWanted] = useState(readTileWidth)
+  const [, remeasure] = useReducer((n: number) => n + 1, 0)
+  const width = clampTileWidth(wanted, measureRoom(stripRef.current))
+  const widthRef = useRef(width)
+  widthRef.current = width
+  const resize = useRef<Resize | null>(null)
   const spots = (): Record<Corner, Vec> => {
     const el = ref.current
-    const size = { width: el?.offsetWidth || CALL_TILE_WIDTH, height: el?.offsetHeight || 0 }
+    const size = { width: el?.offsetWidth || widthRef.current, height: el?.offsetHeight || 0 }
     return cornerSpots(
       { width: window.innerWidth, height: window.innerHeight },
       size,
@@ -199,13 +278,32 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
       measureCallTileArea(),
     )
   }
-  const { corner, held, moving, relayout, handlers } = useCornerDrag(ref, {
+  // A single click opens the call view, once it's clear it wasn't the first
+  // half of a double-click (full screen).
+  const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (tapTimer.current) clearTimeout(tapTimer.current)
+    },
+    [],
+  )
+  const { corner, held, moving, relayout, reanchor, handlers } = useCornerDrag(ref, {
     windowLabel,
     spots,
     // A button's click is the button's; anywhere else opens the call view.
     onTap: (target) => {
       const hit = target instanceof Element ? target.closest('button') : null
-      if (!hit || !ref.current?.contains(hit)) useCallScreen.getState().ask()
+      if (hit && ref.current?.contains(hit)) return
+      if (tapTimer.current) {
+        // The second click of a double-click: `onDoubleClick` has it.
+        clearTimeout(tapTimer.current)
+        tapTimer.current = null
+        return
+      }
+      tapTimer.current = setTimeout(() => {
+        tapTimer.current = null
+        useCallScreen.getState().ask()
+      }, DOUBLE_CLICK_MS)
     },
   })
   useFadeIn(ref)
@@ -213,20 +311,62 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
   const relayoutRef = useRef(relayout)
   relayoutRef.current = relayout
   useEffect(() => {
-    const again = (): void => relayoutRef.current()
+    const again = (): void => {
+      remeasure()
+      relayoutRef.current()
+    }
     window.addEventListener('resize', again)
-    const id = setInterval(again, CALL_TILE_RELAYOUT_MS)
+    const id = setInterval(() => relayoutRef.current(), CALL_TILE_RELAYOUT_MS)
     return () => {
       window.removeEventListener('resize', again)
       clearInterval(id)
     }
   }, [])
+  // A new size: the tile stands on its corner again at once, so the corner
+  // it's anchored to stays put while the far edges follow the pointer.
+  const firstWidth = useRef(true)
+  useLayoutEffect(() => {
+    if (firstWidth.current) {
+      firstWidth.current = false
+      return
+    }
+    reanchor()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [width])
   // Over a live Browser page the tile's box is claimed (the page gives way);
   // while it moves, the whole window is (useCornerDrag's drag claim).
-  useBrowserOverlay({ active: true, ref, kind: 'popover', watch: `${corner}:${moving}` })
+  useBrowserOverlay({ active: true, ref, kind: 'popover', watch: `${corner}:${moving}:${width}` })
   const overlapped = useOverlapped(ref)
 
-  const label = `Video call in ${call.roomName}. Click the video to open the call.`
+  const onResizeDown = (e: React.PointerEvent, handle: ResizeHandle): void => {
+    if (e.button !== 0 || resize.current) return
+    // The tile's own drag never sees it.
+    e.stopPropagation()
+    e.preventDefault()
+    try {
+      ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+    } catch {
+      // A synthetic pointer.
+    }
+    resize.current = { id: e.pointerId, x: e.clientX, y: e.clientY, from: widthRef.current, handle }
+  }
+  const onResizeMove = (e: React.PointerEvent): void => {
+    const r = resize.current
+    if (!r || r.id !== e.pointerId) return
+    const next = resizedWidth(r.from, e.clientX - r.x, e.clientY - r.y, r.handle, inwardEdges(corner))
+    setWanted(clampTileWidth(next, measureRoom(stripRef.current)))
+  }
+  const onResizeEnd = (e: React.PointerEvent): void => {
+    const r = resize.current
+    if (!r || r.id !== e.pointerId) return
+    resize.current = null
+    writeTileWidth(widthRef.current)
+    setWanted(widthRef.current)
+  }
+
+  const label = `Video call in ${call.roomName}. Click the video to open the call; double-click for full screen.`
+  // The buttons sit on the top edge, clear of the resize corner.
+  const buttonsLeft = corner === 'bottom-left'
   return (
     <div
       ref={ref}
@@ -238,11 +378,13 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
       data-picture={picture?.key ?? 'none'}
       data-overlapped={overlapped ? 'true' : 'false'}
       data-reduced-motion={reduceMotion() ? 'true' : 'false'}
-      className="fixed flex flex-col items-center gap-1.5 select-none"
+      data-width={width}
+      className="fixed flex flex-col items-center select-none"
       style={{
         left: 0,
         top: 0,
-        width: CALL_TILE_WIDTH,
+        width,
+        gap: CALL_TILE_STRIP_GAP,
         zIndex: CALL_TILE_Z,
         // The gap between the picture and the strip lets clicks through.
         pointerEvents: 'none',
@@ -252,12 +394,17 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
         WebkitAppRegion: 'no-drag',
       } as React.CSSProperties}
       {...handlers}
+      // A resize holds the pointer (captured on its handle): its moves and
+      // its release are the resize's, never the tile's drag or a click.
+      onPointerMove={(e) => (resize.current ? onResizeMove(e) : handlers.onPointerMove(e))}
+      onPointerUp={(e) => (resize.current ? onResizeEnd(e) : handlers.onPointerUp(e))}
+      onPointerCancel={(e) => (resize.current ? onResizeEnd(e) : handlers.onPointerCancel(e))}
     >
       <Surface
         role2="solid"
         elevation={held ? 5 : 3}
         data-testid="call-tile-picture"
-        className="pointer-events-auto w-full cursor-pointer overflow-hidden"
+        className="group pointer-events-auto relative w-full cursor-pointer overflow-hidden"
         role="button"
         tabIndex={0}
         aria-label={`Open the call in ${call.roomName}`}
@@ -267,17 +414,41 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
             useCallScreen.getState().ask()
           }
         }}
+        onDoubleClick={(e) => {
+          const hit = e.target instanceof Element ? e.target.closest('button, [data-resize]') : null
+          if (hit) return
+          if (tapTimer.current) {
+            clearTimeout(tapTimer.current)
+            tapTimer.current = null
+          }
+          enterCallFullscreen()
+        }}
       >
-        {picture ? <VideoTile tile={{ ...picture, large: false }} ctl={video} /> : null}
-        <div className="flex items-center px-2 text-[11px] text-[var(--color-text-muted)]" style={{ height: DURATION_BAND }}>
-          {time ? (
-            <span data-testid="call-tile-duration" className="font-mono tabular-nums text-[var(--color-text-secondary)]">
-              {time}
-            </span>
-          ) : null}
+        {picture ? (
+          <VideoTile
+            tile={{ ...picture, large: false }}
+            ctl={video}
+            corner={
+              time ? (
+                <span data-testid="call-tile-duration" className="font-mono tabular-nums">
+                  {time}
+                </span>
+              ) : null
+            }
+          />
+        ) : null}
+        <div
+          data-testid="call-tile-view-buttons"
+          className={`absolute top-1.5 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 ${
+            buttonsLeft ? 'left-1.5' : 'right-1.5'
+          }`}
+        >
+          <PopOutButton testId="call-tile-popout" look="picture" />
+          <FullscreenButton testId="call-tile-fullscreen" look="picture" chord={chord} />
         </div>
+        <ResizeHandles corner={corner} onDown={onResizeDown} />
       </Surface>
-      <Surface role2="elevated" elevation={held ? 5 : 3} data-testid="call-tile-strip" className="pointer-events-auto p-1.5">
+      <Surface ref={stripRef} role2="elevated" elevation={held ? 5 : 3} data-testid="call-tile-strip" className="pointer-events-auto p-1.5">
         <CallControls variant="tile" call={call} actions={actions} video={video} />
         {/* The share list (where the OS has no picker of its own) and why a
             camera or share was refused, with the way to the privacy settings. */}

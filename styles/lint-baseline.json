@@ -102,7 +102,7 @@
     "src/renderer/components/TopBar/WindowControls.tsx": 2,
     "src/renderer/components/TopBar/server-status.ts": 3,
     "src/renderer/components/Voice/VideoDemo.tsx": 7,
-    "src/renderer/components/Voice/VideoTile.tsx": 3,
+    "src/renderer/components/Voice/VideoTile.tsx": 1,
     "src/renderer/components/VoiceChatOnlyGate.tsx": 2,
     "src/renderer/components/WhatsNewModal/WhatsNewModal.tsx": 8,
     "src/renderer/components/WhatsNewModal/ZenGardenNewsCard.tsx": 3,

@@ -642,3 +642,40 @@ export function GlobeIcon(props: K2IconProps = {}): React.JSX.Element {
     </svg>
   )
 }
+
+// ── Call video: full screen and pop out ─────────────────────────────────
+
+/** The call's video full screen: Lucide `maximize`, squared; `exit` is
+ *  `minimize` (the corners turned in). */
+export function FullscreenIcon({ exit = false, ...props }: K2IconProps & { exit?: boolean }): React.JSX.Element {
+  return (
+    <svg {...iconProps(exit ? 'minimize' : 'maximize', props)}>
+      {exit ? (
+        <>
+          <path d="M8 3v5H3" />
+          <path d="M21 8h-5V3" />
+          <path d="M3 16h5v5" />
+          <path d="M16 21v-5h5" />
+        </>
+      ) : (
+        <>
+          <path d="M8 3H3v5" />
+          <path d="M21 8V3h-5" />
+          <path d="M3 16v5h5" />
+          <path d="M16 21h5v-5" />
+        </>
+      )}
+    </svg>
+  )
+}
+
+/** The call in its own window (pop out): Lucide `external-link`, squared. */
+export function PopOutIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('external-link', props)}>
+      <path d="M15 3h6v6" />
+      <path d="M10 14L21 3" />
+      <path d="M18 13v8H3V6h8" />
+    </svg>
+  )
+}

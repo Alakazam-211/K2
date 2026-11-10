@@ -25,7 +25,9 @@ import { policyBlockText } from '@/lib/voice/video-labels'
 import type { VoiceCall } from '@/stores/voice-core'
 import type { VideoController } from '@/stores/video-core'
 
-export type CallControlsVariant = 'topbar' | 'tile'
+/** `tile`: the floating tile's strip; `overlay`: full screen and the call's
+ *  own window (the strip's buttons, their own test ids). */
+export type CallControlsVariant = 'topbar' | 'tile' | 'overlay'
 
 /** The tile strip's button (px). */
 export const CALL_TILE_BUTTON = 28
@@ -136,7 +138,7 @@ function CallButton({
       data-state={state}
       data-on={on ? 'true' : 'false'}
       className={`relative flex shrink-0 items-center justify-center transition-colors ${look} ${dead ? 'opacity-50' : ''}`}
-      style={variant === 'tile' ? { width: CALL_TILE_BUTTON, height: CALL_TILE_BUTTON, ...noDrag } : noDrag}
+      style={variant !== 'topbar' ? { width: CALL_TILE_BUTTON, height: CALL_TILE_BUTTON, ...noDrag } : noDrag}
       onClick={() => {
         if (!dead) onPress()
       }}
@@ -177,7 +179,7 @@ function CameraButton({ variant, video, busy }: { variant: CallControlsVariant; 
       state={local.camera}
       onPress={() => void video.setCamera(!on)}
     >
-      <VideoIcon off={!on} size={variant === 'tile' ? 15 : undefined} />
+      <VideoIcon off={!on} size={variant !== 'topbar' ? 15 : undefined} />
     </CallButton>
   )
 }
@@ -195,7 +197,7 @@ function ScreenButton({ variant, video, busy }: { variant: CallControlsVariant; 
   if (availability !== 'ready' || !caps?.screen.supported) return null
   const on = local.screen !== 'off'
   const picker = caps.screen.systemPicker
-  if (!on && !picker && !(variant === 'tile' && caps.screen.list)) return null
+  if (!on && !picker && !(variant !== 'topbar' && caps.screen.list)) return null
   const block = on ? null : policyBlockText(policy, 'screen')
   const asking = local.screen === 'asking'
   return (
@@ -213,7 +215,7 @@ function ScreenButton({ variant, video, busy }: { variant: CallControlsVariant; 
         else void video.loadScreenSources()
       }}
     >
-      <ScreenShareIcon stop={on} size={variant === 'tile' ? 15 : undefined} />
+      <ScreenShareIcon stop={on} size={variant !== 'topbar' ? 15 : undefined} />
     </CallButton>
   )
 }
@@ -222,13 +224,13 @@ export default function CallControls({ variant, call, actions, video }: CallCont
   const busy = call.phase === 'joining'
   const locked = call.speakDenied ? micBlockedText('speak_denied', call.roomName) : call.serverMuted ? micBlockedText('server_muted', call.roomName) : null
   const micOff = call.muted || call.micDenied || call.deafened || locked !== null
-  const size = variant === 'tile' ? 15 : undefined
+  const size = variant !== 'topbar' ? 15 : undefined
   return (
     <div
       data-testid={`call-${variant}-controls`}
       role="group"
       aria-label="Call controls"
-      className={`flex items-center ${variant === 'tile' ? 'gap-1.5' : 'gap-0.5'}`}
+      className={`flex items-center ${variant !== 'topbar' ? 'gap-1.5' : 'gap-0.5'}`}
     >
       <CallButton
         variant={variant}

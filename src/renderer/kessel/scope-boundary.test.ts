@@ -236,6 +236,11 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.7 multiplayer cores: Settings → Cores → Multiplayer switches the
   // window's own server's doc cores; callers with a room pass its scope.
   'components/Settings/sections/MultiplayerSection.tsx',
+  // prd-org-chart-v1: Settings → Org Chart switches the window's own
+  // server's Org Chart, and the Org Chart page shows that server's chart
+  // (one board per server; the typed client takes the scope).
+  'components/Settings/sections/OrgChartSection.tsx',
+  'components/OrgChart/OrgChartPage.tsx',
   'components/Settings/sections/multiplayer-cores-api.ts',
   // 0.46.1 remote switch: the per-agent switch in the window's server's
   // workspace settings.

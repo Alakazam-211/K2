@@ -21,6 +21,8 @@ const TARBALL: &str = "/home/k2/sew.tar.gz";
 const REC: &str = "/home/k2/sew-recorder.tar.gz";
 const TRA: &str = "/home/k2/sew-transcriber.tar.gz";
 const MODEL: &str = "/home/k2/sew-asr-test-q8_0.gguf";
+/// The model's licence file, beside it (as Sew publishes them).
+const MODEL_LICENCE: &str = "/home/k2/sew-asr-test-LICENSE.txt";
 
 fn fixture(name: &str) -> Vec<u8> {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../k2-root-proto/testdata/sew").join(name);
@@ -41,6 +43,7 @@ fn bare() -> T {
         f.insert(REC.into(), fixture("sew-recorder-0.0.2-x86_64-unknown-linux-gnu.tar.gz"));
         f.insert(TRA.into(), fixture("sew-transcriber-0.0.2-x86_64-unknown-linux-gnu.tar.gz"));
         f.insert(MODEL.into(), fixture("sew-asr-test-q8_0.gguf"));
+        f.insert(MODEL_LICENCE.into(), fixture("sew-asr-test-LICENSE.txt"));
     }
     let env = Env {
         ops,
@@ -256,13 +259,23 @@ fn enable_stages_installs_then_sets_the_org_policy_on() {
             "engine sew recording stage",
             "engine sew recording stage",
             "engine sew recording stage",
+            "engine sew recording stage",
             "engine sew recording install",
             "engine sew recording status"
         ]
     );
-    let staged: Vec<Vec<u8>> = calls[2..5].iter().map(|(_, s)| s.clone().unwrap()).collect();
-    assert_eq!(staged, [fixture("sew-recorder-0.0.2-x86_64-unknown-linux-gnu.tar.gz"), fixture("sew-transcriber-0.0.2-x86_64-unknown-linux-gnu.tar.gz"), fixture("sew-asr-test-q8_0.gguf")]);
-    let install: Value = serde_json::from_slice(calls[5].1.as_ref().unwrap()).unwrap();
+    let staged: Vec<Vec<u8>> = calls[2..6].iter().map(|(_, s)| s.clone().unwrap()).collect();
+    assert_eq!(
+        staged,
+        [
+            fixture("sew-recorder-0.0.2-x86_64-unknown-linux-gnu.tar.gz"),
+            fixture("sew-transcriber-0.0.2-x86_64-unknown-linux-gnu.tar.gz"),
+            fixture("sew-asr-test-q8_0.gguf"),
+            fixture("sew-asr-test-LICENSE.txt")
+        ],
+        "the model's licence file, from beside --model-file, is staged with it"
+    );
+    let install: Value = serde_json::from_slice(calls[6].1.as_ref().unwrap()).unwrap();
     assert_eq!(install, json!({"model": "test-q8_0"}), "the pinned model by name, never auto");
     assert_eq!(t.policy_posts(), [json!({"changes": {"recording.enabled": true}})]);
     // k2 hostchat status carries it.
@@ -280,6 +293,30 @@ fn enable_stages_installs_then_sets_the_org_policy_on() {
     assert_eq!(st, "200 OK", "{v}");
     assert_eq!(v["alreadyInstalled"], true);
     assert!(!t.recording_calls().iter().any(|a| a.ends_with("stage") || a.ends_with("install")), "{:?}", t.recording_calls());
+}
+
+/// The Kessel Steward's condition R28 for the model's licence files too: a
+/// licence file beside --model-file whose sha256 isn't the pin (or none
+/// there) refuses before anything is staged or any Sew step runs.
+#[test]
+fn a_model_licence_that_isnt_the_pin_refuses_before_any_sew_call() {
+    for doctored in [true, false] {
+        let t = t();
+        if doctored {
+            let mut b = fixture("sew-asr-test-LICENSE.txt");
+            b.push(b'!');
+            t.ops.files.lock().unwrap().insert(MODEL_LICENCE.into(), b);
+        } else {
+            t.ops.files.lock().unwrap().remove(MODEL_LICENCE);
+        }
+        let (st, v) = t.enable(json!({}));
+        let want = if doctored { ("409 Conflict", "model_sha256_mismatch") } else { ("400 Bad Request", "bad_request") };
+        assert_eq!((st.as_str(), code(&v)), want, "doctored={doctored}: {v}");
+        assert!(v["error"]["hint"].as_str().unwrap().contains("sew-asr-test-LICENSE.txt"), "names the file: {v}");
+        let calls = t.recording_calls();
+        assert_eq!(calls, ["engine sew recording plan", "engine sew recording status"], "nothing staged or installed: {calls:?}");
+        assert!(t.policy_posts().is_empty());
+    }
 }
 
 /// The Kessel Steward's condition R28: a model whose sha256 isn't the pin

@@ -398,6 +398,17 @@ fn model_file(m: &rec::SewAsrModel) -> ReleaseFile {
     }
 }
 
+/// One of the model's licence files, a release asset beside it.
+fn licence_file(m: &rec::SewAsrModel, l: &rec::SewAsrLicence) -> ReleaseFile {
+    ReleaseFile {
+        tag: m.sew_version.into(),
+        name: l.file.into(),
+        sha256: l.sha256.into(),
+        cap: l.size,
+        label: format!("the speech model's licence file {}", l.file),
+    }
+}
+
 /// The bytes of one pinned file, checked here against the sha256 in K2's
 /// code before the helper ever sees them.
 fn obtain(env: &Env, f: &ReleaseFile, path: Option<&Path>, flag: &str, code: &'static str) -> R<Vec<u8>> {
@@ -426,10 +437,22 @@ fn stage(env: &Env, files: &Files) -> R<&'static rec::SewAsrModel> {
     let rf = sidecar_file(Sidecar::Recorder, &arch)?;
     let tf = sidecar_file(Sidecar::Transcriber, &arch)?;
     let m = obtain(env, &model_file(model), files.model.as_deref(), "--model-file", "model_sha256_mismatch")?;
+    // Its licence texts and NOTICE: with --model-file, from the same folder
+    // (Sew publishes them beside the model); else downloaded. Each is a
+    // hard sha256 check, as the model is.
+    let mut licences = Vec::new();
+    for l in model.licences {
+        let beside = files.model.as_deref().and_then(Path::parent).map(|d| d.join(l.file));
+        let b = obtain(env, &licence_file(model, l), beside.as_deref(), "--model-file (its licence files beside it)", "model_sha256_mismatch")?;
+        licences.push((l.file, b));
+    }
     let r = obtain(env, &rf, files.recorder.as_deref(), "--recorder-tarball", "sha256_mismatch")?;
     let t = obtain(env, &tf, files.transcriber.as_deref(), "--transcriber-tarball", "sha256_mismatch")?;
     for (what, bytes) in [("sew-recorder", &r), ("sew-transcriber", &t), ("speech model", &m)] {
         sup::helper_stdin(env, &["recording", "stage"], bytes).map_err(|e| no("helper_error", 500, format!("staging {what}: {e}")))?;
+    }
+    for (file, bytes) in &licences {
+        sup::helper_stdin(env, &["recording", "stage"], bytes).map_err(|e| no("helper_error", 500, format!("staging {file}: {e}")))?;
     }
     Ok(model)
 }

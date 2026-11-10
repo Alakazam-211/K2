@@ -4,6 +4,8 @@
 - sew-recorder-0.0.2-x86_64-unknown-linux-gnu.tar.gz
 - sew-transcriber-0.0.2-x86_64-unknown-linux-gnu.tar.gz
 - sew-asr-test-q8_0.gguf (a stand-in speech model, never a real one)
+- sew-asr-test-LICENSE.txt (its stand-in licence file, a separate asset
+  like Sew's asr-license-*.txt)
 
 The same shape as the sew-media fixture: the binary member (a shell stub
 that no test executes) and LICENSE, NOTICE and THIRD_PARTY_NOTICES.md
@@ -54,3 +56,7 @@ model = b"GGUF K2 fixture speech model (never a real model)\n" * 64
 with open(os.path.join(HERE, "sew-asr-test-q8_0.gguf"), "wb") as f:
     f.write(model)
 print(f"model: sha256 {hashlib.sha256(model).hexdigest()} size {len(model)}")
+licence = b"K2 fixture: the stand-in speech model's licence text (never a real licence)\n"
+with open(os.path.join(HERE, "sew-asr-test-LICENSE.txt"), "wb") as f:
+    f.write(licence)
+print(f"model licence: sha256 {hashlib.sha256(licence).hexdigest()} size {len(licence)}")

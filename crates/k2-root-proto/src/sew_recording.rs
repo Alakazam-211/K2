@@ -39,7 +39,8 @@ use crate::sew::{checksum_is_placeholder, hex64, pinned, SewArtifact, SewRelease
 // ── fixed paths ─────────────────────────────────────────────────────────
 
 /// The staged, pinned sidecar tarballs and model (root 0600 under the
-/// helper's 0700 staging dir; removed after a successful install).
+/// helper's 0700 staging dir; removed after a successful install). The
+/// model's licence files are staged beside it ([`staged_licence`]).
 pub const SEW_STAGE_RECORDER_TARBALL: &str = "/var/lib/k2-root-helper/sew/sew-recorder.tar.gz";
 pub const SEW_STAGE_TRANSCRIBER_TARBALL: &str = "/var/lib/k2-root-helper/sew/sew-transcriber.tar.gz";
 /// Sew copies the model to `/usr/local/share/sew/asr/<its own file name>`,
@@ -64,6 +65,20 @@ pub const MAX_VERSION_JSON: usize = 4096;
 /// `sew-media`'s go under `/usr/share/doc/sew-media`).
 pub const SEW_RECORDER_DOC_DIR: &str = "/usr/share/doc/sew-recorder";
 pub const SEW_TRANSCRIBER_DOC_DIR: &str = "/usr/share/doc/sew-transcriber";
+/// The speech model's licence texts and NOTICE (separate release assets,
+/// not inside a tarball), written before Sew installs the model, so the
+/// model is never on the box without its attribution; removed with the
+/// recorder.
+pub const SEW_ASR_DOC_DIR: &str = "/usr/share/doc/sew-asr";
+/// The largest licence file the helper stages (Sew's are about 11 KB).
+pub const MAX_ASR_LICENCE: usize = 256 * 1024;
+
+/// Where the helper stages one pinned licence file: beside the staged
+/// model, under its own pinned file name (from [`SewAsrModel::licences`],
+/// never from input).
+pub fn staged_licence(file: &str) -> String {
+    format!("/var/lib/k2-root-helper/sew/{file}")
+}
 
 // ── the rules K2 checks before asking Sew (docs/recording.md) ──────────
 
@@ -92,6 +107,27 @@ pub fn shared_fit(ram_mib: u64, units_mib: u64, model_mib: u64) -> (bool, u64, u
 
 // ── the speech model pin ────────────────────────────────────────────────
 
+/// One licence file of a speech model (a release asset beside the model:
+/// `sew-<v>-models.json` `license_files[]` and `notice`, hashes from
+/// `SHA256SUMS-models`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SewAsrLicence {
+    pub file: &'static str,
+    pub sha256: &'static str,
+    pub size: u64,
+}
+
+impl SewAsrLicence {
+    fn usable(&self) -> bool {
+        hex64(self.sha256)
+            && self.size > 0
+            && self.size <= MAX_ASR_LICENCE as u64
+            && !self.file.is_empty()
+            && self.file.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+            && !self.file.starts_with('.')
+    }
+}
+
 /// One speech model of one Sew release (`release.json` `models[]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SewAsrModel {
@@ -107,30 +143,65 @@ pub struct SewAsrModel {
     /// The transcriber's `MemoryMax` with this model (Sew's pin
     /// `memory_max_mib`; 0 = not measured, never installable).
     pub memory_max_mib: u64,
+    /// Its licence texts and NOTICE, staged and installed with it. A model
+    /// without them is never installable.
+    pub licences: &'static [SewAsrLicence],
 }
 
 impl SewAsrModel {
     fn usable(&self) -> bool {
-        hex64(self.sha256) && self.size > 0 && self.size <= MAX_ASR_MODEL as u64 && self.memory_max_mib > 0
+        hex64(self.sha256)
+            && self.size > 0
+            && self.size <= MAX_ASR_MODEL as u64
+            && self.memory_max_mib > 0
+            && !self.licences.is_empty()
+            && self.licences.iter().all(SewAsrLicence::usable)
+    }
+
+    /// The pinned licence file with this sha256.
+    pub fn licence_by_sha(&self, sha256_hex: &str) -> Option<&'static SewAsrLicence> {
+        self.licences.iter().find(|l| hex64(l.sha256) && l.sha256.eq_ignore_ascii_case(sha256_hex))
     }
 }
 
-/// The model K2 installs, per Sew release: `base-q8_0` (candle), the one
-/// that fits a shared 8 GiB box (Sew 2026-11-10). Never `auto`: K2 stages
-/// the file before Sew picks.
+/// The model K2 installs, per Sew release: `base-q8_0` (candle), the only
+/// model past Sew's quality gate and the one for a shared 8 GiB box (Sew
+/// 2026-11-10). Never `auto`: K2 stages the file before Sew picks.
 ///
-/// **Placeholder** until Sew publishes the model as a release asset
-/// (pending the Kessel Steward's licence check) and fills in its measured
-/// memory: the stage step refuses cleanly ([`MODEL_UNPINNED`]). On pin day,
-/// copy the row from that release's `release.json` `models[]`.
+/// Sew 0.9.0's: release assets added to the same v0.9.0 release after the
+/// Kessel Steward's licence check (Apache-2.0; quantized by Alakazam Labs
+/// from openai/whisper-base@e37978b9, whose weights are MIT). The row is
+/// `sew-0.9.0-models.json` (sha256 `d4ffbf22…53cd`) `models[0]`, each hash
+/// equal to `SHA256SUMS-models` (sha256 `9ae56512…9159`), checked against
+/// the downloaded files (vendored as `testdata/sew/sew-0.9.0.SHA256SUMS-models`,
+/// held by a test). Sew checks the model against the pin built into `sew`
+/// (`asr_pin_sha256` `6d67c041…b472`) again. A sha256 mismatch is a hard
+/// failure (the Steward's R28): no install, no other model, no retry.
 pub const SEW_ASR_MODELS: &[SewAsrModel] = &[SewAsrModel {
     sew_version: "0.9.0",
     name: "base-q8_0",
     backend: "candle",
     file: "sew-asr-base-q8_0.gguf",
-    sha256: "PLACEHOLDER-sew-0.9.0-models-not-published-yet",
-    size: 0,
-    memory_max_mib: 0,
+    sha256: "19221e8b84f5ffa4e5589557792302257e445cec8f0c147515049ad86e52937c",
+    size: 82_578_976,
+    memory_max_mib: 704,
+    licences: &[
+        SewAsrLicence {
+            file: "asr-license-Apache-2.0.txt",
+            sha256: "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+            size: 11_358,
+        },
+        SewAsrLicence {
+            file: "asr-license-openai-whisper-MIT.txt",
+            sha256: "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d",
+            size: 1_063,
+        },
+        SewAsrLicence {
+            file: "sew-asr-models-NOTICE.txt",
+            sha256: "04716eeb41bc4c8e7d98707100ce248aa6cbd6cec1c3643ec912b87e99972b7f",
+            size: 955,
+        },
+    ],
 }];
 
 /// K2's fixture model for the `test-signer` fixture release 0.0.2
@@ -144,6 +215,11 @@ pub const TEST_ASR_MODELS: &[SewAsrModel] = &[SewAsrModel {
     sha256: "4ff03f6b28aec08b02957c8b8692db4aa50f4d3c61e1cca61aa659ad9e816330",
     size: 3200,
     memory_max_mib: 640,
+    licences: &[SewAsrLicence {
+        file: "sew-asr-test-LICENSE.txt",
+        sha256: "925a8e505c54df2f25afca649e33a3cc4460380423c74c15fd6fe2d3473b8991",
+        size: 76,
+    }],
 }];
 
 /// The model table this build uses (fixtures under `test-signer`).
@@ -246,11 +322,13 @@ pub fn sidecar_in(rel: &'static SewRelease, which: Sidecar, arch: &str) -> Resul
 }
 
 /// What a staged blob is, by its sha256: one of the pinned sidecar
-/// tarballs or the pinned model. `None`: not this build's pin.
+/// tarballs, the pinned model or one of its licence files. `None`: not
+/// this build's pin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Blob {
     Sidecar(Sidecar),
     Model,
+    ModelLicence(&'static SewAsrLicence),
 }
 
 pub fn classify(sha256_hex: &str, arch: &str) -> Option<Blob> {
@@ -264,7 +342,11 @@ pub fn classify_in(rel: &'static SewRelease, models: &'static [SewAsrModel], sha
             return Some(Blob::Sidecar(s));
         }
     }
-    model_in(models, rel.version).ok().filter(|m| m.sha256.eq_ignore_ascii_case(sha256_hex)).map(|_| Blob::Model)
+    let m = model_in(models, rel.version).ok()?;
+    if m.sha256.eq_ignore_ascii_case(sha256_hex) {
+        return Some(Blob::Model);
+    }
+    m.licence_by_sha(sha256_hex).map(Blob::ModelLicence)
 }
 
 // ── stdin input ─────────────────────────────────────────────────────────
@@ -364,23 +446,56 @@ mod tests {
         crate::sew::TEST_RELEASES.last().expect("fixture releases")
     }
 
+    /// The real pin's model: Sew 0.9.0's base-q8_0, exactly as its release
+    /// assets publish it (the vendored `SHA256SUMS-models`, both ways for
+    /// the model and its licence files); an older Sew has no row.
     #[test]
-    fn the_real_model_pin_is_a_placeholder_so_the_stage_step_refuses() {
-        let m = SEW_ASR_MODELS.iter().find(|m| m.sew_version == "0.9.0").expect("a 0.9.0 row");
-        assert_eq!((m.name, m.backend), ("base-q8_0", "candle"), "Sew: base-q8_0 for a shared 8 GiB box, never auto");
-        assert!(SEW_ASR_MODELS.iter().all(|m| m.name != "auto"));
-        let e = model_in(SEW_ASR_MODELS, "0.9.0").unwrap_err();
-        assert!(e.starts_with(MODEL_UNPINNED) && e.contains("sew-asr-base-q8_0.gguf"), "{e}");
-        // The real pin is 0.9.0 and its release.json has no models[] yet
-        // (Sew 2026-11-10: the model waits on a licence point), so its row
-        // stays the placeholder and every model stage refuses.
+    fn the_real_model_pin_is_sews_0_9_0_base_q8_0_and_equals_its_sums() {
         let pin = crate::sew::SEW_RELEASES.last().expect("real pins");
         assert_eq!(pin.version, "0.9.0");
-        let e = model_in(SEW_ASR_MODELS, pin.version).unwrap_err();
-        assert!(e.starts_with(MODEL_UNPINNED) && e.contains("hasn't published"), "{e}");
+        let m = model_in(SEW_ASR_MODELS, pin.version).expect("the 0.9.0 model is pinned");
+        assert_eq!((m.name, m.backend, m.file), ("base-q8_0", "candle", "sew-asr-base-q8_0.gguf"), "never auto");
+        assert!(SEW_ASR_MODELS.iter().all(|m| m.name != "auto"));
+        assert_eq!((m.sha256, m.size, m.memory_max_mib), ("19221e8b84f5ffa4e5589557792302257e445cec8f0c147515049ad86e52937c", 82_578_976, 704));
+        let sums = include_str!("../testdata/sew/sew-0.9.0.SHA256SUMS-models");
+        assert_eq!(
+            {
+                use sha2::Digest;
+                sha2::Sha256::digest(sums.as_bytes()).iter().map(|x| format!("{x:02x}")).collect::<String>()
+            },
+            "9ae56512521e96c2898b2c0020b083b7c8d19d1251d63b7c411de52b06b79159",
+            "the vendored SHA256SUMS-models is the published one"
+        );
+        let mut want: Vec<String> = vec![format!("{}  {}", m.sha256, m.file)];
+        want.extend(m.licences.iter().map(|l| format!("{}  {}", l.sha256, l.file)));
+        want.sort();
+        let mut published: Vec<String> =
+            sums.lines().filter(|l| l.ends_with(".gguf") || l.contains("license") || l.contains("NOTICE")).map(str::to_string).collect();
+        published.sort();
+        assert_eq!(want, published, "the model and its licence files, both ways");
+        assert_eq!(m.licences.len(), 3, "two licence texts and the NOTICE");
+        // A wrong file is no blob of the pin: the stage refuses it before Sew.
+        let wrong = "0".repeat(64);
+        assert_eq!(classify_in(pin, SEW_ASR_MODELS, &wrong, "x86_64"), None);
+        assert_eq!(classify_in(pin, SEW_ASR_MODELS, m.sha256, "x86_64"), Some(Blob::Model));
+        for l in m.licences {
+            assert_eq!(classify_in(pin, SEW_ASR_MODELS, l.sha256, "aarch64"), Some(Blob::ModelLicence(l)));
+            assert!(l.usable(), "{l:?}");
+        }
         // An older Sew has no row at all.
         let e = model_in(SEW_ASR_MODELS, "0.8.3").unwrap_err();
         assert!(e.starts_with(MODEL_UNPINNED) && e.contains("recording needs Sew 0.9.0"), "{e}");
+    }
+
+    /// A model row without its licence files is never installable.
+    #[test]
+    fn a_model_without_its_licences_is_unpinned() {
+        static BARE: [SewAsrModel; 1] = [SewAsrModel { licences: &[], ..SEW_ASR_MODELS[0] }];
+        let e = model_in(&BARE, "0.9.0").unwrap_err();
+        assert!(e.starts_with(MODEL_UNPINNED), "{e}");
+        static ODD: [SewAsrLicence; 1] = [SewAsrLicence { file: "../x", sha256: "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30", size: 1 }];
+        static BAD_NAME: [SewAsrModel; 1] = [SewAsrModel { licences: &ODD, ..SEW_ASR_MODELS[0] }];
+        assert!(model_in(&BAD_NAME, "0.9.0").is_err(), "a licence file name is a plain name");
     }
 
     #[test]
@@ -394,10 +509,11 @@ mod tests {
         assert_eq!(c(&t.tarball_sha256.to_uppercase()), Some(Blob::Sidecar(Sidecar::Transcriber)));
         let m = model_in(TEST_ASR_MODELS, rel.version).expect("model");
         assert_eq!(c(m.sha256), Some(Blob::Model));
+        assert_eq!(c(m.licences[0].sha256), Some(Blob::ModelLicence(&m.licences[0])));
         assert_eq!(c(&"0".repeat(64)), None, "anything else is no pin");
         assert_eq!(c(r.binary_sha256), None, "a bare binary is not a tarball");
         assert!(sidecar_in(rel, Sidecar::Recorder, "riscv64").is_err());
-        // The real pin's sidecars are known; its model isn't, so no blob is one.
+        // The real pin's sidecars are known too.
         let real = crate::sew::SEW_RELEASES.last().expect("real pins");
         let (_, rr) = sidecar_in(real, Sidecar::Recorder, "x86_64").expect("the real pin pins the recorder");
         assert_eq!(classify_in(real, SEW_ASR_MODELS, rr.tarball_sha256, "x86_64"), Some(Blob::Sidecar(Sidecar::Recorder)));
@@ -420,6 +536,10 @@ mod tests {
         let m = &TEST_ASR_MODELS[0];
         assert_eq!(sha(m.file), m.sha256);
         assert_eq!(std::fs::metadata(dir.join(m.file)).expect("model").len(), m.size);
+        for l in m.licences {
+            assert_eq!(sha(l.file), l.sha256, "{}", l.file);
+            assert_eq!(std::fs::metadata(dir.join(l.file)).expect("licence").len(), l.size);
+        }
     }
 
     #[test]
@@ -465,6 +585,15 @@ mod tests {
         );
         assert_eq!(sew_argv(SewStep::Enable), ["recording", "enable", "--i-am-k2"]);
         assert!(!inst.iter().any(|a| a == "auto"));
+    }
+
+    /// The staged licence paths sit beside the staged model, by pinned name.
+    #[test]
+    fn licences_stage_beside_the_model() {
+        let dir = SEW_STAGE_ASR_MODEL.rsplit_once('/').expect("dir").0;
+        for l in SEW_ASR_MODELS[0].licences.iter().chain(TEST_ASR_MODELS[0].licences) {
+            assert_eq!(staged_licence(l.file), format!("{dir}/{}", l.file));
+        }
     }
 
     #[test]

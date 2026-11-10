@@ -36,6 +36,13 @@ fn transcriber_tarball() -> Vec<u8> {
 fn asr_model() -> Vec<u8> {
     fixture("sew-asr-test-q8_0.gguf")
 }
+/// The fixture model's one licence file (a separate asset, like Sew's).
+fn asr_licence() -> Vec<u8> {
+    fixture("sew-asr-test-LICENSE.txt")
+}
+fn asr_licence_staged() -> String {
+    rec::staged_licence(rec::TEST_ASR_MODELS[0].licences[0].file)
+}
 
 /// The `sew` member of a fixture tarball.
 fn member(tarball: &[u8], name: &str) -> Vec<u8> {
@@ -2278,7 +2285,7 @@ use k2_root_proto::sew_recording as rec;
 fn stage_all(t: &T) {
     // The distro's /usr/share (the notices go under /usr/share/doc).
     std::fs::create_dir_all(t.p("/usr/share")).unwrap();
-    for blob in [recorder_tarball(), transcriber_tarball(), asr_model()] {
+    for blob in [recorder_tarball(), transcriber_tarball(), asr_model(), asr_licence()] {
         ok(&t.call_in(&["engine", "sew", "recording", "stage"], &blob));
     }
 }
@@ -2314,20 +2321,27 @@ fn recording_stage_refuses_an_unpinned_sha256_and_stages_only_the_pins() {
     // A tarball with the right outer sha can't carry another binary (the
     // sha pins the bytes), so the member check is proven on the pinned one.
     for (blob, kind, abs) in [
-        (recorder_tarball(), "recorder", rec::SEW_STAGE_RECORDER_TARBALL),
-        (transcriber_tarball(), "transcriber", rec::SEW_STAGE_TRANSCRIBER_TARBALL),
-        (asr_model(), "model", rec::SEW_STAGE_ASR_MODEL),
+        (recorder_tarball(), "recorder", rec::SEW_STAGE_RECORDER_TARBALL.to_string()),
+        (transcriber_tarball(), "transcriber", rec::SEW_STAGE_TRANSCRIBER_TARBALL.to_string()),
+        (asr_model(), "model", rec::SEW_STAGE_ASR_MODEL.to_string()),
+        (asr_licence(), "model-licence", asr_licence_staged()),
     ] {
         let o = t.call_in(&["engine", "sew", "recording", "stage"], &blob);
         ok(&o);
         assert_eq!(json(&o)["kind"], kind);
-        assert_eq!(std::fs::read(t.p(abs)).unwrap(), blob, "{kind}");
-        assert_eq!(std::fs::metadata(t.p(abs)).unwrap().permissions().mode() & 0o777, 0o600, "{kind}");
+        assert_eq!(std::fs::read(t.p(&abs)).unwrap(), blob, "{kind}");
+        assert_eq!(std::fs::metadata(t.p(&abs)).unwrap().permissions().mode() & 0o777, 0o600, "{kind}");
     }
+    assert_eq!(
+        t.p(&asr_licence_staged()).parent(),
+        t.p(rec::SEW_STAGE_ASR_MODEL).parent(),
+        "the licence is staged beside the model"
+    );
     let st = json(&t.call(&["engine", "sew", "status"]));
-    assert_eq!(st["staged"]["recording"], serde_json::json!({"recorder": true, "transcriber": true, "model": true}));
+    assert_eq!(st["staged"]["recording"], serde_json::json!({"recorder": true, "transcriber": true, "model": true, "modelLicences": 1}));
     ok(&t.call(&["engine", "sew", "unstage"]));
     assert!(!t.p(rec::SEW_STAGE_ASR_MODEL).exists(), "unstage clears the recording blobs too");
+    assert!(!t.p(&asr_licence_staged()).exists(), "and the model's licence files");
 }
 
 /// PRD §8 K-a: the pinned files install through Sew's own steps, in order,
@@ -2372,9 +2386,48 @@ fn recording_install_runs_sews_install_then_enable_with_the_pinned_files() {
     for dir in [rec::SEW_RECORDER_DOC_DIR, rec::SEW_TRANSCRIBER_DOC_DIR] {
         assert_eq!(licence_in(&t, dir).as_deref(), Some("test\n"), "{dir}");
     }
-    for abs in [rec::SEW_STAGE_RECORDER_TARBALL, rec::SEW_STAGE_TRANSCRIBER_TARBALL, rec::SEW_STAGE_ASR_MODEL] {
-        assert!(!t.p(abs).exists(), "{abs}: unstaged after the install");
+    // The model's licence file sits in its own doc dir, root 0644.
+    let file = rec::TEST_ASR_MODELS[0].licences[0].file;
+    let installed = t.p(&format!("{}/{file}", rec::SEW_ASR_DOC_DIR));
+    assert_eq!(std::fs::read(&installed).unwrap(), asr_licence());
+    assert_eq!(std::fs::metadata(&installed).unwrap().permissions().mode() & 0o777, 0o644);
+    assert_eq!(v["modelLicences"]["dir"], rec::SEW_ASR_DOC_DIR, "{v}");
+    for abs in [rec::SEW_STAGE_RECORDER_TARBALL.to_string(), rec::SEW_STAGE_TRANSCRIBER_TARBALL.to_string(), rec::SEW_STAGE_ASR_MODEL.to_string(), asr_licence_staged()] {
+        assert!(!t.p(&abs).exists(), "{abs}: unstaged after the install");
     }
+    // Uninstall takes the model's licence files away with the recorder.
+    sew_answers(&t, 0, r#"{"ok":true}"#);
+    ok(&t.call(&["engine", "sew", "recording", "uninstall"]));
+    assert!(!installed.exists() && !t.p(rec::SEW_ASR_DOC_DIR).exists(), "the doc dir goes with its files");
+}
+
+/// The Kessel Steward's R28: a model licence file that isn't the pin's is
+/// refused at the stage, and an install without every pinned licence file
+/// staged (or with one changed since) refuses before Sew runs: the model is
+/// never installed without its attribution, and nothing else is tried.
+#[test]
+fn recording_install_needs_the_models_pinned_licence_files() {
+    let t = box_root();
+    with_pin_installed(&t);
+    let mut wrong = asr_licence();
+    wrong.push(b'\n');
+    let o = t.call_in(&["engine", "sew", "recording", "stage"], &wrong);
+    assert_eq!(o.code, exit::ARGV, "{}", o.stderr);
+    assert!(o.stderr.contains("sha256 mismatch") && o.stderr.contains("nothing staged"), "{}", o.stderr);
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
+    for blob in [recorder_tarball(), transcriber_tarball(), asr_model()] {
+        ok(&t.call_in(&["engine", "sew", "recording", "stage"], &blob));
+    }
+    let o = t.call_in(&["engine", "sew", "recording", "install"], br#"{"model":"test-q8_0"}"#);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("no staged licence file sew-asr-test-LICENSE.txt"), "{}", o.stderr);
+    ok(&t.call_in(&["engine", "sew", "recording", "stage"], &asr_licence()));
+    std::fs::write(t.p(&asr_licence_staged()), b"another licence").unwrap();
+    let o = t.call_in(&["engine", "sew", "recording", "install"], br#"{"model":"test-q8_0"}"#);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("licence file sew-asr-test-LICENSE.txt is not this build's pin"), "{}", o.stderr);
+    assert!(sew_calls(&t).is_empty(), "Sew never ran: {:?}", sew_calls(&t));
+    assert!(!t.p(rec::SEW_ASR_DOC_DIR).exists(), "no licence written either");
 }
 
 /// Before any Sew run: a model that isn't the pin, an input with another

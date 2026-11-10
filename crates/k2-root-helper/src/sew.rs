@@ -484,8 +484,14 @@ pub(crate) fn rollback_notices(ctx: &Ctx) -> HResult<J> {
 /// Remove `doc_dir`'s licence files and the directory when that leaves it
 /// empty. Missing is fine.
 pub(crate) fn remove_notices(ctx: &Ctx, doc_dir: &str) -> HResult<Vec<&'static str>> {
+    remove_named(ctx, doc_dir, &NOTICE_MEMBERS)
+}
+
+/// Remove the files `names` from `doc_dir`, then the directory when that
+/// leaves it empty. Missing is fine.
+fn remove_named(ctx: &Ctx, doc_dir: &str, names: &[&'static str]) -> HResult<Vec<&'static str>> {
     let mut removed = Vec::new();
-    for name in NOTICE_MEMBERS {
+    for &name in names {
         if remove_file(ctx, &format!("{doc_dir}/{name}"))? {
             removed.push(name);
         }
@@ -509,7 +515,23 @@ pub(crate) fn remove_all_notices(ctx: &Ctx) -> HResult<J> {
     let media = remove_notices(ctx, SEW_MEDIA_DOC_DIR)?;
     let recorder = remove_notices(ctx, rec::SEW_RECORDER_DOC_DIR)?;
     let transcriber = remove_notices(ctx, rec::SEW_TRANSCRIBER_DOC_DIR)?;
-    Ok(json!({"sew": sew, "sewMedia": media, "sewRecorder": recorder, "sewTranscriber": transcriber}))
+    let asr = remove_model_licences(ctx)?;
+    Ok(json!({"sew": sew, "sewMedia": media, "sewRecorder": recorder, "sewTranscriber": transcriber, "sewAsr": asr}))
+}
+
+/// Every licence file name a speech-model row of this build pins (for
+/// cleanup: any release's, pinned now or not).
+fn model_licence_files() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = rec::asr_models().iter().flat_map(|m| m.licences.iter().map(|l| l.file)).collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// The speech model's licence files leave [`rec::SEW_ASR_DOC_DIR`] (and
+/// the directory, when that empties it).
+fn remove_model_licences(ctx: &Ctx) -> HResult<Vec<&'static str>> {
+    remove_named(ctx, rec::SEW_ASR_DOC_DIR, &model_licence_files())
 }
 
 /// What is at `/usr/local/bin/sew`: `None` = absent; `Ok(Some((sha,
@@ -768,6 +790,7 @@ pub fn status(ctx: &Ctx) -> J {
                 "recorder": exists(ctx, rec::SEW_STAGE_RECORDER_TARBALL),
                 "transcriber": exists(ctx, rec::SEW_STAGE_TRANSCRIBER_TARBALL),
                 "model": exists(ctx, rec::SEW_STAGE_ASR_MODEL),
+                "modelLicences": model_licence_files().into_iter().filter(|f| exists(ctx, &rec::staged_licence(f))).count(),
             },
         },
         "units": {
@@ -836,6 +859,12 @@ pub(crate) fn unstage(ctx: &Ctx) -> HResult<J> {
         rec::SEW_STAGE_ASR_MODEL,
     ] {
         if remove_file(ctx, abs)? {
+            removed.push(abs.to_string());
+        }
+    }
+    for f in model_licence_files() {
+        let abs = rec::staged_licence(f);
+        if remove_file(ctx, &abs)? {
             removed.push(abs);
         }
     }
@@ -1510,13 +1539,13 @@ fn run_step(ctx: &Ctx, step: SewStep) -> HResult<J> {
 
 /// `engine sew recording stage`: one pinned blob, by its sha256. Anything
 /// that isn't this build's recorder or transcriber tarball (binary member
-/// checked too) or its pinned model is refused before it is written: no
-/// other model, no fallback.
+/// checked too), its pinned model or one of the model's pinned licence
+/// files is refused before it is written: no other model, no fallback.
 fn stage_recording(ctx: &Ctx, blob: &[u8]) -> HResult<J> {
     let sha = sha256_hex(blob);
     let Some(kind) = rec::classify(&sha, ctx.arch) else {
         return Err(Fail::argv(
-            "recording stage refused: sha256 mismatch (not this build's pinned sew-recorder, sew-transcriber or speech model); nothing staged",
+            "recording stage refused: sha256 mismatch (not this build's pinned sew-recorder, sew-transcriber, speech model or its licence files); nothing staged",
         ));
     };
     let (dest, mut out) = match kind {
@@ -1526,18 +1555,24 @@ fn stage_recording(ctx: &Ctx, blob: &[u8]) -> HResult<J> {
             if !sha256_hex(&bin).eq_ignore_ascii_case(art.binary_sha256) {
                 return Err(Fail::argv(format!("recording stage refused: the {} binary's sha256 is not this build's pin", s.member())));
             }
-            (s.staged(), json!({"kind": s.key(), "version": v}))
+            (s.staged().to_string(), json!({"kind": s.key(), "version": v}))
         }
         Blob::Model => {
             let m = rec::pinned_asr_model().map_err(Fail::state)?;
             if blob.len() as u64 != m.size {
                 return Err(Fail::argv("recording stage refused: the model's size is not the pin's"));
             }
-            (rec::SEW_STAGE_ASR_MODEL, json!({"kind": "model", "model": m.name}))
+            (rec::SEW_STAGE_ASR_MODEL.to_string(), json!({"kind": "model", "model": m.name}))
+        }
+        Blob::ModelLicence(l) => {
+            if blob.len() as u64 != l.size {
+                return Err(Fail::argv(format!("recording stage refused: {}'s size is not the pin's", l.file)));
+            }
+            (rec::staged_licence(l.file), json!({"kind": "model-licence", "file": l.file}))
         }
     };
     let d = stage_dir(ctx)?;
-    let (_, name) = split(dest);
+    let (_, name) = split(&dest);
     d.write_atomic(OsStr::new(name), blob, 0o600, ctx.root_owner()).map_err(|e| Fail::io_err("stage", e))?;
     out["staged"] = json!(true);
     out["sha256"] = json!(sha);
@@ -1569,29 +1604,58 @@ fn staged_sidecars(ctx: &Ctx) -> HResult<Vec<(Sidecar, String, Vec<u8>)>> {
     Ok(out)
 }
 
-fn unstage_recording(ctx: &Ctx) -> Vec<&'static str> {
-    [rec::SEW_STAGE_RECORDER_TARBALL, rec::SEW_STAGE_TRANSCRIBER_TARBALL, rec::SEW_STAGE_ASR_MODEL]
-        .into_iter()
-        .filter(|abs| remove_file(ctx, abs).unwrap_or(false))
-        .collect()
+fn unstage_recording(ctx: &Ctx) -> Vec<String> {
+    let mut all: Vec<String> =
+        [rec::SEW_STAGE_RECORDER_TARBALL, rec::SEW_STAGE_TRANSCRIBER_TARBALL, rec::SEW_STAGE_ASR_MODEL].map(String::from).to_vec();
+    all.extend(model_licence_files().into_iter().map(rec::staged_licence));
+    all.into_iter().filter(|abs| remove_file(ctx, abs).unwrap_or(false)).collect()
 }
 
-/// `engine sew recording install`: stdin names the pinned model; the three
-/// staged files are re-checked; then `sew recording install … --no-start`
-/// and, when it exits 0, `sew recording enable`. Each sidecar's notices
-/// follow it; the staged files go. Sew's exit codes are data (`step` says
-/// which ran last).
+/// The pinned model's licence files, staged beside it and re-checked
+/// (every one, by sha256): (file name, bytes). Missing or changed is a
+/// refusal before anything runs.
+fn staged_model_licences(ctx: &Ctx, m: &rec::SewAsrModel) -> HResult<Vec<(&'static str, Vec<u8>)>> {
+    let mut out = Vec::new();
+    for l in m.licences {
+        let (_, b) = staged_pinned(ctx, &rec::staged_licence(l.file), l.sha256, rec::MAX_ASR_LICENCE, &format!("licence file {}", l.file))?;
+        out.push((l.file, b));
+    }
+    Ok(out)
+}
+
+/// The model's licence files into [`rec::SEW_ASR_DOC_DIR`] (root 0644),
+/// each written atomically.
+fn install_model_licences(ctx: &Ctx, set: &[(&'static str, Vec<u8>)]) -> HResult<J> {
+    let d = open_doc_dir(ctx, rec::SEW_ASR_DOC_DIR)?;
+    let mut files = Vec::new();
+    for (name, bytes) in set {
+        d.write_atomic(OsStr::new(name), bytes, 0o644, ctx.root_owner()).map_err(|e| Fail::io_err("write model licence", e))?;
+        files.push(*name);
+    }
+    Ok(json!({"dir": rec::SEW_ASR_DOC_DIR, "files": files}))
+}
+
+/// `engine sew recording install`: stdin names the pinned model; the
+/// staged files (both sidecars, the model and its licence files) are
+/// re-checked; the model's licence files go to [`rec::SEW_ASR_DOC_DIR`]
+/// first (the model is never on the box without its attribution); then
+/// `sew recording install … --no-start` and, when it exits 0, `sew
+/// recording enable`. Each sidecar's notices follow it; the staged files
+/// go. Sew's exit codes are data (`step` says which ran last).
 fn recording_install(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
     let req: RecordingRequest = parse_json(stdin, "recording install refused: input")?;
     let model = req.validate().map_err(Fail::argv)?;
     require_known(ctx)?;
     let sides = staged_sidecars(ctx)?;
     let (model_path, _) = staged_pinned(ctx, rec::SEW_STAGE_ASR_MODEL, model.sha256, rec::MAX_ASR_MODEL, "speech model")?;
+    let licences = staged_model_licences(ctx, model)?;
+    let model_licences = install_model_licences(ctx, &licences)?;
     let mut out = run_step(
         ctx,
         SewStep::Install { recorder: &sides[0].1, transcriber: &sides[1].1, model_file: &model_path, model: model.name },
     )?;
     out["step"] = json!("install");
+    out["modelLicences"] = model_licences;
     if out["sewExit"] != 0 {
         return Ok(out);
     }
@@ -1673,6 +1737,7 @@ fn recording_uninstall(ctx: &Ctx) -> HResult<J> {
             removed[s.key()] = notices_or_error(remove_notices(ctx, s.doc_dir()).map(|a| json!(a)));
         }
         out["noticesRemoved"] = removed;
+        out["modelLicencesRemoved"] = notices_or_error(remove_model_licences(ctx).map(|a| json!(a)));
         out["unstaged"] = json!(unstage_recording(ctx));
     }
     Ok(out)

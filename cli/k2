@@ -74621,6 +74621,10 @@ Recording (Sew, this box's chat and voice service: its recorder and transcriber;
                                             match stops everything. On a box without internet the
                                             error names each file and its sha256: download them
                                             elsewhere and pass the FILE flags.
+                                            With --model-file, put the model's licence files from
+                                            the same release (asr-license-*.txt and
+                                            sew-asr-models-NOTICE.txt) in the same folder: K2
+                                            checks and installs them with the model.
                                             --no-wait returns while it installs (status shows how
                                             far it got).
   k2 hostchat recording disable [--json]    turn recording off (live recordings stop). The recorder
@@ -75837,6 +75841,10 @@ Recording (Sew, this box's chat and voice service: its recorder and transcriber;
                                             match stops everything. On a box without internet the
                                             error names each file and its sha256: download them
                                             elsewhere and pass the FILE flags.
+                                            With --model-file, put the model's licence files from
+                                            the same release (asr-license-*.txt and
+                                            sew-asr-models-NOTICE.txt) in the same folder: K2
+                                            checks and installs them with the model.
                                             --no-wait returns while it installs (status shows how
                                             far it got).
   k2 hostchat recording disable [--json]    turn recording off (live recordings stop). The recorder

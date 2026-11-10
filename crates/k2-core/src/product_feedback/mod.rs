@@ -22,6 +22,7 @@
 //! isn't reachable yet. Nothing is lost.
 
 pub mod diagnostics;
+pub mod scrub;
 pub mod settings;
 pub mod store;
 pub mod wire;

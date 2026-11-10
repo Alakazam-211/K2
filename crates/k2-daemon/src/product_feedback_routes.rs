@@ -3,6 +3,11 @@
 //! (`/cli/feedback/*`, whose POST prefix arm would catch a route under it).
 //!
 //! Routes (every mutating one POST-only: a GET is 405):
+//! - `POST diagnostics` `{client?, page?, k2Version?, cliVersion?,
+//!   includeClientFaults?}` → `{draftId, sections: [{id, title, text,
+//!   bytes}], bytes, expiresAt}`: collects and scrubs the K2 details for
+//!   the preview (PF26), kept an hour. An agent only while the owner
+//!   turned on `agentDiagnostics` (PF10a).
 //! - `POST send` `{category?, text, contactEmail?, client?, k2Version?,
 //!   locale?, diagnostics?: {draftId, drop?, edited?}}` → `{id, state}`
 //! - `GET  list?state=&limit=` → own rows; the owner and admins see all
@@ -36,8 +41,10 @@ use crate::compute_routes::Who;
 use crate::product_feedback_drain as drain;
 use crate::session_events::{emit, SessionEvent};
 
-pub const MAX_BODY: usize = 64 * 1024;
+/// A send carries the edited diagnostics (≤ 256 KB of text, escaped).
+pub const MAX_BODY: usize = 1024 * 1024;
 
+pub const DIAGNOSTICS: &str = "/cli/product-feedback/diagnostics";
 pub const SEND: &str = "/cli/product-feedback/send";
 pub const LIST: &str = "/cli/product-feedback/list";
 pub const SHOW: &str = "/cli/product-feedback/show";
@@ -46,7 +53,7 @@ pub const CANCEL: &str = "/cli/product-feedback/cancel";
 pub const SETTINGS: &str = "/cli/product-feedback/settings";
 
 pub const GET_ROUTES: &[&str] = &[LIST, SHOW, SETTINGS];
-pub const POST_ROUTES: &[&str] = &[SEND, RETRY, CANCEL, SETTINGS];
+pub const POST_ROUTES: &[&str] = &[DIAGNOSTICS, SEND, RETRY, CANCEL, SETTINGS];
 
 pub fn is_route(path: &str) -> bool {
     GET_ROUTES.contains(&path) || POST_ROUTES.contains(&path)
@@ -249,6 +256,7 @@ pub fn handle(path: &str, is_post: bool, who: Who, body: &[u8], params: &HashMap
         Err(r) => return r,
     };
     match (path, is_post) {
+        (DIAGNOSTICS, true) => diagnostics(&c, body),
         (SEND, true) => send(&c, body),
         (LIST, false) => list(&c, params),
         (SHOW, false) => show(&c, params),
@@ -269,6 +277,84 @@ struct SendBody {
     client: Option<String>,
     k2_version: Option<String>,
     locale: Option<String>,
+    diagnostics: Option<DiagChoice>,
+}
+
+/// Which preview to send and what the person left out (PF26).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagChoice {
+    draft_id: Option<String>,
+    #[serde(default)]
+    drop: Vec<String>,
+    #[serde(default)]
+    edited: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagBody {
+    client: Option<String>,
+    page: Option<String>,
+    k2_version: Option<String>,
+    cli_version: Option<String>,
+    #[serde(default)]
+    include_client_faults: bool,
+}
+
+fn need_owner() -> CliResponse {
+    refuse(
+        "403 Forbidden",
+        "diagnostics_need_owner",
+        "An agent can't consent for a person. Ask your owner to allow agents to include K2 details: k2 send-feedback settings --agent-diagnostics on",
+    )
+}
+
+/// `client` for this caller: a passport is always `cli`.
+fn client_of<'a>(c: &Caller, asked: Option<&'a str>) -> Result<&'a str, CliResponse> {
+    if c.passport {
+        return Ok("cli");
+    }
+    match asked.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("cli") {
+        x if pf::CLIENTS.contains(&x) => Ok(x),
+        _ => Err(bad("bad_client", "client is one of desktop, web, cli.")),
+    }
+}
+
+fn diagnostics(c: &Caller, body: &[u8]) -> CliResponse {
+    let b: DiagBody = match parse(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    if c.is_agent() && !settings::load().agent_diagnostics {
+        return need_owner();
+    }
+    let client = match client_of(c, b.client.as_deref()) {
+        Ok(x) => x,
+        Err(r) => return r,
+    };
+    let ctx = crate::product_feedback_diag::Context {
+        client: client.to_string(),
+        page: b.page,
+        desktop_version: b.k2_version.as_deref().and_then(|v| pf::short_field(v, 32)),
+        cli_version: b.cli_version.as_deref().and_then(|v| pf::short_field(v, 32)),
+        include_client_faults: b.include_client_faults && !c.passport,
+    };
+    let now = now_ms();
+    let (facts, logs, book) = crate::product_feedback_diag::gather(&ctx);
+    let sections = pf::diagnostics::build(&facts, &logs, &book, now);
+    let draft = pf::diagnostics::put_draft(&c.sender, sections, now);
+    let list: Vec<J> = draft
+        .sections
+        .iter()
+        .map(|s| json!({ "id": s.id, "title": s.title, "text": s.text, "bytes": s.text.len() }))
+        .collect();
+    ok(json!({
+        "draftId": draft.id,
+        "sections": list,
+        "bytes": pf::diagnostics::bytes_of(&draft.sections),
+        "expiresAt": draft.created_at + pf::diagnostics::DRAFT_TTL_MS,
+    }))
 }
 
 fn parse<T: for<'de> Deserialize<'de> + Default>(body: &[u8]) -> Result<T, CliResponse> {
@@ -332,13 +418,9 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
     if !pf::CATEGORIES.contains(&category) {
         return bad("bad_category", "category is one of bug, idea, praise, other.");
     }
-    let client = if c.passport {
-        "cli"
-    } else {
-        match b.client.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("cli") {
-            x if pf::CLIENTS.contains(&x) => x,
-            _ => return bad("bad_client", "client is one of desktop, web, cli."),
-        }
+    let client = match client_of(c, b.client.as_deref()) {
+        Ok(x) => x,
+        Err(r) => return r,
     };
     let text = match pf::clean_text(b.text.as_deref().unwrap_or("")) {
         Ok(t) => t,
@@ -351,6 +433,33 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
         }
         Some(e) if pf::valid_email(e) => Some(e.to_string()),
         Some(_) => return bad("bad_email", "contactEmail is one email address."),
+    };
+    // The preview's own bytes, minus what the person left out (PF26): the
+    // daemon never collects again here.
+    let mut draft_id: Option<String> = None;
+    let diagnostics_json = match &b.diagnostics {
+        None => None,
+        Some(choice) => {
+            if c.is_agent() && !settings::load().agent_diagnostics {
+                return need_owner();
+            }
+            let id = choice.draft_id.as_deref().unwrap_or("").trim();
+            let Some(draft) = pf::diagnostics::get_draft(id, &c.sender, now_ms()) else {
+                return refuse(
+                    "410 Gone",
+                    "draft_expired",
+                    "That preview of the K2 details is gone (they are kept an hour). Open the preview again.",
+                );
+            };
+            match pf::diagnostics::choose(&draft.sections, &choice.drop, &choice.edited) {
+                Ok(sections) if sections.is_empty() => None,
+                Ok(sections) => {
+                    draft_id = Some(draft.id.clone());
+                    Some(serde_json::to_string(&sections).expect("sections serialize"))
+                }
+                Err(e) => return bad("diagnostics_edit", e),
+            }
+        }
     };
     let now = now_ms();
     let db = k2_core::db::shared();
@@ -376,13 +485,16 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
         body: text,
         contact_email: contact,
         meta_json: meta(c, client, &b).to_string(),
-        diagnostics_json: None,
+        diagnostics_json,
     };
     let row = match store::insert(&conn, &n, now) {
         Ok(r) => r,
         Err(e) => return db_err(e),
     };
     drop(conn);
+    if let Some(d) = draft_id {
+        pf::diagnostics::drop_draft(&d);
+    }
     emit_row(&row.id, State::Queued, None);
     drain::kick();
     ok(json!({
@@ -589,7 +701,7 @@ mod tests {
 
     #[test]
     fn route_sets() {
-        for p in [SEND, RETRY, CANCEL] {
+        for p in [DIAGNOSTICS, SEND, RETRY, CANCEL] {
             assert!(is_post_only(p), "{p}");
         }
         for p in [LIST, SHOW, SETTINGS] {

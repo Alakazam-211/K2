@@ -428,6 +428,7 @@ pub fn sweep_once() -> Pass {
 
 /// Spawn the sweeper (boot: recover `sending` rows, then sweep at once).
 pub fn spawn() -> JoinHandle<()> {
+    crate::product_feedback_diag::note_boot();
     tokio::spawn(async move {
         let _ = tokio::task::spawn_blocking(recover_at_boot).await;
         let tick = tick();

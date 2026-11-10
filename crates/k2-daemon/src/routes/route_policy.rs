@@ -1559,6 +1559,9 @@ pub const ROUTES: &[Route] = &[
     // are Admin in the handler (a person, never a passport). The handler
     // refuses App passes and API keys.
     post("/cli/product-feedback/cancel", Member),
+    // Collects + scrubs the consented K2 details for the preview (an agent
+    // only with the owner's agentDiagnostics, in the handler).
+    post("/cli/product-feedback/diagnostics", Member),
     get("/cli/product-feedback/list", Member),
     post("/cli/product-feedback/retry", Member),
     post("/cli/product-feedback/send", Member),

@@ -216,6 +216,23 @@ fn a_push_uploads_once_moves_the_channel_and_k2_answers_tauri() {
     // The archive is fetchable from the stand-in host at that URL.
     let got = reqwest::blocking::get(url).expect("fetch").bytes().expect("bytes");
     assert_eq!(&got[..], b"mac archive bytes");
+    // The stable download link (a web App's download button): 302 to the
+    // newest file, the same URL latest.json names; 404 without one.
+    let bytes = super::super::updates_serve::answer(&f.app_id, "GET", "/_k2/download/stable/darwin-aarch64").expect("K2 answers download paths");
+    let text = String::from_utf8(bytes).expect("utf8");
+    assert!(text.starts_with("HTTP/1.1 302 Found\r\n"), "{text}");
+    assert!(text.contains(&format!("\r\nLocation: {url}\r\n")), "{text}");
+    assert!(text.ends_with("\r\n\r\n"), "no body: {text}");
+    let head = super::super::updates_serve::answer(&f.app_id, "HEAD", "/_k2/download/stable/windows-x86_64").expect("answer");
+    assert!(String::from_utf8_lossy(&head).starts_with("HTTP/1.1 302 Found\r\n"));
+    for missing in ["/_k2/download/stable/linux-x86_64", "/_k2/download/nightly/darwin-aarch64", "/_k2/download/stable", "/_k2/download/stable/"] {
+        let (status, _) = serve(&f, missing);
+        assert_eq!(status, "HTTP/1.1 404 Not Found", "{missing}");
+    }
+    let post = super::super::updates_serve::answer(&f.app_id, "POST", "/_k2/download/stable/darwin-aarch64").expect("answer");
+    assert!(String::from_utf8_lossy(&post).starts_with("HTTP/1.1 405"));
+    let a = super::super::local_answers::for_app(&f.app_id).expect("answerer");
+    assert!(a("GET", "/_k2/download/stable/darwin-aarch64", Some("x")).is_some_and(|b| b.starts_with(b"HTTP/1.1 302")), "through the router too");
     // Dynamic: an update for an older caller, 204 for a current one.
     let (status, body) = serve(&f, "/_k2/updates/stable/darwin/aarch64/1.3.0?install=abcdef12-3456");
     assert_eq!(status, "HTTP/1.1 200 OK");

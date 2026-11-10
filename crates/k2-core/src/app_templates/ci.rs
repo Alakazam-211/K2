@@ -351,9 +351,10 @@ Each release:
 `rel/` must be inside this repo (a push reads files there only): add it to
 `.gitignore`.
 
-A "Download the desktop app" button on the web App: fetch
-`/_k2/updates/stable/latest.json` from the App's own origin and link
-`platforms["linux-x86_64"].url`. It always names the newest stable file.
+A "Download the desktop app" button on the web App: link
+`/_k2/download/stable/linux-x86_64` on the App's own host. It redirects to
+the newest stable file (404 when there is none);
+`/_k2/updates/stable/latest.json` has the version and notes.
 
 macOS: `k2/ci/build-macos.sh` checks the app compiles on a Mac node,
 unsigned. Mac releases are built, signed and notarized on your own Mac.

@@ -13727,6 +13727,9 @@ plugins.updater.endpoints, with <channel> = the channel that build follows
 (stable for normal builds, beta for beta builds). Type the {{target}},
 {{arch}} and {{current_version}} parts literally: Tauri fills them in.
 k2 app updates ls <app> prints the URL with your App's host.
+A download button: link https://<app host>/_k2/download/<channel>/<platform>
+(linux-x86_64, darwin-aarch64, …): it redirects to the newest file (404
+when that channel has none for the platform).
 
 First, once per App:
   k2 app updates key <app> --set <pubkey>
@@ -51464,10 +51467,9 @@ k2 study ci-release — signed release builds on K2 Compute (k2 ci release)
      then k2 app updates promote <app> --from beta --to stable (the
      template's updater follows stable). <app> is the App's id
      (k2 app list)
-  A DOWNLOAD BUTTON on your web App: fetch, from the App's own origin,
-    /_k2/updates/stable/latest.json and link platforms["linux-x86_64"].url
-    (Tauri's latest.json: version, notes, pub_date, platforms{url,
-    signature}); it always names the newest stable file
+  A DOWNLOAD BUTTON on your web App: link /_k2/download/stable/linux-x86_64
+    on the App's own host: it redirects to the newest stable file (404 when
+    there is none). The version and notes: /_k2/updates/stable/latest.json
   What K2 checks here is a convenience: each receipt verified with the
   node key this server pinned, L1's and V1's files compared. The signer
   checks everything again with its own pins and decides.

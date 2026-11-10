@@ -350,6 +350,8 @@ fn endpoints(app: &AppRow) -> J {
         Some(h) => json!({
             "dynamic": format!("https://{h}/_k2/updates/<channel>/{{{{target}}}}/{{{{arch}}}}/{{{{current_version}}}}"),
             "static": format!("https://{h}/_k2/updates/<channel>/latest.json"),
+            // A download button's stable link: 302 to the newest file.
+            "download": format!("https://{h}/_k2/download/<channel>/<platform>"),
             "fallback": dl_id_of(app).ok().map(|id| format!("{}/{id}/<channel>/latest.json", au::dl_base())),
         }),
         None => J::Null,

@@ -4,6 +4,7 @@
 //! ```text
 //! GET|HEAD /_k2/updates/<channel>/latest.json                       Tauri's static form
 //! GET|HEAD /_k2/updates/<channel>/<target>/<arch>/<current_version>   Tauri's dynamic form: 200 or 204
+//! GET|HEAD /_k2/download/<channel>/<platform>                       302 to the newest file (a download button)
 //! ```
 //!
 //! - Every `url` is the download host's immutable URL: the box never serves
@@ -27,6 +28,8 @@ use k2_core::app_updates::{self as au, feed, store};
 use serde_json::{json, Value as J};
 
 pub const PREFIX: &str = "/_k2/updates/";
+/// The stable download link (a web App's download button): [`download`].
+pub const DOWNLOAD_PREFIX: &str = "/_k2/download/";
 /// Pending count keys kept in memory between flushes (beyond: dropped).
 const MAX_PENDING: usize = 5000;
 const FLUSH_EVERY_SECS: i64 = 30;
@@ -130,6 +133,9 @@ fn not_found(head_only: bool, what: &str) -> Vec<u8> {
 /// (not an update path: the App answers).
 pub fn answer(app_id: &str, method: &str, path_and_query: &str) -> Option<Vec<u8>> {
     let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
+    if let Some(rest) = path.strip_prefix(DOWNLOAD_PREFIX) {
+        return Some(download(app_id, method, rest));
+    }
     let rest = path.strip_prefix(PREFIX)?;
     let head_only = method.eq_ignore_ascii_case("HEAD");
     if !head_only && !method.eq_ignore_ascii_case("GET") {
@@ -166,6 +172,47 @@ pub fn answer(app_id: &str, method: &str, path_and_query: &str) -> Option<Vec<u8
         },
         _ => Some(not_found(head_only, "use /_k2/updates/<channel>/latest.json or /_k2/updates/<channel>/<target>/<arch>/<current_version>")),
     }
+}
+
+/// `GET|HEAD /_k2/download/<channel>/<platform>`: a stable link for a web
+/// App's "Download the desktop app" button. 302 to the newest file of
+/// that channel for that platform (the download host's immutable URL, the
+/// same `url` as `latest.json`); 404 when the channel or file isn't there.
+/// `<platform>` is Tauri's key (`linux-x86_64`, `darwin-aarch64`,
+/// `linux-x86_64-deb`); a plain `<os>-<arch>` with no file of its own
+/// takes that platform's installer, as the updater's answer does. No auth
+/// beyond `latest.json`'s, and no check-in counted.
+fn download(app_id: &str, method: &str, rest: &str) -> Vec<u8> {
+    let head_only = method.eq_ignore_ascii_case("HEAD");
+    if !head_only && !method.eq_ignore_ascii_case("GET") {
+        let b = json!({ "error": "method_not_allowed", "message": "GET or HEAD" });
+        let r = resp("405 Method Not Allowed", Some(&b), false);
+        return String::from_utf8_lossy(&r).replacen("Connection: close\r\n", "Allow: GET, HEAD\r\nConnection: close\r\n", 1).into_bytes();
+    }
+    let usage = "use /_k2/download/<channel>/<platform> (linux-x86_64, darwin-aarch64, …)";
+    let segs: Vec<&str> = rest.split('/').collect();
+    let [ch, platform] = segs.as_slice() else { return not_found(head_only, usage) };
+    if platform.is_empty() {
+        return not_found(head_only, usage);
+    }
+    let Some(f) = get(app_id) else { return not_found(head_only, "this App has no update channel") };
+    let Some(c) = f.channels.get(*ch) else { return not_found(head_only, "no such channel") };
+    let r = c.current();
+    let key = if r.platforms.contains_key(*platform) {
+        Some(platform.to_string())
+    } else {
+        platform.split_once('-').and_then(|(target, arch)| feed::platform_for(r, target, arch)).map(str::to_string)
+    };
+    let Some(url) = key.and_then(|k| r.platforms.get(&k)).map(|(url, _)| url.clone()) else {
+        return not_found(head_only, "no file for that platform in this channel's newest release");
+    };
+    if url.bytes().any(|b| b.is_ascii_control() || b == b' ') || !url.starts_with("https://") && !url.starts_with("http://") {
+        return not_found(head_only, "no file for that platform in this channel's newest release");
+    }
+    format!(
+        "HTTP/1.1 302 Found\r\nLocation: {url}\r\nContent-Length: 0\r\nCache-Control: no-cache\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n"
+    )
+    .into_bytes()
 }
 
 /// The anonymous install id from the query (`install=`), if well formed.

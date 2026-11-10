@@ -762,6 +762,36 @@ fn refuse_other_major(
     ))
 }
 
+/// `--cluster X` (or none) against an existing database the request
+/// matched: a database is never answered from another cluster than the one
+/// asked for (prd-named-pg-clusters-v1 §5).
+fn refuse_other_cluster(
+    conn: &rusqlite::Connection,
+    row: &DbRow,
+    named: Option<&str>,
+    matched: &str,
+) -> Result<(), OpsError> {
+    let have = cluster::db_cluster_name_in(conn, &row.name);
+    let want = named.map(|s| s.rsplit('/').next().unwrap_or(s).to_string());
+    if have == want || (want.is_none() && have.is_none()) {
+        return Ok(());
+    }
+    // No --cluster: an existing database in a named cluster is still the
+    // workspace's own (k2 db create is idempotent on its name/--id).
+    if want.is_none() {
+        return Ok(());
+    }
+    let where_ = have.map(|n| format!("the named cluster {n}")).unwrap_or_else(|| "this box's main cluster".into());
+    Err(OpsError::Refused(
+        "cluster_mismatch",
+        format!(
+            "{matched} is database {name}, which lives in {where_}, not {}. For a new database there, use a new --id (or --name); K2 doesn't move databases between clusters.",
+            named.unwrap_or_default(),
+            name = row.name
+        ),
+    ))
+}
+
 /// The active database this workspace owns that `spec` names: its id, its
 /// Postgres name or the `--id` it was created with (`--db`, 0.46.10).
 fn owned_row(project_id: &str, spec: &str) -> Result<DbRow, OpsError> {
@@ -1023,7 +1053,25 @@ pub fn create_database_on(
         name_override,
         false,
         major,
+        None,
     )
+}
+
+/// `k2 db create --cluster <name>` (prd-named-pg-clusters-v1 §5): the
+/// database goes into that named cluster, which must be K2's and this
+/// workspace's (`owner_project`). `major`, when given, must be its major.
+#[allow(clippy::too_many_arguments)]
+pub fn create_database_in_cluster(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    cap: u32,
+    client_id: Option<&str>,
+    name_override: Option<&str>,
+    major: Option<u32>,
+    cluster: &str,
+) -> Result<serde_json::Value, OpsError> {
+    create_database_inner(ops, secrets, project_id, cap, client_id, name_override, false, major, Some(cluster))
 }
 
 /// Cap-exempt disposable test database (P11/P16). Name is `{ws}_test`.
@@ -1047,7 +1095,7 @@ pub fn create_test_database_on(
     client_id: Option<&str>,
     major: Option<u32>,
 ) -> Result<serde_json::Value, OpsError> {
-    create_database_inner(ops, secrets, project_id, cap, client_id, None, true, major)
+    create_database_inner(ops, secrets, project_id, cap, client_id, None, true, major, None)
 }
 
 /// Where a new database goes (S3): `--major`, else (for `--test`) the
@@ -1061,7 +1109,19 @@ fn target_cluster(
     project_id: &str,
     test: bool,
     explicit: Option<u32>,
+    named: Option<&str>,
 ) -> Result<(Cluster, Option<String>), OpsError> {
+    if let Some(spec) = named {
+        let cl = cluster::named_target(spec, Some(project_id)).map_err(named_err)?;
+        if let Some(m) = explicit.filter(|m| *m != cl.major) {
+            return Err(OpsError::Refused(
+                "major_mismatch",
+                format!("{} is Postgres {}, not {m}: leave out --major, or pick a cluster on {m}", cl.label(), cl.major),
+            ));
+        }
+        ops.helper_pgnamed().map_err(|e| OpsError::Refused("helper_needed", e))?;
+        return Ok((cl, None));
+    }
     if test && explicit.is_none() {
         let live = {
             let db = k2_core::db::shared();
@@ -1103,6 +1163,15 @@ fn target_cluster(
     }
 }
 
+/// A named-cluster refusal as an `OpsError` (its code and hint).
+pub(crate) fn named_err(e: cluster::EnsureError) -> OpsError {
+    match e {
+        cluster::EnsureError::Usage(h) => OpsError::Usage(h),
+        cluster::EnsureError::NotFound(h) => OpsError::NotFound(h),
+        other => OpsError::Refused(other.code(), other.hint()),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn create_database_inner(
     ops: &dyn SystemOps,
@@ -1113,6 +1182,7 @@ fn create_database_inner(
     name_override: Option<&str>,
     test: bool,
     major: Option<u32>,
+    named: Option<&str>,
 ) -> Result<serde_json::Value, OpsError> {
     require_running()?;
     if test {
@@ -1180,6 +1250,7 @@ fn create_database_inner(
                 if let Some(row) = load_active_by_client(&conn, project_id, cid) {
                     if row.status == "active" {
                         refuse_other_major(&conn, &row, major, &format!("--id {cid}"))?;
+                        refuse_other_cluster(&conn, &row, named, &format!("--id {cid}"))?;
                         let used = count_active(&conn, project_id);
                         return dsn_json(
                             ops,
@@ -1204,6 +1275,7 @@ fn create_database_inner(
             }
             if let Some(row) = load_active_by_name(&conn, project_id, &name) {
                 refuse_other_major(&conn, &row, major, &format!("the name {name}"))?;
+                refuse_other_cluster(&conn, &row, named, &format!("the name {name}"))?;
                 let used = count_active(&conn, project_id);
                 return dsn_json(
                     ops,
@@ -1230,7 +1302,7 @@ fn create_database_inner(
     let _ = existing;
 
     // The cluster it goes on (records + helper; may create the cluster).
-    let (cl, major_note) = target_cluster(ops, project_id, test, major)?;
+    let (cl, major_note) = target_cluster(ops, project_id, test, major, named)?;
 
     let migrator = format!("{name}_migrator");
     let agent = format!("{name}_agent");
@@ -1330,8 +1402,8 @@ fn create_database_inner(
         let conn = db.lock();
         conn.execute(
             "INSERT INTO sql_databases (id, project_id, name, client_id, status, \
-             agent_secret_ref, migrator_secret_ref, created_at, cluster_major) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             agent_secret_ref, migrator_secret_ref, created_at, cluster_major, cluster_name) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 id,
                 project_id,
@@ -1341,7 +1413,8 @@ fn create_database_inner(
                 agent_ref,
                 migrator_ref,
                 now_secs(),
-                (cl.major > 0).then_some(cl.major as i64)
+                (cl.major > 0).then_some(cl.major as i64),
+                cl.is_named().then(|| cl.name.clone())
             ],
         )
         .map_err(|e| OpsError::Engine(format!("catalog insert: {e}")))?;
@@ -1355,6 +1428,9 @@ fn create_database_inner(
         json_create(&name, &dsn, false, used, cap)
     };
     v["major"] = if cl.major > 0 { serde_json::json!(cl.major) } else { serde_json::Value::Null };
+    if cl.is_named() {
+        v["cluster"] = serde_json::json!(cl.label());
+    }
     if let Some(note) = major_note {
         v["majorNote"] = serde_json::json!(note);
     }

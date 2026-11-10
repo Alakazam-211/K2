@@ -598,7 +598,7 @@ fn databases_for(scope: &Scope, to: Major, all_workspace_dbs: bool, check: bool)
             q("SELECT name, project_id FROM sql_databases WHERE project_id = ?1 AND status = 'active'", &app.owner_workspace)
         }
         Scope::All => q(
-            "SELECT name, project_id FROM sql_databases WHERE status = 'active' AND coalesce(cluster_major, 0) < ?1 ORDER BY name",
+            "SELECT name, project_id FROM sql_databases WHERE status = 'active' AND coalesce(cluster_major, 0) < ?1 AND cluster_name IS NULL ORDER BY name",
             &to.to_string(),
         ),
     };
@@ -676,6 +676,20 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
         Ok(d) => d,
         Err(r) => return r,
     };
+    // prd-named-pg-clusters-v1 §5: a named cluster keeps its major; its
+    // database never moves to another cluster (a major upgrade of a named
+    // cluster is its own pg_upgrade drill, on a copy).
+    {
+        let k2db = k2_core::db::shared();
+        let conn = k2db.lock();
+        if let Some((db, n)) = dbs.iter().find_map(|(d, _)| cluster::db_cluster_name_in(&conn, d).map(|n| (d.clone(), n))) {
+            return err(
+                409,
+                "named_cluster_fixed",
+                format!("{db} lives in the named cluster {n}, which keeps its major: K2 doesn't move databases out of a named cluster"),
+            );
+        }
+    }
     // PA6: without --to, the highest supported major every App on these
     // databases allows (`--all` keeps K2's default; the check refuses the
     // databases whose Apps exclude it).

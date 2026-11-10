@@ -1029,6 +1029,14 @@ mod unix_impl {
                 let who = crate::sql::pgmove::k2::classify(&who, true);
                 from_cli(crate::sql::pgmove::k2::handle(who, is_post, body, params))
             }
+            // Named Postgres clusters (0.46.11): an agent with the Postgres
+            // versions switch makes and uses its own workspace's, from its tab
+            // (local, as `k2 db upgrade`).
+            p if p == "/cli/db/clusters" => {
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                let who = crate::sql::pgmove::k2::classify(&who, true);
+                from_cli(crate::sql::named_routes::handle(crate::sql::routes::current_ops(), who, is_post, body, params))
+            }
             p if crate::compute_routes::is_route(p) && !crate::compute_routes::is_socket(p) => {
                 if crate::compute_routes::is_post_route(p) && !is_post {
                     return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());

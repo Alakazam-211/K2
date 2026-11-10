@@ -131,6 +131,15 @@ pub enum VersionsAct {
     LiveAbort,
     /// `--replica-identity-full` (owner only, Q10).
     ReplicaIdentityFull,
+    /// `k2 db cluster create <M> --name <n>` (0.46.11,
+    /// prd-named-pg-clusters-v1 §6): a named cluster for the caller's own
+    /// workspace.
+    NamedClusterCreate,
+    /// `k2 db cluster restart <n>`: the caller's own named cluster.
+    NamedClusterRestart,
+    /// `k2 db create --cluster <n>`: a database in the caller's own named
+    /// cluster.
+    CreateOnNamedCluster,
 }
 
 impl VersionsAct {
@@ -153,12 +162,18 @@ impl VersionsAct {
             Self::LiveSwitch => "switch",
             Self::LiveAbort => "abort",
             Self::ReplicaIdentityFull => "replica-identity-full",
+            Self::NamedClusterCreate => "cluster-create",
+            Self::NamedClusterRestart => "cluster-restart",
+            Self::CreateOnNamedCluster => "create-in-cluster",
         }
     }
 
     /// The acts the switch hands an agent (on its own scope).
     pub fn agent_may(self) -> bool {
         matches!(self, Self::Check | Self::Move | Self::Rollback | Self::CreateOnMajor | Self::ClustersTidy)
+            // 0.46.11: the caller's own named clusters (the scope is the
+            // cluster's workspace, checked like a database's).
+            || matches!(self, Self::NamedClusterCreate | Self::NamedClusterRestart | Self::CreateOnNamedCluster)
             // §13: live moves are the owner's until the first owner-run
             // moves are clean; then the constant flips (no migration).
             || (crate::sql::pgmove::dual::DUAL_LIVE_AGENTS && matches!(self, Self::LiveMove | Self::LiveSwitch | Self::LiveAbort))

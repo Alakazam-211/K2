@@ -121,6 +121,11 @@ pub trait SystemOps: Send + Sync {
         stdin: Option<&[u8]>,
     ) -> Result<Vec<u8>, String>;
     fn sleep_ms(&self, ms: u64);
+    /// Does the root helper speak named clusters (protocol 15,
+    /// `namespaces.pgnamed`)? `Err` = the `helper_needed: …` message.
+    fn helper_pgnamed(&self) -> Result<(), String> {
+        pgnamed_gate()
+    }
 }
 
 /// Production implementation.
@@ -208,6 +213,11 @@ impl SystemOps for RealSystemOps {
         // sent to an older helper or the legacy pg helper.
         if needs_pgmajor(args) {
             pgmajor_gate()?;
+        }
+        // A named cluster (`<M>-<name>`, protocol 15): refused here before
+        // a 14 helper sees it (it would refuse the argv anyway).
+        if needs_pgnamed(args) {
+            pgnamed_gate()?;
         }
         if crate::root_helper::state().usable(crate::root_helper::PG_MIN_PROTOCOL) {
             let argv = crate::root_helper::pg_argv(args)?;
@@ -300,6 +310,38 @@ pub fn needs_pgmajor(args: &[&str]) -> bool {
     ) || (args.first().copied() == Some("psql") && args.contains(&"--cluster"))
 }
 
+/// Helper argv naming a named cluster (`<M>-<name>`, protocol 15):
+/// `ensure-cluster <M>-<name>`, `psql --cluster <M>-<name>`, `systemctl
+/// <op> <M>-<name>`.
+pub fn needs_pgnamed(args: &[&str]) -> bool {
+    let named = |t: Option<&&str>| t.is_some_and(|t| k2_root_proto::pg_named::parse_ref(t).is_some());
+    match args.first().copied() {
+        Some("ensure-cluster") => named(args.get(1)),
+        Some("psql") => args.iter().position(|a| *a == "--cluster").is_some_and(|i| named(args.get(i + 1))),
+        Some("systemctl") => named(args.last()),
+        _ => false,
+    }
+}
+
+/// `Ok` when the root helper speaks named clusters (protocol ≥ 15 and
+/// `namespaces.pgnamed`, prd-named-pg-clusters-v1), else the
+/// `helper_needed: …` message.
+pub fn pgnamed_gate() -> Result<(), String> {
+    use k2_root_proto::version::PGNAMED_MIN_PROTOCOL;
+    let st = crate::root_helper::state();
+    if pgnamed_ok(&st) {
+        Ok(())
+    } else {
+        Err(crate::root_helper::helper_needed("a named Postgres cluster", PGNAMED_MIN_PROTOCOL, &st))
+    }
+}
+
+/// Pure: protocol ≥ 15 and `namespaces.pgnamed == true`.
+pub fn pgnamed_ok(st: &crate::root_helper::RootHelperState) -> bool {
+    let ns = st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/pgnamed")).and_then(serde_json::Value::as_bool) == Some(true);
+    st.usable(k2_root_proto::version::PGNAMED_MIN_PROTOCOL) && ns
+}
+
 /// `Ok` when the root helper speaks `pgmajor` (protocol ≥ 9 and
 /// `namespaces.pgmajor`), else the `helper_needed: …` message.
 pub fn pgmajor_gate() -> Result<(), String> {
@@ -358,7 +400,8 @@ pub fn helper_psql_argv_ok(args: &[&str]) -> bool {
         let ok = args
             .get(1)
             .and_then(|m| k2_root_proto::pg_major::parse_major(m))
-            .is_some_and(|m| k2_root_proto::pg_major::LAYOUT.contains(&m));
+            .is_some_and(|m| k2_root_proto::pg_major::LAYOUT.contains(&m))
+            || args.get(1).is_some_and(|t| k2_root_proto::pg_named::parse_ref(t).is_some());
         if !ok {
             return false;
         }
@@ -1377,10 +1420,22 @@ impl SystemOps for FakeSystemOps {
         self.record(format!("systemctl? {key}"));
         self.query_answers.get(&key).cloned().unwrap_or_default()
     }
+    fn helper_pgnamed(&self) -> Result<(), String> {
+        if self.query_answers.contains_key("helper pgnamed") {
+            Ok(())
+        } else {
+            Err("helper_needed: a named Postgres cluster needs k2-root-helper protocol 15 (this box: protocol 14). Run `k2 root-helper update`.".into())
+        }
+    }
     fn run_helper(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String, String> {
         let joined = args.join(" ");
         if joined.contains("apt") {
             return Err("apt-get is forbidden on the sql sidecar".into());
+        }
+        // A named cluster on a helper older than 15 (the default fake):
+        // refused before anything is sent, like the real gate.
+        if needs_pgnamed(args) {
+            self.helper_pgnamed()?;
         }
         if args.first().copied() == Some("psql") && !helper_psql_argv_ok(&args[1..]) {
             return Err(format!("k2-pg-helper would refuse psql argv: {joined}"));

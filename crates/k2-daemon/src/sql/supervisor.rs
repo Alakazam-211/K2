@@ -527,6 +527,8 @@ pub fn majors_json() -> serde_json::Value {
     let upgrades: Vec<serde_json::Value> = dbs
         .iter()
         .filter(|(_, _, m)| *m > 0)
+        // A named cluster keeps its major (prd-named-pg-clusters-v1 §5).
+        .filter(|(_, name, _)| cluster::db_cluster_name_in(&conn, name).is_none())
         .filter_map(|(id, name, m)| {
             let to = pg_major::upgrades_from(*m, today);
             (!to.is_empty()).then(|| {
@@ -543,11 +545,17 @@ pub fn majors_json() -> serde_json::Value {
     let (default_major, source) = cluster::default_major_source_in(&conn);
     serde_json::json!({
         "clusters": clusters.iter().map(cluster::Cluster::json).collect::<Vec<_>>(),
-        "databases": dbs.iter().map(|(id, name, m)| serde_json::json!({
-            "id": id,
-            "name": name,
-            "major": if *m > 0 { serde_json::json!(m) } else { serde_json::Value::Null },
-        })).collect::<Vec<_>>(),
+        "databases": dbs.iter().map(|(id, name, m)| {
+            let mut d = serde_json::json!({
+                "id": id,
+                "name": name,
+                "major": if *m > 0 { serde_json::json!(m) } else { serde_json::Value::Null },
+            });
+            if let Some(n) = cluster::db_cluster_name_in(&conn, name) {
+                d["cluster"] = serde_json::json!(k2_root_proto::pg_named::label(*m, &n));
+            }
+            d
+        }).collect::<Vec<_>>(),
         "upgradeAvailable": upgrades,
         "defaultMajor": default_major,
         "defaultMajorPinned": source == "set",

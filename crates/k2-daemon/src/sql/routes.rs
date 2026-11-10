@@ -413,6 +413,11 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
 /// the password never lands in a terminal, a log or a `--json` capture;
 /// `dsnHint` says how to fetch the full one when it's needed. The App
 /// install path and `/v1` keep calling ops directly and are not changed.
+/// [`without_passwords`] for a non-test create (named clusters' route).
+pub(crate) fn without_passwords_pub(v: serde_json::Value) -> serde_json::Value {
+    without_passwords(v, false)
+}
+
 fn without_passwords(mut v: serde_json::Value, test: bool) -> serde_json::Value {
     let name = v["name"].as_str().unwrap_or_default().to_string();
     for key in ["dsn", "migratorDsn"] {

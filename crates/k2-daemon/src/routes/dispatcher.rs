@@ -10061,6 +10061,27 @@ async fn handle_one_request(
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Named Postgres clusters (0.46.11, prd-named-pg-clusters-v1): the
+        // caller is classified like `k2 db upgrade` (a TCP passport is never
+        // local; agents act over their cell socket), and the handler's
+        // versions_access gate decides.
+        p if p == "/cli/db/clusters" => {
+            let body_bytes = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let who = crate::sql::pgmove::k2::classify(&who, false);
+            let params = super::http::parse_params(&path, &query);
+            let r = tokio::task::spawn_blocking(move || {
+                crate::sql::named_routes::handle(crate::sql::routes::current_ops(), who, is_post, &body_bytes, &params)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if p == "/cli/db/query" => {
             if !is_post {
                 let _ = stream.read(&mut buf).await;

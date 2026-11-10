@@ -857,6 +857,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/db-home", Admin),
     post("/cli/db-home/keep", Owner),
     post("/cli/db/bind", Admin),
+    // Named Postgres clusters (0.46.11): reading is any login; the handler's
+    // versions_access gate decides every POST (owner or the agent switch).
+    both("/cli/db/clusters", Member),
     post("/cli/db/create", Member),
     both("/cli/db/doctor", Admin),
     post("/cli/db/drop", Member),

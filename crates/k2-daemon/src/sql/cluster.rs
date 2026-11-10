@@ -53,6 +53,18 @@ pub struct Cluster {
     /// recorded).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub synthesized: bool,
+    /// A named cluster's one workspace (0280; prd-named-pg-clusters-v1 §5):
+    /// the only one `k2 db create --cluster` creates in. None for `<M>/main`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_project: Option<String>,
+    /// Made with `--wal-archive` (0280).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub wal_archive: bool,
+    /// The helper's word on a non-`main` row (`pg clusters`' `k2Named`,
+    /// protocol 15): one it made and that matches what runs. None = the
+    /// helper didn't say (older than 15, or a `main` row). Never stored.
+    #[serde(skip)]
+    pub k2_named: Option<bool>,
 }
 
 /// The wrapper unit Debian ships (all clusters). Only for a box whose
@@ -73,6 +85,9 @@ impl Cluster {
             state: "unknown".into(),
             start_conf: "auto".into(),
             synthesized: true,
+            owner_project: None,
+            wal_archive: false,
+            k2_named: None,
         }
     }
 
@@ -89,7 +104,25 @@ impl Cluster {
             state: "unknown".into(),
             start_conf: "auto".into(),
             synthesized: false,
+            owner_project: None,
+            wal_archive: false,
+            k2_named: None,
         }
+    }
+
+    /// A named cluster (anything but `<M>/main`).
+    pub fn is_named(&self) -> bool {
+        self.name != pg_major::CLUSTER_NAME
+    }
+
+    /// `17/feedback` (or `17/main`): how people read it.
+    pub fn label(&self) -> String {
+        k2_root_proto::pg_named::label(self.major, &self.name)
+    }
+
+    /// `17-feedback`: the helper's argv token for a named cluster.
+    pub fn wire(&self) -> String {
+        format!("{}-{}", self.major, self.name)
     }
 
     /// The cluster on 5432: what pg_wrapper picks without `--cluster`.
@@ -154,7 +187,11 @@ impl Cluster {
     /// argv; any other adds `--cluster <major>` (protocol 9, `pgmajor`).
     pub fn helper_psql_argv(&self, db: &str, flags: &[&str]) -> Vec<String> {
         let mut v = vec!["psql".to_string()];
-        if !self.is_primary() {
+        if self.is_named() {
+            // Protocol 15 (`pgnamed`): a named cluster the helper made.
+            v.push("--cluster".into());
+            v.push(self.wire());
+        } else if !self.is_primary() {
             v.push("--cluster".into());
             v.push(self.major.to_string());
         }
@@ -200,7 +237,7 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-const COLS: &str = "major, name, port, unit, data_dir, role, origin, state, start_conf";
+const COLS: &str = "major, name, port, unit, data_dir, role, origin, state, start_conf, owner_project, wal_archive";
 
 fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Cluster> {
     let major: i64 = r.get(0)?;
@@ -216,6 +253,9 @@ fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Cluster> {
         state: r.get(7)?,
         start_conf: r.get(8)?,
         synthesized: false,
+        owner_project: r.get(9)?,
+        wal_archive: r.get::<_, i64>(10)? != 0,
+        k2_named: None,
     })
 }
 
@@ -294,10 +334,66 @@ pub fn db_major_in(conn: &rusqlite::Connection, db_name: &str) -> Option<u32> {
     .map(|m| m as u32)
 }
 
+/// The named cluster a database lives in (`sql_databases.cluster_name`,
+/// 0280), None for `<M>/main`.
+pub fn db_cluster_name_in(conn: &rusqlite::Connection, db_name: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT cluster_name FROM sql_databases WHERE name = ?1 AND status != 'dropped' \
+         ORDER BY created_at DESC LIMIT 1",
+        rusqlite::params![db_name],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+    .filter(|n| !n.is_empty() && n != pg_major::CLUSTER_NAME)
+}
+
+/// The record of `major/name`.
+pub fn for_named_in(conn: &rusqlite::Connection, major: u32, name: &str) -> Option<Cluster> {
+    conn.query_row(
+        &format!("SELECT {COLS} FROM sql_clusters WHERE major = ?1 AND name = ?2"),
+        rusqlite::params![major as i64, name],
+        from_row,
+    )
+    .ok()
+}
+
+/// The record of a named cluster by its name alone (names are the box's,
+/// one per box: prd-named-pg-clusters-v1 §2) or by `<M>/<name>`.
+pub fn for_name_in(conn: &rusqlite::Connection, spec: &str) -> Option<Cluster> {
+    if let Some((m, n)) = spec.split_once('/') {
+        let m: u32 = m.parse().ok()?;
+        return for_named_in(conn, m, n).filter(Cluster::is_named);
+    }
+    conn.query_row(
+        &format!("SELECT {COLS} FROM sql_clusters WHERE name = ?1 AND name != 'main' ORDER BY major LIMIT 1"),
+        rusqlite::params![spec],
+        from_row,
+    )
+    .ok()
+}
+
+pub fn for_name(spec: &str) -> Option<Cluster> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    for_name_in(&conn, spec)
+}
+
 /// The cluster a database lives on. `postgres` (and any name K2 has no
 /// row for) is the 5432 cluster. A recorded major with no cluster record
-/// is an error, never a silent fallback to 5432.
+/// is an error, never a silent fallback to 5432; so is a recorded named
+/// cluster with no record, or one that isn't K2's.
 pub fn for_db_in(conn: &rusqlite::Connection, db_name: &str) -> Result<Cluster, String> {
+    if let Some(n) = db_cluster_name_in(conn, db_name) {
+        let m = db_major_in(conn, db_name).unwrap_or(0);
+        let c = for_named_in(conn, m, &n).ok_or_else(|| {
+            format!("database {db_name} lives in the named cluster {m}/{n}, but K2 has no record of it — see `k2 db clusters`")
+        })?;
+        if c.role != "k2" {
+            return Err(format!("database {db_name} lives in {m}/{n}, which K2 no longer counts as its own — see `k2 db clusters`"));
+        }
+        return Ok(c);
+    }
     match db_major_in(conn, db_name) {
         None => Ok(primary_in(conn)),
         Some(m) => for_major_in(conn, m).ok_or_else(|| {
@@ -322,14 +418,16 @@ pub fn record_in(conn: &rusqlite::Connection, c: &Cluster, force_role: bool) -> 
         return Err(format!("refusing to record a cluster without a major (port {})", c.port));
     }
     let now = now_secs();
+    // `owner_project` and `wal_archive` are written on insert and by a
+    // forced record (a named cluster's create) only; a refresh keeps them.
     let sql = if force_role {
-        "INSERT INTO sql_clusters (major, name, port, data_dir, unit, start_conf, state, role, origin, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10) \
+        "INSERT INTO sql_clusters (major, name, port, data_dir, unit, start_conf, state, role, origin, created_at, updated_at, owner_project, wal_archive) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12) \
          ON CONFLICT(major, name) DO UPDATE SET port = ?3, data_dir = ?4, unit = ?5, start_conf = ?6, state = ?7, \
-           role = ?8, origin = ?9, updated_at = ?10"
+           role = ?8, origin = ?9, updated_at = ?10, owner_project = ?11, wal_archive = ?12"
     } else {
-        "INSERT INTO sql_clusters (major, name, port, data_dir, unit, start_conf, state, role, origin, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10) \
+        "INSERT INTO sql_clusters (major, name, port, data_dir, unit, start_conf, state, role, origin, created_at, updated_at, owner_project, wal_archive) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12) \
          ON CONFLICT(major, name) DO UPDATE SET port = ?3, data_dir = ?4, unit = ?5, start_conf = ?6, state = ?7, \
            updated_at = ?10"
     };
@@ -345,7 +443,9 @@ pub fn record_in(conn: &rusqlite::Connection, c: &Cluster, force_role: bool) -> 
             c.state,
             c.role,
             c.origin,
-            now
+            now,
+            c.owner_project,
+            c.wal_archive as i64
         ],
     )
     .map(|_| ())
@@ -414,10 +514,11 @@ pub fn set_default_major_in(conn: &rusqlite::Connection, major: u32) -> Result<(
     Ok(())
 }
 
-/// Record a database's cluster (create, and S5's switch step).
+/// Record a database's cluster (create, and S5's switch step). A move
+/// lands on `<M>/main` (named clusters keep their major), so the name goes.
 pub fn set_db_major_in(conn: &rusqlite::Connection, database_id: &str, major: u32) -> Result<(), String> {
     conn.execute(
-        "UPDATE sql_databases SET cluster_major = ?1 WHERE id = ?2",
+        "UPDATE sql_databases SET cluster_major = ?1, cluster_name = NULL WHERE id = ?2",
         rusqlite::params![major as i64, database_id],
     )
     .map(|_| ())
@@ -453,6 +554,7 @@ pub fn parse_helper_cluster(v: &serde_json::Value) -> Result<Cluster, String> {
         None => "unknown",
     };
     let k2_layout = name == pg_major::CLUSTER_NAME && data_dir == pg_major::data_dir(major);
+    let name_is_named = name != pg_major::CLUSTER_NAME;
     Ok(Cluster {
         major,
         unit: v
@@ -470,6 +572,10 @@ pub fn parse_helper_cluster(v: &serde_json::Value) -> Result<Cluster, String> {
         state: state.into(),
         start_conf,
         synthesized: false,
+        owner_project: None,
+        wal_archive: v.get("walArchive").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        // Protocol 15: the helper's own word on a non-`main` row.
+        k2_named: (name_is_named).then(|| v.get("k2Named").and_then(serde_json::Value::as_bool)).flatten(),
     })
 }
 
@@ -501,6 +607,22 @@ pub fn fold_helper_view_in(conn: &rusqlite::Connection, seen: &[Cluster]) -> Res
         if let Some(k) = known.iter().find(|k| k.major == c.major && k.name == c.name) {
             rec.role = k.role.clone();
             rec.origin = k.origin.clone();
+            rec.owner_project = k.owner_project.clone();
+            rec.wal_archive = k.wal_archive;
+            // prd-named-pg-clusters-v1 §5: a named cluster stays K2's only
+            // while the helper vouches for it (recorded by the helper AND
+            // matching what runs). An explicit "no" = state unknown, and
+            // every verb on it refuses; an older helper (no word) changes
+            // nothing.
+            if rec.is_named() && rec.role == "k2" && c.k2_named == Some(false) {
+                rec.state = "unknown".into();
+            }
+        } else if rec.is_named() {
+            // A named cluster K2 has no record of is never K2's here, even
+            // when the helper made it: only `k2 db cluster create`
+            // records one (it answers again for a cluster it made).
+            rec.role = "foreign".into();
+            rec.origin = "adopted".into();
         } else if rec.role == "k2" {
             if nothing_recorded && rec.is_primary() {
                 rec.origin = "baked".into();
@@ -579,24 +701,190 @@ pub fn ensure_cluster(ops: &dyn SystemOps, major: u32, preview: bool) -> Result<
     Ok(c)
 }
 
-/// Why `k2 db create --major M` refuses a cluster K2 didn't make
-/// (`foreign`: off K2's layout; `adopted`: K2's layout, made by hand):
-/// which cluster, the one-cluster-per-major rule, and what the owner can
+/// Why `k2 db create` refuses a cluster K2 didn't make (`foreign`: off
+/// K2's layout or a named cluster the helper didn't make; `adopted`: K2's
+/// layout, made by hand): which cluster, the rule, and what the owner can
 /// do. K2 has no verb that takes over, forgets or removes such a cluster
 /// (the root helper refuses `pg drop-cluster`), so the hint says so.
 pub fn not_k2_cluster_hint(c: &Cluster) -> String {
     let dir = if c.data_dir.is_empty() { "unknown".to_string() } else { c.data_dir.clone() };
     format!(
-        "Postgres {major} on this box is a cluster K2 didn't make ({major}/{name}, port {port}, data {dir}; recorded {role}). \
-K2 runs one cluster per Postgres major and never creates databases in, takes over or removes a cluster made outside K2. \
-The owner can create on a major K2 runs instead (`k2 db clusters` lists them; without --major K2 uses the box default). \
-K2 has no command yet to take this cluster over or forget it, and removing it by hand isn't enough today (K2 keeps its record and still refuses): \
+        "{major}/{name} on this box is a cluster K2 didn't make (port {port}, data {dir}; recorded {role}). \
+K2 never creates databases in, takes over or removes a cluster made outside K2. \
+Create on a cluster K2 runs instead (`k2 db clusters` lists them; without --major K2 uses the box default), \
+or make one of K2's own beside it: `k2 db cluster create {major} --name <name>`. \
+K2 has no command to take this cluster over or forget it, and removing it by hand isn't enough today (K2 keeps its record and still refuses): \
 ask for it with `k2 feedback ask`.",
         major = c.major,
         name = c.name,
         port = c.port,
         role = c.role,
     )
+}
+
+// ── named clusters (prd-named-pg-clusters-v1, protocol 15) ─────────────
+
+/// `k2 db cluster create <M> --name <name>`: the helper makes `<M>/<name>`
+/// (or answers it again when it made it before), K2 records it `k2` /
+/// `created`, dedicated to `project`. Refuses: a policy-refused major, a
+/// bad name, a name or port K2 recorded for another cluster, a cluster of
+/// that name that isn't K2's (`17/k2db`), one that is another workspace's,
+/// an answer the helper doesn't vouch for (`k2Named`), off K2's layout or
+/// outside the band.
+pub fn ensure_named_cluster(
+    ops: &dyn SystemOps,
+    major: u32,
+    name: &str,
+    port: Option<u16>,
+    wal_archive: bool,
+    project: &str,
+) -> Result<Cluster, EnsureError> {
+    use k2_root_proto::pg_named::{self as named, ClusterName};
+    pg_major::check_target(major, false, pg_major::today_days()).map_err(EnsureError::Policy)?;
+    let Some(n) = ClusterName::parse(name) else {
+        return Err(EnsureError::Usage(format!(
+            "{name:?} is not a cluster name K2 makes: 2-24 of a-z, 0-9 and _, starting with a letter, never main"
+        )));
+    };
+    if let Some(p) = port {
+        if p == pg_major::PRIMARY_PORT || !pg_major::in_band(p) {
+            return Err(EnsureError::Usage(format!(
+                "--port {p}: a named cluster takes a port in K2's band {}-{} other than {}",
+                pg_major::BAND.0 + 1,
+                pg_major::BAND.1,
+                pg_major::PRIMARY_PORT
+            )));
+        }
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for k in list_in(&conn) {
+            if k.name == name && k.major != major {
+                return Err(EnsureError::Refused(format!(
+                    "the name {name} is already {}: cluster names are one per box",
+                    k.label()
+                )));
+            }
+            if k.name == name && k.major == major {
+                if k.role != "k2" {
+                    return Err(EnsureError::Refused(not_k2_cluster_hint(&k)));
+                }
+                if k.owner_project.as_deref().is_some_and(|o| o != project) {
+                    return Err(EnsureError::NotYours(format!("{} belongs to another workspace", k.label())));
+                }
+            }
+        }
+    }
+    ops.helper_pgnamed().map_err(EnsureError::Helper)?;
+    let token = named::ref_token(k2_root_proto::pg_major::PgMajor::new(major).expect("checked by policy"), &n);
+    let port_s = port.map(|p| p.to_string());
+    let mut argv: Vec<&str> = vec!["ensure-cluster", &token];
+    if let Some(p) = port_s.as_deref() {
+        argv.push(p);
+    }
+    if wal_archive {
+        argv.push("--wal-archive");
+    }
+    let raw = ops.run_helper(&argv, None).map_err(|e| {
+        if e.contains("name_taken") || e.contains("not_k2_cluster") {
+            EnsureError::Refused(e)
+        } else {
+            EnsureError::Helper(e)
+        }
+    })?;
+    let v: serde_json::Value =
+        serde_json::from_str(raw.trim()).map_err(|e| EnsureError::Helper(format!("ensure-cluster: not JSON ({e})")))?;
+    let mut c = parse_helper_cluster(&v).map_err(EnsureError::Helper)?;
+    if c.major != major || c.name != name || c.k2_named != Some(true) || c.data_dir != named::data_dir(major, name) {
+        return Err(EnsureError::Helper(format!(
+            "ensure-cluster {token} answered {} in {} (k2Named {:?}) — not a named cluster the helper made",
+            c.label(),
+            c.data_dir,
+            c.k2_named
+        )));
+    }
+    if !pg_major::in_band(c.port) || c.port == pg_major::PRIMARY_PORT {
+        return Err(EnsureError::Helper(format!("ensure-cluster {token} answered port {}, not a band port other than 5432", c.port)));
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if let Some(other) = list_in(&conn).into_iter().find(|k| k.port == c.port && !(k.major == major && k.name == name)) {
+        return Err(EnsureError::Helper(format!(
+            "ensure-cluster {token} answered port {}, which K2 recorded for {}",
+            c.port,
+            other.label()
+        )));
+    }
+    c.role = "k2".into();
+    c.origin = "created".into();
+    c.owner_project = Some(project.to_string());
+    c.wal_archive = v.get("walArchive").and_then(serde_json::Value::as_bool).unwrap_or(wal_archive);
+    record_in(&conn, &c, true).map_err(EnsureError::Helper)?;
+    Ok(c)
+}
+
+/// A named cluster K2 made, for a verb from `project` (None = the owner,
+/// any workspace's): its record, `k2`, `created`, the caller's.
+pub fn named_target(spec: &str, project: Option<&str>) -> Result<Cluster, EnsureError> {
+    let c = for_name(spec).ok_or_else(|| {
+        EnsureError::NotFound(format!("no named cluster {spec} on this box (`k2 db clusters`; `k2 db cluster create <M> --name <name>`)"))
+    })?;
+    if c.role != "k2" || c.origin != "created" {
+        return Err(EnsureError::Refused(not_k2_cluster_hint(&c)));
+    }
+    if let (Some(p), Some(o)) = (project, c.owner_project.as_deref()) {
+        if p != o {
+            return Err(EnsureError::NotYours(format!(
+                "{} is dedicated to another workspace; only that workspace (or the owner) creates databases in it or restarts it",
+                c.label()
+            )));
+        }
+    }
+    Ok(c)
+}
+
+/// `k2 db cluster restart <name>`: the helper restarts that named cluster
+/// (and only one it made).
+pub fn restart_named(ops: &dyn SystemOps, c: &Cluster) -> Result<serde_json::Value, EnsureError> {
+    ops.helper_pgnamed().map_err(EnsureError::Helper)?;
+    let wire = c.wire();
+    let raw = ops.run_helper(&["systemctl", "restart", &wire], None).map_err(|e| {
+        if e.contains("not_k2_cluster") {
+            EnsureError::Refused(e)
+        } else {
+            EnsureError::Helper(e)
+        }
+    })?;
+    Ok(serde_json::from_str(raw.trim()).unwrap_or_else(|_| serde_json::json!({"unit": c.unit})))
+}
+
+/// What k2-watch reads (prd-named-pg-clusters-v1 §8): connections, each
+/// database's size and the WAL archiver, by one fixed query as postgres.
+pub const HEALTH_SQL: &str = "SELECT json_build_object(\
+'connections', (SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE backend_type = 'client backend'), \
+'maxConnections', current_setting('max_connections')::int, \
+'archiveMode', current_setting('archive_mode'), \
+'databases', (SELECT coalesce(json_agg(json_build_object('name', datname, 'bytes', pg_catalog.pg_database_size(datname)) ORDER BY datname), '[]'::json) \
+FROM pg_catalog.pg_database WHERE NOT datistemplate), \
+'archiver', (SELECT json_build_object('archivedCount', archived_count, 'lastArchivedAt', last_archived_time, \
+'failedCount', failed_count, 'lastFailedAt', last_failed_time) FROM pg_catalog.pg_stat_archiver));\n";
+
+/// One K2 cluster's health block (never a foreign one: the caller filters).
+pub fn health_of(ops: &dyn SystemOps, c: &Cluster) -> serde_json::Value {
+    if c.state != "online" {
+        return serde_json::json!({"online": false});
+    }
+    match c.helper_psql(ops, "postgres", &["-v", "ON_ERROR_STOP=1", "-tA"], Some(HEALTH_SQL.as_bytes())) {
+        Ok(out) => match serde_json::from_str::<serde_json::Value>(out.trim()) {
+            Ok(mut v) => {
+                v["online"] = serde_json::json!(true);
+                v
+            }
+            Err(_) => serde_json::json!({"online": true, "error": "the health query answered no JSON"}),
+        },
+        Err(e) => serde_json::json!({"online": true, "error": e}),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -607,6 +895,12 @@ pub enum EnsureError {
     Refused(String),
     /// The helper failed or is too old (`helper_needed: …`).
     Helper(String),
+    /// A malformed name or port (named clusters).
+    Usage(String),
+    /// A named cluster that is another workspace's.
+    NotYours(String),
+    /// No such named cluster.
+    NotFound(String),
 }
 
 impl EnsureError {
@@ -616,12 +910,25 @@ impl EnsureError {
             Self::Refused(_) => "cluster_refused",
             Self::Helper(h) if h.starts_with("helper_needed") => "helper_needed",
             Self::Helper(_) => "cluster_unavailable",
+            Self::Usage(_) => "usage",
+            Self::NotYours(_) => "cluster_not_yours",
+            Self::NotFound(_) => "not_found",
         }
     }
     pub fn hint(&self) -> String {
         match self {
             Self::Policy(r) => r.hint(),
-            Self::Refused(h) | Self::Helper(h) => h.clone(),
+            Self::Refused(h) | Self::Helper(h) | Self::Usage(h) | Self::NotYours(h) | Self::NotFound(h) => h.clone(),
+        }
+    }
+    /// The HTTP status the routes answer with.
+    pub fn status(&self) -> &'static str {
+        match self {
+            Self::Usage(_) => "400 Bad Request",
+            Self::NotYours(_) => "403 Forbidden",
+            Self::NotFound(_) => "404 Not Found",
+            Self::Helper(h) if !h.starts_with("helper_needed") => "502 Bad Gateway",
+            _ => "409 Conflict",
         }
     }
 }

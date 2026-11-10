@@ -539,7 +539,7 @@ fn create_major_choice_and_refusals() {
     match ops::create_database_on(&ops, &secrets, &pb, 1, None, None, Some(17)) {
         Err(OpsError::Refused(code, hint)) => {
             assert_eq!(code, "cluster_refused");
-            for want in ["17/main", "port 5433", "recorded foreign", "one cluster per Postgres major", "k2 db clusters", "no command yet"] {
+            for want in ["17/main", "port 5433", "recorded foreign", "k2 db clusters", "k2 db cluster create 17 --name", "no command to take this cluster over"] {
                 assert!(hint.contains(want), "missing {want:?}: {hint}");
             }
         }
@@ -667,3 +667,255 @@ fn default_major_is_owner_only() {
         "the switch does not grant default-major"
     );
 }
+
+// ── named clusters (0.46.11, prd-named-pg-clusters-v1) ──────────────────
+
+const FEEDBACK: &str = r#"{"major":17,"name":"feedback","port":5434,"dataDir":"/var/lib/postgresql/17/feedback","running":true,"startConf":"auto","k2Named":true,"walArchive":true,"systemId":"7354340000000000000","created":true}"#;
+
+/// akzm: 16/main on 5432 (K2's), the hand-made `17/k2db` on 5433, and a
+/// helper on protocol 15 that made `17/feedback` when asked.
+fn akzm_ops() -> FakeSystemOps {
+    let mut ops = FakeSystemOps::baked();
+    ops.query_answers.insert("helper pgnamed".into(), String::new());
+    ops.query_answers.insert("helper ensure-cluster 17-feedback --wal-archive".into(), FEEDBACK.into());
+    ops
+}
+
+fn helper_view(feedback_vouched: Option<bool>) -> Vec<Cluster> {
+    let mut rows = vec![
+        r#"{"major":16,"name":"main","port":5432,"dataDir":"/var/lib/postgresql/16/main","running":true,"startConf":"auto"}"#.to_string(),
+        r#"{"major":17,"name":"k2db","port":5433,"dataDir":"/var/lib/postgresql/17/k2db","running":true,"startConf":"auto","k2Named":false}"#.to_string(),
+    ];
+    if let Some(v) = feedback_vouched {
+        rows.push(format!(
+            r#"{{"major":17,"name":"feedback","port":5434,"dataDir":"/var/lib/postgresql/17/feedback","running":true,"startConf":"auto","k2Named":{v}}}"#
+        ));
+    }
+    parse_helper_clusters(&format!("[{}]", rows.join(","))).unwrap()
+}
+
+fn fold(view: &[Cluster]) -> Vec<Cluster> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    fold_helper_view_in(&conn, view).unwrap()
+}
+
+fn cluster_name_of(db: &str) -> Option<String> {
+    let k2db = k2_core::db::shared();
+    let conn = k2db.lock();
+    db_cluster_name_in(&conn, db)
+}
+
+#[test]
+fn named_cluster_never_adopts_a_foreign_one() {
+    let _g = crate::sql::sql_server_test_lock();
+    reset(Some(16));
+    record(16, 5432, "k2");
+    let (pid, _) = insert_project("fb-owner");
+    let (other, _) = insert_project("fb-other");
+    let secrets = MemSecretStore::default();
+    // The helper's view: 17/k2db is never K2's, whatever it is called.
+    let after = fold(&helper_view(None));
+    let k2db = after.iter().find(|c| c.name == "k2db").unwrap();
+    assert_eq!((k2db.role.as_str(), k2db.port), ("foreign", 5433));
+    // Even a helper that (wrongly) vouches for a cluster K2 never recorded
+    // doesn't make it K2's: only `k2 db cluster create` records one.
+    let mut bogus = helper_view(None);
+    bogus[1].k2_named = Some(true);
+    assert_eq!(fold(&bogus).iter().find(|c| c.name == "k2db").unwrap().role, "foreign");
+
+    let ops = akzm_ops();
+    // It can't be (re)made, created into, restarted or reached by name.
+    let e = ensure_named_cluster(&ops, 17, "k2db", None, false, &pid).unwrap_err();
+    assert_eq!(e.code(), "cluster_refused", "{e:?}");
+    assert!(e.hint().contains("17/k2db") && e.hint().contains("didn't make"), "{}", e.hint());
+    match ops::create_database_in_cluster(&ops, &secrets, &pid, 5, None, Some("staging_x"), None, "k2db") {
+        Err(OpsError::Refused(code, _)) => assert_eq!(code, "cluster_refused"),
+        other => panic!("17/k2db must refuse, got {other:?}"),
+    }
+    assert_eq!(named_target("k2db", None).unwrap_err().code(), "cluster_refused");
+    assert!(lines_with(&ops, "k2db").is_empty(), "nothing was ever sent naming 17/k2db: {:?}", ops.recorded());
+
+    // 17/feedback: made through the helper, recorded K2's, this workspace's.
+    let c = ensure_named_cluster(&ops, 17, "feedback", None, true, &pid).unwrap();
+    assert_eq!((c.label().as_str(), c.port, c.role.as_str(), c.origin.as_str()), ("17/feedback", 5434, "k2", "created"));
+    assert_eq!(c.owner_project.as_deref(), Some(pid.as_str()));
+    assert!(c.wal_archive);
+    assert_eq!(lines_with(&ops, "helper ensure-cluster 17-feedback --wal-archive").len(), 1);
+    // The name is the box's: no second `feedback` on another major.
+    assert_eq!(ensure_named_cluster(&ops, 16, "feedback", None, false, &pid).unwrap_err().code(), "cluster_refused");
+    // Another workspace's cluster: not yours.
+    assert_eq!(ensure_named_cluster(&ops, 17, "feedback", None, true, &other).unwrap_err().code(), "cluster_not_yours");
+
+    // A database in it: its psql goes `--cluster 17-feedback`, its record
+    // names the cluster, its DSN the cluster's port.
+    let v = ops::create_database_in_cluster(&ops, &secrets, &pid, 5, None, Some("feedback"), Some(17), "feedback").unwrap();
+    assert_eq!(v["cluster"], "17/feedback", "{v}");
+    assert_eq!(v["major"], 17);
+    assert!(v["dsn"].as_str().unwrap().contains(":5434/feedback"), "{v}");
+    assert_eq!(cluster_name_of("feedback").as_deref(), Some("feedback"));
+    assert_eq!(for_db("feedback").unwrap().label(), "17/feedback");
+    assert!(!lines_with(&ops, "helper psql --cluster 17-feedback -d postgres").is_empty(), "{:?}", ops.recorded());
+    for l in ops.recorded().iter().filter(|l| l.starts_with("helper psql")) {
+        assert!(helper_psql_argv_ok(&l["helper psql ".len()..].split(" stdin=").next().unwrap().split(' ').collect::<Vec<_>>()), "{l}");
+    }
+    // --major other than the cluster's: refused. Another workspace: refused.
+    match ops::create_database_in_cluster(&ops, &secrets, &pid, 5, None, Some("fb2"), Some(16), "feedback") {
+        Err(OpsError::Refused(code, _)) => assert_eq!(code, "major_mismatch"),
+        other => panic!("{other:?}"),
+    }
+    match ops::create_database_in_cluster(&ops, &secrets, &other, 5, None, Some("fb3"), None, "feedback") {
+        Err(OpsError::Refused(code, _)) => assert_eq!(code, "cluster_not_yours"),
+        other => panic!("{other:?}"),
+    }
+    // A plain `k2 db create --major 17` never lands in either named
+    // cluster: it asks for 17/main (this fake helper has no answer).
+    match ops::create_database_on(&ops, &secrets, &other, 5, None, Some("plain17"), Some(17)) {
+        Err(OpsError::Refused(code, _)) => assert_eq!(code, "helper_needed"),
+        other => panic!("{other:?}"),
+    }
+    assert!(lines_with(&ops, "plain17").iter().all(|l| !l.contains("--cluster 17-")), "{:?}", ops.recorded());
+    // The upgrade list leaves it out (a named cluster keeps its major).
+    let m = crate::sql::supervisor::majors_json();
+    assert!(m["upgradeAvailable"].as_array().unwrap().iter().all(|u| u["name"] != "feedback"), "{m}");
+    assert!(m["databases"].as_array().unwrap().iter().any(|d| d["name"] == "feedback" && d["cluster"] == "17/feedback"), "{m}");
+
+    // §9a: the App's door ports are its workspace's K2 clusters only, never
+    // 17/k2db's 5433 (its workspace has a database on 5434 alone).
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::deploy::store::insert_app(
+            &conn,
+            &k2_core::deploy::store::NewApp {
+                app_id: "feedback",
+                service_id: "svc-feedback-named",
+                seed_id: None,
+                owner_workspace: &pid,
+                isolation: "process",
+                memory_limit_bytes: None,
+                front_port: 0,
+                created_by: "owner",
+            },
+        )
+        .unwrap();
+    }
+    assert_eq!(crate::apps::pg_choice::door_ports("feedback"), vec![5434]);
+    assert!(crate::apps::pg_choice::door_ports("no-such-app").is_empty());
+
+    // The helper stops vouching for it (the list or the cluster changed):
+    // K2 keeps its record but no longer counts it as online.
+    let after = fold(&helper_view(Some(false)));
+    assert_eq!(after.iter().find(|c| c.name == "feedback").unwrap().state, "unknown");
+    let after = fold(&helper_view(Some(true)));
+    let fb = after.iter().find(|c| c.name == "feedback").unwrap();
+    assert_eq!((fb.state.as_str(), fb.role.as_str(), fb.owner_project.as_deref()), ("online", "k2", Some(pid.as_str())));
+    assert!(fb.wal_archive, "a refresh keeps what the create recorded");
+}
+
+/// Old helper, new daemon: nothing named is ever sent to a helper below
+/// protocol 15 (it would refuse the argv anyway).
+#[test]
+fn named_clusters_need_helper_15_and_send_nothing_before() {
+    let _g = crate::sql::sql_server_test_lock();
+    reset(Some(16));
+    record(16, 5432, "k2");
+    let (pid, _) = insert_project("fb-old-helper");
+    let old = FakeSystemOps::baked();
+    let e = ensure_named_cluster(&old, 17, "feedback", None, true, &pid).unwrap_err();
+    assert_eq!(e.code(), "helper_needed", "{e:?}");
+    assert!(e.hint().contains("protocol 15"), "{}", e.hint());
+    assert!(old.recorded().iter().all(|l| !l.contains("ensure-cluster")), "{:?}", old.recorded());
+    // A cluster recorded while the helper was 15, then the helper rolled
+    // back: databases in it refuse before any psql.
+    let new = akzm_ops();
+    ensure_named_cluster(&new, 17, "feedback", None, true, &pid).unwrap();
+    let secrets = MemSecretStore::default();
+    match ops::create_database_in_cluster(&old, &secrets, &pid, 5, None, Some("feedback"), None, "feedback") {
+        Err(OpsError::Refused(code, _)) => assert_eq!(code, "helper_needed"),
+        other => panic!("{other:?}"),
+    }
+    assert!(old.recorded().iter().all(|l| !l.contains("--cluster 17-feedback")), "{:?}", old.recorded());
+    assert!(crate::sql::sysops::needs_pgnamed(&["psql", "--cluster", "17-feedback", "-d", "x"]));
+    assert!(crate::sql::sysops::needs_pgnamed(&["ensure-cluster", "17-feedback"]));
+    assert!(crate::sql::sysops::needs_pgnamed(&["systemctl", "restart", "17-feedback"]));
+    assert!(!crate::sql::sysops::needs_pgnamed(&["psql", "--cluster", "17", "-d", "x"]));
+    assert!(!crate::sql::sysops::needs_pgnamed(&["ensure-cluster", "17"]));
+}
+
+/// New helper, old daemon: the helper's extra `k2Named` field changes
+/// nothing for a daemon that never sends the named verbs; a non-`main`
+/// row it hasn't seen is foreign (0.46.3's rule, kept).
+#[test]
+fn a_new_helper_view_reads_the_same_for_main_clusters() {
+    let _g = crate::sql::sql_server_test_lock();
+    reset(Some(16));
+    let rows = parse_helper_clusters(
+        r#"{"clusters":[{"major":16,"name":"main","port":5432,"dataDir":"/var/lib/postgresql/16/main","running":true,"startConf":"auto","k2Named":true},
+            {"major":17,"name":"feedback","port":5434,"dataDir":"/var/lib/postgresql/17/feedback","running":true,"startConf":"auto","k2Named":true}]}"#,
+    )
+    .unwrap();
+    assert_eq!(rows[0].k2_named, None, "k2Named means nothing on a main row");
+    assert_eq!(rows[0].role, "k2");
+    assert_eq!(rows[1].role, "foreign");
+    let after = fold(&rows);
+    assert_eq!(after.iter().find(|c| c.name == "feedback").unwrap().role, "foreign", "only a create records a named cluster");
+}
+
+/// `POST /cli/db/clusters` (named_routes): the owner, or a local agent
+/// with the Postgres versions switch for its own workspace; never a Member.
+#[test]
+fn named_cluster_route_gate() {
+    use crate::sql::versions_access::Who;
+    let _g = crate::sql::sql_server_test_lock();
+    reset(Some(16));
+    record(16, 5432, "k2");
+    let (pid, path) = insert_project("fb-route");
+    let ops = akzm_ops();
+    let body = |op: &str, extra: &str| format!(r#"{{"op":"{op}","project":"{path}"{extra}}}"#).into_bytes();
+    let agent = Who::Agent { project_id: pid.clone(), session_id: "s".into(), local: true, sandboxed: false };
+    let create = body("create", r#","major":17,"name":"feedback","walArchive":true"#);
+    let p = Default::default();
+    let r = crate::sql::named_routes::handle(&ops, Who::Member { username: "m".into() }, true, &create, &p);
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    let r = crate::sql::named_routes::handle(&ops, agent.clone(), true, &create, &p);
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    assert!(r.body.contains("db_upgrade_off"), "{}", r.body);
+    let sandboxed = Who::Agent { project_id: pid.clone(), session_id: "s".into(), local: true, sandboxed: true };
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE projects SET agents_can_upgrade_postgres = 1 WHERE id = ?1", [&pid]).unwrap();
+    }
+    assert_eq!(crate::sql::named_routes::handle(&ops, sandboxed, true, &create, &p).status, "403 Forbidden");
+    let r = crate::sql::named_routes::handle(&ops, agent.clone(), true, &create, &p);
+    assert!(r.status.starts_with("200"), "{}", r.body);
+    assert!(r.body.contains("17/feedback"), "{}", r.body);
+    // Restart: only the helper's systemctl for that cluster.
+    let r = crate::sql::named_routes::handle(&ops, agent.clone(), true, &body("restart", r#","name":"feedback""#), &p);
+    assert!(r.status.starts_with("200"), "{}", r.body);
+    assert_eq!(lines_with(&ops, "helper systemctl restart 17-feedback").len(), 1, "{:?}", ops.recorded());
+    // GET lists both, 17/k2db foreign; the owner sees health for K2's.
+    let mut ops2 = akzm_ops();
+    ops2.query_answers.insert(
+        "helper clusters".into(),
+        r#"{"clusters":[{"major":16,"name":"main","port":5432,"dataDir":"/var/lib/postgresql/16/main","running":true,"startConf":"auto"},
+            {"major":17,"name":"k2db","port":5433,"dataDir":"/var/lib/postgresql/17/k2db","running":true,"startConf":"auto","k2Named":false},
+            {"major":17,"name":"feedback","port":5434,"dataDir":"/var/lib/postgresql/17/feedback","running":true,"startConf":"auto","k2Named":true}]}"#
+            .into(),
+    );
+    let mut q = std::collections::HashMap::new();
+    q.insert("health".to_string(), "1".to_string());
+    let r = crate::sql::named_routes::handle(&ops2, Who::Owner, false, b"", &q);
+    let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+    let rows = v["clusters"].as_array().unwrap();
+    let k2db = rows.iter().find(|c| c["name"] == "k2db").unwrap();
+    assert_eq!(k2db["role"], "foreign");
+    assert!(k2db.get("health").is_none(), "never SQL on a foreign cluster: {k2db}");
+    assert!(rows.iter().find(|c| c["name"] == "feedback").unwrap().get("health").is_some(), "{v}");
+    assert!(lines_with(&ops2, "17-k2db").is_empty() && lines_with(&ops2, "5433").is_empty(), "{:?}", ops2.recorded());
+    // An unknown op, a GET with no credential.
+    assert_eq!(crate::sql::named_routes::handle(&ops, agent, true, &body("drop", ""), &p).status, "400 Bad Request");
+    assert_eq!(crate::sql::named_routes::handle(&ops, Who::Other, false, b"", &p).status, "403 Forbidden");
+}
+

@@ -7,6 +7,7 @@
 pub mod actor;
 pub mod cluster;
 pub mod identity;
+pub mod named_routes;
 pub mod ops;
 pub mod paths;
 pub mod pgmove;
@@ -3653,6 +3654,7 @@ mod tests {
 
     mod real_pg;
     mod real_pg_majors;
+    mod real_pg_named;
 
     fn query_json(workspace: &str, sql: &str, params: Option<serde_json::Value>) -> Vec<u8> {
         let mut v = serde_json::json!({ "workspace": workspace, "sql": sql });

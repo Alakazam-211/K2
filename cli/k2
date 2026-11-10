@@ -47679,6 +47679,13 @@ cmd_schema() {
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
+      "name": "project view",
+      "usage": "k2 project view <project> [terminal|thread|chatter] [--json]",
+      "description": "Without a view: print the view the project's agents open in on its dashboards (new projects start on thread). With one: set it for everyone. Setting it is for the owner, an admin, or an agent with 'Manage K2 projects' on (a Member login: exit 1 forbidden; the switch off: exit 1 agent_permission_off). Anyone can still switch one agent for themselves with the picker in its bar, until they restart the app or this default changes. Any other view (split too) is exit 2, before the daemon is asked. Exit codes: 0 ok, 1 refused, 2 bad usage, 4 project not found or ambiguous.",
+      "args": [{"name": "project", "required": true}, {"name": "view", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output ({ok,project,defaultView})."}]
+    },
+    {
       "name": "project msg",
       "usage": "k2 project msg [<project>] <text> [--json]",
       "description": "Post to a project's chat AS your workspace (auto-detected from K2_PROJECT_PATH, falling back to the current directory). One arg = <text> with the project auto-detected from your memberships (exactly one; none = exit 4 no_project, several = exit 4 ambiguous_project); two args = <project> <text>; three-plus = exit 2 (quote your message). <text> of \"-\" reads the body from stdin. delivered:false + deliveryReason:author-is-poc is a NORMAL success (the PoC never self-injects).",
@@ -68544,7 +68551,8 @@ _project_py() {
     P_NAME="${P_NAME:-}" P_ARG_PROJECT="${P_ARG_PROJECT:-}" \
     P_ARG_WORKSPACE="${P_ARG_WORKSPACE:-}" P_TEXT="${P_TEXT:-}" \
     P_MSG_FORM="${P_MSG_FORM:-}" P_TEXT_STDIN="${P_TEXT_STDIN:-false}" \
-    P_AFTER="${P_AFTER:-}" P_LIMIT="${P_LIMIT:-}" \
+    P_AFTER="${P_AFTER:-}" P_LIMIT="${P_LIMIT:-}" P_VIEW="${P_VIEW:-}" \
+    P_PERMISSION_NOTE="${_K2_PERMISSION_NOTE:-}" \
     python3 - <<'PYEOF'
 import json, os, sys, time
 import urllib.error, urllib.parse, urllib.request
@@ -68571,6 +68579,25 @@ def dumps(obj):
     # ({"ok":true,...} / {"error":{"code",...}}), byte-for-byte.
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
+# Permission cards (Beta): the last refusal's `permission` object, if the
+# daemon sent one. die() hands its closing line ("Ask with: k2 permission
+# request …" or "It can't be requested.") to the CLI's EXIT trap through
+# the same note file the curl transports use (BEGIN_CLI_PERMISSION_NOTE),
+# so it prints once, after the JSON error, and only on a failed exit.
+LAST_PERMISSION = [None]
+
+def permission_lines(p):
+    # Same rules as _permission_closing_lines.
+    if not isinstance(p, dict):
+        return []
+    cmd = p.get("command")
+    if isinstance(cmd, str) and cmd:
+        return ["Ask with: " + cmd]
+    if p.get("requestable") is False:
+        hint = p.get("hint")
+        return ([hint] if isinstance(hint, str) and hint else []) + ["It can't be requested."]
+    return []
+
 def die(err):
     # Errors are ALWAYS JSON on stderr, regardless of --json.
     if isinstance(err, str):
@@ -68581,6 +68608,16 @@ def die(err):
         # project prefix (hint passes through, candidates included).
         code = "ambiguous"
     sys.stderr.write(dumps({"error": {"code": code, "hint": err.get("hint", "")}}) + "\n")
+    lines = permission_lines(LAST_PERMISSION[0])
+    if lines:
+        note = os.environ.get("P_PERMISSION_NOTE", "")
+        try:
+            if not note:
+                raise OSError("no note file")
+            with open(note, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception:
+            sys.stderr.write("\n".join(lines) + "\n")
     sys.exit(4 if code in EXIT4 else 2 if code == "usage" else 1)
 
 def request(method, route, params=None, body=None):
@@ -68594,9 +68631,12 @@ def request(method, route, params=None, body=None):
             return json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try:
-            return json.loads(e.read().decode("utf-8", "replace"))
+            v = json.loads(e.read().decode("utf-8", "replace"))
         except Exception:
             return {"error": {"code": "error", "hint": "HTTP %s on %s" % (e.code, route)}}
+        if isinstance(v, dict) and isinstance(v.get("permission"), dict):
+            LAST_PERMISSION[0] = v["permission"]
+        return v
     except Exception:
         return None
 
@@ -68942,6 +68982,33 @@ elif verb == "pin":
         print("%s %s for everyone on this server." % (
             d.get("name"), "is pinned" if d.get("pinned") else "is no longer pinned"))
 
+elif verb == "view":
+    # prd-projects-threads-v1 §4.3: the view a project's agent tiles open in
+    # (`defaultView` on show). No view: print it. A view (checked by the
+    # shell half before any request): set it, owner/admin or an agent with
+    # 'Manage K2 projects' (the daemon decides).
+    show = fetch_show(os.environ["P_ARG_PROJECT"])
+    name = show.get("name") or "?"
+    if "defaultView" not in show:
+        die({"code": "unsupported",
+             "hint": "this K2 server is too old for a project's view; update K2 on it"})
+    want = os.environ.get("P_VIEW", "")
+    if not want:
+        cur = show.get("defaultView")
+        if as_json:
+            print(dumps({"ok": True, "project": name, "defaultView": cur}))
+        else:
+            print("%s opens agents in: %s" % (name, cur))
+    else:
+        d = call("POST", "/cli/project-group/set-default-view",
+                 body={"group": show.get("id"), "view": want})
+        name = d.get("name") or name
+        new = d.get("defaultView") or want
+        if as_json:
+            print(dumps({"ok": True, "project": name, "defaultView": new}))
+        else:
+            print("%s now opens agents in: %s" % (name, new))
+
 elif verb == "access":
     # The per-agent "Manage K2 projects" switch (0162). Owner/Admin only:
     # inside a K2 terminal this sends the session passport, which the
@@ -69078,6 +69145,46 @@ cmd_project_pin() {
         exit 2
     fi
     local P_VERB="pin" P_JSON="$as_json" P_ARG_PROJECT="$project" P_NAME="${state:-on}"
+    _project_py
+}
+
+# prd-projects-threads-v1 §4.3: print or set the view a project opens its
+# agents in. The view is checked here, before any request: only terminal,
+# thread or chatter (no split: a project tile shows one view).
+cmd_project_view() {
+    if _wants_help "$@"; then cmd_help_project_view; exit 0; fi
+    local project="" view="" as_json=false lower
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _project_err "usage" "unknown flag '$1' — usage: k2 project view <project> [terminal|thread|chatter] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$project" ]; then project="$1"
+                elif [ -z "$view" ]; then
+                    lower="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+                    case "$lower" in
+                        terminal|thread|chatter) view="$lower" ;;
+                        split)
+                            _project_err "usage" "split is not a project view: a project's agents open in terminal, thread or chatter"
+                            exit 2 ;;
+                        *)
+                            _project_err "usage" "view must be terminal, thread or chatter, not '$1'"
+                            exit 2 ;;
+                    esac
+                else
+                    _project_err "usage" "unexpected extra argument '$1' — usage: k2 project view <project> [terminal|thread|chatter] [--json]"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$project" ]; then
+        _project_err "usage" "view requires a <project> (add terminal, thread or chatter to set it)"
+        exit 2
+    fi
+    local P_VERB="view" P_JSON="$as_json" P_ARG_PROJECT="$project" P_VIEW="$view"
     _project_py
 }
 
@@ -69315,7 +69422,9 @@ COMMANDS
   create <name>                  Create an empty project
   rename <project> <new-name>    Rename a project
   pin <project> [on|off]         Show it in everyone's Pinned section (default on)
-  delete <project> --yes         Delete a project with its dashboards and chat
+  view <project> [<view>]        Print or set the view the project's agents
+                                 open in: terminal, thread or chatter
+  delete <project> --yes        Delete a project with its dashboards and chat
                                  (owner or admin only; agents can't)
   list                           List this server's projects (members, PoC, pinned)
   show <project>                 One project: members, PoC, last few messages
@@ -69336,9 +69445,10 @@ COMMANDS
 
 WHO MAY CHANGE PROJECTS
   Projects are open by default: any agent may create, rename and pin
-  projects and add or remove members. Deleting a project (and its chat) is
-  for the owner, an admin, or an agent with "Manage K2 projects" on: a
-  Member login gets exit 1 with code forbidden. Each workspace has a
+  projects and add or remove members. Deleting a project (and its chat) and
+  setting the view its agents open in (`view`) are for the owner, an admin,
+  or an agent with "Manage K2 projects" on: a Member login gets exit 1 with
+  code forbidden. Each workspace has a
   per-agent switch,
   "Manage K2 projects" (Settings → Workspaces → <ws> → Agent, or
   `k2 project access`). Off: that agent gets exit 1 with code
@@ -69449,6 +69559,41 @@ USAGE
 EXAMPLES
   k2 project pin 0.46.1
   k2 project pin 0.46.1 off
+EOF
+}
+
+cmd_help_project_view() {
+    cat <<'EOF'
+Print or set the view a project opens its agents in: terminal, thread or
+chatter. Every agent on the project's dashboards opens in this view. New
+projects start on thread.
+
+Anyone can switch one agent with the view picker in its bar. That switch
+is only for them, and it ends when they restart the app or when this
+default changes.
+
+With no <view>, prints the current default. Setting it is for the owner, an
+admin, or an agent with "Manage K2 projects" on. A Member login gets exit 1
+with code forbidden; an agent with the switch off gets agent_permission_off.
+
+USAGE
+  k2 project view <project> [terminal|thread|chatter] [--json]
+
+VIEWS
+  thread       The agent's Thread: you and the agent, like a text chat (default)
+  terminal     The agent's live terminal
+  chatter      Messages between this agent and other agents
+  There is no split view for a project: any other view is exit 2.
+
+FLAGS
+  --json       JSON output: {"ok":true,"project":"sales","defaultView":"thread"}
+
+EXAMPLES
+  k2 project view sales
+  k2 project view sales terminal
+
+EXIT CODES
+  0 ok · 1 refused · 2 bad usage (an unknown view) · 4 project not found or ambiguous
 EOF
 }
 
@@ -99861,6 +100006,7 @@ case "${1:-help}" in
             rename) shift 2; cmd_project_rename "$@" ;;
             delete) shift 2; cmd_project_delete "$@" ;;
             pin)    shift 2; cmd_project_pin "$@" ;;
+            view)   shift 2; cmd_project_view "$@" ;;
             list)   shift 2; cmd_project_list "$@" ;;
             show)   shift 2; cmd_project_show "$@" ;;
             add)    shift 2; cmd_project_add "$@" ;;

@@ -614,6 +614,11 @@
     "description": "Without <workspace>: print the current PoC's name, bare on stdout (script-friendly). With <workspace>: reassign the PoC to that member (must already be a member; takes effect for the NEXT message)."
    },
    {
+    "name": "project view",
+    "usage": "k2 project view <project> [terminal|thread|chatter] [--json]",
+    "description": "Without a view: print the view the project's agents open in on its dashboards (new projects start on thread). With one: set it for everyone. Setting it is for the owner, an admin, or an agent with 'Manage K2 projects' on (a Member login: exit 1 forbidden; the switch off: exit 1 agent_permission_off). Anyone can still switch one agent for themselves with the picker in its bar, until they restart the app or this default changes. Any other view (split too) is exit 2, before the daemon is asked. Exit codes: 0 ok, 1 refused, 2 bad usage, 4 project not found or ambiguous."
+   },
+   {
     "name": "project msg",
     "usage": "k2 project msg [<project>] <text> [--json]",
     "description": "Post to a project's chat AS your workspace (auto-detected from K2_PROJECT_PATH, falling back to the current directory). One arg = <text> with the project auto-detected from your memberships (exactly one; none = exit 4 no_project, several = exit 4 ambiguous_project); two args = <project> <text>; three-plus = exit 2 (quote your message). <text> of \"-\" reads the body from stdin. delivered:false + deliveryReason:author-is-poc is a NORMAL success (the PoC never self-injects)."

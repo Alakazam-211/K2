@@ -330,7 +330,8 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// Bumped to 54 (0.46.11, prd-popup-close-and-card-dismiss-v1): agents
 /// `k2 thread withdraw` their own obsolete cards (`void` is the old name),
 /// and a person's dismiss turn means "not needed now", never a denial.
-pub const SKILL_VERSION_WORKSPACE: u32 = 54;
+/// Bumped to 55 (0.46.11): the Projects block names `k2 project view`.
+pub const SKILL_VERSION_WORKSPACE: u32 = 55;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

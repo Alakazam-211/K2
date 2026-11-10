@@ -592,6 +592,8 @@ A Project is a named GROUP of workspaces sharing one chat + one PoC agent.
 ```
 k2 project read [<name>]         # catch up on the project's shared chat
 k2 project msg [<name>] "..."    # post to the shared chat
+k2 project view <name> [<view>]  # print or set the view its agents open in
+                                 #   (terminal, thread or chatter)
 ```
 If a message arrives prefixed `[project:<name>]`, it came from that project's
 shared chat — reply with `k2 project msg <name> "your reply"`. Never use

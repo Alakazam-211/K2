@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-cli
-skill_version: 54
-skill_checksum: 1ec61ff5d838f6c9
+skill_version: 55
+skill_checksum: 961de178d57595b0
 name: k2-cli
 description: K2 CLI reference — msg, inbox, activity, connections, heartbeat
 ---
@@ -184,6 +184,8 @@ A Project is a named GROUP of workspaces sharing one chat + one PoC agent.
 ```
 k2 project read [<name>]         # catch up on the project's shared chat
 k2 project msg [<name>] "..."    # post to the shared chat
+k2 project view <name> [<view>]  # print or set the view its agents open in
+                                 #   (terminal, thread or chatter)
 ```
 If a message arrives prefixed `[project:<name>]`, it came from that project's
 shared chat — reply with `k2 project msg <name> "your reply"`. Never use

@@ -1161,6 +1161,13 @@ impl Manager {
         Ok(Self::lane_of(row)?.frames(&Self::dev(row), opts)?)
     }
 
+    /// The stream hub's source for a running device: the device's own
+    /// encoded units where its lane has them (iOS on protocol 4), else its
+    /// frames through the daemon's encoder ([`SimLane::stream_source`]).
+    pub fn stream_source(&self, row: &SimRow, opts: FrameOpts, base: FrameSize) -> R<Box<dyn crate::stream::EncodedSource>> {
+        Ok(Self::lane_of(row)?.stream_source(&Self::dev(row), opts, base)?)
+    }
+
     // ── owner setup: licence + first-use install ─────────────────────
 
     pub fn licence(&self, lane: LaneKind, id: &str) -> R<LicenceText> {

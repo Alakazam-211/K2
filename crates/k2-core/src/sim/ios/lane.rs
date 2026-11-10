@@ -7,17 +7,19 @@
 //! `K2-<workspace_key>--<model>`. The core owns the box limits, the idle
 //! reaper and the records; this lane only runs devices.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value as J};
 
-use super::helper::{self, FrameSlot, HelperClock, HelperIo, HelperProc};
+use super::helper::{self, FrameSlot, HelperClock, HelperIo, HelperProc, ReceivedUnit, UnitQueue};
 use super::simctl::{self, device_name, workspace_of, DeviceState, ProcessRunner, Runner, SimDevice, SimError, SimResult, Simctl, DEVICE_PREFIX};
 use super::tree;
 use crate::sim::lane::*;
+use crate::stream::pixel::PixelLayers;
+use crate::stream::{Bytes, EncodedSource, EncodedUnit, LayerSpec, SourceError, SourceSizes};
 
 /// Xcode versions the helper has been run against end to end (the live
 /// test). Others are tried, and the helper refuses clearly if a private
@@ -494,6 +496,160 @@ impl Drop for IosFrames {
     }
 }
 
+/// An overflowed layer's automatic keyframe ask: at most one per layer per
+/// this. Its viewers' gates see the seq gap and hold until the key.
+pub const OVERFLOW_KEY_GAP: Duration = Duration::from_secs(1);
+
+/// Protocol 4 (fix 1, S3b): the helper's own H.264 (VideoToolbox, straight
+/// from the framebuffer) as the stream engine's source, relayed with no
+/// daemon encode. The hub's layer list goes to the helper as it is
+/// (explicit pixel widths; the helper scales, keeping the aspect); units
+/// come off the helper's [`UnitQueue`] with their times on the daemon's
+/// clock. Dropping it turns every layer off.
+struct IosUnits {
+    helper: Arc<dyn HelperIo>,
+    units: Arc<UnitQueue>,
+    clock: Option<HelperClock>,
+    /// The screen in portrait points and pixels per point (the hello).
+    screen: (f32, f32, f32),
+    /// The newest unit is wider than tall.
+    landscape: bool,
+    /// The list the helper has now.
+    layers: Vec<LayerSpec>,
+    /// Layers on a codec the helper doesn't encode (its `codecs`).
+    failed: VecDeque<(u8, String)>,
+    /// Layers the queue dropped that still need their keyframe ask, and
+    /// each layer's last such ask.
+    overflowed: BTreeSet<u8>,
+    overflow_asked: HashMap<u8, Instant>,
+}
+
+impl IosUnits {
+    fn new(helper: Arc<dyn HelperIo>, units: Arc<UnitQueue>, clock: Option<HelperClock>, screen: (f32, f32, f32)) -> Self {
+        // A last hub's units still in the queue belong to its layers.
+        while let Ok(Some(_)) = units.take(Duration::ZERO) {}
+        let _ = units.take_key_wanted();
+        IosUnits { helper, units, clock, screen, landscape: false, layers: Vec::new(), failed: VecDeque::new(), overflowed: BTreeSet::new(), overflow_asked: HashMap::new() }
+    }
+
+    /// The screen in points for the newest unit's orientation.
+    fn points(&self) -> (f32, f32) {
+        let (w, h, _) = self.screen;
+        if self.landscape {
+            (h, w)
+        } else {
+            (w, h)
+        }
+    }
+
+    /// S3a's queue asks for a keyframe on a layer it had to drop; this
+    /// throttles that to one per layer per [`OVERFLOW_KEY_GAP`] (an ask
+    /// that has to wait goes when the gap is up).
+    fn ask_overflowed(&mut self, now: Instant) {
+        self.overflowed.extend(self.units.take_key_wanted());
+        let due: Vec<u8> = self.overflowed.iter().copied().filter(|l| self.overflow_asked.get(l).is_none_or(|t| now.saturating_duration_since(*t) >= OVERFLOW_KEY_GAP)).collect();
+        for layer in due {
+            self.overflowed.remove(&layer);
+            if !self.layers.iter().any(|l| l.id == layer && l.on) {
+                continue; // gone since: nothing to resume
+            }
+            self.overflow_asked.insert(layer, now);
+            let _ = self.helper.request_keyframe(layer, None);
+        }
+    }
+
+    fn unit(&mut self, r: ReceivedUnit) -> EncodedUnit {
+        let pulled_at = Instant::now();
+        let (captured_at, emitted_at) = r.times(self.clock);
+        let h = r.unit.header;
+        self.landscape = h.width > h.height;
+        let (wpt, hpt) = self.points();
+        EncodedUnit {
+            codec: h.codec,
+            key: h.key,
+            source_start: h.source_start,
+            layer: h.layer,
+            width: h.width,
+            height: h.height,
+            width_pt: wpt.round() as u32,
+            height_pt: hpt.round() as u32,
+            seq: h.seq,
+            captured_at,
+            stamps: FrameStamps { emitted_at, received_at: Some(r.received_at) },
+            pulled_at,
+            encode: None, // the helper encoded it
+            data: Bytes::from(r.unit.data),
+        }
+    }
+}
+
+impl EncodedSource for IosUnits {
+    fn next_unit(&mut self, wait: Duration) -> Result<Option<EncodedUnit>, SourceError> {
+        if let Some((layer, why)) = self.failed.pop_front() {
+            return Err(SourceError::LayerFailed { layer, why });
+        }
+        self.ask_overflowed(Instant::now());
+        match self.units.take(wait) {
+            Ok(Some(r)) => Ok(Some(self.unit(r))),
+            Ok(None) => Ok(None),
+            Err(()) => Err(SourceError::Ended(LaneError::not_running("The Simulator helper stopped; the device may have shut down."))),
+        }
+    }
+
+    fn set_layers(&mut self, layers: &[LayerSpec]) {
+        // A layer on a codec the helper said it can't encode would make it
+        // refuse the whole list: that layer fails (its viewers go to JPEG)
+        // and the rest go as they are.
+        let codecs = self.helper.codecs();
+        let mut send = Vec::with_capacity(layers.len());
+        for l in layers {
+            if l.on && !codecs.is_empty() && !codecs.contains(&l.codec) {
+                if !self.failed.iter().any(|(id, _)| *id == l.id) {
+                    let have: Vec<&str> = codecs.iter().map(|c| c.as_str()).collect();
+                    self.failed.push_back((l.id, format!("the Simulator helper can't encode {} (it has {})", l.codec.as_str(), have.join(", "))));
+                }
+                continue;
+            }
+            send.push(*l);
+        }
+        self.layers = send;
+        let _ = self.helper.set_layers(&self.layers);
+    }
+
+    fn request_keyframe(&mut self, layer: u8, since: Option<Instant>) {
+        let since_ns = since.and_then(|t| self.clock.map(|c| c.to_helper_ns(t)));
+        let _ = self.helper.request_keyframe(layer, since_ns);
+    }
+
+    fn sizes(&self) -> Option<SourceSizes> {
+        let (w, _) = self.points();
+        let native = (w * self.screen.2).round() as u32;
+        (w > 0.0).then(|| SourceSizes { points: w.round() as u32, native_px: (native > 0).then_some(native) })
+    }
+}
+
+impl Drop for IosUnits {
+    fn drop(&mut self) {
+        let _ = self.helper.set_layers(&[]);
+    }
+}
+
+impl IosLane {
+    /// The helper's own units for the stream engine, when it negotiated
+    /// protocol 4 (`K2_SIM_HELPER_ENCODE=0` holds the gate at 3) and its
+    /// hello gave the screen; else `None`: protocol 3's JPEG frames through
+    /// the daemon's encoder, as before.
+    fn native_units(&self, udid: &str) -> SimResult<Option<IosUnits>> {
+        let h = self.helper(udid)?;
+        let screen = self.screen(udid);
+        if h.protocol() < 4 || screen.0 <= 0.0 || screen.2 <= 0.0 {
+            return Ok(None);
+        }
+        let Some(units) = h.units() else { return Ok(None) };
+        Ok(Some(IosUnits::new(h, units, self.clock(udid), screen)))
+    }
+}
+
 impl SimLane for IosLane {
     fn kind(&self) -> LaneKind {
         LaneKind::Ios
@@ -794,6 +950,15 @@ impl SimLane for IosLane {
         let src = IosFrames { helper: h.clone(), slot, width_pt: w, native_px: w * scale, clock: self.clock(&dev.device_id) };
         src.configure(opts).lane()?;
         Ok(Box::new(src))
+    }
+
+    /// Protocol 4: the helper's own units ([`IosUnits`]); protocol 3: its
+    /// JPEG frames through the daemon's encoder (the default).
+    fn stream_source(&self, dev: &DeviceRef, opts: FrameOpts, base: FrameSize) -> Result<Box<dyn EncodedSource>, LaneError> {
+        if let Some(u) = self.native_units(&dev.device_id).lane()? {
+            return Ok(Box::new(u));
+        }
+        Ok(Box::new(PixelLayers::new(self.frames(dev, opts)?, opts, base)))
     }
 
     fn logs(&self, dev: &DeviceRef, q: &LogQuery) -> Result<Vec<String>, LaneError> {
@@ -1373,5 +1538,220 @@ mod tests {
         *h.refused.lock().unwrap() = Some(SimError::new("helper_error", "old"));
         lane.act(&r, &t(TouchPhase::Down, 10.0)).unwrap();
         lane.act(&r, &t(TouchPhase::Up, 10.0)).expect("a clean gesture");
+    }
+
+    use crate::stream::Codec;
+    use k2_simvideo::link::{Unit, UnitHeader};
+
+    /// A protocol 4 (or 3) helper: it keeps the units queue and records the
+    /// layer lists, keyframe asks and `frames` starts (the same 402 pt, 3x
+    /// iPhone as [`FakeStream`]).
+    struct FakeP4 {
+        protocol: u32,
+        codecs: Vec<Codec>,
+        queue: Arc<UnitQueue>,
+        layers: M<Vec<Vec<LayerSpec>>>,
+        keys: M<Vec<(u8, Option<u64>)>>,
+        frames_on: M<u32>,
+    }
+    impl HelperIo for FakeP4 {
+        fn call(&self, op: &str, args: J, _t: Duration) -> SimResult<J> {
+            if op == "frames" && args["on"] == true {
+                *self.frames_on.lock().unwrap() += 1;
+            }
+            match op {
+                "hello" => Ok(json!({"ok": true, "screen": {"width": 402.0, "height": 874.0, "scale": 3.0}, "clock_ns": HELLO_CLOCK_NS})),
+                _ => Ok(json!({"ok": true})),
+            }
+        }
+        fn frame_slot(&self, _s: Option<Arc<FrameSlot>>) {}
+        fn alive(&self) -> bool {
+            true
+        }
+        fn protocol(&self) -> u32 {
+            self.protocol
+        }
+        fn codecs(&self) -> Vec<Codec> {
+            self.codecs.clone()
+        }
+        fn set_layers(&self, layers: &[LayerSpec]) -> SimResult<()> {
+            self.layers.lock().unwrap().push(layers.to_vec());
+            Ok(())
+        }
+        fn request_keyframe(&self, layer: u8, since_ns: Option<u64>) -> SimResult<()> {
+            self.keys.lock().unwrap().push((layer, since_ns));
+            Ok(())
+        }
+        fn units(&self) -> Option<Arc<UnitQueue>> {
+            (self.protocol >= 4).then(|| self.queue.clone())
+        }
+    }
+
+    fn p4_lane(protocol: u32, codecs: Vec<Codec>, queue: UnitQueue) -> (IosLane, Arc<FakeP4>, DeviceRef) {
+        let h = Arc::new(FakeP4 { protocol, codecs, queue: Arc::new(queue), layers: M::new(vec![]), keys: M::new(vec![]), frames_on: M::new(0) });
+        let h2 = h.clone();
+        let (lane, _) = lane_with_factory(world(), "26.5", Box::new(move |_, _, _| Ok(h2.clone() as Arc<dyn HelperIo>)));
+        let b = lane.boot(&req("p4", None)).unwrap();
+        let r = dref(&b, "p4");
+        (lane, h, r)
+    }
+
+    fn h264_layer(id: u8, max_width: u32, fps: u32) -> LayerSpec {
+        LayerSpec { id, codec: Codec::H264, max_width, fps, bitrate: 8_000_000, quality: None, on: true }
+    }
+
+    /// A unit as the helper's reader would queue it (read a second from now,
+    /// so no time is clamped to the read).
+    fn received(layer: u8, seq: u64, key: bool, (width, height): (u32, u32), data: Vec<u8>) -> ReceivedUnit {
+        let header = UnitHeader {
+            codec: Codec::H264,
+            key,
+            source_start: key && seq == 1,
+            discardable: false,
+            layer,
+            source: 0,
+            width,
+            height,
+            seq,
+            captured_ns: HELLO_CLOCK_NS + 10_000_000 * seq,
+            emitted_ns: HELLO_CLOCK_NS + 10_000_000 * seq + 4_000_000,
+        };
+        ReceivedUnit { unit: Unit { header, data }, received_at: Instant::now() + Duration::from_secs(1) }
+    }
+
+    /// S3b: on protocol 4 the hub's source is the helper's own units. The
+    /// layer list goes as it is, sizes come from the hello (points, and
+    /// native = points x scale) before any unit, a unit maps with its times
+    /// on the daemon's clock and no daemon encode, its bytes are the read's
+    /// buffer, a landscape unit swaps the points, and dropping it turns
+    /// every layer off. No protocol 3 frames are asked for.
+    #[test]
+    fn a_protocol_4_helper_is_the_hubs_source_and_its_units_map_without_a_copy() {
+        let (lane, h, r) = p4_lane(4, vec![Codec::H264, Codec::Jpeg], UnitQueue::default());
+        let mut src = lane.stream_source(&r, FrameOpts::points(30), FrameSize::Points).unwrap();
+        assert_eq!(*h.frames_on.lock().unwrap(), 0, "no protocol 3 frames");
+        assert_eq!(src.sizes(), Some(SourceSizes { points: 402, native_px: Some(1206) }), "from the hello, before any unit");
+        let list = vec![h264_layer(0, 1206, 60), LayerSpec { id: 1, codec: Codec::Jpeg, max_width: 402, fps: 15, bitrate: 0, quality: None, on: true }, LayerSpec { on: false, ..h264_layer(2, 402, 8) }];
+        src.set_layers(&list);
+        assert_eq!(h.layers.lock().unwrap().last(), Some(&list), "the hub's list as it is");
+
+        let data = b"\0\0\0\x01\x67sps\0\0\0\x01\x68pps\0\0\0\x01\x65idr".to_vec();
+        let ru = received(0, 1, true, (1206, 2622), data.clone());
+        let ptr = ru.unit.data.as_ptr();
+        let read_at = ru.received_at;
+        h.queue.push(ru);
+        let u = src.next_unit(Duration::from_secs(1)).unwrap().expect("a unit");
+        assert_eq!((u.codec, u.key, u.source_start, u.layer, u.seq), (Codec::H264, true, true, 0, 1));
+        assert_eq!((u.width, u.height, u.width_pt, u.height_pt), (1206, 2622, 402, 874));
+        assert!(u.encode.is_none(), "the helper encoded it");
+        assert_eq!(&u.data[..], &data[..]);
+        assert_eq!(u.data.as_ptr(), ptr, "the read's buffer, not a copy");
+        let emitted = u.stamps.emitted_at.expect("emit time");
+        assert_eq!(emitted.duration_since(u.captured_at), Duration::from_millis(4), "the helper's capture to emit");
+        assert_eq!(u.stamps.received_at, Some(read_at));
+        let clock = lane.clock(&r.device_id).expect("the hello's clock");
+        assert_eq!(u.captured_at, clock.at + Duration::from_millis(10), "capture on the daemon's clock");
+        assert!(u.pulled_at <= Instant::now());
+
+        // Rotated: the picture is wider than tall, so are the points.
+        h.queue.push(received(0, 2, true, (2622, 1206), vec![0, 0, 0, 1, 0x65]));
+        let u = src.next_unit(Duration::from_secs(1)).unwrap().expect("a unit");
+        assert_eq!((u.width_pt, u.height_pt), (874, 402));
+        assert_eq!(src.sizes(), Some(SourceSizes { points: 874, native_px: Some(2622) }));
+        assert!(src.next_unit(Duration::ZERO).unwrap().is_none(), "a still screen: nothing");
+        assert!(h.keys.lock().unwrap().is_empty(), "no keyframe asked for");
+        drop(src);
+        assert_eq!(h.layers.lock().unwrap().last(), Some(&vec![]), "dropping it turns every layer off");
+    }
+
+    /// The hub's `since` (its clock) becomes the helper's `since_ns`: the
+    /// inverse of the clock map; no `since` is the next frame.
+    #[test]
+    fn a_keyframe_ask_maps_since_onto_the_helpers_clock() {
+        let (lane, h, r) = p4_lane(4, vec![Codec::H264], UnitQueue::default());
+        let mut src = lane.stream_source(&r, FrameOpts::points(30), FrameSize::Points).unwrap();
+        src.set_layers(&[h264_layer(3, 402, 60)]);
+        let c = lane.clock(&r.device_id).expect("clock");
+        src.request_keyframe(3, Some(c.at + Duration::from_millis(20)));
+        src.request_keyframe(3, None);
+        let mut want = vec![(3, Some(HELLO_CLOCK_NS + 20_000_000)), (3, None)];
+        if let Some(t) = c.at.checked_sub(Duration::from_millis(7)) {
+            src.request_keyframe(3, Some(t));
+            want.push((3, Some(HELLO_CLOCK_NS - 7_000_000)));
+        }
+        assert_eq!(*h.keys.lock().unwrap(), want);
+    }
+
+    /// S3a's queue drops a layer that overflows until its next key and
+    /// wants a keyframe: the source asks at most once a second per layer,
+    /// late rather than never, and not for a layer that has gone.
+    #[test]
+    fn an_overflow_asks_for_a_keyframe_at_most_once_a_second_per_layer() {
+        let (lane, h, r) = p4_lane(4, vec![Codec::H264], UnitQueue::new(2, 1 << 20));
+        let mut src = lane.native_units(&r.device_id).unwrap().expect("protocol 4");
+        src.set_layers(&[h264_layer(0, 402, 60), h264_layer(1, 402, 15)]);
+        let q = h.queue.clone();
+        let keys = || h.keys.lock().unwrap().clone();
+        let sz = (402, 874);
+        q.push(received(0, 1, true, sz, vec![1]));
+        q.push(received(0, 2, false, sz, vec![2]));
+        q.push(received(0, 3, false, sz, vec![3])); // full: layer 0 drops to its next key
+        assert_eq!(src.next_unit(Duration::ZERO).unwrap().map(|u| u.seq), Some(1));
+        assert_eq!(keys(), vec![(0, None)], "the first ask goes at once");
+        q.push(received(0, 4, true, sz, vec![4])); // the key fits: layer 0 resumes
+        q.push(received(0, 5, false, sz, vec![5])); // full again, inside the second
+        assert_eq!(src.next_unit(Duration::ZERO).unwrap().map(|u| u.seq), Some(2));
+        assert_eq!(keys().len(), 1, "throttled");
+        // Another layer's overflow is its own.
+        q.push(received(1, 1, true, sz, vec![6]));
+        q.push(received(1, 2, false, sz, vec![7])); // full: layer 1 drops
+        assert_eq!(src.next_unit(Duration::ZERO).unwrap().map(|u| u.seq), Some(4));
+        assert_eq!(keys(), vec![(0, None), (1, None)], "layer 1 asks at once");
+        // A second on, the waiting ask goes.
+        src.ask_overflowed(Instant::now() + OVERFLOW_KEY_GAP);
+        assert_eq!(keys(), vec![(0, None), (1, None), (0, None)], "late, not never");
+        src.ask_overflowed(Instant::now() + OVERFLOW_KEY_GAP);
+        assert_eq!(keys().len(), 3, "nothing more wanted");
+        // An overflow on a layer the hub has since dropped asks nothing.
+        while src.next_unit(Duration::ZERO).unwrap().is_some() {}
+        src.set_layers(&[h264_layer(0, 402, 60)]);
+        q.push(received(3, 1, true, sz, vec![8]));
+        q.push(received(3, 2, false, sz, vec![9]));
+        q.push(received(1, 3, true, sz, vec![10])); // full: layer 1's key is lost
+        src.ask_overflowed(Instant::now() + 3 * OVERFLOW_KEY_GAP);
+        assert_eq!(keys().len(), 3, "layer 1 is gone");
+        assert_eq!(q.dropped(), 4, "0/3, 0/5, 1/2 and 1/3");
+    }
+
+    /// A layer on a codec the helper doesn't encode fails on its own (the
+    /// hub moves its viewers to JPEG); the rest of the list still goes.
+    #[test]
+    fn a_codec_the_helper_lacks_fails_that_layer_alone() {
+        let (lane, h, r) = p4_lane(4, vec![Codec::Jpeg], UnitQueue::default());
+        let mut src = lane.stream_source(&r, FrameOpts::points(30), FrameSize::Points).unwrap();
+        let jpeg = LayerSpec { id: 1, codec: Codec::Jpeg, max_width: 402, fps: 15, bitrate: 0, quality: None, on: true };
+        src.set_layers(&[h264_layer(0, 402, 60), jpeg]);
+        assert_eq!(h.layers.lock().unwrap().last(), Some(&vec![jpeg]));
+        match src.next_unit(Duration::ZERO) {
+            Err(SourceError::LayerFailed { layer: 0, why }) => assert!(why.contains("h264") && why.contains("jpeg"), "{why}"),
+            other => panic!("want layer 0 failed, got {:?}", other.map(|u| u.map(|u| u.seq))),
+        }
+        assert!(src.next_unit(Duration::ZERO).unwrap().is_none(), "once");
+    }
+
+    /// The rollback (`K2_SIM_HELPER_ENCODE=0` holds the gate at 3, helper.rs)
+    /// and a protocol 3 helper: S2's path, protocol 3 JPEG frames through
+    /// the daemon's encoder; the helper never gets a layer list.
+    #[test]
+    fn a_protocol_3_helper_streams_jpeg_frames_through_the_daemon() {
+        let (lane, h, r) = p4_lane(3, vec![], UnitQueue::default());
+        assert!(lane.native_units(&r.device_id).unwrap().is_none());
+        let mut src = lane.stream_source(&r, FrameOpts::points(30), FrameSize::Points).unwrap();
+        assert_eq!(*h.frames_on.lock().unwrap(), 1, "the protocol 3 frames, opened at points");
+        assert_eq!(src.sizes(), None, "a pixel source knows its sizes at its first frame");
+        src.set_layers(&[h264_layer(0, 402, 30)]);
+        assert!(src.next_unit(Duration::from_millis(30)).unwrap().is_none());
+        assert!(h.layers.lock().unwrap().is_empty(), "no layers to a protocol 3 helper");
+        assert!(h.keys.lock().unwrap().is_empty());
     }
 }

@@ -764,6 +764,16 @@ pub trait SimLane: Send + Sync + 'static {
     /// Start a live capture for the shared encoder.
     fn frames(&self, dev: &DeviceRef, opts: FrameOpts) -> Result<Box<dyn FrameSource>, LaneError>;
 
+    /// The stream engine's source for a live capture (fix 10, S3b; the
+    /// hub's `open`). Default: [`SimLane::frames`] opened with `opts`, each
+    /// frame encoded once per layer by the daemon
+    /// ([`crate::stream::pixel::PixelLayers`], capturing at `base` while
+    /// every layer is points-sized). A lane whose device encodes itself
+    /// (iOS on protocol 4) relays its units instead.
+    fn stream_source(&self, dev: &DeviceRef, opts: FrameOpts, base: FrameSize) -> Result<Box<dyn crate::stream::EncodedSource>, LaneError> {
+        Ok(Box::new(crate::stream::pixel::PixelLayers::new(self.frames(dev, opts)?, opts, base)))
+    }
+
     /// Bounded log lines (oldest first), not yet redacted.
     fn logs(&self, dev: &DeviceRef, q: &LogQuery) -> Result<Vec<String>, LaneError>;
 

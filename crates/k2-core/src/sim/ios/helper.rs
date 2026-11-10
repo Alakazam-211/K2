@@ -99,6 +99,16 @@ impl HelperClock {
         };
         t.unwrap_or(limit).min(limit)
     }
+
+    /// A daemon time on the helper's clock (the inverse of
+    /// [`Self::to_instant`]): a keyframe request's `since_ns`.
+    pub fn to_helper_ns(&self, t: Instant) -> u64 {
+        if t >= self.at {
+            self.helper_ns.saturating_add(u64::try_from(t.duration_since(self.at).as_nanos()).unwrap_or(u64::MAX))
+        } else {
+            self.helper_ns.saturating_sub(u64::try_from(self.at.duration_since(t).as_nanos()).unwrap_or(u64::MAX))
+        }
+    }
 }
 
 /// The newest protocol the daemon asks a helper for: [`PROTOCOL_VERSION`],
@@ -989,6 +999,23 @@ mod tests {
             assert_eq!(c.to_instant(4_993_000_000, limit), earlier);
         }
         assert_eq!(c.to_instant(9_000_000_000, limit), limit, "clamped to the read time");
+    }
+
+    #[test]
+    fn a_daemon_time_maps_back_onto_the_helpers_clock() {
+        let at = Instant::now();
+        let c = HelperClock { helper_ns: 5_000_000_000, at };
+        assert_eq!(c.to_helper_ns(at), 5_000_000_000);
+        assert_eq!(c.to_helper_ns(at + Duration::from_millis(20)), 5_020_000_000);
+        if let Some(earlier) = at.checked_sub(Duration::from_millis(7)) {
+            assert_eq!(c.to_helper_ns(earlier), 4_993_000_000);
+        }
+        let t = at + Duration::from_micros(1234);
+        assert_eq!(c.to_instant(c.to_helper_ns(t), t + Duration::from_secs(1)), t, "the inverse of to_instant");
+        let young = HelperClock { helper_ns: 10, at };
+        if let Some(long_ago) = at.checked_sub(Duration::from_secs(1)) {
+            assert_eq!(young.to_helper_ns(long_ago), 0, "never before the helper's zero");
+        }
     }
 
     #[test]

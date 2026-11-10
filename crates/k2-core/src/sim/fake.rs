@@ -45,7 +45,14 @@ pub struct FakeLane {
     /// `act` waits here until this goes false (a test fills a viewer's
     /// input queue).
     pub hold_act: AtomicBool,
+    /// When set, the stream hub's source: units the "device" encoded
+    /// itself, as the iOS helper does on protocol 4 (S3b). Unset: its
+    /// frames through the daemon's encoder.
+    pub native: Mutex<Option<NativeSource>>,
 }
+
+/// Makes [`FakeLane::native`]'s source, once per hub.
+pub type NativeSource = Box<dyn Fn() -> Box<dyn crate::stream::EncodedSource> + Send + Sync>;
 
 impl FakeLane {
     pub fn new(kind: LaneKind) -> FakeLane {
@@ -66,6 +73,7 @@ impl FakeLane {
             frame_opts: Arc::new(Mutex::new(Vec::new())),
             source_hz: AtomicU32::new(60),
             hold_act: AtomicBool::new(false),
+            native: Mutex::new(None),
         }
     }
 
@@ -292,6 +300,15 @@ impl SimLane for FakeLane {
         self.frame_opts.lock().push(("open", opts));
         let period = Duration::from_secs_f64(1.0 / self.source_hz.load(Ordering::SeqCst).max(1) as f64);
         Ok(Box::new(FakeFrames { seq: 0, opts: self.frame_opts.clone(), now: opts, period, next_due: None }))
+    }
+
+    fn stream_source(&self, dev: &DeviceRef, opts: FrameOpts, base: FrameSize) -> Result<Box<dyn crate::stream::EncodedSource>, LaneError> {
+        self.check_running(dev)?;
+        let native = self.native.lock().as_ref().map(|make| make());
+        match native {
+            Some(s) => Ok(s),
+            None => Ok(Box::new(crate::stream::pixel::PixelLayers::new(self.frames(dev, opts)?, opts, base))),
+        }
     }
 
     fn logs(&self, dev: &DeviceRef, q: &LogQuery) -> Result<Vec<String>, LaneError> {

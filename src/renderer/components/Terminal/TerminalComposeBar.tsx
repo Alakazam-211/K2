@@ -22,7 +22,8 @@
 // box; a failed send restores the text (the box reappearing IS the feedback).
 
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { leaveComposeHandoff, takeComposeHandoff } from './composeHandoff'
 import { createPortal } from 'react-dom'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import {
@@ -60,6 +61,7 @@ import {
   consumeComposeSlashToken,
   composeAgentNameFromProjects,
   composeMessagePlaceholder,
+  composeWaitingLabel,
   composerPermitted,
   extractImagePathsFromDraft,
   filterComposeSlashCommands,
@@ -121,9 +123,6 @@ import {
   stashPrefersReducedMotion,
 } from '@/components/PromptStash/PromptStash'
 import { clientToCssPx, useContextMenuStore } from '@/stores/context-menu'
-
-/** Shown when Thread Send runs before this cell has its own address. The draft stays. */
-const THREAD_ADDR_NOT_READY = "This session isn't ready yet. Your draft is still here."
 
 interface TerminalComposeBarProps {
   /** Resolved PTY SessionId for this pane — the pane's `terminalId`. */
@@ -220,13 +219,16 @@ export function TerminalComposeBar({
   // Home M1: prefixed with the server's host key (`<hostKey>|…`).
   // Keyed by the pane's agent (`draftId`) when the host passes one, so the
   // text survives a refresh (new PTY, new `sessionId`, remounted bar).
+  // The Thread's box shows before its session is up (the pinned Chat's
+  // ensure, a tile still checking): the host passes the same `draftId` the
+  // pane will (ThreadEarlyCompose), so the session arriving never swaps or
+  // wipes the text. No owner at all: memory only.
   const draftOwner = draftId ? `agent:${draftId}` : sessionId
-  const draftKey = scopedKey(
-    scope,
-    sendOnThread ? `k2:composer:draft:${draftOwner}:thread` : `k2:composer:draft:${draftOwner}`,
-  )
+  const draftKey = draftOwner
+    ? scopedKey(scope, sendOnThread ? `k2:composer:draft:${draftOwner}:thread` : `k2:composer:draft:${draftOwner}`)
+    : ''
   const [draft, setDraft] = useState<string>(() => {
-    if (!draftOwner) return ''
+    if (!draftKey) return ''
     try {
       return localStorage.getItem(draftKey) ?? ''
     } catch {
@@ -234,6 +236,10 @@ export function TerminalComposeBar({
     }
   })
   const [sending, setSending] = useState(false)
+  // A Thread send made before the Thread has an address (a side chat whose
+  // session is still starting): the draft stays, Send waits, and it goes by
+  // itself once the address comes.
+  const [queued, setQueued] = useState(false)
   const [history, setHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [slashCommand, setSlashCommand] = useState<ComposeSlashCommand | null>(null)
@@ -274,16 +280,22 @@ export function TerminalComposeBar({
   // they survive a tab switch and a refused send. Without the feature the
   // old path text goes into the draft.
   const threadFilesOn = sendOnThread && threadComposeAttachOn(scope)
-  const threadFilesKey = `${scopedKey(scope, `k2:composer:draft:${draftOwner}:thread`)}:files`
-  const [threadFiles, setThreadFiles] = useState<ThreadComposeFile[]>(() => readThreadComposeFiles(threadFilesKey))
+  const threadFilesKey = draftOwner ? `${scopedKey(scope, `k2:composer:draft:${draftOwner}:thread`)}:files` : ''
+  const [threadFiles, setThreadFiles] = useState<ThreadComposeFile[]>(() =>
+    threadFilesKey ? readThreadComposeFiles(threadFilesKey) : [],
+  )
   const threadFilesLoadedKey = useRef(threadFilesKey)
   useEffect(() => {
-    if (threadFilesLoadedKey.current === threadFilesKey) return
+    const prev = threadFilesLoadedKey.current
+    if (prev === threadFilesKey) return
     threadFilesLoadedKey.current = threadFilesKey
-    setThreadFiles(readThreadComposeFiles(threadFilesKey))
+    const stored = threadFilesKey ? readThreadComposeFiles(threadFilesKey) : []
+    // Files attached while the box had no owner yet stay on it.
+    if (!prev) setThreadFiles((cur) => (cur.length > 0 ? cur : stored))
+    else setThreadFiles(stored)
   }, [threadFilesKey])
   useEffect(() => {
-    if (threadFilesLoadedKey.current !== threadFilesKey) return
+    if (!threadFilesKey || threadFilesLoadedKey.current !== threadFilesKey) return
     writeThreadComposeFiles(threadFilesKey, threadFiles)
   }, [threadFiles, threadFilesKey])
   const pendingFiles = threadFilesOn ? threadFiles : []
@@ -291,34 +303,72 @@ export function TerminalComposeBar({
   // Reload the saved draft when the pane's draft owner changes — this component
   // can be reused for another agent on a workspace/tab switch without
   // remounting. The PTY's `sessionId` arriving after a refresh is no change.
+  // Text typed while the box had no owner yet (memory only) stays on screen
+  // and is saved under the owner it gets.
+  const draftLoadedKey = useRef(draftKey)
   useEffect(() => {
-    if (!draftOwner) {
-      setDraft('')
-      setHistoryIndex(-1)
-      historyDraftRef.current = ''
-      setSlashCommand(null)
-      setSlashMenuOpen(false)
-      setSlashMenuFromTypeahead(false)
-      setSlashHighlight(0)
+    const prev = draftLoadedKey.current
+    if (prev === draftKey) return
+    draftLoadedKey.current = draftKey
+    let stored = ''
+    if (draftKey) {
+      try {
+        stored = localStorage.getItem(draftKey) ?? ''
+      } catch {
+        stored = ''
+      }
+    }
+    if (!prev && draftKey) {
+      setDraft((cur) => cur || stored)
       return
     }
-    try {
-      setDraft(localStorage.getItem(draftKey) ?? '')
-    } catch {
-      setDraft('')
-    }
+    setDraft(stored)
     setHistoryIndex(-1)
     historyDraftRef.current = ''
     setSlashCommand(null)
     setSlashMenuOpen(false)
     setSlashMenuFromTypeahead(false)
     setSlashHighlight(0)
-  }, [draftKey, draftOwner])
+  }, [draftKey])
+
+  // Drafts saved under an older key come over once, unless this box already
+  // has words or files: the PTY session's (before `agent:<draftId>`), and a
+  // preview build's Thread pane key (`thread:<path>|<agent>`).
+  const legacyDraftKeys = (() => {
+    if (!draftId) return [] as string[]
+    const keys: string[] = []
+    if (sessionId) keys.push(scopedKey(scope, sendOnThread ? `k2:composer:draft:${sessionId}:thread` : `k2:composer:draft:${sessionId}`))
+    if (sendOnThread && sessionChrome?.agentName === draftId) {
+      keys.push(scopedKey(scope, `k2:composer:draft:thread:${sessionChrome.projectPath?.trim() ?? ''}|${draftId}`))
+    }
+    return keys
+  })()
+  const legacyDraftKeysId = legacyDraftKeys.join('\n')
+  useEffect(() => {
+    if (!draftKey || !legacyDraftKeysId) return
+    for (const key of legacyDraftKeysId.split('\n')) {
+      let old: string | null = null
+      let oldFiles: ThreadComposeFile[] = []
+      try {
+        old = localStorage.getItem(key)
+        if (old !== null) localStorage.removeItem(key)
+        if (sendOnThread) {
+          oldFiles = readThreadComposeFiles(`${key}:files`)
+          if (oldFiles.length > 0) localStorage.removeItem(`${key}:files`)
+        }
+      } catch {
+        return
+      }
+      const oldText = old ?? ''
+      if (oldText) setDraft((cur) => cur || oldText)
+      if (oldFiles.length > 0) setThreadFiles((cur) => (cur.length > 0 ? cur : oldFiles))
+    }
+  }, [draftKey, legacyDraftKeysId, sendOnThread])
 
   // Persist on every change (localStorage writes are cheap + synchronous — this
   // is the crash-durable store). An empty draft clears the key.
   useEffect(() => {
-    if (!draftOwner) return
+    if (!draftKey) return
     try {
       if (draft) localStorage.setItem(draftKey, draft)
       else {
@@ -371,6 +421,40 @@ export function TerminalComposeBar({
     el.setSelectionRange(start, end)
   }, [draftOwner])
 
+  // The box drawn again by another tree (the pinned Chat's starting body
+  // gives way to its terminal pane when the session comes up): a box that
+  // had the caret hands it, its text and its "/" command to the new one
+  // with the same draft, in the same commit, before paint (composeHandoff.ts).
+  const slashCommandRef = useRef(slashCommand)
+  slashCommandRef.current = slashCommand
+  useLayoutEffect(() => {
+    const el = textareaRef.current
+    if (!el || !draftKey) return
+    const handoff = takeComposeHandoff(draftKey)
+    if (handoff && !isEffectivelyHidden(el)) {
+      // The words as they were on the old box (the saved draft can be a
+      // keystroke behind). Set on the element first, so React's re-render
+      // to the same value leaves the caret alone.
+      if (el.value !== handoff.text) {
+        el.value = handoff.text
+        setDraft(handoff.text)
+      }
+      if (handoff.command) setSlashCommand(handoff.command)
+      if (document.activeElement !== el) el.focus({ preventScroll: true })
+      const len = el.value.length
+      el.setSelectionRange(Math.min(handoff.start, len), Math.min(handoff.end, len))
+    }
+    return () => {
+      if (!el.isConnected || document.activeElement !== el) return
+      leaveComposeHandoff(draftKey, {
+        text: el.value,
+        start: el.selectionStart,
+        end: el.selectionEnd,
+        command: slashCommandRef.current,
+      })
+    }
+  }, [draftKey])
+
   // Workspace-switch "Message agent" pref: take the caret when this bar
   // mounts (or its session changes) so we win the race against the
   // terminal-grid remount. Terminal-mode users are left alone, and so are
@@ -380,7 +464,8 @@ export function TerminalComposeBar({
     if (useSettingsStore.getState().workspaceSwitchFocus !== 'composer') return
     const id = requestAnimationFrame(() => {
       const el = textareaRef.current
-      if (!el || !composeBarMayTakeFocus(el)) return
+      // Already typing here (the session just came up): leave the caret be.
+      if (!el || document.activeElement === el || !composeBarMayTakeFocus(el)) return
       el.focus()
       restoreCaret()
     })
@@ -793,13 +878,17 @@ export function TerminalComposeBar({
     if (sessionChrome?.viewTab === 'chatter') return
     if (sendOnThread) {
       if (!threadAddr.trim()) {
-        setThreadAddrError(THREAD_ADDR_NOT_READY)
+        // The Thread has no address yet (its session is still starting):
+        // the draft stays and goes by itself once the address comes.
+        setThreadAddrError(null)
+        setQueued(true)
         return
       }
     } else if (!sessionId) {
       return
     }
 
+    setQueued(false)
     setSending(true)
     setDraft('') // optimistic clear (PRD 1b); restored below only on failure
     setStashNotes([])
@@ -876,6 +965,20 @@ export function TerminalComposeBar({
       setSending(false)
     }
   }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand, sessionChrome?.viewTab, pendingFiles, scope, reply])
+
+  // A waiting send goes once the Thread has its address (with the words in
+  // the box then); emptying the box calls it off.
+  const sendRef = useRef(send)
+  sendRef.current = send
+  const queuedEmpty = draft.trim().length === 0 && slashCommand == null && pendingFiles.length === 0
+  useEffect(() => {
+    if (!queued) return
+    if (queuedEmpty) {
+      setQueued(false)
+      return
+    }
+    if (threadAddr.trim()) void sendRef.current()
+  }, [queued, queuedEmpty, threadAddr])
 
   const slashTypeaheadQuery = composeSlashTypeaheadQuery(draft)
   const slashMatches =
@@ -1153,6 +1256,13 @@ export function TerminalComposeBar({
       onChange={handleLocalFiles}
     />
   )
+  // A send waiting for the Thread's address (composeWaitingLabel).
+  const waitingLabel = composeWaitingLabel(sessionChrome?.displayName || agentName)
+  const waitingNote = queued ? (
+    <p role="status" data-testid="compose-thread-waiting" className="text-[11px] text-[var(--color-text-muted)]">
+      {waitingLabel}.
+    </p>
+  ) : null
   const addrError = threadAddrError ? (
     <p
       role="alert"
@@ -1399,6 +1509,7 @@ export function TerminalComposeBar({
         onDrop={handleDrop}
       >
         {addrError ? <div style={{ marginBottom: 6 }}>{addrError}</div> : null}
+        {waitingNote ? <div style={{ marginBottom: 6 }}>{waitingNote}</div> : null}
         {stashNotesEl ? <div style={{ marginBottom: 6 }}>{stashNotesEl}</div> : null}
         {fileInput}
         <ThreadComposeBox
@@ -1504,10 +1615,11 @@ export function TerminalComposeBar({
             </ThreadRoundButton>
           ) : null}
           <ThreadSendButton
-            canSend={canSend}
+            canSend={canSend && !queued}
+            waiting={queued}
             onClick={() => void send()}
-            label="Send message"
-            title="Send"
+            label={queued ? waitingLabel : 'Send message'}
+            title={queued ? waitingLabel : 'Send'}
             size={COMPOSE_TOOL.height}
           />
         </ThreadComposeBox>
@@ -1527,6 +1639,7 @@ export function TerminalComposeBar({
       onDrop={handleDrop}
     >
       {addrError}
+      {waitingNote}
       {stashNotesEl}
       {fileInput}
       {stashOpen ? stashDrawerEl('square') : null}
@@ -1616,9 +1729,10 @@ export function TerminalComposeBar({
       ) : null}
       <button
         type="button"
-        aria-label="Send message"
-        title="Send"
-        disabled={!canSend}
+        aria-label={queued ? waitingLabel : 'Send message'}
+        title={queued ? waitingLabel : 'Send'}
+        aria-busy={queued || undefined}
+        disabled={!canSend || queued}
         onClick={() => void send()}
         className="inline-flex flex-shrink-0 items-center justify-center bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
         style={{

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// Sidecar Thread send keeps asking for its own address. An early Send shows
-// an error and leaves the draft. Fail loud — no skip.
+// Sidecar Thread send keeps asking for its own address. An early Send waits
+// with the draft and goes once the address comes. Fail loud — no skip.
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -45,7 +45,8 @@ vi.mock('@/kessel/daemon-ws', () => ({
 import { AgentSessionChrome, SIDECAR_OVERLAY_ADDR_RETRY_MS, sidecarViewKey, useSidecarOverlayAddr } from './AgentSessionChrome'
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 
-const NOT_READY = "This session isn't ready yet. Your draft is still here."
+// The Harness's chrome title is "agent" until the address comes.
+const WAITING = 'Sends when agent is ready'
 const seenAddrs: string[] = []
 
 function AddrProbe() {
@@ -166,27 +167,57 @@ describe('sidecar thread send address', () => {
     expect(seenAddrs).not.toContain('sales')
   })
 
-  it('send before any address does not post and keeps the draft', async () => {
+  it('send before any address waits with the draft, then sends once the address comes', async () => {
     h.sticky.current = []
     renderInPrimaryRoom(<Harness />)
     await waitFor(() => expect(listCalls().length).toBeGreaterThanOrEqual(1))
 
     const box = typeAndSend('  not yet  ')
     expect(box.value).toBe('  not yet  ')
-    expect(screen.getByTestId('compose-thread-addr-error').textContent).toBe(NOT_READY)
+    expect(screen.getByTestId('compose-thread-waiting').textContent).toBe(`${WAITING}.`)
+    expect(screen.queryByTestId('compose-thread-addr-error')).toBeNull()
+    const waiting = screen.getByRole('button', { name: WAITING })
+    expect(waiting.hasAttribute('disabled')).toBe(true)
+    expect(waiting.hasAttribute('data-zen-send-waiting')).toBe(true)
     expect(threadPosts()).toEqual([])
-    expect(screen.getByRole('button', { name: 'Send message' }).hasAttribute('disabled')).toBe(false)
 
     await waitFor(
       () => expect(listCalls().length).toBeGreaterThanOrEqual(2),
       { timeout: 2500 },
     )
+    // Still no address: nothing posted, the words still there.
     expect(threadPosts()).toEqual([])
     expect(box.value).toBe('  not yet  ')
-    expect(screen.getByTestId('compose-thread-addr-error').textContent).toBe(NOT_READY)
     expect(screen.getByTestId('thread-view-name').textContent).toBe('agent')
     expect(seenAddrs).not.toContain('sales')
-    expect(seenAddrs).not.toContain('sales/reviewer')
+
+    // The side chat's session comes up: it goes by itself, once.
+    h.sticky.current = [{ agentName: 'tab-pg-1', kind: 'sidecar', handle: 'sales/reviewer' }]
+    await waitFor(
+      () =>
+        expect(threadPosts()).toEqual([
+          ['thread/post', { addr: 'sales/reviewer', text: 'not yet', via: 'compose', clientMsgId: expect.stringMatching(/^[0-9a-f]{32}$/) }],
+        ]),
+      { timeout: 2500 },
+    )
+    await waitFor(() => expect(box.value).toBe(''))
+    expect(screen.queryByTestId('compose-thread-waiting')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeTruthy()
+    await new Promise((resolve) => setTimeout(resolve, SIDECAR_OVERLAY_ADDR_RETRY_MS + 100))
+    expect(threadPosts().length).toBe(1)
+  })
+
+  it('emptying the box calls off a waiting send', async () => {
+    h.sticky.current = []
+    renderInPrimaryRoom(<Harness />)
+    await waitFor(() => expect(listCalls().length).toBeGreaterThanOrEqual(1))
+    const box = typeAndSend('never mind')
+    expect(screen.getByTestId('compose-thread-waiting')).toBeTruthy()
+    fireEvent.change(box, { target: { value: '' } })
+    await waitFor(() => expect(screen.queryByTestId('compose-thread-waiting')).toBeNull())
+    h.sticky.current = [{ agentName: 'tab-pg-1', kind: 'sidecar', handle: 'sales/reviewer' }]
+    await waitFor(() => expect(screen.getByTestId('thread-view-name').textContent).toBe('sales/reviewer'), { timeout: 2500 })
+    expect(threadPosts()).toEqual([])
   })
 })
 

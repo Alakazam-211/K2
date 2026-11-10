@@ -1218,6 +1218,7 @@ export function ThreadSendButton({
   title = 'Send (Enter)',
   size = 32,
   testId,
+  waiting = false,
 }: {
   canSend: boolean
   onClick: () => void
@@ -1226,6 +1227,9 @@ export function ThreadSendButton({
   /** Its square side (px); the desktop Thread's box uses 26. */
   size?: number
   testId?: string
+  /** A send held until the session is ready: a clock in the accent on the
+   *  resting fill, not pressable (it goes by itself). */
+  waiting?: boolean
 }): JSX.Element {
   // The square Style cut for a control this size.
   const cut = chamferCutFor(size)
@@ -1239,6 +1243,8 @@ export function ThreadSendButton({
       aria-label={label}
       title={title}
       data-zen-send=""
+      data-zen-send-waiting={waiting ? '' : undefined}
+      aria-busy={waiting || undefined}
       data-zen-pressed={lit ? 'true' : undefined}
       data-testid={testId}
       {...ZEN_TILE_RAISED_PROPS}
@@ -1252,16 +1258,23 @@ export function ThreadSendButton({
         height: size,
         borderRadius: 999,
         background: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)',
-        color: canSend ? 'var(--zen-accent-text)' : 'var(--zen-text-muted)',
+        color: canSend ? 'var(--zen-accent-text)' : waiting ? 'var(--zen-accent)' : 'var(--zen-text-muted)',
         filter: lit ? THREAD_SEND_PRESSED_FILTER : undefined,
         transition: 'background-color 140ms ease, filter 90ms ease-out',
         ...chamferVars({ cut, fill: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)' }),
       }}
     >
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <path d="M8 13V3" />
-        <path d="M3.5 7.5 8 3l4.5 4.5" />
-      </svg>
+      {waiting ? (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <circle cx="8" cy="8" r="6" />
+          <path d="M8 4.75V8l2.25 1.5" />
+        </svg>
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M8 13V3" />
+          <path d="M3.5 7.5 8 3l4.5 4.5" />
+        </svg>
+      )}
     </button>
   )
 }

@@ -77,6 +77,18 @@ function renderThreadBar(scope: ServerScope = primaryScope(), withTurn = false):
   )
 }
 
+/** The Thread box while the session is still starting (no session id yet):
+ *  the same stash as the full box. */
+function renderEarlyThreadBar(): void {
+  const room = testRoom({ tabs: {}, scope: primaryScope(), projects: [] })
+  renderInRoom(
+    room,
+    <SessionViewChromeContext.Provider value={{ ...chrome, projectPath: '/ws/sales' }}>
+      <TerminalComposeBar sessionId="" draftId="sales" workspacePath="/ws/sales" sendDestination="thread" />
+    </SessionViewChromeContext.Provider>,
+  )
+}
+
 function renderPtyBar(): void {
   const room = testRoom({ tabs: {}, scope: primaryScope(), projects: [] })
   renderInRoom(room, <TerminalComposeBar sessionId="sess-2" workspacePath="/ws/sales" sendDestination="pty" />)
@@ -215,6 +227,7 @@ describe('"Save to stash" in the "+" menu', () => {
   it.each([
     ['the Thread box', renderThreadBar],
     ['the terminal compose bar', renderPtyBar],
+    ['the Thread box before its session is ready', renderEarlyThreadBar],
   ])('in %s: attach first, then Save to stash, dimmed on an empty box', (_where, renderBar) => {
     renderBar()
     openPlus()
@@ -226,8 +239,13 @@ describe('"Save to stash" in the "+" menu', () => {
     expect(screen.getByTestId('compose-plus').getAttribute('aria-expanded')).toBe('true')
   })
 
-  it('with text it is enabled, and picking it saves, then clears the box', async () => {
-    renderThreadBar()
+  it.each([
+    ['the Thread box', () => renderThreadBar()],
+    ['the Thread box before its session is ready', renderEarlyThreadBar],
+  ])('in %s, with text it is enabled, and picking it saves, then clears the box', async (_where, renderBar) => {
+    renderBar()
+    // The stash button sits beside Send while the box is empty.
+    expect(screen.getByTestId('stash-button')).toBeTruthy()
     type('stash me from the menu')
     openPlus()
     expect(row('stash').enabled).toBe(true)

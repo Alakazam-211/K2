@@ -355,6 +355,13 @@ export function composeMessagePlaceholder(agentName: string | undefined | null):
   return name ? `Message ${name}` : 'Message the agent'
 }
 
+/** A Thread send made before the Thread has its address waits, and its
+ *  Send says so. */
+export function composeWaitingLabel(name: string | null | undefined): string {
+  const n = (name ?? '').trim()
+  return n ? `Sends when ${n} is ready` : 'Sends when the agent is ready'
+}
+
 /** Resolve the Agents-list name for this pane's workspace path. */
 export function composeAgentNameFromProjects(
   projects: Array<{

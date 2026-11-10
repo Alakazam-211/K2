@@ -1287,6 +1287,46 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     h.daemonCliPost.mockImplementation(async () => mountEnsure())
   })
 
+  it('Thread view: the message box is there and sends while ensure-pinned-chat is still in flight', async () => {
+    localStorage.clear()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    h.daemonCliPost.mockImplementation(async (route: string, body?: unknown) => {
+      if (route === 'workspace/ensure-pinned-chat') {
+        await gate
+        return mountEnsure()
+      }
+      if (route === 'thread/post') return { ok: true, id: 'p1', seq: 1, body: (body as { text: string }).text }
+      return undefined
+    })
+    localStorage.setItem(sessionViewTabStorageKey('local', 'claude-restored'), 'thread')
+    renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" restoredSessionId="claude-restored" />)
+    await waitFor(() => expect(screen.getByTestId('agent-session-ensuring')).toBeTruthy())
+    const slot = screen.getByTestId('agent-session-thread-compose-slot')
+    const box = slot.querySelector('textarea') as HTMLTextAreaElement
+    expect(box).not.toBeNull()
+    expect(box.disabled).toBe(false)
+    expect(box.readOnly).toBe(false)
+    box.focus()
+    fireEvent.change(box, { target: { value: 'start on the pricing page' } })
+    expect(box.value).toBe('start on the pricing page')
+    expect(document.activeElement).toBe(box)
+    // Saved under the pane's draft (the ready pane's box reads the same).
+    expect(localStorage.getItem('local|k2:composer:draft:agent:proj-1:thread')).toBe('start on the pricing page')
+    // The Thread route needs the address, not the session: it goes now.
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() =>
+      expect(h.daemonCliPost).toHaveBeenCalledWith('thread/post', expect.objectContaining({ addr: 'sales', text: 'start on the pricing page', via: 'compose' })),
+    )
+    expect(screen.queryByTestId('terminal-pane')).toBeNull()
+    await act(async () => release())
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    localStorage.clear()
+    h.daemonCliPost.mockImplementation(async () => mountEnsure())
+  })
+
   it('a new agent with no Thread yet: Split view, terminal side left, the empty Thread on the right', async () => {
     localStorage.clear()
     let release: () => void = () => {}

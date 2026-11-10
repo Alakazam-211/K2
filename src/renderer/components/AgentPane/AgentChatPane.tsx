@@ -44,6 +44,7 @@ import {
 import ModeToggle, { ModeToggleSessionContext, type ModeToggleSession } from '@/components/Presence/ModeToggle'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
+import { ThreadEarlyCompose } from '@/components/SessionView/ThreadEarlyCompose'
 import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumns'
 import { prefetchThread } from '@/components/SessionView/threadRead'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
@@ -1367,6 +1368,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
             addr={overlayAddr}
             conversationId={overlayConv}
             displayName={displayName}
+            agentName={projectId}
+            projectPath={projectPath}
           />
         </SplitColumnFloatsContext.Provider>
       </div>
@@ -1429,8 +1432,12 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
 }
 
 /** While the pinned Chat is being ensured: the Thread (and Chatter), with
- *  "Loading session…" where the terminal will be. No message box yet: it
- *  comes with the terminal pane a moment later. */
+ *  "Loading session…" where the terminal will be. The message box is there
+ *  at once (Rosson 2026-11-10: "The user should be able to type there"): a
+ *  Thread post needs the address, not the session. It shares its draft with
+ *  the terminal pane's box, so when the session comes up the person keeps
+ *  typing (ThreadEarlyCompose). Placed as the ready Thread places it
+ *  (`centreEmpty`), so nothing moves then. */
 function EnsuringThreadBody({
   viewTab,
   splitLeft,
@@ -1438,6 +1445,8 @@ function EnsuringThreadBody({
   addr,
   conversationId,
   displayName,
+  agentName,
+  projectPath,
 }: {
   viewTab: SessionViewTab
   splitLeft: SplitPaneView
@@ -1445,6 +1454,9 @@ function EnsuringThreadBody({
   addr: string
   conversationId: string | null
   displayName?: string
+  /** The ready pane's chrome agent name (the workspace id). */
+  agentName: string
+  projectPath: string
 }): React.JSX.Element {
   const loading = (
     <div
@@ -1460,8 +1472,17 @@ function EnsuringThreadBody({
       addr={addr}
       conversationId={conversationId}
       active
-      composeBar={null}
+      composeBar={
+        <ThreadEarlyCompose
+          addr={addr}
+          conversationId={conversationId}
+          agentName={agentName}
+          projectPath={projectPath}
+          displayName={displayName}
+        />
+      }
       agentName={displayName || addr}
+      centreEmpty
       textCapPx={textCapPx}
     />
   )

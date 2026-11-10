@@ -198,6 +198,22 @@ describe('an asleep tile', () => {
     expect(wake.calls).toEqual(['ws-sales'])
   })
 
+  it('still checking its session: the message box is there at once, then a Wake bar if it is asleep', () => {
+    const r = renderInRoom(room, <Tile phase={{ kind: 'checking' }} />)
+    const box = screen.getByTestId('agent-session-thread-compose-slot').querySelector('textarea') as HTMLTextAreaElement
+    expect(box).not.toBeNull()
+    expect(box.disabled).toBe(false)
+    fireEvent.change(box, { target: { value: 'morning' } })
+    expect(box.value).toBe('morning')
+    expect(screen.queryByTestId('tile-wake-bar')).toBeNull()
+    r.rerender(
+      <div data-tile-view="thread" data-testid="tile">
+        <DashboardAgentTile workspaceId="ws-sales" member={member} dashboardId="d1" initialPhase={DORMANT} view="thread" addr="sales" />
+      </div>,
+    )
+    expect(screen.getByTestId('tile-wake-bar').textContent).toContain('sales is asleep.')
+  })
+
   it('Terminal view offers Wake too; Heartbeats reads without a session', () => {
     renderInRoom(room, <Tile phase={DORMANT} />)
     pick('terminal')

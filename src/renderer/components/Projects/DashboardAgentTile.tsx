@@ -31,6 +31,7 @@ import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { Button } from '@/components/ui'
 import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
+import { ThreadEarlyCompose } from '@/components/SessionView/ThreadEarlyCompose'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { InputsList } from '@/components/SessionView/ThreadDrawerPanel'
 import { ThreadFloatBell } from '@/components/SessionView/ThreadFloatBell'
@@ -337,13 +338,18 @@ export function DashboardAgentTile({
       </TileHost>
     )
   }
-  // Thread, not live: the box arrives with the session; asleep, a Wake bar
-  // stands where it goes.
+  // Thread, not live: still checking, the message box is there at once (a
+  // Thread post needs the address, not the session; it shares the live
+  // tile's draft, so typing carries on when the session attaches). Asleep,
+  // a Wake bar stands where it goes, and stays while it wakes.
+  const early = phase.kind === 'checking'
   const bar =
     phase.kind === 'dormant' ? (
       <TileWakeBar name={name} onWake={() => void wake()} />
     ) : phase.kind === 'waking' ? (
       <TileWakeBar name={name} waking />
+    ) : early ? (
+      <ThreadEarlyCompose addr={addr} conversationId={null} agentName={workspaceId} projectPath={projectPath} displayName={name} />
     ) : null
   return (
     <TileHost view={view}>
@@ -354,6 +360,8 @@ export function DashboardAgentTile({
         active={pageLive}
         composeBar={bar}
         agentName={name}
+        // Placed as the live tile's Thread places it, so nothing moves.
+        centreEmpty={early}
         textCapPx={textCap}
       />
     </TileHost>

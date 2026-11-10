@@ -21,12 +21,13 @@ function TagChip({
   onOpen: (id: string) => void
 }): JSX.Element {
   // Span, not button: the chip sits inside the workspace row <button>.
+  // Hovering it hovers the row, which turns its chips black (globals.css).
   return (
     <span
       role="button"
       tabIndex={0}
       data-nav-chip="tag"
-      className={`${tagBox} no-drag cursor-pointer hover:bg-[var(--color-accent)] hover:text-[var(--color-on-accent)]`}
+      className={`${tagBox} no-drag cursor-pointer`}
       title={tag.name}
       onClick={(e) => {
         e.stopPropagation()

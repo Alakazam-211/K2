@@ -48,13 +48,15 @@ describe('chamfered line-2 chips (square Style only)', () => {
   it('project tags (and their +N) and the machine chip opt in', () => {
     expect(tags.match(/data-nav-chip="tag"/g)).toHaveLength(2)
     expect(machine).toContain('data-nav-chip="machine"')
-    expect(machine).toContain("'--nav-chip-edge': 'var(--nav-chip-machine-edge, var(--color-border-strong))'")
+    expect(machine).toContain("'--nav-chip-edge': 'var(--color-border-strong)'")
   })
 })
 
-describe('line-2 chips on the selected row (every Style)', () => {
-  it('take a dark fill and light text: the canvas in a dark scheme, the ink colour in a light one', () => {
-    const r = rule('html [data-agent-row][aria-current="true"] [data-nav-chip]:not(:hover):not([data-zen-root] *)')
+describe('line-2 chips on the selected or hovered row (every Style)', () => {
+  const rows = ':is([data-agent-row][aria-current="true"], [data-agent-row]:hover)'
+
+  it('go black with light text: the canvas in a dark scheme, the ink colour in a light one', () => {
+    const r = rule(`html ${rows} [data-nav-chip]:not([data-zen-root] *)`)
     expect(r).toContain('background: var(--nav-chip-selected-fill)')
     expect(r).toContain('color: var(--nav-chip-selected-ink)')
     expect(globals).toMatch(/:root \{\s*--nav-chip-selected-fill: var\(--color-bg-canvas\);\s*--nav-chip-selected-ink: var\(--color-text-primary\);/)
@@ -63,9 +65,16 @@ describe('line-2 chips on the selected row (every Style)', () => {
     expect(light).toContain('--nav-chip-selected-ink: var(--color-bg-canvas)')
   })
 
-  it('give the machine chip (no accent edge) a muted edge in both Styles', () => {
-    const r = rule('html [data-agent-row][aria-current="true"] [data-nav-chip="machine"]:not([data-zen-root] *)')
-    expect(r).toContain('--nav-chip-machine-edge: var(--nav-chip-selected-edge)')
-    expect(r).toContain('border-color: var(--nav-chip-selected-edge)')
+  it('have no outline: no border, and no Terminal ring', () => {
+    expect(rule(`html ${rows} [data-nav-chip]:not([data-zen-root] *)`)).toContain('border-color: transparent')
+    expect(rule(`html[data-style="terminal"] ${rows} [data-nav-chip]:not([data-zen-root] *)::before`)).toContain('content: none')
+    // The old muted edge on the machine chip is gone.
+    expect(globals).not.toContain('--nav-chip-selected-edge')
+    expect(machine).not.toContain('--nav-chip-machine-edge')
+  })
+
+  it('stay black when the chip itself is hovered: no :not(:hover) carve-out, no accent hover on tags', () => {
+    expect(globals).not.toMatch(/\[data-nav-chip\]:not\(:hover\)/)
+    expect(tags).not.toMatch(/hover:bg-\[var\(--color-accent\)\]/)
   })
 })

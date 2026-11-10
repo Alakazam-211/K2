@@ -16,8 +16,8 @@ export function MachineChip({ place, reach }: { place: string; reach?: RowReach 
       data-machine-chip=""
       data-reach={reach}
       data-nav-chip="machine"
-      // A selected row swaps the edge through --nav-chip-selected-edge (globals.css).
-      style={{ '--nav-chip-edge': 'var(--nav-chip-machine-edge, var(--color-border-strong))' } as React.CSSProperties}
+      // Terminal's ring colour; a selected or hovered row drops the ring (globals.css).
+      style={{ '--nav-chip-edge': 'var(--color-border-strong)' } as React.CSSProperties}
     >
       <ServerIcon size={9} ledColor={reach ? REACH_LED[reach] : undefined} />
       <span className="truncate">{place}</span>

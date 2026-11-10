@@ -1289,34 +1289,28 @@ html[data-style="terminal"] [data-nav-chip]::before {
     3.586px 1px, calc(100% - 3.586px) 1px, calc(100% - 1px) 3.586px, calc(100% - 1px) calc(100% - 3.586px), calc(100% - 3.586px) calc(100% - 1px), 3.586px calc(100% - 1px), 1px calc(100% - 3.586px), 1px 3.586px, 3.586px 1px);
 }
 
-/* Line-2 chips on the SELECTED agent row (project tags, the Home machine
-   chip), every Style: the row's selection fill would swallow a chip's own
-   fill, so the chip takes a dark one (Rosson 2026-11-09). Dark schemes use
-   the canvas, light schemes the ink colour with the canvas as its text.
-   The edge (Terminal's ring, a tag's accent border) stays; hovering a tag
-   keeps its accent fill. Gardens keep their own look. */
+/* Line-2 chips on the SELECTED or HOVERED agent row (project tags, the Home
+   machine chip), every Style: the chip goes black with light text and no
+   outline at all, no accent border, no muted edge, no Terminal ring
+   (Rosson 2026-11-10). The shape stays: a pill in Glass, the cut in
+   Terminal. Dark schemes fill with the canvas (near-black, it reads black
+   on the row), light schemes with the ink colour and the canvas as text.
+   Hovering a chip keeps it black. Gardens keep their own look. */
 :root {
   --nav-chip-selected-fill: var(--color-bg-canvas);
   --nav-chip-selected-ink: var(--color-text-primary);
-  --nav-chip-selected-edge: var(--color-text-muted);
 }
 :root[data-scheme="light"] {
   --nav-chip-selected-fill: var(--color-text-primary);
   --nav-chip-selected-ink: var(--color-bg-canvas);
-  --nav-chip-selected-edge: var(--nav-chip-selected-fill);
 }
-html [data-agent-row][aria-current="true"] [data-nav-chip]:not(:hover):not([data-zen-root] *) {
+html :is([data-agent-row][aria-current="true"], [data-agent-row]:hover) [data-nav-chip]:not([data-zen-root] *) {
   background: var(--nav-chip-selected-fill);
   color: var(--nav-chip-selected-ink);
+  border-color: transparent;
 }
-/* A dark fill sits close to a dark row, so the machine chip (which has no
-   accent edge, unlike a tag) gets a muted edge there: Terminal's ring reads
-   `--nav-chip-machine-edge` (MachineChip), Glass's border is otherwise
-   transparent. In a light
-   scheme the edge is the fill itself. */
-html [data-agent-row][aria-current="true"] [data-nav-chip="machine"]:not([data-zen-root] *) {
-  --nav-chip-machine-edge: var(--nav-chip-selected-edge);
-  border-color: var(--nav-chip-selected-edge);
+html[data-style="terminal"] :is([data-agent-row][aria-current="true"], [data-agent-row]:hover) [data-nav-chip]:not([data-zen-root] *)::before {
+  content: none;
 }
 
 /* Design note tiles (NoteTray, Rosson 2026-10-16) in K2's square Style:

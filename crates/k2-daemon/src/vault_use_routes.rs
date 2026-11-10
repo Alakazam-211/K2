@@ -267,7 +267,7 @@ fn proxy_url(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Va
     }
     let ttl = k2_vault::duration::body_ttl(b.ttl.as_ref(), b.ttl_secs)?;
     let selector = use_selector(vault, c, &sel)?;
-    crate::vault::proxy::mint_for_caller(vault, c, &selector, ttl, &|s: &str| crate::session_liveness::live_session_ids().contains(s))
+    crate::vault::proxy::mint_for_caller(vault, c, &selector, ttl, &crate::vault::proxy::session_counts_as_live)
 }
 
 fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

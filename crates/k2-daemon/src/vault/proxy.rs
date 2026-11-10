@@ -9,7 +9,7 @@
 //!   moves and status says so.
 //! - `/p/<placeholder>/<provider>/<rest>`. Each request is checked afresh:
 //!   loopback peer; the placeholder's hash and expiry; its session still
-//!   live; its secret still resolving for that session for its one site.
+//!   live (or that session's process still running); its secret still resolving for that session for its one site.
 //!   A revoked grant stops a live placeholder at the next call.
 //! - The destination comes only from the secret's one site, never from the
 //!   request. Nothing the caller sends can move it.
@@ -203,12 +203,19 @@ impl Deps {
     }
 }
 
+/// PRD 4.2 step 3: the session is listed as running, or the process that got
+/// its secrets dir still is (GH#81: an id can leave the map while its process
+/// runs, and that process's placeholders must keep working).
+pub fn session_counts_as_live(session_id: &str) -> bool {
+    crate::session_liveness::live_session_ids().contains(session_id) || super::spawn::session_process_lives(session_id)
+}
+
 fn daemon_deps() -> Deps {
     Deps::new(
         Arc::new(super::get),
         // A restored or moved vault is served by the same listener: `get`
         // reads the current one each call.
-        Arc::new(|s: &str| crate::session_liveness::live_session_ids().contains(s)),
+        Arc::new(session_counts_as_live),
         crate::vault_use_routes::rate(),
     )
 }

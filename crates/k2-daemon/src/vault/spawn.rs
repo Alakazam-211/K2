@@ -792,6 +792,14 @@ fn recorded_process(session_id: &str, dir: &Path) -> Option<crate::session_liven
     }
 }
 
+/// GH#81's rule for anything else keyed by a session: is the process that
+/// got this session's secrets dir still running, whatever the id does in the
+/// session map? False when no process was recorded (see [`note_process`]).
+pub fn session_process_lives(session_id: &str) -> bool {
+    let Some(dir) = DIRS.lock().iter().find(|(s, _)| s == session_id).map(|(_, d)| d.clone()) else { return false };
+    recorded_process(session_id, &dir).is_some_and(|p| crate::session_liveness::process_alive(p.pid, p.start))
+}
+
 /// Boot: remove every secrets dir except those of agent sessions that
 /// survived the restart in k2-ptyd (PRD prd-k2-ptyd-v1 P36: B0's running
 /// set, each with the `secrets_dir` its spawn recorded). Those are kept
@@ -1319,6 +1327,28 @@ mod tests {
         child.wait().expect("reap");
         sweep_dead(&|s| s != sid);
         assert!(!dir.exists(), "with the process gone the dir goes");
+    }
+
+    /// PRD 4.2 step 3: the process key counts for a placeholder's session
+    /// too, so a re-registered id doesn't cut off a process that still runs.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_counts_as_live_while_its_process_runs() {
+        let _home = crate::test_support::TempHome::short();
+        let _v = crate::vault::ensure_test_vault();
+        let (ws, sid) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+        materialize(&mut HashMap::new(), &ws, &sid, false, &SpawnRefs::default()).dir.expect("a dir");
+        crate::session_liveness::forget_spawning(&sid);
+        assert!(!crate::vault::proxy::session_counts_as_live(&sid), "not listed, and no process recorded");
+
+        let mut child = std::process::Command::new("sleep").arg("60").spawn().expect("child");
+        note_process(&sid, Some(child.id() as i32));
+        assert!(crate::vault::proxy::session_counts_as_live(&sid), "off the live list, but its process runs");
+
+        child.kill().expect("kill");
+        child.wait().expect("reap");
+        assert!(!crate::vault::proxy::session_counts_as_live(&sid), "the process is gone");
+        assert!(!crate::vault::proxy::session_counts_as_live("no-such-session"));
     }
 
     /// The vault id of the only secret in session `sid`.

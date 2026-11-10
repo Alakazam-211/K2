@@ -1,30 +1,15 @@
 // @vitest-environment jsdom
 // Fail loud: the palette (Select) toggle and its colour, the tray's Send all
 // and per-tile Send, the pop-up's overlay claim (which freezes the page) and its keys,
-// the tray's actions, the web stub, and the "Show the Design tab" switch.
+// the tray's actions and the web stub.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
-vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => {}) }))
-vi.mock('@/lib/daemon-cli', () => ({ daemonCliPost: vi.fn(async () => ({ ok: true })) }))
-const PRIMARY = { id: 'primary', isPrimary: true, isRemote: false } as unknown as import('@/kessel/server-scope').ServerScope
-vi.mock('@/stores/projects', async () => {
-  const { create } = await import('zustand')
-  return {
-    useProjectsStore: create<{ projects: { id: string; path: string; designModeEnabled?: number }[] }>(() => ({
-      projects: [{ id: 'p1', path: '/w/docs', designModeEnabled: 1 }],
-    })),
-  }
-})
-
-import { daemonCliPost } from '@/lib/daemon-cli'
-import { useProjectsStore } from '@/stores/projects'
 import { overlayClaims, resetBrowserOverlaysForTest } from '@/lib/browser-overlay'
 import { DesignPaletteButton } from './DesignToolbar'
 import { NotePopover, sendNowChord } from './NotePopover'
 import { NoteTray } from './NoteTray'
 import { DesignWebStub } from './DesignWebStub'
-import { DesignModeSettingRow } from './DesignModeSettingRow'
 import type { DesignNoteDraft, NoteElement } from './types'
 
 class ResizeObserverStub {
@@ -290,27 +275,5 @@ describe('DesignWebStub', () => {
     expect(screen.getByText('Design needs the desktop app')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Open the Thread' }))
     expect(onOpenThread).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('DesignModeSettingRow', () => {
-  it('turns "Show the Design tab" off for the workspace and updates the projects store', async () => {
-    render(<DesignModeSettingRow scope={PRIMARY} project={{ id: 'p1', path: '/w/docs', designModeEnabled: 1 }} />)
-    const sw = screen.getByRole('switch', { name: 'Show the Design tab' })
-    expect(sw.getAttribute('aria-checked')).toBe('true')
-    await act(async () => {
-      fireEvent.click(sw)
-    })
-    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith(
-      expect.objectContaining({ isPrimary: true }),
-      'workspace/set',
-      { project: '/w/docs', fields: { design_mode_enabled: '0' } },
-    )
-    expect(useProjectsStore.getState().projects[0].designModeEnabled).toBe(0)
-  })
-
-  it('a missing value reads as on', () => {
-    render(<DesignModeSettingRow scope={PRIMARY} project={{ id: 'p2', path: '/w/x' }} />)
-    expect(screen.getByRole('switch', { name: 'Show the Design tab' }).getAttribute('aria-checked')).toBe('true')
   })
 })

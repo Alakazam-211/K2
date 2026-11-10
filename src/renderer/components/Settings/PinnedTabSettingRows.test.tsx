@@ -3,7 +3,8 @@
 // tab" shows what the room does now (auto = on where the server can run a
 // phone), a flip stores 0 or 1 through /cli/workspace/set and mirrors it into
 // the window's projects list, and a server that can't run a phone shows it
-// off and greyed. "Show the Design tab" sits beside it.
+// off and greyed. "Show the Design tab" sits beside it and reads a missing
+// value as on.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -92,6 +93,31 @@ describe('Show the Mobile tab', () => {
     })
     expect(screen.getByRole('alert').textContent).toBe('forbidden')
     expect(useProjectsStore.getState().projects[0].mobileTabEnabled).toBeNull()
+  })
+})
+
+describe('Show the Design tab', () => {
+  function designSwitch(): HTMLElement {
+    return screen.getByRole('switch', { name: 'Show the Design tab' })
+  }
+
+  it('on reads on; flipping stores 0 and mirrors it into the projects list', async () => {
+    useProjectsStore.setState({ projects: [{ id: 'p1', path: '/w/docs', designModeEnabled: 1 }] as never })
+    render(<PinnedTabSettingRow kind="design" scope={scope(true)} project={{ id: 'p1', path: '/w/docs', designModeEnabled: 1 }} />)
+    expect(designSwitch().getAttribute('aria-checked')).toBe('true')
+    await act(async () => {
+      fireEvent.click(designSwitch())
+    })
+    expect(vi.mocked(daemonCliPost)).toHaveBeenCalledWith(expect.objectContaining({ isPrimary: true }), 'workspace/set', {
+      project: '/w/docs',
+      fields: { design_mode_enabled: '0' },
+    })
+    expect(useProjectsStore.getState().projects[0].designModeEnabled).toBe(0)
+  })
+
+  it('a missing value reads as on', () => {
+    render(<PinnedTabSettingRow kind="design" scope={scope(true)} project={{ id: 'p2', path: '/w/x' }} />)
+    expect(designSwitch().getAttribute('aria-checked')).toBe('true')
   })
 })
 

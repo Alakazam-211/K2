@@ -1987,7 +1987,12 @@ html[data-style="glass"] [data-k2-thread-zen] [data-zen-send]:not([data-zen-root
    object over the conversation, as on the phone. Terminal: solid, cut by the
    One Chamfer rule above through `data-k2-chamfer` and `--chamfer-*`. */
 :root {
-  --k2-float-h: 28px;
+  /* One height for every object in the Thread view header: the drawers'
+     selector's (ThreadDrawerSelector), so the menus, pills and round buttons
+     all line up with it. Set per Style below; narrow panes take it from
+     here. Round objects are circles of this diameter; icons keep their size. */
+  --k2-float-size: 28px;
+  --k2-float-h: var(--k2-float-size);
   --k2-float-radius: var(--radius-field);
   --k2-float-fill-hover: var(--color-bg-hover);
   --k2-float-fill-lit: var(--color-bg-elevated);
@@ -2001,6 +2006,8 @@ html[data-style="terminal"] { --k2-float-radius: 0px; }
    live here. Veil follows the light glass technique: a dark wash where dark
    Glass lightens, and a pale accent tint on an on or active round button. */
 html[data-style="glass"] {
+  /* The selector's capsule: 24px circles, 3px in from a 0.5px rim. */
+  --k2-float-size: 31px;
   --k2-float-fill-hover: rgba(255, 255, 255, 0.18);
   --k2-float-fill-lit: rgba(255, 255, 255, 0.24);
   --k2-float-text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
@@ -2031,7 +2038,8 @@ html[data-style="glass"] [data-thread-floats-host] .k2-header-blur:not([data-zen
   padding-bottom: 8px;
   pointer-events: none;
   container: thread-floats / inline-size;
-  --k2-float-group-top: 4px; /* centres the buttons on the 36px picture */
+  /* Centres the objects on the 36px picture (IDENTITY_PICTURE_PX). */
+  --k2-float-group-top: calc((36px - var(--k2-float-h)) / 2);
 }
 [data-thread-floats]:has([data-compact]) { --k2-float-group-top: 0px; }
 .thread-float-group { margin-top: var(--k2-float-group-top); }
@@ -2098,7 +2106,7 @@ html[data-style="terminal"] [data-k2-float-picture] { border: 1px solid var(--co
   .thread-float-group { gap: 4px; }
 }
 @container thread-floats (max-width: 380px) {
-  [data-thread-floats] { --k2-float-h: 26px; }
+  [data-thread-floats] { --k2-float-h: calc(var(--k2-float-size) - 2px); }
   [data-thread-floats] > div:not(.thread-float-scrim) { padding-inline: 8px; column-gap: 4px; }
   [data-k2-float="pill"] { padding: 0 5px; }
   .thread-float-group { gap: 2px; }

@@ -157,6 +157,9 @@ const CI_TABLES: &[&str] = &[
     "compute_seats",
     "compute_owner_trust",
     "compute_key_revocations",
+    // 0284 (the 11-07 trust review): the re-key chain and the taint memory.
+    "compute_key_rotations",
+    "compute_tainted_keys",
 ];
 
 fn ci_rows() -> Vec<(String, i64)> {
@@ -176,7 +179,7 @@ fn ci_routes() -> Vec<(&'static str, &'static str)> {
         assert!(k2_daemon::compute_routes::is_ci_route(p), "{p} is a CI route");
         out.push((*p, if k2_daemon::compute_routes::is_post_route(p) { "POST" } else { "GET" }));
     }
-    assert_eq!(out.len(), 25, "5 `k2 ci` routes + 20 roster/lane/seat/trust/owner/signer routes: {out:?}");
+    assert_eq!(out.len(), 28, "5 `k2 ci` routes + 23 roster/lane/seat/trust/owner/signer routes (seats end/suspend/resume since the 11-07 review): {out:?}");
     out
 }
 

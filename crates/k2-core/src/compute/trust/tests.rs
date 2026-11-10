@@ -237,7 +237,7 @@ fn client_receives_rosters_and_checks_lane_seals() {
     assert_eq!(receive_roster(&c, &s0, "node", 4).unwrap_err().0, codes::ROSTER_REPLAYED);
     // Another key under the same owner name: refused.
     let evil = ApprovalSigner::from_seed(&[8u8; 32]).unwrap();
-    let forged = NodeRoster { roster_key: evil.public().encode(), ..roster(9, entries.clone(), None) }.sign(&evil).unwrap();
+    let forged = NodeRoster { roster_key: evil.public().encode(), ..roster(9, entries.clone(), Some(format!("sha256:{}", "0".repeat(64)))) }.sign(&evil).unwrap();
     assert_eq!(receive_roster(&c, &forged, "node", 5).unwrap_err().0, codes::OWNER_NOT_TRUSTED);
 
     // A client seat on n1 + n2, with its enrol code.
@@ -298,7 +298,7 @@ fn client_receives_rosters_and_checks_lane_seals() {
     // seq 2 can't come again with other contents.
     let unchained = roster(3, revoked.clone(), Some(format!("sha256:{}", "1".repeat(64)))).sign(&o).unwrap();
     assert_eq!(receive_roster(&c, &unchained, "peer", 7).unwrap_err().0, codes::ROSTER_FORKED);
-    let fork = roster(2, revoked.clone(), None).sign(&o).unwrap();
+    let fork = roster(2, revoked.clone(), Some(format!("sha256:{}", "2".repeat(64)))).sign(&o).unwrap();
     assert_eq!(receive_roster(&c, &fork, "peer", 7).unwrap_err().0, codes::ROSTER_FORKED);
     // An owner name the pin doesn't have: refused (M2).
     let renamed = NodeRoster { owner_id: "rosson.k2.dev".into(), ..roster(3, revoked.clone(), Some(s1.digest())) }.sign(&o).unwrap();

@@ -1289,6 +1289,36 @@ html[data-style="terminal"] [data-nav-chip]::before {
     3.586px 1px, calc(100% - 3.586px) 1px, calc(100% - 1px) 3.586px, calc(100% - 1px) calc(100% - 3.586px), calc(100% - 3.586px) calc(100% - 1px), 3.586px calc(100% - 1px), 1px calc(100% - 3.586px), 1px 3.586px, 3.586px 1px);
 }
 
+/* Line-2 chips on the SELECTED agent row (project tags, the Home machine
+   chip), every Style: the row's selection fill would swallow a chip's own
+   fill, so the chip takes a dark one (Rosson 2026-11-09). Dark schemes use
+   the canvas, light schemes the ink colour with the canvas as its text.
+   The edge (Terminal's ring, a tag's accent border) stays; hovering a tag
+   keeps its accent fill. Gardens keep their own look. */
+:root {
+  --nav-chip-selected-fill: var(--color-bg-canvas);
+  --nav-chip-selected-ink: var(--color-text-primary);
+  --nav-chip-selected-edge: var(--color-text-muted);
+}
+:root[data-scheme="light"] {
+  --nav-chip-selected-fill: var(--color-text-primary);
+  --nav-chip-selected-ink: var(--color-bg-canvas);
+  --nav-chip-selected-edge: var(--nav-chip-selected-fill);
+}
+html [data-agent-row][aria-current="true"] [data-nav-chip]:not(:hover):not([data-zen-root] *) {
+  background: var(--nav-chip-selected-fill);
+  color: var(--nav-chip-selected-ink);
+}
+/* A dark fill sits close to a dark row, so the machine chip (which has no
+   accent edge, unlike a tag) gets a muted edge there: Terminal's ring reads
+   `--nav-chip-machine-edge` (MachineChip), Glass's border is otherwise
+   transparent. In a light
+   scheme the edge is the fill itself. */
+html [data-agent-row][aria-current="true"] [data-nav-chip="machine"]:not([data-zen-root] *) {
+  --nav-chip-machine-edge: var(--nav-chip-selected-edge);
+  border-color: var(--nav-chip-selected-edge);
+}
+
 /* Design note tiles (NoteTray, Rosson 2026-10-16) in K2's square Style:
    chamfered like the Thread's surfaces (CHAMFER_CUT.surface = 7px), the
    1px edge drawn by `::before` as an even-odd ring (inner cut 7 − 0.414).

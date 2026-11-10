@@ -75,6 +75,11 @@ assert_contains "routines is a route to heartbeats" "$("$K2" study routines)" "k
 assert_contains "reminders is a route to heartbeats" "$("$K2" study reminders)" "k2 study heartbeats"
 assert_contains "cron is a route to heartbeats" "$("$K2" study cron)" "k2 study heartbeats"
 
+echo "== k2 study mail-watch (no mail is news until someone chooses) =="
+mw_out="$("$K2" study mail-watch)"
+assert_contains "mail-watch: off until chosen" "$mw_out" "Nothing wakes an agent until someone chooses"
+assert_contains "mail-watch: VIP is not trust" "$mw_out" "VIP IS NOT TRUST"
+
 echo "== k2 study app-heartbeats (AH23 / T13: every wait reason) =="
 hb_out="$("$K2" study app-heartbeats)"
 WAIT_FIXTURE="$PROJECT_ROOT/crates/k2-core/src/heartbeats/fixtures/wait-reasons.json"

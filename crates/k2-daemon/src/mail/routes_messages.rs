@@ -242,6 +242,36 @@ fn backend_for(address: &str) -> Result<Box<dyn ReadBackend>, CliResponse> {
     }
 }
 
+/// The mail watcher's backend for an inbox: the one the read routes use.
+pub(crate) fn watch_backend_for(address: &str) -> Option<Box<dyn ReadBackend>> {
+    backend_for(address).ok()
+}
+
+/// `(address, the backend's account handle)` for an inbox.
+pub(crate) fn watch_account_for(address: &str) -> Option<(String, String)> {
+    match messages::backend_for_address(address) {
+        MailBackend::LocalStalwart => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT stalwart_account_id FROM mail_addresses WHERE lower(address) = lower(?1) AND status = 'active'",
+                rusqlite::params![address],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
+            .map(|acct| (address.to_string(), acct))
+        }
+        _ => external::inbox_for_address(address).map(|row| (address.to_string(), row.id)),
+    }
+}
+
+/// A linked inbox's stored password (empty for OAuth), for the watcher.
+pub(crate) fn watch_password(row: &k2_core::db::schema::MailExternalInbox) -> Result<String, String> {
+    let secrets = crate::mail::secrets::FileSecretStore::default();
+    resolve_linked_password(&secrets, row, &row.email_address).map_err(|r| r.body)
+}
+
 /// The (address, account) watch list for a request: an explicit
 /// address must pass the masked ownership gate; no address = every
 /// ACTIVE address the workspace owns PLUS (S9) every external inbox

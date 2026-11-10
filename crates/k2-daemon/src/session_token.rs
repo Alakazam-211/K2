@@ -525,6 +525,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // `mail_manage_allowed_for_path`. Do not prefix-open
         // `/cli/mail/server/` or `/cli/mail/domain/` — exact-DENY the
         // blast leftovers. Writer `/cli/mail-manage` is not an agent verb.
+        // 0.46.11: every agent's mail notices at once is a person's call.
+        "/cli/mail/watch/pause-all",
         "/cli/mail/server/uninstall",
         // Calendars S1: replaces the Stalwart binary (owner/admin only, CAL6).
         "/cli/mail/server/upgrade",

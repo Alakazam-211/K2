@@ -2580,6 +2580,99 @@ impl StalwartClient {
         })
     }
 
+    /// Mail watcher (W19): the account's current Email state, the cursor a
+    /// first poll starts from. `ids: []` so no message moves.
+    pub fn email_state(&self, account_id: &str) -> Result<String, String> {
+        let args = self.mail_call(account_id, "Email/get", serde_json::json!({ "ids": [] }))?;
+        args.get("state")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| "Email/get: reply has no state".to_string())
+    }
+
+    /// Mail watcher (W19): what was created since `since_state`.
+    /// `cannotCalculateChanges` comes back as an error and the caller falls
+    /// back to a date query.
+    pub fn email_changes(&self, account_id: &str, since_state: &str, max: usize) -> Result<EmailChanges, String> {
+        let args = self.mail_call(
+            account_id,
+            "Email/changes",
+            serde_json::json!({ "sinceState": since_state, "maxChanges": max }),
+        )?;
+        let new_state = args
+            .get("newState")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| "Email/changes: reply has no newState".to_string())?;
+        let created = args
+            .get("created")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        Ok(EmailChanges { new_state, created })
+    }
+
+    /// Mail watcher: headers only, for mail in this inbox. No body rides
+    /// this call and nothing here sets `$seen`.
+    pub fn email_get_watch(
+        &self,
+        account_id: &str,
+        ids: &[String],
+        inbox_mailbox_id: &str,
+    ) -> Result<Vec<crate::mail::watch::poll::NewMail>, String> {
+        let args = self.mail_call(
+            account_id,
+            "Email/get",
+            serde_json::json!({
+                "ids": ids,
+                "properties": [
+                    "id", "from", "subject", "receivedAt", "mailboxIds",
+                    "header:Message-ID:asText",
+                    "header:Auto-Submitted:asText",
+                    "header:Authentication-Results:asText:all",
+                ],
+            }),
+        )?;
+        let list = args.get("list").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let mut out = Vec::new();
+        for entry in list {
+            let in_inbox = entry
+                .get("mailboxIds")
+                .and_then(|m| m.get(inbox_mailbox_id))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !in_inbox {
+                continue; // junk, sent, an agent's own draft: not news.
+            }
+            let header = |key: &str| entry.get(key).and_then(|v| v.as_str()).map(str::to_string);
+            let auth_lines = entry
+                .get("header:Authentication-Results:asText:all")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|l| l.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            out.push(crate::mail::watch::poll::NewMail {
+                email_id: header("id").unwrap_or_default(),
+                rfc_message_id: header("header:Message-ID:asText").unwrap_or_default().trim().to_string(),
+                from: parse_addr_list(entry.get("from")),
+                subject: header("subject").unwrap_or_default(),
+                received_at: header("receivedAt").unwrap_or_default(),
+                auth_lines,
+                auto_submitted: header("header:Auto-Submitted:asText")
+                    .is_some_and(|v| v.trim().to_ascii_lowercase().starts_with("auto-")),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Bytes that change when this client's credential changes (the mail
+    /// watcher's "has it been fixed yet" check). Hashed by the caller.
+    pub fn key_fingerprint_material(&self) -> String {
+        match &self.auth {
+            Auth::Bearer(key) => key.clone(),
+            Auth::Basic { username, password } => format!("{username}:{password}"),
+        }
+    }
+
     /// S4 — `Email/query` newest-first (`receivedAt` desc) with a
     /// caller-built RFC 8621 filter (the ops layer owns filter
     /// semantics; this function owns only the wire shape). `offset` is
@@ -5197,6 +5290,13 @@ fn mail_envelope(method: &str, args: serde_json::Value) -> serde_json::Value {
 pub struct MailAddr {
     pub name: Option<String>,
     pub email: String,
+}
+
+/// One `Email/changes` answer.
+#[derive(Debug, Clone)]
+pub struct EmailChanges {
+    pub new_state: String,
+    pub created: Vec<String>,
 }
 
 /// Envelope-level view of one message (the summaries list + the wait
@@ -8426,6 +8526,47 @@ mod s4_mail_tests {
         assert_eq!(parse_identity_for(&args, "bot@acme.dev").as_deref(), Some("I2"));
         assert_eq!(parse_identity_for(&args, "nobody@acme.dev"), None);
         assert_eq!(parse_identity_for(&serde_json::json!({}), "x@y.z"), None);
+    }
+
+    /// The session discovery plus one method answer, for the watcher's calls.
+    fn watch_server(answer: serde_json::Value) -> StalwartClient {
+        let (port, _rx) = spawn_mock_server(vec![
+            r#"{"apiUrl": "/jmap/", "accounts": {"b": {}}, "primaryAccounts": {"urn:stalwart:jmap": "b"}}"#.to_string(),
+            serde_json::json!({ "methodResponses": [answer], "sessionState": "s" }).to_string(),
+        ]);
+        StalwartClient::new(format!("http://127.0.0.1:{port}"), "k")
+    }
+
+    #[test]
+    fn email_changes_returns_the_created_ids_and_the_new_state() {
+        let c = watch_server(serde_json::json!(["Email/changes", { "newState": "s2", "created": ["M1", "M2"], "updated": ["U"], "destroyed": [] }, "0"]));
+        let ch = c.email_changes("acct", "s1", 256).expect("changes");
+        assert_eq!(ch.new_state, "s2");
+        assert_eq!(ch.created, vec!["M1".to_string(), "M2".to_string()]);
+    }
+
+    #[test]
+    fn a_state_too_old_to_change_from_says_so_for_the_fallback() {
+        let c = watch_server(serde_json::json!(["error", { "type": "cannotCalculateChanges", "description": "too old" }, "0"]));
+        let e = c.email_changes("acct", "s1", 256).expect_err("no changes");
+        assert!(e.contains("cannotCalculateChanges"), "{e}");
+    }
+
+    #[test]
+    fn the_watcher_get_keeps_only_inbox_mail() {
+        let c = watch_server(serde_json::json!(["Email/get", { "list": [
+            { "id": "M1", "from": [{ "email": "a@x.test" }], "subject": "in", "receivedAt": "2026-06-10T10:00:00Z",
+              "mailboxIds": { "INBOX": true }, "header:Message-ID:asText": " <m1@x> ",
+              "header:Auto-Submitted:asText": "auto-generated",
+              "header:Authentication-Results:asText:all": ["mx; dmarc=pass"] },
+            { "id": "M2", "from": [{ "email": "b@x.test" }], "subject": "junk", "receivedAt": "2026-06-10T10:00:00Z",
+              "mailboxIds": { "JUNK": true } },
+        ] }, "0"]));
+        let got = c.email_get_watch("acct", &["M1".to_string(), "M2".to_string()], "INBOX").expect("get");
+        assert_eq!(got.len(), 1, "junk is not news");
+        assert_eq!(got[0].rfc_message_id, "<m1@x>");
+        assert!(got[0].auto_submitted);
+        assert_eq!(got[0].auth_lines, vec!["mx; dmarc=pass".to_string()]);
     }
 
     #[test]

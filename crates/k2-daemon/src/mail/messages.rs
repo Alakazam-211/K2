@@ -935,6 +935,10 @@ pub enum SenderCheck {
 /// `header.from` in the topmost header's DMARC part: `None` when the part names
 /// none, `Some("")` when it names an empty one, as a mail with several From
 /// addresses gets.
+pub(crate) fn auth_header_from(first_line: &str) -> Option<String> {
+    dmarc_header_from(first_line)
+}
+
 fn dmarc_header_from(first_line: &str) -> Option<String> {
     let (segments, _) = auth_results_segments(first_line);
     let part = segments.iter().find(|s| auth_method_result(s, "dmarc").is_some())?;

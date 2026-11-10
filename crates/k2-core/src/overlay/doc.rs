@@ -496,12 +496,45 @@ pub struct OverlayDoc {
     /// renderers that don't draw the card. None on every other doc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<ThreadChanges>,
+    /// A mail notice for the people on this Thread (0.46.11): who it's from
+    /// and what it's about, kept apart from `body`, which older renderers
+    /// show as text and carries no mail words at all (W34). None on every
+    /// other doc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<ThreadNotice>,
     /// post-idempotency-v1 (0.46.8): the id the sender's client gave this
     /// post (1–64 of `[A-Za-z0-9_-]`), echoed so its outbox can settle.
     /// Opaque, and only meaningful under the sender's own namespace, so it
     /// goes to every reader. None on posts sent without one.
     #[serde(default, rename = "clientMsgId", skip_serializing_if = "Option::is_none")]
     pub client_msg_id: Option<String>,
+}
+
+/// A mail notice (0.46.11): plain fields a renderer draws as text, never as
+/// Markdown or links (W34). Everything here was sanitized by the mail watcher.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadNotice {
+    /// `mail`.
+    pub source: String,
+    pub inbox: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_name: Option<String>,
+    pub from_addr: String,
+    /// `DMARC pass`, `this server`.
+    pub auth: String,
+    pub subject: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
+    /// `k2 mail read m_…`.
+    pub read_command: String,
+    /// The session line reached the agent.
+    pub delivered: bool,
+    /// Why not, when it didn't.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The notice's id, for a retry.
+    pub notice_id: i64,
 }
 
 /// One file in a [`ThreadChanges`] card: relative to the agent's worktree.
@@ -716,6 +749,7 @@ impl OverlayDoc {
             summary_source: None,
             client_msg_id: None,
             changes: None,
+            notice: None,
         }
     }
 
@@ -764,6 +798,7 @@ impl OverlayDoc {
             summary_source: None,
             client_msg_id: None,
             changes: None,
+            notice: None,
         }
     }
 
@@ -815,6 +850,7 @@ impl OverlayDoc {
             summary_source: None,
             client_msg_id: None,
             changes: None,
+            notice: None,
         }
     }
 
@@ -850,6 +886,7 @@ impl OverlayDoc {
             summary_source: None,
             client_msg_id: None,
             changes: None,
+            notice: None,
         }
     }
 
@@ -859,6 +896,14 @@ impl OverlayDoc {
         let mut doc = Self::text(id, from, to, body, "k2");
         doc.kind = "changes".to_string();
         doc.changes = Some(changes);
+        doc
+    }
+
+    /// A mail notice. `body` is the plain fallback an older renderer shows;
+    /// it carries the sender's address and nothing else from the mail.
+    pub fn mail_notice_card(id: String, to: String, body: String, notice: ThreadNotice) -> Self {
+        let mut doc = Self::text(id, "k2".to_string(), to, body, "k2");
+        doc.notice = Some(notice);
         doc
     }
 
@@ -887,6 +932,7 @@ impl OverlayDoc {
             summary_source: None,
             client_msg_id: None,
             changes: None,
+            notice: None,
         }
     }
 

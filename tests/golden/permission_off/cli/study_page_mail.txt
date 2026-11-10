@@ -125,6 +125,8 @@ AGENT SURFACE
   read / attachments
   k2 mail wait     block for a match (verification codes). Loop on
                    exit 2; do not fan out parallel waits (max 900s).
+  k2 mail watch    hear that mail arrived without blocking: VIPs at once,
+                   the rest in a digest (k2 study mail-watch)
   k2 mail send / reply / outbox
   k2 mail draft    linked Gmail Drafts (always on for draft)
   k2 calendar      calendars of a HOSTED inbox or a LINKED Microsoft 365

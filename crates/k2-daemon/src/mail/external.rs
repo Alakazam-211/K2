@@ -90,6 +90,22 @@ fn map_row(r: &rusqlite::Row) -> rusqlite::Result<MailExternalInbox> {
     })
 }
 
+/// A linked inbox by its id or address.
+pub fn inbox_by_ref(raw: &str) -> Option<MailExternalInbox> {
+    let raw = raw.trim();
+    if raw.contains('@') {
+        return inbox_for_address(raw);
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        &format!("SELECT {EXT_COLS} FROM mail_external_inboxes WHERE id = ?1"),
+        rusqlite::params![raw],
+        map_row,
+    )
+    .ok()
+}
+
 /// The §17.5 seam lookup: is this (normalized) address an external
 /// inbox? Used by [`crate::mail::messages::backend_for_address`] —
 /// and nowhere else above the ops layer.

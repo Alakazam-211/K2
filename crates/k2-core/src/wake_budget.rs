@@ -31,7 +31,25 @@ pub fn wakes_since(conn: &Connection, project_id: &str, since: i64) -> rusqlite:
         params![project_id, since_rfc],
         |r| r.get(0),
     )?;
-    Ok(sources.saturating_add(reminders).clamp(0, i64::from(u16::MAX)) as u16)
+    // VIP lines that reached a session, and digests that went out.
+    let mail_lines: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM agent_mail_notices WHERE project_id = ?1 AND state = 'delivered' AND woke = 1 AND delivered_at >= ?2",
+        params![project_id, since],
+        |r| r.get(0),
+    )?;
+    let digests: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM heartbeat_fires f \
+         JOIN workspace_heartbeats h ON h.project_id = f.project_id AND h.name = f.schedule_name \
+         WHERE f.project_id = ?1 AND h.kind = 'mail_digest' \
+           AND f.decision IN ('fired', 'fired_catchup') AND f.fired_at >= ?2",
+        params![project_id, since_rfc],
+        |r| r.get(0),
+    )?;
+    Ok(sources
+        .saturating_add(reminders)
+        .saturating_add(mail_lines)
+        .saturating_add(digests)
+        .clamp(0, i64::from(u16::MAX)) as u16)
 }
 
 /// True when this agent may take one more automatic wake right now.

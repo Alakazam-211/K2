@@ -2618,6 +2618,47 @@ pub(crate) fn post_workspace_note(workspace: &str, body: &str, via: &str) -> Res
     Ok(())
 }
 
+/// A mail notice card on a workspace's Thread. Posted by K2, no inject and
+/// no push. `body` is the plain text for renderers that don't draw the card:
+/// the sender's address only, never the subject or snippet (W34).
+pub(crate) fn post_mail_notice(workspace: &str, n: crate::mail::watch::ThreadNoticeArgs) -> Result<String, String> {
+    let resolved = resolve_addr(workspace).map_err(|r| r.body)?;
+    let body = format!("VIP mail from {} · open in K2 to see it", n.from_addr);
+    let notice = k2_core::overlay::doc::ThreadNotice {
+        source: "mail".to_string(),
+        inbox: n.inbox,
+        from_name: n.from_name,
+        from_addr: n.from_addr,
+        auth: n.auth,
+        subject: n.subject,
+        snippet: n.snippet,
+        read_command: n.read_command,
+        delivered: n.delivered,
+        reason: n.reason,
+        notice_id: n.notice_id,
+    };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (item, links) = overlay::post_notice(&conn, &resolved.conversation_id, &resolved.project_id, &resolved.addr, &body, notice)?;
+    crate::overlay_ws::emit_links(&links, &item.doc);
+    drop(conn);
+    Ok(item.id)
+}
+
+/// A retried mail notice landed: mark the card and tell viewers.
+pub(crate) fn mark_mail_notice_delivered(workspace: &str, item_id: &str) -> Result<(), String> {
+    let resolved = resolve_addr(workspace).map_err(|r| r.body)?;
+    let item = overlay::mark_notice_delivered(&resolved.conversation_id, item_id)?;
+    let link = k2_core::overlay::OverlayLink {
+        collection: "thread",
+        seq: item.seq,
+        id: item.id.clone(),
+        conversation_id: item.conversation_id.clone(),
+    };
+    crate::overlay_ws::emit_links(&[link], &item.doc);
+    Ok(())
+}
+
 /// K2's changed-files card for one turn on a worktree agent's Thread
 /// (workbench-v1 B7, `crate::turn_changes`). From `k2`, kind `changes`.
 /// No inject, no wake, no push: like [`post_workspace_note`], it is a

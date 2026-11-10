@@ -184,6 +184,8 @@ pub mod routes_oauth_config;
 pub mod routes_send;
 pub mod routes_server;
 pub mod schedule;
+/// Agents hear that mail arrived, on the inboxes someone chose.
+pub mod watch;
 pub mod secrets;
 pub mod fwd_message;
 #[cfg(test)]

@@ -779,6 +779,32 @@ impl GraphBackend {
     }
 
     /// GET a full message + (when present) its attachment metadata.
+    /// Mail watcher: `(Message-ID, Authentication-Results, Auto-Submitted)`.
+    /// A read; never sets `isRead`.
+    pub fn watch_fields(&self, account_id: &str, email_id: &str) -> Result<Option<(String, Vec<String>, bool)>, String> {
+        self.check_handle(account_id)?;
+        let Some(graph_id) = decode_graph_email_id(email_id) else {
+            return Ok(None);
+        };
+        let base = Self::url(&format!("/me/messages/{}", path_encode(graph_id)));
+        let url = with_query(&base, &[("$select", "internetMessageId,internetMessageHeaders".to_string())]);
+        let resp = self.send(GraphMethod::Get, &url, None)?;
+        let Some(m) = self.json_ok(resp, "read message headers")? else {
+            return Ok(None);
+        };
+        let headers = m.get("internetMessageHeaders").and_then(|a| a.as_array()).cloned().unwrap_or_default();
+        let value_of = |wanted: &str| -> Vec<String> {
+            headers
+                .iter()
+                .filter(|h| h.get("name").and_then(|n| n.as_str()).is_some_and(|n| n.eq_ignore_ascii_case(wanted)))
+                .filter_map(|h| h.get("value").and_then(|v| v.as_str()).map(str::to_string))
+                .collect()
+        };
+        let auto = value_of("Auto-Submitted").iter().any(|v| v.trim().to_ascii_lowercase().starts_with("auto-"));
+        let message_id = m.get("internetMessageId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        Ok(Some((message_id, value_of("Authentication-Results"), auto)))
+    }
+
     fn fetch_message(&self, graph_id: &str) -> Result<Option<EmailFull>, String> {
         let base = Self::url(&format!("/me/messages/{}", path_encode(graph_id)));
         let url = with_query(&base, &[("$select", FULL_SELECT.to_string())]);

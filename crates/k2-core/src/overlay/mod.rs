@@ -604,6 +604,37 @@ pub fn post_changes(
     Ok(item_and_thread_link(conversation_id, seq, id, doc))
 }
 
+/// A mail notice on a Thread (0.46.11). From `k2`, no inject, no wake: the
+/// session line is delivered separately.
+pub fn post_notice(
+    conn: &Connection,
+    conversation_id: &str,
+    project_id: &str,
+    to: &str,
+    body: &str,
+    notice: doc::ThreadNotice,
+) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
+    let _guard = WRITE.lock();
+    let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let doc = OverlayDoc::mail_notice_card(id.clone(), to.trim().to_string(), body.to_string(), notice);
+    store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
+    Ok(item_and_thread_link(conversation_id, seq, id, doc))
+}
+
+/// A retried mail notice landed: the card shows delivered.
+pub fn mark_notice_delivered(conversation_id: &str, card_id: &str) -> Result<OverlayItem, String> {
+    let _guard = WRITE.lock();
+    let item = thread_item(conversation_id, card_id)?;
+    let mut doc = item.doc;
+    if let Some(n) = doc.notice.as_mut() {
+        n.delivered = true;
+        n.reason = None;
+    }
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
+    Ok(OverlayItem { doc, ..item })
+}
+
 /// Close a pending `handoff` card: `landed` (with the `k2v://` reference),
 /// `declined` or `expired`. `by` is the person who decided (None for the
 /// expiry sweep). Never takes a value.

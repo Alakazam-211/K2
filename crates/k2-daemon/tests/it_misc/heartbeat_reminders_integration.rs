@@ -408,3 +408,56 @@ fn five_failed_deliveries_retire_the_reminder_as_failed() {
     assert!(!row.enabled && row.archived_at.is_some(), "retired, off, archived");
     assert_eq!(row.consecutive_failures, 5, "counted every failure");
 }
+
+/// Mail notices on a headless daemon: off until someone chooses, and turning
+/// them on makes the digest heartbeat but picks no inbox.
+#[test]
+fn mail_notices_are_off_until_chosen_and_the_routes_are_post_only() {
+    let b = HeadlessBox::new();
+    let (path, id) = b.workspace("watch-routes");
+    let enc = urlenc(&path);
+
+    let (status, body) = b.http("GET", &format!("/cli/mail/watch?project={enc}"), "").expect("status");
+    assert!(status.contains("200"), "{status}: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(v["enabled"], false, "{body}");
+    assert_eq!(v["vips"], serde_json::json!([]), "{body}");
+
+    for verb in ["set", "inboxes", "vip", "pause", "pause-all", "redeliver"] {
+        let (status, body) = b
+            .http("GET", &format!("/cli/mail/watch/{verb}?project={enc}"), "")
+            .expect("answered");
+        assert!(status.contains("405"), "GET {verb}: {status}: {body}");
+    }
+
+    let on = serde_json::json!({ "project": path, "on": true }).to_string();
+    let (status, body) = b.http("POST", "/cli/mail/watch/set", &on).expect("set");
+    assert!(status.contains("200"), "{status}: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(v["enabled"], true, "{body}");
+    assert!(
+        v["inboxes"].as_array().expect("inboxes").iter().all(|i| i["wake"].is_null()),
+        "turning it on picks no inbox: {body}"
+    );
+    assert_eq!(v["digest"]["start"], "09:00", "{body}");
+
+    let kind: String = b
+        .open()
+        .query_row(
+            "SELECT kind FROM workspace_heartbeats WHERE project_id = ?1 AND name = 'mail-digest'",
+            rusqlite::params![id],
+            |r| r.get(0),
+        )
+        .expect("digest row");
+    assert_eq!(kind, "mail_digest");
+
+    // The digest row is the mail page's to change.
+    let (status, body) = b
+        .http("POST", &format!("/cli/heartbeat/edit?project={enc}&name=mail-digest"), "")
+        .expect("answered");
+    assert!(status.contains("400") && body.contains("mail digest"), "{status}: {body}");
+
+    let bad = serde_json::json!({ "project": path, "digestEverySecs": 60 }).to_string();
+    let (status, body) = b.http("POST", "/cli/mail/watch/set", &bad).expect("set");
+    assert!(status.contains("400") && body.contains("at least 5 minutes"), "{status}: {body}");
+}

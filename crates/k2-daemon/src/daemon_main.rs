@@ -1992,6 +1992,8 @@ async fn async_main() {
 
     // Agent-scheduled outbound flusher (mail_outbound status=scheduled).
     let _mail_scheduled_flusher_handle = mail::schedule::spawn_scheduled_flusher();
+    // 0.46.11: agents hear about mail on the inboxes someone chose.
+    mail::watch::spawn();
 
     // K2 Mail S8 (prd-email-server-v1 §9) — the nightly deliverability
     // doctor: a server-level `k2 mail doctor` run re-taken daily while

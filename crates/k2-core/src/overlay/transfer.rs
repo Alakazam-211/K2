@@ -896,6 +896,7 @@ impl Rewrite<'_> {
             summary_source: None,
             client_msg_id: None,
             changes: None,
+            notice: None,
         };
         let key = import_key(
             project_id,

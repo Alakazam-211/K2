@@ -168,6 +168,9 @@ fn smart_launch_checked(
     let Some((project_id, hb)) = special else {
         return smart_launch_inner(project_path, name, catchup_of, check);
     };
+    if hb.is_mail_digest() {
+        return launch_mail_digest(project_path, &project_id, &hb, catchup_of, check);
+    }
     let out = crate::agent_wake::with_agent(&project_id, || {
         smart_launch_inner(project_path, name, catchup_of, check)
     });
@@ -176,6 +179,40 @@ fn smart_launch_checked(
         // reminder stays in its session (Chatter records the line).
         let short: String = hb.body.as_deref().unwrap_or_default().chars().take(200).collect();
         k2_core::heartbeats::reminders::post_note(project_path, &format!("Reminder fired: {short}"));
+    }
+    out
+}
+
+/// A mail digest fire: nothing new means no wake (one `skipped_empty` audit
+/// row, and the schedule counts on from now); otherwise the prepared digest
+/// goes out on the normal paths, and its notices are marked once delivered.
+fn launch_mail_digest(
+    project_path: &str,
+    project_id: &str,
+    hb: &AgentHeartbeat,
+    catchup_of: Option<&str>,
+    check: LeaseCheck<'_>,
+) -> serde_json::Value {
+    use crate::mail::watch::digest;
+    let agent_name = resolve_agent_name(project_path).unwrap_or_default();
+    let wakeup_abs = Path::new(project_path).join(&hb.wakeup_path);
+    let Some(prepared) = digest::prepare(project_id, hb, &wakeup_abs, &digest::real_subjects) else {
+        digest::record_empty(project_id, hb, &agent_name);
+        return serde_json::json!({
+            "success": false,
+            "decision": digest::DECISION_SKIPPED_EMPTY,
+            "reason": "no new mail",
+            "name": hb.name,
+        });
+    };
+    let ids = prepared.ids.clone();
+    digest::set_prepared(prepared);
+    let out = crate::agent_wake::with_agent(project_id, || {
+        smart_launch_inner(project_path, &hb.name, catchup_of, check)
+    });
+    let _ = digest::take_prepared();
+    if out["success"].as_bool() == Some(true) {
+        digest::mark_digested(&ids, chrono::Utc::now().timestamp());
     }
     out
 }
@@ -1092,7 +1129,7 @@ fn run_workspace_session_delivery(
             "",
             true,
             crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
-            "reminder",
+            if hb.is_reminder() { "reminder" } else { "mail" },
         )
     } else {
         crate::workspace_msg::deliver_live(
@@ -1713,6 +1750,13 @@ fn write_audit(
 fn row_delivery(hb: &AgentHeartbeat, wakeup_abs: &Path) -> Option<wake::WakeDelivery> {
     if hb.is_reminder() {
         return Some(reminder_delivery(hb));
+    }
+    if hb.is_mail_digest() {
+        // Always inline, under the digest's own 3 KB cap: the 4096-byte
+        // file pointer would hide the list.
+        let prompt = crate::mail::watch::digest::prepared_prompt()?;
+        let body_bytes = prompt.len();
+        return Some(wake::WakeDelivery { prompt, mode: wake::WakePromptMode::Inline, body_bytes });
     }
     wake::compose_wake_delivery_from_path(wakeup_abs, &hb.name)
 }

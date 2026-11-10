@@ -59,7 +59,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-type ImapSession = imap::Session<imap::Connection>;
+pub type ImapSession = imap::Session<imap::Connection>;
 
 pub struct RealImapOps;
 
@@ -788,6 +788,88 @@ fn summary_from_fetch(
         unread: !fetch.flags().iter().any(|f| matches!(f, Flag::Seen)),
         has_attachment,
     })
+}
+
+// ── The mail watcher (W20) ──────────────────────────────────────────────
+
+/// Log in for the mail watcher: the same one auth point as every other read.
+pub fn watch_open(inbox: &MailExternalInbox, password: &str) -> Result<ImapSession, String> {
+    login(inbox, password)
+}
+
+/// One poll: `EXAMINE` (read-only, so no flag on any message can change) and a
+/// `UID FETCH <last+1>:*` of headers with `BODY.PEEK`. The first poll only
+/// sets the cursor; a UIDVALIDITY change resets it (and the notice store's
+/// dedupe by Message-ID means nothing is told twice).
+pub fn watch_poll(
+    session: &mut ImapSession,
+    cursor: &mut crate::mail::watch::store::Cursor,
+) -> Result<Vec<crate::mail::watch::poll::NewMail>, String> {
+    let mailbox = session.examine("INBOX").map_err(|e| imap_err("EXAMINE", e))?;
+    let validity = mailbox.uid_validity.unwrap_or(0);
+    let uid_next = mailbox.uid_next;
+    let exists = mailbox.exists;
+    let fresh_generation = cursor.uidvalidity != Some(validity);
+    let Some(last) = cursor.last_uid.filter(|_| !fresh_generation) else {
+        // Nothing before this moment is news. `uid_next` is the fast path;
+        // a server without it answers through the newest message's UID.
+        let high = match uid_next {
+            Some(n) => n.saturating_sub(1),
+            None if exists == 0 => 0,
+            None => {
+                let fetches = session.fetch(exists.to_string(), "(UID)").map_err(|e| imap_err("FETCH", e))?;
+                fetches.iter().filter_map(|f| f.uid).max().unwrap_or(0)
+            }
+        };
+        cursor.uidvalidity = Some(validity);
+        cursor.last_uid = Some(high);
+        return Ok(Vec::new());
+    };
+    let fetches = session
+        .uid_fetch(format!("{}:*", last + 1), "(UID INTERNALDATE BODY.PEEK[HEADER])")
+        .map_err(|e| imap_err("UID FETCH", e))?;
+    let mut out = Vec::new();
+    let mut high = last;
+    for f in fetches.iter() {
+        // `n:*` always returns the newest message, even at or below n.
+        let Some(uid) = f.uid.filter(|u| *u > last) else { continue };
+        high = high.max(uid);
+        let Some(header) = f.header() else { continue };
+        let Some(msg) = MessageParser::default().parse(header) else { continue };
+        let received_at = f.internal_date().map(|d| d.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        let from = msg
+            .from()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| {
+                        let email = x.address.as_deref()?.trim().to_string();
+                        (!email.is_empty()).then(|| MailAddr { name: x.name.as_deref().map(str::to_string), email })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let auto_submitted = msg
+            .header_values(mail_parser::HeaderName::Other("Auto-Submitted".into()))
+            .filter_map(|v| v.as_text())
+            .any(|v| v.trim().to_ascii_lowercase().starts_with("auto-"));
+        let auth_lines = msg
+            .header_values(mail_parser::HeaderName::Other("Authentication-Results".into()))
+            .filter_map(|v| v.as_text())
+            .map(str::to_string)
+            .collect();
+        out.push(crate::mail::watch::poll::NewMail {
+            email_id: external::encode_uid_token(validity, uid),
+            rfc_message_id: msg.message_id().unwrap_or_default().to_string(),
+            from,
+            subject: msg.subject().unwrap_or_default().to_string(),
+            received_at: received_at.unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            auth_lines,
+            auto_submitted,
+        });
+    }
+    cursor.uidvalidity = Some(validity);
+    cursor.last_uid = Some(high);
+    Ok(out)
 }
 
 // ── The trait impl ──────────────────────────────────────────────────────
@@ -3135,5 +3217,130 @@ mod tests {
         let sasl = sasl_xoauth2_init("rosson@gmail.com", &fresh.access_token);
         assert_eq!(sasl, "user=rosson@gmail.com\x01auth=Bearer FRESH-access\x01\x01");
         assert!(!sasl.contains("STALE-access"), "the stale token must not ride the SASL");
+    }
+}
+
+#[cfg(test)]
+mod watch_tests {
+    //! The mail watcher against a loopback IMAP server: what it asks for, and
+    //! above all what it never asks for. Nothing here may set a flag.
+    use super::*;
+    use crate::mail::watch::store::Cursor;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    const HEADERS: &str = "From: Jane <jane@acme.test>\r\nSubject: Q4\r\nMessage-ID: <m8@acme.test>\r\nAuto-Submitted: auto-replied\r\nAuthentication-Results: mx.acme.test; dmarc=pass\r\n\r\n";
+
+    /// One validity per EXAMINE, in turn. Returns the server's port and a
+    /// handle that yields every command it saw.
+    fn spawn(validities: Vec<u32>) -> (u16, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let h = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut w = stream;
+            let mut seen = Vec::new();
+            let mut examines = 0usize;
+            w.write_all(b"* OK ready\r\n").unwrap();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let line = line.trim_end().to_string();
+                seen.push(line.clone());
+                let tag = line.split_whitespace().next().unwrap_or("*").to_string();
+                let verb = line.split_whitespace().nth(1).unwrap_or("").to_ascii_uppercase();
+                match verb.as_str() {
+                    "LOGIN" => w.write_all(format!("{tag} OK done\r\n").as_bytes()).unwrap(),
+                    "EXAMINE" => {
+                        let v = validities[examines.min(validities.len() - 1)];
+                        examines += 1;
+                        w.write_all(
+                            format!("* 3 EXISTS\r\n* OK [UIDVALIDITY {v}] ok\r\n* OK [UIDNEXT 8] ok\r\n{tag} OK [READ-ONLY] done\r\n").as_bytes(),
+                        )
+                        .unwrap();
+                    }
+                    "UID" => {
+                        // `n:*` answers the newest message even at or below n.
+                        let stale = format!(
+                            "* 2 FETCH (UID 5 INTERNALDATE \"10-Jun-2026 09:00:00 +0000\" BODY[HEADER] {{{}}}\r\n{HEADERS})\r\n",
+                            HEADERS.len()
+                        );
+                        let fresh = format!(
+                            "* 3 FETCH (UID 8 INTERNALDATE \"10-Jun-2026 10:00:00 +0000\" BODY[HEADER] {{{}}}\r\n{HEADERS})\r\n",
+                            HEADERS.len()
+                        );
+                        w.write_all(stale.as_bytes()).unwrap();
+                        w.write_all(fresh.as_bytes()).unwrap();
+                        w.write_all(format!("{tag} OK done\r\n").as_bytes()).unwrap();
+                    }
+                    "LOGOUT" => {
+                        w.write_all(format!("* BYE\r\n{tag} OK done\r\n").as_bytes()).unwrap();
+                        break;
+                    }
+                    other => panic!("the watcher must not send {other}: {line}"),
+                }
+            }
+            seen
+        });
+        (port, h)
+    }
+
+    fn session(port: u16) -> ImapSession {
+        connect_plaintext_for_test("127.0.0.1", port)
+            .expect("connect")
+            .login("u", "p")
+            .map_err(|(e, _)| e)
+            .expect("login")
+    }
+
+    #[test]
+    fn the_first_poll_sets_the_cursor_and_tells_nothing() {
+        let (port, h) = spawn(vec![7]);
+        let mut s = session(port);
+        let mut cursor = Cursor::default();
+        let got = watch_poll(&mut s, &mut cursor).expect("poll");
+        assert!(got.is_empty(), "nothing before now is news");
+        assert_eq!((cursor.uidvalidity, cursor.last_uid), (Some(7), Some(7)), "UIDNEXT 8 means the newest is 7");
+        drop(s.logout());
+        let seen = h.join().expect("server");
+        assert!(!seen.iter().any(|l| l.contains("UID FETCH")), "{seen:?}");
+    }
+
+    #[test]
+    fn a_poll_fetches_new_headers_with_peek_and_never_touches_a_flag() {
+        let (port, h) = spawn(vec![7]);
+        let mut s = session(port);
+        let mut cursor = Cursor { uidvalidity: Some(7), last_uid: Some(5), ..Default::default() };
+        let got = watch_poll(&mut s, &mut cursor).expect("poll");
+        assert_eq!(got.len(), 1, "UID 5 came back only because of n:*");
+        let m = &got[0];
+        assert_eq!(m.email_id, external::encode_uid_token(7, 8));
+        assert_eq!(m.rfc_message_id, "m8@acme.test");
+        assert_eq!(m.from[0].email, "jane@acme.test");
+        assert!(m.auto_submitted);
+        assert_eq!(m.auth_lines, vec!["mx.acme.test; dmarc=pass".to_string()]);
+        assert_eq!(cursor.last_uid, Some(8));
+        drop(s.logout());
+        let seen = h.join().expect("server");
+        let fetch = seen.iter().find(|l| l.contains("UID FETCH")).expect("a fetch");
+        assert!(fetch.contains("BODY.PEEK[HEADER]"), "{fetch}");
+        assert!(fetch.contains("6:*"), "{fetch}");
+        assert!(!seen.iter().any(|l| l.to_ascii_uppercase().contains(" SELECT ") || l.to_ascii_uppercase().contains("STORE")), "{seen:?}");
+    }
+
+    #[test]
+    fn a_uidvalidity_change_resets_the_cursor_without_a_replay() {
+        let (port, h) = spawn(vec![7, 9]);
+        let mut s = session(port);
+        let mut cursor = Cursor { uidvalidity: Some(7), last_uid: Some(7), ..Default::default() };
+        let _ = watch_poll(&mut s, &mut cursor).expect("first");
+        let got = watch_poll(&mut s, &mut cursor).expect("second");
+        assert!(got.is_empty(), "a new generation is not a flood");
+        assert_eq!((cursor.uidvalidity, cursor.last_uid), (Some(9), Some(7)));
+        drop(s.logout());
+        let _ = h.join().expect("server");
     }
 }

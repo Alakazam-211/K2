@@ -1382,6 +1382,18 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/spam/train", Admin),
     get("/cli/mail/status", Member),
     get("/cli/mail/wait", Member),
+    // 0.46.11: agent mail notices. An agent reaches only its own (the
+    // handlers take the workspace from its passport).
+    get("/cli/mail/watch", Member),
+    get("/cli/mail/watch/inbox", Member),
+    post("/cli/mail/watch/inboxes", Member),
+    get("/cli/mail/watch/log", Member),
+    post("/cli/mail/watch/pause", Member),
+    // Everyone's notices at once: an Admin's call, never an agent's (W23).
+    post("/cli/mail/watch/pause-all", Admin),
+    post("/cli/mail/watch/redeliver", Member),
+    post("/cli/mail/watch/set", Member),
+    post("/cli/mail/watch/vip", Member),
     // homes-sync-v1 (0.46.1): a person's own Homes and devices. Any login
     // (and the owner token); the handler binds the person from the
     // credential. Agents, app passes and API keys are refused there (403).

@@ -24,6 +24,15 @@
 //
 // Every write bumps the chart's revision and the daemon emits
 // `org_chart_changed {revision}` on the app bus; the tab refetches on it.
+//
+// The daemon's side of these shapes is `crates/k2-core/src/org_chart/wire.rs`
+// (mirrored in full in `lib/org-chart-types.ts`). The chart is laid out by
+// the daemon: `nodes` is the truth, one row per org and agent.
+//
+// "Manage the org chart" (per agent) is not an organization route:
+//   POST agent-access/set {toggle: 'org_chart_manage', workspace, value}
+// The Owner turns it on; the Owner or an Admin turns it off. Each chart
+// agent's `canManage` reads it back.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -39,8 +48,8 @@ export interface OrgRef {
 export type OrgLineKind = 'below' | 'beside'
 
 export interface OrgAgent {
-  /** This server's agents: the workspace (project) id. Federated agents: the
-   *  daemon's key for that connection. */
+  /** This server's agents: the workspace (project) id. Agents on other
+   *  servers: `remote:<agent>@<host>`. */
   id: string
   name: string
   color: string | null
@@ -48,13 +57,18 @@ export interface OrgAgent {
   /** null: an agent on this server. Otherwise the federated server it lives
    *  on (shown only when one of this server's agents can talk to it). */
   server: string | null
-  /** What the agent does, from its AGENTS.md (no separate role field). */
+  /** What the agent does, from its AGENTS.md (no separate role field);
+   *  null when it has none. */
   role: string | null
+  /** Its "Manage the org chart" switch. */
+  canManage: boolean
 }
 
 export interface OrgBulletin {
   lines: string[]
+  /** Unix seconds. */
   updatedAt: number
+  /** `owner`, `login:<user>`, `agent:<handle>`. */
   updatedBy: string
 }
 
@@ -82,8 +96,9 @@ export interface OrgConnection {
   b: string
 }
 
-/** A stored position. Only `person` rows bind the layout; `auto` rows are
- *  the daemon's cache and the canvas lays those out itself. */
+/** One node of the daemon's layout. An org's x/y/w/h and a loose agent's
+ *  x/y are canvas coordinates; a member's x/y is relative to its bucket (as
+ *  `layout/move` takes it). `person`: a person dragged it there. */
 export interface OrgPlacement {
   kind: OrgNodeKind
   id: string
@@ -96,9 +111,15 @@ export interface OrgPlacement {
 
 export interface OrgChart {
   revision: number
-  /** The caller may arrange and manage (an Owner or Admin person). A Member
+  /** An Owner or Admin person: writes any org's bulletin. A Member login
    *  sees the chart view only. */
   canEdit: boolean
+  /** The caller may change orgs, members, heads and lines. */
+  canManage: boolean
+  /** The caller may drag and tidy (Owner and Admin people only). */
+  canArrange: boolean
+  /** One card's size on the canvas. */
+  card: { w: number; h: number }
   agents: OrgAgent[]
   orgs: Org[]
   lines: OrgLine[]
@@ -155,12 +176,21 @@ function ref(v: unknown, what: string): OrgRef {
   return { kind: kind(o.kind, `${what}.kind`), id: str(o, 'id', what) }
 }
 
+function bool(o: Obj, k: string, what: string): boolean {
+  const v = o[k]
+  if (typeof v !== 'boolean') throw new Error(`org chart: ${what}.${k} is not a boolean`)
+  return v
+}
+
 export function parseOrgChart(raw: unknown): OrgChart {
   const o = obj(raw, 'the chart')
-  if (typeof o.canEdit !== 'boolean') throw new Error('org chart: canEdit is not a boolean')
+  const card = obj(o.card, 'chart.card')
   return {
     revision: num(o, 'revision', 'chart'),
-    canEdit: o.canEdit,
+    canEdit: bool(o, 'canEdit', 'chart'),
+    canManage: bool(o, 'canManage', 'chart'),
+    canArrange: bool(o, 'canArrange', 'chart'),
+    card: { w: num(card, 'w', 'chart.card'), h: num(card, 'h', 'chart.card') },
     agents: arr(o, 'agents', 'chart').map((v, i) => {
       const a = obj(v, `agents[${i}]`)
       return {
@@ -169,7 +199,8 @@ export function parseOrgChart(raw: unknown): OrgChart {
         color: strOrNull(a, 'color', `agents[${i}]`),
         iconUrl: strOrNull(a, 'iconUrl', `agents[${i}]`),
         server: strOrNull(a, 'server', `agents[${i}]`),
-        role: strOrNull(a, 'role', `agents[${i}]`),
+        role: strOrNull(a, 'role', `agents[${i}]`) || null,
+        canManage: bool(a, 'canManage', `agents[${i}]`),
       }
     }),
     orgs: arr(o, 'orgs', 'chart').map((v, i) => {
@@ -264,4 +295,10 @@ export function orgApiFor(scope: ServerScope): OrgApi {
     tidy: (revision) => post('layout/tidy', { revision }),
     setBulletin: (org, lines) => post('bulletin/set', { org, lines }),
   }
+}
+
+/** "Manage the org chart" for one agent (the Owner turns it on; the Owner or
+ *  an Admin turns it off). `workspace`: the agent's workspace path. */
+export async function setAgentCanManageOrgChart(scope: ServerScope, workspace: string, value: boolean): Promise<void> {
+  await daemonCliPost<unknown>(scope, 'agent-access/set', { toggle: 'org_chart_manage', workspace, value })
 }

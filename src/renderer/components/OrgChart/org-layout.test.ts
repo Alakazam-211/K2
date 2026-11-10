@@ -9,10 +9,11 @@ import {
   CARD_H,
   CARD_W,
   layoutChart,
+  layoutFromNodes,
   LOOSE_LABEL,
   REMOTE_LABEL,
 } from './org-layout'
-import { orgChartFixture } from './org-chart-fixture'
+import { FAR, orgChartFixture } from './org-chart-fixture'
 import * as ops from './org-ops'
 import type { OrgAgent, OrgChart } from './org-api'
 
@@ -24,6 +25,7 @@ function withAgents(n: number): OrgChart {
     iconUrl: null,
     server: null,
     role: null,
+    canManage: false,
   }))
   return { ...orgChartFixture(), agents, orgs: [{ id: 'o', name: 'Ops', purpose: '', headId: null, memberIds: [], bulletin: null }], connections: [] }
 }
@@ -119,7 +121,7 @@ describe('on the canvas', () => {
     const bottom = Math.max(...[...L.orgs.values()].map((b) => b.y + b.h))
     expect(L.labels.map((l) => l.text)).toEqual([LOOSE_LABEL, REMOTE_LABEL])
     expect(L.agents.get('ada')!.y).toBeGreaterThan(bottom)
-    expect(L.agents.get('far')!.y).toBeGreaterThan(L.agents.get('ada')!.y)
+    expect(L.agents.get(FAR)!.y).toBeGreaterThan(L.agents.get('ada')!.y)
     expect(L.agents.get('bo')!.orgId).toBe('org-support')
   })
 
@@ -127,5 +129,57 @@ describe('on the canvas', () => {
     const chart = ops.place(orgChartFixture(), { kind: 'agent', id: 'cy' }, 1500, -300)
     expect(layoutChart(chart).agents.get('cy')).toMatchObject({ x: 1500, y: -300, pinned: true })
     expect(layoutChart(ops.tidy(chart)).agents.get('cy')).toEqual(layoutChart(orgChartFixture()).agents.get('cy'))
+  })
+})
+
+describe("layoutFromNodes: the daemon's layout is the truth", () => {
+  const nodes = [
+    { kind: 'org' as const, id: 'org-billing', x: 40, y: 30, w: 600, h: 300, placedBy: 'auto' as const },
+    { kind: 'org' as const, id: 'org-support', x: 900, y: 30, w: 300, h: 200, placedBy: 'person' as const },
+    { kind: 'agent' as const, id: 'bo', x: 20, y: 60, w: null, h: null, placedBy: 'auto' as const },
+    { kind: 'agent' as const, id: 'ada', x: 0, y: 700, w: null, h: null, placedBy: 'auto' as const },
+    { kind: 'agent' as const, id: 'cy', x: 300, y: 700, w: null, h: null, placedBy: 'person' as const },
+    { kind: 'agent' as const, id: FAR, x: 0, y: 900, w: null, h: null, placedBy: 'auto' as const },
+  ]
+
+  it('draws every node as sent: buckets on the canvas, members relative to their bucket, the card size from the chart', () => {
+    const L = layoutFromNodes(orgChartFixture({ nodes, card: { w: 200, h: 60 } }))
+    expect(L.orgs.get('org-billing')).toEqual({ id: 'org-billing', x: 40, y: 30, w: 600, h: 300, pinned: false })
+    expect(L.orgs.get('org-support')!.pinned).toBe(true)
+    expect(L.agents.get('bo')).toEqual({ id: 'bo', orgId: 'org-support', x: 920, y: 90, w: 200, h: 60, pinned: false })
+    expect(L.agents.get('cy')).toMatchObject({ x: 300, y: 700, pinned: true, orgId: null })
+    expect(L.labels.map((l) => [l.text, l.y])).toEqual([[LOOSE_LABEL, 700 - 28], [REMOTE_LABEL, 900 - 28]])
+  })
+
+  it("a member the daemon hasn't placed yet (an optimistic drop) takes the bucket's next free cell, and the bucket grows to hold it", () => {
+    const chart = ops.joinOrg(orgChartFixture({ nodes }), 'org-support', 'ada')
+    const L = layoutFromNodes(chart)
+    const b = L.orgs.get('org-support')!
+    const ada = L.agents.get('ada')!
+    expect([ada.x - b.x, ada.y - b.y]).toEqual([BUCKET_PAD + CARD_W + CARD_GAP, BUCKET_TITLE_H + BUCKET_PAD])
+    expect(b.w).toBeGreaterThanOrEqual(ada.x - b.x + CARD_W + BUCKET_PAD)
+  })
+
+  it("an org the daemon hasn't placed yet goes at the end of the top row", () => {
+    const chart = ops.createOrg(orgChartFixture({ nodes }), 'pending-org-1', 'Research')
+    const r = layoutFromNodes(chart).orgs.get('pending-org-1')!
+    expect(r.x).toBeGreaterThanOrEqual(900 + 300)
+    expect(r.y).toBe(0)
+  })
+
+  it('a card dragged out of its org stays where it was let go; Tidy up keeps everything still until the daemon answers', () => {
+    const left = ops.leaveOrg(orgChartFixture({ nodes }), 'bo', { x: 1500, y: 1200 })
+    expect(layoutFromNodes(left).agents.get('bo')).toMatchObject({ x: 1500, y: 1200, orgId: null })
+    const before = layoutFromNodes(orgChartFixture({ nodes }))
+    const tidied = ops.tidy(orgChartFixture({ nodes }))
+    expect(tidied.nodes.every((n) => n.placedBy === 'auto')).toBe(true)
+    const after = layoutFromNodes(tidied)
+    expect([...after.agents.values()].map((a) => [a.id, a.x, a.y])).toEqual([...before.agents.values()].map((a) => [a.id, a.x, a.y]))
+  })
+
+  it("deleting an org drops its members' bucket-relative spots (never read as canvas spots)", () => {
+    const L = layoutFromNodes(ops.deleteOrg(orgChartFixture({ nodes }), 'org-support'))
+    expect(L.agents.get('bo')).toMatchObject({ orgId: null })
+    expect(L.agents.get('bo')!.y).toBeGreaterThan(900)
   })
 })

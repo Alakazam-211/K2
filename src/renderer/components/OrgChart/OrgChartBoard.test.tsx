@@ -28,7 +28,7 @@ import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { OrgChartBoard, LS_ORG_CHART_DOTTED, DOTTED_LABEL } from './OrgChartBoard'
 import { fakeOrgApi, type FakeOrgApi } from './org-api.fake'
-import { orgChartFixture } from './org-chart-fixture'
+import { FAR, orgChartFixture } from './org-chart-fixture'
 import { layoutChart } from './org-layout'
 import { TOP_TO_TOP_MESSAGE } from './org-rules'
 import type { OrgChart } from './org-api'
@@ -136,9 +136,9 @@ describe('membership by drag and drop', () => {
     const chart = orgChartFixture()
     const api = await mount(chart)
     const billing = layoutChart(chart).orgs.get('org-billing')!
-    dragCardTo(chart, 'far', billing.x + 10, billing.y + 60)
+    dragCardTo(chart, FAR, billing.x + 10, billing.y + 60)
     expect(api.calls.filter((c) => c.route !== 'chart')).toEqual([])
-    expect(card('far').querySelector('[data-org-dot]')).toBeNull()
+    expect(card(FAR).querySelector('[data-org-dot]')).toBeNull()
   })
 })
 
@@ -250,7 +250,8 @@ describe('positions', () => {
     await waitFor(() => expect(tidy.disabled).toBe(false))
     fireEvent.click(tidy)
     expect(api.callsTo('layout/tidy')).toEqual([{ route: 'layout/tidy', body: { revision: 2 } }])
-    expect(card('cy').style.left).toBe(`${auto.x}px`)
+    // The card stays put until the daemon's tidied layout comes back, then sits on auto.
+    await waitFor(() => expect(card('cy').style.left).toBe(`${auto.x}px`))
     expect(card('cy').style.top).toBe(`${auto.y}px`)
   })
 
@@ -330,7 +331,7 @@ describe('the org view', () => {
 
 describe('a Member login: the view only', () => {
   it('shows View only, no dots, no drags, no Tidy up or New org; the org view reads', async () => {
-    const chart = orgChartFixture({ canEdit: false })
+    const chart = orgChartFixture({ canEdit: false, canManage: false, canArrange: false })
     const api = await mount(chart)
     expect(screen.getByTestId('org-chart-view-only').textContent).toBe('View only')
     expect(document.querySelector('[data-org-dot]')).toBeNull()
@@ -372,4 +373,86 @@ describe('both Styles', () => {
       expect(screen.getByTestId('org-chart-canvas').className).toContain('bg-[var(--color-bg-canvas)]')
     })
   }
+})
+
+describe("the daemon's layout is the truth", () => {
+  it('cards and buckets sit where the nodes say; a member is placed relative to its bucket', async () => {
+    const chart = orgChartFixture({
+      nodes: [
+        { kind: 'org', id: 'org-billing', x: 40, y: 30, w: 600, h: 300, placedBy: 'auto' },
+        { kind: 'org', id: 'org-support', x: 900, y: 30, w: 300, h: 200, placedBy: 'person' },
+        { kind: 'agent', id: 'bo', x: 20, y: 60, w: null, h: null, placedBy: 'auto' },
+        { kind: 'agent', id: 'ada', x: 0, y: 700, w: null, h: null, placedBy: 'auto' },
+        { kind: 'agent', id: 'cy', x: 300, y: 700, w: null, h: null, placedBy: 'person' },
+        { kind: 'agent', id: FAR, x: 0, y: 900, w: null, h: null, placedBy: 'auto' },
+      ],
+    })
+    // A daemon that answers with exactly these nodes.
+    const api = fakeOrgApi(chart)
+    api.chart = async () => structuredClone(chart)
+    render(<OrgChartBoard api={api} subscribe={subscribe} />)
+    await screen.findByTestId('org-chart-board')
+    const bucket = document.querySelector('[data-org-bucket="org-billing"]') as HTMLElement
+    expect([bucket.style.left, bucket.style.top, bucket.style.width, bucket.style.height]).toEqual(['40px', '30px', '600px', '300px'])
+    expect([card('bo').style.left, card('bo').style.top]).toEqual(['920px', '90px'])
+    expect([card('ada').style.left, card('ada').style.top]).toEqual(['0px', '700px'])
+    expect([card('cy').style.left, card('cy').style.top]).toEqual(['300px', '700px'])
+    expect([card('ada').style.width, card('ada').style.height]).toEqual(['220px', '72px'])
+    // Tidy up is on: Cy and Support were placed by a person.
+    expect((screen.getByRole('button', { name: 'Tidy up' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it("a card dropped in a bucket shows inside it at once, in the bucket's next free cell, before the daemon answers", async () => {
+    const chart = orgChartFixture()
+    const api = await mount(chart)
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => (release = r))
+    const add = api.addMember
+    api.addMember = async (org, agent) => {
+      await gate
+      return add(org, agent)
+    }
+    const support = layoutChart(chart).orgs.get('org-support')!
+    dragCardTo(chart, 'ada', support.x + support.w / 2, support.y + support.h / 2)
+    // Bo is in the first cell; Ada takes the next one, inside the (grown) bucket.
+    const b = document.querySelector('[data-org-bucket="org-support"]') as HTMLElement
+    const left = parseFloat(card('ada').style.left)
+    const top = parseFloat(card('ada').style.top)
+    expect(left).toBeGreaterThanOrEqual(parseFloat(b.style.left))
+    expect(left + 220).toBeLessThanOrEqual(parseFloat(b.style.left) + parseFloat(b.style.width))
+    expect(top + 72).toBeLessThanOrEqual(parseFloat(b.style.top) + parseFloat(b.style.height))
+    expect(left).not.toBe(parseFloat(card('bo').style.left))
+    release()
+    await waitFor(() => expect(api.callsTo('member/add')).toHaveLength(1))
+  })
+})
+
+describe('rights: managing vs arranging', () => {
+  it('may manage but not arrange: dots and New org, no Tidy up; a drag that only moves a card posts nothing', async () => {
+    const chart = orgChartFixture({ canArrange: false })
+    const api = await mount(chart)
+    expect(card('ada').querySelector('[data-org-dot]')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'New org' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Tidy up' })).toBeNull()
+    expect(screen.queryByTestId('org-chart-view-only')).toBeNull()
+    const auto = layoutChart(chart).agents.get('cy')!
+    drag(card('cy'), auto.x + 10, auto.y + 10, auto.x + 510, auto.y + 310)
+    expect(api.callsTo('layout/move')).toEqual([])
+    // Joining an org is managing: allowed.
+    const billing = layoutChart(chart).orgs.get('org-billing')!
+    dragCardTo(chart, 'cy', billing.x + billing.w / 2, billing.y + billing.h / 2)
+    expect(api.callsTo('member/add')).toEqual([{ route: 'member/add', body: { org: 'org-billing', agent: 'cy' } }])
+  })
+
+  it('a bulletin time is unix seconds', async () => {
+    const chart = orgChartFixture()
+    // 2026-11-03 12:00 UTC, in seconds.
+    chart.orgs[1]!.bulletin = { lines: ['x'], updatedAt: 1793707200, updatedBy: 'agent:bo' }
+    await mount(chart)
+    const title = document.querySelector('[data-org-bucket-title="org-support"]') as HTMLElement
+    fireEvent.pointerDown(title, { clientX: 5, clientY: 5, button: 0 })
+    fireEvent.pointerUp(window, { clientX: 5, clientY: 5 })
+    const panel = await screen.findByTestId('org-panel')
+    expect(panel.textContent).toMatch(/Updated .*Nov.* by agent:bo/)
+  })
 })

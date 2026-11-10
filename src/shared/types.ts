@@ -156,7 +156,7 @@ export interface AppSettingsResponse {
   /** The Org Chart (prd-org-chart-v1): the tab, orgs and the daily bulletin. Off by default; Owner/Admin. */
   orgChart?: boolean
   /** The Org Chart's night, in the owner's timezone ("HH:MM"). Owner/Admin. */
-  orgChartNight?: { runAt: string; lastCallAt: string; editionAt: string }
+  orgChartNight?: { runAt: string; lastCallAt: string; dayStartsAt: string }
   voiceTunnelPreview?: boolean
   // How many voice rooms this server hosts (0–10, default 1). Owner/Admin.
   voiceRoomsCount?: number

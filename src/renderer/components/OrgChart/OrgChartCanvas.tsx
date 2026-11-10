@@ -12,7 +12,9 @@
 //     the daemon's sentence and post nothing;
 //   - a line: select it, then Remove (or Delete);
 //   - a member's ⋯ menu: Make head, Remove from the org.
-// A Member login (canEdit false) gets the view: no dots, drags or menus.
+// Rights come from the chart: `canManage` (orgs, members, heads, lines:
+// dots, membership drops, menus) and `canArrange` (where things sit: drags
+// that only move). A Member login has neither and gets the view only.
 //
 // Lines are Board's: routes, ends and dash patterns from board-file-1's
 // geom.js (`board-geom.ts`); pan, zoom and minimap are copies of Board's.
@@ -21,14 +23,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Surface, OverflowMenu, type OverflowMenuItem } from '@/components/ui'
 import { BoardGeom, boardDash, type Box, type Side } from './board-geom'
 import { toWorld, wheel, type Camera } from './org-camera'
-import { bucketAt, CARD_H, CARD_W, BUCKET_TITLE_H, type OrgLayout } from './org-layout'
+import { bucketAt, BUCKET_TITLE_H, type OrgLayout } from './org-layout'
 import type { OrgAgent, OrgChart, OrgLineKind, OrgRef } from './org-api'
 import { checkLine, wireKind } from './org-rules'
 import { orgOfAgent } from './org-ops'
 
 export type OrgGesture =
   | { type: 'join'; org: string; agent: string; from: string | null }
-  | { type: 'leave'; org: string; agent: string }
+  /** `at`: where the card was let go, when it was dragged out. */
+  | { type: 'leave'; org: string; agent: string; at?: { x: number; y: number } }
   | { type: 'place'; node: OrgRef; x: number; y: number }
   | { type: 'line'; kind: OrgLineKind; a: OrgRef; b: OrgRef }
   | { type: 'unline'; id: string }
@@ -64,7 +67,7 @@ export function resolveCardDrop(chart: OrgChart, layout: OrgLayout, agent: strin
     const b = layout.orgs.get(target)!
     return { type: 'place', node: { kind: 'agent', id: agent }, x: Math.round(box.x - b.x), y: Math.round(box.y - b.y) }
   }
-  if (cur) return { type: 'leave', org: cur, agent }
+  if (cur) return { type: 'leave', org: cur, agent, at: { x: Math.round(box.x), y: Math.round(box.y) } }
   return { type: 'place', node: { kind: 'agent', id: agent }, x: Math.round(box.x), y: Math.round(box.y) }
 }
 
@@ -93,7 +96,8 @@ type Drag =
 interface Props {
   chart: OrgChart
   layout: OrgLayout
-  canEdit: boolean
+  canManage: boolean
+  canArrange: boolean
   dotted: boolean
   cam: Camera
   onCamera: (cam: Camera) => void
@@ -118,13 +122,15 @@ function initials(name: string): string {
 }
 
 export function OrgChartCanvas(props: Props): React.JSX.Element {
-  const { chart, layout, canEdit, dotted, cam, onCamera, onGesture, onRefuse, onOpenOrg, selectedLine, onSelectLine, onViewport } = props
+  const { chart, layout, canManage, canArrange, dotted, cam, onCamera, onGesture, onRefuse, onOpenOrg, selectedLine, onSelectLine, onViewport } = props
   const viewportRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
   const dragRef = useRef<Drag | null>(null)
   const camRef = useRef(cam)
   camRef.current = cam
   const agentsById = useMemo(() => new Map(chart.agents.map((a) => [a.id, a])), [chart.agents])
+  /** A card can be picked up when the drop can do something: change its org, or move it. */
+  const canDrag = canManage || canArrange
 
   const setDragBoth = (d: Drag | null): void => {
     dragRef.current = d
@@ -201,7 +207,10 @@ export function OrgChartCanvas(props: Props): React.JSX.Element {
       setDragBoth(null)
       if (!d) return
       if (d.kind === 'card') {
-        if (d.moved) onGesture(resolveCardDrop(chart, layout, d.agent, d.box))
+        if (!d.moved) return
+        const g = resolveCardDrop(chart, layout, d.agent, d.box)
+        // Moving a card is arranging; changing its org is managing.
+        if (g.type === 'place' ? canArrange : canManage) onGesture(g)
         return
       }
       if (d.kind === 'bucket') {
@@ -227,11 +236,11 @@ export function OrgChartCanvas(props: Props): React.JSX.Element {
       window.removeEventListener('pointerup', up)
       window.removeEventListener('pointercancel', cancel)
     }
-  }, [drag !== null, chart, layout, onCamera, onGesture, onRefuse, onOpenOrg, nodeAt, world]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [drag !== null, chart, layout, canManage, canArrange, onCamera, onGesture, onRefuse, onOpenOrg, nodeAt, world]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Delete / Backspace removes the selected line.
   useEffect(() => {
-    if (!selectedLine || !canEdit) return
+    if (!selectedLine || !canManage) return
     const key = (e: KeyboardEvent): void => {
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
@@ -243,7 +252,7 @@ export function OrgChartCanvas(props: Props): React.JSX.Element {
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
-  }, [selectedLine, canEdit, onGesture, onSelectLine])
+  }, [selectedLine, canManage, onGesture, onSelectLine])
 
   // While a card or bucket is dragged, it (and a bucket's members) draw where the pointer has it.
   const boxOf = (ref: OrgRef): Box | null => {
@@ -263,7 +272,7 @@ export function OrgChartCanvas(props: Props): React.JSX.Element {
   }
 
   const startWire = (e: React.PointerEvent, from: OrgRef, side: Side): void => {
-    if (!canEdit || e.button !== 0) return
+    if (!canManage || e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
     const box = boxOf(from)
@@ -273,7 +282,7 @@ export function OrgChartCanvas(props: Props): React.JSX.Element {
   }
 
   const dots = (ref: OrgRef, label: string): React.JSX.Element | null =>
-    canEdit ? (
+    canManage ? (
       <>
         {SIDES.map((s) => (
           <span
@@ -363,13 +372,13 @@ export function OrgChartCanvas(props: Props): React.JSX.Element {
         aria-label={`${a.name}${head ? `, head of ${org!.name}` : ''}${remote ? `, on ${a.server}` : ''}`}
         className={
           'group absolute flex items-center gap-2 px-2.5 select-none ' +
-          (canEdit && !remote ? 'cursor-grab ' : '') +
+          (canDrag && !remote ? 'cursor-grab ' : '') +
           (dragging ? 'z-30 cursor-grabbing ' : 'z-10 ') +
           (head ? 'border-[var(--color-accent)] ' : '')
         }
-        style={{ left: box.x, top: box.y, width: CARD_W, height: CARD_H }}
+        style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
         onPointerDown={(e) => {
-          if (!canEdit || remote || e.button !== 0) return
+          if (!canDrag || remote || e.button !== 0) return
           e.stopPropagation()
           setDragBoth({ kind: 'card', agent: a.id, sx: e.clientX, sy: e.clientY, box: { ...box }, moved: false })
         }}
@@ -393,7 +402,7 @@ export function OrgChartCanvas(props: Props): React.JSX.Element {
           {a.role ? <span className="block truncate type-hint text-[var(--color-text-muted)]">{a.role}</span> : null}
           {remote ? <span className="block truncate type-hint text-[var(--color-text-muted)]">on {a.server}</span> : null}
         </span>
-        {canEdit && menu.length ? (
+        {canManage && menu.length ? (
           <span onPointerDown={(e) => e.stopPropagation()} className="flex-shrink-0">
             <OverflowMenu items={menu} label={`${a.name}: more`} triggerProps={{ 'data-org-agent-menu': a.id }} />
           </span>
@@ -452,7 +461,7 @@ export function OrgChartCanvas(props: Props): React.JSX.Element {
                 data-org-bucket-title={o.id}
                 aria-label={`${o.name}: open`}
                 className={
-                  'flex items-center gap-2 border-b border-[var(--color-border)] px-3 ' + (canEdit ? 'cursor-grab' : 'cursor-pointer')
+                  'flex items-center gap-2 border-b border-[var(--color-border)] px-3 ' + (canArrange ? 'cursor-grab' : 'cursor-pointer')
                 }
                 style={{ height: BUCKET_TITLE_H }}
                 onKeyDown={(e) => {
@@ -464,7 +473,7 @@ export function OrgChartCanvas(props: Props): React.JSX.Element {
                 onPointerDown={(e) => {
                   if (e.button !== 0) return
                   e.stopPropagation()
-                  if (!canEdit) {
+                  if (!canArrange) {
                     onOpenOrg(o.id)
                     return
                   }
@@ -477,7 +486,7 @@ export function OrgChartCanvas(props: Props): React.JSX.Element {
               </div>
               {o.memberIds.length === 0 ? (
                 <div className="absolute inset-x-0 bottom-0 flex items-center justify-center type-hint text-[var(--color-text-muted)]" style={{ top: BUCKET_TITLE_H }}>
-                  {canEdit ? 'Drop agents here' : 'No agents yet'}
+                  {canManage ? 'Drop agents here' : 'No agents yet'}
                 </div>
               ) : null}
               {dots({ kind: 'org', id: o.id }, o.name)}
@@ -534,7 +543,7 @@ export function OrgChartCanvas(props: Props): React.JSX.Element {
 
         {chart.agents.map(card)}
 
-        {selected && canEdit ? (
+        {selected && canManage ? (
           <button
             type="button"
             data-org-line-remove={selected.id}

@@ -214,12 +214,15 @@ describe('the "Asked for this" chip map', () => {
   it('every mapped row is a real Agent tab row id', () => {
     const projects = readFileSync(join(__dirname, 'ProjectsSection.tsx'), 'utf8')
     const apps = readFileSync(join(__dirname, 'AgentAppsAccess.tsx'), 'utf8')
+    // The Org Chart's row is its own file, rendered in ProjectsSection's Org Chart group.
+    const orgChart = readFileSync(join(__dirname, 'AgentsManageOrgChartToggle.tsx'), 'utf8')
+    expect(projects.includes('<AgentsManageOrgChartToggle project={project}')).toBe(true)
     for (const row of new Set(Object.values(PERMISSION_ACTION_ROWS))) {
-      const inProjects = projects.includes(`data-settings-id="${row}"`)
+      const inProjects = projects.includes(`data-settings-id="${row}"`) || orgChart.includes(`data-settings-id="${row}"`)
       const inApps = row === 'projects.agents-can-manage-skin' && apps.includes('projects.agents-can-manage-skin')
       expect(inProjects || inApps, row).toBe(true)
       // …and that row carries the chip.
-      expect(projects.includes(`<AskedChip row="${row}" />`), `chip on ${row}`).toBe(true)
+      expect(projects.includes(`<AskedChip row="${row}" />`) || orgChart.includes(`<AskedChip row="${row}" />`), `chip on ${row}`).toBe(true)
     }
   })
 

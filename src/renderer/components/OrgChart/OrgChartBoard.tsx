@@ -17,7 +17,7 @@ import { daemonErrorText } from '@/lib/daemon-error'
 import { httpCodeOf } from '@/lib/daemon-http-error'
 import type { OrgApi, OrgChart } from './org-api'
 import { ORG_NAME_MAX } from './org-api'
-import { layoutChart } from './org-layout'
+import { layoutFromNodes } from './org-layout'
 import * as ops from './org-ops'
 import { fitTo, zoomCentre, type Camera } from './org-camera'
 import { OrgChartCanvas, type OrgGesture } from './OrgChartCanvas'
@@ -100,7 +100,8 @@ export function OrgChartBoard({
     [subscribe, load],
   )
 
-  const layout = useMemo(() => (chart ? layoutChart(chart) : null), [chart])
+  // The daemon's layout (its `nodes`), plus its rules for a node it hasn't placed yet.
+  const layout = useMemo(() => (chart ? layoutFromNodes(chart) : null), [chart])
 
   // Fit the chart once it first has a size to fit into.
   useEffect(() => {
@@ -168,7 +169,7 @@ export function OrgChartBoard({
           return
         }
         case 'leave':
-          void write((x) => ops.leaveOrg(x, g.agent), () => api.removeMember(g.org, g.agent))
+          void write((x) => ops.leaveOrg(x, g.agent, g.at), () => api.removeMember(g.org, g.agent))
           return
         case 'head':
           void write((x) => ops.makeHead(x, g.org, g.agent), () => api.setHead(g.org, g.agent))
@@ -268,7 +269,7 @@ export function OrgChartBoard({
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="org-chart-board">
       <div className="flex flex-shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-3 py-2">
-        {chart.canEdit ? (
+        {chart.canManage ? (
           newName === null ? (
             <Button size="sm" onClick={() => setNewName('')}>
               New org
@@ -301,7 +302,7 @@ export function OrgChartBoard({
             </form>
           )
         ) : null}
-        {chart.canEdit ? (
+        {chart.canArrange ? (
           <Button
             size="sm"
             onClick={tidyUp}
@@ -310,7 +311,7 @@ export function OrgChartBoard({
           >
             Tidy up
           </Button>
-        ) : (
+        ) : chart.canManage ? null : (
           <span
             data-testid="org-chart-view-only"
             className="border border-[var(--color-border)] px-2 py-0.5 type-badge uppercase tracking-wider text-[var(--color-text-muted)] rounded-[var(--radius-pill)]"
@@ -368,7 +369,8 @@ export function OrgChartBoard({
           <OrgChartCanvas
             chart={chart}
             layout={layout}
-            canEdit={chart.canEdit}
+            canManage={chart.canManage}
+            canArrange={chart.canArrange}
             dotted={dotted}
             cam={cam}
             onCamera={setCam}
@@ -393,12 +395,13 @@ export function OrgChartBoard({
             key={org.id}
             org={org}
             agents={agents}
-            canEdit={chart.canEdit}
+            canManage={chart.canManage}
+            canEditBulletin={chart.canEdit}
             onClose={() => setOpenOrg(null)}
             onRename={(name) => panelWrite((x) => ops.renameOrg(x, org.id, name), () => api.rename(org.id, name))}
             onPurpose={(purpose) => panelWrite((x) => ops.setPurpose(x, org.id, purpose), () => api.setPurpose(org.id, purpose))}
             onBulletin={(lines) =>
-              panelWrite((x) => ops.setBulletin(x, org.id, lines, 'you', Date.now()), () => api.setBulletin(org.id, lines))
+              panelWrite((x) => ops.setBulletin(x, org.id, lines, 'you', Math.floor(Date.now() / 1000)), () => api.setBulletin(org.id, lines))
             }
             onHead={(agent) => onGesture({ type: 'head', org: org.id, agent })}
             onDelete={() => deleteOrg(org.id)}

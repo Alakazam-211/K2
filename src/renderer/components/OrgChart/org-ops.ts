@@ -25,8 +25,12 @@ export function joinOrg(chart: OrgChart, org: string, agent: string): OrgChart {
   return { ...left, orgs: left.orgs.map((o) => (o.id === org ? { ...o, memberIds: [...o.memberIds, agent] } : o)) }
 }
 
-export function leaveOrg(chart: OrgChart, agent: string): OrgChart {
-  return leave(chart, agent)
+/** Out of its org. `at`: where it was let go (canvas coordinates), so the
+ *  card stays there until the daemon's layout comes back. */
+export function leaveOrg(chart: OrgChart, agent: string, at?: { x: number; y: number }): OrgChart {
+  const left = leave(chart, agent)
+  if (!at) return left
+  return { ...left, nodes: [...left.nodes, { kind: 'agent', id: agent, x: at.x, y: at.y, w: null, h: null, placedBy: 'auto' }] }
 }
 
 export function makeHead(chart: OrgChart, org: string, agent: string): OrgChart {
@@ -48,9 +52,10 @@ export function place(chart: OrgChart, node: OrgRef, x: number, y: number): OrgC
   return { ...chart, nodes: [...rest, { kind: node.kind, id: node.id, x, y, w: old?.w ?? null, h: old?.h ?? null, placedBy: 'person' }] }
 }
 
-/** "Tidy up": every node back on auto. */
+/** "Tidy up": every node back on auto. Positions stay where they are until
+ *  the daemon's tidied layout comes back (nothing jumps twice). */
 export function tidy(chart: OrgChart): OrgChart {
-  return { ...chart, nodes: chart.nodes.filter((n) => n.placedBy !== 'person') }
+  return { ...chart, nodes: chart.nodes.map((n) => (n.placedBy === 'person' ? { ...n, placedBy: 'auto' } : n)) }
 }
 
 export function createOrg(chart: OrgChart, id: string, name: string, purpose = ''): OrgChart {
@@ -72,13 +77,15 @@ export function setBulletin(chart: OrgChart, org: string, lines: string[], by: s
   }
 }
 
-/** Deleting an org: its members leave, its lines and its placement go. */
+/** Deleting an org: its members leave, its lines and its placement go (and
+ *  its members' spots, which were relative to the bucket). */
 export function deleteOrg(chart: OrgChart, org: string): OrgChart {
+  const members = new Set(chart.orgs.find((o) => o.id === org)?.memberIds ?? [])
   return {
     ...chart,
     orgs: chart.orgs.filter((o) => o.id !== org),
     lines: chart.lines.filter((l) => !((l.a.kind === 'org' && l.a.id === org) || (l.b.kind === 'org' && l.b.id === org))),
-    nodes: chart.nodes.filter((n) => !(n.kind === 'org' && n.id === org)),
+    nodes: chart.nodes.filter((n) => !(n.kind === 'org' && n.id === org) && !(n.kind === 'agent' && members.has(n.id))),
   }
 }
 

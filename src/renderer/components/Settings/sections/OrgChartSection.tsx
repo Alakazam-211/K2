@@ -33,15 +33,15 @@ export const ORG_CHART_MANIFEST: SettingEntry[] = [
 export interface OrgChartNight {
   runAt: string
   lastCallAt: string
-  editionAt: string
+  dayStartsAt: string
 }
 
-export const DEFAULT_NIGHT: OrgChartNight = { runAt: '01:00', lastCallAt: '04:30', editionAt: '06:00' }
+export const DEFAULT_NIGHT: OrgChartNight = { runAt: '01:00', lastCallAt: '04:30', dayStartsAt: '06:00' }
 
 const NIGHT_ROWS: { key: keyof OrgChartNight; label: string; hint: string }[] = [
   { key: 'runAt', label: 'Night run', hint: 'Each org head is woken to update its bulletin.' },
   { key: 'lastCallAt', label: 'Last call', hint: "One reminder to a head that hasn't written yet." },
-  { key: 'editionAt', label: 'New day', hint: "From here, every agent's bulletin counts as unread for the new day." },
+  { key: 'dayStartsAt', label: 'New day', hint: "From here, every agent's bulletin counts as unread for the new day." },
 ]
 
 /** Minutes after 22:00 on the night's clock (22:00 → 0, 07:00 → 540), or
@@ -68,7 +68,9 @@ function parseNight(v: unknown): OrgChartNight {
   if (!v || typeof v !== 'object') return DEFAULT_NIGHT
   const o = v as Record<string, unknown>
   const pick = (k: keyof OrgChartNight): string => (typeof o[k] === 'string' ? (o[k] as string) : DEFAULT_NIGHT[k])
-  return { runAt: pick('runAt'), lastCallAt: pick('lastCallAt'), editionAt: pick('editionAt') }
+  // The daemon reads back `dayStartsAt`; an older one said `editionAt`.
+  const dayStartsAt = typeof o.dayStartsAt === 'string' ? o.dayStartsAt : typeof o.editionAt === 'string' ? o.editionAt : DEFAULT_NIGHT.dayStartsAt
+  return { runAt: pick('runAt'), lastCallAt: pick('lastCallAt'), dayStartsAt }
 }
 
 const muted = 'text-[var(--color-text-muted)]'

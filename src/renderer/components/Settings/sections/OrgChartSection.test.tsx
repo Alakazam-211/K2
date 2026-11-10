@@ -88,10 +88,27 @@ describe('Settings → Org Chart', () => {
     )
   })
 
+  it("reads the daemon's dayStartsAt (and an older daemon's editionAt) and writes dayStartsAt", async () => {
+    cli.settings = { orgChart: true, orgChartNight: { runAt: '00:30', lastCallAt: '03:00', dayStartsAt: '05:45' } }
+    render(<OrgChartSection />)
+    await waitFor(() => expect((screen.getByLabelText('New day') as HTMLInputElement).value).toBe('05:45'))
+    fireEvent.change(screen.getByLabelText('New day'), { target: { value: '06:15' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save times' }))
+    await waitFor(() =>
+      expect(cli.posts).toEqual([
+        { route: 'settings/update', body: { orgChartNight: { runAt: '00:30', lastCallAt: '03:00', dayStartsAt: '06:15' } } },
+      ]),
+    )
+    cleanup()
+    cli.settings = { orgChart: true, orgChartNight: { runAt: '01:00', lastCallAt: '04:30', editionAt: '06:30' } }
+    render(<OrgChartSection />)
+    await waitFor(() => expect((screen.getByLabelText('New day') as HTMLInputElement).value).toBe('06:30'))
+  })
+
   it('the rule itself', () => {
     expect(nightProblem(DEFAULT_NIGHT)).toBeNull()
-    expect(nightProblem({ runAt: '22:00', lastCallAt: '02:00', editionAt: '07:00' })).toBeNull()
-    expect(nightProblem({ ...DEFAULT_NIGHT, editionAt: '08:00' })).toBe('New day must fall between 22:00 and 07:00.')
+    expect(nightProblem({ runAt: '22:00', lastCallAt: '02:00', dayStartsAt: '07:00' })).toBeNull()
+    expect(nightProblem({ ...DEFAULT_NIGHT, dayStartsAt: '08:00' })).toBe('New day must fall between 22:00 and 07:00.')
   })
 
   it('a Member sees it read-only', async () => {

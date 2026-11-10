@@ -19,7 +19,7 @@ import { act } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import OrgChartPage from './OrgChartPage'
 import { fakeOrgApi } from './org-api.fake'
-import { orgChartFixture } from './org-chart-fixture'
+import { FAR, orgChartFixture } from './org-chart-fixture'
 import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 
@@ -51,7 +51,7 @@ describe('OrgChartPage', () => {
     render(<OrgChartPage api={fakeOrgApi(orgChartFixture())} />)
     expect(screen.getByTestId('org-chart-page')).toBeTruthy()
     await screen.findByTestId('org-chart-board')
-    expect([...document.querySelectorAll('[data-org-agent]')].map((e) => e.getAttribute('data-org-agent')).sort()).toEqual(['ada', 'bo', 'cy', 'far'])
+    expect([...document.querySelectorAll('[data-org-agent]')].map((e) => e.getAttribute('data-org-agent')).sort()).toEqual(['ada', 'bo', 'cy', FAR].sort())
   })
 
   it('the switch going off while it is open sends the window back to Agents', async () => {

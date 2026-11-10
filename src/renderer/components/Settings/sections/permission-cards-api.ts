@@ -273,6 +273,7 @@ export const PERMISSION_ACTION_ROWS: Readonly<Record<string, string>> = {
   'apps.core': 'projects.agents-can-manage-skin',
   'vault.manage': 'projects.agents-can-manage-vault',
   'gardens.manage': 'projects.agents-can-manage-gardens',
+  'organization.manage': 'projects.agents-can-manage-org-chart',
   'dns.manage': 'projects.dns-manage-enabled',
   'connections.create': 'projects.agents-can-create-connections',
   'connections.add': 'projects.agents-can-create-connections',

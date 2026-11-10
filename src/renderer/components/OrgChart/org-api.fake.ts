@@ -1,11 +1,14 @@
 // A stand-in daemon for the Org Chart's tests: the `OrgApi` over an
 // in-memory chart, keeping the daemon's rules (one org per agent, the head is
 // a member, line rules, stale revisions) and recording every call by route.
-// Only tests import it.
+// Like the daemon, it lays its chart out itself: `chart()` answers with a
+// node for every org and agent (`nodesOf`, the same §6.6 rules), keeping who
+// placed each one. Only tests import it.
 
 import type { OrgApi, OrgChart, OrgLineKind, OrgRef } from './org-api'
 import { checkLine } from './org-rules'
 import * as ops from './org-ops'
+import { nodesOf } from './org-layout'
 
 export interface FakeCall {
   route: string
@@ -40,7 +43,7 @@ export function fakeOrgApi(initial: OrgChart): FakeOrgApi {
     failNext: (route, code, message = code) => void fails.set(route, { code, message }),
     chart: async () => {
       api.calls.push({ route: 'chart', body: {} })
-      return structuredClone(api.state)
+      return structuredClone({ ...api.state, nodes: nodesOf(api.state) })
     },
     create: async (name, purpose) => write('create', { name, purpose }, (c) => ops.createOrg(c, `org-${++seq}`, name, purpose ?? '')),
     rename: async (org, name) => write('rename', { org, name }, (c) => ops.renameOrg(c, org, name)),

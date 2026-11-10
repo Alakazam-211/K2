@@ -1,18 +1,27 @@
-// The canvas lays itself out (prd-org-chart-v1 §6.6, Rosson's "self right"):
-// pure and deterministic, from the chart's canonical rows, so every window
-// draws the same picture. Only `person` placements (a drag) bind; every other
-// node is placed here, and "Tidy up" clears the person rows so all of it
-// flows again.
+// Where everything sits on the Org Chart canvas (prd-org-chart-v1 §6.6).
 //
-//   - Cards are one size (220×72).
-//   - A bucket grows with its members: cols = ceil(sqrt(n)) (at most 4),
-//     rows follow; head first, then by name. A member a person dragged keeps
-//     its spot inside the bucket; auto members fill the free cells around it.
-//   - Buckets stand in rows by their `below` lines (between the orgs, or
-//     between agents in them), top to bottom, by name within a row. A bucket
-//     with no lines goes in the top row, to the right.
-//   - A bucket a person placed never moves; auto buckets step right past it.
-//   - Agents in no org sit in a "Not in an org" row under the buckets, and
+// The daemon lays the chart out (`org_chart::layout`) and sends the result
+// as `nodes`: that is the truth, and `layoutFromNodes` draws it. An org's
+// node is its bucket's canvas box; a member's x/y is relative to its bucket
+// (so a bucket's members move with it); a loose agent's is on the canvas.
+//
+// A node the daemon hasn't placed yet (a card just dropped into a bucket, an
+// org just made, both shown before the daemon answers) gets the same rules
+// the daemon uses, from `layoutChart` below: the next free cell of its
+// bucket, which grows to hold it, or the end of the row. The next
+// `org_chart_changed` read replaces it with the daemon's spot.
+//
+// `layoutChart` is that rule set for a whole chart (the test daemon in
+// org-api.fake.ts lays its charts out with it):
+//   - cards are one size (220×72);
+//   - a bucket grows with its members: cols = ceil(sqrt(n)) (at most 4),
+//     rows follow; head first, then by name; a member a person dragged keeps
+//     its spot inside the bucket, auto members fill the free cells around it;
+//   - buckets stand in rows by their `below` lines (between the orgs, or
+//     between agents in them), top to bottom, by name within a row; a
+//     bucket with no lines goes in the top row, to the right;
+//   - a bucket a person placed never moves; auto buckets step right past it;
+//   - agents in no org sit in a "Not in an org" row under the buckets, and
 //     agents on other servers in a row under that.
 
 import type { OrgChart, OrgPlacement } from './org-api'
@@ -253,4 +262,125 @@ export function bucketAt(layout: OrgLayout, x: number, y: number): string | null
   let hit: string | null = null
   for (const b of layout.orgs.values()) if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) hit = b.id
   return hit
+}
+
+/** The chart as the daemon laid it out (`nodes`), plus the daemon's rules
+ *  for any node it hasn't placed yet. */
+export function layoutFromNodes(chart: OrgChart): OrgLayout {
+  const cw = chart.card.w
+  const ch = chart.card.h
+  const node = new Map<string, OrgPlacement>()
+  for (const n of chart.nodes) node.set(`${n.kind}:${n.id}`, n)
+  const agentIds = new Set(chart.agents.map((a) => a.id))
+  const orgOf = new Map<string, string>()
+  for (const o of chart.orgs) for (const m of o.memberIds) if (agentIds.has(m) && !orgOf.has(m)) orgOf.set(m, o.id)
+
+  // 1. Members relative to their bucket: placed ones as sent, new ones in the next free cell.
+  const inside = new Map<string, PlacedAgent[]>()
+  for (const o of chart.orgs) {
+    const members = o.memberIds.filter((m) => orgOf.get(m) === o.id)
+    const cols = bucketSize(members.length).cols
+    const placed: PlacedAgent[] = []
+    for (const id of members) {
+      const n = node.get(`agent:${id}`)
+      if (n) placed.push({ id, orgId: o.id, x: n.x, y: n.y, w: cw, h: ch, pinned: n.placedBy === 'person' })
+    }
+    let i = 0
+    for (const id of members) {
+      if (node.has(`agent:${id}`)) continue
+      let c = cell(i, cols)
+      while (placed.some((q) => overlaps({ ...c, w: cw, h: ch }, q))) c = cell(++i, cols)
+      placed.push({ id, orgId: o.id, ...c, w: cw, h: ch, pinned: false })
+      i++
+    }
+    inside.set(o.id, placed)
+  }
+
+  // 2. Buckets: the daemon's box, grown to hold anything not yet placed; a
+  //    new org at the end of the top row.
+  const orgs = new Map<string, PlacedOrg>()
+  const fit = (id: string, x: number, y: number, w: number, h: number, pinned: boolean): void => {
+    for (const q of inside.get(id) ?? []) {
+      w = Math.max(w, q.x + q.w + BUCKET_PAD)
+      h = Math.max(h, q.y + q.h + BUCKET_PAD)
+    }
+    orgs.set(id, { id, x, y, w, h, pinned })
+  }
+  for (const o of chart.orgs) {
+    const n = node.get(`org:${o.id}`)
+    if (!n) continue
+    const size = bucketSize(o.memberIds.length)
+    fit(o.id, n.x, n.y, n.w ?? size.w, n.h ?? size.h, n.placedBy === 'person')
+  }
+  for (const o of chart.orgs) {
+    if (orgs.has(o.id)) continue
+    const right = Math.max(0, ...[...orgs.values()].map((b) => b.x + b.w + BUCKET_GAP))
+    const size = bucketSize(o.memberIds.length)
+    fit(o.id, orgs.size ? right : 0, 0, size.w, size.h, false)
+  }
+
+  // 3. Absolute boxes for members; loose agents where the daemon put them.
+  const agents = new Map<string, PlacedAgent>()
+  for (const o of chart.orgs) {
+    const b = orgs.get(o.id)!
+    for (const m of inside.get(o.id)!) agents.set(m.id, { ...m, x: b.x + m.x, y: b.y + m.y })
+  }
+  const unplaced: string[] = []
+  for (const a of chart.agents) {
+    if (orgOf.has(a.id)) continue
+    const n = node.get(`agent:${a.id}`)
+    if (n) agents.set(a.id, { id: a.id, orgId: null, x: n.x, y: n.y, w: cw, h: ch, pinned: n.placedBy === 'person' })
+    else unplaced.push(a.id)
+  }
+  // An agent the daemon hasn't placed (it just left its org with no drop
+  // spot): a row under everything.
+  if (unplaced.length) {
+    const all = [...orgs.values(), ...agents.values()]
+    const top = all.length ? Math.max(...all.map((b) => b.y + b.h)) + ROW_GAP : 0
+    unplaced.forEach((id, k) =>
+      agents.set(id, {
+        id,
+        orgId: null,
+        x: (k % LOOSE_COLS) * (cw + CARD_GAP),
+        y: top + Math.floor(k / LOOSE_COLS) * (ch + CARD_GAP),
+        w: cw,
+        h: ch,
+        pinned: false,
+      }),
+    )
+  }
+
+  // 4. The two row labels sit over their cards.
+  const labels: OrgLayout['labels'] = []
+  const label = (ids: string[], text: string): void => {
+    const boxes = ids.map((id) => agents.get(id)).filter((b): b is PlacedAgent => !!b)
+    if (!boxes.length) return
+    labels.push({ text, x: Math.min(...boxes.map((b) => b.x)), y: Math.min(...boxes.map((b) => b.y)) - LABEL_H })
+  }
+  label(chart.agents.filter((a) => a.server === null && !orgOf.has(a.id)).map((a) => a.id), LOOSE_LABEL)
+  label(chart.agents.filter((a) => a.server !== null && !orgOf.has(a.id)).map((a) => a.id), REMOTE_LABEL)
+
+  const all = [...orgs.values(), ...agents.values()]
+  if (!all.length) return { orgs, agents, labels, bounds: { x: 0, y: 0, w: 0, h: 0 } }
+  const x1 = Math.min(...all.map((b) => b.x))
+  const y1 = Math.min(...all.map((b) => b.y))
+  const x2 = Math.max(...all.map((b) => b.x + b.w))
+  const y2 = Math.max(...all.map((b) => b.y + b.h))
+  return { orgs, agents, labels, bounds: { x: x1, y: y1, w: x2 - x1, h: y2 - y1 } }
+}
+
+/** The daemon's `nodes` for a chart laid out by `layoutChart` (members
+ *  relative to their bucket), keeping who placed each one. The test daemon
+ *  answers with these. */
+export function nodesOf(chart: OrgChart): OrgPlacement[] {
+  const L = layoutChart(chart)
+  const by = (kind: 'agent' | 'org', id: string): 'auto' | 'person' =>
+    chart.nodes.find((n) => n.kind === kind && n.id === id && n.placedBy === 'person') ? 'person' : 'auto'
+  const out: OrgPlacement[] = []
+  for (const o of L.orgs.values()) out.push({ kind: 'org', id: o.id, x: o.x, y: o.y, w: o.w, h: o.h, placedBy: by('org', o.id) })
+  for (const a of L.agents.values()) {
+    const b = a.orgId ? L.orgs.get(a.orgId)! : null
+    out.push({ kind: 'agent', id: a.id, x: b ? a.x - b.x : a.x, y: b ? a.y - b.y : a.y, w: null, h: null, placedBy: by('agent', a.id) })
+  }
+  return out
 }

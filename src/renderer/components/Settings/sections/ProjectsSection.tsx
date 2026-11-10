@@ -78,6 +78,7 @@ import { AgentHandoffAcceptFrom } from './HandoffAcceptFrom'
 import { AgentHandoffSendAllow } from './HandoffSendAllow'
 import { AgentAppsAccess } from './AgentAppsAccess'
 import { AgentPermissionCardsRow, AskedChip, PermissionAsksProvider } from './PermissionCardsSection'
+import { AgentsManageOrgChartToggle } from './AgentsManageOrgChartToggle'
 import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { WorkspaceSettingsPage } from './WorkspaceSettingsPage'
 import {
@@ -130,6 +131,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-refresh-chat', section: 'projects', label: 'Let this agent refresh its pinned chat', description: 'It can start a fresh pinned chat when its chat goes stale; the old chat stays in Chat history. Off: it asks you first', keywords: ['can refresh its own pinned chat', 'agents_can_refresh_chat', 'chat_refresh', 'refresh', 'pinned chat', 'new chat', 'k2 agent refresh', 'chat.refresh', 'stale'] },
   { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Let this agent operate compute nodes', description: 'It can pause, resume, update and restart your compute machines without asking; changes that need full control of a machine still ask you', keywords: ['allow this agent to operate compute nodes', 'agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Let this agent manage K2 projects', description: 'It can create, rename and delete K2 projects and change their members. Off: it can still read them and post in its project chat', keywords: ['manage k2 projects', 'agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
+  { id: 'projects.agents-can-manage-org-chart', section: 'projects', label: 'Manage the org chart', description: 'It can make and change orgs, members, heads and lines on the Org Chart; it can make itself an org head. Only the owner turns it on; shown while the Org Chart is on', keywords: ['manage the org chart', 'org chart', 'organization', 'orgs', 'org head', 'bulletin', 'org_chart_manage', 'organization.manage', 'k2 organization', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Let this agent manage Gardens and data sources', description: 'It can approve and pause data sources, turn on triggers and edit Gardens without asking; every act is logged', keywords: ['manage gardens and data sources', 'agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
   { id: 'projects.mail-agent-send', section: 'projects', label: 'Let this agent send email', description: 'Whether this agent can send email: never, after you approve each one, or on its own', keywords: ['mail_agent_send', 'agent send', 'sending', 'send', 'email', 'mail', 'gmail', 'linked', 'gated', 'approval', 'outbound'] },
   { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Let this agent manage hosted mail', description: 'It can turn hosted mail on or off for this server and set up domains and delivery', keywords: ['allow agents to manage hosted mail on this server', 'mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
@@ -1364,6 +1366,8 @@ function ProjectDetail({
   assignProjectToGroup: (projectId: string, groupId: string | null) => Promise<void>
   fetchProjects: () => Promise<void>
 }): React.JSX.Element {
+  // The Org Chart group shows only while the server's Org Chart is on.
+  const orgChartOn = useSettingsStore((s) => s.orgChart) === true
   const [agentEditorOpen, setAgentEditorOpen] = useState(false)
   const [agentEditorName, setAgentEditorName] = useState('')
   /** Generic stack-layer edit (arbitrary .md path via AIFileEditor). */
@@ -1806,6 +1810,11 @@ function ProjectDetail({
                   <AgentsManageProjectsToggle project={project} />
                   <AgentsManageGardensToggle project={project} />
                 </SettingsGroup>
+                {orgChartOn ? (
+                  <SettingsGroup title="Org Chart" card>
+                    <AgentsManageOrgChartToggle project={project} scope={primaryScope()} />
+                  </SettingsGroup>
+                ) : null}
                 <SettingsGroup title="Email sending" card>
                   <MailAgentSendControl project={project} />
                   {/* Agent email notices (N10): hides itself for a Member and on a

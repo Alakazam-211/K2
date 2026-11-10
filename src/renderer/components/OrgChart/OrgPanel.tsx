@@ -1,7 +1,9 @@
 // One org, opened from its bucket (Rosson 11-10): its purpose (a short
 // paragraph, ≤ 400 characters), its bulletin (at most 5 lines, 160
 // characters each, live: a head's or an Admin's edit lands at once), its
-// head and its members. An Owner or Admin edits them here; a Member reads.
+// head and its members. Whoever may manage the chart edits the name,
+// purpose and head; an Owner or Admin person writes the bulletin; a Member
+// reads.
 // The 5-line and 160-character limits are the daemon's; the panel says the
 // same sentence before it sends.
 
@@ -30,8 +32,9 @@ export function bulletinLines(text: string): string[] {
     .filter(Boolean)
 }
 
-function when(ms: number): string {
-  const d = new Date(ms)
+/** A bulletin's `updatedAt` (unix seconds) as people read it. */
+function when(seconds: number): string {
+  const d = new Date(seconds * 1000)
   return Number.isFinite(d.getTime()) ? d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''
 }
 
@@ -42,7 +45,8 @@ const field =
 export function OrgPanel({
   org,
   agents,
-  canEdit,
+  canManage,
+  canEditBulletin,
   onClose,
   onRename,
   onPurpose,
@@ -52,7 +56,10 @@ export function OrgPanel({
 }: {
   org: Org
   agents: Map<string, OrgAgent>
-  canEdit: boolean
+  /** Name, purpose, head, delete (the chart's `canManage`). */
+  canManage: boolean
+  /** The bulletin: an Owner or Admin person (the chart's `canEdit`). */
+  canEditBulletin: boolean
   onClose: () => void
   onRename: (name: string) => Promise<void>
   onPurpose: (purpose: string) => Promise<void>
@@ -108,7 +115,7 @@ export function OrgPanel({
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-2">
-        {canEdit ? (
+        {canManage ? (
           <Input
             value={name}
             maxLength={ORG_NAME_MAX}
@@ -149,7 +156,7 @@ export function OrgPanel({
       <div className="flex-1 space-y-4 overflow-y-auto px-3 py-3">
         <section className="space-y-1">
           <div className={`type-section uppercase tracking-wider ${muted}`}>Purpose</div>
-          {canEdit ? (
+          {canManage ? (
             <>
               <textarea
                 className={field}
@@ -186,7 +193,7 @@ export function OrgPanel({
 
         <section className="space-y-1">
           <div className={`type-section uppercase tracking-wider ${muted}`}>Bulletin</div>
-          {canEdit ? (
+          {canEditBulletin ? (
             <>
               <textarea
                 className={field + ' font-[var(--font-code)]'}
@@ -246,7 +253,7 @@ export function OrgPanel({
                   </span>
                   {m.id === org.headId ? (
                     <span className="type-badge text-[var(--color-accent)]">Head</span>
-                  ) : canEdit ? (
+                  ) : canManage ? (
                     <Button size="sm" variant="ghost" onClick={() => onHead(m.id)}>
                       Make head
                     </Button>
@@ -255,7 +262,7 @@ export function OrgPanel({
               ))}
             </ul>
           ) : (
-            <p className={`type-hint ${muted}`}>{canEdit ? 'Drag agents into the bucket to add them.' : 'No agents yet.'}</p>
+            <p className={`type-hint ${muted}`}>{canManage ? 'Drag agents into the bucket to add them.' : 'No agents yet.'}</p>
           )}
         </section>
 
@@ -266,7 +273,7 @@ export function OrgPanel({
         ) : null}
       </div>
 
-      {canEdit ? (
+      {canManage ? (
         <div className="border-t border-[var(--color-border)] px-3 py-2">
           <Button size="sm" variant="danger" onClick={onDelete}>
             Delete org

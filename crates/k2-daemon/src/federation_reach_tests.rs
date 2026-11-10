@@ -201,3 +201,32 @@ fn a_message_post_is_never_sent_twice_after_it_left() {
     std::thread::sleep(std::time::Duration::from_millis(1600));
     assert_eq!(seen.load(Ordering::SeqCst), 1, "a POST that left is not resent: {err}");
 }
+
+#[test]
+fn split_remote_sidecar_reads_workspace_slash_handle() {
+    assert_eq!(split_remote_sidecar("ada/notes"), ("ada", Some("notes")));
+    assert_eq!(split_remote_sidecar(" ada / 2 "), ("ada", Some("2")));
+    assert_eq!(split_remote_sidecar("ada"), ("ada", None));
+    // An empty half is no sidecar: the whole name goes to the workspace
+    // gate, which refuses it.
+    assert_eq!(split_remote_sidecar("ada/"), ("ada/", None));
+    assert_eq!(split_remote_sidecar("/notes"), ("/notes", None));
+}
+
+#[test]
+fn error_chain_keeps_every_cause_once() {
+    #[derive(Debug)]
+    struct E(&'static str, Option<Box<E>>);
+    impl std::fmt::Display for E {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for E {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|e| e as &(dyn std::error::Error + 'static))
+        }
+    }
+    let e = E("error sending request", Some(Box::new(E("connection reset", Some(Box::new(E("reset", None)))))));
+    assert_eq!(error_chain(&e), "error sending request: connection reset");
+}

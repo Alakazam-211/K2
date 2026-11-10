@@ -1988,6 +1988,25 @@ _send_remote_msg() {
         return 2
     fi
 
+    # 0.46.11: `<agent>/<chat>::<host>` reaches a sidecar chat in that
+    # workspace (the chat's name is slugged like a local address:
+    # "Field Notes" -> field-notes). The roster lookup and the connection
+    # gate use the workspace half; the receiver checks the chat exists.
+    local sidecar=""
+    case "$agent" in
+        */*)
+            sidecar="${agent#*/}"
+            agent="${agent%%/*}"
+            sidecar=$(printf '%s' "$sidecar" | python3 -c 'import sys
+s = sys.stdin.read().strip().lower()
+print("-".join(p for p in s.split() if p))')
+            if [ -z "$agent" ] || [ -z "$sidecar" ] || [[ "$sidecar" == */* ]] || [[ "$sidecar" == *:* ]]; then
+                echo "k2 msg: a chat on another server is <agent>/<chat>::<host> (one slash), e.g. ada/notes::box.example.k2.dev." >&2
+                return 2
+            fi
+            ;;
+    esac
+
     # Optional one-shot compat hint when the caller used legacy @ form.
     if [ "${_USED_LEGACY_AT:-0}" = "1" ] && [ "${_FED_AT_HINT_SHOWN:-0}" = "0" ]; then
         echo "hint: prefer \`k2 msg ${agent}::${host}\` — '@' federated addresses are legacy compat (not email)." >&2
@@ -2224,9 +2243,13 @@ sys.stderr.write(json.dumps({"error":{"code":"forbidden","hint":hint}},
     # 3. Send. Build the body safely with python3 (mirrors cmd_fed send).
     # from_workspace is best-effort for owner path; scoped principal forces it
     # server-side from the passport (body spoof ignored).
-    local body resp
+    local body resp wire_agent="$agent" shown="$agent"
+    if [ -n "$sidecar" ]; then
+        wire_agent="${agent}/${sidecar}"
+        shown="${agent}/${sidecar}"
+    fi
     body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3]}))' \
-        "${fp}::${wsid}::${agent}" "$text" "$from_project")
+        "${fp}::${wsid}::${wire_agent}" "$text" "$from_project")
     resp=$(cli_send cli_post_json "/cli/federation/send" "$body")
 
     # 4. Surface the response.
@@ -2254,7 +2277,11 @@ st = d.get("status", "")
 if st == "sent":
     print("SENT"); sys.exit(0)
 if st == "queued":
-    print("QUEUED\t%s" % (d.get("hint", "") or "")); sys.exit(0)
+    # 0.46.11: the reason alone (transport error); the CLI words the line.
+    why = d.get("reason") or d.get("hint") or ""
+    if why.startswith("delivery deferred to retry: "):
+        why = why[len("delivery deferred to retry: "):]
+    print("QUEUED\t%s" % " ".join(str(why).split())); sys.exit(0)
 if st == "declined":
     print("DECLINED\t%s" % (d.get("hint") or d.get("reason") or "declined by peer")); sys.exit(0)
 print("OTHER")
@@ -2265,11 +2292,18 @@ print("OTHER")
     case "$skind" in
         SENT)
             [ -n "$note_handle" ] && _k2_addr_note "${agent}::${host}" "${note_handle}::${host}"
-            echo "delivered to ${agent}::${host} (federation)"
+            echo "delivered to ${shown}::${host} (federation)"
             return 0 ;;
         QUEUED)
+            # Exit 0 (the message is safe in the outbox and will go), but
+            # the line says plainly it has NOT landed yet (0.46.11).
             [ -n "$note_handle" ] && _k2_addr_note "${agent}::${host}" "${note_handle}::${host}"
-            echo "${sdetail:-queued for ${agent}::${host} — peer briefly unreachable, will deliver when it reconnects (federation)}" >&2
+            if [ -n "$sdetail" ]; then
+                echo "QUEUED (not delivered yet) for ${shown}::${host}: $sdetail" >&2
+            else
+                echo "QUEUED (not delivered yet) for ${shown}::${host}: the peer is briefly unreachable" >&2
+            fi
+            echo "  K2 retries it from this server's outbox (next try in about 30 s). The owner can watch it with: k2 fed outbox" >&2
             return 0 ;;
         GATE)
             # sdetail is "code\thint" after first tab split above left "code\thint"
@@ -38208,7 +38242,7 @@ for c in conns:
             bound = ' → %s' % handle
             if display and display.strip().lower() != handle.strip().lower():
                 bound += ' (%s)' % display
-        repair = '  [re-pair recommended: paired with the older pairing code]' if c.get('repairRecommended') else ''
+        repair = '  [older pairing code: messages still work; re-pair recommended]' if c.get('repairRecommended') else ''
         # 0159: never moves to another workspace that takes the name.
         gone = '  [GONE: that workspace is no longer on the host; handles are never reused, so this connection stays closed until your human adds it again]' if c.get('remoteWorkspaceGone') else ''
         print('  - %s%s   (remote)%s%s' % (addr, bound, repair, gone))
@@ -46068,6 +46102,11 @@ ARGUMENTS
                  federation plane (connected peer is the gate; no Connect
                  token required). Legacy agent@host still works temporarily
                  (not email). Wire form fp::ws::agent is for `k2 fed send` only.
+  <agent>/<handle>::<host>
+                 A sidecar chat in that peer's workspace, e.g.
+                 ada/notes::box.example.k2.dev (a chat named "Notes").
+                 Same connection and switch as the workspace; both
+                 servers need K2 0.46.11 or later.
   "text"         The message body. Wrap in quotes if it has spaces.
 
 OPTIONS
@@ -66224,7 +66263,7 @@ for p in peers:
     extra = ('  label=%s' % label) if label else ''
     print('  %s  trust=%s  fp=%s…%s' % (host, trust, fp, extra))
     if p.get('repair_recommended'):
-        print('      re-pair recommended: paired with the older pairing code (still works; pair again with k2 fed pair-start)')
+        print('      older pairing code: messages still work; re-pair recommended (Settings → Connections → Re-pair, or k2 fed pair-start)')
     # 0.45.2: this server's signed address notice to that peer.
     n = p.get('address_notice') or {}
     st = n.get('status')

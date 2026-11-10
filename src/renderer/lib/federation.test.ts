@@ -56,6 +56,8 @@ import {
   sortPeersForPicker,
   sortRosterForPicker,
   emptyRosterNote,
+  pairedCurrent,
+  repairStepsForPeer,
   type FederationPeer,
   type RosterAgent,
 } from '@/lib/federation'
@@ -949,3 +951,26 @@ describe('the federated agent picker with nothing to show (0.46.1)', () => {
   })
 })
 
+describe('re-pair helpers', () => {
+  it('counts only a Trusted row on the current code as paired', () => {
+    expect(pairedCurrent(undefined)).toBe(false)
+    expect(pairedCurrent({ fingerprint: 'F', label: '', subdomain: 'box', trust: 'pending', capabilities: [], pairing_version: 2 })).toBe(false)
+    expect(pairedCurrent({ fingerprint: 'F', label: '', subdomain: 'box', trust: 'trusted', capabilities: [], pairing_version: 1 })).toBe(false)
+    expect(pairedCurrent({ fingerprint: 'F', label: '', subdomain: 'box', trust: 'trusted', capabilities: [], pairing_version: 2 })).toBe(true)
+    // A daemon from before 0.45.2 does not report a version.
+    expect(pairedCurrent({ fingerprint: 'F', label: '', subdomain: 'box', trust: 'trusted', capabilities: [] })).toBe(true)
+  })
+
+  it('walks both owners through the CLI steps when the app is not signed in there', () => {
+    const steps = repairStepsForPeer(
+      { fingerprint: 'F', label: '', subdomain: 'box', trust: 'trusted', capabilities: [], pairing_version: 1 },
+      'rosson.k2.dev',
+    )
+    const text = steps.join('\n')
+    expect(text).toMatch(/sign in to box\.k2\.dev/)
+    for (const cmd of ['k2 fed pair-start', 'k2 fed pair-join', 'k2 fed pair-finish', 'k2 fed pair-verify', 'k2 fed confirm']) {
+      expect(text).toContain(cmd)
+    }
+    expect(text).toMatch(/Both must confirm/)
+  })
+})

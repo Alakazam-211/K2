@@ -452,12 +452,17 @@ fn post_inbound_status(base: &str, envelope_bytes: &[u8]) -> Result<(u16, String
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|e| format!("build http client: {e}"))?;
-    let resp = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .body(envelope_bytes.to_vec())
-        .send()
-        .map_err(|e| format!("POST {url}: {e}"))?;
+    let resp = crate::federation_routes::send_with_retry(
+        crate::federation_routes::DialRetry::NeverSent,
+        Duration::from_secs(20),
+        || {
+            client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .body(envelope_bytes.to_vec())
+        },
+    )
+    .map_err(|e| format!("POST {url}: {}", crate::federation_routes::error_chain(&e)))?;
     let status = resp.status().as_u16();
     let body = resp.text().unwrap_or_default();
     Ok((status, body))

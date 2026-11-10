@@ -65,6 +65,8 @@ import {
   federatedPeerHost,
   isTrustedPeerHost,
   listFederationPeers,
+  peerMatchesHostname,
+  repairStepsForPeer,
   REPAIR_RECOMMENDED_HINT,
   savedHostBaseUrl,
   sortPeersForPicker,
@@ -724,6 +726,19 @@ function ActiveHostPeersPanel({
 
   const pairableLocal = localHosts.filter((h) => h.token.length > 0)
   const activeHealth = connectionHealth(useConnectHostStore((s) => s.connectionStatus))
+  // Re-pair from a peer row: the app runs both halves when it is signed in
+  // to that server; otherwise it shows the steps for the two owners.
+  const [repairSteps, setRepairSteps] = useState<{ fingerprint: string; steps: string[] } | null>(null)
+  const handleRepairPeer = async (p: FederationPeer): Promise<void> => {
+    const signedIn = pairableLocal.find((h) => peerMatchesHostname(p, h.hostname))
+    if (signedIn) {
+      setRepairSteps(null)
+      await handlePair(signedIn)
+      return
+    }
+    setPairMsg(null)
+    setRepairSteps({ fingerprint: p.fingerprint, steps: repairStepsForPeer(p, hostLabel) })
+  }
 
   const handlePair = async (h: ConnectHost): Promise<void> => {
     setPairBusyHost(h.id)
@@ -824,8 +839,25 @@ function ActiveHostPeersPanel({
                   }
                 >
                   {p.repair_recommended && (
-                    <div className="type-hint text-[var(--color-text-secondary)] leading-relaxed">
-                      {REPAIR_RECOMMENDED_HINT}
+                    <div className="type-hint text-[var(--color-text-secondary)] leading-relaxed space-y-2">
+                      <div>{REPAIR_RECOMMENDED_HINT}</div>
+                      <Button
+                        variant="quiet"
+                        data-testid="connections-peer-repair"
+                        disabled={pairBusyHost !== null}
+                        onClick={() => void handleRepairPeer(p)}
+                      >
+                        Re-pair
+                      </Button>
+                      {repairSteps?.fingerprint === p.fingerprint && (
+                        <ol className="list-decimal pl-5 space-y-1" data-testid="connections-peer-repair-steps">
+                          {repairSteps.steps.map((step) => (
+                            <li key={step} className="select-text">
+                              {step}
+                            </li>
+                          ))}
+                        </ol>
+                      )}
                     </div>
                   )}
                 </ConnectionRow>
@@ -1041,7 +1073,9 @@ function HostTile({
     setPairBusy(true)
     setPairMsg(null)
     try {
-      await autoPairWithHost(host.hostname)
+      // "Check pairing" on a paired server re-pairs (both rows move to the
+      // current code); a first Pair pairs.
+      await autoPairWithHost(host.hostname, { repair: peerPaired === 'yes' })
       if (!aliveRef.current) return
       setPeerPaired('yes')
       setPairMsg({

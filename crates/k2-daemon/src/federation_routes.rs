@@ -506,12 +506,26 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
     // covers live text and tray packages alike. Same 404 as an unknown id,
     // so the answer never tells a peer which hidden workspaces exist; the
     // sender's drain dead-letters any 4xx.
-    if !roster::accepts_inbound(&ws_id, &project_path, &to_name) {
+    //
+    // `name/handle` (0.46.11) names a sidecar chat in that workspace: the
+    // workspace half passes the same gate, and the chat must exist there.
+    let (to_ws_name, to_sidecar) = split_remote_sidecar(&to_name);
+    if !roster::accepts_inbound(&ws_id, &project_path, to_ws_name) {
         k2_core::log_debug!(
             "[federation] inbound refused: peer {} addressed a name/workspace pair this server does not list",
             ingested.peer_fingerprint
         );
         return unknown_agent_response();
+    }
+    if let Some(handle) = to_sidecar {
+        let known = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::workspace_session_handles::resolve_for_delivery(&conn, &ws_id, handle).is_ok()
+        };
+        if !known {
+            return unknown_sidecar_response(to_ws_name, handle);
+        }
     }
 
     // Sender attribution `<sender-agent>::<peer-host>` — always `::`, never
@@ -561,8 +575,14 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
     if opt_in {
         // Identical to local `k2 msg`: inject if live, wake+resume+inject if
         // dormant. (wake=true, like `k2 talk`.)
+        // A sidecar is reached as `<workspace id>/<handle>`, the same
+        // address a local `k2 msg` resolves (never the workspace's main chat).
+        let deliver_to = match to_sidecar {
+            Some(handle) => format!("{ws_id}/{handle}"),
+            None => project_path.clone(),
+        };
         let result = workspace_msg::deliver_live(
-            &project_path,
+            &deliver_to,
             &text,
             &from_label,
             "",
@@ -653,6 +673,35 @@ pub(crate) fn unknown_agent_response() -> CliResponse {
         body: serde_json::json!({
             "error": "unknown_agent: no agent by that name at that address on this server",
             "code": "unknown_agent",
+        })
+        .to_string(),
+    }
+}
+
+/// Split a signed `to` name into the workspace name and an optional sidecar
+/// handle: `ada/notes` → (`ada`, `notes`). A name without a
+/// slash, or with an empty half, is a plain workspace name.
+pub(crate) fn split_remote_sidecar(name: &str) -> (&str, Option<&str>) {
+    match name.trim().split_once('/') {
+        Some((ws, handle)) if !ws.trim().is_empty() && !handle.trim().is_empty() => {
+            (ws.trim(), Some(handle.trim()))
+        }
+        _ => (name.trim(), None),
+    }
+}
+
+/// 404 for `name/handle` when the workspace takes messages but has no chat
+/// at that handle.
+pub(crate) fn unknown_sidecar_response(ws_name: &str, handle: &str) -> CliResponse {
+    CliResponse {
+        status: "404 Not Found",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": format!(
+                "unknown_sidecar: {ws_name} has no chat at '{handle}' on this server \
+                 (its owner can see the addresses with k2 sessions)"
+            ),
+            "code": "unknown_sidecar",
         })
         .to_string(),
     }
@@ -912,8 +961,12 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     // typed name — any name the peer lists for a connected workspace
     // passes, and a connected name paired with another workspace's id does
     // not (F1). See [`remote_send_gate_check`].
+    //
+    // `name/handle` (a sidecar chat in that workspace) is gated as the
+    // workspace: the connection is to the workspace, its chats come with it.
     if let Some(from_ws) = from_workspace.as_deref() {
-        if let Err(resp) = remote_send_gate_check(from_ws, &peer, ws, agent) {
+        let (gate_name, _) = split_remote_sidecar(agent);
+        if let Err(resp) = remote_send_gate_check(from_ws, &peer, ws, gate_name) {
             return resp;
         }
     }
@@ -1102,9 +1155,14 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 CliResponse::ok_json(out.to_string())
             }
         }
+        // Not delivered: the message waits in this server's outbox and the
+        // drain re-dials it (the next sweep, about 30 s). `delivered:false`
+        // + `reason` let a caller tell this apart from "sent" (0.46.11).
         Err(e) => CliResponse::ok_json(
             serde_json::json!({
                 "status": "queued",
+                "delivered": false,
+                "reason": e,
                 "msg_uuid": msg_uuid,
                 "peer": peer.fingerprint,
                 "hint": format!("delivery deferred to retry: {e}")
@@ -1391,12 +1449,13 @@ pub fn post_inbound(base: &str, envelope_bytes: &[u8]) -> Result<String, String>
         .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| format!("build http client: {e}"))?;
-    let resp = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .body(envelope_bytes.to_vec())
-        .send()
-        .map_err(|e| format!("POST {url}: {e}"))?;
+    let resp = send_with_retry(DialRetry::NeverSent, std::time::Duration::from_secs(20), || {
+        client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .body(envelope_bytes.to_vec())
+    })
+    .map_err(|e| format!("POST {url}: {}", error_chain(&e)))?;
     let status = resp.status();
     if status.is_success() {
         // Return the body (best-effort): an unreadable body is NOT a delivery
@@ -1405,6 +1464,87 @@ pub fn post_inbound(base: &str, envelope_bytes: &[u8]) -> Result<String, String>
     } else {
         Err(format!("peer rejected inbound: HTTP {}", status.as_u16()))
     }
+}
+
+/// Pauses before the 2nd and 3rd try of a federation dial whose request
+/// failed at the transport (0.46.11). A peer reached through K2 Connect
+/// sometimes drops a fresh connection (tunnel reconnect, a busy box); one
+/// quick retry turns that into a delivery instead of a "deferred" or a
+/// failed roster lookup.
+pub(crate) const DIAL_RETRY_DELAYS_MS: [u64; 2] = [300, 1200];
+
+/// Which transport failures a dial retries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DialRetry {
+    /// Only failures where the request never left (connect, DNS, TLS
+    /// handshake). For a POST: a retry can never deliver twice.
+    NeverSent,
+    /// Any transport failure without a response, timeouts excepted. For an
+    /// idempotent GET (the roster).
+    AnyTransport,
+}
+
+/// True when `e` is a transport failure that `policy` retries. A timeout is
+/// never retried: it already spent the caller's time budget.
+pub(crate) fn retryable_transport(e: &reqwest::Error, policy: DialRetry) -> bool {
+    if e.is_timeout() || e.status().is_some() {
+        return false;
+    }
+    match policy {
+        DialRetry::NeverSent => e.is_connect(),
+        DialRetry::AnyTransport => e.is_connect() || e.is_request(),
+    }
+}
+
+/// Send the request `build` makes, retrying per `policy` after
+/// [`DIAL_RETRY_DELAYS_MS`], never starting a try past `budget` (the
+/// caller's own time cap). Blocking.
+pub(crate) fn send_with_retry(
+    policy: DialRetry,
+    budget: std::time::Duration,
+    build: impl Fn() -> reqwest::blocking::RequestBuilder,
+) -> Result<reqwest::blocking::Response, reqwest::Error> {
+    let started = std::time::Instant::now();
+    let mut attempt = 0;
+    loop {
+        match build().send() {
+            Ok(resp) => return Ok(resp),
+            Err(e)
+                if attempt < DIAL_RETRY_DELAYS_MS.len()
+                    && retryable_transport(&e, policy)
+                    && started.elapsed()
+                        + std::time::Duration::from_millis(DIAL_RETRY_DELAYS_MS[attempt])
+                        < budget =>
+            {
+                k2_core::log_debug!(
+                    "[federation] dial attempt {} failed ({}); retrying",
+                    attempt + 1,
+                    error_chain(&e)
+                );
+                std::thread::sleep(std::time::Duration::from_millis(DIAL_RETRY_DELAYS_MS[attempt]));
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// An error and every cause under it, `outer: inner: innermost`. reqwest's
+/// own text stops at "error sending request for url (…)" and hides why (a
+/// reset, a TLS failure, a refused connect); the cause is what an owner
+/// needs to see.
+pub(crate) fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = e.to_string();
+    let mut cur = e.source();
+    while let Some(c) = cur {
+        let text = c.to_string();
+        if !text.is_empty() && !out.contains(&text) {
+            out.push_str(": ");
+            out.push_str(&text);
+        }
+        cur = c.source();
+    }
+    out
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2215,23 +2355,23 @@ pub(crate) fn get_peer_roster_typed(
         .connect_timeout(timeout)
         .build()
         .map_err(|e| RosterFetchError::Body(format!("build http client: {e}")))?;
-    let resp = client
-        .get(&url)
-        .query(&[("fp", fp), ("ts", &ts.to_string()), ("sig", sig)])
-        .send()
-        .map_err(|e| RosterFetchError::Transport {
-            timed_out: e.is_timeout(),
-            message: format!("GET {url}: {e}"),
-        })?;
+    let ts_s = ts.to_string();
+    let resp = send_with_retry(DialRetry::AnyTransport, timeout, || {
+        client.get(&url).query(&[("fp", fp), ("ts", ts_s.as_str()), ("sig", sig)])
+    })
+    .map_err(|e| RosterFetchError::Transport {
+        timed_out: e.is_timeout(),
+        message: format!("GET {url}: {}", error_chain(&e)),
+    })?;
     let status = resp.status();
     if !status.is_success() {
         return Err(RosterFetchError::Status(status.as_u16()));
     }
     resp.text().map_err(|e| {
         if e.is_timeout() {
-            RosterFetchError::Transport { timed_out: true, message: format!("read roster body: {e}") }
+            RosterFetchError::Transport { timed_out: true, message: format!("read roster body: {}", error_chain(&e)) }
         } else {
-            RosterFetchError::Body(format!("read roster body: {e}"))
+            RosterFetchError::Body(format!("read roster body: {}", error_chain(&e)))
         }
     })
 }

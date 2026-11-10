@@ -955,15 +955,14 @@ export async function autoPairWithHost(
     )
   }
 
-  // 2. Idempotency: skip whichever direction is already Trusted.
+  // 2. Idempotency: nothing to do when both directions are Trusted with the
+  //    current pairing code. A side still on the older code (v1) is
+  //    upgraded even without `repair`: "Check pairing" used to return here
+  //    and report success while both rows stayed v1 (0.46.11).
   const [remotePeers, localPeers] = await Promise.all([peersFor(remoteC), peersFor(localC)])
-  const remoteTrustsLocal = remotePeers.some(
-    (p) => p.fingerprint === localPub.fingerprint && p.trust === 'trusted',
-  )
-  const localTrustsRemote = localPeers.some(
-    (p) => p.fingerprint === remotePub.fingerprint && p.trust === 'trusted',
-  )
-  if (remoteTrustsLocal && localTrustsRemote && !opts?.repair) return
+  const remoteRow = remotePeers.find((p) => p.fingerprint === localPub.fingerprint)
+  const localRow = localPeers.find((p) => p.fingerprint === remotePub.fingerprint)
+  if (pairedCurrent(remoteRow) && pairedCurrent(localRow) && !opts?.repair) return
 
   // 3. One pairing-v2 exchange makes each side trust the other. The REMOTE
   //    pins LOCAL's key + the URL to dial back; LOCAL pins the REMOTE under
@@ -985,7 +984,47 @@ export async function autoPairWithHost(
     },
     opts?.confirmCode ?? confirmPairingCodeWithDialog,
   )
+
+  // 4. Both confirms answered 200; check each server now really holds the
+  //    other as Trusted on the current code, so a half-finished pairing is
+  //    never reported as done.
+  const [remoteAfter, localAfter] = await Promise.all([peersFor(remoteC), peersFor(localC)])
+  const remoteOk = pairedCurrent(remoteAfter.find((p) => p.fingerprint === localPub.fingerprint))
+  const localOk = pairedCurrent(localAfter.find((p) => p.fingerprint === remotePub.fingerprint))
+  if (!remoteOk || !localOk) {
+    const side = !remoteOk && !localOk ? `both servers` : !remoteOk ? `"${host}"` : `this server`
+    throw new Error(
+      `The pairing did not finish on ${side}: it still shows the older pairing code, or no trust. ` +
+        `Nothing else changed. Pair again; k2 fed peers on each server shows where it stopped.`,
+    )
+  }
 }
+
+/** A peer row that is Trusted on the current pairing code. A row from a
+ *  daemon that does not report `pairing_version` (before 0.45.2) counts as
+ *  current: it can't pair any other way. */
+export function pairedCurrent(p: FederationPeer | undefined): boolean {
+  if (!p || p.trust !== 'trusted') return false
+  return typeof p.pairing_version !== 'number' || p.pairing_version >= PAIRING_VERSION_CURRENT
+}
+
+/** The steps to re-pair with `peer` when this app is not signed in to it,
+ *  so it can't run the other server's half. `here` names this server.
+ *  Both owners must confirm: a side that doesn't stays on the older code. */
+export function repairStepsForPeer(peer: FederationPeer, here: string): string[] {
+  const there = federatedPeerHost(peer) || peerShownLabel(peer)
+  return [
+    `Easiest: sign in to ${there} in this app (Settings → Connections → Add a server) as its owner or an admin, then click Re-pair again. The app runs every step on both servers.`,
+    `Or with the k2 CLI, an owner on each server: on ${here}, run k2 fed pair-start and send the k2pair1: token to ${there}'s owner.`,
+    `On ${there}: k2 fed pair-join <token>, and send back the k2pair2: token.`,
+    `On ${here}: k2 fed pair-finish <token>. It prints a pairing code and a k2pair3: token for ${there}.`,
+    `On ${there}: k2 fed pair-verify <token>. It prints its pairing code.`,
+    `If the two codes match, each owner runs the k2 fed confirm line their own server printed (within 10 minutes). Both must confirm.`,
+  ]
+}
+
+/** The pairing version a pairing-v2 confirm records (`pairing_v2::PAIRING_VERSION`). */
+export const PAIRING_VERSION_CURRENT = 2
 
 /**
  * Parse a remote **user** address into `{ agent, host }`.

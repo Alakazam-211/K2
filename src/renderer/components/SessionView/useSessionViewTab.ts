@@ -15,6 +15,7 @@ import {
   writeSessionTerminalRevealed,
   writeSessionViewTab,
 } from './sessionViewTab'
+import type { ThreadPanelKind } from './threadPanels'
 
 export interface SessionViewChoice {
   viewTab: SessionViewTab
@@ -28,6 +29,11 @@ export interface SessionViewChoice {
   setTerminalRevealed: (next: boolean) => void
   /** Which conversation's memory `terminalRevealed` is. */
   terminalRevealKey: string | null
+  /** Thread view's open slide-out panel (Chatter or Heartbeats), or null.
+   *  Not remembered: a new window or conversation opens with none. Opening
+   *  one hides the terminal, and revealing the terminal closes it. */
+  threadPanel: ThreadPanelKind | null
+  setThreadPanel: (next: ThreadPanelKind | null) => void
 }
 
 /** Which server's view memory a room reads and writes: the ROOM's server.
@@ -72,6 +78,14 @@ export function useSessionViewTab(
   }))
   if (revealMemo.key !== terminalKey) {
     setRevealMemo({ key: terminalKey, revealed: readSessionTerminalRevealed(terminalKey) })
+  }
+  // The open panel belongs to this conversation too (keyed the same way).
+  const [panelMemo, setPanelMemo] = useState<{ key: string | null; panel: ThreadPanelKind | null }>(() => ({
+    key: terminalKey,
+    panel: null,
+  }))
+  if (panelMemo.key !== terminalKey) {
+    setPanelMemo({ key: terminalKey, panel: null })
   }
 
   useEffect(() => {
@@ -121,8 +135,22 @@ export function useSessionViewTab(
     (revealed: boolean) => {
       setRevealMemo({ key: terminalKey, revealed })
       if (terminalKey) writeSessionTerminalRevealed(terminalKey, revealed)
+      // One drawer at a time.
+      if (revealed) setPanelMemo({ key: terminalKey, panel: null })
     },
     [terminalKey],
+  )
+
+  const terminalRevealedNow = revealMemo.revealed
+  const setThreadPanel = useCallback(
+    (panel: ThreadPanelKind | null) => {
+      setPanelMemo({ key: terminalKey, panel })
+      if (panel && terminalRevealedNow) {
+        setRevealMemo({ key: terminalKey, revealed: false })
+        if (terminalKey) writeSessionTerminalRevealed(terminalKey, false)
+      }
+    },
+    [terminalKey, terminalRevealedNow],
   )
 
   return {
@@ -135,5 +163,7 @@ export function useSessionViewTab(
     terminalRevealed: revealMemo.revealed,
     setTerminalRevealed,
     terminalRevealKey: terminalKey,
+    threadPanel: panelMemo.panel,
+    setThreadPanel,
   }
 }

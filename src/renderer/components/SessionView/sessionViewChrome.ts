@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
+import type { ThreadPanelKind } from './threadPanels'
 
 /** Chrome around an agent session: the view menu picks the compose send destination. */
 export interface SessionViewChromeValue {
@@ -21,6 +22,12 @@ export interface SessionViewChromeValue {
   /** A sidecar's header has no phase of its own to read: the pane reports
    *  whether it has a live terminal. */
   reportTerminalLive?: (live: boolean) => void
+  /** Thread view's open slide-out panel (`threadPanels.ts`). Undefined: this
+   *  chrome has no panels. */
+  threadPanel?: ThreadPanelKind | null
+  setThreadPanel?: (next: ThreadPanelKind | null) => void
+  /** The workspace's path: the Heartbeats panel reads its fires by it. */
+  projectPath?: string
 }
 
 export const SessionViewChromeContext = createContext<SessionViewChromeValue | null>(null)

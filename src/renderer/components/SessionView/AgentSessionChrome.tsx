@@ -13,6 +13,8 @@ import {
 import { SessionViewMenu } from './SessionViewMenu'
 import { ThreadViewIdentity } from './ThreadViewIdentity'
 import { ThreadTerminalToggle } from './ThreadTerminalToggle'
+import { ThreadPanelToggles } from './ThreadPanelToggles'
+import type { ThreadPanelKind } from './threadPanels'
 import { ThreadFloatBell } from './ThreadFloatBell'
 import { ThreadFloatSearch } from './ThreadFloatSearch'
 import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, useThreadFloats } from './threadFloats'
@@ -84,6 +86,8 @@ export function AgentSessionChrome({
     terminalRevealed,
     setTerminalRevealed,
     terminalRevealKey,
+    threadPanel,
+    setThreadPanel,
   } = useSessionViewTab(sessionKey, room.scope)
   // Reported by the TerminalPane below (its phase).
   const [terminalLive, setTerminalLive] = useState(false)
@@ -146,6 +150,9 @@ export function AgentSessionChrome({
         terminalRevealed,
         terminalRevealKey,
         reportTerminalLive: setTerminalLive,
+        threadPanel,
+        setThreadPanel,
+        projectPath: cwd,
       }}
     >
       <div className="relative h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
@@ -155,6 +162,8 @@ export function AgentSessionChrome({
           terminalRevealed={terminalRevealed}
           onToggleTerminal={() => setTerminalRevealed(!terminalRevealed)}
           terminalAvailable={terminalLive}
+          threadPanel={threadPanel}
+          onThreadPanel={setThreadPanel}
           viewTab={viewTab}
           splitLeft={splitLeft}
           splitRight={splitRight}
@@ -220,6 +229,8 @@ export function SidecarSessionHeader({
   tokenPicker,
   threadConversationId,
   threadScope,
+  threadPanel,
+  onThreadPanel,
 }: {
   title: string
   /** The Thread's address: Thread view's header reads the picture by it. */
@@ -242,6 +253,9 @@ export function SidecarSessionHeader({
   /** thread-read-v1: this chat's Thread, for the view menu's unread + mute. */
   threadConversationId?: string | null
   threadScope?: ServerScope
+  /** Thread view's Chatter / Heartbeats panel. No `onThreadPanel`: no buttons. */
+  threadPanel?: ThreadPanelKind | null
+  onThreadPanel?: (next: ThreadPanelKind | null) => void
 }): JSX.Element {
   const floating = viewTab === 'thread'
   const floatsRef = useThreadFloats(floating)
@@ -276,6 +290,9 @@ export function SidecarSessionHeader({
             disabled={!terminalAvailable}
             onToggle={onToggleTerminal}
           />
+        ) : null}
+        {viewTab === 'thread' && onThreadPanel ? (
+          <ThreadPanelToggles open={threadPanel ?? null} onChange={onThreadPanel} />
         ) : null}
         {bell}
         {floating ? <ThreadFloatSearch /> : null}
@@ -337,6 +354,9 @@ export function PinnedSessionBody({
   displayName,
   terminalRevealed,
   terminalRevealKey,
+  threadPanel,
+  setThreadPanel,
+  projectPath,
   children,
 }: {
   viewTab: SessionViewTab
@@ -350,6 +370,11 @@ export function PinnedSessionBody({
   /** Thread view's revealed terminal (`useSessionViewTab`). */
   terminalRevealed: boolean
   terminalRevealKey: string | null
+  /** Thread view's Chatter / Heartbeats panel (`useSessionViewTab`). */
+  threadPanel?: ThreadPanelKind | null
+  setThreadPanel?: (next: ThreadPanelKind | null) => void
+  /** The workspace's path, for the Heartbeats panel. */
+  projectPath?: string
   children: ReactNode
 }): JSX.Element {
   return (
@@ -364,6 +389,9 @@ export function PinnedSessionBody({
         displayName,
         terminalRevealed,
         terminalRevealKey,
+        threadPanel: setThreadPanel ? (threadPanel ?? null) : undefined,
+        setThreadPanel,
+        projectPath,
       }}
     >
       <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">

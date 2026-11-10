@@ -98,6 +98,8 @@ import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumns'
 import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
 import { useTerminalRevealPresence } from '@/components/SessionView/threadReveal'
+import { threadDrawerOpen, type ThreadDrawerKind } from '@/components/SessionView/threadPanels'
+import { ThreadDrawerPanel } from '@/components/SessionView/ThreadDrawerPanel'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { effectiveKeybinding, keyEventMatchesCombo } from '@shared/hotkeys'
 import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome'
@@ -621,8 +623,19 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // the person asked for; the column stays laid out (`revealShown`) while it
   // slides shut. Keyed during render so the commit that closes it still has
   // it on screen.
-  const revealOpen = showThreadOnly && !!sessionChrome?.terminalRevealed
-  const { shown: revealShown, onClosed: onRevealClosed } = useTerminalRevealPresence(revealOpen, showThreadOnly)
+  // Chatter and Heartbeats (`threadPanels.ts`) slide out of the same column:
+  // `drawerOpen` is whichever is open, `drawerShown` the one laid out (the
+  // last one open while it slides shut).
+  const drawerOpen = showThreadOnly
+    ? threadDrawerOpen(!!sessionChrome?.terminalRevealed, sessionChrome?.threadPanel ?? null)
+    : null
+  const revealOpen = drawerOpen !== null
+  const { shown: drawerLaidOut, onClosed: onRevealClosed } = useTerminalRevealPresence(revealOpen, showThreadOnly)
+  const [lastDrawer, setLastDrawer] = useState<ThreadDrawerKind>(drawerOpen ?? 'terminal')
+  if (drawerOpen && drawerOpen !== lastDrawer) setLastDrawer(drawerOpen)
+  const drawerShown: ThreadDrawerKind = drawerOpen ?? lastDrawer
+  // The terminal's own column (the painter, focus): only when it's the drawer.
+  const revealShown = drawerLaidOut && drawerShown === 'terminal'
   // Read by the key handler, which doesn't re-bind on a view change.
   const showThreadOnlyRef = useRef(showThreadOnly)
   showThreadOnlyRef.current = showThreadOnly
@@ -5804,12 +5817,18 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       reveal={
         showThreadOnly && sessionChrome?.terminalRevealed !== undefined
           ? {
+              kind: drawerShown,
               open: revealOpen,
-              shown: revealShown,
+              shown: drawerLaidOut,
               motionKey: sessionChrome.terminalRevealKey ?? null,
               onClosed: onRevealClosed,
             }
           : null
+      }
+      panel={
+        drawerLaidOut && drawerShown !== 'terminal' && sessionChrome?.threadPanel !== undefined ? (
+          <ThreadDrawerPanel kind={drawerShown} active={drawerOpen === drawerShown} />
+        ) : null
       }
       terminal={
         <>

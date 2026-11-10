@@ -42,6 +42,8 @@ import { ThreadFloatBell } from '@/components/SessionView/ThreadFloatBell'
 import { ThreadFloatSearch } from '@/components/SessionView/ThreadFloatSearch'
 import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, useThreadFloats } from '@/components/SessionView/threadFloats'
 import { ThreadTerminalToggle } from '@/components/SessionView/ThreadTerminalToggle'
+import { ThreadPanelToggles } from '@/components/SessionView/ThreadPanelToggles'
+import type { ThreadPanelKind } from '@/components/SessionView/threadPanels'
 import { FolderTrustHoldPanel, useFolderTrustHold } from './FolderTrustHold'
 import { folderTrustMessage } from '@/kessel-term/folderTrustMessage'
 import { httpStatusOf } from '@/lib/daemon-http-error'
@@ -218,6 +220,9 @@ interface ChatHeaderProps {
   onToggleTerminal: () => void
   /** A terminal is running (ready); the toggle waits for one. */
   terminalAvailable: boolean
+  /** Thread view's Chatter / Heartbeats panel. No `onThreadPanel`: no buttons. */
+  threadPanel?: ThreadPanelKind | null
+  onThreadPanel?: (next: ThreadPanelKind | null) => void
   /** Live pinned harness, including non-v1 (pi, cursor, hermes). */
   pinnedProvider: string | null
   /** Opens the shared continue dialog. Does not switch sessions. */
@@ -253,6 +258,8 @@ function ChatHeader({
   terminalRevealed,
   onToggleTerminal,
   terminalAvailable,
+  threadPanel,
+  onThreadPanel,
   pinnedProvider,
   onContinueNewChat,
   projectId,
@@ -390,6 +397,9 @@ function ChatHeader({
           disabled={!terminalAvailable}
           onToggle={onToggleTerminal}
         />
+      ) : null}
+      {viewTab === 'thread' && onThreadPanel ? (
+        <ThreadPanelToggles open={threadPanel ?? null} onChange={onThreadPanel} />
       ) : null}
       {floating && projectId ? <ThreadFloatBell projectId={projectId} /> : null}
       {floating ? <ThreadFloatSearch /> : null}
@@ -812,6 +822,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     terminalRevealed,
     setTerminalRevealed,
     terminalRevealKey,
+    threadPanel,
+    setThreadPanel,
   } = useSessionViewTab(overlayConv, room.scope)
   // research-remote-thread-load-v1 Fix 1: the pinned Chat's Thread answers
   // at the workspace handle, which the room's project list (the list a Home
@@ -1198,6 +1210,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       terminalRevealed={terminalRevealed}
       onToggleTerminal={() => setTerminalRevealed(!terminalRevealed)}
       terminalAvailable={phase.kind === 'ready'}
+      threadPanel={threadPanel}
+      onThreadPanel={setThreadPanel}
       pinnedProvider={liveProvider}
       onContinueNewChat={setContinueSource}
       projectId={projectId}
@@ -1317,6 +1331,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         displayName={displayName}
         terminalRevealed={terminalRevealed}
         terminalRevealKey={terminalRevealKey}
+        threadPanel={threadPanel}
+        setThreadPanel={setThreadPanel}
+        projectPath={projectPath}
       >
         <TerminalPane
           // Remount on each daemon respawn so TerminalPane re-attaches to
@@ -1544,6 +1561,8 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     terminalRevealed,
     setTerminalRevealed,
     terminalRevealKey,
+    threadPanel,
+    setThreadPanel,
   } = useSessionViewTab(overlayConv, room.scope)
   const [overlayAddr, setOverlayAddr] = useState('')
   useEffect(() => {
@@ -1851,6 +1870,8 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       terminalRevealed={terminalRevealed}
       onToggleTerminal={() => setTerminalRevealed(!terminalRevealed)}
       terminalAvailable={ready && !breakerTripped}
+      threadPanel={breakerTripped ? null : threadPanel}
+      onThreadPanel={breakerTripped ? undefined : setThreadPanel}
       pinnedProvider={providerKeyForCommand(launchConfig?.command)}
       onContinueNewChat={setContinueSource}
       projectId={projectId}
@@ -1914,6 +1935,9 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
         displayName={displayName}
         terminalRevealed={terminalRevealed}
         terminalRevealKey={terminalRevealKey}
+        threadPanel={threadPanel}
+        setThreadPanel={setThreadPanel}
+        projectPath={projectPath}
       >
         <TerminalPane
           key={refreshNonce}

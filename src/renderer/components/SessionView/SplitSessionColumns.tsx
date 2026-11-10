@@ -1,4 +1,4 @@
-import { useRef, type CSSProperties, type ReactNode } from 'react'
+import { useMemo, useRef, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import type { SplitPaneView } from './sessionViewTab'
 import { useTerminalRevealLayout, type TerminalReveal } from './threadReveal'
 import { useThreadFloatsClearOfTerminal } from './threadFloats'
@@ -11,6 +11,11 @@ import { useThreadFloatsClearOfTerminal } from './threadFloats'
  * `reveal` is Thread view's terminal reveal (`threadReveal.ts`): the same
  * node, hidden until asked for, then beside or above the Thread. The Thread
  * stays in `single`, so neither side remounts on a toggle.
+ *
+ * Thread view's panels (Chatter, Heartbeats: `threadPanels.ts`) slide out of
+ * the same place at the same size, in a column of their own after the
+ * terminal's (`panel`). One drawer at a time; a swap between two open ones
+ * doesn't slide.
  */
 export function SplitSessionColumns({
   showSplit,
@@ -22,6 +27,7 @@ export function SplitSessionColumns({
   renderView,
   single,
   reveal,
+  panel,
 }: {
   showSplit: boolean
   hidePty: boolean
@@ -33,16 +39,43 @@ export function SplitSessionColumns({
   single: ReactNode
   /** Thread view only. Everywhere else the columns stay as they were. */
   reveal?: TerminalReveal | null
+  /** Thread view's open panel, shown when `reveal.kind` is one. */
+  panel?: ReactNode
 }): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
   const singleRef = useRef<HTMLDivElement>(null)
+  const drawerKind = reveal?.kind ?? 'terminal'
+  const drawerKindRef = useRef(drawerKind)
+  drawerKindRef.current = drawerKind
+  // The column that slides: the terminal's, or the panel's.
+  const drawerRef = useMemo<RefObject<HTMLElement | null>>(
+    () => ({
+      get current() {
+        return drawerKindRef.current === 'terminal' ? terminalRef.current : panelRef.current
+      },
+    }),
+    [],
+  )
   const revealLayout = useTerminalRevealLayout(reveal, {
     container: containerRef,
-    terminal: terminalRef,
+    terminal: drawerRef,
     thread: singleRef,
   })
   const revealShown = !!reveal?.shown
+  const terminalRevealShown = revealShown && drawerKind === 'terminal'
+  const panelShown = !showSplit && revealShown && drawerKind !== 'terminal'
+  // Solid in every theme; never frosted.
+  const drawerStyle: CSSProperties = {
+    position: 'relative',
+    zIndex: 1,
+    flex: '0 0 auto',
+    background: 'var(--color-bg)',
+    ...(revealLayout.placement === 'left'
+      ? { width: revealLayout.sizePx, borderRight: '1px solid var(--color-border)' }
+      : { height: revealLayout.sizePx, borderBottom: '1px solid var(--color-border)' }),
+  }
   useThreadFloatsClearOfTerminal(containerRef, !!reveal, {
     left: reveal?.open && revealLayout.placement === 'left' ? revealLayout.sizePx : 0,
     top: reveal?.open && revealLayout.placement === 'top' ? revealLayout.sizePx : 0,
@@ -56,7 +89,7 @@ export function SplitSessionColumns({
         : null
   const terminalShown = showSplit ? terminalSide !== null : !hidePty
   const terminalStyle: CSSProperties = {
-    display: terminalShown || revealShown ? 'flex' : 'none',
+    display: terminalShown || terminalRevealShown ? 'flex' : 'none',
     flexDirection: 'column',
     minWidth: 0,
     minHeight: 0,
@@ -68,17 +101,8 @@ export function SplitSessionColumns({
             ? { borderLeft: '1px solid var(--color-border)' }
             : {}),
         }
-      : revealShown
-        ? {
-            position: 'relative',
-            zIndex: 1,
-            flex: '0 0 auto',
-            // Solid in every theme; never frosted.
-            background: 'var(--color-bg)',
-            ...(revealLayout.placement === 'left'
-              ? { width: revealLayout.sizePx, borderRight: '1px solid var(--color-border)' }
-              : { height: revealLayout.sizePx, borderBottom: '1px solid var(--color-border)' }),
-          }
+      : terminalRevealShown
+        ? drawerStyle
         : { flex: hidePty ? undefined : 1 }),
   }
 
@@ -87,6 +111,7 @@ export function SplitSessionColumns({
       ref={containerRef}
       data-testid="session-split-columns"
       data-reveal-placement={revealShown ? revealLayout.placement : undefined}
+      data-reveal-drawer={revealShown ? drawerKind : undefined}
       style={{
         flex: 1,
         minHeight: 0,
@@ -112,6 +137,16 @@ export function SplitSessionColumns({
       >
         {terminal}
       </div>
+      {panelShown ? (
+        <div
+          ref={panelRef}
+          data-testid="session-reveal-panel"
+          data-thread-drawer={drawerKind}
+          style={{ ...drawerStyle, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, overflow: 'hidden' }}
+        >
+          {panel}
+        </div>
+      ) : null}
       {showSplit && left !== 'terminal' ? (
         <div
           className="min-w-0 min-h-0 overflow-hidden flex flex-col"

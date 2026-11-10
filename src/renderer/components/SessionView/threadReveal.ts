@@ -12,6 +12,7 @@ import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from '
 import { drawerMotionOn } from '@/components/Layout/drawer-motion'
 import { focusThreadComposeSlotTextarea } from '@/lib/workspace-switch-focus'
 import { threadFloatsIn } from './threadFloats'
+import type { ThreadDrawerKind } from './threadPanels'
 
 export type RevealPlacement = 'left' | 'top'
 
@@ -73,7 +74,11 @@ function slideTiming(el: Element): { durationMs: number; easing: string } {
 // ── The layout and the motion ───────────────────────────────────────────
 
 export interface TerminalReveal {
-  /** The person wants it revealed. */
+  /** What the column holds: the terminal, or one of Thread view's panels
+   *  (`threadPanels.ts`), which use the same column, size and slide. While it
+   *  slides shut, the drawer that was open. Absent: the terminal. */
+  kind?: ThreadDrawerKind
+  /** The person wants it revealed (any drawer is open). */
   open: boolean
   /** It is laid out: open, or still sliding shut. */
   shown: boolean

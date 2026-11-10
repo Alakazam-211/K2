@@ -27,6 +27,8 @@ export function useOverlayChatter(opts: {
   hasMore: boolean
   loadOlder: () => Promise<void>
   loadingOlder: boolean
+  /** The first page hasn't answered yet (the Thread view's Chatter panel). */
+  loading: boolean
 } {
   const { scope, addr, conversationId, enabled } = opts
   const [items, setItems] = useState<OverlayThreadItem[]>([])
@@ -34,6 +36,7 @@ export function useOverlayChatter(opts: {
   const [error, setError] = useState<string | null>(null)
   const [hasMore, setHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const [loading, setLoading] = useState(false)
   const snapshotSeqRef = useRef(0)
   /** Bumped when the Thread moved to another conversation key (Codex/Hermes
    *  adoption): re-read and re-subscribe on the new one. */
@@ -53,12 +56,14 @@ export function useOverlayChatter(opts: {
       setError(null)
       setHasMore(false)
       setLoadingOlder(false)
+      setLoading(false)
       return
     }
     let cancelled = false
     let ws: WebSocket | null = null
 
     async function boot(): Promise<void> {
+      setLoading(true)
       try {
         const raw = await daemonCliGet<unknown>(scope, 'chatter', { addr, limit: OVERLAY_PAGE_SIZE })
         if (cancelled) return
@@ -70,6 +75,7 @@ export function useOverlayChatter(opts: {
         setHasMore(snap.has_more)
         setResolvedConv(conv)
         setError(null)
+        setLoading(false)
         if (!conv) return
 
         const creds = await getDaemonWs(scope)
@@ -103,6 +109,7 @@ export function useOverlayChatter(opts: {
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : String(e))
+          setLoading(false)
         }
       }
     }
@@ -143,5 +150,5 @@ export function useOverlayChatter(opts: {
     }
   }, [scope, addr])
 
-  return { items, conversationId: resolvedConv, error, hasMore, loadOlder, loadingOlder }
+  return { items, conversationId: resolvedConv, error, hasMore, loadOlder, loadingOlder, loading }
 }

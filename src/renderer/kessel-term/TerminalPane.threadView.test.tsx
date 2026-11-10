@@ -413,6 +413,27 @@ describe('Revealing the terminal from Thread view', () => {
     expect(h.painters.disposes).toBe(1)
   })
 
+  it('a panel takes the terminal’s place: the terminal stays hidden, no resize, no WebGL surface', async () => {
+    h.painter = 'webgl'
+    const { rerender } = renderInRoom(room, pane(thread({ terminalRevealed: true, threadPanel: null, setThreadPanel: vi.fn() })))
+    await goReady()
+    expect(h.painters.mounts).toBe(1)
+    const before = sends('resize').length
+
+    // Opening Chatter closes the terminal (useSessionViewTab), in one commit.
+    rerender(pane(thread({ terminalRevealed: false, threadPanel: 'chatter', setThreadPanel: vi.fn() })))
+    await act(async () => {})
+    const byId = (id: string): HTMLElement => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!
+    expect(byId('session-reveal-terminal').style.display).toBe('none')
+    expect(byId('session-reveal-panel').getAttribute('data-thread-drawer')).toBe('chatter')
+    expect(byId('thread-drawer-panel').getAttribute('data-thread-panel')).toBe('chatter')
+    expect(h.painters.disposes).toBe(1)
+    fireTerminalRO(0, 0)
+    await waitDebounce()
+    expect(sends('resize').length).toBe(before)
+    expect(h.threadMounts).toBe(1)
+  })
+
   it('a lost context while revealed gets its retry on the next reveal', async () => {
     h.painter = 'webgl'
     const { rerender } = renderInRoom(room, pane(thread({ terminalRevealed: true })))

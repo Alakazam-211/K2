@@ -172,6 +172,51 @@ describe('Thread view header (S2)', () => {
     expect(screen.getByTestId('thread-view-picture')).toBeTruthy()
   })
 
+  it('Chatter and Heartbeats follow the terminal button in the left group, in Thread view only', async () => {
+    renderIn('thread')
+    const terminal = await waitFor(() => {
+      const el = screen.queryByTestId('thread-terminal-toggle')
+      if (!el) throw new Error('no toggle')
+      return el
+    })
+    const group = terminal.parentElement!
+    expect(group.classList.contains('thread-float-group')).toBe(true)
+    const order = Array.from(group.querySelectorAll('[data-testid^="thread-"]'))
+      .map((el) => el.getAttribute('data-testid'))
+      .filter((id) => id === 'thread-terminal-toggle' || id?.startsWith('thread-panel-toggle-'))
+    expect(order).toEqual(['thread-terminal-toggle', 'thread-panel-toggle-chatter', 'thread-panel-toggle-heartbeats'])
+    cleanup()
+    renderIn('terminal')
+    await waitFor(() => expect(screen.queryByTestId('sidecar-session-title')).not.toBeNull())
+    expect(screen.queryByTestId('thread-panel-toggle-chatter')).toBeNull()
+    expect(screen.queryByTestId('thread-panel-toggle-heartbeats')).toBeNull()
+  })
+
+  it('one drawer at a time: a panel hides the terminal, the terminal closes the panel', async () => {
+    renderIn('thread')
+    const terminal = await waitFor(() => {
+      const el = screen.queryByTestId('thread-terminal-toggle') as HTMLButtonElement | null
+      if (!el) throw new Error('no toggle')
+      return el
+    })
+    act(() => {
+      fireEvent.click(screen.getByTestId('fake-report-live'))
+    })
+    const chatter = screen.getByTestId('thread-panel-toggle-chatter')
+    const beats = screen.getByTestId('thread-panel-toggle-heartbeats')
+    fireEvent.click(terminal)
+    expect(terminal.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(chatter)
+    expect(chatter.getAttribute('aria-pressed')).toBe('true')
+    expect(terminal.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(beats)
+    expect(beats.getAttribute('aria-pressed')).toBe('true')
+    expect(chatter.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(terminal)
+    expect(terminal.getAttribute('aria-pressed')).toBe('true')
+    expect(beats.getAttribute('aria-pressed')).toBe('false')
+  })
+
   for (const view of ['terminal', 'chatter', 'split']) {
     it(`${view} view keeps the plain title`, async () => {
       renderIn(view)

@@ -1337,6 +1337,9 @@ function coerceItem(row: unknown): OverlayThreadItem | null {
       ...(d.handoff ? { handoff: coerceHandoff(d.handoff) } : {}),
       // workbench-v1 B7: K2's changed-files card.
       ...(d.changes ? { changes: coerceChanges(d.changes) } : {}),
+      // Chatter (0.46.3): the one line for people, and whose it is.
+      ...(typeof d.summary === 'string' && d.summary.trim() ? { summary: d.summary } : {}),
+      ...(d.summarySource === 'sender' || d.summarySource === 'derived' ? { summarySource: d.summarySource } : {}),
       ...docExtras(d),
     },
   }

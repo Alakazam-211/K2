@@ -4560,7 +4560,7 @@ function MailAgentSendControl({
       below={
         <>
           <Callout tone="warn" data-testid="mail-agent-send-on-warning" className="type-hint leading-relaxed">
-            With sending on, an agent that reads a malicious email can be talked into sending any mail it can read, with its attachments, and any workspace file that doesn&apos;t look like a secret, to any address. Nobody is asked at send time. Use approval for any agent that reads mail from outside.
+            With sending on, an agent that reads a malicious email can be talked into sending any mail it can read, with its attachments, and any workspace file that doesn&apos;t look like a secret, to any address: up to 20 messages an hour and 100 a day per mailbox, at 25 MiB each. Nobody is asked or told at send time; the outbox records it afterwards. The secret check catches mistakes, not intent. The DMARC check only slows forged senders, and an attacker&apos;s own domain passes it. Use approval for any agent that reads mail from outside.
           </Callout>
           {error && <div className="type-hint text-[var(--color-status-error-soft)] mt-2">{error}</div>}
         </>

@@ -399,14 +399,6 @@ export interface StashChangedEvent {
  *  or it went `void` (a newer code replaced it, or the login changed).
  *  `deviceName` / `sessionId` (the phone's row id in `GET
  *  /cli/auth/devices`) are set on `paired` only. Never the code or a token. */
-/** APP-LEVEL (prd-setup-checklist-v1 C1) — a setup checklist changed:
- *  re-read `GET /cli/first-run/status`. Person-scoped when the daemon
- *  names a person (hide, show, skip, finish); sent to every socket when
- *  something every list reads changed. No payload. */
-export interface FirstRunChangedEvent {
-  kind: 'first_run_changed'
-}
-
 export interface PairCodeChangedEvent {
   kind: 'pair_code_changed'
   codeId: string
@@ -416,10 +408,11 @@ export interface PairCodeChangedEvent {
   sessionId: string | null
 }
 
-/** APP-LEVEL, PERSON-SCOPED (setup checklist) — this person's setup
- *  checklist changed: hidden, shown, a row skipped, finished, or the owner
- *  account was created, linked or its prompt dismissed. A refetch signal:
- *  re-read `GET /cli/first-run/status`. */
+/** APP-LEVEL (setup checklist) — a setup checklist changed: re-read
+ *  `GET /cli/first-run/status`. Person-scoped when the daemon names a
+ *  person (hide, show, skip, finish, the account prompt dismissed); sent
+ *  to every socket when the owner links accounts or flips the switch. No
+ *  payload. */
 export interface FirstRunChangedEvent {
   kind: 'first_run_changed'
 }

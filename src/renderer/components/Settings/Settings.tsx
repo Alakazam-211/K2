@@ -520,7 +520,7 @@ export default function Settings(): React.JSX.Element {
             </svg>
           </button>
         </div>
-        <nav className="flex-1 py-1 overflow-y-auto">
+        <nav className="settings-nav-scroll flex-1 py-1 overflow-y-scroll overflow-x-hidden">
           {settingsNav({ zenGardens: zenGardensShown, notifications: notificationsShown }).map((block) => {
             if (block.kind === 'item') {
               return (
@@ -547,7 +547,7 @@ export default function Settings(): React.JSX.Element {
                       <div
                         key={it.label}
                         data-settings-soon={it.label}
-                        className="w-full text-left pl-7 pr-4 py-1.5 text-xs text-[var(--color-text-muted)] flex items-center justify-between"
+                        className="w-full text-left pl-7 pr-2.5 py-1.5 text-xs text-[var(--color-text-muted)] flex items-center justify-between"
                       >
                         <span>{it.label}</span>
                         {/* The same right-hand SOON tag as 3rd Party Bots (Rosson 2026-10-15). */}
@@ -872,8 +872,12 @@ function SettingsNavButton({
     <button
       type="button"
       data-settings-nav={id}
+      data-k2-chamfer="control"
       onClick={onClick}
-      className={`w-full text-left flex items-center justify-between ${nested ? 'pl-7 pr-4' : 'px-4'} py-1.5 text-xs no-drag cursor-pointer transition-colors ${
+      // The left margin and the scrollbar lane (.settings-nav-scroll) are the
+      // same width, so the highlight is a whole shape with even insets. The
+      // padding is 6px less than the header's, which keeps the labels aligned.
+      className={`ml-1.5 w-[calc(100%-6px)] border-transparent rounded-[var(--radius-selector)] text-left flex items-center justify-between ${nested ? 'pl-[22px] pr-2.5' : 'px-2.5'} py-1.5 text-xs no-drag cursor-pointer transition-colors ${
         active
           ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]'
           : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]'

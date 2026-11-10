@@ -1066,13 +1066,6 @@
 [data-style="glass-next"] [data-settings-card]:not([data-zen-root] *) { border-radius: var(--radius-box); }
 [data-style="glass-next"] [data-mode-toggle]:not([data-zen-root] *) { border-radius: var(--radius-pill); overflow: hidden; }
 
-/* Settings nav rows sit inside their tile, not edge to edge. */
-[data-style="glass-next"] [data-settings-nav]:not([data-zen-root] *) {
-  margin: 0 6px;
-  width: calc(100% - 12px);
-  border-radius: var(--radius-selector);
-}
-
 /* ── Form controls, tuned to the phone ────────────────────────────────── */
 [data-style="glass-next"] .k2-checkbox:not([data-zen-root] *),
 [data-style="glass-next"] .k2-radio:not([data-zen-root] *) { border-width: 1.5px; }

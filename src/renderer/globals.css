@@ -914,6 +914,30 @@ html[data-os]:not([data-os="mac"]) select optgroup {
   background: var(--color-scrollbar-thumb-hover);
 }
 
+/* Settings sidebar scrollbar: a slim lane that is always reserved, so the rows
+   never change width. Its 6px is the right inset of the selected row, matching
+   the row's 6px left margin. A system scrollbar took about 15px of the row,
+   and only when the list overflowed. */
+.settings-nav-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.settings-nav-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-nav-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-scrollbar-thumb);
+  background-clip: padding-box;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+}
+
+.settings-nav-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--color-scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
 /* ── Shiki code highlighting ────────────────────────────────────────── */
 
 .code-highlighted pre {

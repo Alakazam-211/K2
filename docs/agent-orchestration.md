@@ -162,7 +162,6 @@ k2so inbox search "query"            Search inbox + all folders
 ```
 k2so msg <workspace> "text"          Live delivery (blocks until landed)
 k2so msg <workspace> "text" --inbox  Drop in their inbox (async, email-style)
-k2so who                             Workspaces with live agents right now
 k2so connections list|add|remove     Cross-workspace links
 ```
 

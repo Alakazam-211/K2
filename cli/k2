@@ -22792,7 +22792,7 @@ again. --json prints the whole answer. More: k2 study vault
 EOF
 }
 
-# ── 0.38.7: `k2 whatsnew` ──────────────────────────────────────────
+# ── 0.38.7: `k2 whats-new` ──────────────────────────────────────────
 #
 # Prints the user-facing changelog highlights for versions newer than
 # the user's last-seen marker, with subcommands to inspect / reset /
@@ -22808,7 +22808,7 @@ cmd_whatsnew() {
             --mark-seen) action="mark-seen"; shift ;;
             --help|-h)
                 cat <<'EOF'
-k2 whatsnew [--reset] [--all] [--mark-seen]
+k2 whats-new [--reset] [--all] [--mark-seen]
 
 Show the user-facing changelog for K2 versions you haven't seen yet
 (the same content the Tauri app shows in its popup on first launch
@@ -57610,7 +57610,7 @@ for r in data:
         echo "To update the app, download from:"
         echo "  https://github.com/Alakazam-211/K2/releases/tag/$tag"
         echo ""
-        echo "Or use: k2 app-update --list  to see all versions"
+        echo "Or use: k2 update --app --list  to see all versions"
         return
     fi
 

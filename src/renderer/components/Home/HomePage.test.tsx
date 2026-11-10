@@ -763,7 +763,7 @@ describe('Home — the Agents page shell', () => {
     }
   })
 
-  it('rows 1–9 carry the pinned area badge (Cmd+N order); the picker shows ⌘ 1-9 and each Home its ⌥⌘N', () => {
+  it('rows 1–9 carry the pinned area badge (Cmd+N order); no ⌘ 1-9 hint; each Home its ⌥⌘N', () => {
     const home = useHomesStore.getState().homes[0]
     // 3 rows from beforeEach (connected Cortana, Bee, Cee) + Nova + 7 more on
     // the no-login server = 11 rows of three kinds.
@@ -796,19 +796,16 @@ describe('Home — the Agents page shell', () => {
       expect(rowOf('Cortana').querySelector('[data-shortcut-badge="1"]')).not.toBeNull()
       expect(rowOf('Bee').querySelector('[data-shortcut-badge="2"]')).not.toBeNull()
       expect(rowOf('Nova').querySelector('[data-shortcut-badge="4"]')).not.toBeNull()
-      // The modifier: `⌘ 1-9` in the header, beside (not inside) the picker
-      // button (P2), where the palette button was.
+      // No `⌘ 1-9` hint in the header (Rosson 2026-11-09): the picker is the
+      // header's only child, so it runs the full width.
       const pickerButton = within(homeSidebar()).getByTitle('Pick a Home')
-      expect(pickerButton.querySelector('[data-shortcut-hint]')).toBeNull()
-      const slot = homeSidebar().querySelector('[data-home-row-hint]')
-      if (!(slot instanceof HTMLElement)) throw new Error('no row hint slot in the Home header')
-      expect(pickerButton.contains(slot)).toBe(false)
-      expect(slot.getAttribute('title')).toBe("⌘1–⌘9 open this Home's agents 1–9")
-      const hint = slot.querySelector('[data-shortcut-hint]')
-      if (!hint) throw new Error('no row chord hint in the Home header')
-      expect(hint.getAttribute('data-shortcut-hint')).toBe('⌘ 1-9')
-      expect(hint.textContent).toBe('⌘ 1-9')
-      expect(hint.querySelector('.key-symbol')?.textContent).toBe('⌘')
+      expect(homeSidebar().querySelector('[data-home-row-hint]')).toBeNull()
+      expect(homeSidebar().querySelector('[data-shortcut-hint]')).toBeNull()
+      const header = homeSidebar().querySelector('[data-home-header]')
+      if (!(header instanceof HTMLElement)) throw new Error('no Home header')
+      expect(header.children.length).toBe(1)
+      expect(header.contains(pickerButton)).toBe(true)
+      expect(pickerButton.className).toContain('w-full')
 
       fireEvent.click(pickerButton)
       // The menu is portalled out of the sidebar (no clipping ancestor).
@@ -826,10 +823,11 @@ describe('Home — the Agents page shell', () => {
     }
   })
 
-  it('the header has no palette button and no hint on an empty Home (T1.1, T1.2)', () => {
+  it('the header has no palette button and no ⌘ 1-9 hint, with rows or without (T1.1, T1.2)', () => {
     render(<Shell />)
     expect(within(homeSidebar()).queryByTitle('Command Palette (⌘K)')).toBeNull()
-    expect(homeSidebar().querySelector('[data-home-row-hint] [data-shortcut-hint="⌘ 1-9"]')).not.toBeNull()
+    expect(homeSidebar().querySelector('[data-home-row-hint]')).toBeNull()
+    expect(homeSidebar().querySelector('[data-shortcut-hint]')).toBeNull()
     cleanup()
 
     const home = useHomesStore.getState().homes[0]

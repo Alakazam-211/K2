@@ -1,9 +1,10 @@
 // Home on the Agents shell — the sidebar (prd-home-v1 H2/H3/H5/H6).
 //
 // Same chrome as the Agents `Sidebar`: resize handle, the header control
-// row (here the Home picker in the focus-group dropdown's spot, plus the
-// rows' "⌘ 1-9" hint; ⌘K stays on the keyboard, the menus and the rails),
-// the row list, and the bottom bar with ONE
+// row (here the Home picker in the focus-group dropdown's spot, running the
+// full width: no "⌘ 1-9" hint beside it, Rosson 2026-11-09; the rows keep
+// their 1–9 numbers and ⌘1–9 still opens them; ⌘K stays on the keyboard,
+// the menus and the rails), the row list, and the bottom bar with ONE
 // button in the Add Workspace spot — Add Agent — beside the collapse
 // button. Add Agent opens one picker with This server and From a server.
 //
@@ -48,8 +49,7 @@ import { homeRowHoverPrefetch } from '@/lib/home-row-prefetch'
 import { useHomeRowAvatar, useHomeRowColor } from '@/lib/home-avatars'
 import { useRemoteRoomsPreview } from '@/lib/remote-rooms-preview'
 import { homeRooms, useShownHomeRoom } from '@/stores/home-rooms'
-import { AgentRowButton, ShortcutRangeHint, SingleProjectItem } from '@/components/Sidebar/Sidebar'
-import { HOME_ROW_SHORTCUT_HINT } from '@/lib/home-shortcuts'
+import { AgentRowButton, SingleProjectItem } from '@/components/Sidebar/Sidebar'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
 import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
@@ -434,22 +434,11 @@ export default function HomeSidebar(): React.JSX.Element {
     <div className="relative flex flex-col h-full" data-home-sidebar="">
       <ResizeHandle />
 
-      {/* Header controls — the focus-group row's spot and look. */}
-      <div className="px-3 pt-3 pb-2 no-drag flex items-center gap-1.5">
-        <div className="flex-1 min-w-0">
-          <HomePicker />
-        </div>
-        {/* The rows' Cmd+1–9 hint, where the palette button was (P1/P2).
-            The per-Home ⌥⌘N badges stay inside the open picker. */}
-        {rows.length > 0 && (
-          <span
-            className="flex-shrink-0 px-1.5"
-            title="⌘1–⌘9 open this Home's agents 1–9"
-            data-home-row-hint=""
-          >
-            <ShortcutRangeHint combo={HOME_ROW_SHORTCUT_HINT} />
-          </span>
-        )}
+      {/* Header controls — the focus-group row's spot and look. The picker
+          runs the full width (no ⌘ 1-9 hint beside it); its menu matches. The
+          per-Home ⌥⌘N badges stay inside the open picker. */}
+      <div className="px-3 pt-3 pb-2 no-drag" data-home-header="">
+        <HomePicker />
       </div>
 
       {/* Home roster */}

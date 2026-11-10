@@ -3,8 +3,9 @@
 // Two chords, one window-level owner (`hooks/useWorkspaceIndexShortcuts`):
 //
 //   - Home rows: Cmd+1–9 selects Home row N (Home M3). Like the Agents
-//     pinned area, it is `metaKey` on every platform and paints as `⌘ 1-9`
-//     beside a 1–9 position badge on each row.
+//     pinned area, it is `metaKey` on every platform; each row paints its
+//     1–9 position badge. (The header's `⌘ 1-9` hint is gone, so
+//     the Home picker runs the full width.)
 //   - Home switcher: HOME_SWITCH_BINDING below picks the Nth named Home
 //     (`k2.homes.v1` order, the order of the Home dropdown).
 //
@@ -72,7 +73,3 @@ export function homeSwitchDigit(e: ChordEvent): number | null {
 export function homeSwitchCombo(n: number): string {
   return `${HOME_SWITCH_BINDING.label}${n}`
 }
-
-/** The Home rows' chord hint (beside the Home's row count), matching the
- *  Agents pinned header. `metaKey` on every platform, like that header. */
-export const HOME_ROW_SHORTCUT_HINT = '⌘ 1-9'

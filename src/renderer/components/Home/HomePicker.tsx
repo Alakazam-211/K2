@@ -18,10 +18,10 @@ import { HOME_SWITCH_LIMIT, homeSwitchCombo } from '@/lib/home-shortcuts'
 
 type Mode = 'menu' | 'create' | 'rename'
 
-// The button carries the row count; the rows' "⌘ 1-9" hint sits beside
-// the picker in the sidebar header (HomeSidebar). Each Home in the menu
-// carries its Home switcher chord (HOME_SWITCH_BINDING) in the row badge's
-// look.
+// The button carries the row count and runs the sidebar header's full
+// width; the menu matches the button's width (`useAnchoredMenu`'s `match`)
+// and long names truncate. Each Home in the menu carries its Home switcher
+// chord (HOME_SWITCH_BINDING) in the row badge's look.
 export default function HomePicker(): React.JSX.Element {
   const homes = useHomesStore((s) => s.homes)
   const current = useHomesStore(selectedHome)
@@ -131,18 +131,19 @@ export default function HomePicker(): React.JSX.Element {
               <button type="button" role="menuitem" className={itemClass} onClick={startCreate}>
                 New Home…
               </button>
-              <button type="button" role="menuitem" className={itemClass} onClick={startRename}>
-                Rename “{current.name}”…
+              {/* A long Home name truncates on one line, like the rows above. */}
+              <button type="button" role="menuitem" className={itemClass} onClick={startRename} title={`Rename “${current.name}”`}>
+                <span className="min-w-0 truncate">Rename “{current.name}”…</span>
               </button>
               <button
                 type="button"
                 role="menuitem"
                 className={itemClass}
                 disabled={homes.length <= 1}
-                title={homes.length <= 1 ? 'The last Home can’t be deleted' : undefined}
+                title={homes.length <= 1 ? 'The last Home can’t be deleted' : `Delete “${current.name}”`}
                 onClick={() => void remove()}
               >
-                Delete “{current.name}”
+                <span className="min-w-0 truncate">Delete “{current.name}”</span>
               </button>
               </div>
             </>

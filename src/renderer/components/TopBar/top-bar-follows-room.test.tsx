@@ -313,7 +313,7 @@ describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
     if (!cluster) throw new Error('no right cluster around the usage chip')
     const clusterPipe = Array.from(cluster.children).find((el) => el.hasAttribute('data-top-bar-pipe'))
     if (!clusterPipe) throw new Error('the right cluster has no divider')
-    expect(clusterPipe.className).toBe('block w-px h-4 bg-[var(--color-border)] mx-1')
+    expect(clusterPipe.className).toBe('block w-px h-4 bg-[var(--color-control-edge)] mx-1')
   })
 
   it('shows B’s numbers through B’s scope, then the window’s again on Agents', async () => {

@@ -3,7 +3,7 @@
 //! vs-live W38). One count across every automatic source, keyed by agent, so
 //! a noisy feed can't spend an agent's whole hour and then some.
 //!
-//! Sources, reminders and mail count today. Anything else that wakes an agent
+//! Sources, reminders, mail and the Org Chart's wakes count today. Anything else that wakes an agent
 //! joins by adding its own count to [`wakes_since`] and delivering through
 //! the daemon's `agent_wake` path; nothing here knows about any one of them
 //! beyond the query.
@@ -45,10 +45,14 @@ pub fn wakes_since(conn: &Connection, project_id: &str, since: i64) -> rusqlite:
         params![project_id, since_rfc],
         |r| r.get(0),
     )?;
+    // Org Chart wakes (prd-org-chart-v1 §5, vs-live A7): night runs, last
+    // calls, members' updates at night, heads' asks, reach outcomes.
+    let org = crate::org_chart::store::wakes_since(conn, project_id, since)?;
     Ok(sources
         .saturating_add(reminders)
         .saturating_add(mail_lines)
         .saturating_add(digests)
+        .saturating_add(org)
         .clamp(0, i64::from(u16::MAX)) as u16)
 }
 

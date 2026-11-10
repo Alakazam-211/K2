@@ -416,6 +416,19 @@ pub struct AppSettings {
     /// other server-wide setting that changes what agents do.
     #[serde(default)]
     pub owner_timezone: Option<String>,
+    /// 0.46.11 — the Org Chart (prd-org-chart-v1): the tab, orgs, the
+    /// daily bulletin and the night runs. **Default off.** Off, every
+    /// `/cli/organization/*` route answers 409 `org_chart_off` and no feed
+    /// line, AGENTS.md block or night run happens; nothing is deleted.
+    /// Admin floor. Mirrored into `crate::org_chart::set_enabled`.
+    #[serde(default)]
+    pub org_chart: bool,
+    /// 0.46.11 — the Org Chart's night, in the owner's timezone: when heads
+    /// are woken to update their bulletins, the last call, and when the
+    /// read marker's day starts. All within 22:00–07:00, in that order
+    /// (checked on write). Admin floor.
+    #[serde(default)]
+    pub org_chart_night: OrgChartNight,
     /// Composer 1c (D4 / red-team H1) — per-host opt-in that lets a
     /// CONNECT-USER (role >= Member) instruct agents via the composer route
     /// `POST /cli/terminal/send-message`. The OWNER token is ALWAYS allowed
@@ -1241,6 +1254,8 @@ impl Default for AppSettings {
             active_window_hours: default_active_window_hours(),
             owner_display_name: None,
             owner_timezone: None,
+            org_chart: false,
+            org_chart_night: OrgChartNight::default(),
             allow_remote_instruct: false,
             dns_manage_enabled: false,
             agents_can_create_connections: false,
@@ -1497,6 +1512,42 @@ pub fn migrate_legacy_apps_switch() -> Result<bool, String> {
 /// The refusal for `gardenAccess: false` (or anything but `true`).
 pub const GARDEN_ACCESS_ALWAYS_ON: &str =
     "gardenAccess can't be turned off: Garden access is how Gardens work from 0.46.3 (see `k2 study garden-changes`)";
+
+/// The Org Chart's night times (`orgChartNight`), `HH:MM` in the owner's
+/// timezone. Checked by `org_chart::day::NightTimes::parse` on write.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgChartNight {
+    /// Heads are woken to write their bulletins.
+    #[serde(default = "default_org_run_at")]
+    pub run_at: String,
+    /// One more line to a head that hasn't written yet.
+    #[serde(default = "default_org_last_call_at")]
+    pub last_call_at: String,
+    /// The read marker's new day starts (the bulletin pops up again).
+    #[serde(default = "default_org_day_starts_at")]
+    pub day_starts_at: String,
+}
+
+fn default_org_run_at() -> String {
+    "01:00".to_string()
+}
+fn default_org_last_call_at() -> String {
+    "04:30".to_string()
+}
+fn default_org_day_starts_at() -> String {
+    "06:00".to_string()
+}
+
+impl Default for OrgChartNight {
+    fn default() -> Self {
+        OrgChartNight {
+            run_at: default_org_run_at(),
+            last_call_at: default_org_last_call_at(),
+            day_starts_at: default_org_day_starts_at(),
+        }
+    }
+}
 
 /// Read `~/.k2so/settings.json` and parse into `AppSettings`. Missing
 /// or malformed files yield `AppSettings::default()`. Always

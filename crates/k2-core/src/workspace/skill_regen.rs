@@ -314,7 +314,25 @@ fn compose_agents_md(project_path: &str) -> String {
         out.push('\n');
         out.push_str(AGENTS_MD_PERMISSIONS_POINTER);
     }
+    // The Org Chart (prd-org-chart-v1 §6.3): only while it is on. Off =
+    // no block, today's bytes. It names the verb, never today's text.
+    if crate::org_chart::enabled() {
+        out.push('\n');
+        out.push_str(crate::org_chart::AGENTS_MD_BLOCK);
+    }
     out
+}
+
+/// The Org Chart switch flipped: recompose every workspace's AGENTS.md so
+/// its block follows the switch. Returns how many were recomposed.
+pub fn sync_org_chart_teaching_everywhere() -> usize {
+    let Ok(projects) = crate::projects_ops::projects_list() else {
+        return 0;
+    };
+    for p in &projects {
+        recompose_agents_md(&p.path);
+    }
+    projects.len()
 }
 
 /// The AGENTS.md pointer to the `k2-permissions` skill, composed only while

@@ -162,6 +162,10 @@ pub mod voice_rooms;
 // the poller and routes live in k2-daemon. See module docs.
 pub mod sources;
 pub mod wake_budget;
+// The Org Chart (prd-org-chart-v1, 0.46.11): orgs, heads, lines, the daily
+// bulletin and its read marker, night runs, reach asks. Store + rules here;
+// routes and the night pass live in k2-daemon (`org_chart`).
+pub mod org_chart;
 // Sew chat for agents (`k2 chat`, slice S30 core): levels, approval modes,
 // addressed rules, limits, and the access / action / approval-queue store
 // (migration 0167). Pure half; routes and the Sew seam live in k2-daemon.

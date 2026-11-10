@@ -32,7 +32,7 @@ mod imp {
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::{CommandExt, ExitStatusExt};
     use std::path::{Path, PathBuf};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::sync::atomic::{AtomicI32, Ordering};
     use std::sync::OnceLock;
     use std::time::{Duration, Instant};
@@ -442,7 +442,7 @@ mod imp {
         // --no-mask gives the child the terminal on stdout and stderr too.
         let shares_terminal = foreground_tty(0) || (args.no_mask && (foreground_tty(1) || foreground_tty(2)));
 
-        let mut cmd = Command::new(&args.cmd[0]);
+        let mut cmd = k2_core::bg_proc::command(&args.cmd[0]);
         cmd.args(&args.cmd[1..]);
         for (k, v) in &child_env {
             cmd.env(k, OsStr::from_bytes(v));

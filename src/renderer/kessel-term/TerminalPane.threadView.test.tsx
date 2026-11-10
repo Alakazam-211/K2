@@ -330,7 +330,7 @@ async function waitDebounce(): Promise<void> {
 describe('Thread text limit in TerminalPane', () => {
   it('Thread view passes the limit', () => {
     renderInRoom(room, pane(chrome({ viewTab: 'thread' })))
-    expect(h.threadProps.at(-1)?.textCapPx).toBe(720)
+    expect(h.threadProps.at(-1)?.textCapPx).toBe(820)
   })
 
   it('Full width passes no limit', () => {

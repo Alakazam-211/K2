@@ -42,9 +42,9 @@ describe('Thread text width', () => {
     expect(WORKSPACE_SETTINGS_MANIFEST.some((e) => e.id === 'general.thread-text-width')).toBe(true)
   })
 
-  it('shows 720 at 480–960 in steps of 20, with no Reset at the default', () => {
+  it('shows 820 at 480–960 in steps of 20, with no Reset at the default', () => {
     render(<WorkspaceBehaviorRows />)
-    expect(slider().value).toBe('720')
+    expect(slider().value).toBe('820')
     expect(slider().min).toBe('480')
     expect(slider().max).toBe('960')
     expect(slider().step).toBe('20')

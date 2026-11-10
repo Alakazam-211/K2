@@ -14,7 +14,6 @@
 //! back; a passport can't approve.
 // pending k2-node Windows port: these tests drive the real k2-node runtime
 // in-process, and k2-node is Unix-only until its Windows port (Phase 3).
-#![cfg(unix)]
 
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
@@ -38,7 +37,7 @@ const OWNER: &str = "owner-token-node-admin-e2e";
 struct Env {
     home: PathBuf,
     prev_home: Option<std::ffi::OsString>,
-    _guard: std::sync::MutexGuard<'static, ()>,
+    _guard: k2_core::test_env::SerialGuard,
 }
 
 impl Drop for Env {
@@ -53,7 +52,7 @@ impl Drop for Env {
 }
 
 fn setup() -> Env {
-    let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = k2_core::test_env::serial(&TEST_LOCK);
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let home = k2_core::test_env::short_tmp(format!("k2nae-{:x}", nanos % 0xffff_ffff));
     std::fs::create_dir_all(&home).unwrap();

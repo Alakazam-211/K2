@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { FileViewerPane } from '@/components/FileViewerPane/FileViewerPane'
-import { DialogFrame, DialogScrim, Toggle } from '@/components/ui'
+import { DialogCloseButton, DialogFrame, DialogScrim, Toggle } from '@/components/ui'
 import {
   addContextLayer,
   contextErrorMessage,
@@ -142,20 +142,6 @@ export function ContextStackEditor({
   useEffect(() => {
     void refreshCatalog()
   }, [refreshCatalog])
-
-  // Escape closes the browse-defaults modal.
-  useEffect(() => {
-    if (!browseOpen) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        setBrowseOpen(false)
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [browseOpen])
 
   const toastError = (err: unknown, fallback: string): void => {
     useToastStore.getState().addToast(contextErrorMessage(err, fallback), 'error')
@@ -781,13 +767,11 @@ function BrowseDefaultsModal({
 
   return (
     <>
-      <DialogScrim
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-      />
+      <DialogScrim />
+      {/* Esc, the × and a press outside close the catalog. */}
       <DialogFrame
+        onCancel={onClose}
+        closeButton="inline"
         role="dialog"
         aria-modal="true"
         aria-labelledby="context-catalog-title"
@@ -797,7 +781,6 @@ function BrowseDefaultsModal({
           fontFamily:
             "'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace",
         }}
-        onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex-shrink-0 px-5 pt-4 pb-3 border-b border-[var(--color-border)] space-y-3">
           <div className="flex items-start justify-between gap-3">
@@ -814,14 +797,7 @@ function BrowseDefaultsModal({
                 for a nice K2 experience.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-shrink-0 px-2 py-0.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer"
-              aria-label="Close"
-            >
-              Esc
-            </button>
+            <DialogCloseButton className="-mt-1 -mr-2" onClick={onClose} />
           </div>
 
           <div className="relative">

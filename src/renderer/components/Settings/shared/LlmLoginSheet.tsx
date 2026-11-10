@@ -15,6 +15,7 @@ import React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import type { ServerScope } from '@/kessel/server-scope'
+import { DialogCloseButton, useDialogCancel } from '@/components/ui'
 import {
   addLogin,
   cancelLogin,
@@ -180,6 +181,14 @@ export function LlmLoginSheet({
   const title =
     start.kind === 'add' ? `Add a ${start.toolLabel} subscription` : `Sign ${start.label} in again`
 
+  // The ×, Esc and a press outside are this sheet's Cancel (a sign-in under
+  // way is cancelled on the server; nothing is saved). Held while starting.
+  // Once a sign-in is under way a press outside does nothing: it goes on in
+  // the browser, and the click that brings K2 back must not cancel it.
+  const signingIn = login !== null && !done
+  const dismiss = useCallback(() => (done ? onClose() : void cancel()), [done, onClose, cancel])
+  const dialogCancel = useDialogCancel(dismiss, busy, { pressOutside: !signingIn })
+
   return (
     <div
       className="fixed inset-0 z-[500] flex items-center justify-center bg-black/50 p-4"
@@ -188,8 +197,9 @@ export function LlmLoginSheet({
       aria-label={title}
       data-testid="llm-login-sheet"
     >
-      <div className="w-full max-w-lg max-h-full overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] p-5 space-y-4">
-        <div className="type-heading text-[var(--color-text-primary)]">{title}</div>
+      <div {...dialogCancel} className="relative w-full max-w-lg max-h-full overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] p-5 space-y-4">
+        <DialogCloseButton className="absolute top-2 right-2" onClick={dismiss} disabled={busy} />
+        <div className="type-heading pr-6 text-[var(--color-text-primary)]">{title}</div>
 
         {!login && (
           <div className="space-y-3">

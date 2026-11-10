@@ -30,8 +30,7 @@ import {
 import { primaryScope } from '@/kessel/server-scope'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
-import { useDialogEscape } from '../settings-esc'
-import { BetaTag, Toggle } from '@/components/ui'
+import { BetaTag, DialogCloseButton, Toggle, Tag, useDialogCancel } from '@/components/ui'
 
 // ── Types mirroring the backend agent_heartbeats table ────────────────
 
@@ -212,7 +211,9 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
   const [instructions, setInstructions] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  useDialogEscape(onCancel, !busy)
+  // Esc (claimed: Settings stays open), the × and a press outside cancel;
+  // held while saving.
+  const cancel = useDialogCancel(onCancel, busy)
 
   const update = (patch: Partial<ScheduleSpec>): void =>
     setSpec((s) => ({ ...s, ...patch }))
@@ -264,8 +265,9 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 no-drag" role="dialog" aria-modal="true" aria-label={isEdit ? 'Edit schedule' : 'Add heartbeat'}>
-      <div {...floatMaterial('dialog')} className="w-[520px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] p-5 shadow-2xl">
-        <div className="type-heading text-[var(--color-text-primary)] mb-4">
+      <div {...floatMaterial('dialog')} {...cancel} className="relative w-[520px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] p-5 shadow-2xl">
+        <DialogCloseButton className="absolute top-2 right-2" onClick={onCancel} disabled={busy} />
+        <div className="type-heading pr-6 text-[var(--color-text-primary)] mb-4">
           {isEdit ? `Edit schedule: ${initial?.name}` : 'Add heartbeat'}
         </div>
 

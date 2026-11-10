@@ -9,7 +9,6 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, Callout, DialogFrame, DialogScrim, Input, Radio, Surface } from '@/components/ui'
-import { settingMenuOpen, useDialogEscape } from '../settings-esc'
 import { SETTING_ROW_LABEL } from '../controls/SettingControls'
 
 export const DIALOG_LABEL = 'block type-row text-[var(--color-text-primary)] mb-1'
@@ -40,11 +39,8 @@ export function AccessSheet({
   children: React.ReactNode
 }): React.JSX.Element {
   const titleId = useId()
-  // An open menu inside the dialog (App, Role) closes first; the dialog stays.
-  const onEsc = useCallback(() => {
-    if (!settingMenuOpen()) onClose()
-  }, [onClose])
-  useDialogEscape(onEsc, !busy)
+  // Esc, the × and a press outside close it (dialog-cancel leaves Esc to an
+  // open menu inside first: App, Role); held while a write is in flight.
   // Portalled to <body>, so the scrim covers the whole window, not just the
   // Settings panel it opens from. Every dialog is one width with its top
   // edge in one place, whatever its height: a tall form and a short
@@ -54,6 +50,7 @@ export function AccessSheet({
     <>
       <DialogScrim />
       <DialogFrame
+        onCancel={busy ? undefined : onClose}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

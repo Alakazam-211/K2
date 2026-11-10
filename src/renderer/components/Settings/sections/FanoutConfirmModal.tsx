@@ -1,6 +1,7 @@
 import React from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
-import { useEffect, useState } from 'react'
+import { DialogCloseButton, useDialogCancel } from '@/components/ui'
+import { useState } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { AgentContextDiagram } from './AgentContextDiagram'
 import { FANOUT_ENABLE_WARNING } from './CanonicalAgentButtons'
@@ -56,16 +57,9 @@ export function FanoutConfirmModal({
   const [busy, setBusy] = useState<Busy>(null)
   const [error, setError] = useState<string | null>(null)
 
-  // Escape closes (== Cancel) unless an action is mid-flight.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      e.preventDefault() // claim it: Settings must not close too
-      if (busy === null) onCancel()
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [busy, onCancel])
+  // Esc (claimed: Settings stays open), the × and a press outside == Cancel;
+  // held while an action is mid-flight.
+  const cancel = useDialogCancel(onCancel, busy !== null)
 
   // Recommended/safe: enable the K2 Canonical Agent skill for this
   // workspace (merge route). Does NOT touch the fan-out marker.
@@ -110,20 +104,22 @@ export function FanoutConfirmModal({
       data-scrim=""
       className="fixed inset-0 z-50 flex items-center justify-center no-drag"
       style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
-      onClick={busy === null ? onCancel : undefined}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Set up canonical harness fan-out"
         {...floatMaterial('dialog')} className="w-[820px] max-w-[92vw] max-h-[90vh] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        {...cancel}
       >
         {/* Header */}
         <div className="px-5 pt-5 pb-2">
-          <h2 className="type-title text-[var(--color-text-primary)]">
-            Set up canonical harness fan-out
-          </h2>
+          <div className="flex items-start justify-between gap-2">
+            <h2 className="type-title text-[var(--color-text-primary)]">
+              Set up canonical harness fan-out
+            </h2>
+            <DialogCloseButton className="-mt-2 -mr-2" onClick={onCancel} disabled={busy !== null} />
+          </div>
           <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
             Canonical fan-out makes K2&rsquo;s generated{' '}
             <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENTS.md</span> the

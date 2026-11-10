@@ -35,10 +35,9 @@ import {
   type HireForm,
 } from './api-keys-api'
 import { primaryScope } from '@/kessel/server-scope'
-import { Button, Checkbox, Spinner, Tag } from '@/components/ui'
+import { Button, Checkbox, DialogCloseButton, Spinner, Tag, useDialogCancel } from '@/components/ui'
 import { currentShortcutOs } from '@/lib/shortcut-label'
 import { isAirgap } from '@/lib/airgap'
-import { useDialogEscape } from '../settings-esc'
 import { SettingDropdown, SettingsGroup } from '../controls/SettingControls'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
@@ -621,7 +620,9 @@ function CreateKeyModal({
   const confirm = useOwnerConfirm(finishHireKeyConfirm)
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  useDialogEscape(onClose, !submitting)
+  // Esc (claimed: Settings stays open), the × and a press outside close it;
+  // held while saving or confirming.
+  const cancel = useDialogCancel(onClose, submitting)
   const setHireField = <K extends keyof HireForm>(k: K, v: HireForm[K]) =>
     setHireForm((prev) => ({ ...prev, [k]: v }))
 
@@ -701,8 +702,9 @@ function CreateKeyModal({
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Create API key">
-      <div {...floatMaterial('dialog')} className="w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl">
-        <h3 className="type-heading text-[var(--color-text-primary)]">Create API key</h3>
+      <div {...floatMaterial('dialog')} {...cancel} className="relative w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl">
+        <DialogCloseButton className="absolute top-2 right-2" onClick={onClose} disabled={submitting} />
+        <h3 className="type-heading pr-6 text-[var(--color-text-primary)]">Create API key</h3>
         <label className="block type-hint text-[var(--color-text-muted)]">
           Label
           <input
@@ -905,7 +907,9 @@ function EditCeilingModal({
   const confirm = useOwnerConfirm(finishCeilingConfirm)
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  useDialogEscape(onClose, !submitting)
+  // Esc (claimed: Settings stays open), the × and a press outside close it;
+  // held while saving or confirming.
+  const cancel = useDialogCancel(onClose, submitting)
 
   const save = async () => {
     setSubmitting(true)
@@ -944,8 +948,9 @@ function EditCeilingModal({
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="App access">
-      <div {...floatMaterial('dialog')} className="w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl" data-testid="edit-app-access">
-        <h3 className="type-heading text-[var(--color-text-primary)]">
+      <div {...floatMaterial('dialog')} {...cancel} className="relative w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl" data-testid="edit-app-access">
+        <DialogCloseButton className="absolute top-2 right-2" onClick={onClose} disabled={submitting} />
+        <h3 className="type-heading pr-6 text-[var(--color-text-primary)]">
           App access for {keyRow.label || keyRow.id}
         </h3>
         <p className="type-hint text-[var(--color-text-secondary)]">

@@ -20,7 +20,7 @@ import { registerZenSourcesBatchReview } from '@/lib/zen/zen-sources-review'
 import { ConfirmStep } from './DataSourceConfirm'
 import { batchHash, btn, btnPrimary, danger, every, makerLabel, muted, onLabel, scopeForHostKey, sourcesErrorText } from './data-sources-ui'
 import { Checkbox } from '@/components/ui'
-import { useDialogEscape } from '../settings-esc'
+import { DialogCloseButton, useDialogCancel } from '@/components/ui'
 
 export interface SourcesBatchArgs {
   /** Shown in the title: Review pending for Garden "Fleet". */
@@ -192,13 +192,18 @@ export function DataSourcesBatchDialog({
   scopeOf?: (hostKey: string) => ServerScope
 }): React.JSX.Element {
   const servers = Object.entries(args.byServer)
-  useDialogEscape(onClose)
+  // Esc (claimed: Settings stays open), the × and a press outside close it,
+  // as Close does.
+  const cancel = useDialogCancel(onClose)
   return (
     <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/40" data-testid="sources-batch" role="dialog" aria-modal="true" aria-label="Review pending">
-      <div className="bg-[var(--color-bg)] border border-[var(--color-border)] p-3 w-[560px] max-w-[95vw] max-h-[85vh] overflow-auto space-y-2">
-        <p className="type-name text-[var(--color-text-primary)]">
-          {args.gardenName ? `Review pending for Garden “${args.gardenName}”` : 'Review pending'}
-        </p>
+      <div {...cancel} className="bg-[var(--color-bg)] border border-[var(--color-border)] p-3 w-[560px] max-w-[95vw] max-h-[85vh] overflow-auto space-y-2">
+        <div className="flex items-start justify-between gap-2">
+          <p className="type-name text-[var(--color-text-primary)]">
+            {args.gardenName ? `Review pending for Garden “${args.gardenName}”` : 'Review pending'}
+          </p>
+          <DialogCloseButton className="-mt-1 -mr-1" onClick={onClose} />
+        </div>
         <p className={`type-hint ${muted}`}>
           Each check runs on its own server. Items that use a secret on one server need one confirm.
         </p>

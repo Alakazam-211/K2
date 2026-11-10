@@ -107,7 +107,6 @@ import {
   Surface,
   type OverflowMenuItem,
 } from '@/components/ui'
-import { useDialogEscape } from '../settings-esc'
 import {
   ConnectionRow,
   HEALTH_TAG_TONE,
@@ -625,19 +624,22 @@ function ServerFormDialog({
   onRotationDone: (newPassword: string) => void | Promise<void>
   onRotationCancel: () => void
 }): React.JSX.Element {
-  // Mid-save or mid-rotation Esc does nothing; the buttons there decide.
-  useDialogEscape(onClose, !busy && !rotation)
+  // Esc, the × and a press outside close it unsaved. Held mid-save, and
+  // mid-rotation (the server is saved with a temporary password): the
+  // buttons there decide.
   const field = 'w-full type-control'
   return (
     <>
       <DialogScrim />
       <DialogFrame
+        onCancel={onClose}
+        cancelHeld={busy || rotation !== null}
         role="dialog"
         aria-modal="true"
         aria-label={draft.id ? 'Edit server' : 'Add server'}
         className="w-[26rem] max-w-[90vw] p-5"
       >
-        <h3 className="type-heading text-[var(--color-text-primary)] mb-3">{draft.id ? 'Edit server' : 'Add server'}</h3>
+        <h3 className="type-heading pr-6 text-[var(--color-text-primary)] mb-3">{draft.id ? 'Edit server' : 'Add server'}</h3>
         {rotation ? (
           <>
             <div className="type-hint text-[var(--color-text-secondary)] mb-2">

@@ -11,7 +11,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore, type ProjectWithWorkspaces } from '../../stores/projects'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
-import { DialogScrim } from '@/components/ui'
+import { DialogCloseButton, DialogScrim, useDialogCancel } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { trashName } from '@/lib/reveal-label'
 
@@ -141,17 +141,9 @@ export default function DisableWorktreesDialog({
     }
   }, [project.id, worktrees, hasUnmerged, showRecycleConfirm, fetchProjects, onClose])
 
-  // Escape to close
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      e.preventDefault() // claim it: Settings must not close too
-      if (!isPending) onClose()
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [open, isPending, onClose])
+  // Esc (claimed: Settings stays open), the × and a press outside close it;
+  // held while disabling.
+  const cancel = useDialogCancel(open ? onClose : undefined, open && isPending)
 
   if (!open) return null
 
@@ -160,20 +152,20 @@ export default function DisableWorktreesDialog({
       zIndex={50}
       className="flex items-center justify-center no-drag"
       style={{ backdropFilter: 'blur(4px)' }}
-      onClick={isPending ? undefined : onClose}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Disable Worktrees"
         {...floatMaterial('dialog')} className="w-[520px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        {...cancel}
       >
         {/* Header */}
-        <div className="px-5 pt-5 pb-2">
+        <div className="px-5 pt-5 pb-2 flex items-start justify-between gap-2">
           <h2 className="type-title text-[var(--color-text-primary)]">
             Disable Worktrees
           </h2>
+          <DialogCloseButton className="-mt-2 -mr-2" onClick={onClose} disabled={isPending} />
         </div>
 
         {/* Body */}

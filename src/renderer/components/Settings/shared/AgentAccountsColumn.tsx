@@ -51,8 +51,7 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 import { LlmLoginSheet, type LoginSheetStart } from './LlmLoginSheet'
 import { SIGN_IN_TOOLS, useLlmSignInRequestStore } from '@/stores/llm-sign-in-request'
-import { useDialogEscape } from '../settings-esc'
-import { Button, Tag } from '@/components/ui'
+import { Button, DialogCloseButton, Tag, useDialogCancel } from '@/components/ui'
 
 /** Visible keyboard focus on the tile actions (Button leaves outline to the UA). */
 const ACTION_FOCUS = 'outline-none focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)]'
@@ -469,7 +468,9 @@ function ApiKeyDialog({
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  useDialogEscape(onClose, !busy)
+  // Esc (claimed: Settings stays open), the × and a press outside close it
+  // (nothing saved); held while saving.
+  const cancel = useDialogCancel(onClose, busy)
   const submit = useCallback(async () => {
     const sentKey = key.trim()
     setKey('')
@@ -492,8 +493,9 @@ function ApiKeyDialog({
       aria-label={`Add ${toolLabel} API token`}
       data-testid="llm-apikey-dialog"
     >
-      <div className="w-[min(420px,92vw)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] p-4 space-y-3">
-        <h3 className="type-heading text-[var(--color-text-primary)]">Add {toolLabel} API token</h3>
+      <div {...cancel} className="relative w-[min(420px,92vw)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] p-4 space-y-3">
+        <DialogCloseButton className="absolute top-2 right-2" onClick={onClose} disabled={busy} />
+        <h3 className="type-heading pr-6 text-[var(--color-text-primary)]">Add {toolLabel} API token</h3>
         <label className="block type-hint text-[var(--color-text-muted)]">
           Label
           <input

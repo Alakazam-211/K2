@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { DialogScrim } from '@/components/ui'
+import { DialogCloseButton, DialogScrim, useDialogCancel } from '@/components/ui'
 
 interface IconCropDialogProps {
   imageDataUrl: string
@@ -124,36 +124,34 @@ export default function IconCropDialog({
     onConfirm(outCanvas.toDataURL('image/png'))
   }, [scale, offset, onConfirm])
 
-  // Escape to cancel
+  // Esc (claimed: Settings stays open), the × and a press outside cancel;
+  // Enter applies.
+  const cancel = useDialogCancel(onCancel)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault() // claim it: Settings must not close too
-        onCancel()
-      }
       if (e.key === 'Enter') handleConfirm()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [onCancel, handleConfirm])
+  }, [handleConfirm])
 
   return (
     <DialogScrim
       zIndex={1000}
       className="flex items-center justify-center"
-      onClick={onCancel}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Crop icon"
-        className="flex flex-col items-center gap-4 p-6"
+        {...cancel}
+        className="relative flex flex-col items-center gap-4 p-6"
         style={{
           backgroundColor: 'var(--color-bg-stripe)',
           border: '1px solid var(--color-border)',
         }}
-        onClick={(e) => e.stopPropagation()}
       >
+        <DialogCloseButton className="absolute top-2 right-2" onClick={onCancel} />
         <span className="type-section text-[var(--color-text-muted)] font-mono tracking-wide uppercase">
           Drag to position, scroll to zoom
         </span>

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
 import { BetaTag } from '@/components/ui/Tag'
+import { DialogCloseButton, useDialogCancel } from '@/components/ui'
 import { searchManifest, sectionLabel, type SettingEntry } from './searchManifest'
 
 interface SettingsSearchModalProps {
@@ -39,19 +40,14 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
     inputRef.current?.focus()
   }, [])
 
+  // Esc (wherever focus is), the × and a press outside close it. The shared
+  // listener claims the Escape (preventDefault + stopImmediatePropagation),
+  // so the Settings router's Escape-closes-settings doesn't also fire.
+  const cancel = useDialogCancel(onClose)
+
   // Keyboard handling — bound at the container so arrow keys work even
-  // when focus is on the input. We stop propagation so outer handlers
-  // (e.g. the Settings router's Escape-closes-settings) don't also
-  // fire; React synthetic + native are separate layers and without
-  // stopPropagation the Escape bubbles to the window listener.
+  // when focus is on the input.
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      e.stopPropagation()
-      ;(e.nativeEvent as KeyboardEvent).stopImmediatePropagation?.()
-      onClose()
-      return
-    }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setSelectedIndex((i) => Math.min(i + 1, Math.max(0, results.length - 1)))
@@ -70,23 +66,6 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
     }
   }
 
-  // Belt-and-suspenders: the React synthetic handler above fires before
-  // the native bubble reaches `window`, but we also install a native
-  // capture-phase listener so a third party with window.addEventListener
-  // can't race past us. When the modal is open, any Escape on window
-  // is consumed here.
-  useEffect(() => {
-    const nativeHandler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopImmediatePropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', nativeHandler, true) // capture = true
-    return () => window.removeEventListener('keydown', nativeHandler, true)
-  }, [onClose])
-
   // Keep the selected row in view
   useEffect(() => {
     const row = listRef.current?.querySelector<HTMLElement>(`[data-result-index="${selectedIndex}"]`)
@@ -96,11 +75,10 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[10vh]"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
       onKeyDown={onKeyDown}
       tabIndex={-1}
     >
-      <div {...floatMaterial('dialog')} className="w-full max-w-xl mx-4 bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-2xl flex flex-col max-h-[70vh]">
+      <div {...floatMaterial('dialog')} {...cancel} className="w-full max-w-xl mx-4 bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-2xl flex flex-col max-h-[70vh]">
         {/* Input */}
         <div className="flex items-center gap-2 px-3 py-2.5 border-b border-[var(--color-border)] flex-shrink-0">
           <svg className="w-3.5 h-3.5 text-[var(--color-text-muted)] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -118,6 +96,7 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
           <kbd className="type-hint font-mono text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5">
             esc
           </kbd>
+          <DialogCloseButton className="-mr-1" onClick={onClose} />
         </div>
 
         {/* Results */}

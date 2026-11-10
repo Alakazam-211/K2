@@ -772,11 +772,15 @@
 
 /* ── Floating surfaces: menus, popovers, the command palette ─────────────
    Which of them is Frost is one line: FLOAT_MATERIAL in
-   components/ui/float-material.ts. When frosted, a menu gets the phone's
-   denser fill so its text stays legible over busy content; as a tile it
-   takes the raised tile rule below. */
+   components/ui/float-material.ts. When frosted, a menu is solid enough to
+   read cleanly, as the phone's hold menu is: a 97% fill over a heavier blur,
+   so the rows underneath never read as words, even under the menu's last
+   line and even where a webview draws no blur at all. It keeps the bright
+   rim. As a tile it takes the raised tile rule below. */
 [data-style="glass"] [data-material="frost"][data-float]:not([data-zen-root] *) {
-  background: rgba(36, 36, 40, 0.62);
+  background: rgba(32, 32, 36, 0.97);
+  -webkit-backdrop-filter: blur(48px) saturate(180%);
+  backdrop-filter: blur(48px) saturate(180%);
   box-shadow: var(--material-sheen), var(--shadow-3);
 }
 /* A menu's rows stay inside its rounded corners. Excludes menus with flyouts
@@ -793,7 +797,7 @@
 [data-style="glass"][data-palette="veil"] [data-material="frost"]:not([data-zen-root] *) {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 2px 5px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04);
 }
-[data-style="glass"][data-palette="veil"] [data-material="frost"][data-float]:not([data-zen-root] *) { background: var(--material-tint); }
+[data-style="glass"][data-palette="veil"] [data-material="frost"][data-float]:not([data-zen-root] *) { background: rgba(255, 255, 255, 0.97); }
 /* On a white tile (the nav, a drawer, a card, a menu, a pane) glass would
    vanish, so it keeps the rim and its fill becomes a grey wash. Hover and lit
    sit on top of that wash. The Settings page's content pane is the page, not

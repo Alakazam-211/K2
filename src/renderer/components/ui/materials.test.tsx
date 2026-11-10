@@ -69,6 +69,17 @@ describe('Floating chrome is Frost', () => {
     expect(menu.hasAttribute('data-floating')).toBe(false)
   })
 
+  it('a frosted menu is solid enough that rows under it never read as words, in both modes, and keeps its rim', () => {
+    const alpha = (body: string): number => Number(/background: rgba\(\d+, \d+, \d+, ([\d.]+)\)/.exec(body)![1])
+    const dark = rules.find((r) => r.selector === '[data-style="glass"] [data-material="frost"][data-float]:not([data-zen-root] *)')!
+    const light = rules.find((r) => r.selector === '[data-style="glass"][data-palette="veil"] [data-material="frost"][data-float]:not([data-zen-root] *)')!
+    expect(alpha(dark.body)).toBeGreaterThanOrEqual(0.97)
+    expect(alpha(light.body)).toBeGreaterThanOrEqual(0.97)
+    // A heavier blur than the 28px on the rest of Frost.
+    expect(dark.body).toContain('backdrop-filter: blur(48px) saturate(180%)')
+    expect(dark.body).toContain('box-shadow: var(--material-sheen), var(--shadow-3)')
+  })
+
   it('a search field is a frosted field; a plain field is not', async () => {
     const { Input } = await import('./Input')
     const { getByRole } = render(

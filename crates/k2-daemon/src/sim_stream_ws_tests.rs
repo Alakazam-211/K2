@@ -603,6 +603,7 @@ fn a_stats_viewer_gets_stage_times_and_its_probed_touches() {
                     let st = &v["stats"];
                     frames += st["frames"].as_u64().expect("frames");
                     assert!(st["hubCpuMs"].is_number() && st["encoderCpuMs"].is_number(), "{st}");
+                    assert!(st["skips"]["window"].is_u64() && st["skips"]["age"].is_u64() && st["skips"]["send"].is_u64() && st["catchUps"].is_u64(), "S4's skip counts: {st}");
                     for s in st["stages"].as_array().expect("stages") {
                         let (p50, p95, max) = (s["p50"].as_f64().expect("p50"), s["p95"].as_f64().expect("p95"), s["max"].as_f64().expect("max"));
                         assert!(p50 <= p95 && p95 <= max, "{s}");

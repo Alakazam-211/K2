@@ -5,11 +5,13 @@
 //!
 //! **The engine keeps** the codec and window negotiation, the rate table
 //! ([`rates`], by [`SourceKind`]), the hub subscription, the ack window and
-//! [`ViewerGate`] (never a delta after a gap; a viewer that skips asks for a
-//! key), fps changes, keyframe asks, the JPEG fallback when a layer's
-//! encoder fails, the `stats=1` readout, the input queue and its thread,
-//! and the close codes (4410 when the source ends; the route's own codes
-//! from its auth hook).
+//! [`super::ViewerGate`] ([`ViewerFlow`]: never a delta after a gap; a
+//! viewer that skips, for a full window, an old unacked unit or a slow
+//! send, asks for a key), fps changes and moves down a layer, keyframe
+//! asks, the JPEG fallback when a layer's encoder fails, the `stats=1`
+//! readout (with its skips and catch-up asks), the input queue and its
+//! thread, and the close codes (4410 when the source ends; the route's own
+//! codes from its auth hook).
 //!
 //! **The route gives** ([`Hooks`]):
 //! - [`Auth`]: the re-check on every tick ([`AUTH_TICK`]; keep, or close
@@ -48,10 +50,10 @@ use tokio_tungstenite::tungstenite::Message;
 use k2_core::log_debug;
 use k2_core::sim::stream::{negotiate_window, negotiate_with, parse_offer, Codec, FrameHeader, InputTiming, ServerMsg, Stage, StatsWindow, VideoHeader, ViewerPath};
 use k2_core::sim::stream::{CLOSE_DEVICE_STOPPED, VIDEO_CODEC_H264, VIDEO_CODEC_VP8};
-use k2_core::sim::video::flow::{AckWindow, ACK_EXPIRY};
+use k2_core::sim::video::flow::ACK_EXPIRY;
 use k2_core::stream::{Codec as UnitCodec, EncodedSource, EncodedUnit, SourceKey, SourceKind};
 
-use super::{rates, HubEvent, JoinError, Took, ViewerGate, Want};
+use super::{rates, HubEvent, JoinError, ViewerFlow, Want};
 
 /// How often [`Auth::recheck`] runs (as `/cli/sessions/bytes` does).
 pub const AUTH_TICK: Duration = Duration::from_secs(5);
@@ -369,18 +371,19 @@ fn record_unit(st: &mut StatsWindow, u: &EncodedUnit, send_start: Instant, sent:
     st.frame_sent();
 }
 
-/// Send one unit; false when the socket is gone. The caller marks it in
-/// flight.
-async fn send_unit(write: &mut (impl SinkExt<Message> + Unpin), u: &EncodedUnit, seq: u32, started: Instant, stats: Option<&mut StatsWindow>) -> bool {
+/// Send one unit; how long the send took, or `None` when the socket is
+/// gone. The caller marks it in flight ([`ViewerFlow::sent`]).
+async fn send_unit(write: &mut (impl SinkExt<Message> + Unpin), u: &EncodedUnit, seq: u32, started: Instant, stats: Option<&mut StatsWindow>) -> Option<Duration> {
     let msg = unit_message(u, seq, started);
     let send_start = Instant::now();
     if write.send(Message::Binary(msg)).await.is_err() {
-        return false;
+        return None;
     }
+    let done = Instant::now();
     if let Some(st) = stats {
-        record_unit(st, u, send_start, Instant::now());
+        record_unit(st, u, send_start, done);
     }
-    true
+    Some(done.saturating_duration_since(send_start))
 }
 
 /// CPU ms between two cumulative readings (0 for the first, which has no
@@ -389,13 +392,6 @@ fn cpu_window_ms(last: &mut u64, now: u64) -> f32 {
     let ms = if *last == 0 { 0.0 } else { now.saturating_sub(*last) as f32 / 1e6 };
     *last = now;
     ms
-}
-
-/// May this viewer put one more unit in flight? (The window's delay-based
-/// cap: a layer is paced at its source, so a delta that fits the window
-/// goes; the round-trip limit would only drop it and cost a keyframe.)
-fn room(w: &AckWindow) -> bool {
-    (w.in_flight() as u32) < w.cap()
 }
 
 /// The `hello` text: the route's fields with the engine's on top.
@@ -488,10 +484,8 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
     let mut enc_cpu_ns = 0u64;
     let mut stats_tick = tokio::time::interval(Duration::from_secs(1));
     stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut window = AckWindow::new(window_max);
-    let mut congested = false;
     let started = Instant::now();
-    let mut gate = ViewerGate::new(sub.layer());
+    let mut flow = ViewerFlow::new(sub.layer(), window_max, codec.is_video());
     if write.send(hello_text(hello(&neg), &neg)).await.is_err() {
         return Ok(());
     }
@@ -511,16 +505,13 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
     let mut auth_tick = tokio::time::interval(auth.every);
     auth_tick.tick().await;
     'serve: loop {
-        if window.expire(Instant::now(), ACK_EXPIRY) > 0 {
+        if flow.window.expire(Instant::now(), ACK_EXPIRY) > 0 {
             log_debug!("[{tag}] viewer {me}: acks lost for {ACK_EXPIRY:?}; freeing the window");
         }
         // A keyframe that waited for room goes first.
-        if let Some(u) = gate.take_held(room(&window)) {
-            let seq = gate.wire_seq(&u);
-            if !send_unit(&mut write, &u, seq, started, stats.as_mut()).await {
-                break 'serve;
-            }
-            window.sent(seq, Instant::now());
+        if let Some((u, seq)) = flow.held() {
+            let Some(took) = send_unit(&mut write, &u, seq, started, stats.as_mut()).await else { break 'serve };
+            flow.sent(seq, Instant::now(), took, &sub, stats.as_mut());
         }
         tokio::select! {
             _ = auth_tick.tick() => {
@@ -550,24 +541,25 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
                 if let Some(e) = &u.encode {
                     enc_cpu_ns += e.cpu_ns;
                 }
-                match gate.offer(u, room(&window)) {
-                    Took::Send(u) => {
-                        let seq = gate.wire_seq(&u);
-                        if !send_unit(&mut write, &u, seq, started, stats.as_mut()).await {
-                            break 'serve;
-                        }
-                        window.sent(seq, Instant::now());
-                    }
-                    Took::Dropped => {
-                        sub.catch_up();
-                    }
-                    Took::Held | Took::Stale => {}
+                if let Some((u, seq)) = flow.offer(u, Instant::now(), &sub, stats.as_mut()) {
+                    let Some(took) = send_unit(&mut write, &u, seq, started, stats.as_mut()).await else { break 'serve };
+                    flow.sent(seq, Instant::now(), took, &sub, stats.as_mut());
                 }
             }
             Some(ev) = sub.events.recv() => match ev {
+                HubEvent::Moved { layer, codec: to, fps: f, why } if codec.is_video() && to == unit_codec(codec) => {
+                    // Its link stayed congested: the same codec, a lower rate.
+                    log_debug!("[{tag}] viewer {me} on {key} moves down to {f} fps ({why})");
+                    flow.moved(layer);
+                    fps = f;
+                    if write.send(text(&ServerMsg::Fps { fps })).await.is_err() {
+                        break 'serve;
+                    }
+                }
                 HubEvent::Moved { layer, fps: f, why, .. } => {
                     log_debug!("[{tag}] {} for viewer {me} on {key} failed ({why}); falling back to JPEG", codec.as_str());
-                    gate.moved(layer);
+                    flow.moved(layer);
+                    flow.video = false;
                     codec = Codec::Jpeg;
                     fps = f;
                     let msg = ServerMsg::Codec { codec, message: Some(format!("The video encoder stopped ({why}); this stream is JPEG now.")) };
@@ -632,16 +624,12 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
                 };
                 match vm.engine() {
                     Some(EngineMsg::Ack { seq }) => {
-                        window.ack(seq, Instant::now());
                         // The layer's bitrate follows its most congested viewer.
-                        if codec.is_video() && window.congested() != congested {
-                            congested = !congested;
-                            sub.set_congested(congested);
-                        }
+                        flow.ack(seq, Instant::now(), &sub);
                     }
                     Some(EngineMsg::Fps { fps: f }) => {
                         fps = rates::clamp_fps(kind, unit_codec(codec), path, Some(f));
-                        gate.moved(sub.set_fps(fps));
+                        flow.moved(sub.set_fps(fps));
                         let _ = write.send(text(&ServerMsg::Fps { fps })).await;
                     }
                     Some(EngineMsg::Keyframe) => {

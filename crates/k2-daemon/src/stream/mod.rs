@@ -58,7 +58,7 @@ use k2_core::sim::video::flow::RateCtl;
 use k2_core::stream::{thread_cpu_ns, Codec, EncodedSource, EncodedUnit, LayerSpec, SourceError, SourceKey, SourceSizes};
 use tokio::sync::mpsc;
 
-pub use gate::{Took, ViewerGate};
+pub use gate::{skip_age, Took, ViewerFlow, ViewerGate, SKIP_AGE_MIN, SKIP_AGE_RTTS, SKIP_SEND};
 pub use viewer::{serve, Auth, Coalesce, DesktopRule, EngineMsg, Hooks, InputSink, Negotiated, Offer, PointerWheel, Push, Refusal, ServeError, Source, StreamMsg, Verdict, Wheel, AUTH_TICK};
 
 /// Layer rates. A viewer's fps rounds up to the nearest.

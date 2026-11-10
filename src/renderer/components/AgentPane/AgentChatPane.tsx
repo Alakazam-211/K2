@@ -29,7 +29,8 @@ import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-
 import { chatDisplayName, resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from '@/components/SessionView/SessionViewMenu'
 import type { SplitPaneView } from '@/components/SessionView/sessionViewTab'
-import { BAR_CONTROLS, PinnedSessionBody, sessionFloatsPlace } from '@/components/SessionView/AgentSessionChrome'
+import { BAR_CONTROLS, PinnedSessionBody, barShowsModeToggle, sessionFloatsPlace } from '@/components/SessionView/AgentSessionChrome'
+import ModeToggle, { ModeToggleSessionContext, type ModeToggleSession } from '@/components/Presence/ModeToggle'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
 import { SplitSessionColumns } from '@/components/SessionView/SplitSessionColumns'
@@ -420,6 +421,7 @@ function ChatHeader({
         </span>
       )}
       <div className={floating ? 'flex min-w-0 items-center justify-end gap-1.5 thread-float-group' : 'flex min-w-0 items-center justify-end gap-1'}>
+      {barShowsModeToggle(viewTab, place) ? <ModeToggle /> : null}
       {shows('token') && projectId && (
         <SessionTokenPicker
           scope={room.scope}
@@ -756,6 +758,8 @@ async function ensurePinnedChat(
  */
 function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSessionId, onDaemonSessionRemoved }: AgentChatTerminalProps): React.JSX.Element {
   const room = useRoom()
+  // The eye/pencil in any bar of this session reads who else is on it.
+  const modeSession = useMemo<ModeToggleSession>(() => ({ path: projectPath, room }), [projectPath, room])
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalIdRef = useRef(agentChatId(projectId, agentName))
   const displayName = useDisplayName(projectPath, agentName)
@@ -1232,6 +1236,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     />
   )
   const header = (
+    <ModeToggleSessionContext.Provider value={modeSession}>
     <PlacedSessionHeader
       placed={split.placed}
       header={chatHeader}
@@ -1248,6 +1253,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         />
       }
     />
+    </ModeToggleSessionContext.Provider>
   )
 
   const openContinue = continueSource
@@ -1357,6 +1363,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       {header}
       <PinnedSessionBody
         splitSlots={split.slots}
+        modeToggleSession={modeSession}
         viewTab={viewTab}
         splitLeft={splitLeft}
         splitRight={splitRight}
@@ -1546,6 +1553,8 @@ function RetryButton({ onClick, refreshing }: { onClick: () => void; refreshing:
  */
 function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSessionId }: AgentChatTerminalProps): React.JSX.Element {
   const room = useRoom()
+  // The eye/pencil in any bar of this session reads who else is on it.
+  const modeSession = useMemo<ModeToggleSession>(() => ({ path: projectPath, room }), [projectPath, room])
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalIdRef = useRef(agentChatId(projectId, agentName))
 
@@ -1915,6 +1924,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     />
   )
   const header = (
+    <ModeToggleSessionContext.Provider value={modeSession}>
     <PlacedSessionHeader
       placed={split.placed}
       header={chatHeader}
@@ -1931,6 +1941,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
         />
       }
     />
+    </ModeToggleSessionContext.Provider>
   )
 
   const continueDialog = continueSource ? (
@@ -1982,6 +1993,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
       {header}
       <PinnedSessionBody
         splitSlots={split.slots}
+        modeToggleSession={modeSession}
         viewTab={viewTab}
         splitLeft={splitLeft}
         splitRight={splitRight}

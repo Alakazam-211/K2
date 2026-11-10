@@ -1,5 +1,5 @@
 // Presence S5 — window-mode store coverage: the whoami-derived default
-// (owner → claimer, everyone else → viewer, null → stay unresolved),
+// (every resolved role → claimer since 0.46.11, null → stay unresolved),
 // manual-toggle precedence over a slow default, the viewer-suppression
 // predicate (unresolved never suppresses), and the daemon-ACK `capable`
 // mirror.
@@ -57,9 +57,9 @@ describe('deriveDefaultMode', () => {
     expect(deriveDefaultMode('owner')).toBe('claimer')
   })
 
-  it('every non-owner role → viewer (eye) mode', () => {
-    expect(deriveDefaultMode('admin')).toBe('viewer')
-    expect(deriveDefaultMode('member')).toBe('viewer')
+  it('every role starts on the pencil (0.46.11): Admin and Member too', () => {
+    expect(deriveDefaultMode('admin')).toBe('claimer')
+    expect(deriveDefaultMode('member')).toBe('claimer')
   })
 
   it('unresolved identity → null (no default applied)', () => {
@@ -77,13 +77,16 @@ describe('initWindowModeDefault', () => {
     expect(s.resolved).toBe(true)
   })
 
-  it('resolves member windows to viewer', async () => {
-    whoami.role = 'member'
-    initWindowModeDefault()
-    await flush()
-    const s = useWindowModeStore.getState()
-    expect(s.mode).toBe('viewer')
-    expect(s.resolved).toBe(true)
+  it('resolves member and admin windows to claimer', async () => {
+    for (const role of ['member', 'admin'] as const) {
+      __resetWindowModeForTests()
+      whoami.role = role
+      initWindowModeDefault()
+      await flush()
+      const s = useWindowModeStore.getState()
+      expect(s.mode, role).toBe('claimer')
+      expect(s.resolved, role).toBe(true)
+    }
   })
 
   it('whoami failure leaves the store unresolved (daemon defaults rule)', async () => {
@@ -124,6 +127,11 @@ describe('noteViewerInteractionBlocked', () => {
     expect(useToastStore.getState().toasts).toHaveLength(0)
   })
 
+  it('the toast points at the pencil in the terminal\'s bar, not the top-right', () => {
+    expect(VIEWER_BLOCKED_TOAST).toBe("You're in view mode. Switch to edit with the pencil in the terminal's bar.")
+    expect(VIEWER_BLOCKED_TOAST).not.toMatch(/top-right/)
+  })
+
   it('resolved viewer toasts once then throttles', () => {
     useWindowModeStore.getState().setMode('viewer')
     expect(noteViewerInteractionBlocked()).toBe(true)
@@ -152,8 +160,10 @@ describe('capable mirror + host switch', () => {
     whoami.role = 'member'
     initWindowModeDefault()
     await flush()
+    expect(useWindowModeStore.getState().mode).toBe('claimer')
+    // On this host: the eye by hand, and the daemon says no input rights.
+    useWindowModeStore.getState().setMode('viewer')
     useWindowModeStore.getState().setCapable(false)
-    expect(useWindowModeStore.getState().mode).toBe('viewer')
 
     // Switch to a host where we are the owner.
     whoami.role = 'owner'

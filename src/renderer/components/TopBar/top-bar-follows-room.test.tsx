@@ -623,26 +623,14 @@ describe('presence roster follows the room (Z15, Z34)', () => {
   })
 })
 
-describe('mode toggle shows the room’s mode (Z15)', () => {
-  it('is the room’s mode, disabled, set by B; the window toggle comes back on Agents', async () => {
+describe('no mode toggle in the top bar (0.46.11)', () => {
+  it('neither the window’s nor a followed room’s: the eye/pencil lives in the terminal’s bar', () => {
     const { container } = bar()
-    const windowGroup = container.querySelector('[data-mode-toggle]')
-    if (!windowGroup) throw new Error('mode toggle missing')
-    expect(windowGroup.getAttribute('data-mode-source')).toBe(null)
-
-    focus(roomOnB())
-    const usable = container.querySelector('[data-mode-source="room"]')
-    if (!usable) throw new Error('room mode toggle missing')
-    expect(usable.getAttribute('data-mode-toggle')).toBe('claimer')
-    expect(usable.getAttribute('title')).toBe('Set by B')
-    for (const b of Array.from(usable.querySelectorAll('button'))) expect(b.disabled).toBe(true)
-
+    expect(container.querySelector('[data-mode-toggle]')).toBe(null)
     focus(roomOnB({ readOnly: true }))
-    expect(container.querySelector('[data-mode-source="room"]')?.getAttribute('data-mode-toggle')).toBe('viewer')
-
+    expect(container.querySelector('[data-mode-toggle]')).toBe(null)
     backToAgents()
-    expect(container.querySelector('[data-mode-source="room"]')).toBe(null)
-    expect(container.querySelector('[data-mode-toggle]')).not.toBe(null)
+    expect(container.querySelector('[data-mode-toggle]')).toBe(null)
   })
 })
 

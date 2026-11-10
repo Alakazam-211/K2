@@ -59,11 +59,19 @@ import {
 import { AgentSessionChrome } from './AgentSessionChrome'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 
+// The room's roster: the terminal bar's eye/pencil reads who else is here.
+const roomPresence = createStore<PresenceView>(() => ({ roster: [], supported: true }))
+
 // Home M3 — a failed refresh drops the tab from THIS room's strip.
 const room = testRoom({
   tabs: { room: { dropTabAfterFailedSidecarRefresh } },
+  presence: roomPresence,
 })
 import { useSessionViewChrome } from './sessionViewChrome'
+import { createStore } from 'zustand/vanilla'
+import type { PresenceView } from '@/stores/server-view'
+import type { RosterUser } from '@/stores/presence'
+import { useWindowModeStore } from '@/stores/window-mode'
 import { overlayViewer, sessionViewSplitStorageKey, sessionViewTabStorageKey } from './sessionViewTab'
 
 function viewButtonLabel(): string {
@@ -689,5 +697,70 @@ describe('sidecar refresh resumes on the server', () => {
       expect(screen.getByTestId('mount-probe').getAttribute('data-mount')).not.toBe(before)
     })
     expect(dropTabAfterFailedSidecarRefresh).not.toHaveBeenCalled()
+  })
+})
+
+// 0.46.11: the eye/pencil left the app's top bar for the terminal's own bar.
+describe('eye/pencil in the terminal bar (0.46.11)', () => {
+  const CWD = '/Users/me/work/sales'
+  const person = (user: string): RosterUser => ({ user, role: user === 'owner' ? 'owner' : 'member', windowCount: 1, workspaces: [CWD], connectedAt: 1 })
+
+  // Thread view's bell reads the room's projects.
+  const modeRoom = testRoom({ tabs: { room: { dropTabAfterFailedSidecarRefresh } }, presence: roomPresence, projects: [] })
+
+  beforeEach(() => {
+    cleanup()
+    useWindowModeStore.setState({ mode: 'claimer', resolved: true, capable: true })
+    roomPresence.setState({ roster: [person('owner'), person('alice')], supported: true })
+  })
+  afterEach(() => {
+    cleanup()
+    roomPresence.setState({ roster: [], supported: true })
+  })
+
+  function renderView(view: string) {
+    localStorage.clear()
+    localStorage.setItem(sessionViewTabStorageKey('local', 'conv-r'), view)
+    return renderInRoom(modeRoom,
+      <AgentSessionChrome title="sales/reviewer" addr="sales/reviewer" conversationId="conv-r" agentName="tab-xyz" cwd={CWD} command="claude">
+        <ProbeTerminal />
+      </AgentSessionChrome>,
+    )
+  }
+
+  it('Terminal view: in the session bar, at the right end before Restart', async () => {
+    renderView('terminal')
+    const header = await screen.findByTestId('sidecar-session-header')
+    const toggle = header.querySelector('[data-mode-toggle]')
+    expect(toggle?.getAttribute('data-mode-toggle')).toBe('claimer')
+    // Right group: the eye/pencil comes first, Restart last.
+    const right = toggle!.parentElement!
+    expect(right.firstElementChild).toBe(toggle)
+    expect(right.lastElementChild?.getAttribute('aria-label')).toBe('Refresh session')
+    expect(document.querySelectorAll('[data-mode-toggle]')).toHaveLength(1)
+  })
+
+  it('flipping it here flips the window’s mode', async () => {
+    renderView('terminal')
+    const header = await screen.findByTestId('sidecar-session-header')
+    fireEvent.click(header.querySelector('button[title^="View only"]') as HTMLElement)
+    expect(useWindowModeStore.getState().mode).toBe('viewer')
+    expect(header.querySelector('[data-mode-toggle]')?.getAttribute('data-mode-toggle')).toBe('viewer')
+  })
+
+  it('alone on the pencil: not there', async () => {
+    roomPresence.setState({ roster: [person('owner')] })
+    renderView('terminal')
+    await screen.findByTestId('sidecar-session-header')
+    expect(document.querySelector('[data-mode-toggle]')).toBeNull()
+  })
+
+  it('not in Thread view (its slide-out terminal has no bar) and not in Chatter', async () => {
+    for (const view of ['thread', 'chatter']) {
+      renderView(view)
+      await screen.findByTestId('sidecar-session-header')
+      expect([view, document.querySelector('[data-mode-toggle]')]).toEqual([view, null])
+      cleanup()
+    }
   })
 })

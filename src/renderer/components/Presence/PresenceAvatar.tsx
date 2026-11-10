@@ -5,7 +5,6 @@
 // (filled = owner, hollow = admin, none = member). Role is never a colour,
 // and amber is gone from presence.
 
-import { useConnectHostStore } from '@/stores/connect-host'
 import { PresenceChip, type PresenceRole } from './PresenceChip'
 import type { PersonNames } from '@/lib/person-name'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -36,11 +35,8 @@ export function presenceDisplayName(name: string): string {
   return name === 'owner' ? 'Owner' : name
 }
 
-/** Who you are on the window's server, as its roster names you: `owner`
- *  on this computer, else your saved login's username. */
-export function useSelfPresenceUser(): string {
-  return useConnectHostStore((s) => (s.activeHost === 'local' ? 'owner' : s.activeHost.username || 'owner'))
-}
+/** Who you are on the window's server, as its roster names you. */
+export { useSelfPresenceUser } from './self-presence'
 
 export default function PresenceAvatar({ name, role, size = 20, you, away, imageUrl, pictureScope, title, color, names }: PresenceAvatarProps): React.JSX.Element {
   return (

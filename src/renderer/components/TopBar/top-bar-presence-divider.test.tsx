@@ -17,7 +17,6 @@ vi.mock('@/components/Timer/TimerButton', () => ({ default: () => <span data-stu
 vi.mock('@/components/Timer/UsageButton', () => ({ default: () => <span data-stub="usage" /> }))
 vi.mock('@/components/Timer/KeepAwakeButton', () => ({ default: () => <span data-stub="keep-awake" /> }))
 vi.mock('@/components/Help/HelpButton', () => ({ default: () => <span data-stub="help" /> }))
-vi.mock('@/components/Presence/ModeToggle', () => ({ default: () => <span data-stub="mode" /> }))
 vi.mock('./AdminProfileButton', () => ({ default: () => <span data-stub="admin-profile" /> }))
 
 import { cleanup, render } from '@testing-library/react'
@@ -109,7 +108,26 @@ describe('the presence divider in the top bar', () => {
       </TopBarUtilities>,
     )
     const items = clusterItems()
-    expect(items.filter((i) => i === 'pipe')).toHaveLength(5)
+    expect(items.filter((i) => i === 'pipe')).toHaveLength(4)
     expectNoAdjacentPipes(items)
+  })
+
+  it('0.46.11: no eye/pencil in the top bar, and no pipe left beside its gap', () => {
+    for (const drawers of [false, true]) {
+      render(
+        <TopBarUtilities>
+          {drawers ? <button data-drawer="left" /> : null}
+        </TopBarUtilities>,
+      )
+      expect(document.querySelector('[data-mode-toggle]')).toBe(null)
+      const items = clusterItems()
+      expectNoAdjacentPipes(items)
+      const afterHelp = items.slice(items.indexOf('help') + 1)
+      // Help, then one pipe before the next group (drawers, or Zen/profile).
+      if (afterHelp.length > 0) expect(afterHelp[0]).toBe('pipe')
+      if (drawers) expect(afterHelp.slice(0, 2)).toEqual(['pipe', 'drawer'])
+      expect(items[items.length - 1]).not.toBe('pipe')
+      cleanup()
+    }
   })
 })

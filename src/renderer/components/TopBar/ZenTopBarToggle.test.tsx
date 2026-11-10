@@ -2,8 +2,9 @@
 //
 // prd-zen-gardens-v1 G5 / G63 (TG3.4) — the way into Zen is one square
 // toggle, the LAST item of the shared top-bar cluster: right of the two
-// drawer toggles on Agents and Home (after a pipe), after the mode toggle
-// on pages without drawer toggles (Settings, Feedback). It turns THIS
+// drawer toggles on Agents and Home (after a pipe), after Help on pages
+// without drawer toggles (Settings, Feedback). The eye/pencil left this bar
+// in 0.46.11 (it lives in the terminal's bar). It turns THIS
 // window's Zen on (Shift: safe mode) and is absent where Zen doesn't exist:
 // Focus / ticket windows. (Windows has it since the G-Win smoke.) (The web client is
 // `components/Zen/zen-web.test.tsx`.)
@@ -24,7 +25,6 @@ vi.mock('@/components/Timer/UsageButton', () => ({ default: () => <span data-stu
 vi.mock('@/components/Timer/KeepAwakeButton', () => ({ default: () => <span data-stub="keep-awake" /> }))
 vi.mock('@/components/Help/HelpButton', () => ({ default: () => <span data-stub="help" /> }))
 vi.mock('@/components/Presence/PresenceRoster', () => ({ default: () => <span data-stub="presence" /> }))
-vi.mock('@/components/Presence/ModeToggle', () => ({ default: () => <span data-stub="mode" /> }))
 // Rosson 2026-10-16: the Admin profile button sits right of the Zen toggle
 // (`AdminProfileButton.test.tsx` checks it).
 vi.mock('./AdminProfileButton', () => ({ default: () => <span data-stub="admin-profile" /> }))
@@ -84,8 +84,6 @@ describe('the Zen toggle in the top bar (G5, TG3.4)', () => {
       'keep-awake',
       'help',
       'pipe',
-      'mode',
-      'pipe',
       'left',
       'right',
       'pipe',
@@ -97,9 +95,9 @@ describe('the Zen toggle in the top bar (G5, TG3.4)', () => {
     expect(toggle?.getAttribute('title')).toBe('Zen Mode (⌃⌘Z). Hold Shift for safe mode.')
   })
 
-  it('a page without drawer toggles (Settings, Feedback): after the mode toggle, with its own pipe', () => {
+  it('a page without drawer toggles (Settings, Feedback): after Help, with its own pipe', () => {
     render(<TopBarUtilities />)
-    expect(clusterItems().slice(-4)).toEqual(['mode', 'pipe', 'zen', 'admin-profile'])
+    expect(clusterItems().slice(-4)).toEqual(['help', 'pipe', 'zen', 'admin-profile'])
   })
 
   it('a click turns this window’s Zen on over the current page; Shift starts safe mode', () => {

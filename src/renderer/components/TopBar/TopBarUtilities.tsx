@@ -5,7 +5,6 @@ import KeepAwakeButton from '@/components/Timer/KeepAwakeButton'
 import HelpButton from '@/components/Help/HelpButton'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import VoiceButton from '@/components/Voice/VoiceButton'
-import ModeToggle from '@/components/Presence/ModeToggle'
 import { zenAvailable } from '@/lib/zen/zen-platform'
 import { TopBarFollowRoomContext } from './top-bar-scope'
 import TopBarPipe from './TopBarPipe'
@@ -21,16 +20,20 @@ export function hasTopBarPageToggles(children: ReactNode): boolean {
 /**
  * Right-cluster body shared with TopBar: presence (with its own pipe, only
  * while the roster shows), usage, pipe, timer,
- * keep awake, Help, pipe, mode, then a pipe only when that page has
+ * keep awake, Help, then a pipe only when that page has
  * its own toggles, then (where Zen exists) a pipe and the Zen toggle as the
  * LAST item: right of the drawer toggles on Agents and Home
  * (prd-zen-gardens-v1 G5, G63). The Admin profile button sits right of
  * the Zen toggle, wherever that toggle shows (Rosson 2026-10-16).
  * No Agents run button — pass it as `leading` from TopBar only.
  *
- * 0.43.2 Z36: `followRoom` (TopBar only) lets presence, usage, Keep awake
- * and the mode toggle show a focused remote Home room's server. The timer
- * stays on the window's server. Every other page's bar leaves it off.
+ * 0.43.2 Z36: `followRoom` (TopBar only) lets presence, usage and Keep
+ * awake show a focused remote Home room's server. The timer stays on the
+ * window's server. Every other page's bar leaves it off.
+ *
+ * 0.46.11: the eye/pencil left this bar for the terminal's own bar
+ * (`ModeToggle` in the session header), so Help is followed directly by
+ * the next group's pipe and no divider is left beside a gap.
  */
 export default function TopBarUtilities({
   leading,
@@ -54,8 +57,6 @@ export default function TopBarUtilities({
       <TimerButton />
       <KeepAwakeButton />
       <HelpButton />
-      <TopBarPipe />
-      <ModeToggle />
       {pageToggles ? <TopBarPipe /> : null}
       {children}
       {zenAvailable() || isWebClient() ? <TopBarPipe /> : null}

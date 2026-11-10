@@ -1,7 +1,8 @@
 // Presence S5 — per-WINDOW viewer/claimer mode (PRD §5.3).
 //
-// One mode per Tauri window (not per pane, not per user): the top-right
-// ModeToggle flips it, and every TerminalPane in the window mirrors it
+// One mode per Tauri window (not per pane, not per user): the ModeToggle
+// in a terminal's bar flips it (every bar on screen shows the same
+// window state), and every TerminalPane in the window mirrors it
 // to its grid-WS with `{action:"set_mode", mode}`. The daemon is the
 // AUTHORITY — it gates input/resize/claims per frame against mode AND
 // capability; everything here is advisory UX:
@@ -15,11 +16,13 @@
 //     false only for a login revoked while its socket is still open.
 //
 // The eye/pencil MODE is a per-window input mode, not a login role: any
-// login may flip it, and non-owner windows still start on the eye.
+// login may flip it.
 //
 // DEFAULT (derived ONCE from whoami, the PresenceKickButton cached
-// approach): owner → claimer (local windows keep today's behavior),
-// anything else → viewer. Until whoami resolves the store stays
+// approach): every resolved role → claimer (0.46.11, Rosson: "everyone
+// should be pencil by default"). The daemon still decides what a login
+// may do: a login without input rights gets `capable=false` in the mode
+// ACK and the pencil disables. Until whoami resolves the store stays
 // UNRESOLVED and nothing is suppressed or sent — the daemon's own
 // defaults (owner connections claimer, everyone else viewer) already
 // enforce the right thing, so a transient whoami failure can never
@@ -32,12 +35,12 @@ import { useToastStore } from '@/stores/toast'
 
 export type WindowMode = 'viewer' | 'claimer'
 
-/** Pure default rule (unit-tested): owner → claimer, any other resolved
- *  role → viewer. `null` (whoami failed / pre-role daemon) → no default;
- *  the store stays unresolved and the daemon defaults rule. */
+/** Pure default rule (unit-tested): any resolved role → claimer (the
+ *  pencil). `null` (whoami failed / pre-role daemon) → no default; the
+ *  store stays unresolved and the daemon defaults rule. */
 export function deriveDefaultMode(role: string | null): WindowMode | null {
   if (role === null) return null
-  return role === 'owner' ? 'claimer' : 'viewer'
+  return 'claimer'
 }
 
 interface WindowModeState {
@@ -71,8 +74,10 @@ export function isViewerModeActive(): boolean {
   return s.resolved && s.mode === 'viewer'
 }
 
+/** Where to switch back: the eye/pencil sits in the terminal's bar, and
+ *  always shows there while the window is on the eye. */
 export const VIEWER_BLOCKED_TOAST =
-  "you're in view mode, change to edit mode on the top-right."
+  "You're in view mode. Switch to edit with the pencil in the terminal's bar."
 
 const VIEWER_TOAST_THROTTLE_MS = 3500
 let lastViewerToastAt = 0

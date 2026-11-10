@@ -1,6 +1,6 @@
 // prd-zen-gardens-v1 G5 — the way into Zen: one square toggle at the end of
 // the top bar's right cluster, right of the drawer toggles on Agents and
-// Home (after the mode toggle on pages without them). Zen is a mode of the
+// Home (after Help on pages without them). Zen is a mode of the
 // window, so it turns THIS window's Zen on; the page underneath stays put.
 // Shift-click starts it in safe mode (Z29). In Settings' bar it closes
 // Settings and enters Zen. It renders nothing where Zen doesn't exist: the

@@ -37,6 +37,7 @@ import { onActiveHostChange } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
 import { registerPrimaryRoomPresence } from '@/stores/primary-room-sources'
 import { asNameMap, type PersonNames } from '@/lib/person-name'
+import { usersForWorkspace, workspacePathsOverlap } from '@/lib/presence-workspace'
 
 // Re-export the wire row type under the name the components use — the
 // shape is FROZEN against `presence.rs::RosterUser` (S1).
@@ -147,26 +148,9 @@ export function shouldShowRoster(roster: RosterUser[], supported: boolean): bool
 /** Max mini avatars on a nav row before the `+N` overflow chip (S6). */
 export const MAX_WORKSPACE_AVATARS = 3
 
-/** One direction of the join: does `subscribed` cover `path`? EXACT
- *  mirror of the daemon's `event_matches_workspace` normalization
- *  (`crates/k2-daemon/src/session_events_ws.rs`): trim ALL trailing
- *  slashes off the subscribed path, then match when the trimmed paths
- *  are equal OR `path` starts with `<trimmed>/` — the appended slash
- *  enforces the segment boundary (`/a/b` must NOT cover `/a/bc`). An
- *  empty subscribed path normalizes to the `/` prefix (covers every
- *  absolute path), same as the daemon. */
-function pathCovers(subscribed: string, path: string): boolean {
-  const trimmed = subscribed.replace(/\/+$/, '')
-  const prefixWithSlash = trimmed === '' ? '/' : `${trimmed}/`
-  return path.replace(/\/+$/, '') === trimmed || path.startsWith(prefixWithSlash)
-}
-
-/** Symmetric prefix overlap: true when either path sits at or under the
- *  other (after the daemon's trailing-slash normalization). Pure —
- *  unit-tested directly. */
-export function workspacePathsOverlap(a: string, b: string): boolean {
-  return pathCovers(a, b) || pathCovers(b, a)
-}
+// The join itself is side-effect free (`lib/presence-workspace.ts`) so a
+// control can use it without loading this store's event wiring.
+export { workspacePathsOverlap, usersForWorkspace }
 
 /** True when at most one human is subscribed to this workspace path
  *  (or presence is unsupported — treat as single-player). */
@@ -178,18 +162,6 @@ export function isSoleWorkspaceViewer(
   if (!supported) return true
   if (!path) return true
   return usersForWorkspace(roster, path).length <= 1
-}
-
-/** The roster rows to show on a nav row for `path` (daemon ordering
- *  preserved). A user with multiple windows carries every subscribed
- *  workspace in one row, so they appear on EVERY matching nav row. An
- *  empty row path selects nobody (only subscriptions normalize to the
- *  match-all `/`, never nav rows). */
-export function usersForWorkspace(roster: RosterUser[], path: string): RosterUser[] {
-  if (!path) return []
-  return roster.filter(
-    (u) => Array.isArray(u.workspaces) && u.workspaces.some((w) => workspacePathsOverlap(w, path)),
-  )
 }
 
 // ── Event wiring (module-scope, mirrors active-agents conventions) ────────

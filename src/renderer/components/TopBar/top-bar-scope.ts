@@ -2,9 +2,10 @@
 // (prd-home-seamless-0432 Z14–Z20, vs-live Z34–Z36).
 //
 // When a remote Home room is focused, the Agents/Home top bar shows THAT
-// room's server: the switcher label, the presence roster, the usage chip,
-// Keep awake and the mode toggle. The timer and the Tickets badge stay on
-// the window's server (Z15, Z18).
+// room's server: the switcher label, the presence roster, the usage chip
+// and Keep awake. The timer and the Tickets badge stay on the window's
+// server (Z15, Z18). The eye/pencil left the top bar in 0.46.11: a room's
+// terminal bar shows the room's mode (`ModeToggle`).
 //
 //   - Following is opt-in (Z36): only `TopBar.tsx` passes `followRoom`.
 //     Settings, Projects, Wiki, Tickets, Focus and the gate chrome never

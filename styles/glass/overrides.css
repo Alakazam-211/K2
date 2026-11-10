@@ -279,8 +279,10 @@
   box-shadow: none;
 }
 [data-style="glass"] [data-settings-card]:not([data-zen-root] *) { border-radius: var(--radius-box); }
-/* The mode toggle is two circles, like the page tabs: the lit one is filled. */
-[data-style="glass"] [data-mode-toggle]:not([data-zen-root] *) { border-width: 0; border-radius: var(--radius-pill); }
+/* The mode toggle is two circles, like the page tabs: the lit one is filled.
+   It sits in the terminal's bar (0.46.11), so the circles are its own. */
+[data-style="glass"] [data-mode-toggle]:not([data-zen-root] *) { border-width: 0; border-radius: var(--radius-pill); gap: 4px; }
+[data-style="glass"] [data-mode-toggle] button:not([data-zen-root] *) { border-radius: var(--radius-pill); }
 /* With no rim round the pair, the lit half needs a firmer wash than a hover. */
 [data-style="glass"] [data-mode-toggle] button[aria-pressed="true"]:not([data-zen-root] *) {
   background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);

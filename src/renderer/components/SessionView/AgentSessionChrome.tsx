@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react'
 import { subscribeThreadAddress, threadAddressChangeMatches } from '@/lib/thread-address-bus'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import {
@@ -34,6 +34,7 @@ import { useRoom } from '@/components/Room/RoomContext'
 import { SessionTokenPicker } from '@/components/Settings/shared/LlmLoginPicker'
 import { roomProjectForCwd } from '@/stores/room'
 import type { ServerScope } from '@/kessel/server-scope'
+import ModeToggle, { ModeToggleSessionContext, type ModeToggleSession } from '@/components/Presence/ModeToggle'
 
 interface AgentSessionChromeProps {
   /** Sidecar handle (`sales/reviewer`) or pinned workspace handle. */
@@ -105,6 +106,8 @@ export function AgentSessionChrome({
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
+  // The eye/pencil in any bar of this session reads who else is on it.
+  const modeSession = useMemo<ModeToggleSession>(() => ({ path: cwd ?? null, room }), [cwd, room])
 
   const handleRefresh = useCallback(async () => {
     if (refreshing) return
@@ -164,6 +167,7 @@ export function AgentSessionChrome({
         projectPath: cwd,
       }}
     >
+      <ModeToggleSessionContext.Provider value={modeSession}>
       <div className="relative h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
         <PlacedSessionHeader
           placed={split.placed}
@@ -232,6 +236,7 @@ export function AgentSessionChrome({
           </SplitChromeSlotsContext.Provider>
         </div>
       </div>
+      </ModeToggleSessionContext.Provider>
     </SessionViewChromeContext.Provider>
   )
 }
@@ -244,6 +249,13 @@ function Remount({ children }: { children: ReactNode }): JSX.Element {
  *  split view until its columns are there). Thread view's objects that have
  *  no bar form (the terminal toggle, the bell, search) are not among them. */
 export const BAR_CONTROLS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>(['view', 'token', 'history', 'refresh'])
+
+/** The eye/pencil (`ModeToggle`) sits on Terminal view's bar only: where a
+ *  terminal is shown. Not Thread view's floats (its slide-out terminal has
+ *  no bar), not Chatter. Split view places its own. */
+export function barShowsModeToggle(viewTab: SessionViewTab, place: ThreadFloatsPlace | null): boolean {
+  return place === null && viewTab === 'terminal'
+}
 
 /** Where a session header floats: Thread view, Chatter view, or split
  *  view's Thread (else Chatter) column; null is a bar. */
@@ -361,6 +373,7 @@ export function SidecarSessionHeader({
           </span>
         )}
         <div className={floating ? 'relative z-[1] flex min-w-0 items-center justify-end gap-1.5 thread-float-group' : 'flex min-w-0 items-center justify-end gap-1'}>
+        {barShowsModeToggle(viewTab, place) ? <ModeToggle /> : null}
         {shows('token') ? tokenPicker : null}
         {shows('refresh') ? (
           <button
@@ -411,6 +424,7 @@ export function PinnedSessionBody({
   setThreadPanel,
   projectPath,
   splitSlots,
+  modeToggleSession,
   children,
 }: {
   viewTab: SessionViewTab
@@ -431,8 +445,15 @@ export function PinnedSessionBody({
   projectPath?: string
   /** Split view's places for the header (`useSplitChrome`). */
   splitSlots?: SplitChromeSlots
+  /** The session for an eye/pencil drawn inside the body (split view's bar). */
+  modeToggleSession?: ModeToggleSession
   children: ReactNode
 }): JSX.Element {
+  const body = (
+    <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
+      <SplitChromeSlotsContext.Provider value={splitSlots ?? null}>{children}</SplitChromeSlotsContext.Provider>
+    </div>
+  )
   return (
     <SessionViewChromeContext.Provider
       value={{
@@ -450,9 +471,11 @@ export function PinnedSessionBody({
         projectPath,
       }}
     >
-      <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
-        <SplitChromeSlotsContext.Provider value={splitSlots ?? null}>{children}</SplitChromeSlotsContext.Provider>
-      </div>
+      {modeToggleSession ? (
+        <ModeToggleSessionContext.Provider value={modeToggleSession}>{body}</ModeToggleSessionContext.Provider>
+      ) : (
+        body
+      )}
     </SessionViewChromeContext.Provider>
   )
 }

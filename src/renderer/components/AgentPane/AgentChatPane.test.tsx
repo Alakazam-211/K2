@@ -250,6 +250,10 @@ import { AgentChatPane } from './AgentChatPane'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { useTabsStore } from '@/stores/tabs'
 import { sessionViewTabStorageKey } from '@/components/SessionView/sessionViewTab'
+import { createStore } from 'zustand/vanilla'
+import type { PresenceView } from '@/stores/server-view'
+
+const EMPTY_PRESENCE = createStore<PresenceView>(() => ({ roster: [], supported: true }))
 
 // Home M3 — the pane reads its room: the mocked tabs store, this suite's
 // project list, and an activity sink (MS68). The scope is the primary one,
@@ -265,6 +269,8 @@ const room = testRoom({
     getInitialState: () => ({ activeProjectIds: h.activeIds.value }),
     subscribe: () => () => {},
   },
+  // The terminal bar's eye/pencil reads who else is here: just you.
+  presence: EMPTY_PRESENCE,
 })
 
 beforeEach(() => {
@@ -1242,6 +1248,7 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
       getInitialState: () => ({ activeProjectIds: h.activeIds.value }),
       subscribe: () => () => {},
     },
+    presence: EMPTY_PRESENCE,
   })
   const getRoutes = (): string[] => h.daemonCliGet.mock.calls.map((c) => c[0])
 

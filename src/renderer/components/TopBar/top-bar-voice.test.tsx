@@ -16,7 +16,6 @@ vi.mock('@/components/Timer/TimerButton', () => ({ default: () => <span data-stu
 vi.mock('@/components/Timer/UsageButton', () => ({ default: () => <span data-stub="usage" /> }))
 vi.mock('@/components/Timer/KeepAwakeButton', () => ({ default: () => <span data-stub="keep-awake" /> }))
 vi.mock('@/components/Help/HelpButton', () => ({ default: () => <span data-stub="help" /> }))
-vi.mock('@/components/Presence/ModeToggle', () => ({ default: () => <span data-stub="mode" /> }))
 vi.mock('./AdminProfileButton', () => ({ default: () => <span data-stub="admin-profile" /> }))
 // The real button needs a voice server; here it always shows.
 vi.mock('@/components/Voice/VoiceButton', () => ({

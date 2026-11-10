@@ -163,13 +163,14 @@
   padding: 2px 8px;
   gap: 4px;
 }
-[data-style="glass"] [data-page-tabs]:not([data-zen-root] *) { padding-block: 3px; }
+/* The selected pill sits the same 3px in from the capsule on every side, like the phone's thumb. */
+[data-style="glass"] [data-page-tabs]:not([data-zen-root] *) { padding: 3px; }
 [data-style="glass"] [data-chrome="bar"] button[data-nav-picker]:not([data-zen-root] *) { height: var(--k2-topbar-height); }
 /* The server menu clears the pill. From the bar's centre, so it opens in the
    same place when Home has no trigger. */
 [data-style="glass"] [data-server-switcher] > div:not([data-zen-root] *) { top: calc(50% + 20px); }
 /* The selected page tab is the phone's Home | Agents thumb: a blue pill. */
-[data-style="glass"] [data-page-tab]:not([data-zen-root] *) { border-radius: var(--radius-pill); }
+[data-style="glass"] [data-page-tab]:not([data-zen-root] *) { border-radius: var(--radius-pill); width: 24px; height: 24px; padding: 0; }
 [data-style="glass"] [data-page-tab][data-selected]:not([data-zen-root] *) {
   background: var(--color-accent);
   color: var(--color-on-accent);

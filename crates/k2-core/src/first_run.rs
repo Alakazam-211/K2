@@ -23,7 +23,8 @@
 //!
 //! **Finished.** When every row shown to the caller is done or skipped, the
 //! daemon writes `finished_at` once; it stays until `show`, even if a row
-//! comes undone later (that surface handles it, not this list).
+//! comes undone later (that surface handles it, not this list). `show`
+//! clears hidden, finished and skips, so a skipped row is to do again.
 //!
 //! **Existing installs (K2 Q-A).** Migration 0290 sets `existing_cutoff`
 //! only on a server already in use. A person with no row then counts as
@@ -141,7 +142,8 @@ pub struct PersonRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Hide,
-    /// Clears hidden and finished (skips stay).
+    /// Clears hidden, finished and skips: every row not done is to do
+    /// again (otherwise the next read would finish the list at once).
     Show,
     Skip(String),
 }
@@ -325,7 +327,7 @@ pub fn apply_on(
         }
         Action::Show => {
             conn.execute(
-                "UPDATE first_run_person SET hidden_at = NULL, finished_at = NULL WHERE person_key = ?1",
+                "UPDATE first_run_person SET hidden_at = NULL, finished_at = NULL, skipped_json = '[]' WHERE person_key = ?1",
                 params![person],
             )?;
         }

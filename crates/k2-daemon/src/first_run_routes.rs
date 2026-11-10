@@ -6,7 +6,7 @@
 //! |---|---|---|---|
 //! | GET  | `/cli/first-run/status` | | `{enabled, hidden, finished, rows[{id, state, opens, note?}]}` |
 //! | POST | `/cli/first-run/hide` | | the same body |
-//! | POST | `/cli/first-run/show` | | the same body (hidden and finished cleared) |
+//! | POST | `/cli/first-run/show` | | the same body (hidden, finished and skips cleared) |
 //! | POST | `/cli/first-run/skip` | `{"row": "<id>"}` | the same body |
 //!
 //! **Who.** A person only: the owner token or a Connect login at the
@@ -264,6 +264,13 @@ mod tests {
             }
         }
         assert!(saw, "skip sends first_run_changed to the owner");
+
+        // show clears the skip: the row is to do again.
+        let r = handle(true, SHOW_PATH, b"", &Actor::owner_token());
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["rows"][2], json!({ "id": "tunnel", "state": "todo", "opens": "tunnel" }));
+        assert_eq!(v["finished"], json!(false));
 
         let r = handle(true, SKIP_PATH, br#"{"row":"nope"}"#, &Actor::owner_token());
         assert_eq!(r.status, "400 Bad Request");

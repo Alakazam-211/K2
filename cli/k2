@@ -50810,7 +50810,7 @@ _setup_usage() {
     cat <<'EOF'
 k2 setup [--json]       your setup list on this server: [x] done, [ ] to do, [-] skipped
 k2 setup hide           hide the list in the app (k2 setup still prints it)
-k2 setup show           bring the list back, even after it finished
+k2 setup show           bring the list back, skipped steps included, even after it finished
 k2 setup skip <step>    skip one step: llm_sign_in, first_agent, tunnel, phone, own_sign_in
 
 Each step is done by doing it: the list reads what is set up on this

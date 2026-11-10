@@ -308,6 +308,26 @@ fn finishing_writes_once_and_stays_finished_after_a_row_comes_undone() {
 }
 
 #[test]
+fn show_brings_a_skipped_row_back_as_todo() {
+    let conn = db();
+    let p = people();
+    let member = Viewer::Login(Role::Member);
+    let f = Facts { has_agent: true, ..Facts::default() };
+    let s = apply_on(&conn, &p, "anna", member, &f, true, &Action::Skip("phone".into()), 1).expect("skip");
+    assert!(s.finished && s.newly_finished, "the skip finished the list");
+    assert_eq!(row(&s.rows, "phone").state, State::Skipped);
+    let s = apply_on(&conn, &p, "anna", member, &f, true, &Action::Show, 2).expect("show");
+    assert!(!s.finished && !s.newly_finished, "show reopens it: {s:?}");
+    assert_eq!(row(&s.rows, "phone").state, State::Todo, "the skipped row is to do again");
+    assert_eq!(row(&s.rows, "first_agent").state, State::Done, "done rows stay done");
+    // The next read does not finish it again.
+    let s = status_on(&conn, &p, "anna", member, &f, true, 3).expect("read");
+    assert!(!s.finished);
+    assert_eq!(row(&s.rows, "phone").state, State::Todo);
+    assert!(load_record(&conn, "anna").expect("load").expect("row").skipped.is_empty());
+}
+
+#[test]
 fn skipping_the_last_open_row_finishes_the_list() {
     let conn = db();
     let p = people();

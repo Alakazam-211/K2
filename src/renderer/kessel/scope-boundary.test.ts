@@ -134,6 +134,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/DisableWorktreesDialog.tsx',
   'components/Settings/sections/AgentsSection.tsx',
   'components/Settings/sections/RemoteDesktopSection.tsx',
+  // 0.46.11 vault send: the confirm for an agent's standing send grant is
+  // about the window's own server's vault (Settings), like the vault rows.
+  'components/Settings/sections/HandoffSendAllow.tsx',
   'components/Settings/sections/ApiTokensSection.tsx',
   'components/Settings/sections/api-keys-api.ts',
   // 0.46.5 App phone pairing: an App's phone-app config is about the

@@ -1332,6 +1332,24 @@ mod tests {
         assert_eq!(event_scope_path(&ev), None, "app-level by path");
     }
 
+    /// prd-setup-checklist-v1: `first_run_changed` carries nothing on the
+    /// wire; with a person only that person's sockets get it, without one
+    /// every socket does.
+    #[test]
+    fn first_run_frame_is_person_scoped_when_it_names_a_person() {
+        let ev = SessionEvent::FirstRunChanged { person: Some("gina".into()) };
+        let json: serde_json::Value = serde_json::from_str(&serde_json::to_string(&ev).expect("ser")).expect("json");
+        assert_eq!(json, serde_json::json!({ "kind": "first_run_changed" }));
+        assert_eq!(ev.kind_name(), "first_run_changed");
+        assert!(person_may_see(&ev, Some("gina")));
+        assert!(!person_may_see(&ev, Some("owner")), "another person's socket");
+        assert!(!person_may_see(&ev, None), "an unresolved socket gets no person frames");
+        assert_eq!(event_scope_path(&ev), None, "app-level by path");
+        let all = SessionEvent::FirstRunChanged { person: None };
+        assert_eq!(serde_json::to_value(&all).expect("json"), serde_json::json!({ "kind": "first_run_changed" }));
+        assert!(person_may_see(&all, Some("gina")) && person_may_see(&all, None), "no person: every socket");
+    }
+
     /// homes-sync-v1: the Homes frames' wire shape (the phone contract) and
     /// their routing: only a socket of the same person gets them, and the
     /// person key never rides the wire.

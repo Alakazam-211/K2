@@ -254,9 +254,9 @@ mod tests {
         assert_eq!(v["rows"][2], json!({ "id": "tunnel", "state": "skipped", "opens": "tunnel" }));
         let mut saw = false;
         while let Ok(ev) = rx.try_recv() {
+            // Other tests in this process may send their own frames.
             if let SessionEvent::FirstRunChanged { person } = ev {
-                assert_eq!(person.as_deref(), Some("owner"));
-                saw = true;
+                saw |= person.as_deref() == Some("owner");
             }
         }
         assert!(saw, "skip sends first_run_changed to the owner");

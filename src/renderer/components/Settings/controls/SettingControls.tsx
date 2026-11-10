@@ -34,9 +34,11 @@ export const SETTING_FIELD_WIDTH = 'w-60'
  *  stays). Wrap the avatar, so other surfaces keep theirs. */
 export const AVATAR_ROUND = 'inline-flex flex-shrink-0 overflow-hidden rounded-[var(--radius-field)]'
 
-/** Row label and hint, one role each, so a label reads the same in every row. */
+/** Row label and hint, one role each, so a label reads the same in every row.
+ *  A hint wraps at a reading measure (about 75 characters a line), so a long
+ *  one never runs the full width of a wide window. */
 export const SETTING_ROW_LABEL = 'type-row text-[var(--color-text-primary)]'
-export const SETTING_ROW_HINT = 'type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed'
+export const SETTING_ROW_HINT = 'type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed max-w-[75ch]'
 
 export function SettingRow({
   label,

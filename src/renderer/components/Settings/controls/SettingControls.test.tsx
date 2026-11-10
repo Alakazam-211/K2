@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { menuLayerForTrigger, SettingDropdown } from './SettingControls'
+import { menuLayerForTrigger, SETTING_ROW_HINT, SettingDropdown, SettingRow, SettingsGroup } from './SettingControls'
 
 function triggerUnder(...layers: Array<{ zIndex?: string; position?: string }>): HTMLElement {
   const root = document.createElement('div')
@@ -98,6 +98,32 @@ describe('SettingDropdown menu layer', () => {
     expect(box.className).not.toContain('--color-bg-surface')
     expect(box.className).not.toContain('--color-bg-elevated')
     expect(menu.getAttribute('style') ?? '').not.toContain('z-index: 9999')
+  })
+
+  it('is frosted floating chrome in Glass, and keeps the table\'s material in a Garden', () => {
+    render(<WorkspaceDropdown zIndex={0} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace' }))
+    const box = screen.getByTestId('setting-dropdown-menu').firstElementChild as HTMLElement
+    expect(box.getAttribute('data-material')).toBe('frost')
+    expect(box.getAttribute('data-float')).toBe('menu')
+    cleanup()
+    render(<div data-zen-root=""><WorkspaceDropdown zIndex={0} /></div>)
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace' }))
+    const garden = screen.getByTestId('setting-dropdown-menu').firstElementChild as HTMLElement
+    expect(garden.getAttribute('data-material')).not.toBe('frost')
+  })
+})
+
+describe('Hints', () => {
+  it('wrap at a reading measure, in rows and under a group title', () => {
+    render(
+      <SettingsGroup title="Group" hint="Group hint" card>
+        <SettingRow label="Row" hint="Row hint"><span /></SettingRow>
+      </SettingsGroup>,
+    )
+    expect(screen.getByText('Group hint').className).toContain('max-w-[75ch]')
+    expect(screen.getByText('Row hint').className).toContain('max-w-[75ch]')
+    expect(SETTING_ROW_HINT).toContain('max-w-[75ch]')
   })
 })
 

@@ -16,8 +16,8 @@
 //!   `behavior`, `-moz-binding`): such a `style` goes whole;
 //! - **links don't navigate**: an `a` keeps its target only as
 //!   `data-k2-link` (http, https or mailto), never as `href`, so a click in
-//!   the frame goes nowhere. The reader shows the target and opens it
-//!   through K2 after a confirm.
+//!   the frame goes nowhere. When the sender gave the link no `title`, the
+//!   target becomes its title too, so hovering shows where it really goes.
 //!
 //! `ammonia` (MIT OR Apache-2.0) does the parsing and the allowlist; it is
 //! already this crate's dependency (the ticket brief cleaner).
@@ -126,9 +126,11 @@ fn builder(blocked: Arc<AtomicBool>) -> ammonia::Builder<'static> {
 }
 
 /// Rename every `href` attribute on an `a` start tag in ammonia's output to
-/// `data-k2-link`. ammonia serializes every attribute as `name="value"`
-/// with `"` escaped inside values and `<` escaped in text, so a scan that
-/// tracks double quotes inside tags is exact here.
+/// `data-k2-link`, and give a link with no `title` its target as the title.
+/// ammonia serializes every attribute as `name="value"` with `"` escaped
+/// inside values and `<` escaped in text, so a scan that tracks double
+/// quotes inside tags is exact here (and a value copied from one attribute
+/// to another stays escaped).
 fn hrefs_to_data_links(html: &str) -> String {
     let bytes = html.as_bytes();
     let mut out = String::with_capacity(html.len() + 32);
@@ -161,19 +163,33 @@ fn hrefs_to_data_links(html: &str) -> String {
         let tb = tag.as_bytes();
         let mut k = 0;
         let mut q = false;
+        let mut has_title = false;
+        let mut target: Option<String> = None;
         while k < tb.len() {
             if tb[k] == b'"' {
                 q = !q;
             }
+            if !q && tb[k] == b' ' && tag[k + 1..].starts_with("title=\"") {
+                has_title = true;
+            }
             if !q && tb[k] == b' ' && tag[k + 1..].starts_with("href=\"") {
                 rewritten.push_str(" data-k2-link=\"");
                 k += " href=\"".len();
+                let close = tag[k..].find('"').map(|p| p + k).unwrap_or(tag.len());
+                target = Some(tag[k..close].to_string());
                 q = true;
                 continue;
             }
             let ch_end = tag[k..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
             rewritten.push_str(&tag[k..k + ch_end]);
             k += ch_end;
+        }
+        if let (Some(t), false) = (target, has_title) {
+            // `<a …>` → `<a … title="target">` (before the closing `>`).
+            if rewritten.ends_with('>') {
+                rewritten.pop();
+                rewritten.push_str(&format!(" title=\"{t}\">"));
+            }
         }
         out.push_str(&rewritten);
         i = end;
@@ -230,7 +246,14 @@ mod tests {
             "the link target stays visible, inert: {}",
             c.html
         );
-        assert!(c.html.contains(r#"title="Your bank""#), "{}", c.html);
+        assert!(c.html.contains(r#"title="Your bank""#), "the sender's title stays: {}", c.html);
+        assert!(!c.html.contains(r#"title="https://bank.example/login""#), "{}", c.html);
+        let bare = clean_mail_html(r#"<a href="https://x.example/a?b=1&amp;c=2">x</a>"#);
+        assert_eq!(
+            bare.html,
+            r#"<a data-k2-link="https://x.example/a?b=1&amp;c=2" title="https://x.example/a?b=1&amp;c=2">x</a>"#,
+            "no title: the target becomes the hover text"
+        );
         assert!(c.remote_blocked, "the remote pictures and the url() style are reported");
     }
 
@@ -250,6 +273,7 @@ mod tests {
         assert!(c.html.starts_with(r#"<a data-k2-link="https://x.example/?q=&quot;"#), "{}", c.html);
         assert!(c.html.contains(r#"title="t&quot;x""#), "{}", c.html);
         assert!(c.html.ends_with(">go</a><p>then</p>"), "the tag closed where it should: {}", c.html);
+        assert_eq!(c.html.matches("title=").count(), 1, "the sender's title is kept, none added: {}", c.html);
         // Text that looks like an attribute is left alone.
         let t = clean_mail_html(r#"<p>write href="x" here</p>"#);
         assert_eq!(t.html, r#"<p>write href="x" here</p>"#);

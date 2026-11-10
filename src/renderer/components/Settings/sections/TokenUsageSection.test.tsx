@@ -4,7 +4,8 @@
 // it sends (no workspace for All, tz, since, group_by), the Owner/Admin
 // gate by status, live refetch on token_usage_changed, inline errors,
 // the activity log's order and cursors, cost labels, filters that reset on
-// a server switch, the chat link, and the focused room's server.
+// a server switch, the chat link, the focused room's server, and the
+// two-column layout on a wide pane (breakdown beside the chart).
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -56,7 +57,7 @@ vi.mock('@/lib/open-settings-page', () => ({
   openSettingsPage: async (section: string) => h.openSettings(section),
 }))
 
-import { ROLE_GATE_TEXT, TokenUsageSection } from './TokenUsageSection'
+import { ROLE_GATE_TEXT, TokenUsageSection, USAGE_TWO_COLUMN_MIN_PX } from './TokenUsageSection'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { usePageViewStore } from '@/stores/page-view'
@@ -400,6 +401,133 @@ describe('who may see it', () => {
     expect(screen.getByText('The chart couldn’t load')).toBeTruthy()
     expect(screen.getByTestId('usage-tiles')).toBeTruthy()
     expect(screen.getByTestId('usage-breakdown')).toBeTruthy()
+  })
+})
+
+describe('on a wide pane', () => {
+  // jsdom has no layout: the test sets the page's measured width.
+  let paneWidth = USAGE_TWO_COLUMN_MIN_PX
+  const observers = new Set<() => void>()
+  class FakeResizeObserver {
+    private cb: () => void
+    constructor(cb: () => void) {
+      this.cb = cb
+    }
+    observe(): void {
+      observers.add(this.cb)
+    }
+    unobserve(): void {}
+    disconnect(): void {
+      observers.delete(this.cb)
+    }
+  }
+  const resizePane = (width: number): void => {
+    paneWidth = width
+    act(() => {
+      for (const cb of observers) cb()
+    })
+  }
+  const realClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+
+  beforeEach(() => {
+    paneWidth = USAGE_TWO_COLUMN_MIN_PX
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.dataset.usagePage !== undefined ? paneWidth : 0
+      },
+    })
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+  })
+
+  afterEach(() => {
+    cleanup()
+    observers.clear()
+    vi.unstubAllGlobals()
+    if (realClientWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', realClientWidth)
+  })
+
+  const page = (): HTMLElement => {
+    const el = document.querySelector<HTMLElement>('[data-usage-page]')
+    if (!el) throw new Error('no usage page')
+    return el
+  }
+
+  it('puts the breakdown and plan limits beside the totals and chart, ranked by the picked total', async () => {
+    h.answer = (route, params) => {
+      // Codex wrote more output from fewer requests: the ranking follows the tile.
+      if (route === 'usage/tokens' && params?.group_by === 'harness') {
+        return { ...report(params), groups: [{ key: 'claude', label: 'claude', ...totals(25) }, { key: 'codex', label: 'codex', ...totals(7, { output_tokens: 150 }) }] }
+      }
+      return defaultAnswer(route, params)
+    }
+    await renderPage()
+    expect(page().dataset.usageLayout).toBe('two-column')
+    const columns = screen.getByTestId('usage-columns')
+    const [left, right] = Array.from(columns.children) as HTMLElement[]
+    expect(within(left).getByTestId('usage-tiles')).toBeTruthy()
+    expect(within(left).getByTestId('usage-chart')).toBeTruthy()
+    expect(within(right).getByTestId('usage-breakdown').dataset.breakdownLayout).toBe('list')
+    expect(await within(right).findByTestId('usage-limits-strip')).toBeTruthy()
+    // Activity spans both columns, under them.
+    expect(columns.contains(screen.getByTestId('usage-activity'))).toBe(false)
+
+    // One number per row: the picked total, its share and a bar.
+    expect(screen.getByTestId('usage-breakdown-measure').textContent).toBe('Output')
+    const k2 = screen.getByTestId('usage-breakdown-row-/w/k2')
+    expect(within(k2).getByTestId('usage-breakdown-share').textContent).toBe('94%')
+    expect(within(k2).getByRole('button', { name: 'Show only K2, Output 60, 94% of this range' })).toBeTruthy()
+    expect(within(screen.getByTestId('usage-breakdown-row-outside')).getByTestId('usage-breakdown-share').textContent).toBe('6%')
+
+    fireEvent.click(screen.getByTestId('usage-tab-harness'))
+    await screen.findByTestId('usage-breakdown-row-codex')
+    const order = (): string[] =>
+      within(screen.getByTestId('usage-breakdown-rows'))
+        .getAllByTestId(/^usage-breakdown-row-/)
+        .map((r) => r.getAttribute('data-testid')?.replace('usage-breakdown-row-', '') ?? '')
+    expect(order()).toEqual(['codex', 'claude'])
+    fireEvent.click(screen.getByTestId('usage-tile-requests'))
+    expect(screen.getByTestId('usage-breakdown-measure').textContent).toBe('Requests')
+    expect(order()).toEqual(['claude', 'codex'])
+    expect(within(screen.getByTestId('usage-breakdown-row-claude')).getByTestId('usage-breakdown-share').textContent).toBe('78%')
+  })
+
+  it('falls back to one column below the width, and follows the pane as it resizes', async () => {
+    paneWidth = USAGE_TWO_COLUMN_MIN_PX - 1
+    await renderPage()
+    expect(page().dataset.usageLayout).toBe('one-column')
+    expect(screen.queryByTestId('usage-columns')).toBeNull()
+    expect(screen.getByTestId('usage-breakdown').dataset.breakdownLayout).toBe('table')
+    // One column: plan limits lead, as before.
+    const strip = await screen.findByTestId('usage-limits-strip')
+    expect(strip.compareDocumentPosition(screen.getByTestId('usage-tokens')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    resizePane(USAGE_TWO_COLUMN_MIN_PX)
+    expect(page().dataset.usageLayout).toBe('two-column')
+    expect(screen.getByTestId('usage-breakdown').dataset.breakdownLayout).toBe('list')
+    resizePane(USAGE_TWO_COLUMN_MIN_PX - 40)
+    expect(page().dataset.usageLayout).toBe('one-column')
+  })
+
+  it('an empty range is one card across the page, not two columns', async () => {
+    h.answer = (route, params) => {
+      if (route === 'usage/tokens') return { ...report(params), total: totals(0), days: [], groups: [] }
+      if (route === 'usage/turns') return { rows: [], next_cursor: null, has_more: false }
+      return defaultAnswer(route, params)
+    }
+    render(<TokenUsageSection />)
+    await screen.findByTestId('usage-empty')
+    expect(page().dataset.usageLayout).toBe('one-column')
+    expect(screen.queryByTestId('usage-columns')).toBeNull()
+  })
+
+  it('while the numbers load, the breakdown holds its place and says so', async () => {
+    h.answer = (route, params) => (route === 'usage/tokens' ? new Promise(() => {}) : defaultAnswer(route, params))
+    render(<TokenUsageSection />)
+    const loading = await screen.findByTestId('usage-breakdown-loading')
+    expect(loading.textContent).toContain('Loading the breakdown…')
+    expect(screen.getByTestId('usage-columns').contains(loading)).toBe(true)
+    expect(screen.getByTestId('usage-tiles').getAttribute('aria-busy')).toBe('true')
   })
 })
 

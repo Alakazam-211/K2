@@ -1,7 +1,10 @@
 // Settings → Language Models → Usage (page id `token-usage`), Usage v2.
 //
 // One page in the Settings family (like Workspaces / Agents): a title with
-// one line under it, then card groups at one content width.
+// one line under it, then card groups at one content width. On a wide pane
+// (USAGE_TWO_COLUMN_MIN_PX, measured, not the window) it goes two-column:
+// totals and chart on the left; the breakdown, ranked by the picked total,
+// and plan limits on the right; activity across both under them.
 //   - Plan limits: each tool's default login, linking to Subs / Tokens.
 //   - One filter bar: the range (Today … All time) and, when a workspace is
 //     open, All workspaces / This workspace. Rows picked in the breakdown
@@ -57,6 +60,7 @@ import {
   filterForGroup,
   fmtCompact,
   fmtExact,
+  harnessColor,
   harnessLabel,
   harnessRank,
   hasFilters,
@@ -69,7 +73,8 @@ import {
   type UsageRange,
 } from './usage/usage-page'
 import { Button, Segmented, Surface } from '@/components/ui'
-import { SettingsGroup } from '../controls/SettingControls'
+import { useElementWidth } from '@/hooks/useElementWidth'
+import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 
 export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
   {
@@ -135,6 +140,35 @@ export function breakdownRows(report: UsageReport, tab: BreakdownTab, projects: 
 
 /** The page's content width, the same as Workspaces / Agents and General. */
 const CONTENT_WIDTH = 'max-w-[52rem]'
+
+/** Page width (px) from which Usage goes two-column: the left column keeps
+ *  room for three totals a row and a readable chart (about 41rem or more),
+ *  the right one a breakdown (22rem or more). The same in every theme;
+ *  measured from the page, so it follows the Settings pane, not the window. */
+export const USAGE_TWO_COLUMN_MIN_PX = 1040
+
+/** Two columns: wide enough to use a big display, short of an ultra-wide
+ *  one's lines too long to follow. */
+const WIDE_CONTENT_WIDTH = 'max-w-[112rem]'
+const WIDE_GRID = 'grid grid-cols-[minmax(0,2fr)_minmax(22rem,1fr)] gap-6 items-start'
+
+/** A card group's title and one line, for a group that isn't one card (the
+ *  totals): the same anatomy as SettingsGroup's. An empty, hidden picker
+ *  keeps the title row as tall as the Breakdown's, which has one, so the two
+ *  columns' headings and cards start on one line in every theme. */
+function GroupHead({ title, hint }: { title: string; hint: string }): React.JSX.Element {
+  return (
+    <div className="mb-2">
+      <div className="flex items-center justify-between gap-4 min-h-[1.5rem]">
+        <h3 className="type-heading text-[var(--color-text-primary)]">{title}</h3>
+        <span aria-hidden="true" className="k2-segmented invisible">
+          <span className="k2-segment">&nbsp;</span>
+        </span>
+      </div>
+      <p className={SETTING_ROW_HINT}>{hint}</p>
+    </div>
+  )
+}
 
 /** A small error mark: a status dot (round only where dots are round). */
 function ErrorDot(): React.JSX.Element {
@@ -219,54 +253,64 @@ function Tiles({
   const tokens = (n: number): string => `${fmtExact(n)} tokens`
   const measures = CHART_MEASURES.filter((m) => m.id !== 'cost' || total === null || cost)
   return (
-    <div
-      role="group"
-      aria-label="Totals for this range"
-      aria-busy={total === null}
-      className="grid grid-cols-2 @xl:grid-cols-3 gap-3"
-      data-testid="usage-tiles"
-    >
-      {measures.map(({ id }) => {
-        if (!total) return <Tile key={id} measure={id} value={placeholder} sub={' '} on={false} onPick={null} />
-        if (id === 'cost') {
+    <section className="@container">
+      <GroupHead title="Totals" hint="Pick one to chart it by day and sort the breakdown by it." />
+      <div
+        role="group"
+        aria-label="Totals for this range"
+        aria-busy={total === null}
+        className="grid grid-cols-2 @xl:grid-cols-3 gap-3"
+        data-testid="usage-tiles"
+      >
+        {measures.map(({ id }) => {
+          if (!total) return <Tile key={id} measure={id} value={placeholder} sub={' '} on={false} onPick={null} />
+          if (id === 'cost') {
+            return (
+              <Tile
+                key={id}
+                measure={id}
+                value={costFigure(cost)}
+                title={COST_LABEL}
+                sub={
+                  unpriced ? (
+                    <span data-testid="usage-tile-cost-unpriced">{unpriced}</span>
+                  ) : (
+                    <span>{cost?.source === 'provider' ? 'As reported, not your bill' : 'At list prices, not your bill'}</span>
+                  )
+                }
+                on={measure === id}
+                onPick={() => onMeasure(id)}
+              />
+            )
+          }
+          const n = measureValue(total, id)
           return (
             <Tile
               key={id}
               measure={id}
-              value={costFigure(cost)}
-              title={COST_LABEL}
-              sub={
-                unpriced ? (
-                  <span data-testid="usage-tile-cost-unpriced">{unpriced}</span>
-                ) : (
-                  <span>{cost?.source === 'provider' ? 'As reported, not your bill' : 'At list prices, not your bill'}</span>
-                )
-              }
+              value={fmtCompact(n)}
+              title={fmtExact(n)}
+              sub={id === 'requests' ? `${fmtExact(n)} calls` : tokens(n)}
               on={measure === id}
               onPick={() => onMeasure(id)}
             />
           )
-        }
-        const n = measureValue(total, id)
-        return (
-          <Tile
-            key={id}
-            measure={id}
-            value={fmtCompact(n)}
-            title={fmtExact(n)}
-            sub={id === 'requests' ? `${fmtExact(n)} calls` : tokens(n)}
-            on={measure === id}
-            onPick={() => onMeasure(id)}
-          />
-        )
-      })}
-    </div>
+        })}
+      </div>
+    </section>
   )
 }
 
 /** The breakdown's number columns, in the totals' order. */
 const BREAKDOWN_COLUMNS: ChartMeasure[] = ['requests', 'input', 'cache_read', 'cache_write', 'output', 'cost']
 const BREAKDOWN_GRID = 'grid grid-cols-[minmax(0,1fr)_repeat(6,5.25rem)] gap-x-3 items-center'
+
+/** "48%", "<1%" or "0%": a row's share of the picked total. */
+function shareText(share: number): string {
+  if (share <= 0) return '0%'
+  if (share < 0.01) return '<1%'
+  return `${Math.round(share * 100)}%`
+}
 
 function Breakdown({
   report,
@@ -275,15 +319,26 @@ function Breakdown({
   projects,
   measure,
   onPick,
+  list,
 }: {
-  report: UsageReport
+  /** Null while the first answer is on its way: the card says so. */
+  report: UsageReport | null
   tab: BreakdownTab
   onTab: (t: BreakdownTab) => void
   projects: readonly UsageNameProject[]
   measure: ChartMeasure
   onPick: (key: string) => void
+  /** Beside the chart (two columns): one row per name with the picked total,
+   *  its share and a bar. Otherwise a table of every total. */
+  list: boolean
 }): React.JSX.Element {
-  const rows = breakdownRows(report, tab, projects)
+  // Ranked by the picked total, biggest first; ties keep the daemon's order.
+  const rows = report
+    ? breakdownRows(report, tab, projects)
+        .map((row, i) => ({ row, i, v: measureValue(row.totals, measure) }))
+        .sort((a, b) => b.v - a.v || a.i - b.i)
+        .map((x) => x.row)
+    : []
   const withCost = rows.some((r) => r.totals.cost)
   const columns = BREAKDOWN_COLUMNS.filter((c) => c !== 'cost' || withCost)
   const tabLabel = BREAKDOWN_TABS.find((t) => t.id === tab)?.label ?? ''
@@ -291,8 +346,24 @@ function Breakdown({
     tab === 'harness' ? key : tab === 'model' && key.indexOf('/') > 0 ? key.slice(0, key.indexOf('/')) : null
   const cell = (row: BreakdownRow, c: ChartMeasure): string => (c === 'cost' ? costFigure(row.totals.cost) : fmtCompact(measureValue(row.totals, c)))
   const exact = (row: BreakdownRow, c: ChartMeasure): string => (c === 'cost' ? COST_LABEL : fmtExact(measureValue(row.totals, c)))
+  const columnLabel = (c: ChartMeasure): string => (c === 'cost' ? 'Est. cost' : MEASURE_LABEL[c])
+  const sum = rows.reduce((n, r) => n + measureValue(r.totals, measure), 0)
+  const rowClass = 'relative w-full px-4 py-2.5 text-left no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-wash-1)]'
+  const name = (row: BreakdownRow, harness: string | null): React.JSX.Element => (
+    <span className="min-w-0 flex items-center gap-2">
+      {harness ? <SeriesKey harness={harness} /> : null}
+      <span className="min-w-0">
+        <span className="block type-name text-[var(--color-text-primary)] truncate">{row.label}</span>
+        {row.sub ? (
+          <span className="block type-hint text-[var(--color-text-secondary)] truncate [direction:rtl] text-left" title={row.sub}>
+            <bdi>{row.sub}</bdi>
+          </span>
+        ) : null}
+      </span>
+    </span>
+  )
   return (
-    <section data-testid="usage-breakdown">
+    <section data-testid="usage-breakdown" data-breakdown-layout={list ? 'list' : 'table'}>
       <SettingsGroup
         title="Breakdown"
         hint="Pick a row to show only that one across the page."
@@ -305,9 +376,59 @@ function Breakdown({
             options={BREAKDOWN_TABS.map((t) => ({ value: t.id, label: t.label, buttonProps: { 'data-testid': `usage-tab-${t.id}` } }))}
           />
         }
+        state={
+          report === null ? (
+            <SettingsLoadState kind="loading" title="Loading the breakdown…" testId="usage-breakdown-loading">
+              Totals by {tabLabel.toLowerCase()} for this range.
+            </SettingsLoadState>
+          ) : undefined
+        }
       >
         {rows.length === 0 ? (
           <p className="px-4 py-6 type-hint text-[var(--color-text-secondary)]">Nothing to break down in this range.</p>
+        ) : list ? (
+          <div data-testid="usage-breakdown-rows">
+            <div className="flex items-center justify-between gap-3 px-4 pt-3 pb-2 type-hint text-[var(--color-text-secondary)]">
+              <span>{tabLabel}</span>
+              <span className="text-[var(--color-text-primary)]" title={measure === 'cost' ? COST_LABEL : undefined} data-testid="usage-breakdown-measure">
+                {columnLabel(measure)}
+              </span>
+            </div>
+            {rows.map((row) => {
+              const harness = harnessOf(row.key)
+              const share = sum > 0 ? measureValue(row.totals, measure) / sum : 0
+              return (
+                <div key={row.key} className="border-t border-[var(--color-border)]" data-testid={`usage-breakdown-row-${row.key || 'outside'}`}>
+                  <button
+                    type="button"
+                    data-k2-focus=""
+                    aria-label={`Show only ${row.label}, ${columnLabel(measure)} ${cell(row, measure)}, ${shareText(share)} of this range`}
+                    title={`Show only ${row.label}`}
+                    onClick={() => onPick(row.key)}
+                    className={`${rowClass} block`}
+                  >
+                    <span className="flex items-start justify-between gap-3">
+                      {name(row, harness)}
+                      <span className="flex-shrink-0 text-right">
+                        <span className="block type-row tabular-nums text-[var(--color-text-primary)]" title={exact(row, measure)}>
+                          {cell(row, measure)}
+                        </span>
+                        <span className="block type-hint tabular-nums text-[var(--color-text-secondary)] mt-0.5" data-testid="usage-breakdown-share">
+                          {shareText(share)}
+                        </span>
+                      </span>
+                    </span>
+                    <span aria-hidden="true" className="mt-2 block h-1 overflow-hidden rounded-[var(--radius-pill)] bg-[var(--color-wash-2)]">
+                      <span
+                        className="block h-full"
+                        style={{ width: `${Math.min(100, share * 100)}%`, background: harness ? harnessColor(harness) : 'var(--color-accent)' }}
+                      />
+                    </span>
+                  </button>
+                </div>
+              )
+            })}
+          </div>
         ) : (
           <div data-testid="usage-breakdown-rows">
             <div className={`${BREAKDOWN_GRID} px-4 pt-3 pb-2 type-hint text-[var(--color-text-secondary)]`}>
@@ -318,7 +439,7 @@ function Breakdown({
                   className={`text-right leading-tight ${c === measure ? 'text-[var(--color-text-primary)]' : ''}`}
                   title={c === 'cost' ? COST_LABEL : undefined}
                 >
-                  {c === 'cost' ? 'Est. cost' : MEASURE_LABEL[c]}
+                  {columnLabel(c)}
                 </span>
               ))}
             </div>
@@ -332,22 +453,11 @@ function Breakdown({
                     aria-label={`Show only ${row.label}, ${fmtExact(row.totals.requests)} requests`}
                     title={`Show only ${row.label}`}
                     onClick={() => onPick(row.key)}
-                    className={`${BREAKDOWN_GRID} relative w-full px-4 py-2.5 text-left no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-wash-1)]`}
+                    className={`${BREAKDOWN_GRID} ${rowClass}`}
                   >
-                    <span className="min-w-0 flex items-center gap-2">
-                      {harness ? <SeriesKey harness={harness} /> : null}
-                      <span className="min-w-0">
-                        <span className="block type-name text-[var(--color-text-primary)] truncate">{row.label}</span>
-                        {row.sub ? (
-                          <span className="block type-hint text-[var(--color-text-secondary)] truncate [direction:rtl] text-left" title={row.sub}>
-                            <bdi>{row.sub}</bdi>
-                          </span>
-                        ) : null}
-                      </span>
-                    </span>
+                    {name(row, harness)}
                     {columns.map((c) => (
                       <span
-                       
                         key={c}
                         title={exact(row, c)}
                         className={`text-right type-row tabular-nums ${c === measure ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}
@@ -407,6 +517,8 @@ function rangePhrase(range: UsageRange): string {
 const WIDER: Record<UsageRange, UsageRange | null> = { today: '7d', '7d': '30d', '30d': '90d', '90d': 'all', all: null }
 
 export function TokenUsageSection(): React.JSX.Element {
+  const [rootEl, rootRef] = useState<HTMLDivElement | null>(null)
+  const wide = useElementWidth(rootEl) >= USAGE_TWO_COLUMN_MIN_PX
   const hostKey = useConnectHostStore((s) => activeHostKey(s.activeHost))
   const windowName = useConnectHostStore((s) =>
     s.activeHost === 'local' ? 'this computer' : s.activeHost.hostname || s.activeHost.label || 'this server',
@@ -552,164 +664,187 @@ export function TokenUsageSection(): React.JSX.Element {
     [series.data],
   )
 
+  const failed = report.error !== null && report.data === null
+  // Two columns only when there are numbers to set side by side; a failure
+  // or an empty range is one card across the page.
+  const columns = wide && !failed && !nothing
+  const limits = <UsageLimitsStrip target={target} canLink={isWindow} />
+  const totalsAndChart = (
+    <>
+      <Tiles total={report_?.total ?? null} measure={measure} onMeasure={setMeasure} />
+      <SettingsGroup
+        title={range === 'today' ? `${MEASURE_LABEL[measure]} today` : `${MEASURE_LABEL[measure]} by day`}
+        hint="Hover a day for its numbers."
+        card
+        action={<ChartLegend harnesses={legend} />}
+      >
+        <UsageChart
+          series={series.data ?? []}
+          slots={slots}
+          measure={measure}
+          error={series.error}
+          loading={report_ === null || (series.loading && series.data === null)}
+          onRetry={retry}
+        />
+      </SettingsGroup>
+    </>
+  )
+  const breakdown = (
+    <Breakdown
+      report={report_}
+      tab={tab}
+      onTab={setTab}
+      projects={nameProjects}
+      measure={measure}
+      onPick={(key) => setFilters(filterForGroup(tab, key, filters))}
+      list={columns}
+    />
+  )
+
   return (
-    <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6 @container`} data-usage-page="">
-      <header className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h2 className="type-title text-[var(--color-text-primary)]" data-testid="usage-title">
-            Usage
-          </h2>
-          <p className="type-hint text-[var(--color-text-secondary)] mt-1" data-testid="usage-subtitle">
-            Tokens your agents used on {serverName}, counted from Claude, Codex and Grok chats. Days follow your time zone ({tz}).
-          </p>
-        </div>
-        {roomTarget ? (
-          <Segmented
-            aria-label="Server"
-            value={onRoom ? 'room' : 'window'}
-            onChange={(next) => setOnRoom(next === 'room')}
-            options={[
-              { value: 'window', label: windowName === 'this computer' ? 'This computer' : windowName, buttonProps: { 'data-testid': 'usage-server-window' } },
-              { value: 'room', label: `${roomTarget.label} (focused room)`, buttonProps: { 'data-testid': 'usage-server-room' } },
-            ]}
-          />
-        ) : null}
-      </header>
+    <div ref={rootRef} className="w-full" data-usage-page="" data-usage-layout={columns ? 'two-column' : 'one-column'}>
+      <div className={`w-full ${columns ? WIDE_CONTENT_WIDTH : CONTENT_WIDTH} space-y-6 pb-6`}>
+        <header className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="type-title text-[var(--color-text-primary)]" data-testid="usage-title">
+              Usage
+            </h2>
+            <p className="type-hint text-[var(--color-text-secondary)] mt-1" data-testid="usage-subtitle">
+              Tokens your agents used on {serverName}, counted from Claude, Codex and Grok chats. Days follow your time zone ({tz}).
+            </p>
+          </div>
+          {roomTarget ? (
+            <Segmented
+              aria-label="Server"
+              value={onRoom ? 'room' : 'window'}
+              onChange={(next) => setOnRoom(next === 'room')}
+              options={[
+                { value: 'window', label: windowName === 'this computer' ? 'This computer' : windowName, buttonProps: { 'data-testid': 'usage-server-window' } },
+                { value: 'room', label: `${roomTarget.label} (focused room)`, buttonProps: { 'data-testid': 'usage-server-room' } },
+              ]}
+            />
+          ) : null}
+        </header>
 
-      {roleGated ? (
-        <Surface chamfer material="tile" className="px-4 py-4">
-          <p className="type-row text-[var(--color-text-primary)]" data-testid="usage-role-gate">
-            {ROLE_GATE_TEXT}
-          </p>
-          <p className="type-hint text-[var(--color-text-secondary)] mt-0.5">Ask an owner or admin if you need these numbers.</p>
-        </Surface>
-      ) : (
-        <>
-          <UsageLimitsStrip target={target} canLink={isWindow} />
+        {roleGated ? (
+          <Surface chamfer material="tile" className="px-4 py-4">
+            <p className="type-row text-[var(--color-text-primary)]" data-testid="usage-role-gate">
+              {ROLE_GATE_TEXT}
+            </p>
+            <p className="type-hint text-[var(--color-text-secondary)] mt-0.5">Ask an owner or admin if you need these numbers.</p>
+          </Surface>
+        ) : (
+          <>
+            {columns ? null : limits}
 
-          <section className="space-y-6" data-testid="usage-tokens" aria-busy={report.loading}>
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-3" data-testid="usage-filters">
-                <Segmented
-                  aria-label="Range"
-                  value={range}
-                  onChange={setRange}
-                  options={USAGE_RANGES.map((r) => ({ value: r.id, label: r.label, buttonProps: { 'data-testid': `usage-range-${r.id}` } }))}
-                />
-                {thisWorkspace ? (
+            <section className="space-y-6" data-testid="usage-tokens" aria-busy={report.loading}>
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3" data-testid="usage-filters">
                   <Segmented
-                    aria-label="Workspaces"
-                    value={scope}
-                    onChange={(next) =>
-                      setFilters(next === 'this' ? { ...filters, workspace: thisWorkspace, outside: false } : { ...filters, workspace: null, outside: false })
-                    }
-                    options={[
-                      { value: 'all', label: 'All workspaces', buttonProps: { 'data-testid': 'usage-all-workspaces' } },
-                      { value: 'this', label: 'This workspace', buttonProps: { 'data-testid': 'usage-this-workspace', title: thisWorkspace } },
-                    ]}
+                    aria-label="Range"
+                    value={range}
+                    onChange={setRange}
+                    options={USAGE_RANGES.map((r) => ({ value: r.id, label: r.label, buttonProps: { 'data-testid': `usage-range-${r.id}` } }))}
                   />
-                ) : null}
-              </div>
-              {chips.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-2" data-testid="usage-chips">
-                  <span className="type-hint text-[var(--color-text-secondary)]">Showing only</span>
-                  {chips.map((c) => (
-                    <FilterChip key={c.id} testId={`usage-filter-${c.id}`} label={c.label} onClear={() => setFilters({ ...filters, ...c.clear })} />
-                  ))}
-                  <Button variant="quiet" data-testid="usage-clear-filters" onClick={() => setFilters(NO_FILTERS)}>
-                    Show everything
-                  </Button>
+                  {thisWorkspace ? (
+                    <Segmented
+                      aria-label="Workspaces"
+                      value={scope}
+                      onChange={(next) =>
+                        setFilters(next === 'this' ? { ...filters, workspace: thisWorkspace, outside: false } : { ...filters, workspace: null, outside: false })
+                      }
+                      options={[
+                        { value: 'all', label: 'All workspaces', buttonProps: { 'data-testid': 'usage-all-workspaces' } },
+                        { value: 'this', label: 'This workspace', buttonProps: { 'data-testid': 'usage-this-workspace', title: thisWorkspace } },
+                      ]}
+                    />
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
-
-            {report.error && report.data === null ? (
-              <Surface chamfer material="tile" className="px-4 py-4 flex items-start justify-between gap-6" role="alert">
-                <div className="min-w-0">
-                  <p className="type-row text-[var(--color-text-primary)] flex items-center gap-2">
-                    <ErrorDot />
-                    Usage couldn’t load
-                  </p>
-                  <p className="type-hint text-[var(--color-text-secondary)] mt-0.5" data-testid="usage-tokens-error">
-                    {report.error}
-                  </p>
-                </div>
-                <RetryButton onClick={retry} />
-              </Surface>
-            ) : nothing ? (
-              <Surface chamfer material="tile" className="px-6 py-10 text-center" data-testid="usage-empty">
-                <p className="type-heading text-[var(--color-text-primary)]">
-                  {filtered ? 'Nothing matches these filters' : `No usage ${rangePhrase(range)}`}
-                </p>
-                <p className="type-hint text-[var(--color-text-secondary)] mt-1 mx-auto max-w-[48ch]">
-                  {filtered
-                    ? `No requests ${rangePhrase(range)} match what you picked.`
-                    : `Agents on ${serverName} haven’t used any tokens ${rangePhrase(range)}. A wider range may show earlier use.`}
-                </p>
-                <div className="mt-4 flex justify-center gap-2">
-                  {filtered ? (
-                    <Button variant="accent" onClick={() => setFilters(NO_FILTERS)}>
+                {chips.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-2" data-testid="usage-chips">
+                    <span className="type-hint text-[var(--color-text-secondary)]">Showing only</span>
+                    {chips.map((c) => (
+                      <FilterChip key={c.id} testId={`usage-filter-${c.id}`} label={c.label} onClear={() => setFilters({ ...filters, ...c.clear })} />
+                    ))}
+                    <Button variant="quiet" data-testid="usage-clear-filters" onClick={() => setFilters(NO_FILTERS)}>
                       Show everything
                     </Button>
-                  ) : null}
-                  {wider ? (
-                    <Button variant={filtered ? 'default' : 'accent'} data-testid="usage-empty-wider" onClick={() => setRange(wider)}>
-                      {wider === 'all' ? 'Show all time' : `Show the last ${USAGE_RANGES.find((r) => r.id === wider)?.label}`}
-                    </Button>
-                  ) : null}
-                </div>
-              </Surface>
-            ) : (
-              <>
-                <Tiles total={report_?.total ?? null} measure={measure} onMeasure={setMeasure} />
-                <SettingsGroup
-                  title={range === 'today' ? `${MEASURE_LABEL[measure]} today` : `${MEASURE_LABEL[measure]} by day`}
-                  hint="Pick a total above to chart it. Hover a day for its numbers."
-                  card
-                  action={<ChartLegend harnesses={legend} />}
-                >
-                  <UsageChart
-                    series={series.data ?? []}
-                    slots={slots}
-                    measure={measure}
-                    error={series.error}
-                    loading={report_ === null || (series.loading && series.data === null)}
-                    onRetry={retry}
-                  />
-                </SettingsGroup>
-                {report_ ? (
-                  <Breakdown
-                    report={report_}
-                    tab={tab}
-                    onTab={setTab}
-                    projects={nameProjects}
-                    measure={measure}
-                    onPick={(key) => setFilters(filterForGroup(tab, key, filters))}
-                  />
+                  </div>
                 ) : null}
-              </>
+              </div>
+
+              {failed ? (
+                <Surface chamfer material="tile" className="px-4 py-4 flex items-start justify-between gap-6" role="alert">
+                  <div className="min-w-0">
+                    <p className="type-row text-[var(--color-text-primary)] flex items-center gap-2">
+                      <ErrorDot />
+                      Usage couldn’t load
+                    </p>
+                    <p className="type-hint text-[var(--color-text-secondary)] mt-0.5" data-testid="usage-tokens-error">
+                      {report.error}
+                    </p>
+                  </div>
+                  <RetryButton onClick={retry} />
+                </Surface>
+              ) : nothing ? (
+                <Surface chamfer material="tile" className="px-6 py-10 text-center" data-testid="usage-empty">
+                  <p className="type-heading text-[var(--color-text-primary)]">
+                    {filtered ? 'Nothing matches these filters' : `No usage ${rangePhrase(range)}`}
+                  </p>
+                  <p className="type-hint text-[var(--color-text-secondary)] mt-1 mx-auto max-w-[48ch]">
+                    {filtered
+                      ? `No requests ${rangePhrase(range)} match what you picked.`
+                      : `Agents on ${serverName} haven’t used any tokens ${rangePhrase(range)}. A wider range may show earlier use.`}
+                  </p>
+                  <div className="mt-4 flex justify-center gap-2">
+                    {filtered ? (
+                      <Button variant="accent" onClick={() => setFilters(NO_FILTERS)}>
+                        Show everything
+                      </Button>
+                    ) : null}
+                    {wider ? (
+                      <Button variant={filtered ? 'default' : 'accent'} data-testid="usage-empty-wider" onClick={() => setRange(wider)}>
+                        {wider === 'all' ? 'Show all time' : `Show the last ${USAGE_RANGES.find((r) => r.id === wider)?.label}`}
+                      </Button>
+                    ) : null}
+                  </div>
+                </Surface>
+              ) : columns ? (
+                <div className={WIDE_GRID} data-testid="usage-columns">
+                  <div className="min-w-0 space-y-6">{totalsAndChart}</div>
+                  <div className="min-w-0 space-y-6">
+                    {breakdown}
+                    {limits}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {totalsAndChart}
+                  {breakdown}
+                </>
+              )}
+            </section>
+
+            {/* Nothing in the range: the empty card above says so once. */}
+            {nothing ? null : (
+              <UsageActivity
+                scope={target.scope}
+                scopeKey={scopeKey}
+                filters={filters}
+                range={range}
+                projects={nameProjects}
+                loginLabel={loginLabel}
+                canOpenChat={canOpenChat}
+                onOpenChat={onOpenChat}
+              />
             )}
-          </section>
 
-          {/* Nothing in the range: the empty card above says so once. */}
-          {nothing ? null : (
-            <UsageActivity
-              scope={target.scope}
-              scopeKey={scopeKey}
-              filters={filters}
-              range={range}
-              projects={nameProjects}
-              loginLabel={loginLabel}
-              canOpenChat={canOpenChat}
-              onOpenChat={onOpenChat}
-            />
-          )}
-
-          <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed max-w-[75ch]" data-testid="usage-footnote">
-            {UNITS_FOOTNOTE} {COST_FOOTNOTE}
-          </p>
-        </>
-      )}
+            <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed max-w-[75ch]" data-testid="usage-footnote">
+              {UNITS_FOOTNOTE} {COST_FOOTNOTE}
+            </p>
+          </>
+        )}
+      </div>
     </div>
   )
 }

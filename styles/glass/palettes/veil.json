@@ -84,6 +84,26 @@
       "$type": "color",
       "$description": "The accent as a fill under on-accent text (filled buttons, the selected segment, count badges): deep enough that the label clears 4.5:1, including at a 90% hover. Icons, rings and switches keep accent."
     },
+    "chart-1": {
+      "$value": "#2a78d6",
+      "$type": "color",
+      "$description": "Chart series 1 (Usage: Claude). The series hues are a fixed order validated together for colour-blind separation and at least 3:1 on this palette's cards; colour follows the thing, never its rank."
+    },
+    "chart-2": {
+      "$value": "#c8531f",
+      "$type": "color",
+      "$description": "Chart series 2 (Usage: Codex)."
+    },
+    "chart-3": {
+      "$value": "#13865d",
+      "$type": "color",
+      "$description": "Chart series 3 (Usage: Grok)."
+    },
+    "chart-other": {
+      "$value": "#6250d6",
+      "$type": "color",
+      "$description": "Chart series for anything past the named ones."
+    },
     "status-working": {
       "$value": "var(--glass-accent)",
       "$type": "color"

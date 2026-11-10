@@ -119,6 +119,10 @@
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.4);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
+  --color-chart-1: #3987e5;
+  --color-chart-2: #d95926;
+  --color-chart-3: #199e70;
+  --color-chart-other: #9085e9;
   --term-fg: #e0e0e0;
   --term-bg: #0a0a0a;
   --term-cursor: #e0e0e0;
@@ -492,6 +496,10 @@
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.28);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.42);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
+  --color-chart-1: #3987e5;
+  --color-chart-2: #d95926;
+  --color-chart-3: #199e70;
+  --color-chart-other: #9085e9;
   --color-ring-edge-strong: rgba(255, 255, 255, 0.22);
   --color-ring-edge: rgba(255, 255, 255, 0.14);
   --color-ring-hairline: rgba(255, 255, 255, 0.06);
@@ -580,6 +588,10 @@
   --color-scrollbar-thumb-strong: rgba(60, 60, 67, 0.34);
   --color-scrollbar-thumb-strong-hover: rgba(60, 60, 67, 0.5);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 78%, black);
+  --color-chart-1: #2a78d6;
+  --color-chart-2: #c8531f;
+  --color-chart-3: #13865d;
+  --color-chart-other: #6250d6;
   --color-ring-edge-strong: rgba(255, 255, 255, 0.85);
   --color-ring-edge: rgba(255, 255, 255, 0.7);
   --color-ring-hairline: rgba(60, 60, 67, 0.08);
@@ -667,6 +679,10 @@
   --color-scrollbar-thumb-hover: rgba(255, 250, 235, 0.20);
   --color-scrollbar-thumb-strong: rgba(255, 250, 235, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 250, 235, 0.40);
+  --color-chart-1: #3987e5;
+  --color-chart-2: #d95926;
+  --color-chart-3: #199e70;
+  --color-chart-other: #9085e9;
   --color-ring-edge-strong: rgba(255, 255, 255, 0.22);
   --color-ring-edge: rgba(255, 255, 255, 0.14);
   --color-ring-hairline: rgba(255, 255, 255, 0.06);
@@ -1949,6 +1965,10 @@
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.4);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
+  --color-chart-1: #3987e5;
+  --color-chart-2: #d95926;
+  --color-chart-3: #199e70;
+  --color-chart-other: #9085e9;
   --term-fg: #e0e0e0;
   --term-bg: #0a0a0a;
   --term-cursor: #e0e0e0;
@@ -2026,6 +2046,10 @@
   --color-scrollbar-thumb-strong: rgba(40, 32, 16, 0.30);
   --color-scrollbar-thumb-strong-hover: rgba(40, 32, 16, 0.45);
   --color-accent-fill: var(--color-accent);
+  --color-chart-1: #2a78d6;
+  --color-chart-2: #c8531f;
+  --color-chart-3: #13865d;
+  --color-chart-other: #6250d6;
   --term-fg: #221e15;
   --term-bg: #faf8f3;
   --term-cursor: #221e15;
@@ -2102,6 +2126,10 @@
   --color-scrollbar-thumb-hover: rgba(255, 250, 235, 0.20);
   --color-scrollbar-thumb-strong: rgba(255, 250, 235, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 250, 235, 0.40);
+  --color-chart-1: #3987e5;
+  --color-chart-2: #d95926;
+  --color-chart-3: #199e70;
+  --color-chart-other: #9085e9;
   --term-fg: #e5e1d8;
   --term-bg: #100f0e;
   --term-cursor: #ffc700;

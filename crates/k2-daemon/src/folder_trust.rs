@@ -880,7 +880,7 @@ fn workspace_folder_for(params: &HashMap<String, String>, folder: &str) -> Resul
 /// and to name the caller on the card.
 pub fn dispatch(is_post: bool, path: &str, params: &HashMap<String, String>, body: &[u8], session_author: &str) -> CliResponse {
     match path {
-        STATUS_PATH => status_route(params, body),
+        STATUS_PATH => status_route(params, body, session_author),
         REQUEST_PATH => {
             if !is_post {
                 return CliResponse::method_not_allowed();
@@ -929,7 +929,7 @@ fn status_json(id: &str, s: &gate::StatusView) -> J {
     v
 }
 
-fn status_route(params: &HashMap<String, String>, body: &[u8]) -> CliResponse {
+fn status_route(params: &HashMap<String, String>, body: &[u8], session_author: &str) -> CliResponse {
     match param(params, body, "path").or_else(|| param(params, body, "folder")) {
         Some(p) => {
             let (id, path) = match workspace_folder_for(params, &p) {
@@ -937,7 +937,13 @@ fn status_route(params: &HashMap<String, String>, body: &[u8]) -> CliResponse {
                 Err(r) => return r,
             };
             match gate::status(&path) {
-                Ok(v) => CliResponse::ok_json(status_json(&id, &v).to_string()),
+                Ok(v) => {
+                    let mut st = status_json(&id, &v);
+                    // Who gets the buttons: the check `decide` itself runs,
+                    // so a client never has its own idea of the rule.
+                    st["can_decide"] = json!(crate::overlay_routes::require_action_card_person(params, session_author, "answers").is_ok());
+                    CliResponse::ok_json(st.to_string())
+                }
                 Err(e) => err("400 Bad Request", "usage", e),
             }
         }

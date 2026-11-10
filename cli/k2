@@ -51474,7 +51474,8 @@ WHAT K2 DOES
   Who decides: the owner (the owner token, or a login with the Owner
   role, from any device). Admins and Members are refused, in words. The
   same three choices are in Settings → Workspaces → Folder trust while the
-  folder waits, and on the CLI. Whichever is used first decides: the card
+  folder waits, in the agent's chat when its session can't start, and on
+  the CLI. Whichever is used first decides: the card
   closes showing that choice and who made it, and a later tap on it says
   "Already answered: … by <who> at <time>". A trust starts the spawns K2
   held there again; a session K2 stopped starts again when its tab opens.

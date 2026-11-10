@@ -168,6 +168,33 @@ fn only_the_owner_decides() {
     assert_eq!(bad.status, "400 Bad Request");
 }
 
+/// The chat's "can't start" panel offers the buttons on the daemon's word:
+/// `can_decide` is the same check `decide` runs (0.46.11).
+#[test]
+fn status_says_who_may_decide() {
+    let e = env();
+    let ws = folder(&e.home, "whodecides", Some(HOOK));
+    let id = register(&ws);
+    let path = s(&ws);
+    let can_decide = |p: &HashMap<String, String>, author: &str| {
+        let r = dispatch(false, STATUS_PATH, p, b"", author);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        json_of(&r)["can_decide"].clone()
+    };
+    let base = params(&[("path", path.as_str())]);
+    assert_eq!(can_decide(&base, "owner"), serde_json::json!(true), "the owner token");
+    k2_core::connect_users::add_user("gina", "password123").expect("gina");
+    assert_eq!(can_decide(&base, "gina"), serde_json::json!(false), "a Member login");
+    k2_core::connect_users::set_role("gina", k2_core::connect_users::Role::Owner).expect("owner role");
+    assert_eq!(can_decide(&base, "gina"), serde_json::json!(true), "an Owner-role login");
+    // An agent reading its own folder, even with the owner's author string.
+    assert_eq!(can_decide(&passport(&id, &[("path", path.as_str())]), "agent"), serde_json::json!(false), "a passport");
+    assert_eq!(can_decide(&passport(&id, &[("path", path.as_str())]), "owner"), serde_json::json!(false), "a passport, as owner");
+    let mut widget = base.clone();
+    widget.insert("origin".into(), "https://widget.example".into());
+    assert_eq!(can_decide(&widget, "owner"), serde_json::json!(false), "a Garden widget");
+}
+
 /// Review B#3: the CLI/ticket path sends the fingerprint it showed; a
 /// missing one is refused, a stale one is 409 and nothing is decided.
 #[test]

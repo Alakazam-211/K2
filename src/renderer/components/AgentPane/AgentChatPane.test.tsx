@@ -19,8 +19,9 @@
 // records the props the cutover cares about (attachAgentName, command,
 // args, onChildExit).
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
 import ContextMenu from '@/components/ContextMenu/ContextMenu'
 import { useEffect } from 'react'
 
@@ -1292,5 +1293,200 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(getRoutes()).toContain('sessions/list-for-workspace'))
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+  })
+})
+
+// Rosson 2026-11-09: a folder held by the trust gate left the agent
+// unopenable, so nobody could reach the Thread card that unlocks it. The
+// decision now shows where the session would be, instead of a Retry.
+describe('folder trust: the decision shows where the session would be', () => {
+  const CHOICES = ['Trust it', 'Always trust this folder', "Don't trust"]
+  const ENSURED = {
+    sessionId: 'sess-1',
+    claudeSessionId: 'claude-1',
+    resumedExisting: true,
+    command: 'claude',
+    args: ['--resume', 'claude-1'],
+    cols: 120,
+    rows: 40,
+    reused: false,
+  }
+  const status = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    path: '/ws',
+    scope: '/ws',
+    state: 'pending',
+    decided_by: null,
+    decided_at: null,
+    findings: [{ tool: 'claude', file: '.claude/settings.json', what: 'hooks', detail: 'runs `node setup.mjs`' }],
+    more: 0,
+    fingerprint: 'fp-1',
+    trusted_by: [],
+    decide: 'k2 workspace trust /ws --yes|--always|--no (owner)',
+    can_decide: true,
+    ...over,
+  })
+  const refusal = (error: string): DaemonHttpError =>
+    new DaemonHttpError(error, 409, null, null, { error, message: 'Waiting for the owner to trust /ws.', findings: [] })
+
+  let current: Record<string, unknown>
+  let refuseEnsure: DaemonHttpError | null
+  let restoreGet: ReturnType<typeof h.daemonCliGet.getMockImplementation>
+  let restorePost: ReturnType<typeof h.daemonCliPost.getMockImplementation>
+
+  beforeEach(() => {
+    restoreGet = h.daemonCliGet.getMockImplementation()
+    restorePost = h.daemonCliPost.getMockImplementation()
+    current = status()
+    refuseEnsure = refusal('folder_trust_pending')
+    h.daemonCliGet.mockImplementation(async (route: string): Promise<unknown> => {
+      if (route === 'folder-trust/status') return current
+      return route === 'chat/list' ? [] : undefined
+    })
+    h.daemonCliPost.mockImplementation(async (route: string): Promise<unknown> => {
+      if (route === 'workspace/ensure-pinned-chat') {
+        if (refuseEnsure) throw refuseEnsure
+        return ENSURED
+      }
+      if (route === 'folder-trust/decide') {
+        current = status({ state: 'always', decided_by: 'rosson' })
+        refuseEnsure = null
+        return { ok: true, message: 'Always trusted.', status: current }
+      }
+      if (route === 'folder-trust/reset') {
+        current = status({ state: 'undecided' })
+        return { ...current, ok: true }
+      }
+      return undefined
+    })
+  })
+
+  afterEach(() => {
+    h.daemonCliGet.mockImplementation(restoreGet!)
+    h.daemonCliPost.mockImplementation(restorePost!)
+    localStorage.clear()
+  })
+
+  const routes = (): string[] => h.daemonCliPost.mock.calls.map((c) => c[0])
+  const expectNoFailureView = (): void => {
+    expect(screen.queryByText('Chat session failed to start')).toBeNull()
+    expect(screen.queryByText('Chat session ended')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  }
+
+  it('a start refused for a held folder shows the three choices and what K2 found, not Retry', async () => {
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await screen.findByTestId('folder-trust-hold-choices')
+    for (const label of CHOICES) expect(screen.getByRole('button', { name: label })).toBeTruthy()
+    expect(screen.getByText('.claude/settings.json')).toBeTruthy()
+    expectNoFailureView()
+    expect(screen.queryByTestId('terminal-pane')).toBeNull()
+  })
+
+  it('a running session K2 stopped because the folder changed shows the choices, not "Chat session ended"', async () => {
+    refuseEnsure = null
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    h.sessionHandlers.current!.onRemoved!({ agent_name: 'proj-1', workspace_path: '/ws' })
+    await screen.findByTestId('folder-trust-hold-choices')
+    expectNoFailureView()
+  })
+
+  it('a choice goes to the daemon for the version shown, then the session starts on its own', async () => {
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await screen.findByTestId('folder-trust-hold-choices')
+    fireEvent.click(screen.getByRole('button', { name: 'Always trust this folder' }))
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    expect(screen.queryByTestId('folder-trust-hold')).toBeNull()
+    expect(h.daemonCliPost.mock.calls.find((c) => c[0] === 'folder-trust/decide')?.[1]).toEqual({
+      path: '/ws',
+      decision: 'always',
+      fingerprint: 'fp-1',
+      scope: '/ws',
+      seen_state: 'pending',
+    })
+    const order = routes().filter((r) => r === 'folder-trust/decide' || r === 'workspace/ensure-pinned-chat')
+    expect(order).toEqual(['workspace/ensure-pinned-chat', 'folder-trust/decide', 'workspace/ensure-pinned-chat'])
+    expect(ensureBodies()).toHaveLength(2)
+    expect(lastEnsureCall()?.forceRespawn).toBeUndefined()
+  })
+
+  it('a decision made elsewhere starts the session too', async () => {
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await screen.findByTestId('folder-trust-hold-choices')
+    current = status({ state: 'trusted', decided_by: 'rosson' })
+    refuseEnsure = null
+    window.dispatchEvent(new Event('focus'))
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    expect(routes()).not.toContain('folder-trust/decide')
+  })
+
+  it('someone who may not decide gets a plain line and no buttons', async () => {
+    for (const canDecide of [{ can_decide: false }, { can_decide: undefined }]) {
+      cleanup()
+      current = status(canDecide)
+      renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+      await screen.findByTestId('folder-trust-hold')
+      expect(screen.getByTestId('folder-trust-hold-line').textContent).toBe(
+        "Only this server's owner can decide. The chat starts on its own once they do.",
+      )
+      expect(screen.queryByTestId('folder-trust-hold-choices')).toBeNull()
+      for (const label of CHOICES) expect(screen.queryByRole('button', { name: label })).toBeNull()
+      expect(screen.queryByText('.claude/settings.json')).toBeNull()
+      expectNoFailureView()
+    }
+    expect(routes()).not.toContain('folder-trust/decide')
+  })
+
+  it('denied says why, with the way to change it for the owner', async () => {
+    refuseEnsure = refusal('folder_trust_denied')
+    current = status({ state: 'denied', decided_by: 'rosson', decided_at: Date.UTC(2026, 10, 9, 12) / 1000 })
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await screen.findByTestId('folder-trust-hold')
+    expect(screen.getByText("K2 won't start this chat in this folder")).toBeTruthy()
+    expect(screen.getByTestId('folder-trust-hold-line').textContent).toBe('Not trusted by rosson on 11-09: K2 starts no programs here.')
+    expect(screen.queryByTestId('folder-trust-hold-choices')).toBeNull()
+    expectNoFailureView()
+    fireEvent.click(screen.getByRole('button', { name: 'Change this decision' }))
+    await screen.findByTestId('folder-trust-hold-choices')
+    expect(h.daemonCliPost.mock.calls.find((c) => c[0] === 'folder-trust/reset')?.[1]).toEqual({ path: '/ws' })
+  })
+
+  it('denied, for someone who may not change it: why, and no button', async () => {
+    refuseEnsure = refusal('folder_trust_denied')
+    current = status({ state: 'denied', decided_by: 'rosson', can_decide: false })
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await screen.findByTestId('folder-trust-hold')
+    expect(screen.getByTestId('folder-trust-hold-line').textContent).toContain("Only this server's owner can change that.")
+    expect(screen.queryByRole('button', { name: 'Change this decision' })).toBeNull()
+  })
+
+  it('Thread view shows the same decision above the messages', async () => {
+    localStorage.clear()
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'thread', left: 'terminal', right: 'thread' }))
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await screen.findByTestId('folder-trust-hold-choices')
+    for (const label of CHOICES) expect(screen.getByRole('button', { name: label })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Trust it' }))
+    await waitFor(() => expect(ensureBodies()).toHaveLength(2))
+  })
+
+  it('a chat that simply ended stays "ended": a clean folder neither blocks nor starts it', async () => {
+    refuseEnsure = null
+    current = status({ state: 'clean', findings: [] })
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    h.daemonCliPost.mockClear()
+    h.sessionHandlers.current!.onRemoved!({ agent_name: 'proj-1', workspace_path: '/ws' })
+    await screen.findByText('Chat session ended')
+    expect(screen.queryByTestId('folder-trust-hold')).toBeNull()
+    expect(ensureBodies()).toHaveLength(0)
+  })
+
+  it('a refused start whose folder no longer reads as held keeps the daemon sentence and Retry', async () => {
+    current = status({ state: 'clean', findings: [] })
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await screen.findByText('Waiting for the owner to trust /ws.')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+    expect(ensureBodies()).toHaveLength(1)
   })
 })

@@ -41,6 +41,9 @@ import { ThreadViewIdentity } from '@/components/SessionView/ThreadViewIdentity'
 import { ThreadFloatBell } from '@/components/SessionView/ThreadFloatBell'
 import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, useThreadFloats } from '@/components/SessionView/threadFloats'
 import { ThreadTerminalToggle } from '@/components/SessionView/ThreadTerminalToggle'
+import { FolderTrustHoldPanel, useFolderTrustHold } from './FolderTrustHold'
+import { folderTrustMessage } from '@/kessel-term/folderTrustMessage'
+import { httpStatusOf } from '@/lib/daemon-http-error'
 import { useSettingsStore } from '@/stores/settings'
 import type { SessionViewTab } from '@/components/SessionView/sessionViewTab'
 import {
@@ -742,7 +745,9 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     | { kind: 'ensuring' }
     | { kind: 'ready'; sessionId: string; canonicalSessionId: string }
     | { kind: 'idle' }
-    | { kind: 'error'; message: string }
+    // `folderTrust`: the daemon refused because of the folder (409), so the
+    // decision shows here instead of a Retry.
+    | { kind: 'error'; message: string; folderTrust?: boolean }
   const [phase, setPhase] = useState<Phase>({ kind: 'ensuring' })
   const phaseRef = useRef(phase)
   phaseRef.current = phase
@@ -913,14 +918,37 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         if (forceRespawn) setAttachNonce((n) => n + 1)
       } catch (err) {
         console.error('[AgentChatPane] ensure-pinned-chat failed:', err)
+        const trustRefusal = folderTrustMessage(
+          httpStatusOf(err) ?? 0,
+          JSON.stringify((err as { body?: unknown } | null)?.body ?? null),
+        )
         setPhase({
           kind: 'error',
-          message: err instanceof Error ? err.message : String(err),
+          message: trustRefusal ?? (err instanceof Error ? err.message : String(err)),
+          folderTrust: trustRefusal !== null,
         })
       }
     },
     [projectPath, restoredSessionId],
   )
+
+  // The session isn't running and the folder may be why (K2 stopped it when
+  // the folder's settings changed, or a start was refused): ask the daemon,
+  // and show the decision instead of "Chat session ended / Retry". Once it
+  // is decided, whoever decided it, the session starts: the same idempotent
+  // ensure a visit makes, so it joins a spawn the daemon retried itself.
+  const startAfterFolderTrust = useCallback((): void => {
+    setPhase({ kind: 'ensuring' })
+    void ensure(false)
+  }, [ensure])
+  const folderHold = useFolderTrustHold(
+    room.scope,
+    projectPath,
+    !room.readOnly && (phase.kind === 'idle' || (phase.kind === 'error' && phase.folderTrust === true)),
+    startAfterFolderTrust,
+  )
+  const folderHoldPanel = folderHold.held ? <FolderTrustHoldPanel hold={folderHold} /> : null
+  const folderHoldBanner = folderHold.held ? <FolderTrustHoldPanel hold={folderHold} inline /> : null
 
   // Visit → ensure (find-or-spawn; daemon resolves resume vs fresh).
   // Mounting this pane is a visit or other need — seedBoot / Active-list
@@ -1189,7 +1217,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       {continueDialog}
       <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
-        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv} displayName={displayName}>
+        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv} displayName={displayName} banner={folderHoldBanner}>
+        {folderHoldPanel ?? (folderHold.checking ? null : (
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-xs font-semibold text-[var(--color-text-primary)]">
             {isMainChatMissing(phase.message) ? "This chat's history can't be found" : 'Chat session failed to start'}
@@ -1203,6 +1232,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           </div>
           <RetryButton onClick={handleRefresh} refreshing={refreshing} />
         </div>
+        ))}
         </OverlayTabBody>
       </div>
       </>
@@ -1215,7 +1245,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       {continueDialog}
       <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
         {header}
-        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv} displayName={displayName}>
+        <OverlayTabBody viewTab={viewTab} overlayAddr={overlayAddr} overlayConv={overlayConv} displayName={displayName} banner={folderHoldBanner}>
+        {folderHoldPanel ?? (folderHold.checking ? null : (
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-xs font-semibold text-[var(--color-text-primary)]">
             {room.readOnly ? `Not running on ${room.scope.label}` : 'Chat session ended'}
@@ -1227,6 +1258,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
           </div>
           <RetryButton onClick={room.readOnly ? () => void ensure(false) : handleRefresh} refreshing={refreshing} />
         </div>
+        ))}
         </OverlayTabBody>
       </div>
       </>
@@ -1377,12 +1409,16 @@ function OverlayTabBody({
   overlayAddr,
   overlayConv,
   displayName,
+  banner,
   children,
 }: {
   viewTab: SessionViewTab
   overlayAddr: string
   overlayConv: string | null
   displayName?: string
+  /** Thread view: shown above the messages (the Terminal view shows it
+   *  through `children`). */
+  banner?: React.ReactNode
   children: React.ReactNode
 }): React.JSX.Element {
   const threadTextCap = useSettingsStore((s) => threadTextCapPx(s.threadTextWidth))
@@ -1390,6 +1426,7 @@ function OverlayTabBody({
     return (
       <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
         <ProgressiveHeaderBlur />
+        {banner}
         <ThreadOverlayPane
           addr={overlayAddr}
           conversationId={overlayConv}

@@ -9,7 +9,7 @@
 // other updates (the card closes showing the choice; this row re-reads the
 // status), and a refusal is shown here in the daemon's words.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorText } from '@/lib/daemon-error'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -37,6 +37,9 @@ export interface FolderTrustStatus {
   fingerprint?: string | null
   trusted_by: string[]
   decide: string
+  /** This caller may decide (the daemon's own check, the one `decide` runs).
+   *  Absent from a daemon without it: no buttons offered there. */
+  can_decide?: boolean
 }
 
 /** The decisions, as the card words them and the daemon names them. */
@@ -104,32 +107,71 @@ export function folderTrustRefusal(err: unknown): string {
   return daemonErrorText(err)
 }
 
-export function FolderTrustRow({ scope, projectPath }: { scope: ServerScope; projectPath: string }): React.JSX.Element {
+export interface FolderTrustControls {
+  status: FolderTrustStatus | null
+  /** The first read has answered (or failed). */
+  loaded: boolean
+  error: string | null
+  notice: string | null
+  busy: boolean
+  /** The folder waits for a person's decision. */
+  waiting: boolean
+  decide: (decision: (typeof FOLDER_TRUST_CHOICES)[number]['decision']) => Promise<void>
+  reset: () => Promise<void>
+}
+
+/** One folder's trust: the daemon's status and its two decisions. Settings'
+ *  row and the chat's "this session can't start" panel both run on this, so
+ *  they can't disagree. `enabled: false` reads nothing and forgets what it
+ *  read; `pollDenied` also re-reads a denied folder (the panel shows the way
+ *  out of it, so an undo elsewhere has to show). */
+export function useFolderTrust(
+  scope: ServerScope,
+  projectPath: string,
+  { enabled = true, pollDenied = false }: { enabled?: boolean; pollDenied?: boolean } = {},
+): FolderTrustControls {
   const [status, setStatus] = useState<FolderTrustStatus | null>(null)
+  const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // A read started before the last enable/disable or folder change is dropped.
+  const readGen = useRef(0)
 
   const load = useCallback(async (): Promise<void> => {
+    const gen = ++readGen.current
     try {
-      setStatus(asStatus(await daemonCliGet<unknown>(scope, 'folder-trust/status', { path: projectPath })))
+      const next = asStatus(await daemonCliGet<unknown>(scope, 'folder-trust/status', { path: projectPath }))
+      if (gen !== readGen.current) return
+      setStatus(next)
       setError(null)
     } catch (err) {
+      if (gen !== readGen.current) return
       setError(err instanceof Error ? err.message : String(err))
     }
+    setLoaded(true)
   }, [scope, projectPath])
 
   useEffect(() => {
-    void load()
-  }, [load])
+    if (enabled) {
+      void load()
+      return
+    }
+    readGen.current += 1
+    setStatus(null)
+    setLoaded(false)
+    setError(null)
+    setNotice(null)
+  }, [enabled, load])
 
   const waiting = status !== null && UNDECIDED.includes(status.state)
+  const polling = enabled && (waiting || (pollDenied && status?.state === 'denied'))
 
   // While the folder waits: re-read now and then and when the window comes
   // back, so a decision made on the card shows here. A failed or odd read
   // keeps what is shown (never blanks the row).
   useEffect(() => {
-    if (!waiting) return
+    if (!polling) return
     let live = true
     const refresh = async (): Promise<void> => {
       try {
@@ -147,7 +189,7 @@ export function FolderTrustRow({ scope, projectPath }: { scope: ServerScope; pro
       clearInterval(timer)
       window.removeEventListener('focus', onFocus)
     }
-  }, [waiting, scope, projectPath])
+  }, [polling, scope, projectPath])
 
   const reset = useCallback(async (): Promise<void> => {
     if (busy) return
@@ -195,6 +237,38 @@ export function FolderTrustRow({ scope, projectPath }: { scope: ServerScope; pro
     [busy, status, scope, projectPath, load],
   )
 
+  return { status, loaded, error, notice, busy, waiting, decide, reset }
+}
+
+/** What K2 found in the folder (and, when denied, what still trusts it). */
+export function FolderTrustFindings({ status }: { status: FolderTrustStatus }): React.JSX.Element | null {
+  const findings = status.findings.length > 0 && status.state !== 'clean' ? (
+    <ul className={SETTING_ROW_HINT}>
+      {status.findings.slice(0, 5).map((f) => (
+        <li key={`${f.file}:${f.what}`}>
+          <code>{f.file}</code>: {f.detail}
+        </li>
+      ))}
+      {status.findings.length > 5 || status.more > 0 ? (
+        <li>and {Math.max(0, status.findings.length - 5) + status.more} more</li>
+      ) : null}
+    </ul>
+  ) : null
+  const elsewhere = status.state === 'denied' && status.trusted_by.length > 0 ? (
+    <div className={SETTING_ROW_HINT}>Still trusted elsewhere: {status.trusted_by.join('; ')}</div>
+  ) : null
+  if (!findings && !elsewhere) return null
+  return (
+    <>
+      {findings}
+      {elsewhere}
+    </>
+  )
+}
+
+export function FolderTrustRow({ scope, projectPath }: { scope: ServerScope; projectPath: string }): React.JSX.Element {
+  const { status, error, notice, busy, waiting, decide, reset } = useFolderTrust(scope, projectPath)
+
   const canReset = status !== null && ['trusted', 'always', 'denied', 'changed'].includes(status.state)
 
   return (
@@ -212,21 +286,7 @@ export function FolderTrustRow({ scope, projectPath }: { scope: ServerScope; pro
       <div className={SETTING_ROW_HINT} data-testid="folder-trust-line">
         {status ? folderTrustLine(status) : error ? '' : 'Checking…'}
       </div>
-      {status && status.findings.length > 0 && status.state !== 'clean' ? (
-        <ul className={SETTING_ROW_HINT}>
-          {status.findings.slice(0, 5).map((f) => (
-            <li key={`${f.file}:${f.what}`}>
-              <code>{f.file}</code>: {f.detail}
-            </li>
-          ))}
-          {status.findings.length > 5 || status.more > 0 ? (
-            <li>and {Math.max(0, status.findings.length - 5) + status.more} more</li>
-          ) : null}
-        </ul>
-      ) : null}
-      {status && status.state === 'denied' && status.trusted_by.length > 0 ? (
-        <div className={SETTING_ROW_HINT}>Still trusted elsewhere: {status.trusted_by.join('; ')}</div>
-      ) : null}
+      {status ? <FolderTrustFindings status={status} /> : null}
       {waiting ? (
         <div className="flex flex-wrap gap-1.5 mt-2" data-testid="folder-trust-choices">
           {FOLDER_TRUST_CHOICES.map((c) => (

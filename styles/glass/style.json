@@ -5,7 +5,7 @@
   "author": "Alakazam Labs",
   "version": "0.1.0",
   "schemaVersion": 1,
-  "description": "Rounded and calm, like the K2 phone app. Solid tiles on a plain background, with frosted glass only on things that float.",
+  "description": "Rounded and calm, like the K2 phone app. Solid cards on a plain background, with see-through menus.",
   "defaultPalette": "obsidian",
   "defaultPalettes": {
     "dark": "obsidian",

@@ -178,7 +178,7 @@ export const STYLES: readonly StyleMeta[] = [
     "id": "glass",
     "name": "Glass",
     "author": "Alakazam Labs",
-    "description": "Rounded and calm, like the K2 phone app. Solid tiles on a plain background, with frosted glass only on things that float.",
+    "description": "Rounded and calm, like the K2 phone app. Solid cards on a plain background, with see-through menus.",
     "defaultPalette": "obsidian",
     "defaultPalettes": {
       "dark": "obsidian",

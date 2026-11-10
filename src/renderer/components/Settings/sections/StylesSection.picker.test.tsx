@@ -65,6 +65,29 @@ describe('the Styles list', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'Glass' })).toBeTruthy()
   })
 
+  it('marks the style in use once, in the list: neutral, so the selected row keeps the one accent', () => {
+    useTerminalCharcoal()
+    render(<StylesSection />)
+    expect(screen.getAllByText('In use')).toHaveLength(1)
+    expect(within(rows()[0]).getByText('In use').getAttribute('data-tone')).toBe('neutral')
+  })
+
+  it('list rows show keyboard focus in the theme\'s shape', () => {
+    render(<StylesSection />)
+    for (const r of rows()) {
+      expect(r.hasAttribute('data-k2-focus')).toBe(true)
+      expect(r.className).not.toContain('focus-visible:outline-')
+    }
+  })
+
+  it('describes Glass in plain words', () => {
+    useStyleStore.getState().applyStyle({ styleId: 'glass', paletteId: 'obsidian', schemeMode: 'dark' })
+    render(<StylesSection />)
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('Rounded and calm, like the K2 phone app.')
+    expect(text).not.toContain('things that float')
+  })
+
   it('describes Terminal in plain words', () => {
     useTerminalCharcoal()
     render(<StylesSection />)
@@ -109,6 +132,10 @@ describe('Colours', () => {
     const pressed = Array.from(document.querySelectorAll('[data-palette-id][aria-pressed="true"]'))
     expect(pressed.map((b) => b.getAttribute('data-palette-id'))).toEqual(['charcoal'])
     expect(screen.queryByText('Light only')).toBeNull()
+    // One accent cue on the chosen card: its edge, no tint.
+    const charcoal = pressed[0] as HTMLElement
+    expect(charcoal.className).toContain('border-[var(--color-accent-text)]')
+    expect(charcoal.className).not.toContain('bg-[var(--color-accent)]')
     cleanup()
     useStyleStore.getState().applyStyle({ styleId: 'glass', paletteId: 'obsidian', schemeMode: 'dark' })
     render(<StylesSection />)
@@ -193,6 +220,15 @@ describe('the accent', () => {
     expect(useStyleStore.getState().accent).toBe('#123456')
   })
 
+  it('a colour that saves says Saved in its row', () => {
+    useTerminalCharcoal()
+    render(<StylesSection />)
+    fireEvent.change(screen.getByTestId('accent-well'), { target: { value: '#ff00aa' } })
+    const row = document.querySelector('[data-settings-id="styles.accent"]') as HTMLElement
+    expect(row.querySelector('[data-save-note]')?.textContent).toBe('Saved')
+    expect(document.querySelectorAll('[data-save-note]')).toHaveLength(1)
+  })
+
   it('a colour that applies but cannot be saved says so in its row', () => {
     useTerminalCharcoal()
     render(<StylesSection />)
@@ -223,6 +259,16 @@ describe('Terminals', () => {
     fireEvent.click(reset)
     expect(useStyleStore.getState().textGamma).toBe(before)
     expect(reset.disabled).toBe(true)
+  })
+
+  it('the hint is short, and the slider keeps a value slot so it ends where Frost does', () => {
+    useTerminalSettingsStore.setState({ painter: 'webgl' })
+    useTerminalCharcoal()
+    render(<StylesSection />)
+    const row = document.querySelector('[data-settings-id="styles.text-weight"]') as HTMLElement
+    expect(row.textContent).toContain('Drag right for thicker terminal text. Saved for Terminal in dark mode.')
+    const slider = screen.getByRole('slider', { name: 'Terminal text weight' })
+    expect((slider.nextElementSibling as HTMLElement).className).toContain('w-10 flex-shrink-0')
   })
 
   it('with WebGL off the slider is disabled and points to Terminal settings', () => {

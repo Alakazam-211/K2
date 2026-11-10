@@ -16,7 +16,7 @@
 // - Every save is read back from localStorage. A change that applied but
 //   didn't save says so in its row, instead of failing silently.
 
-import React, { useCallback, useReducer, useState } from 'react'
+import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import { LS_PALETTE, LS_SCHEME, LS_STYLE, osPrefersLight, stampStyleAttributes, useStyleStore } from '@/stores/style'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
@@ -32,7 +32,7 @@ import {
   type StyleScheme,
 } from '@/styles.generated'
 import type { SettingEntry } from '../searchManifest'
-import { SettingRow, SettingsGroup } from '../controls/SettingControls'
+import { SaveNote, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import { Button, Input, Segmented, Slider, Tag, cx } from '@/components/ui'
 
 /** Registry terminal colors are 0xRRGGBB ints (Kessel's format). */
@@ -76,9 +76,10 @@ const NOT_SAVED =
  *  card's radius, so they sit concentric within its padding. */
 const SWATCH_SHAPE = 'rounded-[calc(var(--radius-box)/4)]'
 
-/** Keyboard focus for list rows: an inset ring, so a scrolling list never clips it. */
-const ROW_FOCUS =
-  'outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)]'
+
+/** A slider's value, in a fixed slot after it, so every slider in the page
+ *  ends on the same edge whether or not it shows a value. */
+const VALUE_SLOT = 'w-10 flex-shrink-0 text-right type-hint text-[var(--color-text-secondary)] tabular-nums'
 
 const HEX_RE = /^#?([0-9a-f]{6})$/i
 
@@ -103,9 +104,11 @@ function SwatchStrip({ colors, className }: { colors: readonly string[]; classNa
   )
 }
 
+/** The chosen palette's tick. In the text colour: the card's edge is its one
+ *  accent cue. */
 function CheckMark(): React.JSX.Element {
   return (
-    <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-accent-text)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden="true">
+    <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-text-primary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden="true">
       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
     </svg>
   )
@@ -196,8 +199,19 @@ export function StylesSection(): React.JSX.Element {
 
   // A save that applied live but didn't reach storage, by where it was made.
   const [unsaved, setUnsaved] = useState<SaveSpot | null>(null)
-  const noteSave = (spot: SaveSpot, saved: boolean): void =>
+  // A save that did land, by where it was made: "Saved" there for 2s.
+  const [justSaved, setJustSaved] = useState<SaveSpot | null>(null)
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (savedTimer.current) clearTimeout(savedTimer.current)
+  }, [])
+  const noteSave = (spot: SaveSpot, saved: boolean): void => {
     setUnsaved((cur) => (saved ? (cur === spot ? null : cur) : spot))
+    if (savedTimer.current) clearTimeout(savedTimer.current)
+    setJustSaved(saved ? spot : null)
+    if (saved) savedTimer.current = setTimeout(() => setJustSaved(null), 2000)
+  }
+  const savedNote = (spot: SaveSpot): React.JSX.Element => <SaveNote state={justSaved === spot ? 'saved' : 'idle'} />
   // Storage-derived state (is there anything to reset?) re-reads on render.
   const [, rerender] = useReducer((n: number) => n + 1, 0)
 
@@ -399,9 +413,9 @@ export function StylesSection(): React.JSX.Element {
                   if (!isActive) preview(selectionForStyle(style, committed))
                 }}
                 onMouseLeave={endPreview}
+                data-k2-focus=""
                 className={cx(
-                  'relative w-full flex flex-col gap-2 px-3 py-2.5 text-left no-drag cursor-pointer transition-colors',
-                  ROW_FOCUS,
+                  'relative w-full flex flex-col gap-2 px-3 py-2.5 text-left no-drag cursor-pointer transition-colors outline-none',
                   isSelected ? 'bg-[var(--color-accent)]/15' : 'hover:bg-[var(--color-wash-1)]',
                 )}
               >
@@ -412,7 +426,8 @@ export function StylesSection(): React.JSX.Element {
                   <span data-style-name className="type-name text-[var(--color-text-primary)] truncate flex-1">
                     {style.name}
                   </span>
-                  {isActive && <Tag tone="accent">In use</Tag>}
+                  {/* Neutral: the selected row already carries the accent. */}
+                  {isActive && <Tag tone="neutral">In use</Tag>}
                 </span>
                 {swatchPalette && (
                   <SwatchStrip
@@ -438,10 +453,8 @@ export function StylesSection(): React.JSX.Element {
           <header className="space-y-3">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h2 className="type-title text-[var(--color-text-primary)] truncate">{selectedStyle.name}</h2>
-                  {selectedIsActive && <Tag tone="accent">In use</Tag>}
-                </div>
+                {/* The list marks the style in use; the title doesn't repeat it. */}
+                <h2 className="type-title text-[var(--color-text-primary)] truncate">{selectedStyle.name}</h2>
                 <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed">{selectedStyle.description}</p>
               </div>
               {!selectedIsActive && (
@@ -483,7 +496,7 @@ export function StylesSection(): React.JSX.Element {
                           className={cx(
                             'k2-focus w-40 flex flex-col gap-2 p-2.5 text-left border no-drag cursor-pointer transition-colors rounded-[calc(var(--radius-box)/2)]',
                             isCurrent
-                              ? 'border-[var(--color-accent-text)] bg-[var(--color-accent)]/10'
+                              ? 'border-[var(--color-accent-text)]'
                               : 'border-[var(--color-control-edge)] hover:border-[var(--color-text-muted)] hover:bg-[var(--color-wash-1)]',
                           )}
                         >
@@ -517,7 +530,7 @@ export function StylesSection(): React.JSX.Element {
                 </div>
               }
             >
-              {null}
+              {savedNote('palette')}
             </SettingRow>
 
             <SettingRow
@@ -526,6 +539,7 @@ export function StylesSection(): React.JSX.Element {
               hint="Auto follows your system's appearance."
               below={unsaved === 'scheme' ? <RowError>{NOT_SAVED}</RowError> : undefined}
             >
+              {savedNote('scheme')}
               {/* Manual activation: arrows only move focus, because a choice here
                   commits a style change. No value while browsing another style. */}
               <Segmented
@@ -562,6 +576,7 @@ export function StylesSection(): React.JSX.Element {
                   hint={i === 0 ? 'Auto uses these two palettes.' : undefined}
                   below={unsaved === 'auto' && i === AUTO_SIDES.length - 1 ? <RowError>{NOT_SAVED}</RowError> : undefined}
                 >
+                  {i === AUTO_SIDES.length - 1 ? savedNote('auto') : null}
                   <Segmented
                     aria-label={label}
                     activation="manual"
@@ -595,6 +610,7 @@ export function StylesSection(): React.JSX.Element {
                 ) : undefined
               }
             >
+              {savedNote('accent')}
               <input
                 type="color"
                 aria-label="Accent colour"
@@ -639,6 +655,7 @@ export function StylesSection(): React.JSX.Element {
                   hint={`Room between panes, tiles and sections. Compact is ${selectedStyle.name}'s default.`}
                   below={unsaved === 'density' ? <RowError>{NOT_SAVED}</RowError> : undefined}
                 >
+                  {savedNote('density')}
                   <Segmented
                     aria-label="Spacing"
                     activation="manual"
@@ -670,6 +687,7 @@ export function StylesSection(): React.JSX.Element {
                       hint={`${DIAL_HINTS[`${selectedStyle.id}.${dial.id}`] ?? `Adjusts ${selectedStyle.name}.`} ${savedHere}`}
                       below={unsaved === 'dials' && i === selectedStyle.dials.length - 1 ? <RowError>{NOT_SAVED}</RowError> : undefined}
                     >
+                      {i === selectedStyle.dials.length - 1 ? savedNote('dials') : null}
                       <Slider
                         aria-label={dial.label}
                         min={dial.min}
@@ -679,9 +697,7 @@ export function StylesSection(): React.JSX.Element {
                         onChange={(e) => handleDialInput(dial, Number(e.target.value))}
                         className="w-40"
                       />
-                      <span className="w-10 text-right type-hint text-[var(--color-text-secondary)] tabular-nums">
-                        {formatDialValue(dial, value)}
-                      </span>
+                      <span className={VALUE_SLOT}>{formatDialValue(dial, value)}</span>
                       <Button
                         variant="quiet"
                         className="flex-shrink-0"
@@ -708,11 +724,12 @@ export function StylesSection(): React.JSX.Element {
                 label="Text weight"
                 hint={
                   painter === 'webgl'
-                    ? `How thick text looks in terminals. Drag right for thicker; open terminals update as you drag. Saved for ${activeStyle.name} in ${resolvedScheme} mode on this computer.`
+                    ? `Drag right for thicker terminal text. Saved for ${activeStyle.name} in ${resolvedScheme} mode.`
                     : 'Only works when terminals draw with WebGL, which is turned off. Turn it on in Terminal settings, under Terminal Painter.'
                 }
                 below={unsaved === 'text-weight' ? <RowError>{NOT_SAVED}</RowError> : undefined}
               >
+                {savedNote('text-weight')}
                 <Slider
                   aria-label="Terminal text weight"
                   min={TEXT_GAMMA_MIN}
@@ -723,6 +740,8 @@ export function StylesSection(): React.JSX.Element {
                   onChange={(e) => handleTextWeight(parseFloat(e.target.value))}
                   className="w-40"
                 />
+                {/* The Frost row's value slot, empty, so both sliders end on one edge. */}
+                <span aria-hidden="true" className={VALUE_SLOT} />
                 {painter === 'webgl' ? (
                   <Button
                     variant="quiet"

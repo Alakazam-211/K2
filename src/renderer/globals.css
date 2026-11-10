@@ -37,6 +37,14 @@
 @utility type-control { font-size: var(--type-md); font-weight: var(--tw-font-weight, 400); line-height: var(--tw-leading, 1.35); }
 @utility type-badge { font-size: var(--type-micro); font-weight: var(--tw-font-weight, 600); line-height: var(--tw-leading, 1.35); }
 
+/* Code inside a sentence (a command in a hint, a file name in a row) sits at
+   the sentence's visual size. The code face runs large next to the system
+   font, so outside Terminal (whose UI font is the code face) it steps down.
+   An element with its own type role keeps it. */
+html:not([data-style="terminal"]) :is(.type-hint, .type-row, .type-control, .type-name) :is(code, .font-mono):not([class*="type-"]):not([data-zen-root] *) {
+  font-size: 0.9em;
+}
+
 /* ── Bundled coding fonts ─────────────────────────────────────────── */
 @font-face { font-family: 'MesloLGM Nerd Font'; src: url('./fonts/MesloLGMNerdFontMono-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
 @font-face { font-family: 'MesloLGM Nerd Font'; src: url('./fonts/MesloLGMNerdFontMono-Bold.ttf') format('truetype'); font-weight: 700; font-style: normal; font-display: swap; }

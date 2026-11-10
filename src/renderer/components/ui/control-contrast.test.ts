@@ -183,3 +183,13 @@ describe('Keyboard focus', () => {
     }
   })
 })
+
+describe('Code in a sentence', () => {
+  it('outside Terminal, a command inside a hint or row steps down to the sentence\'s visual size', () => {
+    const body = rule(
+      globals,
+      'html:not([data-style="terminal"]) :is(.type-hint, .type-row, .type-control, .type-name) :is(code, .font-mono):not([class*="type-"]):not([data-zen-root] *)',
+    )
+    expect(body).toContain('font-size: 0.9em')
+  })
+})

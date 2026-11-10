@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { useState } from 'react'
-import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { menuLayerForTrigger, SETTING_ROW_HINT, SettingDropdown, SettingRow, SettingsGroup } from './SettingControls'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { menuLayerForTrigger, SaveError, SaveNote, SETTING_ROW_HINT, SettingDropdown, SettingRow, SettingsGroup, useSaveStatus } from './SettingControls'
 
 function triggerUnder(...layers: Array<{ zIndex?: string; position?: string }>): HTMLElement {
   const root = document.createElement('div')
@@ -149,5 +149,47 @@ describe('SettingDropdown Esc (0.46.3)', () => {
     } finally {
       window.removeEventListener('keydown', settingsEsc)
     }
+  })
+})
+
+function SaveHarness({ fail }: { fail?: unknown }): React.JSX.Element {
+  const save = useSaveStatus()
+  return (
+    <>
+      <button type="button" onClick={() => (fail === undefined ? save.saved() : save.failed(fail))}>Write</button>
+      <SaveNote state={save.state} />
+      <SaveError state={save.state} />
+    </>
+  )
+}
+
+describe('Save confirmation', () => {
+  it('shows "Saved" by the control for two seconds after a write lands', () => {
+    vi.useFakeTimers()
+    try {
+      render(<SaveHarness />)
+      expect(screen.queryByRole('status')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Write' }))
+      expect(screen.getByRole('status').textContent).toBe('Saved')
+      act(() => { vi.advanceTimersByTime(1999) })
+      expect(screen.getByRole('status')).toBeTruthy()
+      act(() => { vi.advanceTimersByTime(1) })
+      expect(screen.queryByRole('status')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a failed write says why, that nothing changed, and to try again', () => {
+    render(<SaveHarness fail={new Error('the server refused.')} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Write' }))
+    expect(screen.getByRole('alert').textContent).toBe('Couldn\u2019t save: the server refused. Nothing changed; try again.')
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('a failure with no message still says something', () => {
+    render(<SaveHarness fail={{}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Write' }))
+    expect(screen.getByRole('alert').textContent).toContain('K2 couldn\u2019t reach this server')
   })
 })

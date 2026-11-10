@@ -108,6 +108,70 @@ export function SettingRow({
   )
 }
 
+/** What the last write from a row did: nothing yet, saved (for a moment), or
+ *  failed with a reason. */
+export type SaveState = 'idle' | 'saved' | { error: string }
+
+/** A row's save confirmation. Call `saved()` when a write lands and
+ *  `failed(err)` when it doesn't; "Saved" shows for `holdMs`, an error stays
+ *  until the next try. Pair with <SaveNote> by the control and <SaveError>
+ *  under the hint. */
+export function useSaveStatus(holdMs = 2000): {
+  state: SaveState
+  saved: () => void
+  failed: (err: unknown) => void
+  reset: () => void
+} {
+  const [state, setState] = useState<SaveState>('idle')
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const clear = (): void => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+  }
+  useEffect(() => clear, [])
+  return {
+    state,
+    saved: () => {
+      clear()
+      setState('saved')
+      timer.current = setTimeout(() => setState('idle'), holdMs)
+    },
+    failed: (err) => {
+      clear()
+      const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+      setState({ error: raw.trim() || 'K2 couldn\u2019t reach this server.' })
+    },
+    reset: () => {
+      clear()
+      setState('idle')
+    },
+  }
+}
+
+/** "Saved" with a check, quiet, beside the control for a moment after a write. */
+export function SaveNote({ state }: { state: SaveState }): React.JSX.Element | null {
+  if (state !== 'saved') return null
+  return (
+    <span role="status" data-save-note="" className="inline-flex items-center gap-1 type-hint text-[var(--color-status-ok-soft)] whitespace-nowrap">
+      <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+        <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+      </svg>
+      Saved
+    </span>
+  )
+}
+
+/** Why the last write failed, under the row's hint. The control is already
+ *  back where it was; this says so and that trying again is safe. */
+export function SaveError({ state }: { state: SaveState }): React.JSX.Element | null {
+  if (typeof state !== 'object') return null
+  return (
+    <p role="alert" data-save-error="" className="type-hint text-[var(--color-status-error-soft)] mt-1 leading-relaxed max-w-[75ch]">
+      Couldn&rsquo;t save: {state.error.replace(/[.\s]+$/, '')}. Nothing changed; try again.
+    </p>
+  )
+}
+
 /** A row whose left side is free-form (label, hint, notes) and whose control
  *  is a switch or small cluster on the right. `compact` is the narrow room
  *  drawer: the control leads and the row keeps its tighter padding. */

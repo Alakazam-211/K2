@@ -205,6 +205,17 @@ k2_screen_helper_verify_signed() {
         echo "FATAL: K2 Screen carries an entitlement it must not have ($K2_SCREEN_FORBIDDEN_ENTITLEMENTS)" >&2
         return 1
     fi
+    # Inside-out: the bundle's signature lives in its main executable, so
+    # signing the .app signs k2-deskd; check the executable carries it.
+    info="$(codesign -dv "$exe" 2>&1)" \
+        || { echo "FATAL: codesign -dv $exe failed: $info" >&2; return 1; }
+    grep -q "^Identifier=${K2_SCREEN_HELPER_BUNDLE_ID}\$" <<<"$info" \
+        || { echo "FATAL: k2-deskd inside K2 Screen.app is not signed as ${K2_SCREEN_HELPER_BUNDLE_ID}" >&2; return 1; }
+    # The outer app's --deep --strict check reaches the nested bundle.
+    out="$(codesign --verify --deep --strict --verbose=2 "$app" 2>&1)" \
+        || { echo "FATAL: $app does not deep-verify: ${out:0:400}" >&2; return 1; }
+    grep -q -- "--validated:.*${K2_SCREEN_HELPER_APP}" <<<"$out" \
+        || { echo "FATAL: codesign --deep on $app did not validate ${K2_SCREEN_HELPER_APP}" >&2; return 1; }
     rc=0
     out="$("$exe" --version 2>&1)" || rc=$?
     if [ "$rc" -eq 137 ]; then

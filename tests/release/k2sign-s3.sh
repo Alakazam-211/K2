@@ -161,20 +161,37 @@ mkmac "$tmp/md-old" 0.46.19; refuses "a marker for another version" "$tmp/md-old
 mkmac "$tmp/md-np" "$V3" no-ptyd; refuses "no embedded k2-ptyd" "$tmp/md-np" u2 k2-daemon-macos-aarch64 "$V3" "embeds no k2-ptyd"
 cp "$tmp/lx" "$tmp/elf-as-mac"; refuses "an ELF offered as the macOS daemon" "$tmp/elf-as-mac" u2 k2-daemon-macos-aarch64 "$V3" "is not an arm64 Mach-O"
 
-echo "== K2.app.tar.gz: team, notarized, version, nested helper and k2-ptyd =="
-mkapp() { # <out tgz> <version> [no-ptyd]
-    local d="$tmp/appsrc" a
-    rm -rf "$d"; a="$d/K2.app"
+echo "== K2.app.tar.gz: team, notarized, version, nested helpers (k2-ptyd, K2 Screen) =="
+# A get-task-allow entitlement K2 Screen must never carry.
+printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>com.apple.security.get-task-allow</key><true/></dict></plist>\n' > "$tmp/gta.plist"
+mkapp() { # <out tgz> <version> [no-ptyd|no-screen|screen-id|screen-noruntime|screen-gta|screen-plist]
+    local d="$tmp/appsrc" a f="${3:-}" s sid="dev.k2.app.screen" sopts=(-o runtime) splist="dev.k2.app.screen"
+    rm -rf "$d"; a="$d/K2.app"; s="$a/Contents/Helpers/K2 Screen.app"
     mkdir -p "$a/Contents/MacOS" "$a/Contents/Helpers/K2 Daemon.app/Contents/MacOS"
     cp "$tmp/outer" "$a/Contents/MacOS/k2"
     cp "$tmp/outer" "$a/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon"
-    [ "${3:-}" = no-ptyd ] || cp "$tmp/ptyd" "$a/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-ptyd"
+    [ "$f" = no-ptyd ] || cp "$tmp/ptyd" "$a/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-ptyd"
     printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.k2.app.daemon</string><key>CFBundleExecutable</key><string>k2-daemon</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>\n' \
         > "$a/Contents/Helpers/K2 Daemon.app/Contents/Info.plist"
     printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.k2.app</string><key>CFBundleExecutable</key><string>k2</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>\n' "$2" \
         > "$a/Contents/Info.plist"
-    [ "${3:-}" = no-ptyd ] || codesign -f -s - -i dev.k2.app.ptyd "$a/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-ptyd" 2>/dev/null
+    [ "$f" = no-ptyd ] || codesign -f -s - -i dev.k2.app.ptyd "$a/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-ptyd" 2>/dev/null
     codesign -f -s - "$a/Contents/Helpers/K2 Daemon.app" 2>/dev/null
+    # K2 Screen.app, signed inside-out like release.sh: the bundle (whose
+    # signature lives in k2-deskd) before the outer app.
+    if [ "$f" != no-screen ]; then
+        case "$f" in
+            screen-id) sid="dev.k2.app.other" ;;
+            screen-noruntime) sopts=() ;;
+            screen-gta) sopts=(-o runtime --entitlements "$tmp/gta.plist") ;;
+            screen-plist) splist="dev.k2.app.wrong" ;;
+        esac
+        mkdir -p "$s/Contents/MacOS"
+        cp "$tmp/outer" "$s/Contents/MacOS/k2-deskd"
+        printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>%s</string><key>CFBundleExecutable</key><string>k2-deskd</string><key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/></dict></plist>\n' "$splist" \
+            > "$s/Contents/Info.plist"
+        codesign -f -s - -i "$sid" ${sopts[@]+"${sopts[@]}"} "$s" 2>/dev/null
+    fi
     codesign -f -s - "$a" 2>/dev/null
     COPYFILE_DISABLE=1 tar -czf "$1" -C "$d" K2.app
 }
@@ -189,6 +206,16 @@ V5=0.46.24; open_session "$V5" "$B1" "${ASSETS[@]}"
 refuses "S3-6 a $V4 app in a $V5 session" "$tmp/app.tgz" u2 K2.app.tar.gz "$V5" "K2.app is $V4, session is $V5"
 mkapp "$tmp/app-np.tgz" "$V5" no-ptyd
 refuses "no k2-ptyd in the daemon helper" "$tmp/app-np.tgz" u2 K2.app.tar.gz "$V5" "K2.app has no k2-ptyd"
+mkapp "$tmp/app-ns.tgz" "$V5" no-screen
+refuses "no K2 Screen.app (remote desktop helper)" "$tmp/app-ns.tgz" u2 K2.app.tar.gz "$V5" "K2.app has no K2 Screen.app with k2-deskd"
+mkapp "$tmp/app-sp.tgz" "$V5" screen-plist
+refuses "K2 Screen.app's Info.plist names another bundle" "$tmp/app-sp.tgz" u2 K2.app.tar.gz "$V5" "K2 Screen.app must be dev.k2.app.screen running k2-deskd"
+mkapp "$tmp/app-si.tgz" "$V5" screen-id
+refuses "K2 Screen signed under another identifier" "$tmp/app-si.tgz" u2 K2.app.tar.gz "$V5" "K2.app has no K2 Screen.app signed by team 36B8R93HXV as dev.k2.app.screen"
+mkapp "$tmp/app-sr.tgz" "$V5" screen-noruntime
+refuses "K2 Screen without the hardened runtime" "$tmp/app-sr.tgz" u2 K2.app.tar.gz "$V5" "K2 Screen.app is not signed with the hardened runtime"
+mkapp "$tmp/app-sg.tgz" "$V5" screen-gta
+refuses "K2 Screen with get-task-allow" "$tmp/app-sg.tgz" u2 K2.app.tar.gz "$V5" "K2 Screen.app carries com.apple.security.get-task-allow"
 mkapp "$tmp/app5.tgz" "$V5"
 signs "K2.app.tar.gz with its evidence" "$tmp/app5.tgz" u2 K2.app.tar.gz "$V5"
 printf 'not a tarball' > "$tmp/junk"; refuses "a file that isn't a tarball" "$tmp/junk" u1 K2.app.tar.gz 0.46.25 "no approved signing session"

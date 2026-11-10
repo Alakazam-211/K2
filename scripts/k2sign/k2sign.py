@@ -84,6 +84,20 @@ POLICY_KEYS = {
 }
 LINUX_DAEMONS = {"k2-daemon-linux-x86_64": "x86_64", "k2-daemon-linux-aarch64": "aarch64"}
 MAC_DAEMON = "k2-daemon-macos-aarch64"
+# K2 Screen.app, the remote desktop helper (prd-remote-desktop-tab-v1 D3):
+# the one K2 process that holds Screen Recording and Accessibility.
+SCREEN_APP = "K2 Screen.app"
+SCREEN_ID = "dev.k2.app.screen"
+SCREEN_EXE = "k2-deskd"
+# Entitlements it must never carry: anything that lets another process
+# attach to it or load code into it would hand out both grants.
+SCREEN_FORBIDDEN = (
+    "com.apple.security.get-task-allow",
+    "com.apple.security.cs.allow-dyld-environment-variables",
+    "com.apple.security.cs.disable-library-validation",
+    "com.apple.security.cs.allow-jit",
+    "com.apple.security.cs.allow-unsigned-executable-memory",
+)
 APP_TARBALL = "K2.app.tar.gz"
 MARKER_RE = re.compile(rb"K2_DAEMON_BUILD v=([0-9.]+) os=([a-z]+) arch=([a-z0-9_]+);")
 TOKEN_RE = re.compile(r"^(github_pat_[A-Za-z0-9_]{20,255}|gh[pousr]_[A-Za-z0-9]{20,255})$")
@@ -946,7 +960,8 @@ def codesign_ok(ctx, pol, target, identifier, deep=False):
 
 def app_evidence(ctx, pol, version, path, d):
     """K2.app.tar.gz: Developer ID for our team, notarized and stapled, this
-    version, with the nested daemon helper and k2-ptyd signed."""
+    version, with the nested daemon helper and k2-ptyd signed, and K2 Screen
+    signed and locked down (screen_evidence)."""
     import plistlib
     team = pol["apple_team"]
     x = os.path.join(d, "app")
@@ -977,6 +992,39 @@ def app_evidence(ctx, pol, version, path, d):
     ptyd = os.path.join(helper, "Contents", "MacOS", "k2-ptyd")
     if not os.path.isfile(ptyd) or not codesign_ok(ctx, pol, ptyd, "dev.k2.app.ptyd"):
         raise Refused("K2.app has no k2-ptyd signed by team %s" % team)
+    screen_evidence(ctx, pol, app)
+
+
+def screen_evidence(ctx, pol, app):
+    """K2.app/Contents/Helpers/K2 Screen.app: its own bundle (id and main
+    executable), signed by our team as dev.k2.app.screen, hardened runtime,
+    none of SCREEN_FORBIDDEN. The outer --deep check already proved its
+    signature valid; this proves it is ours and locked down."""
+    import plistlib
+    team = pol["apple_team"]
+    screen = os.path.join(app, "Contents", "Helpers", SCREEN_APP)
+    exe = os.path.join(screen, "Contents", "MacOS", SCREEN_EXE)
+    if not os.path.isdir(screen) or not os.path.isfile(exe):
+        raise Refused("K2.app has no %s with %s (the remote desktop helper)" % (SCREEN_APP, SCREEN_EXE))
+    try:
+        info = plistlib.load(open(os.path.join(screen, "Contents", "Info.plist"), "rb"))
+    except Exception:
+        raise Refused("%s has no readable Info.plist" % SCREEN_APP)
+    if info.get("CFBundleIdentifier") != SCREEN_ID or info.get("CFBundleExecutable") != SCREEN_EXE:
+        raise Refused("%s must be %s running %s (it is %s running %s)"
+                      % (SCREEN_APP, SCREEN_ID, SCREEN_EXE, info.get("CFBundleIdentifier"), info.get("CFBundleExecutable")))
+    if not codesign_ok(ctx, pol, screen, SCREEN_ID):
+        raise Refused("K2.app has no %s signed by team %s as %s" % (SCREEN_APP, team, SCREEN_ID))
+    rc, out, err = run(["/usr/bin/codesign", "-dv", screen])
+    m = re.search(rb"flags=0x[0-9a-f]+\(([^)]*)\)", out + err)
+    if rc != 0 or m is None or b"runtime" not in m.group(1).split(b","):
+        raise Refused("%s is not signed with the hardened runtime" % SCREEN_APP)
+    rc, out, err = run(["/usr/bin/codesign", "-d", "--entitlements", "-", "--xml", screen])
+    if rc != 0:
+        raise Refused("cannot read %s's entitlements (%s)" % (SCREEN_APP, first_line(err)))
+    for k in SCREEN_FORBIDDEN:
+        if k.encode() in out:
+            raise Refused("%s carries %s" % (SCREEN_APP, k))
 
 
 MH_MAGIC_64 = b"\xcf\xfa\xed\xfe"

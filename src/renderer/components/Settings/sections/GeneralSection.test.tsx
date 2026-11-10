@@ -81,7 +81,7 @@ describe('Settings → General', () => {
     const groups = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)
     // "You" always has Your timezone, so it is never a bare heading even
     // when Your account is hidden (a Member, or no owner-linked accounts).
-    expect(groups).toEqual(['K2', 'Text', 'This computer', 'You', 'Saved settings'])
+    expect(groups).toEqual(['K2', 'Text', 'This computer', 'You', 'Send feedback', 'Saved settings'])
     expect(within(row('general.owner-timezone')).getByLabelText('Your timezone')).toBeTruthy()
     await waitFor(() => expect(row('general.app-version').textContent).toContain('Version 0.46.11.'))
     expect(row('general.cli-version').textContent).toContain('Version 0.46.11 installed.')

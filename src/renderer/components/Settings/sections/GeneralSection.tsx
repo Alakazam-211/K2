@@ -294,9 +294,7 @@ function GeneralTab({ isRemote }: { isRemote: boolean }): React.JSX.Element {
 
       {/* Send feedback to K2 (prd-k2-product-feedback-v1, 0.46.11): this
           person's remembered choice; the owner's and admins' switches. */}
-      <SettingsGroup title="Send feedback" card>
-        <SendFeedbackRows />
-      </SettingsGroup>
+      <SendFeedbackRows />
 
       <SettingsGroup title="Saved settings" card>
         <ConfigLocationRow />

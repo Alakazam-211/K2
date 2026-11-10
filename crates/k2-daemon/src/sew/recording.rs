@@ -404,7 +404,9 @@ fn licence_file(m: &rec::SewAsrModel, l: &rec::SewAsrLicence) -> ReleaseFile {
         tag: m.sew_version.into(),
         name: l.file.into(),
         sha256: l.sha256.into(),
-        cap: l.size,
+        // The helper's cap, not the pinned size: a wrong file is then a
+        // sha256 refusal that names it, never a bare "too large".
+        cap: rec::MAX_ASR_LICENCE as u64,
         label: format!("the speech model's licence file {}", l.file),
     }
 }

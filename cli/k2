@@ -395,9 +395,9 @@ _cli_tool_id_for_verb() {
         help|--help|-h|glossary|help-deprecated|help-internal|help-advanced) echo "help" ;;
         --schema|schema) echo "schema" ;;
         study) echo "study" ;;
-        whats-new|whatsnew) echo "whats-new" ;;
+        whats-new) echo "whats-new" ;;
         checkin|done|status) echo "checkin" ;;
-        activity|feed) echo "activity" ;;
+        activity) echo "activity" ;;
         read) echo "read" ;;
         skills) echo "skills" ;;
         msg|talk|thread) echo "msg" ;;

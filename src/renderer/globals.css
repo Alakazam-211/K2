@@ -1698,6 +1698,9 @@ html[data-style="glass"] [data-material="frost"][class~="right-0"]:not([data-zen
   html[data-style="glass"] [data-nav-control]:active:not(:disabled):not([data-zen-root] *) { scale: 1; }
 }
 
+/* People are round in Glass. The chip sets its Terminal cut inline, so this has to win over that. */
+html[data-style="glass"] :is([data-presence-chip], [data-presence-more]) > span:not([data-zen-root] *) { clip-path: none !important; border-radius: 9999px; }
+
 /* Glass: segmented motion off under reduced motion (the slide lives in the
    style package, which can't hold a media query). */
 @media (prefers-reduced-motion: reduce) {

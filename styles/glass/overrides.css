@@ -390,3 +390,12 @@
 [data-style="glass"] :is([data-home-picker-menu], [data-focus-group-menu])[data-placement="down"]:not([data-zen-root] *) { margin-top: 4px; }
 [data-style="glass"] :is([data-home-picker-menu], [data-focus-group-menu])[data-placement="up"]:not([data-zen-root] *) { margin-bottom: 4px; }
 [data-style="glass"] [data-picker-spacer]:not([data-zen-root] *) { display: none; }
+
+/* People and agents are round in Glass, like the phone. Gardens keep their own look. */
+[data-style="glass"] [data-k2-avatar]:not([data-zen-root] *) { border-radius: 9999px; overflow: hidden; }
+[data-style="glass"] [data-nav-chip="machine"]:not([data-zen-root] *) {
+  border-color: transparent;
+  border-radius: 9999px;
+  background: var(--color-bg-elevated);
+  padding-inline: 8px;
+}

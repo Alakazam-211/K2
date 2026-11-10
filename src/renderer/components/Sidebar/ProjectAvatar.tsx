@@ -121,6 +121,7 @@ export default function ProjectAvatar({
       <span
         className="flex-shrink-0"
         data-k2-chamfer="surface"
+        data-k2-avatar=""
         style={{
           ...cutVars,
           width: size,
@@ -149,6 +150,7 @@ export default function ProjectAvatar({
       <span
         className="flex items-center justify-center"
         data-k2-chamfer="surface"
+        data-k2-avatar=""
         style={{
           ...cutVars,
           '--k2-ch-bw': '0px',

@@ -62,11 +62,12 @@ function message(over: Partial<ReaderMessage> = {}): ReaderMessage {
 
 function fakeSource(opts: { viewer?: ReaderViewer; inboxes?: ReaderInbox[]; thread?: ReaderMessage[] } = {}) {
   const calls: { method: string; args: unknown[] }[] = []
-  const rec = (method: string, answer: unknown) =>
+  // Typed as the method it stands in for: records the call, answers `answer`.
+  const rec = <K extends keyof MailReaderSource>(method: K, answer: Awaited<ReturnType<MailReaderSource[K]>>) =>
     vi.fn(async (...args: unknown[]) => {
       calls.push({ method, args })
       return answer
-    })
+    }) as unknown as MailReaderSource[K]
   const thread = opts.thread ?? [message()]
   const source = {
     inboxes: rec('inboxes', { viewer: opts.viewer ?? ADMIN, inboxes: opts.inboxes ?? INBOXES }),
@@ -90,7 +91,13 @@ function fakeSource(opts: { viewer?: ReaderViewer; inboxes?: ReaderInbox[]; thre
   return { source, calls, writes: () => calls.filter((c) => (WRITE_METHODS as readonly string[]).includes(c.method)) }
 }
 
-async function openFirstThread(f: ReturnType<typeof fakeSource>, renderHtml = vi.fn(() => null), confirm = vi.fn(async () => true)) {
+type HtmlSlot = (p: { html: string; title: string }) => React.ReactNode
+
+async function openFirstThread(
+  f: ReturnType<typeof fakeSource>,
+  renderHtml: HtmlSlot = vi.fn(() => null),
+  confirm: () => Promise<boolean> = vi.fn(async () => true),
+) {
   render(<MailReader source={f.source} renderHtml={renderHtml} confirm={confirm} />)
   // Admin's own mailbox is picked first; switch to the agent inbox.
   fireEvent.click(await screen.findByTestId('mr-inbox-bot@x.example'))

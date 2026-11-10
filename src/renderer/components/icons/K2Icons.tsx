@@ -5,11 +5,11 @@
 //
 //   Home, Agents, Projects, Tickets, Wiki, Server, Admin, Run, Drawer,
 //   Clock, Mug, Help, Pin, PinOff, Palette, Board, Smartphone, SmartphoneOff,
-//   Pencil, Trash, ArrowUp, Feedback, OrgChart
+//   Pencil, Trash, ArrowUp, Feedback, OrgChart, Mail
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `library`,
 //     `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`,
 //     `circle-help`, `pin`, `pin-off`, `palette`, `presentation`,
-//     `smartphone`, `pencil`, `trash-2`, `arrow-up`, `message-square`; SmartphoneOff is
+//     `smartphone`, `pencil`, `trash-2`, `arrow-up`, `message-square`, `mail`; SmartphoneOff is
 //     `smartphone` plus the bell's 2,2 → 22,22 slash),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
@@ -142,6 +142,17 @@ export function OrgChartIcon(props: K2IconProps = {}): React.JSX.Element {
       <rect x="16" y="16" width="6" height="6" />
       <path d="M5 16v-4h14v4" />
       <path d="M12 12V8" />
+    </svg>
+  )
+}
+
+/** Mail (the Mail page, OA5): Lucide `mail`, squared (the flap meets in a
+ *  mitred point). */
+export function MailIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('mail', props)}>
+      <rect width="20" height="16" x="2" y="4" />
+      <path d="m22 7-10 6L2 7" />
     </svg>
   )
 }

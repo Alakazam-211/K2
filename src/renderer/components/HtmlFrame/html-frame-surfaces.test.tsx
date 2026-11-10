@@ -38,6 +38,8 @@ const SURFACES: ReadonlyArray<{ file: string; profile: 'scripted' | 'inert' | 'w
   { file: 'components/FileViewerPane/FileViewerPane.tsx', profile: 'scripted' },
   { file: 'components/Projects/ProjectDashboard.tsx', profile: 'scripted' },
   { file: 'components/AgentPane/AgentInboxPane.tsx', profile: 'inert' },
+  // prd-ocmail-admin-in-k2-v1 T13: the Mail page's slot for @k2/mail-reader.
+  { file: 'components/Mail/InertMailFrame.tsx', profile: 'inert' },
   { file: 'components/Feedback/BriefFrame.tsx', profile: 'inert' },
   // prd-zen-user-widgets-v2 TUW3.1: agent-written Garden widgets, sealed.
   { file: 'components/Zen/widgets/ZenCustomFrame.tsx', profile: 'widget' },

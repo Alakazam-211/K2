@@ -23,6 +23,7 @@ import { openWikiTab } from '@/lib/wiki-open'
 import { pageShortcutLabel } from '@/lib/page-shortcuts'
 import { isMacPlatform, type DesktopOs } from '@/lib/desktop-chrome'
 import { HomesSyncBadge } from '@/components/Home/HomesSyncBadge'
+import { useMailTabShown } from '@/components/Mail/mail-tab'
 import { PageTab } from './PageTab'
 
 // The tab itself is its own light module, so Thread view's drawer selector
@@ -55,6 +56,7 @@ export const PAGE_TAB_LABELS = {
   projects: { name: 'Projects', title: 'Projects — grouped agents, shared dashboards' },
   feedback: { name: 'Tickets', title: 'Tickets — agents waiting on a human' },
   wiki: { name: 'Wiki', title: 'Wiki' },
+  mail: { name: 'Mail', title: 'Mail — read the inboxes on this server (hosted and linked)' },
 } as const
 
 /** The Org Chart tab (prd-org-chart-v1 §6.5, Rosson 2026-11-10): just left
@@ -77,7 +79,7 @@ export function orgChartTabTitle(keybindings: Record<string, string>, isMac: boo
  *  top-bar icon, the cog included, inside the 24px-tall tab. */
 export const PAGE_TAB_ICON_PX = K2_ICON_PX
 
-/** The five page tabs in order, with their A3 icons. Wiki (0.46.0, Rosson
+/** The page tabs in order, with their A3 icons. Wiki (0.46.0, Rosson
  *  2026-10-16) opens the wiki of the workspace on screen
  *  (`lib/wiki-open.ts`), not a bare page switch. */
 export const PAGE_TAB_ITEMS = [
@@ -86,6 +88,9 @@ export const PAGE_TAB_ITEMS = [
   { page: 'projects', Icon: FEATURE_ICONS.projects },
   { page: 'feedback', Icon: FEATURE_ICONS.tickets },
   { page: 'wiki', Icon: FEATURE_ICONS.wiki },
+  // OA5 (prd-ocmail-admin-in-k2-v1): the mail reader, right of the Wiki;
+  // shown for Owner, Admin and Member logins only (`useMailTabShown`).
+  { page: 'mail', Icon: FEATURE_ICONS.mail },
 ] as const satisfies readonly { page: keyof typeof PAGE_TAB_LABELS; Icon: (props: K2IconProps) => React.JSX.Element }[]
 
 /** A page tab's tooltip with its chords: the page shortcut (⌃⌘1–5,
@@ -124,6 +129,7 @@ export default function PageTabs(): React.JSX.Element {
   // (that N+1 over E2E is the Settings-drag disconnect on large remotes).
   // Defensive: a malformed store value must not take the top bar down.
   const projectIdsKey = (Array.isArray(projects) ? projects : []).map((p) => p?.id ?? '').join('\0')
+  const mailShown = useMailTabShown()
 
   // Moved verbatim from the absorbed FeedbackTopBarButton: wire the
   // feedback:created/answered listeners once (idempotent) and (re)count
@@ -163,7 +169,7 @@ export default function PageTabs(): React.JSX.Element {
 
   return (
     <div data-material="frost" data-frost-shape="pill" data-page-tabs="" className="no-drag flex items-center gap-0.5">
-      {PAGE_TAB_ITEMS.map(({ page: p, Icon }) => {
+      {PAGE_TAB_ITEMS.filter(({ page: p }) => p !== 'mail' || mailShown).map(({ page: p, Icon }) => {
         const badge =
           p === 'projects'
             ? { badge: projectsUnread }

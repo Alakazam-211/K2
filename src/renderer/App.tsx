@@ -61,6 +61,7 @@ import { installAccountDbBaseLoader } from './components/Settings/lib/account-db
 import ProjectsPage from './components/Projects/ProjectsPage'
 import WikiPage from './components/Wiki/WikiPage'
 import OrgChartPage from './components/OrgChart/OrgChartPage'
+import MailPage from './components/Mail/MailPage'
 import { usePageViewStore, isRoomPage, primaryRoomPageLive } from './stores/page-view'
 import { initFeedbackEvents } from './stores/feedback'
 import { initAppApprovalsEvents } from './stores/app-approvals'
@@ -1157,6 +1158,8 @@ function AppRoot(): React.JSX.Element {
       {!settingsOpen && <ProjectsPage />}
       {!settingsOpen && <WikiPage />}
       {!settingsOpen && <OrgChartPage />}
+      {/* OA5 (prd-ocmail-admin-in-k2-v1): the mail reader page. */}
+      {!settingsOpen && <MailPage />}
       <ContextMenu />
       <ConfirmDialog />
       {/* Send feedback to K2: one dialog per window, opened by the top-bar

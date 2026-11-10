@@ -31,7 +31,9 @@ const h = vi.hoisted(() => {
   const unread = { byKey: {} as Record<string, { kind: string; id: string; unread: number; waiting: number; muted: boolean }> }
   // Typed loose so a test can hand PageTabs a malformed value.
   const projects = { projects: [] as unknown }
-  return { settings, feedback, unread, projects }
+  // OA5: whether this login may see the Mail tab (Owner, Admin, Member).
+  const mail = { shown: false }
+  return { settings, feedback, unread, projects, mail }
 })
 
 function hookOf<T extends object>(state: T): ((sel: (s: T) => unknown) => unknown) & { getState: () => T } {
@@ -62,6 +64,9 @@ vi.mock('@/stores/unread', async () => {
 vi.mock('@/stores/projects', () => ({
   useProjectsStore: hookOf(h.projects),
 }))
+vi.mock('@/components/Mail/mail-tab', () => ({
+  useMailTabShown: () => h.mail.shown,
+}))
 
 import PageTabs, { ORG_CHART_TAB, PAGE_TAB_ICON_PX, PAGE_TAB_ITEMS, settingsTabTitle } from './PageTabs'
 import { currentShortcutOs } from '@/lib/shortcut-label'
@@ -75,6 +80,7 @@ afterEach(() => {
   h.projects.projects = []
   h.settings.keybindings = {}
   h.settings.orgChart = false
+  h.mail.shown = false
   usePageViewStore.getState().setPage('agents')
 })
 
@@ -144,11 +150,12 @@ describe('PageTabs — Home tab', () => {
   it('each page draws its A3 icon (home, agents, projects, tickets, wiki)', () => {
     const { container } = render(<PageTabs />)
     const pages = tabs(container).slice(0, -1)
-    PAGE_TAB_ITEMS.forEach(({ Icon }, i) => {
+    // Mail is hidden here (h.mail.shown false); its own test below.
+    PAGE_TAB_ITEMS.filter((x) => x.page !== 'mail').forEach(({ Icon }, i) => {
       const { container: one } = render(<Icon size={PAGE_TAB_ICON_PX} />)
       expect(pages[i].innerHTML).toBe(one.innerHTML)
     })
-    expect(PAGE_TAB_ITEMS.map((x) => x.page)).toEqual(['home', 'agents', 'projects', 'feedback', 'wiki'])
+    expect(PAGE_TAB_ITEMS.map((x) => x.page)).toEqual(['home', 'agents', 'projects', 'feedback', 'wiki', 'mail'])
     expect(pages.map((b) => b.querySelector('svg')?.getAttribute('data-k2-icon'))).toEqual([
       'home',
       'agents',
@@ -307,6 +314,35 @@ describe('PageTabs — Wiki tab (0.46.0)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Wiki' }))
     expect(h.settings.closeSettings).toHaveBeenCalled()
     expect(usePageViewStore.getState().page).toBe('wiki')
+  })
+})
+
+describe('PageTabs — Mail tab (OA5, prd-ocmail-admin-in-k2-v1)', () => {
+  it('is hidden unless the login may see it (Owner, Admin, Member)', () => {
+    render(<PageTabs />)
+    expect(screen.queryByRole('button', { name: 'Mail' })).toBeNull()
+  })
+
+  it('when shown: right of the Wiki, before the cog, envelope icon; clicking it opens the Mail page', () => {
+    h.mail.shown = true
+    const { container } = render(<PageTabs />)
+    const mail = screen.getByRole('button', { name: 'Mail' })
+    expect(tabs(container).at(-2)).toBe(mail)
+    expect(tabs(container).at(-3)).toBe(screen.getByRole('button', { name: 'Wiki' }))
+    expect(mail.querySelector('svg')?.getAttribute('data-k2-icon')).toBe('mail')
+    expect(mail.getAttribute('title')).toBe('Mail — read the inboxes on this server (hosted and linked)')
+    fireEvent.click(mail)
+    expect(usePageViewStore.getState().page).toBe('mail')
+    expect(isRoomPage('mail' as AppPage)).toBe(false)
+  })
+
+  it('from Settings it closes Settings and opens Mail', () => {
+    h.mail.shown = true
+    h.settings.settingsOpen = true
+    render(<PageTabs />)
+    fireEvent.click(screen.getByRole('button', { name: 'Mail' }))
+    expect(h.settings.closeSettings).toHaveBeenCalled()
+    expect(usePageViewStore.getState().page).toBe('mail')
   })
 })
 

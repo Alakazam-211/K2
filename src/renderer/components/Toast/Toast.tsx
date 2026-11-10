@@ -104,6 +104,7 @@ const PAGE_HOST: Partial<Record<AppPage, string>> = {
   projects: 'projects',
   feedback: 'feedback',
   wiki: 'wiki',
+  mail: 'mail',
 }
 
 function firstVisible(root: ParentNode, selector: string): HTMLElement | null {

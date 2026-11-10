@@ -46,7 +46,7 @@ describe('top bar: selector, then server, hidden on Home', () => {
     act(() => usePageViewStore.setState({ page: 'home' }))
     const { container } = render(<TopBar />)
     expect(hidden(container)).toBe('true')
-    for (const page of ['agents', 'projects', 'feedback', 'wiki'] as AppPage[]) {
+    for (const page of ['agents', 'projects', 'feedback', 'wiki', 'mail'] as AppPage[]) {
       act(() => usePageViewStore.setState({ page }))
       expect(hidden(container)).toBe('false')
     }
@@ -59,6 +59,7 @@ describe('top bar: selector, then server, hidden on Home', () => {
     ['Projects', '../Projects/ProjectsPage.tsx'],
     ['Wiki', '../Wiki/WikiPage.tsx'],
     ['Tickets', '../Feedback/FeedbackPage.tsx'],
+    ['Mail', '../Mail/MailPage.tsx'],
   ])('%s bar: same order, server always shown', (_name, rel) => {
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), rel), 'utf8')
     const tabs = src.indexOf('<PageTabs />')

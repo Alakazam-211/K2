@@ -72,6 +72,7 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Feedback/FeedbackItemView.tsx': 'Feedback page: the room is hidden',
   'components/Wiki/WikiPage.tsx': 'Wiki page: the room is hidden',
   'components/OrgChart/OrgChartPage.tsx': 'Org Chart page: the room is hidden',
+  'components/Mail/MailPage.tsx': 'Mail page: the room is hidden',
   // Zen covers the window; PageLive is false so Browser tabs hide.
   'components/Zen/ZenAddAgent.tsx': 'Zen is shown: Browser tabs are hidden',
   'components/Zen/ZenChromeCluster.tsx': 'Zen is shown: Browser tabs are hidden',

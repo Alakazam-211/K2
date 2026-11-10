@@ -815,8 +815,13 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/roster/publish", Admin),
     post("/cli/compute/run", Member),
     get("/cli/compute/seats", Admin),
+    // Seat end / suspend / resume (11-07 trust review M7): the owner, in
+    // person (the handler: owner_person + a fresh confirm bound to the seat).
+    post("/cli/compute/seats/end", Admin),
     post("/cli/compute/seats/offer", Admin),
     post("/cli/compute/seats/request", Admin),
+    post("/cli/compute/seats/resume", Admin),
+    post("/cli/compute/seats/suspend", Admin),
     post("/cli/compute/trust/approve", Admin),
     post("/cli/compute/trust/deny", Admin),
     get("/cli/compute/trust/requests", Admin),

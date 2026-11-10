@@ -75,6 +75,9 @@ pub mod codes {
     pub const KEY_REVOKED: &str = "node_key_revoked";
     pub const ROTATION_REFUSED: &str = "rotation_refused";
     pub const NODE_CLIENT_CAP: &str = super::ci::codes::NODE_CLIENT_CAP;
+    /// Two different rosters under one seq, or one that doesn't chain to
+    /// the one before it held here.
+    pub const ROSTER_FORKED: &str = "node_roster_forked";
 }
 
 /// A name (`[a-z0-9._-]`, 1–63, starts alphanumeric: lanes, seats, owners).
@@ -141,6 +144,72 @@ pub fn taint_basis_for(st: &NodeStatement, attested: bool, rekeyed: bool) -> Res
             "this key predates the taint flag (taint: unknown): attest it (--attest \"what you checked\") or re-key it under the wall".into(),
         )),
     }
+}
+
+/// Why a statement disqualifies its key from any lane (V10): it ran a job
+/// without the wall, or the node runs `--dev`, without the job wall, or
+/// with a key its jobs can read. `None`: it vouches for nothing bad.
+pub fn statement_taint(st: &NodeStatement) -> Option<&'static str> {
+    if st.taint == Taint::Tainted {
+        Some("it ran a job without the job wall")
+    } else if st.dev {
+        Some("it runs with --dev")
+    } else if st.wall == ci::Wall::None {
+        Some("it runs without the job wall")
+    } else if st.key_exposure.job_readable {
+        Some("its key is readable by its jobs")
+    } else {
+        None
+    }
+}
+
+/// Remember, for good, that a key was seen tainted (0284; 11-07 review
+/// M4). A later statement saying "clean" never clears it: only a new key.
+pub fn remember_taint(conn: &Connection, node_fp: &str, why: &str, at: i64) {
+    let _ = conn.execute("INSERT OR IGNORE INTO compute_tainted_keys (node_fp, why, at) VALUES (?1, ?2, ?3)", params![node_fp, why, at]);
+}
+
+/// Was this key ever seen tainted here (and why)? A store error counts as
+/// tainted.
+pub fn taint_remembered(conn: &Connection, node_fp: &str) -> Option<String> {
+    match conn.query_row("SELECT why FROM compute_tainted_keys WHERE node_fp = ?1", params![node_fp], |r| r.get::<_, String>(0)).optional() {
+        Ok(w) => w,
+        Err(e) => Some(format!("the taint record can't be read: {e}")),
+    }
+}
+
+/// [`taint_basis_for`], and never for a key this server remembers tainted
+/// (M4): a key that ran unwalled once stays out of every lane.
+pub fn taint_basis_checked(conn: &Connection, st: &NodeStatement, attested: bool, rekeyed: bool) -> Result<TaintBasis, (&'static str, String)> {
+    if let Some(why) = taint_remembered(conn, &st.node_fp) {
+        return Err((codes::NODE_KEY_TAINTED, format!("this key was seen tainted here ({why}): only a re-key under the wall clears it")));
+    }
+    taint_basis_for(st, attested, rekeyed)
+}
+
+/// The owner's working entries whose key no longer deserves a vouch (M4):
+/// the node's latest statement (for that key) disqualifies it, or the key
+/// is remembered tainted. Each one's taint basis goes (a narrowing: no
+/// person needed), and the taint is remembered. Returns the names changed.
+pub fn narrow_tainted(conn: &Connection, at: i64) -> Vec<String> {
+    let mut changed = Vec::new();
+    for mut e in entries(conn).into_iter().filter(|e| e.entry.status == KeyStatus::Active && e.entry.taint_basis.is_some()) {
+        let live = e.node_id.as_deref().and_then(|id| statement_of(conn, id)).map(|(_, st)| st).filter(|st| st.node_fp == e.entry.node_fp);
+        if let Some(why) = live.as_ref().and_then(statement_taint) {
+            remember_taint(conn, &e.entry.node_fp, why, at);
+        }
+        if taint_remembered(conn, &e.entry.node_fp).is_none() {
+            continue;
+        }
+        e.entry.taint_basis = None;
+        e.entry.attestation_digest = None;
+        e.attestation = None;
+        e.updated_at = at;
+        if put_entry(conn, &e, at).is_ok() {
+            changed.push(e.entry.name.clone());
+        }
+    }
+    changed
 }
 
 // ── roster entries (owner) ───────────────────────────────────────────
@@ -297,6 +366,19 @@ pub fn latest_roster(conn: &Connection, key_fp: &str) -> Option<StoredRoster> {
     conn.query_row(
         "SELECT body, sig, source, received_at FROM compute_node_rosters WHERE key_fp = ?1 ORDER BY seq DESC LIMIT 1",
         params![key_fp],
+        roster_from_row,
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .and_then(stored)
+}
+
+/// The roster stored under a roster key with exactly this `seq`.
+pub fn roster_at(conn: &Connection, key_fp: &str, seq: u64) -> Option<StoredRoster> {
+    conn.query_row(
+        "SELECT body, sig, source, received_at FROM compute_node_rosters WHERE key_fp = ?1 AND seq = ?2",
+        params![key_fp, seq as i64],
         roster_from_row,
     )
     .optional()
@@ -816,9 +898,34 @@ pub fn owner_trust_by_peer(conn: &Connection, peer_fp: &str) -> Option<OwnerTrus
 
 /// A person pins an owner's roster key here (and says whether this server's
 /// vault secrets may go to that owner's nodes: V25, PRD §4.4 rule 3).
+/// May `key` be pinned for `owner_id` (the paired server `peer_fp`)?
+/// (11-07 review M2) One key per owner name: another key already pinned
+/// under that name is refused (a person removes the old pin first), and a
+/// pinned key is never moved to another name or peer. Pinning the same key
+/// for the same owner and peer again is fine.
+pub fn pin_ok(conn: &Connection, key: &ApprovalKey, owner_id: &str, peer_fp: &str) -> Result<(), String> {
+    name_ok("owner", owner_id)?;
+    let fp = key.fingerprint();
+    if let Some(t) = owner_trust(conn, &fp) {
+        if t.owner_id != owner_id || t.peer_fp != peer_fp {
+            return Err(format!("that roster key is already pinned for {} (another server): it is never moved to {owner_id}", t.owner_id));
+        }
+    }
+    if let Some(other) = owner_trusts(conn).into_iter().find(|t| t.owner_id == owner_id && t.key_fp != fp) {
+        return Err(format!(
+            "{owner_id} is already pinned with another roster key ({}…): if its key really changed, a person removes the old pin first",
+            &other.key_fp[..16.min(other.key_fp.len())]
+        ));
+    }
+    if let Some(other) = owner_trusts(conn).into_iter().find(|t| t.peer_fp == peer_fp && t.key_fp != fp) {
+        return Err(format!("that server is already pinned as {} with another roster key: a person removes the old pin first", other.owner_id));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn pin_owner(conn: &Connection, key: &ApprovalKey, owner_id: &str, peer_fp: &str, by: &str, via: &str, consent: bool, at: i64) -> Result<OwnerTrust, String> {
-    name_ok("owner", owner_id)?;
+    pin_ok(conn, key, owner_id, peer_fp)?;
     conn.execute(
         "INSERT INTO compute_owner_trust (key_fp, roster_key, owner_id, peer_fp, pinned_by, pinned_via, pinned_at, secrets_consent, consent_by, consent_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
@@ -868,8 +975,23 @@ pub fn receive_roster(conn: &Connection, s: &Signed, source: &str, at: i64) -> R
         .ok_or_else(|| (codes::OWNER_NOT_TRUSTED, format!("no person here pinned {}'s roster key ({}…)", peek.owner_id, &key.fingerprint()[..16])))?;
     let pinned = ApprovalKey::parse(&trust.roster_key).ok_or((codes::BAD_ARGS, "pinned roster key unreadable".to_string()))?;
     let r = NodeRoster::open(s, &pinned).map_err(|e| (codes::BAD_ARGS, e))?;
+    if r.owner_id != trust.owner_id {
+        return Err((codes::OWNER_NOT_TRUSTED, format!("the roster names its owner {:?}, but this key was pinned for {}", r.owner_id, trust.owner_id)));
+    }
     if (r.seq as i64) < trust.high_seq {
         return Err((codes::ROSTER_REPLAYED, format!("roster seq {} is older than {} already seen from {}", r.seq, trust.high_seq, r.owner_id)));
+    }
+    // The chain (V13, checked on arrival): the same seq is the same roster,
+    // and a roster right after one held here names that one's digest.
+    if let Some(same) = roster_at(conn, &trust.key_fp, r.seq) {
+        if same.signed.digest() != s.digest() {
+            return Err((codes::ROSTER_FORKED, format!("{} signed two different rosters with seq {}: refused", r.owner_id, r.seq)));
+        }
+    }
+    if let Some(prev) = r.seq.checked_sub(1).and_then(|q| roster_at(conn, &trust.key_fp, q)) {
+        if r.prev_digest.as_deref() != Some(prev.signed.digest().as_str()) {
+            return Err((codes::ROSTER_FORKED, format!("roster seq {} doesn't chain to the seq {} held here", r.seq, prev.roster.seq)));
+        }
     }
     let stored = store_roster(conn, s, &r, source, at).map_err(|e| (codes::BAD_ARGS, e))?;
     conn.execute("UPDATE compute_owner_trust SET high_seq = MAX(high_seq, ?2) WHERE key_fp = ?1", params![trust.key_fp, r.seq as i64])

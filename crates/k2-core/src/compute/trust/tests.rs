@@ -213,17 +213,19 @@ fn client_receives_rosters_and_checks_lane_seals() {
     let sb = statement(&b, Taint::Clean, 0, None).sign(&b).unwrap();
     let mut entries = vec![entry_row(&a, "n1", &sa, Some(TaintBasis::SelfClean)).entry, entry_row(&b, "n2", &sb, Some(TaintBasis::SelfClean)).entry];
     entries.sort_by(|x, y| x.node_fp.cmp(&y.node_fp));
-    let roster = |seq: u64, entries: Vec<RosterEntry>| NodeRoster {
+    // Fresh (M5: a client trusts a roster for lane secrets for three days).
+    let t0 = crate::compute::now();
+    let roster = |seq: u64, entries: Vec<RosterEntry>, prev: Option<String>| NodeRoster {
         v: 1,
         owner_id: "owner.k2.dev".into(),
         owner_server_fp: "e".repeat(64),
         roster_key: o.public().encode(),
         seq,
-        issued_at: 1000 + seq as i64,
-        prev_digest: (seq > 1).then(|| format!("sha256:{}", "0".repeat(64))),
+        issued_at: t0 + seq as i64,
+        prev_digest: prev,
         entries,
     };
-    let s1 = roster(2, entries.clone()).sign(&o).unwrap();
+    let s1 = roster(2, entries.clone(), Some(format!("sha256:{}", "0".repeat(64)))).sign(&o).unwrap();
     // Nobody pinned the key: refused.
     assert_eq!(receive_roster(&c, &s1, "node", 1).unwrap_err().0, codes::OWNER_NOT_TRUSTED);
     pin_owner(&c, &o.public(), "owner.k2.dev", &"9".repeat(64), "owner", "local-auth", false, 1).unwrap();
@@ -231,11 +233,11 @@ fn client_receives_rosters_and_checks_lane_seals() {
     assert!(fx.stored && fx.seq == 2 && fx.revoked.is_empty());
     assert!(!receive_roster(&c, &s1, "peer", 3).unwrap().stored, "the same seq twice: no-op");
     // A lower seq than the high-water mark: refused (V13).
-    let s0 = roster(1, entries.clone()).sign(&o).unwrap();
+    let s0 = roster(1, entries.clone(), None).sign(&o).unwrap();
     assert_eq!(receive_roster(&c, &s0, "node", 4).unwrap_err().0, codes::ROSTER_REPLAYED);
     // Another key under the same owner name: refused.
     let evil = ApprovalSigner::from_seed(&[8u8; 32]).unwrap();
-    let forged = NodeRoster { roster_key: evil.public().encode(), ..roster(9, entries.clone()) }.sign(&evil).unwrap();
+    let forged = NodeRoster { roster_key: evil.public().encode(), ..roster(9, entries.clone(), None) }.sign(&evil).unwrap();
     assert_eq!(receive_roster(&c, &forged, "node", 5).unwrap_err().0, codes::OWNER_NOT_TRUSTED);
 
     // A client seat on n1 + n2, with its enrol code.
@@ -292,7 +294,16 @@ fn client_receives_rosters_and_checks_lane_seals() {
         e.status = KeyStatus::Revoked;
         e.revoked_reason = Some(RevokeReason::Compromised);
     }
-    let s3 = roster(3, revoked).sign(&o).unwrap();
+    // The chain is checked on arrival: seq 3 must name seq 2's digest, and
+    // seq 2 can't come again with other contents.
+    let unchained = roster(3, revoked.clone(), Some(format!("sha256:{}", "1".repeat(64)))).sign(&o).unwrap();
+    assert_eq!(receive_roster(&c, &unchained, "peer", 7).unwrap_err().0, codes::ROSTER_FORKED);
+    let fork = roster(2, revoked.clone(), None).sign(&o).unwrap();
+    assert_eq!(receive_roster(&c, &fork, "peer", 7).unwrap_err().0, codes::ROSTER_FORKED);
+    // An owner name the pin doesn't have: refused (M2).
+    let renamed = NodeRoster { owner_id: "rosson.k2.dev".into(), ..roster(3, revoked.clone(), Some(s1.digest())) }.sign(&o).unwrap();
+    assert_eq!(receive_roster(&c, &renamed, "peer", 7).unwrap_err().0, codes::OWNER_NOT_TRUSTED);
+    let s3 = roster(3, revoked, Some(s1.digest())).sign(&o).unwrap();
     let fx = receive_roster(&c, &s3, "peer", 7).unwrap();
     assert_eq!(fx.revoked, vec![a.fingerprint()]);
     assert_eq!(key_revoked(&c, &a.fingerprint()), Some(RevokeReason::Compromised));
@@ -413,4 +424,104 @@ fn signers_and_statements() {
     let ss = seat_statement_for(&seat, &o.public(), 3, SeatState::Active, 9);
     assert_eq!(ss.nodes, vec!["n1".to_string(), "n2".to_string()], "sorted, unique");
     ss.sign(&o).unwrap();
+}
+
+/// M4 + M5 (11-07 review), the client: the lane gate's standing reads the
+/// node's own latest statement (a key that says it ran unwalled is
+/// tainted, and stays so after it says "clean" again), and never trusts an
+/// owner roster older than three days (a missed revocation).
+#[test]
+fn a_stale_roster_or_a_tainted_statement_stops_lane_secrets() {
+    use crate::compute::lane_secrets::{self as ls, NodeStanding};
+    let c = conn();
+    let o = ApprovalSigner::from_seed(&[11u8; 32]).unwrap();
+    let a = SigningKey::generate().unwrap();
+    let node = add_node(&c, "node-m", "m1", &a);
+    let sa = statement(&a, Taint::Clean, 0, None).sign(&a).unwrap();
+    let entry = entry_row(&a, "m1", &sa, Some(TaintBasis::SelfClean)).entry;
+    pin_owner(&c, &o.public(), "owner.k2.dev", &"9".repeat(64), "owner", "local-auth", false, 1).unwrap();
+    let roster = |seq: u64, at: i64, prev: Option<String>| {
+        NodeRoster {
+            v: 1,
+            owner_id: "owner.k2.dev".into(),
+            owner_server_fp: "e".repeat(64),
+            roster_key: o.public().encode(),
+            seq,
+            issued_at: at,
+            prev_digest: prev,
+            entries: vec![entry.clone()],
+        }
+        .sign(&o)
+        .unwrap()
+    };
+    let seat = SeatRow { side: "client".into(), owner_key_fp: Some(o.public().fingerprint()), ..owner_seat("seat-m", &"c".repeat(64), &["m1"], "active") };
+    put_seat(&c, &seat).unwrap();
+    set_node_seat(&c, "node-m", Some("seat-m")).unwrap();
+    let v = ls::seat_view(&c, "seat-m").unwrap();
+    // A roster four days old: not trusted for lane secrets.
+    let r1 = roster(1, crate::compute::now() - ls::ROSTER_MAX_AGE_SECS - 3600, None);
+    receive_roster(&c, &r1, "peer", 1).unwrap();
+    assert_eq!(ls::node_standing_in(&c, &v, &node), NodeStanding::Unlisted, "a stale roster vouches for nothing");
+    let r2 = roster(2, crate::compute::now(), Some(r1.digest()));
+    receive_roster(&c, &r2, "peer", 2).unwrap();
+    assert_eq!(ls::node_standing_in(&c, &v, &node), NodeStanding::Clean, "a fresh one does");
+    // The node says it ran a job without the wall: tainted at once, the
+    // roster notwithstanding, and remembered.
+    save_statement(&c, "node-m", &statement(&a, Taint::Tainted, 0, None).sign(&a).unwrap(), 3).unwrap();
+    assert_eq!(ls::node_standing_in(&c, &v, &node), NodeStanding::Tainted);
+    save_statement(&c, "node-m", &sa, 4).unwrap();
+    assert_eq!(ls::node_standing_in(&c, &v, &node), NodeStanding::Tainted, "saying clean again doesn't clear it");
+    assert!(taint_remembered(&c, &a.fingerprint()).is_some());
+    assert_eq!(taint_basis_checked(&c, &statement(&a, Taint::Clean, 0, None), false, false).unwrap_err().0, codes::NODE_KEY_TAINTED);
+}
+
+/// M4, the owner: a listed key whose node later says it ran unwalled loses
+/// its vouch in the working entries (and the memory keeps it out).
+#[test]
+fn a_listed_key_that_goes_tainted_loses_its_vouch() {
+    let c = conn();
+    let a = SigningKey::generate().unwrap();
+    add_node(&c, "node-o", "o1", &a);
+    let sa = statement(&a, Taint::Clean, 0, None).sign(&a).unwrap();
+    save_statement(&c, "node-o", &sa, 1).unwrap();
+    let mut row = entry_row(&a, "o1", &sa, Some(TaintBasis::SelfClean));
+    row.node_id = Some("node-o".into());
+    put_entry(&c, &row, 2).unwrap();
+    assert!(narrow_tainted(&c, 3).is_empty(), "a clean key keeps its vouch");
+    save_statement(&c, "node-o", &statement(&a, Taint::Tainted, 0, None).sign(&a).unwrap(), 4).unwrap();
+    assert_eq!(narrow_tainted(&c, 5), vec!["o1".to_string()]);
+    let e = entry_by_fp(&c, &a.fingerprint()).unwrap();
+    assert_eq!((e.entry.status, e.entry.taint_basis), (KeyStatus::Active, None));
+    save_statement(&c, "node-o", &sa, 6).unwrap();
+    assert!(taint_remembered(&c, &a.fingerprint()).is_some(), "the memory outlives a clean statement");
+}
+
+/// 11-07 review (Low): a store error reading the revocations (or the taint
+/// memory) reads as revoked (tainted), never as a clean "not revoked".
+#[test]
+fn a_store_error_reads_as_revoked_not_clean() {
+    let c = conn();
+    let fp = "a".repeat(64);
+    assert_eq!(key_revoked(&c, &fp), None, "control: nothing recorded");
+    c.execute_batch("DROP TABLE compute_key_revocations; DROP TABLE compute_tainted_keys;").unwrap();
+    assert!(key_revoked(&c, &fp).is_some(), "unreadable: revoked");
+    assert!(receipt_void(&c, &fp, Some(1)).is_some(), "unreadable: void");
+    assert!(taint_remembered(&c, &fp).is_some(), "unreadable: tainted");
+}
+
+/// M2 (11-07 review): a roster key is pinned for one owner name and one
+/// paired server, for good; one owner name never gets a second key.
+#[test]
+fn a_pin_is_never_moved_or_doubled() {
+    let c = conn();
+    let a = ApprovalSigner::from_seed(&[21u8; 32]).unwrap().public();
+    let b = ApprovalSigner::from_seed(&[22u8; 32]).unwrap().public();
+    pin_owner(&c, &a, "o.k2.dev", &"1".repeat(64), "owner", "local-auth", false, 1).unwrap();
+    pin_owner(&c, &a, "o.k2.dev", &"1".repeat(64), "owner", "local-auth", false, 2).expect("the same pin again");
+    assert!(pin_owner(&c, &a, "rosson.k2.dev", &"1".repeat(64), "owner", "local-auth", false, 3).is_err(), "no rename");
+    assert!(pin_owner(&c, &a, "o.k2.dev", &"2".repeat(64), "owner", "local-auth", false, 3).is_err(), "no move to another server");
+    assert!(pin_owner(&c, &b, "o.k2.dev", &"3".repeat(64), "owner", "local-auth", false, 3).is_err(), "no second key under one name");
+    assert!(pin_owner(&c, &b, "p.k2.dev", &"1".repeat(64), "owner", "local-auth", false, 3).is_err(), "no second key for one server");
+    assert_eq!(owner_trust(&c, &a.fingerprint()).unwrap().owner_id, "o.k2.dev");
+    assert!(owner_trust(&c, &b.fingerprint()).is_none());
 }

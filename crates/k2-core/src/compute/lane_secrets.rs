@@ -242,8 +242,17 @@ pub fn seats_with_node_in(conn: &Connection, node_id: &str) -> Vec<SeatView> {
     seat.and_then(|id| seat_view(conn, &id)).into_iter().collect()
 }
 
+/// The oldest owner roster a client still trusts for lane secrets (11-07
+/// review M5): the owner re-signs an unchanged one every two days
+/// (`trust::ROSTER_REFRESH_SECS`), so one older than three days means the
+/// client hasn't heard from it (a revocation may be missing).
+pub const ROSTER_MAX_AGE_SECS: i64 = 3 * 86_400;
+
 /// [`SeatBook::node_standing`] on `conn`: the node's key in the newest
-/// roster this server holds under the seat's pinned owner key.
+/// roster this server holds under the seat's pinned owner key, no older
+/// than [`ROSTER_MAX_AGE_SECS`] (M5), and the node's own latest statement
+/// to this server: a key it says ran unwalled (or remembered so) is
+/// tainted, whatever the roster still says (M4).
 pub fn node_standing_in(conn: &Connection, seat: &SeatView, node: &NodeRow) -> NodeStanding {
     if trust::key_revoked(conn, &node.fingerprint).is_some() {
         return NodeStanding::Revoked;
@@ -251,7 +260,17 @@ pub fn node_standing_in(conn: &Connection, seat: &SeatView, node: &NodeRow) -> N
     if seat.owner_key_fp.is_empty() {
         return NodeStanding::Unlisted;
     }
+    let live = trust::statement_of(conn, &node.id).map(|(_, st)| st).filter(|st| st.node_fp == node.fingerprint);
+    if let Some(why) = live.as_ref().and_then(trust::statement_taint) {
+        trust::remember_taint(conn, &node.fingerprint, why, super::now());
+    }
+    if trust::taint_remembered(conn, &node.fingerprint).is_some() {
+        return NodeStanding::Tainted;
+    }
     let Some(r) = trust::latest_roster(conn, &seat.owner_key_fp) else { return NodeStanding::Unlisted };
+    if super::now() - r.roster.issued_at > ROSTER_MAX_AGE_SECS {
+        return NodeStanding::Unlisted;
+    }
     let Some(seat_row) = trust::seat(conn, "client", &seat.seat_id) else { return NodeStanding::Unlisted };
     match r.roster.entry(&node.fingerprint).filter(|e| e.status == KeyStatus::Active && seat_row.nodes.contains(&e.name)) {
         None => NodeStanding::Unlisted,

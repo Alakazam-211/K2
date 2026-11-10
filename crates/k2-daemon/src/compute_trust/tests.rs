@@ -151,8 +151,13 @@ fn admin_cmds(node_id: &str) -> Vec<wire::SignedCommand> {
         .collect()
 }
 
+/// The digest a person is shown for a request (the CLI passes it, M1).
+fn digest_of(id: &str) -> String {
+    trust::request_by_id(&k2_core::db::shared().lock(), id).expect("the request").digest
+}
+
 fn approve(id: &str) -> Value {
-    call(TRUST_APPROVE, &Who::Owner, json!({"request": id, "confirmToken": token(trust::CONFIRM_TRUST, id, "owner")})).unwrap_or_else(|e| panic!("approve {id}: {e:?}"))
+    call(TRUST_APPROVE, &Who::Owner, json!({"request": id, "expectedDigest": digest_of(id), "confirmToken": token(trust::CONFIRM_TRUST, id, "owner")})).unwrap_or_else(|e| panic!("approve {id}: {e:?}"))
 }
 
 fn roster_set(node: &str, extra: Value) -> String {
@@ -197,12 +202,12 @@ fn roster_changes_need_a_person_and_reach_the_nodes() {
     // An agent with the operate switch files; it can never approve.
     let r = call(ROSTER_PROPOSE, &agent(&ws), json!({"op": "set", "node": "n1", "host": "host-a"})).unwrap();
     let id1 = r["request"]["id"].as_str().unwrap().to_string();
-    let e = call(TRUST_APPROVE, &agent(&ws), json!({"request": id1, "confirmToken": token(trust::CONFIRM_TRUST, &id1, "owner")})).unwrap_err();
+    let e = call(TRUST_APPROVE, &agent(&ws), json!({"request": id1, "expectedDigest": digest_of(&id1), "confirmToken": token(trust::CONFIRM_TRUST, &id1, "owner")})).unwrap_err();
     assert_eq!((e.0, e.1.as_str()), (403, tcodes::PERSON_ONLY));
     // A person without a confirm, or with one for another request: refused.
-    assert_eq!(call(TRUST_APPROVE, &Who::Owner, json!({"request": id1})).unwrap_err().1, "vault_confirm_required");
+    assert_eq!(call(TRUST_APPROVE, &Who::Owner, json!({"request": id1, "expectedDigest": digest_of(&id1)})).unwrap_err().1, "vault_confirm_required");
     let wrong = token(trust::CONFIRM_TRUST, "ctr_other", "owner");
-    assert_eq!(call(TRUST_APPROVE, &Who::Owner, json!({"request": id1, "confirmToken": wrong})).unwrap_err().1, "vault_confirm_required");
+    assert_eq!(call(TRUST_APPROVE, &Who::Owner, json!({"request": id1, "expectedDigest": digest_of(&id1), "confirmToken": wrong})).unwrap_err().1, "vault_confirm_required");
     // An agent can't mint the roster key either.
     assert_eq!(call(ROSTER_KEY, &agent(&ws), json!({})).unwrap_err().1, tcodes::PERSON_ONLY);
 
@@ -225,7 +230,7 @@ fn roster_changes_need_a_person_and_reach_the_nodes() {
     let doc: NodeRosterDoc = serde_json::from_value(o.cmd.args.clone()).unwrap();
     assert_eq!(doc.open(Some(&key)).unwrap().roster.seq, 1);
     // A replay of the same approval finds nothing to decide.
-    let again = call(TRUST_APPROVE, &Who::Owner, json!({"request": id1, "confirmToken": token(trust::CONFIRM_TRUST, &id1, "owner")})).unwrap_err();
+    let again = call(TRUST_APPROVE, &Who::Owner, json!({"request": id1, "expectedDigest": digest_of(&id1), "confirmToken": token(trust::CONFIRM_TRUST, &id1, "owner")})).unwrap_err();
     assert_eq!(again.1, tcodes::NOT_PENDING);
 
     // V12: n2 says `taint: unknown`: the owner attests instead of a re-key.
@@ -233,7 +238,7 @@ fn roster_changes_need_a_person_and_reach_the_nodes() {
     // doesn't relay rosters: the delivery says so, nothing is sent.
     let id2 = roster_set("n2", json!({"attest": "installed with the job wall; no unwalled job in the ledger"}));
     let ana = admin_login();
-    let out = call(TRUST_APPROVE, &ana, json!({"request": id2, "confirmToken": token(trust::CONFIRM_TRUST, &id2, "connect:ana")})).unwrap();
+    let out = call(TRUST_APPROVE, &ana, json!({"request": id2, "expectedDigest": digest_of(&id2), "confirmToken": token(trust::CONFIRM_TRUST, &id2, "connect:ana")})).unwrap();
     assert_eq!(out["result"]["roster"]["seq"], 2);
     let r2 = {
         let h = k2_core::db::shared();
@@ -375,25 +380,24 @@ fn a_seat_end_to_end_between_two_servers() {
         let h = k2_core::db::shared();
         let c = h.lock();
         let t = trust::owner_trust(&c, &key_fp).unwrap();
-        assert!(t.secrets_consent && t.owner_id == OWNER);
+        // M6: the seat card pins the key; it never gives the consent.
+        assert!(!t.secrets_consent && t.owner_id == OWNER, "{t:?}");
         assert_eq!(trust::seat(&c, "client", "client-ci-standard").unwrap().state, "requested");
     });
 
     // Owner: the request is held; its code never shows; nodes are named.
     on(&odb, OWNER, || {
-        let list = call(TRUST_REQUESTS, &Who::Owner, json!({})).ok();
-        let _ = list;
         let rq = get(TRUST_REQUESTS, &Who::Owner);
         let mine = rq["requests"].as_array().unwrap().iter().find(|r| r["id"] == oreq.as_str()).unwrap().clone();
         assert_eq!(mine["body"]["code"], "[redacted]");
         // Not yet: no nodes named.
-        assert_eq!(call(TRUST_APPROVE, &Who::Owner, json!({"request": oreq, "confirmToken": token(trust::CONFIRM_TRUST, &oreq, "owner")})).unwrap_err().1, tcodes::BAD_ARGS);
+        assert_eq!(call(TRUST_APPROVE, &Who::Owner, json!({"request": oreq, "expectedDigest": digest_of(&oreq), "confirmToken": token(trust::CONFIRM_TRUST, &oreq, "owner")})).unwrap_err().1, tcodes::BAD_ARGS);
         assert_eq!(call(SEATS_OFFER, &agent(&ows), json!({"request": oreq, "nodes": ["n1", "n4"]})).unwrap_err().1, tcodes::NODE_LACKS_LANES);
         assert_eq!(call(SEATS_OFFER, &agent(&ows), json!({"request": oreq, "nodes": ["n1", "n5"]})).unwrap_err().1, "remote_admin_off");
         call(SEATS_OFFER, &agent(&ows), json!({"request": oreq, "nodes": ["n1", "n2", "n3"]})).unwrap();
         // A seat seals node plans with the owner approval key: owner only.
         let ana = admin_login();
-        assert_eq!(call(TRUST_APPROVE, &ana, json!({"request": oreq, "confirmToken": token(trust::CONFIRM_TRUST, &oreq, "connect:ana")})).unwrap_err().1, tcodes::PERSON_ONLY);
+        assert_eq!(call(TRUST_APPROVE, &ana, json!({"request": oreq, "expectedDigest": digest_of(&oreq), "confirmToken": token(trust::CONFIRM_TRUST, &oreq, "connect:ana")})).unwrap_err().1, tcodes::PERSON_ONLY);
     });
     let seat_out = on(&odb, OWNER, || approve(&oreq));
     let batch = seat_out["result"]["batch"].as_str().unwrap().to_string();
@@ -471,7 +475,10 @@ fn a_seat_end_to_end_between_two_servers() {
         assert_eq!((v.seat_id.as_str(), v.lane.as_str(), v.active, v.lane_secrets), ("client-ci-standard", "ci-standard", true, true));
         assert_eq!(v.isolation, plane::LaneTemplate::ci_standard().isolation, "the owner's lane template came with the offer");
         assert_eq!(ls::node_standing_in(&h.lock(), &v, &row), NodeStanding::Clean);
-        assert_eq!(ls::consent_for(&h.lock(), &v).map(|c| c.owner_key_fp), Some(key_fp.clone()), "the card's consent");
+        assert!(ls::consent_for(&h.lock(), &v).is_none(), "M6: no consent until a person gives it on its own confirm");
+        let tok = token(trust::CONFIRM_TRUST, &format!("consent:{key_fp}"), "owner");
+        call(OWNERS_CONSENT, &Who::Owner, json!({"owner": OWNER, "on": true, "confirmToken": tok})).unwrap();
+        assert_eq!(ls::consent_for(&h.lock(), &v).map(|c| c.owner_key_fp), Some(key_fp.clone()), "the person's consent");
         // Consent withdrawn (an agent may narrow): gone at once.
         call(OWNERS_CONSENT, &agent(&cws), json!({"owner": OWNER, "on": false})).unwrap();
         assert!(ls::consent_for(&h.lock(), &v).is_none());
@@ -485,6 +492,71 @@ fn a_seat_end_to_end_between_two_servers() {
         assert!(ls::consent_for(&h.lock(), &v).is_some());
     });
     let _ = seat_row;
+
+    // M7 (11-07 review): the owner suspends, resumes and ends the seat, in
+    // person; the client hears each (its gate needs an active seat), each
+    // seat node gets its lanes file without the seat and the client's
+    // server paused / resumed / revoked; an older statement replayed under
+    // the same roster seq never undoes a later one; and a lane change
+    // reaches the client.
+    let seat_state = || on(&cdb, CLIENT, || trust::seat(&k2_core::db::shared().lock(), "client", "client-ci-standard").unwrap());
+    let active_stmt = seat_state().statement.clone().unwrap();
+    let change = |path: &str, op: &str| {
+        on(&odb, OWNER, || {
+            let bound = format!("seat-{op}:client-ci-standard");
+            assert_eq!(call(path, &agent(&ows), json!({"seat": "client-ci-standard", "confirmToken": token(trust::CONFIRM_TRUST, &bound, "owner")})).unwrap_err().1, tcodes::PERSON_ONLY);
+            assert_eq!(call(path, &admin_login(), json!({"seat": "client-ci-standard", "confirmToken": token(trust::CONFIRM_TRUST, &bound, "connect:ana")})).unwrap_err().1, tcodes::PERSON_ONLY, "the owner's");
+            assert_eq!(call(path, &Who::Owner, json!({"seat": "client-ci-standard"})).unwrap_err().1, "vault_confirm_required");
+            let out = call(path, &Who::Owner, json!({"seat": "client-ci-standard", "why": "test", "confirmToken": token(trust::CONFIRM_TRUST, &bound, "owner")})).unwrap();
+            assert!(out["plans"].as_array().unwrap().iter().all(|p| p["queued"] == true), "{out}");
+            out
+        })
+    };
+    let plan_verbs = |batch: &str| -> Vec<Vec<String>> {
+        on(&odb, OWNER, || {
+            nodes
+                .iter()
+                .map(|n| {
+                    let stored = k2_core::compute::admin::list_requests(&k2_core::db::shared().lock(), &k2_core::compute::admin::ReqFilter { node_id: Some(&n.id), state: None, limit: 50, ..Default::default() });
+                    let p = stored.iter().find(|r| r.reason.as_deref().is_some_and(|x| x.contains(batch))).expect("the batch's plan");
+                    p.commands.iter().map(|c| node_open(n, c).cmd.verb).collect()
+                })
+                .collect()
+        })
+    };
+    let out = change(SEATS_SUSPEND, "suspend");
+    assert_eq!(seat_state().state, "suspended", "the client heard it");
+    for v in plan_verbs(out["batch"].as_str().unwrap()) {
+        assert_eq!(v, vec![pshare::VERB_PAUSE.to_string(), plane::VERB_LANES_WRITE.to_string()]);
+    }
+    on(&odb, OWNER, || {
+        let f = trust::lanes_file_for(&k2_core::db::shared().lock(), "n1").unwrap();
+        assert!(f.seats.is_empty(), "a suspended seat is in no lanes file");
+    });
+    // The older "active" statement, replayed (same roster seq): ignored.
+    on(&cdb, CLIENT, || {
+        let r = trust::latest_roster(&k2_core::db::shared().lock(), &key_fp).unwrap();
+        client_take_roster(None, &NodeRosterDoc { roster: r.signed, seats: vec![active_stmt.clone()] }, "node").unwrap();
+    });
+    assert_eq!(seat_state().state, "suspended", "a replayed older statement never undoes a later one");
+    let out = change(SEATS_RESUME, "resume");
+    assert_eq!(seat_state().state, "active");
+    for v in plan_verbs(out["batch"].as_str().unwrap()) {
+        assert_eq!(v, vec![plane::VERB_LANES_WRITE.to_string(), pshare::VERB_RESUME.to_string()]);
+    }
+    // A lane change: the client's copy follows.
+    on(&odb, OWNER, || {
+        let r = call(LANES_SET, &agent(&ows), json!({"name": "ci-standard", "set": {"secrets": false}})).unwrap();
+        let out = approve(r["request"]["id"].as_str().unwrap());
+        assert!(out["result"]["clients"].as_array().unwrap().iter().any(|c| c["sent"] == true), "{out}");
+    });
+    on(&cdb, CLIENT, || assert!(!trust::seat_lane(&k2_core::db::shared().lock(), "client", "client-ci-standard").unwrap().secrets, "the client has the new lane"));
+    let out = change(SEATS_END, "end");
+    assert_eq!(seat_state().state, "ended");
+    for v in plan_verbs(out["batch"].as_str().unwrap()) {
+        assert_eq!(v, vec![pshare::VERB_REVOKE.to_string(), plane::VERB_LANES_WRITE.to_string()]);
+    }
+    on(&odb, OWNER, || assert_eq!(call(SEATS_RESUME, &Who::Owner, json!({"seat": "client-ci-standard", "confirmToken": token(trust::CONFIRM_TRUST, "seat-resume:client-ci-standard", "owner")})).unwrap_err().1, tcodes::SEAT_NOT_ACTIVE, "an ended seat stays ended"));
 
     // Owner revokes n1 as compromised: the client hears it (federation),
     // and the node relay of an older roster is refused as a replay.
@@ -774,18 +846,26 @@ fn lane_secrets_end_to_end_between_two_servers() {
         (nodes, keys, ows)
     });
 
-    // Client: an agent asks (secrets on by default); the card says what
-    // the person agrees to; a person approves with a fresh confirm.
+    // Client: an agent asks for secrets (off by default, M6); the card says
+    // they are a separate yes; a person approves the seat with a fresh
+    // confirm, then gives the consent on its own confirm.
     let cws = on(&cdb, CLIENT, || operating_ws("e2e-cli"));
-    let req = on(&cdb, CLIENT, || call(SEATS_REQUEST, &agent(&cws), json!({"owner": OWNER, "lane": "ci-standard", "why": "release builds"})).unwrap());
+    let req = on(&cdb, CLIENT, || call(SEATS_REQUEST, &agent(&cws), json!({"owner": OWNER, "lane": "ci-standard", "secrets": true, "why": "release builds"})).unwrap());
     let summary = req["request"]["summary"].as_str().unwrap().to_string();
-    assert!(summary.contains("vault secrets") && summary.contains("root"), "the card names the consent: {summary}");
+    assert!(summary.contains("vault secrets") && summary.contains("separate"), "the card says the consent is its own yes: {summary}");
     let creq = req["request"]["id"].as_str().unwrap().to_string();
     let e = on(&cdb, CLIENT, || call(TRUST_APPROVE, &agent(&cws), json!({"request": creq, "confirmToken": token(trust::CONFIRM_TRUST, &creq, "owner")})).unwrap_err());
     assert_eq!(e.1, tcodes::PERSON_ONLY, "an agent never gives the consent");
     let out = on(&cdb, CLIENT, || approve(&creq));
     let oreq = out["result"]["ownerRequest"].as_str().unwrap().to_string();
+    assert_eq!(out["result"]["consentNext"], json!(format!("k2 compute owners consent {OWNER} on")), "{out}");
     let key_fp = on(&odb, OWNER, || roster_key().unwrap().fingerprint());
+    on(&cdb, CLIENT, || {
+        let h = k2_core::db::shared();
+        assert!(!trust::owner_trust(&h.lock(), &key_fp).unwrap().secrets_consent, "M6: approving the seat gave no consent");
+        let tok = token(trust::CONFIRM_TRUST, &format!("consent:{key_fp}"), "owner");
+        call(OWNERS_CONSENT, &Who::Owner, json!({"owner": OWNER, "on": true, "confirmToken": tok})).unwrap();
+    });
 
     // Owner: the seat on both nodes, one approval.
     let seat_out = on(&odb, OWNER, || {
@@ -1142,4 +1222,246 @@ fn a_rekey_waits_for_a_person_and_a_compromise_follows_the_chain() {
     let next = latest.roster.entry(&new.fingerprint()).unwrap();
     assert_eq!((next.status, next.revoked_reason), (KeyStatus::Revoked, Some(ci::RevokeReason::Compromised)), "the chain follows the revoke");
     assert!(trust::receipt_void(&h.lock(), &new.fingerprint(), Some(1)).is_some());
+}
+
+/// M1 (11-07 review): an approval is for exactly what the person was
+/// shown. A pending request can still be rewritten (an operator names a
+/// seat's nodes); one rewritten after the person read it is refused, and
+/// an approval that doesn't name the digest it was shown is too.
+#[test]
+fn an_approval_is_bound_to_what_the_person_was_shown() {
+    let _ci = ci_on();
+    let _db = k2_core::db::scoped_for_test();
+    test_seams::set_owner_id(Some(OWNER));
+    owned_node("n1", Taint::Clean, P9);
+    let id = roster_set("n1", json!({}));
+    let shown = digest_of(&id);
+    // After the person read it, the request is rewritten (another host).
+    {
+        let h = k2_core::db::shared();
+        let c = h.lock();
+        let mut body = trust::request_by_id(&c, &id).unwrap().body;
+        body["host"] = json!("elsewhere");
+        trust::rewrite_pending(&c, &id, &body, "list n1 as active in the node roster: host elsewhere").unwrap();
+    }
+    let tok = || token(trust::CONFIRM_TRUST, &id, "owner");
+    let e = call(TRUST_APPROVE, &Who::Owner, json!({"request": id, "expectedDigest": shown, "confirmToken": tok()})).unwrap_err();
+    assert_eq!((e.0, e.1.as_str()), (409, REQUEST_CHANGED), "{e:?}");
+    let e = call(TRUST_APPROVE, &Who::Owner, json!({"request": id, "confirmToken": tok()})).unwrap_err();
+    assert_eq!((e.0, e.1.as_str()), (400, tcodes::BAD_ARGS), "no digest, no approval: {e:?}");
+    let h = k2_core::db::shared();
+    assert!(trust::latest_own_roster(&h.lock()).is_none(), "nothing was signed");
+    drop(h);
+    // What it says now, approved as shown now.
+    approve(&id);
+    let h = k2_core::db::shared();
+    assert_eq!(trust::latest_own_roster(&h.lock()).unwrap().roster.entries[0].host, "elsewhere");
+}
+
+/// M4 (11-07 review), the owner: a node listed clean that later says it ran
+/// a job without the wall loses its vouch at once (a narrowed roster is
+/// signed and handed out without a person: it only takes trust away), and
+/// neither the two-day re-sign nor a later "clean" vouches for it again.
+#[test]
+fn a_node_that_goes_tainted_loses_its_vouch_at_once() {
+    let _ci = ci_on();
+    let _db = k2_core::db::scoped_for_test();
+    test_seams::set_owner_id(Some(OWNER));
+    let (n1, k1) = owned_node("n1", Taint::Clean, P9);
+    approve(&roster_set("n1", json!({})));
+    let latest = || trust::latest_own_roster(&k2_core::db::shared().lock()).unwrap();
+    let seq = latest().roster.seq;
+    admin_cmds(&n1.id);
+    on_statement(&n1.id, &statement(&k1, Taint::Tainted, 0, None).sign(&k1).unwrap());
+    let r = latest();
+    let e = r.roster.entry(&k1.fingerprint()).unwrap().clone();
+    assert_eq!((r.roster.seq, e.status, e.taint_basis), (seq + 1, KeyStatus::Active, None), "narrowed at once");
+    assert!(!admin_cmds(&n1.id).is_empty(), "the narrowed roster went out");
+    // A clean statement later: still no vouch, and the re-sign agrees.
+    on_statement(&n1.id, &statement(&k1, Taint::Clean, 0, None).sign(&k1).unwrap());
+    k2_core::db::shared().lock().execute("UPDATE compute_node_rosters SET issued_at = issued_at - ?1", rusqlite::params![trust::ROSTER_REFRESH_SECS + 5]).unwrap();
+    tick();
+    let r = latest();
+    assert_eq!((r.roster.seq, r.roster.entry(&k1.fingerprint()).unwrap().taint_basis), (seq + 2, None));
+    // Listing it again (or seating it) is refused.
+    assert_eq!(call(ROSTER_PROPOSE, &Who::Owner, json!({"op": "set", "node": "n1"})).unwrap_err().1, ci::codes::NODE_KEY_TAINTED);
+}
+
+/// M5 (11-07 review), the owner: a seated client that was unreachable when
+/// a roster went out gets it at the next tick (no person, no new publish).
+#[test]
+fn a_client_that_missed_a_roster_gets_it_at_the_next_tick() {
+    let _ci = ci_on();
+    let _db = k2_core::db::scoped_for_test();
+    test_seams::set_owner_id(Some(OWNER));
+    let cfp = "d".repeat(64);
+    {
+        let h = k2_core::db::shared();
+        let t = compute::now();
+        let row = SeatRow {
+            id: "s-m5".into(),
+            side: "owner".into(),
+            peer_fp: cfp.clone(),
+            peer_host: CLIENT.into(),
+            owner_id: OWNER.into(),
+            owner_key_fp: None,
+            client_fp: "c".repeat(64),
+            client_label: CLIENT.into(),
+            client_url: format!("https://{CLIENT}"),
+            lane: "ci-standard".into(),
+            nodes: vec!["n1".into(), "n2".into()],
+            state: "active".into(),
+            statement: None,
+            roster_seq: None,
+            code_binding: None,
+            request_id: None,
+            batch_id: None,
+            note: None,
+            created_at: t,
+            updated_at: t,
+        };
+        trust::put_seat(&h.lock(), &row).unwrap();
+    }
+    let up = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let up = up.clone();
+        test_seams::set_fed(Some(Box::new(move |_to: &str, kind: &str, _p: &Value| {
+            assert_eq!(kind, KIND_NODE_ROSTER);
+            if up.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok(json!({"ok": true}))
+            } else {
+                Err(no("peer_unreachable", 502, "the client is down"))
+            }
+        })));
+    }
+    owned_node("n1", Taint::Clean, P9);
+    let out = approve(&roster_set("n1", json!({})));
+    assert_eq!(out["result"]["delivered"]["clients"][0]["sent"], false, "{out}");
+    test_seams::take_sent();
+    up.store(true, std::sync::atomic::Ordering::SeqCst);
+    tick();
+    let sent: Vec<String> = test_seams::take_sent().into_iter().filter(|(to, _, _)| to == &cfp).map(|(_, k, _)| k).collect();
+    assert_eq!(sent, vec![KIND_NODE_ROSTER.to_string()], "the tick caught the client up");
+    tick();
+    assert!(test_seams::take_sent().iter().all(|(to, _, _)| to != &cfp), "once handed, not again");
+    test_seams::set_fed(None);
+}
+
+/// M7 (11-07 review): a lane's node plan that runs out while its node is
+/// offline is sealed again (same steps, the person's same approval, the
+/// lanes file as it is now) once the node is back, once.
+#[test]
+fn an_expired_lanes_plan_is_sealed_again_when_the_node_is_back() {
+    let _ci = ci_on();
+    let _db = k2_core::db::scoped_for_test();
+    test_seams::set_owner_id(Some(OWNER));
+    let (n1, _) = owned_node("n1", Taint::Clean, P9);
+    approve(&roster_set("n1", json!({})));
+    let r = call(LANES_SET, &Who::Owner, json!({"name": "ci-standard", "from": "ci-standard"})).unwrap();
+    approve(r["request"]["id"].as_str().unwrap());
+    {
+        let h = k2_core::db::shared();
+        let t = compute::now();
+        let row = SeatRow {
+            id: "s-m7".into(),
+            side: "owner".into(),
+            peer_fp: "d".repeat(64),
+            peer_host: CLIENT.into(),
+            owner_id: OWNER.into(),
+            owner_key_fp: None,
+            client_fp: "c".repeat(64),
+            client_label: CLIENT.into(),
+            client_url: format!("https://{CLIENT}"),
+            lane: "ci-standard".into(),
+            nodes: vec!["n1".into()],
+            state: "active".into(),
+            statement: None,
+            roster_seq: None,
+            code_binding: None,
+            request_id: None,
+            batch_id: None,
+            note: None,
+            created_at: t,
+            updated_at: t,
+        };
+        trust::put_seat(&h.lock(), &row).unwrap();
+    }
+    // The node is offline: the lane change's plan waits, then runs out.
+    admin_seams::set_online(&n1.id, false);
+    admin_cmds(&n1.id);
+    let r = call(LANES_SET, &Who::Owner, json!({"name": "ci-standard", "set": {"secrets": false}})).unwrap();
+    let out = approve(r["request"]["id"].as_str().unwrap());
+    assert_eq!(out["result"]["plans"][0]["queued"], true, "{out}");
+    let old = out["result"]["plans"][0]["request"].as_str().unwrap().to_string();
+    {
+        let h = k2_core::db::shared();
+        let gone = k2_core::compute::admin::expire_unsent(&h.lock(), compute::now() + wire::MAX_LIFETIME_SECS + wire::CLOCK_SKEW_SECS + 5);
+        assert_eq!(gone.iter().map(|g| g.id.clone()).collect::<Vec<_>>(), vec![old.clone()]);
+    }
+    assert!(admin_cmds(&n1.id).is_empty(), "offline: nothing went");
+    tick();
+    assert!(admin_cmds(&n1.id).is_empty(), "still offline: not sealed again yet");
+    admin_seams::set_online(&n1.id, true);
+    tick();
+    let sent: Vec<wire::Opened> = admin_cmds(&n1.id).iter().map(|c| node_open(&n1, c)).collect();
+    let lanes: Vec<&wire::Opened> = sent.iter().filter(|o| o.cmd.verb == plane::VERB_LANES_WRITE).collect();
+    assert_eq!(lanes.len(), 1, "sealed again once: {:?}", sent.iter().map(|o| o.cmd.verb.clone()).collect::<Vec<_>>());
+    let file: LanesFile = plane::check_write_args(&lanes[0].cmd.args).unwrap();
+    assert!(!file.lanes["ci-standard"].secrets, "the file as it is now");
+    tick();
+    assert!(admin_cmds(&n1.id).iter().all(|c| node_open(&n1, c).cmd.verb != plane::VERB_LANES_WRITE), "once");
+}
+
+/// M3 (11-07 review): a lane's approval seals node admin plans for every
+/// live seat on it with the owner's approval key, so an Admin login can't
+/// approve one (only the owner, like a seat).
+#[test]
+fn only_the_owner_approves_a_lane() {
+    let _ci = ci_on();
+    let _db = k2_core::db::scoped_for_test();
+    test_seams::set_owner_id(Some(OWNER));
+    let r = call(LANES_SET, &Who::Owner, json!({"name": "ci-standard", "from": "ci-standard"})).unwrap();
+    let id = r["request"]["id"].as_str().unwrap().to_string();
+    let e = call(TRUST_APPROVE, &admin_login(), json!({"request": id, "expectedDigest": digest_of(&id), "confirmToken": token(trust::CONFIRM_TRUST, &id, "connect:ana")})).unwrap_err();
+    assert_eq!((e.0, e.1.as_str()), (403, tcodes::PERSON_ONLY), "{e:?}");
+    assert!(trust::lane(&k2_core::db::shared().lock(), "ci-standard").is_none());
+    approve(&id);
+    assert!(trust::lane(&k2_core::db::shared().lock(), "ci-standard").is_some());
+}
+
+/// M2 (11-07 review): names come from what this server verified, never
+/// from the peer. A node owner that calls itself someone else is refused
+/// at the seat request; a client's seat names it (and points its nodes at)
+/// the host it was paired as, whatever label or URL it sends.
+#[test]
+fn names_come_from_the_pairing_never_the_peer() {
+    let _ci = ci_on();
+    let _db = k2_core::db::scoped_for_test();
+    // Client: the owner answers with someone else's name.
+    test_seams::set_owner_id(Some(CLIENT));
+    let owner_peer = peer("owner", OWNER);
+    test_seams::add_peer(owner_peer.clone());
+    let roster = wire::ApprovalSigner::from_seed(&[7u8; 32]).unwrap().public();
+    let k = roster.encode();
+    test_seams::set_fed(Some(Box::new(move |_to: &str, kind: &str, _p: &Value| {
+        assert_eq!(kind, KIND_OWNER_KEY);
+        Ok(json!({"ownerId": "rosson.k2.dev", "rosterKey": k, "keyFp": "x", "ownerServerFp": "e".repeat(64)}))
+    })));
+    let ws = operating_ws("m2");
+    let e = call(SEATS_REQUEST, &agent(&ws), json!({"owner": OWNER, "lane": "ci-standard"})).unwrap_err();
+    assert_eq!((e.0, e.1.as_str()), (502, "peer_answer"), "{e:?}");
+    assert!(get(TRUST_REQUESTS, &Who::Owner)["requests"].as_array().unwrap().is_empty(), "nothing filed");
+    test_seams::set_fed(None);
+
+    // Owner: a seat request whose label and URL aren't the paired host's.
+    test_seams::set_owner_id(Some(OWNER));
+    let client_fp = "c".repeat(64);
+    let code = pairing::EnrollString::new(&pairing::new_code().unwrap(), &client_fp).unwrap().render();
+    let ask = |url: &str| json!({"seat": "s-1", "controllerFp": client_fp, "controllerUrl": url, "label": "rosson.k2.dev (your own server)", "lane": "ci-standard", "code": code});
+    let e = receive(&"d".repeat(64), CLIENT, KIND_SEAT_REQUEST, &ask("https://evil.example")).unwrap_err();
+    assert_eq!(e.code, tcodes::BAD_ARGS, "{}", e.hint);
+    let out = receive(&"d".repeat(64), CLIENT, KIND_SEAT_REQUEST, &ask(&format!("https://{CLIENT}"))).unwrap();
+    let req = trust::request_by_id(&k2_core::db::shared().lock(), out["request"].as_str().unwrap()).unwrap();
+    assert_eq!((req.body["clientLabel"].as_str(), req.body["clientUrl"].as_str()), (Some(CLIENT), Some(format!("https://{CLIENT}").as_str())));
+    assert!(!req.summary.contains("your own server"), "{}", req.summary);
 }

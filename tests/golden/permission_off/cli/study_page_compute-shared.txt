@@ -123,17 +123,17 @@ SEATS AND LANES (0.46.10: your CI on another owner's nodes)
       A: k2 fed pair-finish <token 2>  B: k2 fed pair-verify <token 3>
       both compare the codes, then each: k2 fed confirm <fp> <code>
   1 Ask (an agent may):
-      k2 compute seats request <owner-host> --lane ci-standard --why "…"
+      k2 compute seats request <owner-host> --lane ci-standard --secrets --why "…"
     It is held for a person here. Its card shows the owner's node-roster
-    key (to compare with `k2 compute roster key` on their screen) and says
-    that approving lets this server's vault secrets go to that owner's
-    nodes for jobs on the seat: their root can read them. --no-secrets
-    asks without that.
+    key (to compare with `k2 compute roster key` on their screen).
+    --secrets only asks: approving the seat never sends a vault secret.
   2 A person here approves, from a terminal outside K2 (a fresh confirm):
       k2 compute trust requests          (find the request id)
       k2 compute trust approve <id>
-    That pins the owner's key, gives the secrets consent and sends the
-    request. An agent gets person_only (exit 3): ask your person.
+    That pins the owner's key and sends the request. An agent gets
+    person_only (exit 3): ask your person. Secrets are a separate yes, on
+    their own confirm, whose words say what they mean (their root can read
+    them): k2 compute owners consent <owner-host> on.
   3 On the owner's server (their side, not yours): k2 compute trust
     requests shows your request; they (or their agent) name the nodes,
     k2 compute seats offer <request> --nodes a,b, and their owner approves:
@@ -152,9 +152,10 @@ SEATS AND LANES (0.46.10: your CI on another owner's nodes)
     K2 places it only on a seat node that passes every rule below. A node
     with a per-job uid lists job-uid in k2 compute info <node>; elsewhere
     the job needs --exclusive.
-  Consent later, or again: k2 compute owners consent <owner-host> on (a
-  person, a fresh confirm); off works at once (an agent may). See it:
-  k2 compute owners. A new owner key (pinned again) needs a new consent.
+  The consent (step 2's separate yes, or later): k2 compute owners consent
+  <owner-host> on (a person, a fresh confirm); off works at once (an agent
+  may). See it: k2 compute owners. A new owner key (pinned again) needs a
+  new consent.
   A lane secret is sealed only to a Linux node of an active seat, behind
   the job wall, whose key is active and clean in the owner's node roster,
   in a job with its own uid (the node's job-uid) or --exclusive. Checked

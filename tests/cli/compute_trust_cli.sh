@@ -194,6 +194,11 @@ b="$(last /cli/compute/seats/request)"
 eq "owner" "$(field "$b" owner)" '"owner.k2.dev"'
 eq "secrets off" "$(field "$b" secrets)" "false"
 eq "why" "$(field "$b" why)" '"release builds"'
+# 11-07 review M6: secrets are off unless asked for (--secrets only asks).
+rc "seats request, no flag" 0 compute seats request owner.k2.dev --lane ci-standard
+eq "secrets off by default" "$(field "$(last /cli/compute/seats/request)" secrets)" "false"
+rc "seats request --secrets" 0 compute seats request owner.k2.dev --lane ci-standard --secrets
+eq "secrets asked" "$(field "$(last /cli/compute/seats/request)" secrets)" "true"
 rc "seats offer" 0 compute seats offer ctr_7 --nodes n1,n2,n3
 b="$(last /cli/compute/seats/offer)"
 eq "request" "$(field "$b" request)" '"ctr_7"'

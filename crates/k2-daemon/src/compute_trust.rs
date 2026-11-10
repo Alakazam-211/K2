@@ -80,6 +80,10 @@ pub const LANES_SET: &str = "/cli/compute/lanes/set";
 pub const SEATS: &str = "/cli/compute/seats";
 pub const SEATS_REQUEST: &str = "/cli/compute/seats/request";
 pub const SEATS_OFFER: &str = "/cli/compute/seats/offer";
+/// Owner: end, suspend or resume a seat (11-07 review M7).
+pub const SEATS_END: &str = "/cli/compute/seats/end";
+pub const SEATS_SUSPEND: &str = "/cli/compute/seats/suspend";
+pub const SEATS_RESUME: &str = "/cli/compute/seats/resume";
 pub const SIGNERS: &str = "/cli/ci/signers";
 pub const SIGNER_ADD: &str = "/cli/ci/signer/add";
 pub const SIGNER_REVEAL: &str = "/cli/ci/signer/reveal";
@@ -116,6 +120,9 @@ pub const ROUTES: &[&str] = &[
     SEATS,
     SEATS_REQUEST,
     SEATS_OFFER,
+    SEATS_END,
+    SEATS_SUSPEND,
+    SEATS_RESUME,
     SIGNERS,
     SIGNER_ADD,
     SIGNER_REVEAL,
@@ -133,6 +140,9 @@ pub const POST_ROUTES: &[&str] = &[
     LANES_SET,
     SEATS_REQUEST,
     SEATS_OFFER,
+    SEATS_END,
+    SEATS_SUSPEND,
+    SEATS_RESUME,
     SIGNER_ADD,
     SIGNER_REVEAL,
     SIGNER_FINISH,
@@ -160,6 +170,9 @@ pub(crate) fn handle(p: &str, who: &Who, body: &[u8], params: &HashMap<String, S
         SEATS => seats_show(who),
         SEATS_REQUEST => seats_request(who, body),
         SEATS_OFFER => seats_offer(who, body),
+        SEATS_END => seat_change(who, body, SeatState::Ended),
+        SEATS_SUSPEND => seat_change(who, body, SeatState::Suspended),
+        SEATS_RESUME => seat_change(who, body, SeatState::Active),
         SIGNERS => signers_show(who),
         SIGNER_ADD => signer_add(who, body),
         SIGNER_REVEAL => signer_reveal(who, body),
@@ -456,7 +469,12 @@ fn roster_propose(who: &Who, body: &[u8]) -> R<Value> {
                 return Err(no(tcodes::NO_STATEMENT, 409, format!("{}'s statement is for another key: wait for it to reconnect", n.name)));
             }
             let attest = s(&v, "attest").map(str::trim).filter(|x| !x.is_empty());
-            trust::taint_basis_for(&st, attest.is_some(), false).map_err(|(c, h)| no(c, 409, format!("{}: {h}", n.name)))?;
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                trust::taint_basis_checked(&conn, &st, attest.is_some(), false)
+            }
+            .map_err(|(c, h)| no(c, 409, format!("{}: {h}", n.name)))?;
             let host = s(&v, "host").unwrap_or(&n.name).to_ascii_lowercase();
             trust::name_ok("host", &host).map_err(|e| no(tcodes::BAD_ARGS, 400, e))?;
             for k in ["provider", "site"] {
@@ -617,6 +635,13 @@ fn refresh_roster(by: &str) -> R<trust::StoredRoster> {
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
+        // M4: a re-sign never vouches again for a key gone tainted.
+        let narrowed = trust::narrow_tainted(&conn, now());
+        if !narrowed.is_empty() {
+            store::record_event(&conn, by, "node_roster_narrowed", None, None, None, json!({"untrusted": narrowed}));
+            drop(conn);
+            return issue_roster(by);
+        }
         if trust::entries_changed(&conn) {
             return Err(no("roster_change_pending", 409, "a roster change waits for a person"));
         }
@@ -674,32 +699,110 @@ fn deliver_to_nodes(r: &trust::StoredRoster, only_new: bool) -> Vec<Value> {
 
 fn deliver_roster(r: &trust::StoredRoster) -> Value {
     let to_nodes = deliver_to_nodes(r, false);
-    let seats = {
+    let to_clients = deliver_to_clients(r, false);
+    json!({"nodes": to_nodes, "clients": to_clients})
+}
+
+/// What each seated client was last handed: the roster `seq` and its seat
+/// statements' digests (this process). A client that was unreachable gets
+/// the newest at a later tick (11-07 review M5), backing off while it stays
+/// unreachable.
+struct ClientHanded {
+    seq: u64,
+    seats: Vec<String>,
+}
+static HANDED_CLIENTS: Mutex<Option<HashMap<String, ClientHanded>>> = Mutex::new(None);
+/// A client that keeps failing: `(failures, next try)`.
+static CLIENT_BACKOFF: Mutex<Option<HashMap<String, (u32, i64)>>> = Mutex::new(None);
+
+/// Hand the roster and each client's own seat statements to every client
+/// with a live (or suspended or ended) seat here. `only_new`: the tick's
+/// catch-up: skip a client already handed exactly this, and one still in
+/// its backoff.
+fn deliver_to_clients(r: &trust::StoredRoster, only_new: bool) -> Vec<Value> {
+    let (seats, lanes) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        trust::seats(&conn, Some("owner"))
+        let seats = trust::seats(&conn, Some("owner"));
+        let lanes: HashMap<String, LaneTemplate> = seats.iter().filter_map(|s| trust::seat_lane(&conn, "owner", &s.id).map(|l| (s.id.clone(), l))).collect();
+        (seats, lanes)
     };
+    let t = now();
     let mut to_clients = Vec::new();
     let mut done: Vec<String> = Vec::new();
-    for s in seats.iter().filter(|s| matches!(s.state.as_str(), "active" | "offered" | "suspended")) {
+    for s in seats.iter().filter(|s| matches!(s.state.as_str(), "active" | "offered" | "suspended" | "ended")) {
         if done.contains(&s.peer_fp) {
             continue;
         }
         done.push(s.peer_fp.clone());
-        let mine: Vec<Signed> = seats.iter().filter(|x| x.peer_fp == s.peer_fp).filter_map(|x| x.statement.clone()).collect();
+        // A client never sees another client's seat.
+        let theirs: Vec<&SeatRow> = seats.iter().filter(|x| x.peer_fp == s.peer_fp && x.statement.is_some()).collect();
+        let mine: Vec<Signed> = theirs.iter().filter_map(|x| x.statement.clone()).collect();
+        // What was handed: each seat statement and the lane it runs under
+        // (a lane change reaches a client that missed it too, M7).
+        let digests: Vec<String> = theirs
+            .iter()
+            .map(|x| format!("{}|{}", x.statement.as_ref().map(Signed::digest).unwrap_or_default(), lanes.get(&x.id).and_then(|l| serde_json::to_string(l).ok()).unwrap_or_default()))
+            .collect();
+        if only_new {
+            let handed = HANDED_CLIENTS.lock().unwrap_or_else(|p| p.into_inner()).as_ref().and_then(|m| m.get(&s.peer_fp)).is_some_and(|h| h.seq == r.roster.seq && h.seats == digests);
+            let waiting = CLIENT_BACKOFF.lock().unwrap_or_else(|p| p.into_inner()).as_ref().and_then(|m| m.get(&s.peer_fp)).is_some_and(|(_, next)| t < *next);
+            if handed || waiting {
+                continue;
+            }
+        }
         let payload = json!({"roster": r.signed, "seats": mine});
-        match fed_send(&s.peer_fp, KIND_NODE_ROSTER, payload) {
-            Ok(_) => to_clients.push(json!({"client": s.peer_host, "sent": true})),
-            Err(x) => to_clients.push(json!({"client": s.peer_host, "sent": false, "why": x.hint})),
+        let sent = fed_send(&s.peer_fp, KIND_NODE_ROSTER, payload).and_then(|_| {
+            // Each live seat's lane template (an offer the client already
+            // took changes nothing but the lane).
+            for x in theirs.iter().filter(|x| x.state != "ended") {
+                if let Some(l) = lanes.get(&x.id) {
+                    fed_send(&s.peer_fp, KIND_SEAT_OFFER, json!({"seat": x.statement, "roster": r.signed, "lane": l}))?;
+                }
+            }
+            Ok(())
+        });
+        match sent {
+            Ok(_) => {
+                HANDED_CLIENTS.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(HashMap::new).insert(s.peer_fp.clone(), ClientHanded { seq: r.roster.seq, seats: digests });
+                if let Some(m) = CLIENT_BACKOFF.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+                    m.remove(&s.peer_fp);
+                }
+                to_clients.push(json!({"client": s.peer_host, "sent": true}))
+            }
+            Err(x) => {
+                // The tick's own failures back off (1 min doubling, ≤ 1 h).
+                if only_new {
+                    let mut g = CLIENT_BACKOFF.lock().unwrap_or_else(|p| p.into_inner());
+                    let e = g.get_or_insert_with(HashMap::new).entry(s.peer_fp.clone()).or_insert((0, 0));
+                    e.0 = e.0.saturating_add(1);
+                    e.1 = t + (60i64 << e.0.min(6)).min(3600);
+                }
+                to_clients.push(json!({"client": s.peer_host, "sent": false, "why": x.hint}))
+            }
         }
     }
-    json!({"nodes": to_nodes, "clients": to_clients})
+    to_clients
 }
 
 /// The daemon's own loop (60 s, headless): expire requests; re-sign an
 /// unchanged roster before it goes stale, and deliver it.
 pub fn tick() {
     let t = now();
+    // M4: no re-sign vouches for a key whose live statement (or memory)
+    // says it ran unwalled: narrow first.
+    let narrowed = {
+        let Some(db) = k2_core::db::try_shared() else { return };
+        let conn = db.lock();
+        if trust::latest_own_roster(&conn).is_some() {
+            trust::narrow_tainted(&conn, t)
+        } else {
+            Vec::new()
+        }
+    };
+    if !narrowed.is_empty() {
+        narrow_and_issue(&narrowed);
+    }
     let (stale, changed) = {
         let Some(db) = k2_core::db::try_shared() else { return };
         let conn = db.lock();
@@ -725,7 +828,90 @@ pub fn tick() {
     };
     if let Some(r) = latest {
         deliver_to_nodes(&r, true);
+        // M5: and the seated clients that missed it.
+        deliver_to_clients(&r, true);
     }
+    requeue_expired_plans();
+}
+
+/// M7 (11-07 review): a seat's or lane's node plan that ran out unsent
+/// (the node stayed offline past the approval's lifetime) is sealed again
+/// once the node is back, with the same steps and the same person's
+/// approval, its lanes file brought up to date (what every approved seat
+/// and lane says now). Nothing a person didn't approve is added. Each
+/// expired plan is sealed again once (its result says by which).
+fn requeue_expired_plans() {
+    let expired: Vec<k2_core::compute::admin::RequestRow> = {
+        let Some(db) = k2_core::db::try_shared() else { return };
+        let conn = db.lock();
+        k2_core::compute::admin::list_requests(&conn, &k2_core::compute::admin::ReqFilter { state: Some("expired"), limit: 200, ..Default::default() })
+            .into_iter()
+            .filter(|r| r.kind == "plan" && r.result.as_ref().is_none_or(|x| x.get("requeuedAs").is_none()))
+            .filter(|r| trust_plan_ref(r).is_some())
+            .collect()
+    };
+    if expired.is_empty() {
+        return;
+    }
+    let Ok(vault) = crate::compute_admin::trust_vault() else { return };
+    for r in expired {
+        let Some((reference, batch)) = trust_plan_ref(&r) else { continue };
+        let node = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::node_by_id(&conn, &r.node_id)
+        };
+        let Some(node) = node.filter(|n| n.state == "active" && !n.is_tenant()) else { continue };
+        if !crate::compute_admin::online(&node.id) {
+            continue;
+        }
+        let name = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            trust::entry_by_fp(&conn, &node.fingerprint).filter(|e| e.entry.status == KeyStatus::Active).map(|e| e.entry.name)
+        };
+        let Ok(steps) = r.steps() else { continue };
+        let mut fresh = Vec::new();
+        for st in steps {
+            if st.verb == plane::VERB_LANES_WRITE {
+                let Some(n) = &name else { continue };
+                let file = {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    trust::lanes_file_for(&conn, n)
+                };
+                let Ok(file) = file else { continue };
+                fresh.push((st.verb, json!({"file": file})));
+            } else {
+                fresh.push((st.verb, st.args));
+            }
+        }
+        if fresh.is_empty() {
+            continue;
+        }
+        let by = r.decided_by.clone().unwrap_or_else(|| "owner".into());
+        let via = r.decided_via.clone().unwrap_or_else(|| "local-auth".into());
+        match crate::compute_admin::queue_approved_plan(&vault, &node, &fresh, &r.proposed_by, &by, &via, &reference, &batch) {
+            Ok(id) => {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                let mut res = r.result.clone().unwrap_or_else(|| json!({}));
+                res["requeuedAs"] = json!(id);
+                let _ = k2_core::compute::admin::set_result(&conn, &r.id, "expired", &res);
+                store::record_event(&conn, "controller", "trust_plan_requeued", Some(&node.id), None, None, json!({"expired": r.id, "request": id, "ref": reference, "batch": batch}));
+            }
+            Err(e) => k2_core::log_debug!("[compute] requeue {}: {}", r.id, e.hint),
+        }
+    }
+}
+
+/// `(the trust approval it was sealed under, its batch)` for a node plan
+/// sealed by a seat, lane or seat change ("approved with ctr_… (batch …)").
+fn trust_plan_ref(r: &k2_core::compute::admin::RequestRow) -> Option<(String, String)> {
+    let reason = r.reason.as_deref()?.strip_prefix("approved with ")?;
+    let (reference, rest) = reason.split_once(" (batch ")?;
+    let batch = rest.strip_suffix(')')?;
+    (reference.starts_with("ctr_") || reference.starts_with("seat-")).then(|| (reference.to_string(), batch.to_string()))
 }
 
 // ── decide ───────────────────────────────────────────────────────────
@@ -771,8 +957,22 @@ fn approve(who: &Who, body: &[u8]) -> R<Value> {
     if req.state != "pending" {
         return Err(decide_err(tcodes::NOT_PENDING));
     }
-    if req.kind == "seat_offer" {
+    // A seat, and a lane (its approval seals node plans for every live seat
+    // on it, 11-07 review M3), use the owner approval key: owner only.
+    if matches!(req.kind.as_str(), "seat_offer" | "lane") {
         owner_person(who)?;
+    }
+    // M1: the approval is for exactly what the person was shown. A pending
+    // request can still be rewritten (an operator names a seat's nodes),
+    // so the caller names the digest it showed; any other is refused.
+    let shown = s(&v, "expectedDigest")
+        .ok_or_else(|| no(tcodes::BAD_ARGS, 400, "name the request's digest you were shown (expectedDigest): k2 compute trust approve <id> passes it"))?;
+    if !crypto::ct_eq(shown.as_bytes(), req.digest.as_bytes()) {
+        return Err(no(
+            REQUEST_CHANGED,
+            409,
+            format!("{} changed since you were shown it (now: {}): look again (k2 compute trust requests) and approve what it says now", req.id, req.summary),
+        ));
     }
     let via = take_confirm(who, &v, trust::CONFIRM_TRUST, &req.id)?;
     let by = who.label();
@@ -856,7 +1056,12 @@ fn approve_roster(req: &TrustRequest, by: &str, via: &str) -> R<Value> {
                 return Err(no(tcodes::NO_STATEMENT, 409, format!("{} changed key since this was filed: file it again", node.name)));
             }
             let attest = s(b, "attest");
-            let basis = trust::taint_basis_for(&st, attest.is_some(), false).map_err(|(c, h)| no(c, 409, h))?;
+            let basis = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                trust::taint_basis_checked(&conn, &st, attest.is_some(), false)
+            }
+            .map_err(|(c, h)| no(c, 409, h))?;
             let attestation = match (basis, attest) {
                 (TaintBasis::OwnerAttested, Some(checked)) => {
                     let a = trust::attestation_for(&owner, &key, &st, &st_signed.digest(), checked, by, t);
@@ -1097,7 +1302,29 @@ fn approve_lane(req: &TrustRequest, by: &str, via: &str) -> R<Value> {
             Err(e) => plans.push(json!({"node": node.name, "queued": false, "why": e.hint})),
         }
     }
-    Ok(json!({"lane": name, "template": t, "batch": batch, "plans": plans}))
+    // M7 (11-07 review): the clients on this lane learn the new template
+    // too (their gate checks the lane's secrets and isolation before any
+    // seal): each seat's own signed statement again, with the roster and
+    // the lane, as an offer.
+    let (seats, roster) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let seats: Vec<SeatRow> = trust::seats(&conn, Some("owner")).into_iter().filter(|s| s.lane == name && matches!(s.state.as_str(), "active" | "offered" | "suspended")).collect();
+        for s in &seats {
+            let _ = trust::set_seat_lane(&conn, "owner", &s.id, &t);
+        }
+        (seats, trust::latest_own_roster(&conn))
+    };
+    let mut clients = Vec::new();
+    if let Some(r) = roster {
+        for s in seats.iter().filter(|s| s.statement.is_some()) {
+            match fed_send(&s.peer_fp, KIND_SEAT_OFFER, json!({"seat": s.statement, "roster": r.signed, "lane": t})) {
+                Ok(_) => clients.push(json!({"client": s.peer_host, "seat": s.id, "sent": true})),
+                Err(e) => clients.push(json!({"client": s.peer_host, "seat": s.id, "sent": false, "why": e.hint})),
+            }
+        }
+    }
+    Ok(json!({"lane": name, "template": t, "batch": batch, "plans": plans, "clients": clients}))
 }
 
 /// The owned node whose active roster entry has this name.
@@ -1204,19 +1431,35 @@ fn seats_request(who: &Who, body: &[u8]) -> R<Value> {
     let answer = fed_send(&peer.fingerprint, KIND_OWNER_KEY, json!({}))?;
     let roster_key = answer.get("rosterKey").and_then(Value::as_str).unwrap_or("");
     let key = ApprovalKey::parse(roster_key).ok_or_else(|| no("peer_answer", 502, format!("{owner_host} has no node roster key yet (it runs k2 compute roster key first)")))?;
-    let owner_id = answer.get("ownerId").and_then(Value::as_str).unwrap_or("").to_string();
+    // M2 (11-07 review): the owner's name is the paired server's verified
+    // host, never a name the peer picks for itself (it would show on the
+    // card and in the consent as someone else).
+    let owner_id = verified_host(&peer);
+    let said = answer.get("ownerId").and_then(Value::as_str).unwrap_or("");
+    if !said.eq_ignore_ascii_case(&owner_id) {
+        return Err(no("peer_answer", 502, format!("{owner_host} names itself {said:?}, but this server paired with it as {owner_id}: refused")));
+    }
     trust::name_ok("owner", &owner_id).map_err(|e| no("peer_answer", 502, e))?;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        trust::pin_ok(&conn, &key, &owner_id, &peer.fingerprint).map_err(|e| no(tcodes::OWNER_NOT_TRUSTED, 409, e))?;
+    }
     let label = owner_id_or_label();
     let seat = s(&v, "seat").map(str::to_string).unwrap_or_else(|| format!("{}-{lane}", label.split('.').next().unwrap_or("client")));
     trust::name_ok("seat", &seat).map_err(|e| no(tcodes::BAD_ARGS, 400, e))?;
-    let consent = v.get("secrets").and_then(Value::as_bool).unwrap_or(true);
+    // M6 (11-07 review): secrets are off unless asked for, and even then
+    // this card never gives the consent: a person agrees to that on its own
+    // card, with its own confirm (k2 compute owners consent <owner> on),
+    // whose words say what it means.
+    let consent = v.get("secrets").and_then(Value::as_bool).unwrap_or(false);
     let summary = format!(
-        "ask {owner_id} for a CI seat (lane {lane}, seat {seat}). This pins {owner_id}'s node-roster key {}… (compare it with `k2 compute roster key` on that server's own screen){}",
+        "ask {owner_id} for a CI seat (lane {lane}, seat {seat}). This pins {owner_id}'s node-roster key {}… (compare it with `k2 compute roster key` on that server's own screen). {}",
         &key.fingerprint()[..16],
         if consent {
-            format!(" and lets this server send vault secrets to {owner_id}'s nodes for lane jobs: that owner's root can read them")
+            format!("Secrets are asked for, but not given here: sending vault secrets to {owner_id}'s nodes is a separate yes, with its own confirm, next")
         } else {
-            ", without secrets (no vault secret goes to its nodes)".to_string()
+            "No vault secret goes to its nodes".to_string()
         }
     );
     file_request(
@@ -1244,7 +1487,9 @@ fn approve_seat_request(req: &TrustRequest, by: &str, via: &str) -> R<Value> {
     let owner = s(b, "ownerId").unwrap_or("").to_string();
     let seat_id = s(b, "seat").unwrap_or("").to_string();
     let lane = s(b, "lane").unwrap_or("").to_string();
-    let consent = b.get("secrets").and_then(Value::as_bool).unwrap_or(false);
+    // M6: asked for or not, the consent is never given here (its own card).
+    let asked_secrets = b.get("secrets").and_then(Value::as_bool).unwrap_or(false);
+    let consent = false;
     let ctl = my_fp()?;
     let code = pairing::new_code().map_err(db_err)?;
     let es = pairing::EnrollString::new(&code, &ctl).ok_or_else(|| no("internal", 500, "could not make the seat code"))?;
@@ -1288,17 +1533,21 @@ fn approve_seat_request(req: &TrustRequest, by: &str, via: &str) -> R<Value> {
     let sent = fed_send(&peer_fp, KIND_SEAT_REQUEST, payload);
     let db = k2_core::db::shared();
     let conn = db.lock();
-    match sent {
-        Ok(a) => Ok(json!({"seat": seat_id, "owner": owner, "sent": true, "ownerRequest": a.get("request").cloned()})),
+    let mut out = match sent {
+        Ok(a) => json!({"seat": seat_id, "owner": owner, "sent": true, "ownerRequest": a.get("request").cloned()}),
         Err(e) => {
             if let Some(mut row) = trust::seat(&conn, "client", &seat_id) {
                 row.note = Some(format!("the request didn't reach {owner}: {}", e.hint));
                 row.updated_at = now();
                 let _ = trust::put_seat(&conn, &row);
             }
-            Ok(json!({"seat": seat_id, "owner": owner, "sent": false, "why": e.hint}))
+            json!({"seat": seat_id, "owner": owner, "sent": false, "why": e.hint})
         }
+    };
+    if asked_secrets {
+        out["consentNext"] = json!(k2_core::compute::lane_secrets::consent_command(&owner));
     }
+    Ok(out)
 }
 
 /// `k2 compute seats offer <request> --nodes a,b,c` (owner): name the
@@ -1349,6 +1598,16 @@ fn seat_node_ok(name: &str, client_fp: &str) -> R<store::NodeRow> {
     };
     if entry.as_ref().is_none_or(|e| e.entry.taint_basis.is_none()) {
         return Err(no(tcodes::NODE_KEY_TAINTED, 409, format!("{name}: the roster vouches for nothing on its key (attest it or re-key it first)")));
+    }
+    // M4: what the node says now, not only what it said when listed.
+    let live = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let st = trust::statement_of(&conn, &node.id).map(|(_, st)| st).filter(|st| st.node_fp == node.fingerprint);
+        st.as_ref().and_then(trust::statement_taint).map(str::to_string).or_else(|| trust::taint_remembered(&conn, &node.fingerprint))
+    };
+    if let Some(why) = live {
+        return Err(no(tcodes::NODE_KEY_TAINTED, 409, format!("{name}: its key is tainted ({why}); it gets no seat until a re-key under the wall")));
     }
     if matches!(node.os.as_deref(), Some("macos") | Some("darwin")) {
         return Err(no(tcodes::MAC_SEAT_NOT_OFFERED, 409, format!("{name} is a Mac: Mac nodes share one uid between tenants, so they are never seated for another client (V18)")));
@@ -1503,6 +1762,124 @@ fn approve_seat_offer(req: &TrustRequest, by: &str, via: &str) -> R<Value> {
     Ok(json!({"seat": seat_json(&row), "batch": batch, "plans": plans, "delivered": delivered}))
 }
 
+/// A node's `servers.toml` label for a server URL (k2-node's `label_of`,
+/// `https://baden.k2.dev:8443/` → `baden.k2.dev-8443`): what `servers.*`
+/// verbs name.
+fn node_server_label(url: &str) -> String {
+    let host = url.split("://").nth(1).unwrap_or(url).trim_end_matches('/');
+    let host = host.split('/').next().unwrap_or(host);
+    let host = host.rsplit('@').next().unwrap_or(host);
+    let mut s: String = host.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '-' }).collect();
+    s.truncate(64);
+    if s.is_empty() {
+        "server".into()
+    } else {
+        s
+    }
+}
+
+/// `k2 compute seats end|suspend|resume <seat> [--why …]` (owner, 11-07
+/// review M7): the owner in person (a fresh confirm bound to
+/// `seat-<op>:<id>`; the seat's node plans use the owner approval key).
+/// The seat's statement is signed again with the new state and handed to
+/// the client (its gate needs an active seat for any lane secret); each of
+/// the seat's nodes gets, in one batch, its lanes file without the seat
+/// (with it again on resume) and the client's server paused, resumed or
+/// revoked (running jobs stop; its files go after 24 h).
+fn seat_change(who: &Who, body: &[u8], to: SeatState) -> R<Value> {
+    owner_person(who)?;
+    let v = json_body(body)?;
+    let id = s(&v, "seat").ok_or_else(|| no(tcodes::BAD_ARGS, 400, "name the seat (k2 compute seats)"))?.to_string();
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        trust::seat(&conn, "owner", &id)
+    }
+    .ok_or_else(|| no(tcodes::SEAT_NOT_FOUND, 404, format!("no seat {id} offered here (k2 compute seats)")))?;
+    let (op, state, verb) = match to {
+        SeatState::Ended => ("end", "ended", pshare::VERB_REVOKE),
+        SeatState::Suspended => ("suspend", "suspended", pshare::VERB_PAUSE),
+        _ => ("resume", "active", pshare::VERB_RESUME),
+    };
+    let ok = match to {
+        SeatState::Ended => row.state != "ended",
+        SeatState::Suspended => matches!(row.state.as_str(), "active" | "offered"),
+        _ => row.state == "suspended",
+    };
+    if !ok {
+        return Err(no(tcodes::SEAT_NOT_ACTIVE, 409, format!("seat {id} is {}: it can't {op}", row.state)));
+    }
+    let why = s(&v, "why").map(|w| w.chars().filter(|c| !c.is_control()).take(200).collect::<String>());
+    let via = take_confirm(who, &v, trust::CONFIRM_TRUST, &format!("seat-{op}:{id}"))?;
+    if to == SeatState::Active {
+        for n in &row.nodes {
+            seat_node_ok(n, &row.client_fp)?;
+        }
+    }
+    let key = roster_key()?;
+    let roster = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        trust::latest_own_roster(&conn)
+    }
+    .ok_or_else(|| no(tcodes::NODE_NOT_ON_ROSTER, 409, "no signed node roster yet"))?;
+    let t = now();
+    // Strictly after the statement it replaces (the client keeps only a
+    // later one under the same roster seq).
+    let prev_at = row.statement.as_ref().and_then(|x| x.peek::<SeatStatement>(ci::DOMAIN_NODE_SEAT).ok()).map(|x| x.issued_at).unwrap_or(0);
+    let mut next = row.clone();
+    next.state = state.into();
+    next.roster_seq = Some(roster.roster.seq as i64);
+    next.note = why.clone();
+    next.updated_at = t;
+    let st = trust::seat_statement_for(&next, &key, roster.roster.seq, to, t.max(prev_at + 1));
+    let signed = sign_owner(ci::DOMAIN_NODE_SEAT, &st)?;
+    SeatStatement::open(&signed, &key).map_err(|e| no("sign", 500, e))?;
+    next.statement = Some(signed);
+    let by = who.label();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        trust::put_seat(&conn, &next).map_err(db_err)?;
+        store::record_event(&conn, &by, &format!("seat_{op}"), None, None, None, json!({"seat": id, "client": row.client_label, "via": via, "why": why}));
+    }
+    let batch = format!("seat-{op}-{}", crypto::random_id().map_err(db_err)?);
+    let vault = crate::compute_admin::trust_vault()?;
+    let label = node_server_label(&row.client_url);
+    let mut plans = Vec::new();
+    for name in &row.nodes {
+        let node = match node_for_entry(name) {
+            Ok(n) => n,
+            Err(e) => {
+                plans.push(json!({"node": name, "queued": false, "why": e.hint}));
+                continue;
+            }
+        };
+        let file = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            trust::lanes_file_for(&conn, name).map_err(|e| no(tcodes::BAD_ARGS, 409, e))?
+        };
+        let server_args = if to == SeatState::Ended {
+            serde_json::to_value(pshare::RevokeArgs { server: label.clone(), now: true, wipe: false }).map_err(db_err)?
+        } else {
+            json!({"server": label})
+        };
+        // Narrowing first: the server's state before its lane comes back.
+        let steps = if to == SeatState::Active {
+            vec![(plane::VERB_LANES_WRITE.to_string(), json!({"file": file})), (verb.to_string(), server_args)]
+        } else {
+            vec![(verb.to_string(), server_args), (plane::VERB_LANES_WRITE.to_string(), json!({"file": file}))]
+        };
+        match crate::compute_admin::queue_approved_plan(&vault, &node, &steps, "controller:seat", &by, &via, &format!("seat-{op}:{id}"), &batch) {
+            Ok(rid) => plans.push(json!({"node": node.name, "queued": true, "request": rid})),
+            Err(e) => plans.push(json!({"node": node.name, "queued": false, "why": e.hint})),
+        }
+    }
+    let delivered = deliver_roster(&roster);
+    Ok(json!({"seat": seat_json(&next), "batch": batch, "plans": plans, "delivered": delivered}))
+}
+
 // ── the federation leg ───────────────────────────────────────────────
 
 fn trusted_peer(host: &str) -> R<FederationPeer> {
@@ -1524,6 +1901,12 @@ fn trusted_peer(host: &str) -> R<FederationPeer> {
         return Err(no("not_connected", 403, format!("{host} isn't trusted yet")));
     }
     Ok(peer)
+}
+
+/// A paired server's verified host (what it was paired as, from this
+/// server's own peer record; never a name the peer sends, M2).
+fn verified_host(peer: &FederationPeer) -> String {
+    federation::peer_address_host(&peer.subdomain, &peer.base_url).to_ascii_lowercase()
 }
 
 /// Seal `payload` as `kind` to a pinned, trusted peer and post it to its
@@ -1591,7 +1974,11 @@ pub fn handle_federation(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(e) => return crate::federation_routes::ingress_reject(e),
     };
-    let host = store.get(&ingested.peer_fingerprint).map(crate::federation_routes::peer_host).unwrap_or_default();
+    // Who the peer is: the host it was paired as (M2), not where it is dialed.
+    let host = store.get(&ingested.peer_fingerprint).map(verified_host).unwrap_or_default();
+    if host.is_empty() {
+        return crate::compute_routes::refusal_response(&no("not_paired", 403, "this server has no host for that peer"));
+    }
     let SignalKind::Custom { kind, payload } = &ingested.signal.kind else {
         return crate::compute_routes::refusal_response(&no("wrong_kind", 400, "this route takes compute seat kinds only"));
     };
@@ -1632,17 +2019,26 @@ fn receive_seat_request(peer_fp: &str, peer_host: &str, p: &Value) -> R<Value> {
     if !ci::is_fp(ctl) {
         return Err(no(tcodes::BAD_ARGS, 400, "controllerFp is the client's 64-hex key fingerprint"));
     }
-    let url = s(p, "controllerUrl").unwrap_or("");
-    if !url.starts_with("https://") || url.len() > 253 {
-        return Err(no(tcodes::BAD_ARGS, 400, "controllerUrl is https://<host>"));
+    // M2 (11-07 review): the client is named, and its nodes are pointed
+    // at, the host this server paired with: never a label or URL the peer
+    // picks (its seat nodes would otherwise dial wherever it says, and the
+    // card would show whatever name it likes).
+    if peer_host.is_empty() || !ci::is_name(peer_host) {
+        return Err(no(tcodes::BAD_ARGS, 400, "this server has no verified host for that peer"));
     }
+    let url_owned = format!("https://{peer_host}");
+    let said = s(p, "controllerUrl").unwrap_or("");
+    if !said.trim_end_matches('/').eq_ignore_ascii_case(&url_owned) {
+        return Err(no(tcodes::BAD_ARGS, 400, format!("controllerUrl {said:?} isn't the host this server paired with ({url_owned})")));
+    }
+    let url = url_owned.as_str();
     let (_, prefix) = k2_core::compute::share::split_add_code(s(p, "code").unwrap_or("")).map_err(|e| no(tcodes::BAD_ARGS, 400, e))?;
     if !ctl.starts_with(&prefix) {
         return Err(no(tcodes::BAD_ARGS, 400, "the seat code names another server"));
     }
     let lane = s(p, "lane").unwrap_or(plane::LANE_CI_STANDARD);
     trust::name_ok("lane", lane).map_err(|e| no(tcodes::BAD_ARGS, 400, e))?;
-    let label: String = s(p, "label").unwrap_or(peer_host).chars().filter(|c| !c.is_control()).take(253).collect();
+    let label: String = peer_host.to_string();
     let body = json!({"seat": seat, "peerFp": peer_fp, "peerHost": peer_host, "clientFp": ctl, "clientLabel": label, "clientUrl": url,
         "lane": lane, "code": s(p, "code"), "nodes": [], "why": s(p, "why").map(|w| w.chars().take(200).collect::<String>())});
     let summary = seat_offer_summary(&body);
@@ -1688,6 +2084,11 @@ fn client_take_roster(peer_fp: Option<&str>, doc: &NodeRosterDoc, source: &str) 
             return Err(no(tcodes::OWNER_NOT_TRUSTED, 403, "that roster key was pinned for another server"));
         }
     }
+    // M2: the owner's name is the one a person pinned; a roster or seat
+    // that calls it something else is refused (no re-pin by renaming).
+    if peek.owner_id != trust_row.owner_id {
+        return Err(no(tcodes::OWNER_NOT_TRUSTED, 403, format!("the roster names its owner {:?}, but this key was pinned for {}", peek.owner_id, trust_row.owner_id)));
+    }
     let fx = trust::receive_roster(&conn, &doc.roster, source, t).map_err(|(c, h)| no(c, 409, h))?;
     let pinned = ApprovalKey::parse(&trust_row.roster_key).ok_or_else(|| no("store", 500, "pinned key unreadable"))?;
     for s_signed in &doc.seats {
@@ -1696,12 +2097,20 @@ fn client_take_roster(peer_fp: Option<&str>, doc: &NodeRosterDoc, source: &str) 
             continue;
         }
         let Some(mut row) = trust::seat(&conn, "client", &st.seat_id) else { continue };
-        if row.owner_key_fp.as_deref() != Some(key.fingerprint().as_str()) || row.lane != st.lane {
+        if row.owner_key_fp.as_deref() != Some(key.fingerprint().as_str()) || row.lane != st.lane || st.owner_id != trust_row.owner_id {
             store::record_event(&conn, "controller", "seat_refused", None, None, None, json!({"seat": st.seat_id, "why": "another owner key or lane than asked"}));
             continue;
         }
         if row.roster_seq.is_some_and(|q| (st.roster_seq as i64) < q) {
             continue;
+        }
+        // M7 (11-07 review): under one roster seq, only a later statement
+        // counts (an older "active" replayed after a "suspended" or
+        // "ended" is ignored); the same statement again changes nothing.
+        if let Some(held) = row.statement.as_ref().and_then(|h| h.peek::<SeatStatement>(ci::DOMAIN_NODE_SEAT).ok()) {
+            if (st.roster_seq, st.issued_at) <= (held.roster_seq, held.issued_at) {
+                continue;
+            }
         }
         row.nodes = st.nodes.clone();
         row.state = match st.state {
@@ -1730,11 +2139,42 @@ fn client_take_roster(peer_fp: Option<&str>, doc: &NodeRosterDoc, source: &str) 
 // ── node hooks (compute_ws) ──────────────────────────────────────────
 
 /// A node's verified self-statement: keep the latest.
+/// M4 (11-07 review): a statement that says the key ran unwalled (or
+/// runs `--dev`, without the wall, or with a job-readable key) is
+/// remembered for good, and on a node this server owns its roster entry
+/// loses its vouch at once: the narrowed roster is signed (no person: it
+/// only takes trust away) and handed out.
 pub fn on_statement(node_id: &str, s: &Signed) {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    if let Err(e) = trust::save_statement(&conn, node_id, s, now()) {
-        store::record_event(&conn, "node", "statement_refused", Some(node_id), None, None, json!({"why": e}));
+    let narrowed = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match trust::save_statement(&conn, node_id, s, now()) {
+            Err(e) => {
+                store::record_event(&conn, "node", "statement_refused", Some(node_id), None, None, json!({"why": e}));
+                return;
+            }
+            Ok(st) => {
+                if let Some(why) = trust::statement_taint(&st) {
+                    trust::remember_taint(&conn, &st.node_fp, why, now());
+                    store::record_event(&conn, "node", "node_key_tainted", Some(node_id), None, None, json!({"fp": st.node_fp, "why": why}));
+                }
+                trust::narrow_tainted(&conn, now())
+            }
+        }
+    };
+    if !narrowed.is_empty() {
+        narrow_and_issue(&narrowed);
+    }
+}
+
+/// Sign and hand out a roster whose only change is narrowing (M4).
+fn narrow_and_issue(names: &[String]) {
+    match issue_roster("controller:taint") {
+        Ok(r) => {
+            audit("controller", "node_roster_narrowed", None, json!({"seq": r.roster.seq, "untrusted": names}));
+            deliver_roster(&r);
+        }
+        Err(e) => k2_core::log_debug!("[compute] node roster narrow: {}", e.hint),
     }
 }
 
@@ -1757,6 +2197,9 @@ pub fn on_node_roster(node_id: &str, doc: NodeRosterDoc) {
 
 /// Refusal code: a node's re-key waits for a person (11-07 review H2).
 pub const REKEY_PENDING: &str = "rekey_pending";
+/// Refusal code: the request was rewritten after the person was shown it
+/// (11-07 review M1).
+pub const REQUEST_CHANGED: &str = "request_changed";
 
 /// A node attaches with a key this server doesn't pin, carrying a rotation
 /// signed by one it does (V3). The proof is checked, but the pinned key

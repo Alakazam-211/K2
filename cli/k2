@@ -26232,14 +26232,20 @@ terminal outside K2, Touch ID / vault password) decides every change:
   k2 compute lanes set <name> [--from ci-standard] [key=value …]   held
   k2 compute seats [--json]           seats this server offered or holds
   k2 compute seats request <owner-host> [--lane ci-standard] [--seat ID]
-                   [--no-secrets] [--why "…"]   (client) ask a paired node
+                   [--secrets] [--why "…"]   (client) ask a paired node
                    owner for a seat. Held for your person: approving pins that
                    owner's node-roster key (compare its fingerprint with
-                   `k2 compute roster key` on the owner's screen) and agrees to
-                   send vault secrets to its nodes (its root can read them)
+                   `k2 compute roster key` on the owner's screen). It never
+                   sends vault secrets: --secrets only asks; a person agrees
+                   to that separately (k2 compute owners consent <owner> on)
   k2 compute seats offer <request> --nodes a,b,c   (owner) name a client's
                    seat nodes; the owner approves: one card signs the seat and
                    sets up every node (lanes file + the client as a server)
+  k2 compute seats suspend|resume|end <seat> [--why "…"]   (owner, in person:
+                   a fresh confirm) the client hears it at once (no lane
+                   secret on a seat that isn't active); every seat node gets
+                   its lanes file without the seat and the client's server
+                   paused, resumed or revoked (end: running jobs stop)
   k2 compute trust [requests] [--all] [--json]  |  approve <id>  |  deny <id> [--why]
                    |  withdraw <id>   approve/deny: a person, in person
   k2 compute owners [--json]          node owners this server pinned (seq,
@@ -26248,8 +26254,8 @@ terminal outside K2, Touch ID / vault password) decides every change:
                    person here agrees that this server's vault secrets may go to
                    <owner>'s nodes for jobs on your seat of a lane of theirs
                    that allows secrets (their root can read them; other tenants
-                   can't). The seat request card already gives it (unless
-                   --no-secrets). on takes a fresh confirm, bound to that
+                   can't). The seat request card never gives it: it is its
+                   own yes. on takes a fresh confirm, bound to that
                    owner's pinned roster key; off works at once (an agent may
                    narrow). Then: k2 vault grant NAME --to
                    compute:<ws>/lane:<owner>/<lane> --as env
@@ -30080,7 +30086,7 @@ _compute_trust_approve() {
         exit 3
     fi
     _compute_call GET /cli/compute/trust/requests "state=all" tcp
-    local found full state label
+    local found full state label digest
     found="$(printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 want = sys.argv[1]
@@ -30088,22 +30094,33 @@ rows = [r for r in json.load(sys.stdin)["requests"] if r["id"] == want or r["id"
 if len(rows) != 1:
     sys.exit(1)
 r = rows[0]
-print(r["id"]); print(r["state"]); print(r["summary"][:64]); print("---"); print(r["summary"])
+print(r["id"]); print(r["state"]); print(r["summary"][:64]); print(r["digest"]); print("---"); print(r["summary"])
 if r.get("reason"): print("reason: " + r["reason"])
 ' "$id")" || { echo "{\"error\":\"request_not_found\",\"hint\":\"no single request matches '$id' (k2 compute trust)\"}" >&2; exit 3; }
     full="$(printf '%s\n' "$found" | sed -n 1p)"
     state="$(printf '%s\n' "$found" | sed -n 2p)"
     label="$(printf '%s\n' "$found" | sed -n 3p)"
+    # The digest of what is printed here: the daemon refuses the approval
+    # when the request changed since (request_changed). The Touch ID
+    # sheet's words are the daemon's own.
+    digest="$(printf '%s\n' "$found" | sed -n 4p)"
     if [ "$state" != "pending" ]; then
         echo "{\"error\":\"not_pending\",\"hint\":\"$full is $state\"}" >&2
         exit 3
     fi
-    printf '%s\n' "$found" | sed -n '5,$p' >&2
+    printf '%s\n' "$found" | sed -n '6,$p' >&2
     local tok
     tok="$(_vault_confirm_token compute-trust "$full" "$label")" || exit 3
-    K2_CP_MAX_TIME=300 _compute_call POST /cli/compute/trust/approve "$(_compute_json K2_CJ_request="$full" K2_CJ_confirmToken="$tok")" tcp
+    K2_CP_MAX_TIME=300 _compute_call POST /cli/compute/trust/approve "$(_compute_json K2_CJ_request="$full" K2_CJ_expectedDigest="$digest" K2_CJ_confirmToken="$tok")" tcp
     tok=""
     _compute_trust_print
+    # A seat that asked for secrets: the seat's approval didn't give them.
+    # The consent is its own yes, with its own words and confirm.
+    local next
+    next="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(((json.load(sys.stdin).get("result") or {}).get("consentNext")) or "")')"
+    if [ -n "$next" ]; then
+        echo "The seat asked to send vault secrets to that owner's nodes. That is a separate yes: $next" >&2
+    fi
 }
 
 # k2 compute roster|lanes|seats|trust|owners (0.46.10 C1/C3a).
@@ -30246,16 +30263,20 @@ if not v["offered"] and not v["held"]:
                     ;;
                 request)
                     local owner="${1:-}"; [ -n "$owner" ] && shift
-                    [ -n "$owner" ] || { echo "usage: k2 compute seats request <owner-host> [--lane L] [--seat ID] [--no-secrets] [--why TEXT]" >&2; exit 2; }
-                    local lane="" seat="" secrets="1" why=""
+                    [ -n "$owner" ] || { echo "usage: k2 compute seats request <owner-host> [--lane L] [--seat ID] [--secrets] [--why TEXT]" >&2; exit 2; }
+                    # Secrets are off unless asked for (--secrets); even then
+                    # the seat's approval never gives them: a person agrees
+                    # on their own confirm (k2 compute owners consent … on).
+                    local lane="" seat="" secrets="0" why=""
                     while [ $# -gt 0 ]; do
                         case "$1" in
                             --lane) lane="${2:-}"; shift 2 ;;
                             --seat) seat="${2:-}"; shift 2 ;;
+                            --secrets) secrets="1"; shift ;;
                             --no-secrets) secrets="0"; shift ;;
                             --why) why="${2:-}"; shift 2 ;;
                             --json) shift ;;
-                            *) echo "usage: k2 compute seats request <owner-host> [--lane L] [--seat ID] [--no-secrets] [--why TEXT]" >&2; exit 2 ;;
+                            *) echo "usage: k2 compute seats request <owner-host> [--lane L] [--seat ID] [--secrets] [--why TEXT]" >&2; exit 2 ;;
                         esac
                     done
                     _compute_call POST /cli/compute/seats/request "$(_compute_json K2_CJ_owner="$owner" K2_CJ_lane="$lane" K2_CJ_seat="$seat" K2_CJ_secrets_b="$secrets" K2_CJ_why="$why")"
@@ -30275,7 +30296,30 @@ if not v["offered"] and not v["held"]:
                     _compute_call POST /cli/compute/seats/offer "$(_compute_json K2_CJ_request="$req" K2_CJ_nodes="$nodes")"
                     _compute_trust_print
                     ;;
-                *) echo "usage: k2 compute seats [list|request|offer] (k2 compute --help)" >&2; exit 2 ;;
+                end|suspend|resume)
+                    # (owner) The owner, in person: the seat's statement is
+                    # signed again and its nodes' plans use the owner key.
+                    local seat="${1:-}"; [ -n "$seat" ] && shift
+                    local why=""
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --why) why="${2:-}"; shift 2 ;;
+                            --json) shift ;;
+                            *) echo "usage: k2 compute seats $sub <seat> [--why TEXT]" >&2; exit 2 ;;
+                        esac
+                    done
+                    [ -n "$seat" ] || { echo "usage: k2 compute seats $sub <seat> [--why TEXT]" >&2; exit 2; }
+                    if _compute_in_session; then
+                        echo '{"error":"person_only","hint":"the node owner ends, suspends or resumes a seat in person, from a terminal outside K2 (Touch ID / vault password)"}' >&2
+                        exit 3
+                    fi
+                    local tok
+                    tok="$(_vault_confirm_token compute-trust "seat-$sub:$seat" "")" || exit 3
+                    K2_CP_MAX_TIME=300 _compute_call POST "/cli/compute/seats/$sub" "$(_compute_json K2_CJ_seat="$seat" K2_CJ_why="$why" K2_CJ_confirmToken="$tok")" tcp
+                    tok=""
+                    _compute_trust_print
+                    ;;
+                *) echo "usage: k2 compute seats [list|request|offer|end|suspend|resume] (k2 compute --help)" >&2; exit 2 ;;
             esac
             ;;
         trust)
@@ -57819,17 +57863,17 @@ SEATS AND LANES (0.46.10: your CI on another owner's nodes)
       A: k2 fed pair-finish <token 2>  B: k2 fed pair-verify <token 3>
       both compare the codes, then each: k2 fed confirm <fp> <code>
   1 Ask (an agent may):
-      k2 compute seats request <owner-host> --lane ci-standard --why "…"
+      k2 compute seats request <owner-host> --lane ci-standard --secrets --why "…"
     It is held for a person here. Its card shows the owner's node-roster
-    key (to compare with `k2 compute roster key` on their screen) and says
-    that approving lets this server's vault secrets go to that owner's
-    nodes for jobs on the seat: their root can read them. --no-secrets
-    asks without that.
+    key (to compare with `k2 compute roster key` on their screen).
+    --secrets only asks: approving the seat never sends a vault secret.
   2 A person here approves, from a terminal outside K2 (a fresh confirm):
       k2 compute trust requests          (find the request id)
       k2 compute trust approve <id>
-    That pins the owner's key, gives the secrets consent and sends the
-    request. An agent gets person_only (exit 3): ask your person.
+    That pins the owner's key and sends the request. An agent gets
+    person_only (exit 3): ask your person. Secrets are a separate yes, on
+    their own confirm, whose words say what they mean (their root can read
+    them): k2 compute owners consent <owner-host> on.
   3 On the owner's server (their side, not yours): k2 compute trust
     requests shows your request; they (or their agent) name the nodes,
     k2 compute seats offer <request> --nodes a,b, and their owner approves:
@@ -57848,9 +57892,10 @@ SEATS AND LANES (0.46.10: your CI on another owner's nodes)
     K2 places it only on a seat node that passes every rule below. A node
     with a per-job uid lists job-uid in k2 compute info <node>; elsewhere
     the job needs --exclusive.
-  Consent later, or again: k2 compute owners consent <owner-host> on (a
-  person, a fresh confirm); off works at once (an agent may). See it:
-  k2 compute owners. A new owner key (pinned again) needs a new consent.
+  The consent (step 2's separate yes, or later): k2 compute owners consent
+  <owner-host> on (a person, a fresh confirm); off works at once (an agent
+  may). See it: k2 compute owners. A new owner key (pinned again) needs a
+  new consent.
   A lane secret is sealed only to a Linux node of an active seat, behind
   the job wall, whose key is active and clean in the owner's node roster,
   in a job with its own uid (the node's job-uid) or --exclusive. Checked

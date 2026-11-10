@@ -591,6 +591,103 @@ async fn a_wrong_origin_is_refused_before_a_try_is_counted() {
     assert_eq!(tries, 0);
 }
 
+/// The referrer policy a browser applies to a form on `page` (an HTTP
+/// answer): the last valid token of the last `Referrer-Policy` header, then
+/// a `<meta name="referrer">` in the body overrides it (W3C Referrer Policy
+/// §4.1 and §5.2). The empty string is "no policy" (the browser default).
+fn page_referrer_policy(page: &str) -> String {
+    const VALID: &[&str] = &[
+        "no-referrer",
+        "no-referrer-when-downgrade",
+        "same-origin",
+        "origin",
+        "strict-origin",
+        "origin-when-cross-origin",
+        "strict-origin-when-cross-origin",
+        "unsafe-url",
+    ];
+    let (head, body) = page.split_once("\r\n\r\n").expect("a whole answer");
+    let mut policy = String::new();
+    for line in head.lines() {
+        let Some((name, value)) = line.split_once(':') else { continue };
+        if name.trim().eq_ignore_ascii_case("referrer-policy") {
+            for token in value.split(',').map(|t| t.trim().to_ascii_lowercase()) {
+                if VALID.contains(&token.as_str()) {
+                    policy = token;
+                }
+            }
+        }
+    }
+    let lower = body.to_ascii_lowercase();
+    for tag in lower.split("<meta").skip(1) {
+        let tag = tag.split('>').next().unwrap();
+        if tag.contains("name=\"referrer\"") {
+            let content = tag.split("content=\"").nth(1).expect("a referrer meta has content").split('"').next().unwrap();
+            if VALID.contains(&content) {
+                policy = content.to_string();
+            }
+        }
+    }
+    policy
+}
+
+/// The `Origin` a browser sends on a form POST (not CORS) from a page at
+/// `from` to `to` under `policy`: Fetch §3.2.5 "serializing a request origin".
+fn browser_form_post_origin(policy: &str, from: &str, to: &str) -> String {
+    let null = match policy {
+        "no-referrer" => true,
+        "same-origin" => from != to,
+        "no-referrer-when-downgrade" | "strict-origin" | "strict-origin-when-cross-origin" | "" => {
+            from.starts_with("https://") && to.starts_with("http://")
+        }
+        _ => false,
+    };
+    if null { "null".to_string() } else { from.to_string() }
+}
+
+/// A user's report (0.46.10): the PIN page sent `Referrer-Policy:
+/// no-referrer`, so a browser POSTed its form with `Origin: null` and the
+/// handler refused every PIN with a 403. The form is sent the way a browser
+/// sends it from the page K2 served: the right PIN gets in, a retry from the
+/// wrong-PIN page works too, and a foreign page is still refused.
+#[tokio::test]
+async fn a_browser_sends_the_pin_pages_form_with_its_real_origin() {
+    let (port, _seen) = spawn_site().await;
+    let rig = Rig::new(&[("sg-browser", port)]).await;
+    set_pin("sg-browser", "hunter22");
+    let site = format!("https://{}", rig.host("sg-browser"));
+
+    let page = rig.get("sg-browser", None, "/app").await;
+    assert!(page.starts_with("HTTP/1.1 401") && page.contains("action=\"/_k2/site/pin\""), "{page}");
+    let policy = page_referrer_policy(&page);
+    let origin = browser_form_post_origin(&policy, &site, &site);
+    assert_eq!(origin, site, "the PIN page's policy ({policy:?}) keeps the real Origin on its form");
+
+    let wrong = rig.post_pin("sg-browser", Some(&origin), "pin=nothunter&next=%2Fapp").await;
+    assert!(wrong.starts_with("HTTP/1.1 401") && wrong.contains("That PIN isn&#39;t right."), "{wrong}");
+    let retry = browser_form_post_origin(&page_referrer_policy(&wrong), &site, &site);
+    let right = rig.post_pin("sg-browser", Some(&retry), "pin=hunter22&next=%2Fapp").await;
+    assert!(right.starts_with("HTTP/1.1 303") && right.contains("Location: /app\r\n"), "{right}");
+    assert_eq!(page_referrer_policy(&right), "no-referrer", "the site gets no Referer after the PIN");
+
+    // A foreign page's form, whatever its policy, is still refused, and
+    // `Origin: null` (no-referrer, sandboxed frame, data: URL) is not let in.
+    for policy in ["", "no-referrer", "unsafe-url", "same-origin"] {
+        let origin = browser_form_post_origin(policy, "https://evil.example", &site);
+        let r = rig.post_pin("sg-browser", Some(&origin), "pin=hunter22").await;
+        assert!(r.starts_with("HTTP/1.1 403"), "{policy:?} → Origin {origin}: {r}");
+    }
+}
+
+/// The `307` that sends a PIN POST to a new connection: a browser re-sends
+/// the POST under the redirect's policy, so it must keep the Origin too.
+#[test]
+fn the_pin_reconnect_keeps_the_forms_origin() {
+    let r = String::from_utf8(pages::reconnect("/_k2/site/pin", false)).unwrap();
+    let site = "https://a.rosson.k2.dev";
+    assert_eq!(browser_form_post_origin(&page_referrer_policy(&r), site, site), site, "{r}");
+}
+
 #[tokio::test]
 async fn a_pin_change_or_a_move_to_private_cuts_the_friend() {
     let (port, _seen) = spawn_site().await;

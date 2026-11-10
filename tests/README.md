@@ -19,22 +19,20 @@ maps them so any future agent can answer "where do the tests live" and
 
 Exercise the full running system over HTTP/filesystem. Each tier has
 different prerequisites, listed below. Both scripts are
-self-contained and print colored PASS/FAIL summaries. New shell tests go
-under `tests/cli/` (hermetic, or against a sandbox daemon via
-`tests/cli/_sandbox_daemon.sh`).
+self-contained and print colored PASS/FAIL summaries. Headless checks
+against a sandbox daemon (temp HOME, no setup) live in `tests/cli/`;
+the hook pipeline's `k2 hooks status` check is `tests/cli/hooks_status.sh`.
 
 | File | What it covers | Needs daemon running? | Needs workspace registered? |
 |---|---|---|---|
-| `behavior-test-tier3.sh` | Migrations, template content, CLI script correctness, Rust invariants via grep | no | no |
-| `behavior-test-tier2.sh` | DB-dependent flows — source gating, workspace state, hook pipeline, scheduler-tick | **yes** | **yes** |
+| `behavior-test-tier1.sh` | Filesystem state after CLI calls — lock files, CLAUDE.md scaffolds, event queue, triage summary | **yes** | no |
+| `cli-integration-test.sh` | End-to-end CLI surface — every verb tested against a live daemon | **yes** | **yes** |
 
 ### Running
 
 ```bash
-# Tier 3 — no setup needed. Start here on a cold machine.
-bash tests/behavior-test-tier3.sh
-
-# Tier 2 — needs a running daemon and a registered test workspace.
+# Tier 1 / cli-integration — need a running daemon and, for cli,
+# a registered test workspace.
 #
 # 1. Point TEST_WORKSPACE at a git-initialized dir. Default is
 #    /Users/z3thon/DevProjects/k2so-cli-test.
@@ -45,18 +43,19 @@ sqlite3 ~/.k2/k2.db "INSERT OR REPLACE INTO projects \
     (id, path, name, color, agent_mode, pinned, tab_order, heartbeat_mode) \
     VALUES ('cli-test', '$TEST_WORKSPACE', 'cli-test', \
     '#888', 'manager', 0, 99, 'heartbeat')"
-# 3. Run it:
-bash tests/behavior-test-tier2.sh
+# 3. Run whichever you want:
+bash tests/behavior-test-tier1.sh
+bash tests/cli-integration-test.sh
 ```
 
 ### Baseline expectations (as of Phase 4 H7.3)
 
 | File | Pass / Fail / Skip |
 |---|---|
-| tier3 | 385 / 0 / 4 |
-| tier2 | 16 / 0 / 0 |
+| tier1 | 19 / 0 / 4 |
+| cli-integration | 111 / 0 / 0 |
 
-The tier2 skips are all "project row not found in DB" branches
+The tier1 skips are all "project row not found in DB" branches
 guarded on the test workspace not being registered. If you register
 the workspace, the skips convert to real assertions.
 
@@ -108,17 +107,17 @@ Each file corresponds to one feature area.
 | `terminal_routes_integration.rs` | 17 | `/cli/terminal/read,write,spawn,spawn-background,agents/running` |
 | `watchdog_integration.rs` | 6 | Daemon harness-watchdog escalation ladder |
 | `sessions_ws_integration.rs` | 6 | `/cli/sessions/subscribe` WS loopback |
-| `it_sessions/agents_routes_integration.rs` | 5 | `/cli/agents/launch,delegate` (H5) |
-| `it_sessions/triage_integration.rs` | 4 | Triage read-only summary + scheduler-fire dispatch |
+| `agents_routes_integration.rs` | 5 | `/cli/agents/launch,delegate` (H5) |
+| `triage_integration.rs` | 4 | Triage read-only summary + scheduler-fire dispatch |
 | `scheduler_wake_integration.rs` | 4 | `DaemonWakeProvider` auto-launch |
 | `companion_routes_integration.rs` | 4 | `/cli/companion/sessions,projects-summary` (H4) |
 | `spawn_to_signal_e2e.rs` | 3 | HTTP spawn → signal → inject end-to-end |
 | `pending_live_durability.rs` | 3 | F3 pending-live queue + boot replay |
 | `providers_inject_integration.rs` | 2 | `DaemonInjectProvider` → real PTY |
-| `it_sessions/awareness_ws_integration.rs` | 2 | `/cli/awareness/subscribe` WS loopback |
-| `it_sessions/heartbeat_port_claim_integration.rs` | 1 | Daemon eagerly owns heartbeat.port (H7) |
-| `it_sessions/heartbeat_fire_v2_integration.rs` | (varies) | 0.37.0 v2-retirement: wake_headless registers in v2_session_map + writes workspace_sessions row |
-| `it_chat/workspace_msg_integration.rs` | 7 | 0.37.0 simplified-msg: `workspace_msg::resolve_workspace` (name/path/UUID) + `deliver_to_inbox` |
+| `awareness_ws_integration.rs` | 2 | `/cli/awareness/subscribe` WS loopback |
+| `heartbeat_port_claim_integration.rs` | 1 | Daemon eagerly owns heartbeat.port (H7) |
+| `heartbeat_fire_v2_integration.rs` | (varies) | 0.37.0 v2-retirement: wake_headless registers in v2_session_map + writes workspace_sessions row |
+| `workspace_msg_integration.rs` | 7 | 0.37.0 simplified-msg: `workspace_msg::resolve_workspace` (name/path/UUID) + `deliver_to_inbox` |
 
 ### Running
 
@@ -126,13 +125,8 @@ Each file corresponds to one feature area.
 # All daemon tests.
 cargo test -p k2so-daemon
 
-# Just one file (tests/<file>.rs).
+# Just one file.
 cargo test -p k2so-daemon --test terminal_routes_integration
-
-# A grouped file (tests/it_<area>/<file>.rs) is a module of its group's
-# binary: run the group under cargo-nextest, or the module on its own.
-cargo nextest run -p k2-daemon --test it_sessions
-cargo test -p k2-daemon --test it_sessions -- triage_integration::
 ```
 
 ---
@@ -233,11 +227,8 @@ cargo test --release --workspace
 bun run typecheck:web && bun run test
 
 # Shell suites that work without manual setup.
-bash tests/behavior-test-tier3.sh
-
-# Tier 2 needs the test workspace registered in K2SO UI first
-# (see "Running" under section 1).
-bash tests/behavior-test-tier2.sh
+bash tests/behavior-test-tier1.sh
+bash tests/cli-integration-test.sh
 ```
 
 Current totals (0.37.0):
@@ -246,15 +237,17 @@ Current totals (0.37.0):
 - Rust daemon integration: ~80 passing across 15 files (incl. new `workspace_msg_integration.rs`)
 - Tauri lib: 76 passing
 - Vitest: 133 passing (2 known pre-existing failures, see section 6)
-- Shell tier 3: 385 passing
+- Shell tier 1: 19 passing
+- Shell CLI integration: 110 passing
 
 ---
 
 ## How to wire a new test
 
-**New behavior / user-visible flow** → add a script under `tests/cli/`.
-Use `_hermetic_cli.sh` when no daemon is needed and `_sandbox_daemon.sh`
-for a throwaway daemon under a temp HOME.
+**New behavior / user-visible flow** → add to the relevant tier. Most
+go to tier1 (filesystem) or a headless `tests/cli/` script (sandbox
+daemon). Full-surface regressions go in
+`cli-integration-test.sh`.
 
 **New core module** → add an integration file in
 `crates/k2so-core/tests/` named `session_stream_<module>.rs` (mirror

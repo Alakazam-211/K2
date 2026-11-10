@@ -17,7 +17,7 @@
 // pane: they share state through the pane's floats host element.
 
 import { useSyncExternalStore } from 'react'
-import { THREAD_FLOATS_HOST_ATTR } from './threadFloats'
+import { THREAD_FLOATS_HOST_ATTR, threadFloatsHostOf } from './threadFloats'
 
 // ── Text ────────────────────────────────────────────────────────────────
 
@@ -261,7 +261,7 @@ export function subscribeThreadSearch(cb: () => void): () => void {
 export function threadSearchHost(el: Element | null | undefined): HTMLElement | null {
   if (!el) return null
   const header = el.closest('[data-thread-floats]')
-  if (header) return header.parentElement
+  if (header) return threadFloatsHostOf(header)
   return el.closest<HTMLElement>(`[${THREAD_FLOATS_HOST_ATTR}]`)
 }
 

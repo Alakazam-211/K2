@@ -105,6 +105,9 @@ export function useSessionViewTab(
     (next: SessionViewTab) => {
       setViewTabState(next)
       if (storageKey) writeSessionViewTab(storageKey, next)
+      // Split view has no drawers (it picks its sides instead): an open
+      // Chatter or Heartbeats panel closes rather than wait for Thread view.
+      if (next === 'split') setPanelMemo((prev) => (prev.panel ? { ...prev, panel: null } : prev))
     },
     [storageKey],
   )

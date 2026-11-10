@@ -272,3 +272,27 @@ describe('useSessionViewTab — saved Chat view migrates to Threads (0.46.5)', (
     })
   })
 })
+
+describe('Thread view panels and split view', () => {
+  it('an open Chatter or Heartbeats panel closes on the way to split view', () => {
+    localStorage.clear()
+    localStorage.setItem('local|k2:session-view-tab:conv-panel', 'thread')
+    const hook = renderHook(() => useSessionViewTab('conv-panel', PRIMARY))
+    act(() => hook.result.current.setThreadPanel('heartbeats'))
+    expect(hook.result.current.threadPanel).toBe('heartbeats')
+    act(() => hook.result.current.setViewTab('split'))
+    expect(hook.result.current.viewTab).toBe('split')
+    expect(hook.result.current.threadPanel).toBeNull()
+    act(() => hook.result.current.setViewTab('thread'))
+    expect(hook.result.current.threadPanel).toBeNull()
+  })
+
+  it('other views leave it as Thread view had it', () => {
+    localStorage.clear()
+    localStorage.setItem('local|k2:session-view-tab:conv-panel-2', 'thread')
+    const hook = renderHook(() => useSessionViewTab('conv-panel-2', PRIMARY))
+    act(() => hook.result.current.setThreadPanel('chatter'))
+    act(() => hook.result.current.setViewTab('terminal'))
+    expect(hook.result.current.threadPanel).toBe('chatter')
+  })
+})

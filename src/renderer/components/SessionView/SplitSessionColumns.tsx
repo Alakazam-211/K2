@@ -1,7 +1,8 @@
 import { useMemo, useRef, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import type { SplitPaneView } from './sessionViewTab'
 import { useTerminalRevealLayout, type TerminalReveal } from './threadReveal'
-import { useThreadFloatsClearOfTerminal } from './threadFloats'
+import { THREAD_FLOATS_SLOT_ATTR, useThreadFloatsClearOfTerminal } from './threadFloats'
+import { splitThreadSide, useSplitChromeSlots } from './splitChrome'
 
 /**
  * Split columns around one terminal node. That node stays the first child
@@ -16,6 +17,10 @@ import { useThreadFloatsClearOfTerminal } from './threadFloats'
  * the same place at the same size, in a column of their own after the
  * terminal's (`panel`). One drawer at a time; a swap between two open ones
  * doesn't slide.
+ *
+ * In split view, under a session chrome (`splitChrome.tsx`), the first Thread
+ * column offers a slot for the chrome's floating objects and the other column
+ * a place for its view menu, so neither column has a bar over the Thread.
  */
 export function SplitSessionColumns({
   showSplit,
@@ -88,6 +93,16 @@ export function SplitSessionColumns({
         ? 'right'
         : null
   const terminalShown = showSplit ? terminalSide !== null : !hidePty
+  const chromeSlots = useSplitChromeSlots()
+  const threadSide = chromeSlots ? splitThreadSide(showSplit ? 'split' : 'terminal', left, right) : null
+  const barSide = threadSide === null ? null : threadSide === 'left' ? 'right' : 'left'
+  // Always the first child of its column, so the column's view never moves.
+  const barSlot = (side: 'left' | 'right'): ReactNode =>
+    barSide === side ? <div ref={chromeSlots?.setBar} className="flex-shrink-0" data-testid="split-view-bar-slot" /> : null
+  const threadSlot = (side: 'left' | 'right'): ReactNode =>
+    threadSide === side ? (
+      <div ref={chromeSlots?.setThread} style={{ display: 'contents' }} {...{ [THREAD_FLOATS_SLOT_ATTR]: '' }} data-testid="split-thread-floats-slot" />
+    ) : null
   const terminalStyle: CSSProperties = {
     display: terminalShown || terminalRevealShown ? 'flex' : 'none',
     flexDirection: 'column',
@@ -135,6 +150,7 @@ export function SplitSessionColumns({
         data-testid={terminalSide ? `session-split-${terminalSide}` : reveal ? 'session-reveal-terminal' : undefined}
         data-split-view={terminalSide ? 'terminal' : undefined}
       >
+        {terminalSide ? barSlot(terminalSide) : null}
         {terminal}
       </div>
       {panelShown ? (
@@ -149,21 +165,25 @@ export function SplitSessionColumns({
       ) : null}
       {showSplit && left !== 'terminal' ? (
         <div
-          className="min-w-0 min-h-0 overflow-hidden flex flex-col"
+          className="relative min-w-0 min-h-0 overflow-hidden flex flex-col"
           style={{ gridColumn: 1 }}
           data-testid="session-split-left"
           data-split-view={left}
         >
+          {threadSlot('left')}
+          {barSlot('left')}
           {renderView(left)}
         </div>
       ) : null}
       {showSplit && right !== 'terminal' ? (
         <div
-          className="min-w-0 min-h-0 overflow-hidden flex flex-col border-l border-[var(--color-border)]"
+          className="relative min-w-0 min-h-0 overflow-hidden flex flex-col border-l border-[var(--color-border)]"
           style={{ gridColumn: 2 }}
           data-testid="session-split-right"
           data-split-view={right}
         >
+          {threadSlot('right')}
+          {barSlot('right')}
           {renderView(right)}
         </div>
       ) : null}

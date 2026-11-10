@@ -13,8 +13,14 @@ import { useLayoutEffect, useRef, type JSX, type RefObject } from 'react'
 // - how far the revealed terminal reaches from the left or top, which keeps
 //   the floats over the Thread and off the terminal.
 
-/** Marks the element the two values live on (the header's parent). */
+/** Marks the element the two values live on (the header's parent, or the
+ *  parent of the slot it is drawn into). */
 export const THREAD_FLOATS_HOST_ATTR = 'data-thread-floats-host'
+/** A box of no size of its own (`display: contents`) that the floats are
+ *  drawn into from elsewhere: split view's Thread column offers one as its
+ *  first child, so the objects come first in the tab order. Its parent is
+ *  the host. */
+export const THREAD_FLOATS_SLOT_ATTR = 'data-thread-floats-slot'
 export const THREAD_FLOAT_INSET_VAR = '--thread-float-inset'
 export const THREAD_FLOAT_LEFT_VAR = '--thread-float-left'
 export const THREAD_FLOAT_TOP_VAR = '--thread-float-top'
@@ -26,6 +32,35 @@ export const THREAD_FLOATS_GRID =
   'grid grid-cols-[minmax(max-content,1fr)_minmax(0,auto)_minmax(max-content,1fr)] gap-x-2 items-start px-3'
 
 export type ThreadFloatShape = 'round' | 'pill' | 'name' | 'note'
+
+/** Where a pane's floating objects are drawn: over the Thread on its own
+ *  (Thread view), or over the Thread's column in split view. */
+export type ThreadFloatsPlace = 'thread' | 'split'
+
+/** Each floating object, by name. */
+export type ThreadFloatId =
+  | 'view'
+  | 'terminal'
+  | 'bell'
+  | 'search'
+  | 'identity'
+  | 'token'
+  | 'history'
+  | 'refresh'
+  | 'chatter'
+  | 'heartbeats'
+
+/** The only objects split view's Thread column shows (Rosson, 2026-11-09):
+ *  the agent's picture and name, the bell and search. Split view already
+ *  picks what each side shows, so the view menu, the terminal and every
+ *  other object stay in Thread view. An object not listed here is hidden in
+ *  split view, so a new one needs no rule of its own. */
+export const SPLIT_VIEW_THREAD_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>(['identity', 'bell', 'search'])
+
+/** Whether `id` is drawn in `place`: Thread view shows them all. */
+export function threadFloatShown(id: ThreadFloatId, place: ThreadFloatsPlace): boolean {
+  return place === 'thread' || SPLIT_VIEW_THREAD_FLOATS.has(id)
+}
 
 /** A floating object: chamfered in Terminal, Frost in Glass. Off, it changes
  *  nothing. No other style reads the attributes. */
@@ -39,12 +74,19 @@ export function floatProps(floating: boolean, shape: ThreadFloatShape): Record<s
   }
 }
 
-/** Ref for the header. While floating, publishes its height on its parent. */
+/** The element a floating header's values live on: its parent, or past the
+ *  slot it was drawn into. */
+export function threadFloatsHostOf(header: Element): HTMLElement | null {
+  const parent = header.parentElement
+  return parent?.hasAttribute(THREAD_FLOATS_SLOT_ATTR) ? parent.parentElement : parent
+}
+
+/** Ref for the header. While floating, publishes its height on its host. */
 export function useThreadFloats(floating: boolean): RefObject<HTMLDivElement | null> {
   const ref = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const header = ref.current
-    const host = header?.parentElement
+    const host = header ? threadFloatsHostOf(header) : null
     if (!floating || !header || !host) return
     host.setAttribute(THREAD_FLOATS_HOST_ATTR, '')
     const publish = (): void => {
@@ -85,7 +127,9 @@ export function useThreadFloatsClearOfTerminal(
 /** The pane's floating header, from inside the pane. */
 export function threadFloatsIn(container: HTMLElement): HTMLElement | null {
   return (
-    container.closest(`[${THREAD_FLOATS_HOST_ATTR}]`)?.querySelector<HTMLElement>(':scope > [data-thread-floats]') ?? null
+    container
+      .closest(`[${THREAD_FLOATS_HOST_ATTR}]`)
+      ?.querySelector<HTMLElement>(`:scope > [data-thread-floats], :scope > [${THREAD_FLOATS_SLOT_ATTR}] > [data-thread-floats]`) ?? null
   )
 }
 

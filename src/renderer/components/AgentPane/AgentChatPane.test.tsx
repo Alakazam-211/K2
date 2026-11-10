@@ -1289,6 +1289,46 @@ describe('remote Thread load Fix 1 — the Thread starts beside the ensure', () 
     localStorage.clear()
   })
 
+  it('in Split view the Thread column has the floats, only the picture and name, the bell and search; the view menu sits over the other side', async () => {
+    localStorage.clear()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'workspace/ensure-pinned-chat') {
+        await gate
+        return mountEnsure()
+      }
+      return undefined
+    })
+    renderInRoom(handled, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    const right = screen.getByTestId('session-split-right')
+    const floats = await waitFor(() => {
+      const el = right.querySelector<HTMLElement>('[data-testid="pinned-chat-header"]')
+      if (!el) throw new Error('no header in the Thread column')
+      return el
+    })
+    expect(floats.hasAttribute('data-thread-floats')).toBe(true)
+    expect(screen.getAllByTestId('pinned-chat-header')).toHaveLength(1)
+    expect(floats.querySelector('[data-testid="thread-view-identity"]')).not.toBeNull()
+    expect(floats.querySelector('[data-testid="thread-search-button"]')).not.toBeNull()
+    expect(screen.queryByLabelText('Switch pinned chat session')).toBeNull()
+    expect(screen.queryByLabelText('Refresh chat session')).toBeNull()
+    expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
+    const bar = screen.getByTestId('split-view-bar')
+    expect(screen.getByTestId('session-split-left').contains(bar)).toBe(true)
+    expect(bar.querySelector('[data-testid="session-view-button"]')).not.toBeNull()
+    // Ready, the mocked terminal draws no columns: the bar comes back whole.
+    await act(async () => release())
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    await waitFor(() => expect(screen.queryByTestId('split-view-bar')).toBeNull())
+    expect(screen.getByTestId('pinned-chat-header').hasAttribute('data-thread-floats')).toBe(false)
+    expect(screen.getByLabelText('Refresh chat session')).toBeTruthy()
+    h.daemonCliPost.mockImplementation(async () => mountEnsure())
+    localStorage.clear()
+  })
+
   it('a list without the handle looks the address up as before', async () => {
     renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
     await waitFor(() => expect(getRoutes()).toContain('sessions/list-for-workspace'))

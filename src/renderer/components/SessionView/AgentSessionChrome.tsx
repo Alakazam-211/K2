@@ -14,10 +14,19 @@ import { SessionViewMenu } from './SessionViewMenu'
 import { ThreadViewIdentity } from './ThreadViewIdentity'
 import { ThreadTerminalToggle } from './ThreadTerminalToggle'
 import { ThreadPanelToggles } from './ThreadPanelToggles'
-import type { ThreadPanelKind } from './threadPanels'
+import { THREAD_PANEL_KINDS, type ThreadPanelKind } from './threadPanels'
 import { ThreadFloatBell } from './ThreadFloatBell'
 import { ThreadFloatSearch } from './ThreadFloatSearch'
-import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, useThreadFloats } from './threadFloats'
+import {
+  THREAD_FLOATS_GRID,
+  ThreadFloatScrim,
+  floatProps,
+  threadFloatShown,
+  useThreadFloats,
+  type ThreadFloatId,
+  type ThreadFloatsPlace,
+} from './threadFloats'
+import { PlacedSessionHeader, SplitChromeSlotsContext, useSplitChrome, type SplitChromeSlots } from './splitChrome'
 import { chatHarnessName } from './chatHarness'
 import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
@@ -91,6 +100,7 @@ export function AgentSessionChrome({
   } = useSessionViewTab(sessionKey, room.scope)
   // Reported by the TerminalPane below (its phase).
   const [terminalLive, setTerminalLive] = useState(false)
+  const split = useSplitChrome(viewTab, splitLeft, splitRight)
   // The harness picks the Token control's provider below.
   const tokenProvider = chatHarnessName({ command, commandHint, provider })
   const [refreshing, setRefreshing] = useState(false)
@@ -156,37 +166,55 @@ export function AgentSessionChrome({
       }}
     >
       <div className="relative h-full flex flex-col min-h-0" data-testid="sidecar-session-chrome">
-        <SidecarSessionHeader
-          title={title}
-          addr={addr}
-          terminalRevealed={terminalRevealed}
-          onToggleTerminal={() => setTerminalRevealed(!terminalRevealed)}
-          terminalAvailable={terminalLive}
-          threadPanel={threadPanel}
-          onThreadPanel={setThreadPanel}
-          viewTab={viewTab}
-          splitLeft={splitLeft}
-          splitRight={splitRight}
-          onViewTabChange={setViewTab}
-          onSplitLeft={setSplitLeft}
-          onSplitRight={setSplitRight}
-          threadConversationId={conversationId}
-          threadScope={room.scope}
-          onRefresh={() => void handleRefresh()}
-          refreshing={refreshing}
-          bell={viewTab === 'thread' && cwd ? <ThreadFloatBell cwd={cwd} /> : null}
-          tokenPicker={
-            tokenProvider && !room.readOnly ? (
-              <SessionTokenPicker
-                scope={room.scope}
-                provider={tokenProvider}
-                sessionKey={agentName}
-                conversationId={conversationId}
-                resolveProjectId={() => (cwd ? roomProjectForCwd(room, cwd)?.id ?? null : null)}
-                floating={viewTab === 'thread'}
-              />
-            ) : null
+        <PlacedSessionHeader
+          placed={split.placed}
+          viewMenu={
+            <SessionViewMenu
+              value={viewTab}
+              splitLeft={splitLeft}
+              splitRight={splitRight}
+              onChange={setViewTab}
+              onSplitLeft={setSplitLeft}
+              onSplitRight={setSplitRight}
+              threadConversationId={conversationId}
+              threadScope={room.scope}
+            />
           }
+          header={(splitColumn) => (
+            <SidecarSessionHeader
+              title={title}
+              addr={addr}
+              terminalRevealed={terminalRevealed}
+              onToggleTerminal={() => setTerminalRevealed(!terminalRevealed)}
+              terminalAvailable={terminalLive}
+              threadPanel={threadPanel}
+              onThreadPanel={setThreadPanel}
+              viewTab={viewTab}
+              splitLeft={splitLeft}
+              splitRight={splitRight}
+              onViewTabChange={setViewTab}
+              onSplitLeft={setSplitLeft}
+              onSplitRight={setSplitRight}
+              threadConversationId={conversationId}
+              threadScope={room.scope}
+              onRefresh={() => void handleRefresh()}
+              refreshing={refreshing}
+              splitColumn={splitColumn}
+              bell={cwd ? <ThreadFloatBell cwd={cwd} /> : null}
+              tokenPicker={
+                tokenProvider && !room.readOnly ? (
+                  <SessionTokenPicker
+                    scope={room.scope}
+                    provider={tokenProvider}
+                    sessionKey={agentName}
+                    conversationId={conversationId}
+                    resolveProjectId={() => (cwd ? roomProjectForCwd(room, cwd)?.id ?? null : null)}
+                    floating={viewTab === 'thread'}
+                  />
+                ) : null
+              }
+            />
+          )}
         />
         {refreshError ? (
           <p
@@ -200,7 +228,9 @@ export function AgentSessionChrome({
           </p>
         ) : null}
         <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
-          <Remount key={nonce}>{children}</Remount>
+          <SplitChromeSlotsContext.Provider value={split.slots}>
+            <Remount key={nonce}>{children}</Remount>
+          </SplitChromeSlotsContext.Provider>
         </div>
       </div>
     </SessionViewChromeContext.Provider>
@@ -209,6 +239,19 @@ export function AgentSessionChrome({
 
 function Remount({ children }: { children: ReactNode }): JSX.Element {
   return <>{children}</>
+}
+
+/** The controls a session's bar draws (Terminal and Chatter views, and
+ *  split view until its columns are there). Thread view's objects that have
+ *  no bar form (the terminal toggle, the bell, search) are not among them. */
+export const BAR_CONTROLS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>(['view', 'token', 'history', 'refresh'])
+
+/** Where a session header floats: Thread view, or split view's Thread column;
+ *  null is a bar. */
+export function sessionFloatsPlace(viewTab: SessionViewTab, splitColumn: boolean): ThreadFloatsPlace | null {
+  if (viewTab === 'thread') return 'thread'
+  if (viewTab === 'split' && splitColumn) return 'split'
+  return null
 }
 
 export function SidecarSessionHeader({
@@ -231,6 +274,7 @@ export function SidecarSessionHeader({
   threadScope,
   threadPanel,
   onThreadPanel,
+  splitColumn = false,
 }: {
   title: string
   /** The Thread's address: Thread view's header reads the picture by it. */
@@ -256,8 +300,15 @@ export function SidecarSessionHeader({
   /** Thread view's Chatter / Heartbeats panel. No `onThreadPanel`: no buttons. */
   threadPanel?: ThreadPanelKind | null
   onThreadPanel?: (next: ThreadPanelKind | null) => void
+  /** Split view: drawn into the Thread's column (`splitChrome.tsx`), as
+   *  floats, with only the objects split view keeps. */
+  splitColumn?: boolean
 }): JSX.Element {
-  const floating = viewTab === 'thread'
+  const place = sessionFloatsPlace(viewTab, splitColumn)
+  const floating = place !== null
+  // A bar draws its own controls; floats draw what their place shows.
+  const shows = (id: ThreadFloatId): boolean => (place === null ? BAR_CONTROLS.has(id) : threadFloatShown(id, place))
+  const panelKinds = THREAD_PANEL_KINDS.filter(shows)
   const floatsRef = useThreadFloats(floating)
   return (
     <div
@@ -273,33 +324,35 @@ export function SidecarSessionHeader({
     >
         {floating ? <ThreadFloatScrim /> : null}
         <div className={floating ? 'relative z-[1] flex min-w-0 items-center gap-1.5 thread-float-group' : 'flex min-w-0 items-stretch'}>
-        <SessionViewMenu
-          value={viewTab}
-          splitLeft={splitLeft}
-          splitRight={splitRight}
-          onChange={onViewTabChange}
-          onSplitLeft={onSplitLeft}
-          onSplitRight={onSplitRight}
-          threadConversationId={threadConversationId}
-          threadScope={threadScope}
-          floating={floating}
-        />
-        {viewTab === 'thread' ? (
+        {shows('view') ? (
+          <SessionViewMenu
+            value={viewTab}
+            splitLeft={splitLeft}
+            splitRight={splitRight}
+            onChange={onViewTabChange}
+            onSplitLeft={onSplitLeft}
+            onSplitRight={onSplitRight}
+            threadConversationId={threadConversationId}
+            threadScope={threadScope}
+            floating={floating}
+          />
+        ) : null}
+        {shows('terminal') ? (
           <ThreadTerminalToggle
             revealed={terminalRevealed}
             disabled={!terminalAvailable}
             onToggle={onToggleTerminal}
           />
         ) : null}
-        {viewTab === 'thread' && onThreadPanel ? (
-          <ThreadPanelToggles open={threadPanel ?? null} onChange={onThreadPanel} />
+        {onThreadPanel && panelKinds.length > 0 ? (
+          <ThreadPanelToggles open={threadPanel ?? null} onChange={onThreadPanel} kinds={panelKinds} />
         ) : null}
-        {bell}
-        {floating ? <ThreadFloatSearch /> : null}
+        {shows('bell') ? bell : null}
+        {shows('search') ? <ThreadFloatSearch /> : null}
         </div>
-        {viewTab === 'thread' ? (
+        {floating ? (
           <div className="relative z-[1] min-w-0">
-            <ThreadViewIdentity name={title} addr={addr} />
+            {shows('identity') ? <ThreadViewIdentity name={title} addr={addr} /> : null}
           </div>
         ) : (
           <span
@@ -310,35 +363,37 @@ export function SidecarSessionHeader({
           </span>
         )}
         <div className={floating ? 'relative z-[1] flex min-w-0 items-center justify-end gap-1.5 thread-float-group' : 'flex min-w-0 items-center justify-end gap-1'}>
-        {tokenPicker}
-        <button
-          type="button"
-          {...floatProps(floating, 'round')}
-          onClick={onRefresh}
-          disabled={refreshing}
-          title="Restart this session — respawns this PTY, does not switch Chat."
-          aria-label="Refresh session"
-          className="self-center inline-flex items-center justify-center h-5 w-5 rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className={refreshing ? 'animate-spin' : ''}
-            aria-hidden="true"
+        {shows('token') ? tokenPicker : null}
+        {shows('refresh') ? (
+          <button
+            type="button"
+            {...floatProps(floating, 'round')}
+            onClick={onRefresh}
+            disabled={refreshing}
+            title="Restart this session — respawns this PTY, does not switch Chat."
+            aria-label="Refresh session"
+            className="self-center inline-flex items-center justify-center h-5 w-5 rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
           >
-            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-            <path d="M3 3v5h5" />
-            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-            <path d="M16 16h5v5" />
-          </svg>
-        </button>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={refreshing ? 'animate-spin' : ''}
+              aria-hidden="true"
+            >
+              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+              <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+              <path d="M16 16h5v5" />
+            </svg>
+          </button>
+        ) : null}
         </div>
     </div>
   )
@@ -357,6 +412,7 @@ export function PinnedSessionBody({
   threadPanel,
   setThreadPanel,
   projectPath,
+  splitSlots,
   children,
 }: {
   viewTab: SessionViewTab
@@ -375,6 +431,8 @@ export function PinnedSessionBody({
   setThreadPanel?: (next: ThreadPanelKind | null) => void
   /** The workspace's path, for the Heartbeats panel. */
   projectPath?: string
+  /** Split view's places for the header (`useSplitChrome`). */
+  splitSlots?: SplitChromeSlots
   children: ReactNode
 }): JSX.Element {
   return (
@@ -395,7 +453,7 @@ export function PinnedSessionBody({
       }}
     >
       <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col" data-testid="agent-session-terminal">
-        {children}
+        <SplitChromeSlotsContext.Provider value={splitSlots ?? null}>{children}</SplitChromeSlotsContext.Provider>
       </div>
     </SessionViewChromeContext.Provider>
   )

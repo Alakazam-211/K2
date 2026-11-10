@@ -1,6 +1,6 @@
 import { lazy, Suspense, useLayoutEffect, useRef, useState, type JSX } from 'react'
 import { useRoom } from '@/components/Room/RoomContext'
-import { floatProps } from './threadFloats'
+import { floatProps, threadFloatsHostOf } from './threadFloats'
 
 // As ThreadOverlayPane: the avatar pulls in the projects and Home avatar stores.
 const AgentAvatar = lazy(() =>
@@ -29,11 +29,12 @@ export function ThreadViewIdentity({ name, addr }: { name: string; addr: string 
   const rootRef = useRef<HTMLDivElement>(null)
   const [compact, setCompact] = useState(false)
 
-  // The pane, not the window: the header's parent (a column or a split pane
+  // The pane, not the window: the header's host (a column or a split pane
   // counts). The header's own height doesn't change the pane's size, so
   // switching layouts can't feed back into this measure.
   useLayoutEffect(() => {
-    const pane = rootRef.current?.closest('[data-session-header]')?.parentElement
+    const header = rootRef.current?.closest('[data-session-header]')
+    const pane = header ? threadFloatsHostOf(header) : null
     if (!pane) return
     const measure = (): void => {
       const rect = pane.getBoundingClientRect()

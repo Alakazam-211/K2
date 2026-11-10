@@ -13,13 +13,16 @@ const TOOLTIP: Record<ThreadPanelKind, string> = {
 export function ThreadPanelToggles({
   open,
   onChange,
+  kinds = THREAD_PANEL_KINDS,
 }: {
   open: ThreadPanelKind | null
   onChange: (next: ThreadPanelKind | null) => void
+  /** The buttons to draw (the header's place decides: none in split view). */
+  kinds?: readonly ThreadPanelKind[]
 }): JSX.Element {
   return (
     <>
-      {THREAD_PANEL_KINDS.map((kind) => {
+      {kinds.map((kind) => {
         const on = open === kind
         const label = THREAD_PANEL_LABEL[kind]
         return (

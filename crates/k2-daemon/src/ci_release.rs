@@ -459,6 +459,9 @@ pub(crate) fn evidence(who: &Who, body: &[u8]) -> R<Value> {
             dual.insert(jf.build.clone(), json!({"build": bl, "verify": label, "compare": d}));
         }
     }
+    // The owner's attestations for the keys the roster vouches for that
+    // way, as they reached this server with the seat offer (0286).
+    let attestations = trust::attestations_named(&conn, &owner_key, &roster.roster);
     drop(conn);
     let o = ci_engine::ops();
     let root = o.repo_root(Path::new(&ws.path)).map_err(|e| no(ci::codes::NOT_A_REPO, 409, e))?;
@@ -477,19 +480,27 @@ pub(crate) fn evidence(who: &Who, body: &[u8]) -> R<Value> {
         receipts,
         statements: statements.into_values().collect(),
         rotations: Vec::new(),
-        attestations: Vec::new(),
+        attestations: attestations.clone(),
         rosters: vec![roster.signed.clone()],
         seats: vec![seat_stmt],
         pairing_pins: pins,
     };
     bundle.check().map_err(|e| no(rcodes::RECEIPT, 409, format!("the evidence bundle doesn't check: {e}")))?;
     audit(who, "ci.evidence", None, Some(&ws.id), None, json!({"run": run.id, "version": facts.version, "jobs": files.keys().collect::<Vec<_>>()}));
-    let attested: Vec<String> = roster.roster.entries.iter().filter(|e| e.attestation_digest.is_some()).map(|e| e.name.clone()).collect();
+    let held: std::collections::HashSet<String> = attestations.iter().map(Signed::digest).collect();
+    let missing: Vec<String> = roster
+        .roster
+        .entries
+        .iter()
+        .filter(|e| e.attestation_digest.as_deref().is_some_and(|d| !held.contains(d)))
+        .map(|e| e.name.clone())
+        .collect();
     let mut notes: Vec<String> = Vec::new();
-    if !attested.is_empty() {
+    if !missing.is_empty() {
         notes.push(format!(
-            "the owner vouches for {} by attestation; this server holds no attestation documents (owners don't send them yet), so a signer that checks owner_attested keys refuses this bundle",
-            attested.join(", ")
+            "the owner vouches for {} by attestation, but this server holds no attestation document for {} (they arrive with the owner's seat offer), so a signer that checks owner_attested keys refuses this bundle",
+            missing.join(", "),
+            if missing.len() == 1 { "it" } else { "them" }
         ));
     }
     Ok(json!({

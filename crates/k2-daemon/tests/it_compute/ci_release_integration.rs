@@ -13,7 +13,8 @@
 //! to its node, receipt v2, `BUILD_COMMIT` / `BUILD_TREE`, `--tier ci`),
 //! evidence refused before the set passed, the reaper's verdict, then the
 //! evidence bundle v2 (it checks; receipts by label and role, the
-//! statements, the roster and seat, the pairing pins, the commit object)
+//! statements, the roster and seat, the owner attestations the roster names
+//! (a note while one is missing), the pairing pins, the commit object)
 //! and the dual-build comparison.
 
 use std::io::{Read, Write};
@@ -30,7 +31,7 @@ use k2_core::compute::proto::evidence::{EvidenceBundle, Role};
 use k2_core::compute::proto::frames::{
     Availability, Caps, Control, Frame, Free, JobState, Offer, Plan, Receipt, ReceiptFrame, ReceiptLog, SignedReceipt, SrcRan, RECEIPT_V2,
 };
-use k2_core::compute::proto::node_roster::{NodeRoster, RosterEntry, SeatStatement};
+use k2_core::compute::proto::node_roster::{NodeRoster, OwnerAttestation, RosterEntry, SeatStatement};
 use k2_core::compute::proto::results::ArtifactInfo;
 use k2_core::compute::proto::statement::{KeyExposure, NodeStatement};
 use k2_core::compute::{store, trust};
@@ -222,9 +223,18 @@ fn owner_key() -> ApprovalSigner {
     ApprovalSigner::from_seed(&[7u8; 32]).unwrap()
 }
 
+/// The owner's attestation for `n` (signed with the roster key; the same
+/// bytes every call).
+fn attestation(n: &Node) -> Signed {
+    let st = statement(&n.key);
+    let d = st.sign(&n.key).unwrap().digest();
+    trust::attestation_for(NODE_OWNER, &owner_key().public(), &st, &d, "installed with the job wall", "owner", 1_700_000_200).sign(&owner_key()).unwrap()
+}
+
 /// The owner's roster `seq` with each node on `hosts[i]`, vouched for when
-/// `vouched[i]`; chained to `prev`.
-fn roster(nodes: &[Node], hosts: &[&str], vouched: &[bool], seq: u64, prev: Option<&Signed>) -> Signed {
+/// `vouched[i]` (by attestation for the names in `attested`); chained to
+/// `prev`.
+fn roster(nodes: &[Node], hosts: &[&str], vouched: &[bool], attested: &[&str], seq: u64, prev: Option<&Signed>) -> Signed {
     let mut entries: Vec<RosterEntry> = nodes
         .iter()
         .zip(hosts)
@@ -239,8 +249,8 @@ fn roster(nodes: &[Node], hosts: &[&str], vouched: &[bool], seq: u64, prev: Opti
             revoked_reason: None,
             valid_from: 0,
             valid_to: None,
-            taint_basis: v.then_some(TaintBasis::SelfClean),
-            attestation_digest: None,
+            taint_basis: v.then_some(if attested.contains(&n.name) { TaintBasis::OwnerAttested } else { TaintBasis::SelfClean }),
+            attestation_digest: (*v && attested.contains(&n.name)).then(|| attestation(n).digest()),
             host: h.to_string(),
             provider: None,
             site: None,
@@ -431,17 +441,18 @@ async fn a_release_set_is_placed_on_the_seat_built_and_bundled_as_evidence() {
     assert_eq!((r.status, code(&r).as_str()), (409, "seat_degraded"), "{}", r.body);
     assert!(r.body.contains("isn't in the owner's newest node roster"), "{}", r.body);
     // Roster 1: only k2n7 vouched for. Degraded, each one's reason named.
-    let r1 = roster(&nodes, &["h1", "h1", "h2"], &[true, false, false], 1, None);
+    let r1 = roster(&nodes, &["h1", "h1", "h2"], &[true, false, false], &[], 1, None);
     let r = post(d.port, "/cli/ci/release", release(true)).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "seat_degraded"), "{}", r.body);
     assert!(r.body.contains("k2n8: the owner vouches for nothing") && r.body.contains("1 can"), "{}", r.body);
     // Roster 2: all vouched for, all on one host: no independent pair.
-    let r2 = roster(&nodes, &["h1", "h1", "h1"], &[true, true, true], 2, Some(&r1));
+    let r2 = roster(&nodes, &["h1", "h1", "h1"], &[true, true, true], &[], 2, Some(&r1));
     let r = post(d.port, "/cli/ci/release", release(true)).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "no_independent_nodes"), "{}", r.body);
     assert!(r.body.contains("both on host h1"), "{}", r.body);
-    // Roster 3: k2n9 on another host. --plan places the set, sends nothing.
-    let _r3 = roster(&nodes, &["h1", "h1", "h2"], &[true, true, true], 3, Some(&r2));
+    // Roster 3: k2n9 on another host, vouched for by the owner's
+    // attestation. --plan places the set, sends nothing.
+    let _r3 = roster(&nodes, &["h1", "h1", "h2"], &[true, true, true], &["k2n9"], 3, Some(&r2));
     let r = post(d.port, "/cli/ci/release", release(true)).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let placed = j(&r)["placed"].as_array().unwrap().clone();
@@ -505,9 +516,31 @@ async fn a_release_set_is_placed_on_the_seat_built_and_bundled_as_evidence() {
         node_ran(n, job, &sha, &tree, &files);
     }
     tokio::task::spawn_blocking(k2_daemon::ci_engine::tick_now).await.unwrap();
+    // The roster vouches for k2n9 by attestation, but no attestation
+    // document is held here yet: the bundle has none, and a note says so.
     let r = post(d.port, "/cli/ci/evidence", json!({"workspace": ws, "run": &run_id[..8]})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let v = j(&r);
+    assert_eq!(v["bundle"]["attestations"], json!([]), "{}", r.body);
+    let note = v["notes"][0].as_str().unwrap_or_else(|| panic!("a note: {}", r.body));
+    assert!(note.contains("k2n9") && note.contains("owner_attested"), "{note}");
+    // The attestation as it arrives with the seat offer (compute_owner_
+    // attestations; the trust tests cover receive_attestations itself).
+    let k9 = nodes.iter().find(|n| n.name == "k2n9").unwrap();
+    let att = attestation(k9);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO compute_owner_attestations (digest, key_fp, node_fp, body, sig, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![att.digest(), owner_key().public().fingerprint(), k9.key.fingerprint(), att.body, att.sig, k2_core::compute::now()],
+        )
+        .unwrap();
+    }
+    let r = post(d.port, "/cli/ci/evidence", json!({"workspace": ws, "run": &run_id[..8]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    assert_eq!(v["notes"], json!([]), "every attestation the roster names is held: {}", r.body);
     assert_eq!(v["file"], "evidence-acme-desktop-1.2.0.json");
     let bundle: EvidenceBundle = serde_json::from_value(v["bundle"].clone()).expect("a bundle v2");
     bundle.check().expect("it checks");
@@ -521,6 +554,10 @@ async fn a_release_set_is_placed_on_the_seat_built_and_bundled_as_evidence() {
         assert_eq!(er.plan_digest().unwrap(), serde_json::from_str::<Receipt>(&er.body).unwrap().plan_digest, "{label}: the plan hashes to its receipt");
     }
     assert_eq!(bundle.statements.len(), 3);
+    assert_eq!(bundle.attestations.len(), 1, "the one attestation the roster names");
+    assert_eq!(bundle.attestations[0].digest(), att.digest());
+    let a = OwnerAttestation::open(&bundle.attestations[0], &owner_key().public()).expect("opens with the roster key");
+    assert_eq!((a.node_fp.as_str(), a.owner_id.as_str()), (k9.key.fingerprint().as_str(), NODE_OWNER));
     assert_eq!(bundle.rosters.len(), 1);
     let held: NodeRoster = bundle.rosters[0].open_owner(&owner_key().public(), ci::DOMAIN_NODE_ROSTER).expect("the owner's roster");
     assert_eq!(held.seq, 3, "the newest roster held");

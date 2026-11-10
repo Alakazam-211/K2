@@ -187,7 +187,8 @@ fn wait_row(port: u16, tok: &str, id: &str, what: &str, pred: impl Fn(&J) -> boo
 fn drain_now() -> Pass {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        let p = drain::drain_once(true);
+        // The drain is blocking (reqwest::blocking): off the async worker.
+        let p = tokio::task::block_in_place(|| drain::drain_once(true));
         if p != Pass::InFlight {
             return p;
         }
@@ -642,7 +643,10 @@ async fn diagnostics_are_previewed_scrubbed_and_sent_as_shown() {
         assert!(!all.contains(leak), "{leak} left in the preview: {all}");
     }
     let errors = d["sections"][4]["text"].as_str().unwrap().to_string();
-    assert!(errors.contains("path=Some(\\\"<workspace-1>/src\\\")") || errors.contains("path=Some(\"<workspace-1>/src\")"), "{errors}");
+    // The workspace's number depends on the other workspaces on the box.
+    let path_line = errors.lines().find(|l| l.contains("[agent-hooks]")).expect("the agent-hooks line");
+    let ph = path_line.split("path=Some(\"").nth(1).and_then(|r| r.strip_suffix("/src\") failed")).unwrap_or_else(|| panic!("{path_line}"));
+    assert!(ph.starts_with("<workspace-") && ph.ends_with('>') && ph[11..ph.len() - 1].bytes().all(|b| b.is_ascii_digit()), "{path_line}");
     assert!(errors.contains("Bearer [bearer]") && errors.contains("<ip>") && errors.contains("<email>") && errors.contains("[k2-credential]"), "{errors}");
     assert!(!errors.contains("[ok] started"), "only failure-looking lines: {errors}");
     assert!(d["sections"][0]["text"].as_str().unwrap().contains("Desktop app: 0.46.11-test"), "{d}");

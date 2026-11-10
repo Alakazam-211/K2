@@ -85,6 +85,7 @@ features:
   companion-pairing-v1
   files-download-v1
   transfers-v1
+  product-feedback-v1
   post-idempotency-v1
   remote-desktop-v1
   boot-status-views-v1

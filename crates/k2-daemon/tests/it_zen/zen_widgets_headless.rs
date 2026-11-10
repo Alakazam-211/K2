@@ -216,7 +216,7 @@ fn expect_one_event(events: &AtomicUsize, before: usize, what: &str) {
 async fn tuw1_widgets_round_trip_on_the_real_daemon() {
     // Serialized with the in-process tests: one of them sets K2_AIRGAP,
     // which a spawned daemon would inherit.
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     let home = new_home("bin");
     let d = spawn_daemon(&home.0);
     let (port, tok) = (d.port, d.owner.clone());
@@ -432,7 +432,7 @@ fn login(username: &str) -> String {
 /// set it, and only a person's Resume (the owner token) clears it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn widgets_work_with_zero_clicks_and_only_a_person_resumes_a_pause() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     with_temp_home(|home| {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let port = d.port;
@@ -588,7 +588,7 @@ fn query_encode(s: &str) -> String {
 async fn uwb15_lib_routes_refuse_downloads_air_gapped_and_serve_the_cache() {
     use base64::Engine as _;
     use sha2::{Digest, Sha256};
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     with_temp_home(|home| {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let port = d.port;
@@ -639,7 +639,7 @@ async fn uwb15_lib_routes_refuse_downloads_air_gapped_and_serve_the_cache() {
 /// route, a fresh connection each, so a race shows up.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oversized_full_body_reads_413_not_a_reset() {
-    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = k2_core::test_env::serial(&TEST_LOCK);
     with_temp_home(|_home| {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         // Past the Zen cap (zen_routes::MAX_BODY, 1,280 KiB since one 1 MB widget

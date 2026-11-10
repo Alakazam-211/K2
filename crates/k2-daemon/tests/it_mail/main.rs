@@ -15,4 +15,7 @@ fn runner_guard() {
     support::env::require_nextest();
 }
 
+#[cfg(unix)]
+mod cell_server_uds_integration;
 mod email_notify_live;
+mod mail_manage_integration;

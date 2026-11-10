@@ -28,4 +28,7 @@ mod live_access_events_integration;
 mod live_access_hub_integration;
 mod live_access_integration;
 mod must_change_password_integration;
+mod presence_integration;
+mod presence_kick_integration;
 mod room_surfaces_integration;
+mod viewer_claimer_integration;

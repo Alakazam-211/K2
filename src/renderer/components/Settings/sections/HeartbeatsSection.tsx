@@ -31,7 +31,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
 import { useDialogEscape } from '../settings-esc'
-import { Toggle, Tag } from '@/components/ui'
+import { BetaTag, Toggle } from '@/components/ui'
 
 // ── Types mirroring the backend agent_heartbeats table ────────────────
 
@@ -1146,12 +1146,7 @@ export function HeartbeatsPanel({
         <div>
           <h3 className="type-heading text-[var(--color-text-primary)] flex items-center gap-2">
             Heartbeats
-            <Tag
-              tone="accent"
-              title="This feature is in beta — interface and behavior may change"
-            >
-              beta
-            </Tag>
+            <BetaTag />
           </h3>
           <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
             Scheduled wakeups for <span className="text-[var(--color-text-secondary)]">{agentModeLabel(agentMode, agentName)}</span>. Each fires on its own cadence with its own <span className="font-mono">WAKEUP.md</span>.

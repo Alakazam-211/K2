@@ -154,7 +154,7 @@ describe('Settings → Cores → Multiplayer', () => {
     expect(screen.queryByText(MULTIPLAYER_MEMBER_LINE)).toBeNull()
     expect(screen.getByTestId('multiplayer-later').textContent).toBe('Coming later: CSV grid, Word, Slides.')
     // Off: no beta line, no open-now line.
-    expect(screen.queryByText('Beta: keep your work in git while multiplayer is new.')).toBeNull()
+    expect(screen.queryByText('Keep your work in git while multiplayer is new.')).toBeNull()
   })
 
   it('Member: switches visible but disabled, plus the line; a click writes nothing', async () => {
@@ -177,8 +177,8 @@ describe('Settings → Cores → Multiplayer', () => {
     expect(JSON.stringify(h.posts[0].body)).toBe('{"multiplayerCores":{"markdown":true}}')
     expect(h.gets).toEqual(['docs/cores', 'docs/cores'])
     // While on: the beta line under the switch.
-    expect(within(row('markdown')).getByText('Beta: keep your work in git while multiplayer is new.')).toBeTruthy()
-    expect(within(row('text')).queryByText('Beta: keep your work in git while multiplayer is new.')).toBeNull()
+    expect(within(row('markdown')).getByText('Keep your work in git while multiplayer is new.')).toBeTruthy()
+    expect(within(row('text')).queryByText('Keep your work in git while multiplayer is new.')).toBeNull()
   })
 
   it('turning off with nothing open flips with no dialog', async () => {

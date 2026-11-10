@@ -26,7 +26,7 @@ import {
   type DocCore,
   type DocCores,
 } from './multiplayer-cores-api'
-import { Toggle, Tag } from '@/components/ui'
+import { BetaTag, Toggle } from '@/components/ui'
 
 export const MULTIPLAYER_INTRO =
   "People and agents work in the same file at the same time, with presence, history and everyone's own undo. " +
@@ -36,10 +36,13 @@ export const MULTIPLAYER_INTRO =
 
 export const MULTIPLAYER_MEMBER_LINE = "Only the server's owner or an Admin can change these."
 
-export const MULTIPLAYER_BETA_LINE = 'Beta: keep your work in git while multiplayer is new.'
+export const MULTIPLAYER_BETA_LINE = 'Keep your work in git while multiplayer is new.'
 /** A core that opens as a Garden (the Board): its own Beta line. */
-export const MULTIPLAYER_GARDEN_BETA_LINE = "Beta: export a board now and then (its ⋯ menu) to keep a copy while it's new."
-export const BOARD_FILE_PREVIEW_LABEL = 'Open .k5board files in a Board tab (Beta)'
+export const MULTIPLAYER_GARDEN_BETA_LINE = "Export a board now and then (its ⋯ menu) to keep a copy while it's new."
+/** The board-file switch's words; it carries a Beta tag on screen. */
+export const BOARD_FILE_PREVIEW_NAME = 'Open .k5board files in a Board tab'
+/** The switch's accessible name: the words plus "(Beta)", which the tag says on screen. */
+export const BOARD_FILE_PREVIEW_LABEL = `${BOARD_FILE_PREVIEW_NAME} (Beta)`
 export const BOARD_FILE_PREVIEW_LINE =
   'A board file in a workspace opens in its own tab, and agents work on it with k2 board. Off: it shows a card instead. Single-person for now.'
 
@@ -204,7 +207,10 @@ function PreviewRow({
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">{BOARD_FILE_PREVIEW_LABEL}</div>
+          <div className="type-name text-[var(--color-text-primary)] flex items-center gap-2">
+            <span>{BOARD_FILE_PREVIEW_NAME}</span>
+            <BetaTag />
+          </div>
           <div className={`type-hint ${muted} mt-0.5 leading-relaxed`}>{BOARD_FILE_PREVIEW_LINE}</div>
           {error ? (
             <div role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1">
@@ -245,11 +251,7 @@ function CoreRow({
         <div className="flex-1 min-w-0">
           <div className="type-name text-[var(--color-text-primary)] flex items-center gap-2">
             <span>{core.name}</span>
-            {core.status === 'beta' ? (
-              <Tag tone="accent">
-                Beta
-              </Tag>
-            ) : null}
+            {core.status === 'beta' ? <BetaTag /> : null}
           </div>
           <div className={`type-hint ${muted} mt-0.5 leading-relaxed`}>{core.description}</div>
           {core.on ? (

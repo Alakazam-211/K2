@@ -19,7 +19,7 @@
 // a change from another client (or `k2 app access`) shows here.
 
 import React, { useEffect, useState } from 'react'
-import { Checkbox, Toggle } from '@/components/ui'
+import { BetaTag, Checkbox, Toggle } from '@/components/ui'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL } from '../controls/SettingControls'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { emit } from '@tauri-apps/api/event'
@@ -189,8 +189,8 @@ export function AgentAppsAccess({
         />
         <div className="flex-1 min-w-0">
           <div className={SETTING_ROW_LABEL}>
-            Build and run Apps{' '}
-            <span className="type-hint text-[var(--color-text-secondary)]">Apps (beta)</span>
+            Build and run Apps
+            <BetaTag className="ml-2" />
           </div>
           <div className={desc}>
             Builds, installs, runs and removes its own Apps within default limits. Off: every change waits for you.

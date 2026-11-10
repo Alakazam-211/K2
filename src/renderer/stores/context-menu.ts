@@ -13,7 +13,8 @@ export interface ContextMenuItemDef {
   enabled?: boolean
   /** When set, render a checkbox in front of the label. */
   checked?: boolean
-  /** Small pill next to the label (e.g. "coming soon" for disabled stubs). */
+  /** A tag at the row's end: "Beta" draws the shared Beta tag (ui/Tag), any
+   *  other word an accent tag. */
   badge?: string
   /** Leading icon. Omitted rows stay text-only. */
   icon?: ReactNode

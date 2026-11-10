@@ -42,6 +42,8 @@ export interface ExplorerNoun {
   blurb: string
   example?: string
   note?: K2NounNote
+  /** Shows the Beta tag; a search for "beta" finds it. */
+  beta?: boolean
   verbs: ExplorerVerb[]
   /** `--help` text for a noun `--schema` does not list yet. */
   help?: string
@@ -115,6 +117,7 @@ export function buildExplorerModel(catalog: CliCatalog): ExplorerModel {
         blurb: item.blurb,
         example: item.example,
         note: item.note,
+        beta: item.beta,
         verbs,
         help: catalog.k2.help[item.noun],
       }
@@ -240,7 +243,7 @@ export function searchExplorer(
       for (const n of g.nouns) {
         const label = `${tool.name} ${n.noun}`
         const s2 = Math.max(
-          scoreText(bare, words, n.noun, n.blurb, n.example ?? '', g.title),
+          scoreText(bare, words, n.noun, n.blurb, n.example ?? '', g.title, n.beta ? 'beta' : ''),
           ...n.also.map((a) => scoreText(bare, words, a) - 5),
           scoreText(q, words, label),
         )

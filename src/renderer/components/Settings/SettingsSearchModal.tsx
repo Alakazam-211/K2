@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
+import { BetaTag } from '@/components/ui/Tag'
 import { searchManifest, sectionLabel, type SettingEntry } from './searchManifest'
 
 interface SettingsSearchModalProps {
@@ -148,6 +149,7 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
                   <span className="flex-shrink-0 min-w-0 truncate font-medium">
                     {entry.label}
                   </span>
+                  {entry.beta ? <BetaTag /> : null}
                   {entry.description && (
                     <span className="flex-1 min-w-0 truncate type-hint text-[var(--color-text-muted)]">
                       — {entry.description}

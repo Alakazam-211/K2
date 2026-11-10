@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { Tag } from '@/components/ui'
+import { BetaTag, BETA_TAG_TITLE, Tag } from '@/components/ui'
 
 const globals = readFileSync(join(__dirname, '..', '..', 'globals.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ')
 
@@ -23,6 +23,15 @@ describe('Tag', () => {
     expect(tag.getAttribute('data-tone')).toBe('accent')
     expect(tag.className).toBe('k2-tag type-hint font-medium ml-auto')
     expect(tag.getAttribute('title')).toBe('t')
+  })
+
+  it('BetaTag is the accent tag that says Beta, centred on its line, with the hover line', () => {
+    render(<BetaTag className="ml-auto" />)
+    const tag = screen.getByText('Beta')
+    expect(tag.getAttribute('data-tone')).toBe('accent')
+    expect(tag.hasAttribute('data-beta-tag')).toBe(true)
+    expect(tag.className).toBe('k2-tag type-hint font-medium align-middle ml-auto')
+    expect(tag.getAttribute('title')).toBe(BETA_TAG_TITLE)
   })
 
   it('defaults to the neutral tone', () => {

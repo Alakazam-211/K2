@@ -20,7 +20,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { spanLabel } from '@/lib/heartbeat-wait'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
-import { Checkbox, Toggle, Tag } from '@/components/ui'
+import { BetaTag, Checkbox, Toggle } from '@/components/ui'
 
 export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
   {
@@ -530,12 +530,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
       <div className="w-1/3 min-w-[280px] max-w-[420px] flex-shrink-0">
       <h2 className="type-title text-[var(--color-text-primary)] mb-1 flex items-center gap-2">
         Heartbeats
-        <Tag
-          tone="accent"
-          title="This feature is in beta — interface and behavior may change"
-        >
-          beta
-        </Tag>
+        <BetaTag />
       </h2>
       <p className="type-hint text-[var(--color-text-muted)] mb-4 leading-relaxed">
         K2 checks your heartbeats every minute while this computer is awake, with or

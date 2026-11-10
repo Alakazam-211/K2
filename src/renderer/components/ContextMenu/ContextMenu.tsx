@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useLayoutEffect, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
+import { BetaTag, Tag } from '@/components/ui/Tag'
 import { KeyCombo } from '@/components/KeySymbol'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import {
@@ -176,23 +177,7 @@ function RowButton({
         </span>
       ) : null}
       {item.badge ? (
-        <span
-          style={{
-            flexShrink: 0,
-            fontSize: '9px',
-            fontWeight: 600,
-            letterSpacing: '0.04em',
-            textTransform: 'uppercase',
-            lineHeight: 1.2,
-            padding: '2px 5px',
-            borderRadius: 'var(--radius-pill)',
-            color: 'var(--color-on-accent, #ffffff)',
-            background: 'var(--color-accent, #3b82f6)',
-            border: '1px solid var(--color-accent, #3b82f6)',
-          }}
-        >
-          {item.badge}
-        </span>
+        /^beta$/i.test(item.badge) ? <BetaTag /> : <Tag tone="accent">{item.badge}</Tag>
       ) : null}
       {hasSub ? (
         <span aria-hidden style={{ flexShrink: 0, marginLeft: 8, color: 'var(--color-text-muted)', fontSize: '10px' }}>

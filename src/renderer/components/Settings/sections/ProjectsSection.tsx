@@ -69,7 +69,7 @@ import { workspaceGrantSlug } from './api-keys-api'
 import { setSqlDbAgentAccess, setWorkspaceDbUpgrade } from './data-api'
 import { primaryScope } from '@/kessel/server-scope'
 import { RemoteInstructToggle } from '../shared/RemoteInstructToggle'
-import { Button, Callout, Input, OverflowMenu, Spinner, Surface, Tag, Toggle } from '@/components/ui'
+import { BetaTag, Button, Callout, Input, OverflowMenu, Spinner, Surface, Tag, Toggle } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 import { computeErrorMessage, setWorkspaceComputeManage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
 import { metaChordLabel } from '@/lib/shortcut-label'
@@ -2566,8 +2566,8 @@ export function AgentsOperateComputeToggle({
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Let this agent operate compute nodes{' '}
-            <span className="type-hint text-[var(--color-text-secondary)]">Beta</span>
+            Let this agent operate compute nodes
+            <BetaTag className="ml-2" />
             <AskedChip row="projects.agents-can-operate-compute" />
           </div>
           <div className={permissionDescClass(compact)}>
@@ -2685,8 +2685,8 @@ export function AgentsManageComputeToggle({
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Let this agent manage compute nodes{' '}
-            <span className="type-hint text-[var(--color-text-secondary)]">Beta</span>
+            Let this agent manage compute nodes
+            <BetaTag className="ml-2" />
             <AskedChip row="projects.agents-can-manage-compute" />
           </div>
           <div className={permissionDescClass(compact)}>

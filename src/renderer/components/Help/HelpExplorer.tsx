@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { floatMaterial } from '@/components/ui/float-material'
-import { DialogScrim, Input, Surface } from '@/components/ui'
+import { BetaTag, DialogScrim, Input, Surface } from '@/components/ui'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
 import catalogJson from '@shared/cli-catalog.generated.json'
@@ -161,6 +161,7 @@ function NounCard({
           </code>
           {noun.note === 'sidecar' ? <Badge>sidecar</Badge> : null}
           {noun.note === 'linux-sidecar' ? <Badge>Linux sidecar</Badge> : null}
+          {noun.beta ? <BetaTag className="ml-1.5" /> : null}
           <span className="ml-1.5 text-[10.5px] text-[var(--color-text-muted)]">
             {count ? `${count} command${count === 1 ? '' : 's'}` : noun.help ? 'help' : ''}
             {count || noun.help ? (expanded ? ' ▾' : ' ▸') : ''}

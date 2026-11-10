@@ -19,7 +19,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveNote, SettingSwitchRow, SettingsGroup, useSaveStatus } from '../controls/SettingControls'
-import { Toggle, Tag } from '@/components/ui'
+import { BetaTag, Toggle } from '@/components/ui'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { formatRelativeTime } from '@/lib/format-relative-time'
@@ -43,7 +43,8 @@ export const PERMISSION_CARDS_MANIFEST: SettingEntry[] = [
   {
     id: 'permission-cards.switch',
     section: 'permission-cards',
-    label: 'Permission cards (Beta)',
+    label: 'Permission cards',
+    beta: true,
     description:
       'Let agents ask, with a card in their Thread, for a setting you would otherwise change in Settings. Owner only; off by default',
     keywords: ['permission cards', 'permission', 'cards', 'ask', 'request', 'approve', 'allow', 'deny', 'beta', 'k2 permission'],
@@ -110,14 +111,6 @@ const STATE_LABEL: Record<string, string> = {
 
 export function requestStateLabel(state: string): string {
   return STATE_LABEL[state] ?? state
-}
-
-function BetaPill(): React.JSX.Element {
-  return (
-    <Tag tone="accent">
-      BETA
-    </Tag>
-  )
 }
 
 /** The global switch and the viewer's role, re-read on a host switch and on
@@ -332,8 +325,8 @@ export function AgentPermissionCardsRow({ project }: { project: { id: string; na
       }
     >
       <div className={SETTING_ROW_LABEL}>
-        Let this agent ask for permission{' '}
-        <span className="type-hint text-[var(--color-text-secondary)]">Beta</span>
+        Let this agent ask for permission
+        <BetaTag className="ml-2" />
       </div>
       <div className={SETTING_ROW_HINT}>
         It can post a card in its Thread when it needs a setting changed, saying what and why.
@@ -506,7 +499,7 @@ export function PermissionCardsSection(): React.JSX.Element {
     <div className="max-w-3xl space-y-6" data-testid="permission-cards-section">
       <div>
         <h2 className="type-title text-[var(--color-text-primary)] flex items-center gap-2">
-          Permission Cards <BetaPill />
+          Permission Cards <BetaTag />
         </h2>
         <p className="type-hint text-[var(--color-text-muted)] mt-1">
           When an agent hits something only an owner or admin can turn on, it can post a card in its
@@ -516,7 +509,7 @@ export function PermissionCardsSection(): React.JSX.Element {
         </p>
       </div>
 
-      <SettingsGroup title="Permission cards" badge={<BetaPill />}>
+      <SettingsGroup title="Permission cards" badge={<BetaTag />}>
         <div className="flex items-start gap-3 py-2" data-settings-id="permission-cards.switch">
           <Toggle
             checked={(painted ?? serverOn) === true}

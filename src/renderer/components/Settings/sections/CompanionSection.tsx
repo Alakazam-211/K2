@@ -9,7 +9,7 @@ import appStoreBadge from '@/assets/app-store-badge.svg?url'
 import googlePlayBadge from '@/assets/google-play-badge.png'
 import { primaryScope } from '@/kessel/server-scope'
 import { PhonePairing } from '../shared/PhonePairing'
-import { Tag } from '@/components/ui/Tag'
+import { BetaTag } from '@/components/ui/Tag'
 
 // K2 Companion (task #615) — the mobile app and K2 Connect now share ONE
 // tunnel (the frpc reverse tunnel exposed by K2 Connect at <sub>.k2.dev).
@@ -108,12 +108,7 @@ export function CompanionSection(): React.JSX.Element {
     <div className="max-w-xl">
       <h2 className="type-title text-[var(--color-text-primary)] mb-1 flex items-center gap-2">
         K2 Companion
-        <Tag
-          tone="accent"
-          title="This feature is in beta — interface and behavior may change"
-        >
-          beta
-        </Tag>
+        <BetaTag />
       </h2>
       <p className="type-hint text-[var(--color-text-muted)] mb-4">
         Reach your K2 agents from your phone. The mobile app pairs to the same

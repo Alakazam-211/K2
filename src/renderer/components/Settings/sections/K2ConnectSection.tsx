@@ -59,7 +59,7 @@ import {
 } from './OwnerAccountToggle'
 import { threadPushAvailable } from './useNotifyPrefs'
 import { SewAdminAccessState } from './SewAccessParts'
-import { Toggle, Checkbox, Tag } from '@/components/ui'
+import { BetaTag, Toggle, Checkbox, Tag } from '@/components/ui'
 import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
 import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
 import { AgentsCanCreateConnectionsRow } from '../shared/AgentsCanCreateConnectionsRow'
@@ -1572,11 +1572,7 @@ export function K2ConnectSection({
         {/* ── Account: sign-in + purchased-subdomain picker ──────────── */}
         <SettingsGroup
           title="Account"
-          badge={
-            <Tag tone="accent">
-              beta
-            </Tag>
-          }
+          badge={<BetaTag />}
         >
           {!session ? (
             <div data-settings-id="k2-connect.account-login">

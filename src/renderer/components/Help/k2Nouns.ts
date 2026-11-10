@@ -22,6 +22,8 @@ export interface K2Noun {
   blurb: string
   example?: string
   note?: K2NounNote
+  /** A Beta noun: the explorer shows the Beta tag after its name. */
+  beta?: boolean
 }
 
 export interface K2NounGroup {
@@ -55,7 +57,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         example: 'k2 voice rooms',
       },
       { noun: 'read', blurb: "Peek at another agent's terminal before injecting.", example: 'k2 read sales --lines 40' },
-      { noun: 'talk', blurb: 'Beta: read their screen first, then send, in one call.', example: 'k2 talk sales "ready?"' },
+      { noun: 'talk', blurb: 'Read their screen first, then send, in one call.', example: 'k2 talk sales "ready?"', beta: true },
       { noun: 'terminal', blurb: 'Raw bytes into a terminal, or spawn one (advanced).' },
       { noun: 'sessions', blurb: 'Who is working in this workspace, and past conversations.', example: 'k2 sessions --past --search scroll' },
     ],

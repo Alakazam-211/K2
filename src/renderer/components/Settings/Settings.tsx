@@ -14,7 +14,7 @@ import { topBarLeftClusterMinWidth, TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/d
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
-import { Surface, Tag } from '@/components/ui'
+import { BetaTag, Surface, Tag } from '@/components/ui'
 import { titleBarDragOnMouseDown, titleBarOnContextMenu, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { TerminalSection, TERMINAL_MANIFEST } from './sections/TerminalSection'
 import { CodeEditorSettingsSection, CODE_EDITOR_MANIFEST } from './sections/CodeEditorSettingsSection'
@@ -911,7 +911,7 @@ function SettingsNavButton({
     >
       <span>{label}</span>
       {beta ? (
-        <Tag tone="accent" className="ml-auto">BETA</Tag>
+        <BetaTag className="ml-auto" />
       ) : null}
       {comingSoon ? (
         <Tag tone="muted" className="ml-auto">SOON</Tag>

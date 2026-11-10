@@ -45,6 +45,9 @@ export interface SettingEntry {
    * picking it opens that Garden in the Gardens page's rail.
    */
   garden?: string
+  /** A Beta setting: the result row shows the Beta tag after the label,
+   *  and a search for "beta" finds it. */
+  beta?: boolean
 }
 
 /** Haystack built once per entry at index time. */
@@ -61,6 +64,7 @@ export function scoreEntry(entry: SettingEntry, query: string): number {
   const desc = (entry.description ?? '').toLowerCase()
   const group = (entry.group ?? '').toLowerCase()
   const keywords = (entry.keywords ?? []).map((k) => k.toLowerCase())
+  if (entry.beta && !keywords.includes('beta')) keywords.push('beta')
 
   // Exact label match wins.
   if (label === q) return 1000

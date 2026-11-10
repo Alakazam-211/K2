@@ -82,15 +82,13 @@ describe('Settings nav Apps', () => {
     expect(SECTION_LABELS['local-grokbots']).toBe('Grok Bot')
   })
 
-  it('User Access, User Templates, and Apps rows carry a right-side BETA tag', () => {
+  it('User Access, User Templates, and Apps rows carry a right-side Beta tag (the shared BetaTag)', () => {
     expect(src).toContain('justify-between')
     expect(src).toContain('ml-auto')
-    expect(src).toContain('>BETA<')
     expect(src).toContain('beta={it.beta}')
     const button = src.slice(src.indexOf('function SettingsNavButton'))
     expect(button).toContain('justify-between')
-    expect(button).toContain('ml-auto')
-    expect(button).toContain('BETA')
+    expect(button).toContain('<BetaTag className="ml-auto" />')
   })
 })
 

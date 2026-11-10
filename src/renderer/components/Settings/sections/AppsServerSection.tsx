@@ -24,7 +24,7 @@
 // window regains focus. No fetchProjects().
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Callout, Toggle } from '@/components/ui'
+import { BetaTag, Button, Callout, Toggle } from '@/components/ui'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { useSettingsStore } from '@/stores/settings'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -57,7 +57,8 @@ export const APPS_SERVER_MANIFEST: SettingEntry[] = [
   {
     id: 'skin-access.server',
     section: 'skin-access',
-    label: 'Apps (beta) on this server',
+    label: 'Apps on this server',
+    beta: true,
     description: 'Turn Apps on or off, check the box, prepare it and install the App engine',
     keywords: ['apps', 'app', 'beta', 'this server', 'doctor', 'prepare', 'box', 'podman', 'engine', 'k2 app doctor', 'setup'],
     group: 'This server',
@@ -257,7 +258,7 @@ export function AppsServerSection(): React.JSX.Element {
         </p>
       </div>
 
-      <SettingsGroup title="Apps (beta)">
+      <SettingsGroup title="Apps">
         <div className="flex items-start gap-3 py-2">
           <Toggle
             checked={appsOn}
@@ -266,7 +267,10 @@ export function AppsServerSection(): React.JSX.Element {
             aria-label="Apps (beta)"
           />
           <div className="flex-1 min-w-0">
-            <div className="type-row text-[var(--color-text-primary)]">Apps (beta)</div>
+            <div className="type-row text-[var(--color-text-primary)] flex items-center gap-2">
+              Apps
+              <BetaTag />
+            </div>
             <p className={`type-hint ${muted} mt-0.5`}>
               On: agents you allow can build, install and deploy Apps here. Apps run walled, in a guarded container. Off:
               every App route is closed.

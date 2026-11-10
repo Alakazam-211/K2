@@ -1,25 +1,30 @@
-// The device stream's player (fix 4): decode and draw in a Worker on an
+// The stream engine's player (fix 4; E9, source-neutral: the Mobile tab's
+// device and the remote desktop): decode and draw in a Worker on an
 // OffscreenCanvas where the webview allows it, so React work on the main
-// thread never delays a frame. The socket stays here (M-10); each binary
-// message's ArrayBuffer is transferred to the worker (`sim-player.worker.ts`)
-// with its header fields.
+// thread never delays a frame. The socket stays with the pane (M-10); each
+// binary message's ArrayBuffer is transferred to the worker
+// (`stream-player.worker.ts`) with its header fields.
 //
 // Where it runs: `canUseWorkerPlayer()` needs `Worker`,
 // `HTMLCanvasElement.transferControlToOffscreen` and `createImageBitmap`;
 // then the worker's own probe says whether it has an OffscreenCanvas 2D
-// context (else: the main-thread path) and a `VideoDecoder` for the codecs
-// `PROBE_CODECS` lists (else: JPEG only). A worker that errors falls back to
-// the main-thread path on the same socket (`lost`). The manual switch
-// `localStorage['k2.mobile.streamPlayer'] = 'main'` forces the main thread.
+// context (else: the main-thread path) and which codecs its `VideoDecoder`
+// takes (`ready` → `decode`: H.264, VP8, JPEG; the pane offers only those).
+// A worker that errors falls back to the main-thread path on the same
+// socket (`lost`). The manual switch `localStorage['k2.stream.player'] =
+// 'main'` forces the main thread (the Mobile tab's older
+// `k2.mobile.streamPlayer` still does too).
 //
 // A canvas can hand over control once: after a fallback the pane re-keys
 // its <canvas> so the main path draws on a fresh element.
 
-import { FRAME_HEADER_LEN, VIDEO_HEADER_LEN, type SimFrame } from './sim-stream'
-import type { FromWorker, PixelRgb, ToWorker } from './sim-player.worker'
+import { FRAME_HEADER_LEN, VIDEO_HEADER_LEN, isVideoSource, type DecodeSupport, type StreamFrame } from './stream-wire'
+import type { FromWorker, PixelRgb, ToWorker } from './stream-player.worker'
 
-/** Set to "main" to keep this tab's player on the main thread. */
-export const PLAYER_PREF_KEY = 'k2.mobile.streamPlayer'
+/** Set to "main" to keep this webview's players on the main thread. */
+export const PLAYER_PREF_KEY = 'k2.stream.player'
+/** The Mobile tab's switch from before the engine module; still read. */
+export const LEGACY_PLAYER_PREF_KEY = 'k2.mobile.streamPlayer'
 
 /** How long the worker has to answer its probe or a thumbnail ask. */
 export const PROBE_TIMEOUT_MS = 3000
@@ -41,7 +46,8 @@ interface PlayerEnv {
 
 function pinnedMain(env: PlayerEnv): boolean {
   try {
-    return env.localStorage?.getItem(PLAYER_PREF_KEY) === 'main'
+    const ls = env.localStorage
+    return ls?.getItem(PLAYER_PREF_KEY) === 'main' || ls?.getItem(LEGACY_PLAYER_PREF_KEY) === 'main'
   } catch {
     return false
   }
@@ -59,12 +65,13 @@ export function canUseWorkerPlayer(env: PlayerEnv = globalThis as unknown as Pla
 
 /** The real worker (Vite bundles it; the Tauri CSP allows `worker-src 'self' blob:`). */
 export function startPlayerWorker(): WorkerLike {
-  return new Worker(new URL('./sim-player.worker.ts', import.meta.url), { type: 'module', name: 'k2-sim-player' }) as unknown as WorkerLike
+  return new Worker(new URL('./stream-player.worker.ts', import.meta.url), { type: 'module', name: 'k2-stream-player' }) as unknown as WorkerLike
 }
 
 export interface WorkerProbe {
   canvas2d: boolean
-  video: boolean
+  /** What the worker decodes (`offerCodecs` turns it into `codecs=`). */
+  decode: DecodeSupport
 }
 
 export interface PlayerHandlers {
@@ -72,14 +79,16 @@ export interface PlayerHandlers {
    *  (`performance.now()`); the centre pixel while sampling. */
   drawn(seq: number, decodedAt: number, drawnAt: number, px: PixelRgb | null): void
   ack(seq: number): void
-  keyframe(): void
+  /** A delta came with no keyframe before it, or the decoder failed: the
+   *  frames are dropped until a keyframe; the pane sends `{"t":"keyframe"}`. */
+  needKeyframe(): void
   /** Video can't go on in the worker: switch the stream to JPEG. */
   videoFailed(why: string): void
   /** The worker itself failed: use the main-thread path. */
   lost(why: string): void
 }
 
-export class SimPlayer {
+export class StreamPlayer {
   readonly ready: Promise<WorkerProbe>
   private resolveReady: (p: WorkerProbe) => void = () => {}
   private readonly thumbs = new Map<number, (b: Blob | null) => void>()
@@ -124,11 +133,11 @@ export class SimPlayer {
 
   /** Hand a frame to the worker (its buffer is transferred). False when it
    *  can't go (no raw buffer, e.g. the stub's painted frames). */
-  frame(f: SimFrame): boolean {
+  frame(f: StreamFrame): boolean {
     if (this.dead || !f.raw) return false
     const s = f.source
-    if (s.kind === 'h264') {
-      this.post({ t: 'frame', kind: 'h264', seq: f.seq, buf: f.raw, offset: VIDEO_HEADER_LEN, widthPx: s.widthPx, heightPx: s.heightPx, key: s.key }, [f.raw])
+    if (isVideoSource(s)) {
+      this.post({ t: 'frame', kind: s.kind, seq: f.seq, buf: f.raw, offset: VIDEO_HEADER_LEN, widthPx: s.widthPx, heightPx: s.heightPx, key: s.key }, [f.raw])
       return true
     }
     if (s.kind === 'jpeg') {
@@ -196,7 +205,7 @@ export class SimPlayer {
     if (this.dead) return
     switch (m.t) {
       case 'probe':
-        this.resolveReady({ canvas2d: m.canvas2d, video: m.video })
+        this.resolveReady({ canvas2d: m.canvas2d, decode: m.decode })
         return
       case 'drawn':
         this.drawnAny = true
@@ -207,7 +216,7 @@ export class SimPlayer {
         this.h.ack(m.seq)
         return
       case 'keyframe':
-        this.h.keyframe()
+        this.h.needKeyframe()
         return
       case 'failed':
         this.h.videoFailed(m.why)

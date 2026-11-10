@@ -10,12 +10,11 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 
 import { firstUsableLane, parseSimDevices, parseSimHold, parseSimStatus } from './simApi'
+import { decodeFrame, encodeFrame } from '@/components/Stream/stream-wire'
 import {
   closeReason,
   createStubSimStream,
-  decodeFrame,
   defaultFps,
-  encodeFrame,
   parseServerMsg,
   simStreamUrl,
   type SimStreamHandlers,

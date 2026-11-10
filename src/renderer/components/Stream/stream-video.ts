@@ -1,17 +1,27 @@
-// The device stream as H.264 (0.46.7): K2SV frames carry Annex B access
-// units (SPS + PPS in front of every keyframe), decoded here with WebCodecs
-// (`VideoDecoder`, configured with no `description`, which means Annex B).
+// The stream engine's video decode (E9): K2SV frames carry an H.264 Annex B
+// access unit (SPS + PPS in front of every keyframe; codec byte 1) or a VP8
+// frame (codec byte 2), decoded here with WebCodecs (`VideoDecoder`; H.264
+// is configured with no `description`, which means Annex B).
 //
-//  - `videoDecodeSupport()`: can this webview decode what VideoToolbox
-//    sends? WKWebView (Safari 16.4+), WebView2 and Chromium say yes;
-//    WebKitGTK builds without WebCodecs say no and the tab stays on JPEG.
-//  - `H264Sink`: one per socket. Configures on the first keyframe (codec
-//    string from its SPS), decodes every frame in order (a delta can't be
-//    skipped), draws each output unless the view is held, and acks each seq
-//    once it is drawn or dropped, so the daemon's ack window keeps moving.
-//    A delta with no keyframe before it is skipped and a keyframe asked for;
-//    a decoder error does the same; three in a row give up on video and the
-//    caller falls back to JPEG.
+//  - `probeDecoders()` / `decodeSupport()`: what this webview can decode.
+//    H.264 is what VideoToolbox sends (WKWebView 16.4+, WebView2 and
+//    Chromium say yes); VP8 is a Linux host's software encode. WebKitGTK
+//    builds without WebCodecs say no to both and the viewer stays on JPEG.
+//    A pane offers only what the probe found (`offerCodecs`, R13).
+//  - `VideoSink`: one per socket. Configures on the first keyframe (H.264:
+//    the codec string from its SPS; VP8: `vp8`), decodes every frame in
+//    order (a delta can't be skipped), draws each output unless the view is
+//    held, and acks each seq once it is drawn or dropped, so the daemon's
+//    ack window keeps moving. A delta with no keyframe before it is dropped
+//    (never decoded into garbage) and a keyframe asked for (`needKeyframe`,
+//    again after `KEYFRAME_REASK_MS` if none came: the daemon drops asks
+//    inside its throttle); a decoder error does the same, and three in a
+//    row give up on video so the caller falls back to JPEG.
+//
+// Pure apart from `browserWebCodecs()` (which reads the globals when
+// called): the seams are injected, and tests use `testing.ts`'s fake.
+
+import type { DecodeSupport, VideoCodec } from './stream-wire'
 
 /** The parts of a WebCodecs `VideoFrame` we use. */
 export interface VideoFrameLike {
@@ -73,32 +83,47 @@ export function browserWebCodecs(): WebCodecsLike | null {
 }
 
 /** What VideoToolbox sends: Constrained High (low-latency mode), or Main. */
-export const PROBE_CODECS: readonly string[] = ['avc1.640C1F', 'avc1.4D401F']
+export const H264_PROBE_CODECS: readonly string[] = ['avc1.640C1F', 'avc1.4D401F']
+/** VP8 has one codec string. */
+export const VP8_PROBE_CODECS: readonly string[] = ['vp8']
 
-/** Set to "jpeg" to keep this device's tab on JPEG (a debugging switch). */
-export const CODEC_PREF_KEY = 'k2.mobile.streamCodec'
+/** Set to "jpeg" to keep this webview's streams on JPEG (a debugging switch). */
+export const CODEC_PREF_KEY = 'k2.stream.codec'
+/** The Mobile tab's switch from before the engine module; still read. */
+export const LEGACY_CODEC_PREF_KEY = 'k2.mobile.streamCodec'
 
 function jpegPinned(): boolean {
   try {
-    return globalThis.localStorage?.getItem(CODEC_PREF_KEY) === 'jpeg'
+    const ls = globalThis.localStorage
+    return ls?.getItem(CODEC_PREF_KEY) === 'jpeg' || ls?.getItem(LEGACY_CODEC_PREF_KEY) === 'jpeg'
   } catch {
     return false
   }
 }
 
-let cachedSupport: Promise<boolean> | null = null
-
-/** Can this webview decode the daemon's H.264? (Probed once.) */
-export function videoDecodeSupport(codecs: WebCodecsLike | null = browserWebCodecs()): Promise<boolean> {
-  if (jpegPinned() || !codecs) return Promise.resolve(false)
-  if (!cachedSupport) {
-    cachedSupport = (async () => {
-      for (const codec of PROBE_CODECS) {
-        if (await codecs.isConfigSupported({ codec, optimizeForLatency: true })) return true
-      }
-      return false
-    })()
+async function anySupported(codecs: WebCodecsLike, list: readonly string[]): Promise<boolean> {
+  for (const codec of list) {
+    if (await codecs.isConfigSupported({ codec, optimizeForLatency: true })) return true
   }
+  return false
+}
+
+/** Ask `isConfigSupported` for each video codec (H.264 first, then VP8).
+ *  `jpeg` is the caller's: whether it has a JPEG decode path. */
+export async function probeDecoders(codecs: WebCodecsLike | null, jpeg: boolean): Promise<DecodeSupport> {
+  if (!codecs) return { h264: false, vp8: false, jpeg }
+  const h264 = await anySupported(codecs, H264_PROBE_CODECS)
+  const vp8 = await anySupported(codecs, VP8_PROBE_CODECS)
+  return { h264, vp8, jpeg }
+}
+
+let cachedSupport: Promise<DecodeSupport> | null = null
+
+/** What this thread can decode (probed once; the JPEG pin turns video off). */
+export function decodeSupport(codecs: WebCodecsLike | null = browserWebCodecs()): Promise<DecodeSupport> {
+  const jpeg = typeof (globalThis as { createImageBitmap?: unknown }).createImageBitmap === 'function'
+  if (jpegPinned() || !codecs) return Promise.resolve({ h264: false, vp8: false, jpeg })
+  if (!cachedSupport) cachedSupport = probeDecoders(codecs, jpeg)
   return cachedSupport
 }
 
@@ -136,8 +161,21 @@ export function codecFromAnnexB(data: Uint8Array): string | null {
   return `avc1.${hex(sps[1])}${hex(sps[2])}${hex(sps[3])}`
 }
 
-export interface H264Packet {
+/** A VP8 key frame (RFC 6386 §9.1): frame tag bit 0 clear, then the start
+ *  code 9d 01 2a and the 14-bit width and height. */
+export function isVp8Keyframe(data: Uint8Array): boolean {
+  return data.length >= 10 && (data[0] & 1) === 0 && data[3] === 0x9d && data[4] === 0x01 && data[5] === 0x2a
+}
+
+/** The decoder's codec string for a keyframe, or null when it isn't one. */
+export function codecForKeyframe(codec: VideoCodec, data: Uint8Array): string | null {
+  if (codec === 'vp8') return isVp8Keyframe(data) ? 'vp8' : null
+  return codecFromAnnexB(data)
+}
+
+export interface VideoPacket {
   seq: number
+  codec: VideoCodec
   key: boolean
   data: Uint8Array
   /** The picture size to show (the coded picture may be padded to even). */
@@ -145,19 +183,26 @@ export interface H264Packet {
   heightPx: number
 }
 
-export interface H264SinkOptions {
+export interface VideoSinkOptions {
   codecs: WebCodecsLike
   draw(frame: VideoFrameLike, widthPx: number, heightPx: number): void
   ack(seq: number): void
+  /** The decoder lost its place: the pane sends `{"t":"keyframe"}`. */
   needKeyframe(): void
   /** Video can't go on here; switch the stream to JPEG. */
   failed(reason: string): void
   /** The view is held (frozen): decode, ack, don't draw. */
   held(): boolean
+  /** ms, for the re-ask (default `performance.now`). */
+  now?(): number
 }
 
 /** Decoder errors in a row before the sink gives up on video. */
 export const MAX_DECODE_ERRORS = 3
+
+/** Ask again for a keyframe this long after an unanswered ask (the daemon
+ *  drops asks within 250 ms of the last, `KEYFRAME_MIN_GAP`). */
+export const KEYFRAME_REASK_MS = 1000
 
 interface Queued {
   seq: number
@@ -165,16 +210,19 @@ interface Queued {
   heightPx: number
 }
 
-export class H264Sink {
+export class VideoSink {
   private decoder: VideoDecoderLike | null = null
   private codec: string | null = null
   private needKey = true
-  private askedKey = false
+  private askedAt: number | null = null
   private queue: Queued[] = []
   private errors = 0
   private closed = false
+  private readonly now: () => number
 
-  constructor(private readonly opts: H264SinkOptions) {}
+  constructor(private readonly opts: VideoSinkOptions) {
+    this.now = opts.now ?? (() => performance.now())
+  }
 
   /** Frames waiting in the decoder (tests). */
   get queued(): number {
@@ -185,25 +233,25 @@ export class H264Sink {
     return this.codec
   }
 
-  push(p: H264Packet): void {
+  push(p: VideoPacket): void {
     if (this.closed) {
       this.opts.ack(p.seq)
       return
     }
     if (p.key) {
-      const codec = codecFromAnnexB(p.data)
+      const codec = codecForKeyframe(p.codec, p.data)
       if (!codec) {
         this.opts.ack(p.seq)
-        this.onError(new Error('a keyframe without an SPS'))
+        this.onError(new Error(p.codec === 'vp8' ? 'a VP8 keyframe without its start code' : 'a keyframe without an SPS'))
         return
       }
       if (!this.decoder || this.decoder.state === 'closed' || codec !== this.codec) {
         this.openDecoder(codec)
       }
       this.needKey = false
-      this.askedKey = false
+      this.askedAt = null
     } else if (this.needKey || !this.decoder) {
-      // No reference to decode against: skip it, ask once for a keyframe.
+      // No reference to decode against: drop it, ask for a keyframe.
       this.opts.ack(p.seq)
       this.askKeyframe()
       return
@@ -257,7 +305,7 @@ export class H264Sink {
       try {
         d.close()
       } catch (err) {
-        console.warn('[mobile] video decoder close:', err)
+        console.warn('[stream] video decoder close:', err)
       }
     }
   }
@@ -271,7 +319,7 @@ export class H264Sink {
       }
       const q = this.queue.shift()
       if (!q) {
-        console.warn('[mobile] video: a decoded frame nobody queued', f.timestamp)
+        console.warn('[stream] video: a decoded frame nobody queued', f.timestamp)
         return
       }
       this.errors = 0
@@ -284,7 +332,7 @@ export class H264Sink {
 
   private onError(err: unknown): void {
     this.errors += 1
-    console.warn('[mobile] video decode error:', err)
+    console.warn('[stream] video decode error:', err)
     // What the decoder held is lost: ack it so the window frees.
     for (const q of this.queue.splice(0)) this.opts.ack(q.seq)
     this.closeDecoder()
@@ -298,8 +346,9 @@ export class H264Sink {
   }
 
   private askKeyframe(): void {
-    if (this.askedKey) return
-    this.askedKey = true
+    const t = this.now()
+    if (this.askedAt !== null && t - this.askedAt < KEYFRAME_REASK_MS) return
+    this.askedAt = t
     this.opts.needKeyframe()
   }
 }

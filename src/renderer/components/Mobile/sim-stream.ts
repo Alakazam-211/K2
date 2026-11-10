@@ -4,15 +4,11 @@
 //   GET /cli/sim/stream?workspace=<id|handle|path>&token=…[&fps=<n>]
 //       [&codecs=h264,jpeg&win=<n>][&stats=1]  (WebSocket)
 //
-//  - daemon → viewer, BINARY: a 16-byte header then a baseline JPEG:
-//      0..4 b"K2SF" · 4..8 seq u32 · 8..10 width px u16 · 10..12 height px
-//      u16 · 12..14 width pt u16 · 14..16 height pt u16 (all LE)
-//  - daemon → viewer, BINARY (0.46.7, when `hello.codec` is "h264"): a
-//    24-byte `K2SV` header then an Annex B H.264 access unit:
-//      0..4 b"K2SV" · 4..8 seq u32 · 8..10 width px · 10..12 height px ·
-//      12..14 width pt · 14..16 height pt · 16 codec u8 (1 = H.264) ·
-//      17 flags u8 (bit 0 keyframe) · 18..20 age ms u16 · 20..24 ts ms u32
-//    (all LE). Decoded by `sim-video.ts` (WebCodecs).
+//  - daemon → viewer, BINARY: K2SF (a 16-byte header then a baseline
+//    JPEG) or, 0.46.7, when `hello.codec` is "h264", K2SV (a 24-byte header
+//    then an Annex B H.264 access unit). The headers, their parse and the
+//    decode are the stream engine's (`Stream/stream-wire.ts`,
+//    `Stream/stream-video.ts`), shared with the remote desktop.
 //  - daemon → viewer, TEXT: JSON tagged by "t": hello (with `codec` and
 //    `window` since 0.46.7), state, hold, error, fps, codec (the daemon fell
 //    back to JPEG mid-stream);
@@ -35,19 +31,10 @@
 import type { ServerScope } from '@/kessel/server-scope'
 import { daemonWsBase } from '@/kessel/daemon-ws'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
+import { decodeSupport } from '@/components/Stream/stream-video'
+import { readBinaryFrame, STREAM_WINDOW, type StreamFrame, type StreamFrameSource } from '@/components/Stream/stream-wire'
 import { parseDeviceProfile, parseSimHold, type SimDeviceProfile, type SimHold, type SimLaneId, type SimState } from './simApi'
-import { videoDecodeSupport } from './sim-video'
 import type { SimStreamStats } from './sim-latency'
-
-export const FRAME_MAGIC = 'K2SF'
-export const FRAME_HEADER_LEN = 16
-export const VIDEO_MAGIC = 'K2SV'
-export const VIDEO_HEADER_LEN = 24
-export const VIDEO_CODEC_H264 = 1
-export const VIDEO_FLAG_KEY = 1
-
-/** Frames this tab asks to have in flight (`win=`; the daemon may give fewer). */
-export const STREAM_WINDOW = 3
 
 export type SimCodec = 'jpeg' | 'h264'
 
@@ -129,24 +116,13 @@ export interface SimPoint {
   y: number
 }
 
-/** What a frame holds: a JPEG or an H.264 access unit off the wire, or
- *  (stub) a painter. */
-export type SimFrameSource =
-  | { kind: 'jpeg'; data: Blob }
-  | { kind: 'h264'; key: boolean; data: Uint8Array; widthPx: number; heightPx: number }
-  | { kind: 'paint'; paint: (ctx: CanvasRenderingContext2D, width: number, height: number) => void }
+/** What a frame holds (the engine's `StreamFrameSource`): a JPEG or a video
+ *  access unit off the wire, or (stub) a painter. */
+export type SimFrameSource = StreamFrameSource
 
-export interface SimFrame {
-  /** Per device; the ack names it. */
-  seq: number
-  /** The screen in points for the current orientation. */
-  widthPt: number
-  heightPt: number
-  source: SimFrameSource
-  /** The whole binary message, for the worker player to take over (fix 4;
-   *  absent for the stub's painted frames). */
-  raw?: ArrayBuffer
-}
+/** A device frame (the engine's `StreamFrame`); its size in points is the
+ *  screen's for the current orientation. */
+export type SimFrame = StreamFrame
 
 /** `stream::InputCaps` from `hello` (absent from older daemons). */
 export interface SimInputCaps {
@@ -242,94 +218,6 @@ export function simStreamUrl(
   if (extra?.stats) q.set('stats', '1')
   if (token) q.set('token', token)
   return `${wsBase}/cli/sim/stream?${q.toString()}`
-}
-
-/** The four magic bytes of a binary message, or ''. */
-export function frameMagic(buf: ArrayBuffer): string {
-  if (buf.byteLength < 4) return ''
-  const b = new Uint8Array(buf, 0, 4)
-  return String.fromCharCode(b[0], b[1], b[2], b[3])
-}
-
-export interface VideoFrameHeader {
-  seq: number
-  widthPx: number
-  heightPx: number
-  widthPt: number
-  heightPt: number
-  codec: number
-  key: boolean
-  ageMs: number
-  tsMs: number
-}
-
-/** Split a K2SV message into its header and the access unit. */
-export function decodeVideoFrame(buf: ArrayBuffer): (VideoFrameHeader & { data: Uint8Array<ArrayBuffer> }) | null {
-  if (buf.byteLength < VIDEO_HEADER_LEN || frameMagic(buf) !== VIDEO_MAGIC) return null
-  const v = new DataView(buf)
-  return {
-    seq: v.getUint32(4, true),
-    widthPx: v.getUint16(8, true),
-    heightPx: v.getUint16(10, true),
-    widthPt: v.getUint16(12, true),
-    heightPt: v.getUint16(14, true),
-    codec: v.getUint8(16),
-    key: (v.getUint8(17) & VIDEO_FLAG_KEY) !== 0,
-    ageMs: v.getUint16(18, true),
-    tsMs: v.getUint32(20, true),
-    data: new Uint8Array(buf, VIDEO_HEADER_LEN),
-  }
-}
-
-/** Encode a K2SV message the way the daemon does (tests). */
-export function encodeVideoFrame(
-  h: { seq: number; widthPx: number; heightPx: number; widthPt: number; heightPt: number; key: boolean; codec?: number; ageMs?: number; tsMs?: number },
-  au: Uint8Array,
-): ArrayBuffer {
-  const buf = new ArrayBuffer(VIDEO_HEADER_LEN + au.byteLength)
-  const v = new DataView(buf)
-  for (let i = 0; i < 4; i++) v.setUint8(i, VIDEO_MAGIC.charCodeAt(i))
-  v.setUint32(4, h.seq, true)
-  v.setUint16(8, h.widthPx, true)
-  v.setUint16(10, h.heightPx, true)
-  v.setUint16(12, h.widthPt, true)
-  v.setUint16(14, h.heightPt, true)
-  v.setUint8(16, h.codec ?? VIDEO_CODEC_H264)
-  v.setUint8(17, h.key ? VIDEO_FLAG_KEY : 0)
-  v.setUint16(18, h.ageMs ?? 0, true)
-  v.setUint32(20, h.tsMs ?? 0, true)
-  new Uint8Array(buf, VIDEO_HEADER_LEN).set(au)
-  return buf
-}
-
-/** Split a binary message into its header fields and the JPEG bytes. */
-export function decodeFrame(buf: ArrayBuffer): { seq: number; widthPx: number; heightPx: number; widthPt: number; heightPt: number; jpeg: Uint8Array<ArrayBuffer> } | null {
-  if (buf.byteLength < FRAME_HEADER_LEN) return null
-  const v = new DataView(buf)
-  const magic = String.fromCharCode(v.getUint8(0), v.getUint8(1), v.getUint8(2), v.getUint8(3))
-  if (magic !== FRAME_MAGIC) return null
-  return {
-    seq: v.getUint32(4, true),
-    widthPx: v.getUint16(8, true),
-    heightPx: v.getUint16(10, true),
-    widthPt: v.getUint16(12, true),
-    heightPt: v.getUint16(14, true),
-    jpeg: new Uint8Array(buf, FRAME_HEADER_LEN),
-  }
-}
-
-/** Encode a frame the way the daemon does (tests, the stub). */
-export function encodeFrame(h: { seq: number; widthPx: number; heightPx: number; widthPt: number; heightPt: number }, jpeg: Uint8Array): ArrayBuffer {
-  const buf = new ArrayBuffer(FRAME_HEADER_LEN + jpeg.byteLength)
-  const v = new DataView(buf)
-  for (let i = 0; i < 4; i++) v.setUint8(i, FRAME_MAGIC.charCodeAt(i))
-  v.setUint32(4, h.seq, true)
-  v.setUint16(8, h.widthPx, true)
-  v.setUint16(10, h.heightPx, true)
-  v.setUint16(12, h.widthPt, true)
-  v.setUint16(14, h.heightPt, true)
-  new Uint8Array(buf, FRAME_HEADER_LEN).set(jpeg)
-  return buf
 }
 
 function parseInputCaps(o: Record<string, unknown>): SimInputCaps {
@@ -430,7 +318,7 @@ export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handler
     try {
       const creds = await scope.creds()
       if (closed) return
-      const video = offer?.video ? await videoDecodeSupport() : false
+      const video = offer?.video ? (await decodeSupport()).h264 : false
       if (closed) return
       const codecs: SimCodec[] = video ? ['h264', 'jpeg'] : ['jpeg']
       const url = simStreamUrl(daemonWsBase(creds), workspace, creds.token, fps, offer ? { codecs, window: offer.window } : undefined, { stats })
@@ -458,33 +346,12 @@ export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handler
           if (m) handlers.onServer(m)
           return
         }
-        if (ev.data instanceof ArrayBuffer && frameMagic(ev.data) === VIDEO_MAGIC) {
-          const v = decodeVideoFrame(ev.data)
-          if (!v || v.codec !== VIDEO_CODEC_H264) {
-            console.warn('[mobile] stream: a K2SV message this tab cannot read')
-            return
-          }
-          handlers.onFrame({
-            seq: v.seq,
-            widthPt: v.widthPt,
-            heightPt: v.heightPt,
-            source: { kind: 'h264', key: v.key, data: v.data, widthPx: v.widthPx, heightPx: v.heightPx },
-            raw: ev.data,
-          })
+        const r: ReturnType<typeof readBinaryFrame> = ev.data instanceof ArrayBuffer ? readBinaryFrame(ev.data) : { error: 'header' }
+        if ('error' in r) {
+          console.warn(r.error === 'video' ? '[mobile] stream: a K2SV message this tab cannot read' : '[mobile] stream: a binary message without the K2SF header')
           return
         }
-        const f = ev.data instanceof ArrayBuffer ? decodeFrame(ev.data) : null
-        if (!f) {
-          console.warn('[mobile] stream: a binary message without the K2SF header')
-          return
-        }
-        handlers.onFrame({
-          seq: f.seq,
-          widthPt: f.widthPt,
-          heightPt: f.heightPt,
-          source: { kind: 'jpeg', data: new Blob([f.jpeg], { type: 'image/jpeg' }) },
-          raw: ev.data as ArrayBuffer,
-        })
+        handlers.onFrame(r.frame)
       }
       sock.onerror = () => {
         if (!closed) handlers.onConn('error', 'The device stream failed.')

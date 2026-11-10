@@ -7,8 +7,9 @@
 //    answers in `hello` (an older daemon: JPEG, one at a time).
 //  - JPEG: draws each frame on the canvas, then acks its seq. A frame with a
 //    newer one already waiting is acked without drawing (stale).
-//  - H.264: `H264Sink` decodes every frame in order (WebCodecs), draws each
-//    output, acks it; it asks for a keyframe when it lost its place. If
+//  - H.264: the engine's `VideoSink` (`Stream/stream-video.ts`) decodes
+//    every frame in order (WebCodecs), draws each output, acks it; it drops
+//    frames and asks for a keyframe when it lost its place. If
 //    video fails here the tab reconnects JPEG-only; the canvas keeps the
 //    last frame meanwhile.
 //  - A remote H.264 stream left at the JPEG default rate (8) is raised to
@@ -18,13 +19,15 @@
 //    when the device rotates); `hello` / `hold` / `state` / `fps` text
 //    messages keep the rest current.
 //  - Fix 4: decode and draw run in a worker on an OffscreenCanvas where the
-//    webview allows it (`sim-player.ts`): the socket stays here and each
-//    frame's buffer is transferred. Until the worker answers its probe the
+//    webview allows it (the engine's `Stream/stream-player.ts`): the
+//    socket stays here and each frame's buffer is transferred. Until the
+//    worker answers its probe the
 //    socket waits; a worker with no VideoDecoder means JPEG only; a worker
 //    that fails falls back to this thread on the same socket, and the pane
 //    re-keys its <canvas> (`canvasKey`) since a canvas hands over control
-//    once. `localStorage['k2.mobile.streamPlayer'] = 'main'` forces this
-//    thread. jsdom has no OffscreenCanvas, so tests take this thread.
+//    once. `localStorage['k2.stream.player'] = 'main'` (or the older
+//    `k2.mobile.streamPlayer`) forces this thread. jsdom has no
+//    OffscreenCanvas, so tests take this thread.
 //  - M0 (the latency readout only): `stats` asks the daemon for its stage
 //    times (`onStats`), and `onFrameStage` gets each frame's socket,
 //    decoded and drawn times on this side.
@@ -37,11 +40,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
 import type { SimHold, SimState } from './simApi'
 import type { ScreenPt } from './sim-input'
+import { STREAM_WINDOW, isVideoSource } from '@/components/Stream/stream-wire'
+import { browserWebCodecs, VideoSink } from '@/components/Stream/stream-video'
+import { blobDataUrl, canUseWorkerPlayer, PROBE_TIMEOUT_MS, StreamPlayer, startPlayerWorker, type PlayerHandlers, type WorkerLike } from '@/components/Stream/stream-player'
+import type { PixelRgb } from '@/components/Stream/stream-player.worker'
+import { canvasCentre, canvasThumb, drawJpeg, drawVideoFrame } from '@/components/Stream/stream-canvas'
 import {
   LAN_VIDEO_DEFAULT_FPS,
   REMOTE_DEFAULT_FPS,
   REMOTE_VIDEO_DEFAULT_FPS,
-  STREAM_WINDOW,
   type SimCodec,
   type SimConnState,
   type SimFrame,
@@ -51,10 +58,7 @@ import {
   type SimStreamConnector,
   type SimViewerPath,
 } from './sim-stream'
-import { browserWebCodecs, H264Sink, type VideoFrameLike } from './sim-video'
 import type { FrameStage, SimStreamStats } from './sim-latency'
-import { blobDataUrl, canUseWorkerPlayer, PROBE_TIMEOUT_MS, SimPlayer, startPlayerWorker, type PlayerHandlers, type WorkerLike } from './sim-player'
-import type { PixelRgb } from './sim-player.worker'
 
 export interface UseSimStreamArgs {
   scope: ServerScope
@@ -119,27 +123,6 @@ export interface SimStreamView {
   setFps(fps: number): void
 }
 
-/** A small JPEG of what the canvas shows, or null when it can't export
- *  (no frame, jsdom). */
-export function canvasThumb(canvas: HTMLCanvasElement | null): string | null {
-  if (!canvas || canvas.width === 0 || canvas.height === 0) return null
-  try {
-    const url = canvas.toDataURL('image/jpeg', 0.6)
-    return typeof url === 'string' && url.startsWith('data:image/') ? url : null
-  } catch {
-    return null
-  }
-}
-
-/** The canvas's centre pixel, or null without a 2d context (jsdom). */
-function readCentre(canvas: HTMLCanvasElement | null): PixelRgb | null {
-  if (!canvas || canvas.width === 0 || canvas.height === 0) return null
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  if (!ctx) return null
-  const d = ctx.getImageData(canvas.width >> 1, canvas.height >> 1, 1, 1).data
-  return [d[0], d[1], d[2]]
-}
-
 /** Painted size for a stub frame: 2× points so text stays crisp. */
 const PAINT_SCALE = 2
 
@@ -155,29 +138,7 @@ async function drawFrame(canvas: HTMLCanvasElement, frame: SimFrame, onDecoded?:
     return true
   }
   if (frame.source.kind !== 'jpeg') return false
-  const bmp = await createImageBitmap(frame.source.data)
-  onDecoded?.()
-  try {
-    if (canvas.width !== bmp.width) canvas.width = bmp.width
-    if (canvas.height !== bmp.height) canvas.height = bmp.height
-    ctx.drawImage(bmp, 0, 0)
-  } finally {
-    bmp.close()
-  }
-  return true
-}
-
-/** Draw a decoded video frame, cropped to the header's size (the coded
- *  picture may be one pixel wider / taller: H.264 pads odd sizes). */
-function drawVideoFrame(canvas: HTMLCanvasElement, frame: VideoFrameLike, widthPx: number, heightPx: number): boolean {
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return false
-  const w = Math.min(widthPx, frame.displayWidth)
-  const h = Math.min(heightPx, frame.displayHeight)
-  if (canvas.width !== w) canvas.width = w
-  if (canvas.height !== h) canvas.height = h
-  ctx.drawImage(frame as unknown as CanvasImageSource, 0, 0, w, h, 0, 0, w, h)
-  return true
+  return drawJpeg(canvas, frame.source.data, onDecoded)
 }
 
 export function useSimStream({
@@ -234,7 +195,7 @@ export function useSimStream({
   // ── The player (fix 4) ──────────────────────────────────────────────
   const [player, setPlayer] = useState<'pending' | 'worker' | 'main'>(() => (canUseWorkerPlayer() ? 'pending' : 'main'))
   const [canvasKey, setCanvasKey] = useState(0)
-  const playerRef = useRef<SimPlayer | null>(null)
+  const playerRef = useRef<StreamPlayer | null>(null)
   // The worker can decode H.264 (its probe); the socket offers video only then.
   const playerVideoRef = useRef(true)
   const sampleRef = useRef(samplePixels)
@@ -268,17 +229,17 @@ export function useSimStream({
         drawnRef.current?.(seq, px)
       },
       ack: (seq) => connRef.current?.ack(seq),
-      keyframe: () => connRef.current?.requestKeyframe(),
+      needKeyframe: () => connRef.current?.requestKeyframe(),
       videoFailed: (why) => {
         console.warn('[mobile] video failed in the player worker; reconnecting with JPEG:', why)
         setJpegOnly(true)
       },
       lost: (why) => toMain(why),
     }
-    let p: SimPlayer
+    let p: StreamPlayer
     try {
       const off = canvas.transferControlToOffscreen()
-      p = new SimPlayer(startWorkerRef.current(), off, handlers, { sample: sampleRef.current })
+      p = new StreamPlayer(startWorkerRef.current(), off, handlers, { sample: sampleRef.current })
     } catch (err) {
       toMain(err instanceof Error ? err.message : String(err))
       return
@@ -296,7 +257,8 @@ export function useSimStream({
         toMain('no OffscreenCanvas 2D context in the worker')
         return
       }
-      playerVideoRef.current = probe.video
+      // The sim daemon streams H.264 or JPEG (VP8 is the desktop's).
+      playerVideoRef.current = probe.decode.h264
       setPlayer('worker')
     })
   }, [wantPlayer, canvasRef])
@@ -330,12 +292,12 @@ export function useSimStream({
     // drawn makes it stale.
     let drawing: Promise<void> = Promise.resolve()
     let newestJpeg = -1
-    let sink: H264Sink | null = null
+    let sink: VideoSink | null = null
     const dropSink = (ackQueued = false): void => {
       sink?.close(ackQueued)
       sink = null
     }
-    const videoSink = (): H264Sink | null => {
+    const videoSink = (): VideoSink | null => {
       if (sink) return sink
       const codecs = browserWebCodecs()
       if (!codecs) {
@@ -343,7 +305,7 @@ export function useSimStream({
         setJpegOnly(true)
         return null
       }
-      sink = new H264Sink({
+      sink = new VideoSink({
         codecs,
         held: () => holdRef.current,
         ack: (seq) => {
@@ -359,7 +321,7 @@ export function useSimStream({
         draw: (frame, widthPx, heightPx) => {
           const canvas = canvasRef.current
           if (!live || !canvas) return
-          // The decoder's timestamp is the frame's seq (H264Sink).
+          // The decoder's timestamp is the frame's seq (VideoSink).
           stageRef.current?.(frame.timestamp, 'decoded', performance.now())
           if (drawVideoFrame(canvas, frame, widthPx, heightPx)) {
             setHasFrame(true)
@@ -442,14 +404,14 @@ export function useSimStream({
             if (!p.frame(frame)) c?.ack(frame.seq)
             return
           }
-          if (frame.source.kind === 'h264') {
+          if (isVideoSource(frame.source)) {
             const s = videoSink()
             if (!s) {
               c?.ack(frame.seq)
               return
             }
-            const { key, data, widthPx, heightPx } = frame.source
-            s.push({ seq: frame.seq, key, data, widthPx, heightPx })
+            const { kind, key, data, widthPx, heightPx } = frame.source
+            s.push({ seq: frame.seq, codec: kind, key, data, widthPx, heightPx })
             return
           }
           newestJpeg = frame.seq
@@ -517,7 +479,7 @@ export function useSimStream({
 
   const centrePixel = useCallback((): PixelRgb | null => {
     const p = playerRef.current
-    return p ? p.lastPx : readCentre(canvasRef.current)
+    return p ? p.lastPx : canvasCentre(canvasRef.current)
   }, [canvasRef])
 
   return {

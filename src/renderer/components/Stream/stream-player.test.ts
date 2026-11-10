@@ -2,13 +2,16 @@
 // worker on a real MessageChannel: frames are transferred (the source
 // buffer is detached), acks and `drawn` come back in order with times on
 // this side's clock, a held view still acks, the centre pixel is sampled
-// on request, the thumbnail round-trips, and a worker error hands the
-// stream back to the main thread. Plus the first support check.
+// on request, the thumbnail round-trips, keyframe asks reach the pane, and a
+// worker error hands the stream back to the main thread. Plus the first
+// support check and its switch (the neutral key and the Mobile tab's old
+// one).
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { canUseWorkerPlayer, PLAYER_PREF_KEY, SimPlayer, type PlayerHandlers, type WorkerLike } from './sim-player'
-import { WorkerPlayerCore, type OffscreenLike, type ToWorker } from './sim-player.worker'
-import { encodeFrame, type SimFrame } from './sim-stream'
+import { canUseWorkerPlayer, LEGACY_PLAYER_PREF_KEY, PLAYER_PREF_KEY, StreamPlayer, type PlayerHandlers, type WorkerLike } from './stream-player'
+import { WorkerPlayerCore, type OffscreenLike, type ToWorker } from './stream-player.worker'
+import { encodeFrame, encodeVideoFrame, VIDEO_CODEC_VP8, type StreamFrame } from './stream-wire'
+import { fakeWebCodecs, VP8_DELTA } from './testing'
 
 const ports: MessagePort[] = []
 
@@ -18,12 +21,12 @@ afterEach(() => {
 
 /** A worker made of a MessageChannel and the real worker core. The canvas
  *  (not cloneable here) goes to the core directly. */
-function channelWorker(canvas: OffscreenLike): WorkerLike & { fail(): void } {
+function channelWorker(canvas: OffscreenLike, codecs: ReturnType<typeof fakeWebCodecs> | null = null): WorkerLike & { fail(): void } {
   const { port1, port2 } = new MessageChannel()
   ports.push(port1, port2)
   const core = new WorkerPlayerCore({
     post: (m) => port2.postMessage(m),
-    codecs: null,
+    codecs,
     decodeJpeg: async () => ({ width: 4, height: 2, close: () => {} }),
     now: () => 1_000_250,
   })
@@ -70,14 +73,14 @@ function recorder() {
       times.push([decodedAt, drawnAt])
     },
     ack: (seq) => events.push(`ack ${seq}`),
-    keyframe: () => events.push('keyframe'),
+    needKeyframe: () => events.push('keyframe'),
     videoFailed: (why) => events.push(`failed ${why}`),
     lost: (why) => lost.push(why),
   }
   return { h, events, times, lost }
 }
 
-function jpeg(seq: number): SimFrame & { raw: ArrayBuffer } {
+function jpeg(seq: number): StreamFrame & { raw: ArrayBuffer } {
   const raw = encodeFrame({ seq, widthPx: 4, heightPx: 2, widthPt: 4, heightPt: 2 }, new Uint8Array([0xff, 0xd8, 0xff]))
   return { seq, widthPt: 4, heightPt: 2, source: { kind: 'jpeg', data: new Blob([]) }, raw }
 }
@@ -87,12 +90,12 @@ async function until(pred: () => boolean): Promise<void> {
   expect(pred()).toBe(true)
 }
 
-describe('SimPlayer over a MessageChannel', () => {
+describe('StreamPlayer over a MessageChannel', () => {
   it('transfers each frame, gets acks and drawn back in order, still acks while held, samples on request', async () => {
     const w = channelWorker(offscreen())
     const r = recorder()
-    const p = new SimPlayer(w, {}, r.h, { transferCanvas: false, timeOrigin: 1_000_000 })
-    expect(await p.ready).toEqual({ canvas2d: true, video: false })
+    const p = new StreamPlayer(w, {}, r.h, { transferCanvas: false, timeOrigin: 1_000_000 })
+    expect(await p.ready).toEqual({ canvas2d: true, decode: { h264: false, vp8: false, jpeg: true } })
     const f1 = jpeg(1)
     expect(p.frame(f1)).toBe(true)
     expect(f1.raw.byteLength).toBe(0)
@@ -120,7 +123,7 @@ describe('SimPlayer over a MessageChannel', () => {
   it('the thumbnail round-trips; a worker error hands back to the main thread once', async () => {
     const w = channelWorker(offscreen())
     const r = recorder()
-    const p = new SimPlayer(w, {}, r.h, { transferCanvas: false })
+    const p = new StreamPlayer(w, {}, r.h, { transferCanvas: false })
     await p.ready
     p.frame(jpeg(1))
     await until(() => r.events.includes('ack 1'))
@@ -132,6 +135,25 @@ describe('SimPlayer over a MessageChannel', () => {
     expect(p.alive).toBe(false)
     expect(await p.thumb()).toBeNull()
     expect(p.frame(jpeg(2))).toBe(false)
+  })
+})
+
+describe('StreamPlayer video', () => {
+  it('a VP8 delta with no keyframe is transferred, dropped and asks the pane for a keyframe once', async () => {
+    const codecs = fakeWebCodecs({ h264: false, vp8: true })
+    const w = channelWorker(offscreen(), codecs)
+    const r = recorder()
+    const p = new StreamPlayer(w, {}, r.h, { transferCanvas: false })
+    expect((await p.ready).decode).toEqual({ h264: false, vp8: true, jpeg: true })
+    for (const seq of [1, 2]) {
+      const raw = encodeVideoFrame({ seq, widthPx: 640, heightPx: 360, widthPt: 640, heightPt: 360, key: false, codec: VIDEO_CODEC_VP8 }, VP8_DELTA)
+      const f: StreamFrame = { seq, widthPt: 640, heightPt: 360, source: { kind: 'vp8', key: false, data: new Uint8Array(raw, 24), widthPx: 640, heightPx: 360 }, raw }
+      expect(p.frame(f)).toBe(true)
+    }
+    await until(() => r.events.includes('ack 2'))
+    expect(r.events).toEqual(['ack 1', 'keyframe', 'ack 2'])
+    expect(codecs.decoders).toHaveLength(0)
+    p.close()
   })
 })
 
@@ -149,5 +171,14 @@ describe('canUseWorkerPlayer', () => {
     expect(canUseWorkerPlayer(env({ Worker: undefined }))).toBe(false)
     expect(canUseWorkerPlayer(env({ createImageBitmap: undefined }))).toBe(false)
     expect(canUseWorkerPlayer(env({ localStorage: { getItem: (k: string) => (k === PLAYER_PREF_KEY ? 'main' : null) } }))).toBe(false)
+  })
+
+  it('a stored Mobile-tab setting (k2.mobile.streamPlayer = main) still forces the main thread', () => {
+    expect(LEGACY_PLAYER_PREF_KEY).toBe('k2.mobile.streamPlayer')
+    expect(PLAYER_PREF_KEY).toBe('k2.stream.player')
+    const stored = new Map([['k2.mobile.streamPlayer', 'main']])
+    expect(canUseWorkerPlayer(env({ localStorage: { getItem: (k: string) => stored.get(k) ?? null } }))).toBe(false)
+    stored.set('k2.mobile.streamPlayer', 'worker')
+    expect(canUseWorkerPlayer(env({ localStorage: { getItem: (k: string) => stored.get(k) ?? null } }))).toBe(true)
   })
 })

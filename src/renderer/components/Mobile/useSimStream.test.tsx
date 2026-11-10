@@ -10,10 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 
+import { encodeFrame, type DecodeSupport } from '@/components/Stream/stream-wire'
+import { fakePlayerWorker, fakeWebCodecs, H264_DELTA as DELTA, H264_KEY as KEY, webCodecsGlobals, type FakeVideoDecoder } from '@/components/Stream/testing'
 import type { SimFrame, SimServerMsg, SimStreamConnector, SimStreamHandlers, SimStreamOffer, SimViewerPath } from './sim-stream'
 import { useSimStream } from './useSimStream'
-import type { WorkerLike } from './sim-player'
-import { encodeFrame } from './sim-stream'
 
 /** One scope for every render (a new one would reconnect, as in the pane). */
 const SCOPE = {} as never
@@ -67,10 +67,6 @@ const hello = (codec: 'jpeg' | 'h264', remote: boolean, path?: SimViewerPath): S
   window: 3,
 })
 
-const SC = [0, 0, 0, 1]
-const KEY = new Uint8Array([...SC, 0x67, 0x64, 0x0c, 0x1f, 0xac, ...SC, 0x68, 0xee, ...SC, 0x65, 0x88])
-const DELTA = new Uint8Array([...SC, 0x41, 0x9a])
-
 const h264 = (seq: number, key: boolean): SimFrame => ({
   seq,
   widthPt: 411,
@@ -78,37 +74,13 @@ const h264 = (seq: number, key: boolean): SimFrame => ({
   source: { kind: 'h264', key, data: key ? KEY : DELTA, widthPx: 411, heightPx: 915 },
 })
 
-interface FakeDecoder {
-  init: { output(f: unknown): void; error(e: unknown): void }
-  configs: { codec: string }[]
-  state: string
-}
+let decoders: FakeVideoDecoder[] = []
 
-let decoders: FakeDecoder[] = []
-
+/** The engine's fake WebCodecs as this webview's globals (H.264 yes). */
 function stubWebCodecs(): void {
-  decoders = []
-  class VideoDecoder {
-    static isConfigSupported = async () => ({ supported: true })
-    state = 'unconfigured'
-    configs: { codec: string }[] = []
-    constructor(readonly init: FakeDecoder['init']) {
-      decoders.push(this as unknown as FakeDecoder)
-    }
-    configure(c: { codec: string }): void {
-      this.state = 'configured'
-      this.configs.push(c)
-    }
-    decode(): void {}
-    close(): void {
-      this.state = 'closed'
-    }
-  }
-  class EncodedVideoChunk {
-    constructor(readonly init: unknown) {}
-  }
-  vi.stubGlobal('VideoDecoder', VideoDecoder)
-  vi.stubGlobal('EncodedVideoChunk', EncodedVideoChunk)
+  const codecs = fakeWebCodecs({ h264: true, vp8: true })
+  decoders = codecs.decoders
+  for (const [k, v] of Object.entries(webCodecsGlobals(codecs))) vi.stubGlobal(k, v)
 }
 
 const videoFrame = (timestamp: number) => ({ timestamp, displayWidth: 412, displayHeight: 916, close: vi.fn() })
@@ -281,19 +253,12 @@ describe('useSimStream', () => {
       restore?.()
     })
 
-    function fakeWorker(probe: { canvas2d: boolean; video: boolean }) {
-      const posted: { msg: { t: string; [k: string]: unknown }; transfer: Transferable[] }[] = []
-      const w: WorkerLike = {
-        onmessage: null,
-        onerror: null,
-        postMessage(msg, transfer) {
-          const m = msg as { t: string }
-          posted.push({ msg: m, transfer: transfer ?? [] })
-          if (m.t === 'probe') queueMicrotask(() => w.onmessage?.({ data: { t: 'probe', ...probe } }))
-        },
-        terminate() {},
-      }
-      return { w, posted }
+    const H264_ONLY: DecodeSupport = { h264: true, vp8: false, jpeg: true }
+    const NO_VIDEO: DecodeSupport = { h264: false, vp8: false, jpeg: true }
+
+    function fakeWorker(probe: { canvas2d: boolean; decode: DecodeSupport }) {
+      const w = fakePlayerWorker(probe)
+      return { w, posted: w.posted }
     }
 
     function workerCanvas() {
@@ -305,7 +270,7 @@ describe('useSimStream', () => {
     it('waits for the probe; a worker without VideoDecoder means JPEG only; frames go to it transferred', async () => {
       const { connector, conns } = fakeConnector()
       const { canvasRef, drawImage } = workerCanvas()
-      const fw = fakeWorker({ canvas2d: true, video: false })
+      const fw = fakeWorker({ canvas2d: true, decode: NO_VIDEO })
       const { result } = renderHook(() =>
         useSimStream({ scope: SCOPE, workspace: 'p-docs', visible: true, fps: 8, connector, canvasRef, hold: false, startWorker: () => fw.w }),
       )
@@ -323,12 +288,15 @@ describe('useSimStream', () => {
       act(() => fw.w.onmessage?.({ data: { t: 'ack', seq: 1 } }))
       expect(conns[0].acks).toEqual([1])
       expect(result.current.hasFrame).toBe(true)
+      // The worker's decoder lost its place: the socket asks for a keyframe.
+      act(() => fw.w.reply({ t: 'keyframe' }))
+      expect(conns[0].keyframes).toBe(1)
     })
 
     it('a worker that fails falls back to this thread on the same socket, with a fresh canvas key', async () => {
       const { connector, conns } = fakeConnector()
       const { canvasRef, drawImage } = workerCanvas()
-      const fw = fakeWorker({ canvas2d: true, video: true })
+      const fw = fakeWorker({ canvas2d: true, decode: H264_ONLY })
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const { result } = renderHook(() =>
         useSimStream({ scope: SCOPE, workspace: 'p-docs', visible: true, fps: 8, connector, canvasRef, hold: false, startWorker: () => fw.w }),
@@ -353,7 +321,7 @@ describe('useSimStream', () => {
     it('a worker with no OffscreenCanvas 2D context: the main thread from the start', async () => {
       const { connector, conns } = fakeConnector()
       const { canvasRef } = workerCanvas()
-      const fw = fakeWorker({ canvas2d: false, video: true })
+      const fw = fakeWorker({ canvas2d: false, decode: H264_ONLY })
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const { result } = renderHook(() =>
         useSimStream({ scope: SCOPE, workspace: 'p-docs', visible: true, fps: 8, connector, canvasRef, hold: false, startWorker: () => fw.w }),

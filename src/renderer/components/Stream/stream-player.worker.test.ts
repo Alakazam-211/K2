@@ -1,16 +1,15 @@
 // The worker player's draw code (fix 4), fail loud, with a fake
-// OffscreenCanvas and a fake WebCodecs: stale JPEGs are acked but not
-// drawn, H.264 keyframe asks pass through, a held view acks without
-// drawing, the probe reports what the worker has, the centre pixel is
-// sampled only when asked, and the thumbnail comes from the canvas.
+// OffscreenCanvas and the kit's fake WebCodecs: stale JPEGs are acked but
+// not drawn, keyframe asks pass through (once for a run of deltas), VP8
+// frames go to a `vp8` decoder, the next keyframe after a decode error
+// recovers, a held view acks without drawing, the probe reports what the
+// worker decodes, the centre pixel is sampled only when asked, and the
+// thumbnail comes from the canvas.
 
 import { describe, expect, it, vi } from 'vitest'
-import { WorkerPlayerCore, type FromWorker, type OffscreenLike, type ToWorker } from './sim-player.worker'
-import type { VideoDecoderInitLike, WebCodecsLike } from './sim-video'
-
-const SC = [0, 0, 0, 1]
-const KEY = new Uint8Array([...SC, 0x67, 0x64, 0x0c, 0x1f, 0xac, ...SC, 0x68, 0xee, ...SC, 0x65, 0x88])
-const DELTA = new Uint8Array([...SC, 0x41, 0x9a])
+import { WorkerPlayerCore, type FromWorker, type OffscreenLike, type ToWorker } from './stream-player.worker'
+import type { WebCodecsLike } from './stream-video'
+import { fakeWebCodecs, H264_DELTA as DELTA, H264_KEY as KEY, VP8_DELTA, VP8_KEY } from './testing'
 
 function canvas(withContext = true): OffscreenLike & { drawImage: ReturnType<typeof vi.fn> } {
   const drawImage = vi.fn()
@@ -23,44 +22,20 @@ function canvas(withContext = true): OffscreenLike & { drawImage: ReturnType<typ
   }
 }
 
-function fakeCodecs(supported = true): WebCodecsLike & { inits: VideoDecoderInitLike[]; decoded: number[] } {
-  const inits: VideoDecoderInitLike[] = []
-  const decoded: number[] = []
-  return {
-    inits,
-    decoded,
-    createDecoder(init) {
-      inits.push(init)
-      let state = 'unconfigured'
-      return {
-        get state() {
-          return state
-        },
-        configure: () => {
-          state = 'configured'
-        },
-        decode: (chunk: unknown) => decoded.push((chunk as { timestamp: number }).timestamp),
-        close: () => {
-          state = 'closed'
-        },
-      }
-    },
-    createChunk: (init) => init,
-    isConfigSupported: async () => supported,
-  }
-}
-
-function core(opts: { codecs?: WebCodecsLike | null; ctx?: boolean } = {}) {
+function core(opts: { codecs?: WebCodecsLike | null; ctx?: boolean; jpeg?: boolean } = {}) {
   const out: FromWorker[] = []
   const c = canvas(opts.ctx !== false)
   const decoded: number[] = []
   const w = new WorkerPlayerCore({
     post: (m) => out.push(m),
     codecs: opts.codecs ?? null,
-    decodeJpeg: async (blob) => {
-      decoded.push((await blob.arrayBuffer()).byteLength)
-      return { width: 4, height: 2, close: () => {} }
-    },
+    decodeJpeg:
+      opts.jpeg === false
+        ? null
+        : async (blob) => {
+            decoded.push((await blob.arrayBuffer()).byteLength)
+            return { width: 4, height: 2, close: () => {} }
+          },
     now: () => 5000,
   })
   w.handle({ t: 'init', canvas: c, sample: false })
@@ -73,11 +48,11 @@ function jpegFrame(seq: number): ToWorker {
   return { t: 'frame', kind: 'jpeg', seq, buf, offset: 16, widthPx: 0, heightPx: 0, key: false }
 }
 
-function videoFrame(seq: number, key: boolean): ToWorker {
-  const au = key ? KEY : DELTA
+function videoFrame(seq: number, key: boolean, kind: 'h264' | 'vp8' = 'h264'): ToWorker {
+  const au = kind === 'vp8' ? (key ? VP8_KEY : VP8_DELTA) : key ? KEY : DELTA
   const buf = new ArrayBuffer(24 + au.byteLength)
   new Uint8Array(buf, 24).set(au)
-  return { t: 'frame', kind: 'h264', seq, buf, offset: 24, widthPx: 411, heightPx: 915, key }
+  return { t: 'frame', kind, seq, buf, offset: 24, widthPx: 411, heightPx: 915, key }
 }
 
 const flush = async (): Promise<void> => {
@@ -117,14 +92,14 @@ describe('WorkerPlayerCore', () => {
   })
 
   it('H.264: a delta before any keyframe is acked and asks for one; a keyframe decodes, draws cropped, acks', async () => {
-    const codecs = fakeCodecs()
+    const codecs = fakeWebCodecs()
     const { w, out, c } = core({ codecs })
     w.handle(videoFrame(1, false))
     expect(out).toEqual([{ t: 'ack', seq: 1 }, { t: 'keyframe' }])
     w.handle(videoFrame(2, true))
-    expect(codecs.decoded).toEqual([2])
+    expect(codecs.last().chunks.map((k) => k.timestamp)).toEqual([2])
     const frame = { timestamp: 2, displayWidth: 412, displayHeight: 916, close: vi.fn() }
-    codecs.inits[0].output(frame)
+    codecs.last().init.output(frame)
     expect(c.drawImage).toHaveBeenCalledWith(frame, 0, 0, 411, 915, 0, 0, 411, 915)
     expect(frame.close).toHaveBeenCalled()
     expect(out.slice(2)).toEqual([
@@ -144,15 +119,59 @@ describe('WorkerPlayerCore', () => {
     expect(out[1]).toMatchObject({ t: 'failed' })
   })
 
-  it('the probe says what the worker has; the thumbnail comes from the canvas', async () => {
-    const yes = core({ codecs: fakeCodecs(true) })
+  it('VP8 frames go to a `vp8` decoder; deltas before the key are dropped with one keyframe ask', () => {
+    const codecs = fakeWebCodecs()
+    const { w, out, c } = core({ codecs })
+    w.handle(videoFrame(1, false, 'vp8'))
+    w.handle(videoFrame(2, false, 'vp8'))
+    expect(codecs.decoders).toHaveLength(0)
+    expect(out).toEqual([{ t: 'ack', seq: 1 }, { t: 'keyframe' }, { t: 'ack', seq: 2 }])
+    w.handle(videoFrame(3, true, 'vp8'))
+    w.handle(videoFrame(4, false, 'vp8'))
+    const d = codecs.last()
+    expect(d.configs).toEqual([{ codec: 'vp8', optimizeForLatency: true }])
+    expect(d.chunks.map((k) => `${k.type}:${k.timestamp}`)).toEqual(['key:3', 'delta:4'])
+    d.emit(3, 411, 915)
+    expect(c.drawImage).toHaveBeenCalledTimes(1)
+    expect(out.slice(3)).toEqual([
+      { t: 'drawn', seq: 3, decodedAt: 5000, drawnAt: 5000, px: null },
+      { t: 'ack', seq: 3 },
+    ])
+  })
+
+  it('after a decode error nothing is drawn until the next keyframe, which recovers', () => {
+    const codecs = fakeWebCodecs()
+    const { w, out, c } = core({ codecs })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    w.handle(videoFrame(1, true, 'vp8'))
+    codecs.last().fail()
+    w.handle(videoFrame(2, false, 'vp8'))
+    expect(out).toEqual([{ t: 'ack', seq: 1 }, { t: 'keyframe' }, { t: 'ack', seq: 2 }])
+    expect(c.drawImage).not.toHaveBeenCalled()
+    w.handle(videoFrame(3, true, 'vp8'))
+    expect(codecs.decoders).toHaveLength(2)
+    codecs.last().emit(3, 411, 915)
+    expect(c.drawImage).toHaveBeenCalledTimes(1)
+    expect(out.slice(3)).toEqual([
+      { t: 'drawn', seq: 3, decodedAt: 5000, drawnAt: 5000, px: null },
+      { t: 'ack', seq: 3 },
+    ])
+    warn.mockRestore()
+  })
+
+  it('the probe says what the worker decodes; the thumbnail comes from the canvas', async () => {
+    const yes = core({ codecs: fakeWebCodecs({ h264: true, vp8: true }) })
     yes.w.handle({ t: 'probe' })
     await flush()
-    expect(yes.out).toEqual([{ t: 'probe', canvas2d: true, video: true }])
+    expect(yes.out).toEqual([{ t: 'probe', canvas2d: true, decode: { h264: true, vp8: true, jpeg: true } }])
+    const vp8Only = core({ codecs: fakeWebCodecs({ h264: false, vp8: true }), jpeg: false })
+    vp8Only.w.handle({ t: 'probe' })
+    await flush()
+    expect(vp8Only.out).toEqual([{ t: 'probe', canvas2d: true, decode: { h264: false, vp8: true, jpeg: false } }])
     const no = core({ codecs: null, ctx: false })
     no.w.handle({ t: 'probe' })
     await flush()
-    expect(no.out).toEqual([{ t: 'probe', canvas2d: false, video: false }])
+    expect(no.out).toEqual([{ t: 'probe', canvas2d: false, decode: { h264: false, vp8: false, jpeg: true } }])
     yes.c.width = 4
     yes.c.height = 2
     yes.w.handle({ t: 'thumb', id: 7 })

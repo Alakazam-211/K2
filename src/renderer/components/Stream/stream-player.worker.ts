@@ -1,16 +1,17 @@
-// The device stream's decode and draw, off the main thread (fix 4).
+// The stream engine's decode and draw, off the main thread (fix 4; E9).
 //
-// The main side (`sim-player.ts`) keeps the WebSocket (it dials through the
-// per-server queue with the scope's credentials, M-10) and transfers each
-// binary message's ArrayBuffer here, zero copy, with its kind and header
-// fields. This worker owns the OffscreenCanvas the pane's <canvas> handed
+// The main side (`stream-player.ts`) keeps the WebSocket (it dials through
+// the per-server queue with the scope's credentials, M-10) and transfers
+// each binary message's ArrayBuffer here, zero copy, with its kind and
+// header fields. This worker owns the OffscreenCanvas the pane's <canvas> handed
 // over and draws on it:
 //  - JPEG: `createImageBitmap` → `drawImage`, with the main path's stale
 //    rule (a frame with a newer one already here is acked, not drawn);
-//  - H.264: the same `H264Sink` the main path uses, with this worker's own
-//    `VideoDecoder`.
-// It answers with `drawn` (for the latency readout; times absolute, so the
-// main side can put them on its own clock), `ack`, `keyframe`, `failed` and
+//  - H.264 / VP8: the same `VideoSink` the main path uses, with this
+//    worker's own `VideoDecoder`.
+// It answers with `probe` (what it can decode), `drawn` (for the latency
+// readout; times absolute, so the main side can put them on its own clock),
+// `ack`, `keyframe`, `failed` and
 // `thumb` (the screenshot toast's thumbnail, M-9: the main thread can no
 // longer read the canvas). While the latency readout is on it samples the
 // centre pixel of each drawn frame (the photon probe).
@@ -18,13 +19,14 @@
 // `WorkerPlayerCore` is the logic with its seams injected (tests); the
 // bottom of the file wires it to the worker's `self`.
 
-import { H264Sink, PROBE_CODECS, browserWebCodecs, type VideoFrameLike, type WebCodecsLike } from './sim-video'
+import { VideoSink, browserWebCodecs, probeDecoders, type VideoFrameLike, type WebCodecsLike } from './stream-video'
+import type { DecodeSupport, StreamCodec, VideoCodec } from './stream-wire'
 
 /** Main → worker. */
 export type ToWorker =
   | { t: 'init'; canvas: unknown; sample: boolean }
   | { t: 'probe' }
-  | { t: 'frame'; kind: 'jpeg' | 'h264'; seq: number; buf: ArrayBuffer; offset: number; widthPx: number; heightPx: number; key: boolean }
+  | { t: 'frame'; kind: StreamCodec; seq: number; buf: ArrayBuffer; offset: number; widthPx: number; heightPx: number; key: boolean }
   | { t: 'hold'; on: boolean }
   | { t: 'sample'; on: boolean }
   /** A new socket: drop the decoder; nothing to ack on the old one. */
@@ -39,7 +41,7 @@ export type PixelRgb = [number, number, number]
 /** Worker → main. `decodedAt` / `drawnAt` are absolute ms
  *  (`performance.timeOrigin + performance.now()`). */
 export type FromWorker =
-  | { t: 'probe'; canvas2d: boolean; video: boolean }
+  | { t: 'probe'; canvas2d: boolean; decode: DecodeSupport }
   | { t: 'drawn'; seq: number; decodedAt: number; drawnAt: number; px: PixelRgb | null }
   | { t: 'ack'; seq: number }
   | { t: 'keyframe' }
@@ -67,7 +69,8 @@ export interface OffscreenLike {
 export interface WorkerDeps {
   post(msg: FromWorker): void
   codecs: WebCodecsLike | null
-  decodeJpeg(blob: Blob): Promise<BitmapLike>
+  /** null: no JPEG decode here (no `createImageBitmap`). */
+  decodeJpeg: ((blob: Blob) => Promise<BitmapLike>) | null
   /** Absolute ms. */
   now(): number
 }
@@ -77,7 +80,7 @@ export class WorkerPlayerCore {
   private ctx: Ctx2dLike | null = null
   private held = false
   private sample = false
-  private sink: H264Sink | null = null
+  private sink: VideoSink | null = null
   private newestJpeg = -1
   private drawing: Promise<void> = Promise.resolve()
   private warned = false
@@ -96,8 +99,8 @@ export class WorkerPlayerCore {
         void this.probe()
         return
       case 'frame':
-        if (m.kind === 'h264') this.video(m)
-        else this.jpeg(m)
+        if (m.kind === 'jpeg') this.jpeg(m)
+        else this.video(m, m.kind)
         return
       case 'hold':
         this.held = m.on
@@ -125,17 +128,8 @@ export class WorkerPlayerCore {
   }
 
   private async probe(): Promise<void> {
-    let video = false
-    const codecs = this.deps.codecs
-    if (codecs) {
-      for (const codec of PROBE_CODECS) {
-        if (await codecs.isConfigSupported({ codec, optimizeForLatency: true })) {
-          video = true
-          break
-        }
-      }
-    }
-    this.deps.post({ t: 'probe', canvas2d: this.ctx !== null, video })
+    const decode = await probeDecoders(this.deps.codecs, this.deps.decodeJpeg !== null)
+    this.deps.post({ t: 'probe', canvas2d: this.ctx !== null, decode })
   }
 
   private centre(): PixelRgb | null {
@@ -145,10 +139,16 @@ export class WorkerPlayerCore {
     return [d[0], d[1], d[2]]
   }
 
+  private noJpeg(): void {
+    if (this.warned) return
+    this.warned = true
+    console.warn('[stream] the player worker has no createImageBitmap; JPEG frames are acked but not drawn')
+  }
+
   private noContext(): void {
     if (this.warned) return
     this.warned = true
-    console.warn('[mobile] the player worker has no 2d context; frames are acked but not drawn')
+    console.warn('[stream] the player worker has no 2d context; frames are acked but not drawn')
   }
 
   private jpeg(m: Extract<ToWorker, { t: 'frame' }>): void {
@@ -163,6 +163,10 @@ export class WorkerPlayerCore {
           this.noContext()
           return
         }
+        if (!this.deps.decodeJpeg) {
+          this.noJpeg()
+          return
+        }
         const bmp = await this.deps.decodeJpeg(new Blob([new Uint8Array(m.buf, m.offset)], { type: 'image/jpeg' }))
         const decodedAt = this.deps.now()
         try {
@@ -174,7 +178,7 @@ export class WorkerPlayerCore {
         }
         this.deps.post({ t: 'drawn', seq: m.seq, decodedAt, drawnAt: this.deps.now(), px: this.centre() })
       } catch (err) {
-        console.warn('[mobile] worker frame draw failed:', err)
+        console.warn('[stream] worker frame draw failed:', err)
       } finally {
         // Ack even a skipped or failed frame, or the stream stalls.
         this.deps.post({ t: 'ack', seq: m.seq })
@@ -182,15 +186,15 @@ export class WorkerPlayerCore {
     })
   }
 
-  private video(m: Extract<ToWorker, { t: 'frame' }>): void {
+  private video(m: Extract<ToWorker, { t: 'frame' }>, codec: VideoCodec): void {
     if (!this.sink) {
       const codecs = this.deps.codecs
       if (!codecs) {
         this.deps.post({ t: 'ack', seq: m.seq })
-        this.deps.post({ t: 'failed', why: 'H.264 frames but no WebCodecs in the player worker' })
+        this.deps.post({ t: 'failed', why: 'video frames but no WebCodecs in the player worker' })
         return
       }
-      this.sink = new H264Sink({
+      this.sink = new VideoSink({
         codecs,
         held: () => this.held,
         ack: (seq) => this.deps.post({ t: 'ack', seq }),
@@ -199,7 +203,7 @@ export class WorkerPlayerCore {
         draw: (frame, widthPx, heightPx) => this.drawVideo(frame, widthPx, heightPx),
       })
     }
-    this.sink.push({ seq: m.seq, key: m.key, data: new Uint8Array(m.buf, m.offset), widthPx: m.widthPx, heightPx: m.heightPx })
+    this.sink.push({ seq: m.seq, codec, key: m.key, data: new Uint8Array(m.buf, m.offset), widthPx: m.widthPx, heightPx: m.heightPx })
   }
 
   /** A decoded frame, cropped to the header's size (H.264 pads odd sizes). */
@@ -216,7 +220,7 @@ export class WorkerPlayerCore {
     if (c.width !== w) c.width = w
     if (c.height !== h) c.height = h
     ctx.drawImage(frame, 0, 0, w, h, 0, 0, w, h)
-    // The decoder's timestamp is the frame's seq (H264Sink).
+    // The decoder's timestamp is the frame's seq (VideoSink).
     this.deps.post({ t: 'drawn', seq: frame.timestamp, decodedAt, drawnAt: this.deps.now(), px: this.centre() })
   }
 
@@ -227,7 +231,7 @@ export class WorkerPlayerCore {
       try {
         blob = await c.convertToBlob({ type: 'image/jpeg', quality: 0.6 })
       } catch (err) {
-        console.warn('[mobile] worker thumbnail failed:', err)
+        console.warn('[stream] worker thumbnail failed:', err)
       }
     }
     this.deps.post({ t: 'thumb', id, blob })
@@ -248,7 +252,7 @@ if (typeof scope.importScripts === 'function' && typeof (globalThis as { documen
   const core = new WorkerPlayerCore({
     post: (msg) => scope.postMessage(msg),
     codecs: browserWebCodecs(),
-    decodeJpeg: (blob) => createImageBitmap(blob),
+    decodeJpeg: typeof createImageBitmap === 'function' ? (blob) => createImageBitmap(blob) : null,
     now: () => performance.timeOrigin + performance.now(),
   })
   scope.onmessage = (ev) => core.handle(ev.data)

@@ -3,62 +3,20 @@
 // queue with the workspace, fps cap and token; binary messages are K2SF
 // frames acked by their seq; text JSON is tagged by "t"; input typed
 // before OPEN goes out in order after it; acks name the frame; close stops
-// every callback.
+// every callback. The socket and WebCodecs are the stream engine's fakes
+// (`Stream/testing.ts`).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 
-class FakeWebSocket {
-  static instances: FakeWebSocket[] = []
-  static CONNECTING = 0
-  static OPEN = 1
-  static CLOSING = 2
-  static CLOSED = 3
-  url: string
-  readyState = 0
-  binaryType = 'blob'
-  sent: string[] = []
-  onopen: (() => void) | null = null
-  onmessage: ((ev: { data: unknown }) => void) | null = null
-  onerror: (() => void) | null = null
-  onclose: ((ev: { code: number; reason?: string }) => void) | null = null
-  private listeners = new Map<string, Set<() => void>>()
-  constructor(url: string) {
-    this.url = url
-    FakeWebSocket.instances.push(this)
-  }
-  addEventListener(type: string, fn: () => void): void {
-    const set = this.listeners.get(type) ?? new Set()
-    set.add(fn)
-    this.listeners.set(type, set)
-  }
-  removeEventListener(type: string, fn: () => void): void {
-    this.listeners.get(type)?.delete(fn)
-  }
-  open(): void {
-    this.readyState = 1
-    for (const fn of [...(this.listeners.get('open') ?? [])]) fn()
-    this.onopen?.()
-  }
-  send(text: string): void {
-    if (this.readyState !== 1) throw new Error('send before open')
-    this.sent.push(text)
-  }
-  close(): void {
-    this.readyState = 3
-  }
-}
-
 import { resetGridDialQueueForTests } from '@/lib/grid-dial-queue'
 import type { ServerScope } from '@/kessel/server-scope'
 import { fakeScope } from '@/test-utils/fake-scope'
-import { encodeFrame, encodeVideoFrame, wsSimStream, type SimFrame, type SimStreamHandlers } from './sim-stream'
-import { resetVideoSupportForTests } from './sim-video'
-
-async function tick(): Promise<void> {
-  for (let i = 0; i < 10; i++) await Promise.resolve()
-}
+import { encodeFrame, encodeVideoFrame } from '@/components/Stream/stream-wire'
+import { resetVideoSupportForTests } from '@/components/Stream/stream-video'
+import { FakeWebSocket, fakeWebCodecs, webCodecsGlobals } from '@/components/Stream/testing'
+import { wsSimStream, type SimFrame, type SimStreamHandlers } from './sim-stream'
 
 /** Until the adapter dialed (creds, the decoder probe, the dial queue). */
 async function untilDialed(): Promise<void> {
@@ -67,7 +25,7 @@ async function untilDialed(): Promise<void> {
 }
 
 beforeEach(() => {
-  FakeWebSocket.instances = []
+  FakeWebSocket.reset()
   resetGridDialQueueForTests()
   vi.stubGlobal('WebSocket', FakeWebSocket)
 })
@@ -83,14 +41,10 @@ const scopeFor = (): ServerScope =>
     creds: async () => ({ host: 'box.test', port: 443, secure: true, token: 'tok-1' }),
   }) as unknown as ServerScope
 
-/** A WebCodecs that says yes to H.264 (the probe only). */
-function stubWebCodecs(supported: boolean): void {
-  class VideoDecoder {
-    static isConfigSupported = async () => ({ supported })
-  }
-  class EncodedVideoChunk {}
-  vi.stubGlobal('VideoDecoder', VideoDecoder)
-  vi.stubGlobal('EncodedVideoChunk', EncodedVideoChunk)
+/** A WebCodecs that says yes (or no) to H.264 (the probe only). VP8 is
+ *  always there: the sim's offer never names it. */
+function stubWebCodecs(h264: boolean): void {
+  for (const [k, v] of Object.entries(webCodecsGlobals(fakeWebCodecs({ h264, vp8: true })))) vi.stubGlobal(k, v)
 }
 
 describe('wsSimStream offer (0.46.7)', () => {
@@ -99,7 +53,7 @@ describe('wsSimStream offer (0.46.7)', () => {
     const frames: SimFrame[] = []
     const handlers: SimStreamHandlers = { onFrame: (f) => frames.push(f), onServer: () => {}, onConn: () => {} }
     const conn = wsSimStream({ scope: scopeFor(), workspace: 'p-docs', fps: 30, handlers, offer: { video: true, window: 3 } })
-    await tick()
+    await untilDialed()
     const sock = FakeWebSocket.instances[0]
     const url = new URL(sock.url)
     expect(url.searchParams.get('codecs')).toBe('h264,jpeg')

@@ -54,7 +54,7 @@ import { useDialogEscape } from '../settings-esc'
 import { Button, Tag } from '@/components/ui'
 
 /** Visible keyboard focus on the tile actions (Button leaves outline to the UA). */
-const ACTION_FOCUS = 'outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)]'
+const ACTION_FOCUS = 'outline-none focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)]'
 
 /** The big 7 rows, in the page's order, with their icon names. */
 export const LOGIN_TOOL_ROWS: Array<{ id: string; label: string; agentIcon: string }> = [

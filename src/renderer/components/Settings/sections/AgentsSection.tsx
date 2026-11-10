@@ -16,7 +16,7 @@ import {
   type InjectFlowStep,
 } from '@/stores/presets'
 import { matchAgentPreset } from '@/lib/agent-resolve'
-import { daemonCliGet } from '@/lib/daemon-cli'
+import { fetchCliStatus, type CliStatus, type CliStatusResult } from '@/lib/cli-status'
 import {
   CLI_INSTALL_COMMANDS,
   ensureOneCli,
@@ -27,7 +27,8 @@ import {
 } from '@/lib/ensure-cli'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { primaryScope } from '@/kessel/server-scope'
-import { SaveError, SaveNote, SettingDropdown, SettingRow, SettingsGroup, SETTING_ROW_HINT, useSaveStatus } from '../controls/SettingControls'
+import { SaveError, SaveNote, SettingDropdown, SettingRow, SettingsGroup, SettingsLoadState, SETTING_ROW_HINT, SETTING_ROW_LABEL, useSaveStatus } from '../controls/SettingControls'
+import { Spinner } from '@/components/ui/Spinner'
 import type { SettingEntry } from '../searchManifest'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import type { DesktopOs } from '@/lib/desktop-chrome'
@@ -905,47 +906,27 @@ function SubmitKeysEditor({
 }
 
 // ── Agent tools on this computer ────────────────────────────────────
-// Which tools are on the server's PATH comes from the daemon
-// (GET agents/cli-status). A server without that route says so instead of
-// guessing; install help works either way.
+// Which tools are installed comes from the daemon (GET agents/cli-status,
+// via lib/cli-status). The reply lists every tool K2 can start on that
+// server: a tool missing from it can't be started there, so it gets no row
+// of its own, only a mention on the quiet "Not supported" line. A daemon
+// without the route says so once and the rows show no install state.
 
-interface CliStatus {
-  program: string
-  installed: boolean
-  version?: string | null
-}
+type ToolsState = { kind: 'loading' } | CliStatusResult
 
-type ToolsState =
-  | { kind: 'loading' }
-  | { kind: 'ready'; byProgram: Map<string, CliStatus> }
-  | { kind: 'unsupported' }
-  | { kind: 'error'; message: string }
+/** What one row knows: still checking, can't tell, or the server's answer. */
+type ToolStatus = { kind: 'checking' } | { kind: 'unknown' } | { kind: 'reported'; status: CliStatus }
 
-function isMissingRoute(message: string): boolean {
-  return /route_unclassified|not found|\b404\b/i.test(message)
-}
-
+/** One check per open page and per Check again; no polling. */
 function useCliStatus(): [ToolsState, () => void] {
   const [state, setState] = useState<ToolsState>({ kind: 'loading' })
   const [nonce, setNonce] = useState(0)
   useEffect(() => {
     let live = true
     setState({ kind: 'loading' })
-    daemonCliGet<{ tools?: CliStatus[] }>(primaryScope(), 'agents/cli-status')
-      .then((r) => {
-        if (!live) return
-        const tools = Array.isArray(r?.tools) ? r.tools : null
-        if (!tools) {
-          setState({ kind: 'unsupported' })
-          return
-        }
-        setState({ kind: 'ready', byProgram: new Map(tools.map((t) => [t.program, t])) })
-      })
-      .catch((err: unknown) => {
-        if (!live) return
-        const message = errorText(err)
-        setState(isMissingRoute(message) ? { kind: 'unsupported' } : { kind: 'error', message })
-      })
+    void fetchCliStatus(primaryScope()).then((r) => {
+      if (live) setState(r)
+    })
     return () => {
       live = false
     }
@@ -959,62 +940,105 @@ function openExternal(url: string): void {
   })
 }
 
+/** "Cursor Agent, Pi, Hermes and 6 more". */
+function nameList(tools: AgentTool[]): string {
+  const names = tools.map((t) => t.name)
+  return names.length > 3 ? `${names.slice(0, 3).join(', ')} and ${names.length - 3} more` : names.join(', ').replace(/, ([^,]*)$/, ' and $1')
+}
+
 function AgentToolsGroup({ where }: { where: string }): React.JSX.Element {
   const [state, recheck] = useCliStatus()
   const [openTool, setOpenTool] = useState<string | null>(null)
   const [showMore, setShowMore] = useState(false)
+  // The tool that just installed from here; kept above the rows because an
+  // installed tool moves up into the first list.
+  const [justInstalled, setJustInstalled] = useState<string | null>(null)
 
   const ready = state.kind === 'ready' ? state.byProgram : null
-  const installed = ready ? AGENT_TOOLS.filter((t) => ready.get(t.command)?.installed) : []
-  const first = ready && installed.length > 0 ? installed : AGENT_TOOLS.filter((t) => FEATURED.has(t.command))
+  const listed = ready ? AGENT_TOOLS.filter((t) => ready.has(t.command)) : AGENT_TOOLS
+  const unsupported = ready ? AGENT_TOOLS.filter((t) => !ready.has(t.command)) : []
+  const installed = ready ? listed.filter((t) => ready.get(t.command)?.installed) : []
+  const featured = listed.filter((t) => FEATURED.has(t.command))
+  const first = installed.length > 0 ? installed : featured.length > 0 ? featured : listed.slice(0, 4)
   const firstSet = new Set(first.map((t) => t.command))
-  const more = AGENT_TOOLS.filter((t) => !firstSet.has(t.command))
-  const moreLabel = ready && installed.length > 0 ? 'More agents you can install' : 'More agents'
+  // While checking, only the first four show, so the fold doesn't list tools
+  // that turn out not to be supported here.
+  const more = state.kind === 'loading' ? [] : listed.filter((t) => !firstSet.has(t.command))
+  const moreLabel = installed.length > 0 ? 'More agents you can install' : 'More agents'
+
+  const statusOf = (t: AgentTool): ToolStatus => {
+    if (state.kind === 'loading') return { kind: 'checking' }
+    const s = ready?.get(t.command)
+    return s ? { kind: 'reported', status: s } : { kind: 'unknown' }
+  }
 
   const row = (t: AgentTool): React.JSX.Element => (
     <ToolRow
       key={t.command}
       tool={t}
-      status={ready ? (ready.get(t.command) ?? { program: t.command, installed: false }) : null}
+      status={statusOf(t)}
       where={where}
       open={openTool === t.command}
+      justInstalled={justInstalled === t.command}
       onToggle={() => setOpenTool((cur) => (cur === t.command ? null : t.command))}
-      onInstalled={recheck}
+      onInstalled={() => {
+        setJustInstalled(t.command)
+        recheck()
+      }}
+      onCheckAgain={recheck}
     />
   )
 
-  let notice: React.ReactNode = null
-  if (state.kind === 'loading') {
-    notice = (
-      <p role="status" className="px-4 py-3 type-row text-[var(--color-text-secondary)]" data-testid="tools-loading">
-        Checking which agent tools are on {where}…
-      </p>
+  if (state.kind === 'error') {
+    return (
+      <SettingsGroup
+        title={`Agent tools on ${where}`}
+        hint="The programs your presets run. Install one here, then turn its preset on."
+        card
+        state={
+          <SettingsLoadState
+            kind="error"
+            title="Couldn’t check which agent tools are installed"
+            detail={state.message}
+            testId="tools-error"
+            action={<Button onClick={recheck}>Try again</Button>}
+          >
+            {`Check that ${where} is running, then try again.`}
+          </SettingsLoadState>
+        }
+      />
     )
-  } else if (state.kind === 'error') {
+  }
+
+  if (ready && listed.length === 0) {
+    return (
+      <SettingsGroup
+        title={`Agent tools on ${where}`}
+        hint="The programs your presets run. Install one here, then turn its preset on."
+        card
+        state={
+          <SettingsLoadState kind="empty" title={`No agent tools K2 can start on ${where}`} testId="tools-empty">
+            {`${where === 'this computer' ? 'This computer' : 'This server'} didn’t list any. Add your own command under Launch presets.`}
+          </SettingsLoadState>
+        }
+      />
+    )
+  }
+
+  let notice: React.ReactNode = null
+  if (state.kind === 'unsupported') {
     notice = (
-      <div className="px-4 py-3 flex items-center justify-between gap-4" role="alert" data-testid="tools-error">
-        <div className="min-w-0">
-          <div className="type-row text-[var(--color-text-primary)]">Couldn’t check which tools are installed</div>
-          <div className={SETTING_ROW_HINT} title={state.message}>
-            The install steps below still work. Try again in a moment.
-          </div>
-        </div>
-        <Button variant="quiet" className="flex-shrink-0" onClick={recheck}>
-          Try again
-        </Button>
+      <div className="px-4 py-3" data-testid="tools-unsupported">
+        <p className={SETTING_ROW_HINT}>
+          K2 can’t check which tools are installed on {where} until it’s updated. Open a tool to see how to install it.
+        </p>
       </div>
     )
-  } else if (state.kind === 'unsupported') {
-    notice = (
-      <p className={`px-4 py-3 ${SETTING_ROW_HINT}`} data-testid="tools-unsupported">
-        This version of K2 can’t check which tools are installed on {where}. Open a tool to see how to install it.
-      </p>
-    )
-  } else if (installed.length === 0) {
+  } else if (ready && installed.length === 0) {
     notice = (
       <div className="px-4 py-3" data-testid="tools-none">
-        <div className="type-row text-[var(--color-text-primary)]">No agent tools on {where} yet</div>
-        <div className={SETTING_ROW_HINT}>Install one to start an agent. K2 can install the first four for you.</div>
+        <div className={SETTING_ROW_LABEL}>No agent tools on {where} yet</div>
+        <div className={SETTING_ROW_HINT}>Install one to start an agent.</div>
       </div>
     )
   }
@@ -1024,17 +1048,23 @@ function AgentToolsGroup({ where }: { where: string }): React.JSX.Element {
       title={`Agent tools on ${where}`}
       hint="The programs your presets run. Install one here, then turn its preset on."
       card
+      testId="agent-tools"
       action={
         state.kind === 'ready' ? (
           <Button variant="quiet" onClick={recheck}>
             Check again
           </Button>
+        ) : state.kind === 'loading' ? (
+          <span role="status" className="inline-flex items-center gap-2 type-hint text-[var(--color-text-secondary)]" data-testid="tools-loading">
+            <Spinner />
+            Checking {where}…
+          </span>
         ) : undefined
       }
     >
       {notice}
-      {state.kind !== 'loading' && first.map(row)}
-      {state.kind !== 'loading' && (
+      {first.map(row)}
+      {more.length > 0 && (
         <div className="relative">
           {/* Search lands here for a tool that's folded away. */}
           {!showMore && more.map((t) => <span key={t.command} data-settings-id={`agents.cli-${t.command}`} className="absolute inset-0 pointer-events-none" />)}
@@ -1046,10 +1076,8 @@ function AgentToolsGroup({ where }: { where: string }): React.JSX.Element {
             className="relative w-full flex items-center justify-between gap-4 px-4 py-3 text-left hover:bg-[var(--color-wash-1)] transition-colors no-drag cursor-pointer"
           >
             <span className="min-w-0">
-              <span className="block type-row text-[var(--color-text-primary)]">{moreLabel}</span>
-              <span className={`block ${SETTING_ROW_HINT}`}>
-                {more.length > 3 ? `${more.slice(0, 3).map((t) => t.name).join(', ')} and ${more.length - 3} more` : more.map((t) => t.name).join(', ')}
-              </span>
+              <span className={`block ${SETTING_ROW_LABEL}`}>{moreLabel}</span>
+              <span className={`block ${SETTING_ROW_HINT}`}>{nameList(more)}</span>
             </span>
             <span className="flex items-center gap-2 flex-shrink-0 type-hint text-[var(--color-text-secondary)]">
               {showMore ? 'Hide' : `Show ${more.length}`}
@@ -1060,7 +1088,17 @@ function AgentToolsGroup({ where }: { where: string }): React.JSX.Element {
           </button>
         </div>
       )}
-      {state.kind !== 'loading' && showMore && more.map(row)}
+      {showMore && more.map(row)}
+      {unsupported.length > 0 && (
+        <div className="relative px-4 py-3" data-testid="tools-not-supported">
+          {/* Search for one of these lands on this line. */}
+          {unsupported.map((t) => <span key={t.command} data-settings-id={`agents.cli-${t.command}`} className="absolute inset-0 pointer-events-none" />)}
+          <div className="type-row text-[var(--color-text-secondary)]">Not supported on {where}</div>
+          <div className={SETTING_ROW_HINT}>
+            {nameList(unsupported)}. K2 can’t start {unsupported.length === 1 ? 'it' : 'these'} here.
+          </div>
+        </div>
+      )}
     </SettingsGroup>
   )
 }
@@ -1070,24 +1108,29 @@ function ToolRow({
   status,
   where,
   open,
+  justInstalled,
   onToggle,
   onInstalled,
+  onCheckAgain,
 }: {
   tool: AgentTool
-  /** null: K2 doesn't know (still checking, or the server can't say). */
-  status: CliStatus | null
+  status: ToolStatus
   where: string
   open: boolean
+  justInstalled: boolean
   onToggle: () => void
   onInstalled: () => void
+  onCheckAgain: () => void
 }): React.JSX.Element {
   const installing = useCliInstallStore((s) => s.installing)
   const [copied, setCopied] = useState(false)
   const [installError, setInstallError] = useState<string | null>(null)
-  const [justInstalled, setJustInstalled] = useState(false)
   const program = isInstallableCli(tool.command) ? tool.command : null
   const isInstalling = program !== null && installing === program
-  const isInstalled = status?.installed === true
+  const reported = status.kind === 'reported' ? status.status : null
+  const isInstalled = reported?.installed === true
+  const isBroken = isInstalled && reported?.error != null
+  const isMissing = reported !== null && !reported.installed
 
   const copy = (): void => {
     navigator.clipboard?.writeText(tool.installCommand).then(
@@ -1101,24 +1144,36 @@ function ToolRow({
 
   const install = (p: InstallableCli): void => {
     setInstallError(null)
-    setJustInstalled(false)
     ensureOneCli(primaryScope(), p)
-      .then(() => {
-        setJustInstalled(true)
-        onInstalled()
-      })
+      .then(onInstalled)
       .catch((err: unknown) => setInstallError(errorText(err)))
   }
 
-  const statusLine = status === null
-    ? 'Open to see how to install it.'
-    : isInstalled
-      ? status.version
-        ? `Version ${status.version}`
-        : 'Version unknown'
-      : program
-        ? 'Not installed. K2 installs it the first time you start it.'
-        : 'Not installed'
+  let tag: React.ReactNode = null
+  // No line when K2 can't tell: the group's notice says so once.
+  let statusLine: string | null
+  if (status.kind === 'checking') {
+    statusLine = 'Checking whether it’s installed…'
+  } else if (status.kind === 'unknown' || !reported) {
+    statusLine = null
+  } else if (isBroken) {
+    tag = <Tag tone="warn">Not working</Tag>
+    statusLine = 'Installed, but it didn’t answer when K2 checked.'
+  } else if (isInstalled) {
+    tag = <Tag tone="ok">Installed</Tag>
+    const version = reported.version ? `Version ${reported.version}` : 'Installed'
+    statusLine = reported.launches ? version : `${version}. Agents may start a different copy; open Details.`
+  } else {
+    statusLine = program ? 'Not installed. K2 installs it the first time you start it.' : 'Not installed'
+  }
+
+  const showDetails = isInstalled || status.kind === 'checking'
+  const buttonLabel = open ? 'Hide' : showDetails ? 'Details' : 'How to install'
+  const buttonAria = open
+    ? `Hide details for ${tool.name}`
+    : showDetails
+      ? `Details for ${tool.name}`
+      : `Show how to install ${tool.name}`
 
   return (
     <SettingRow
@@ -1128,31 +1183,47 @@ function ToolRow({
             <AgentIcon agent={tool.command} size={16} />
           </span>
           <span className="truncate">{tool.name}</span>
-          {isInstalled && <Tag tone="ok">Installed</Tag>}
+          {tag}
         </span>
       }
-      hint={<span className="block pl-8">{statusLine}</span>}
+      hint={statusLine === null ? undefined : <span className="block pl-8" data-testid={`tool-status-${tool.command}`}>{statusLine}</span>}
       settingId={`agents.cli-${tool.command}`}
       testId={`tool-row-${tool.command}`}
       below={
         open ? (
           <div className="pl-8 space-y-3" data-testid={`tool-help-${tool.command}`}>
+            {isBroken && reported && (
+              <Callout tone="warn" data-testid={`tool-broken-${tool.command}`}>
+                <p className="type-hint">{tool.name} is installed on {where}, but it didn’t answer when K2 asked for its version, so agents may not start.</p>
+                <p className="type-hint text-[var(--color-text-secondary)] break-words mt-0.5">
+                  {reported.path ? `Found at ${reported.path}. ` : ''}It said: {reported.error?.trim().replace(/[.\s]+$/, '')}.
+                </p>
+              </Callout>
+            )}
+            {isInstalled && !isBroken && reported && !reported.launches && (
+              <p className={SETTING_ROW_HINT}>
+                Agents on {where} start a different copy of {tool.name}{reported.path ? ` than the one at ${reported.path}` : ''}. Check your PATH if the version looks wrong.
+              </p>
+            )}
             <div className="flex items-start gap-2">
               <code data-k2-chamfer="control" className="flex-1 min-w-0 break-all select-text type-hint font-mono px-2 py-1.5 rounded-[var(--radius-field)] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]">
                 {tool.installCommand}
               </code>
-              <Button variant="quiet" className="flex-shrink-0" onClick={copy}>
+              <Button variant="quiet" className="flex-shrink-0" onClick={copy} aria-label={copied ? 'Copied' : 'Copy the install command'}>
                 {copied ? 'Copied' : 'Copy'}
               </Button>
             </div>
             <p className={SETTING_ROW_HINT}>
-              {program && !isInstalled
-                ? `Install runs this command on ${where}. Or copy it into a terminal. `
-                : `Run this in a terminal on ${where}${isInstalled ? ' to update it' : ''}. `}
+              {isBroken
+                ? `Run this in a terminal on ${where} to reinstall it, then check again. `
+                : program && !isInstalled
+                  ? `Install runs this command on ${where}. Or copy it into a terminal. `
+                  : `Run this in a terminal on ${where}${isInstalled ? ' to update it' : ''}. `}
               {tool.notes}
             </p>
             {isInstalling && program && (
-              <p role="status" className="type-hint text-[var(--color-text-secondary)]">
+              <p role="status" className="type-hint text-[var(--color-text-secondary)] inline-flex items-center gap-2">
+                <Spinner />
                 {installingCliLabel(program)} This can take a minute or two.
               </p>
             )}
@@ -1172,6 +1243,9 @@ function ToolRow({
                   {isInstalling ? installingCliLabel(program) : installError ? 'Try again' : `Install ${tool.name}`}
                 </Button>
               )}
+              {isBroken && (
+                <Button onClick={onCheckAgain}>Check again</Button>
+              )}
               <Button variant="quiet" onClick={() => openExternal(tool.docs)}>
                 Open the {tool.name} docs
               </Button>
@@ -1180,8 +1254,8 @@ function ToolRow({
         ) : undefined
       }
     >
-      <Button variant="quiet" aria-expanded={open} aria-label={`${open ? 'Hide' : 'Show'} how to install ${tool.name}`} onClick={onToggle}>
-        {open ? 'Hide' : isInstalled ? 'Details' : 'How to install'}
+      <Button variant="quiet" aria-expanded={open} aria-label={buttonAria} onClick={onToggle}>
+        {buttonLabel}
       </Button>
     </SettingRow>
   )

@@ -128,6 +128,7 @@ fn card_for(f: &Fixture) -> impl Fn(&str, &str, &SecretMeta) -> Result<(), Strin
             created_at: String::new(),
             answered_at: None,
             inject: None,
+            once: false,
         })
         .map(|_| ())
         .map_err(|e| e.code.to_string())

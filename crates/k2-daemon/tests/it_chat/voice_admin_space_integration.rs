@@ -8,10 +8,7 @@
 //! Isolation: `TempHome::short()` (the env lock, so tests run one at a
 //! time); never the real `~/.k2` or `/run/sew`. Every test fails loudly.
 
-#![cfg(unix)]
-
-#[path = "support/fake_sew.rs"]
-mod fake_sew;
+use crate::support::fake_sew;
 
 use std::time::Duration;
 

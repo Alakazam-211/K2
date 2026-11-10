@@ -50,7 +50,7 @@ struct TestEnv {
     home: PathBuf,
     prev_home: Option<std::ffi::OsString>,
     prev_shim: Option<std::ffi::OsString>,
-    _guard: std::sync::MutexGuard<'static, ()>,
+    _guard: k2_core::test_env::SerialGuard,
 }
 
 impl Drop for TestEnv {
@@ -76,7 +76,7 @@ impl Drop for TestEnv {
 /// Temp HOME (never the real `~/.codex` / `~/.claude`) and a shim for
 /// every harness, so no real CLI can start: each one just `cat`s.
 fn setup() -> TestEnv {
-    let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = k2_core::test_env::serial(&TEST_LOCK);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock after epoch")

@@ -866,15 +866,6 @@ export interface DocCoresChangedEvent {
   by: string
 }
 
-/** APP-LEVEL — the Org Chart changed (prd-org-chart-v1 §6.2): an org,
- *  member, head, line, placement or bulletin was written by anyone. The
- *  revision is the chart's after the write; the tab refetches
- *  `organization/chart` when it is newer than what it shows. */
-export interface OrgChartChangedEvent {
-  kind: 'org_chart_changed'
-  revision: number
-}
-
 /** APP-LEVEL — the daemon's hook installer could not update an agent CLI
  *  config (it did not parse, so it was left untouched) or hit a write
  *  error (prd-daemon-activity-and-thread-working-v1 A11). At most once per
@@ -1041,7 +1032,6 @@ export type SessionEventMessage =
   | PairCodeChangedEvent
   | RemoteSessionAccessDeniedEvent
   | SewChangedEvent
-  | OrgChartChangedEvent
   | VoiceRoomsChangedEvent
   | RoomMembersChangedEvent
   | AppDeployedEvent

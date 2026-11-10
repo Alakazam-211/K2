@@ -116,10 +116,7 @@ export const SESSION_EVENT_ROUTES = {
   sew_changed: { class: 'app', app: true },
   // The Org Chart (prd-org-chart-v1 §6.2): the Org Chart tab reloads
   // GET /cli/organization/chart when `revision` is newer.
-  org_chart_changed: {
-    class: 'app',
-    ignored: 'The Org Chart tab subscribes to it itself (O6); nothing else refetches on it.',
-  },
+  org_chart_changed: { class: 'app', app: true },
   // Voice rooms S3/S5: the rooms view moved; the headset's list refetches
   // GET /cli/voice/rooms (`onVoiceRoomsChanged`). Carried: the list covers
   // every signed-in server, so a Home room's socket delivers its server's.
@@ -183,7 +180,6 @@ export const SESSION_EVENT_ROUTES = {
   // prd-org-chart-v1 §6.2: the Org Chart changed (any write; `revision`).
   // The Org Chart tab refetches `organization/chart`. Not carried: the tab
   // reads only the window's server.
-  org_chart_changed: { class: 'app', app: true },
   // prd-daemon-activity-and-thread-working-v1 A11/A27: the daemon's hook
   // installer could not update an agent CLI config. Carried, so a room's
   // server can say so too.

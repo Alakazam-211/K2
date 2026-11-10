@@ -832,6 +832,8 @@ export default function Settings(): React.JSX.Element {
         {remoteDesktopPageShown && activeSection === 'remote-desktop' && (
           <SectionErrorBoundary>
             <RemoteDesktopSection scope={settingsPrimaryScope()} />
+          </SectionErrorBoundary>
+        )}
         {activeSection === 'org-chart' && (
           <SectionErrorBoundary>
             <OrgChartSection />

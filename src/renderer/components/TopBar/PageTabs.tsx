@@ -87,10 +87,12 @@ export const PAGE_TAB_ITEMS = [
   { page: 'agents', Icon: FEATURE_ICONS.agents },
   { page: 'projects', Icon: FEATURE_ICONS.projects },
   { page: 'feedback', Icon: FEATURE_ICONS.tickets },
-  { page: 'wiki', Icon: FEATURE_ICONS.wiki },
-  // OA5 (prd-ocmail-admin-in-k2-v1): the mail reader, right of the Wiki;
-  // shown for Owner, Admin and Member logins only (`useMailTabShown`).
+  // OA5 (prd-ocmail-admin-in-k2-v1): the mail reader, right after Tickets
+  // and right before the Wiki (Rosson 2026-11-10: "DMs and Email go right
+  // after Tickets and right before the Wiki"); shown for Owner, Admin and
+  // Member logins only (`useMailTabShown`).
   { page: 'mail', Icon: FEATURE_ICONS.mail },
+  { page: 'wiki', Icon: FEATURE_ICONS.wiki },
 ] as const satisfies readonly { page: keyof typeof PAGE_TAB_LABELS; Icon: (props: K2IconProps) => React.JSX.Element }[]
 
 /** A page tab's tooltip with its chords: the page shortcut (⌃⌘1–5,

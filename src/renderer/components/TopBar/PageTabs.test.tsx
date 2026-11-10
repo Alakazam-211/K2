@@ -155,7 +155,7 @@ describe('PageTabs — Home tab', () => {
       const { container: one } = render(<Icon size={PAGE_TAB_ICON_PX} />)
       expect(pages[i].innerHTML).toBe(one.innerHTML)
     })
-    expect(PAGE_TAB_ITEMS.map((x) => x.page)).toEqual(['home', 'agents', 'projects', 'feedback', 'wiki', 'mail'])
+    expect(PAGE_TAB_ITEMS.map((x) => x.page)).toEqual(['home', 'agents', 'projects', 'feedback', 'mail', 'wiki'])
     expect(pages.map((b) => b.querySelector('svg')?.getAttribute('data-k2-icon'))).toEqual([
       'home',
       'agents',
@@ -323,12 +323,14 @@ describe('PageTabs — Mail tab (OA5, prd-ocmail-admin-in-k2-v1)', () => {
     expect(screen.queryByRole('button', { name: 'Mail' })).toBeNull()
   })
 
-  it('when shown: right of the Wiki, before the cog, envelope icon; clicking it opens the Mail page', () => {
+  it('when shown: right after Tickets and right before the Wiki, envelope icon; clicking it opens the Mail page', () => {
     h.mail.shown = true
     const { container } = render(<PageTabs />)
     const mail = screen.getByRole('button', { name: 'Mail' })
-    expect(tabs(container).at(-2)).toBe(mail)
-    expect(tabs(container).at(-3)).toBe(screen.getByRole('button', { name: 'Wiki' }))
+    const all = tabs(container)
+    const at = all.indexOf(mail)
+    expect(all[at - 1]).toBe(screen.getByRole('button', { name: /^Tickets/ }))
+    expect(all[at + 1]).toBe(screen.getByRole('button', { name: 'Wiki' }))
     expect(mail.querySelector('svg')?.getAttribute('data-k2-icon')).toBe('mail')
     expect(mail.getAttribute('title')).toBe('Mail — read the inboxes on this server (hosted and linked)')
     fireEvent.click(mail)

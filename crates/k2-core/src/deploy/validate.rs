@@ -811,12 +811,12 @@ mod tests {
         }
     }
 
-    /// Sew 0.9.0 (K-b, PRD §8): before the pin a manifest's `voice:record` is
-    /// `cap_unknown`, as before; with the pin's const on, a role line that
-    /// asks for it outside the App's caps is `cap_outside_ceiling`, and one
-    /// inside them passes.
+    /// Sew 0.9.0 (K-b, PRD §8): since the pin (K2 0.46.11, the const on, no
+    /// test override) a role line that asks for `voice:record` outside the
+    /// App's caps is `cap_outside_ceiling`, and one inside them passes (Meet's
+    /// host role). Before the pin a manifest's `voice:record` was `cap_unknown`.
     #[test]
-    fn voice_record_waits_for_the_pin_then_sits_inside_the_ceiling() {
+    fn voice_record_since_the_pin_sits_inside_the_ceiling() {
         let h = TempHome::new();
         let chat = r#"{"schema":1,"kind":"app","id":"meet","name":"Meet","version":"1.0.0",
           "caps":["thread:read","chat:read","voice:join"CAPS],
@@ -828,9 +828,7 @@ mod tests {
             r.errors.iter().map(|e| format!("{}@{}", e.code, e.at.clone().unwrap_or_default())).collect()
         };
         crate::recording::set_for_tests(false, false);
-        let before = codes(&chat.replace("CAPS", r#","voice:record""#));
-        assert!(before.contains(&"cap_unknown@caps: voice:record".to_string()), "{before:?}");
-        crate::recording::set_for_tests(true, false);
+        assert!(crate::recording::RECORDING_IN_APPS, "the pin's const is on");
         let outside = codes(&chat.replace("CAPS", ""));
         assert_eq!(outside, vec!["cap_outside_ceiling@roles.host.room".to_string()], "the role asks outside the App's caps");
         let inside = codes(&chat.replace("CAPS", r#","voice:record""#));

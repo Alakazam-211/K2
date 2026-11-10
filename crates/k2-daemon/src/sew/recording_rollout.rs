@@ -164,9 +164,10 @@ mod tests {
         hook::set_app_home(SVC, false, "Jobs", "owner").expect("settings row");
         let flags = vec![VOICE_RECORD_CAP.to_string()];
 
+        // The pin's const is on (K2 0.46.11): no override, and still inert
+        // on a box whose Sew doesn't report voice_record_cap (0.8.x).
         k2_core::recording::set_for_tests(false, false);
-        assert_eq!(run(&flags), Summary::default(), "before the pin: inert");
-        k2_core::recording::set_for_tests(true, false);
+        assert!(k2_core::recording::RECORDING_IN_APPS);
         assert_eq!(run(&[]), Summary::default(), "Sew 0.8.x: inert");
 
         let s = run(&flags);

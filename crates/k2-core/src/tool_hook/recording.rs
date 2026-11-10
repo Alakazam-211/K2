@@ -559,14 +559,14 @@ mod tests {
 
     /// PRD §8 K-b "rollout": an App with no role holding `voice:record`
     /// gets no `cap_required` until its grandfather row exists; then it
-    /// does, once. Inert before the pin and without `voice_record_cap`.
+    /// does, once. Inert without `voice_record_cap` (a box still on Sew 0.8.x;
+    /// the pin's const is on since K2 0.46.11).
     #[test]
     fn rollout_sets_cap_required_only_after_the_grandfather_row() {
         let c = conn();
         home::set_app(&c, APP, false, "Jobs", "owner", 1).unwrap();
         crate::recording::set_for_tests(false, false);
-        assert!(matches!(step(&c, APP, &ManifestChat::NotDeclared, true).unwrap(), Step::Skip { .. }), "before the pin");
-        crate::recording::set_for_tests(true, false);
+        assert!(crate::recording::RECORDING_IN_APPS, "the pin's const is on");
         assert!(matches!(step(&c, APP, &ManifestChat::NotDeclared, false).unwrap(), Step::Skip { .. }), "Sew 0.8.x");
         assert_eq!(step(&c, APP, &ManifestChat::NotDeclared, true).unwrap(), Step::Grandfather);
         let e = set_cap_required(&c, APP, 2).unwrap_err();

@@ -7830,19 +7830,13 @@ mod tests {
         assert!(!is_chat_cap("thread:read") && !is_chat_cap("chat:manage"));
     }
 
-    /// Sew 0.9.0 (K-b, PRD §8): before the pin `voice:record` is an unknown
-    /// capability, as on every K2 before it; with the pin's const on it is a
-    /// chat cap that only widens `voice:join`, like `voice:video`.
+    /// Sew 0.9.0 (K-b, PRD §8): since the pin (K2 0.46.11, the const on, no
+    /// test override) `voice:record` is a chat cap that only widens
+    /// `voice:join`, like `voice:video`. Before it, it was an unknown capability.
     #[test]
-    fn voice_record_waits_for_the_pin_and_only_widens_voice_join() {
+    fn voice_record_since_the_pin_only_widens_voice_join() {
         crate::recording::set_for_tests(false, false);
-        for list in [vec!["voice:record"], vec!["voice:join", "voice:record"]] {
-            let caps: Vec<String> = list.iter().map(|c| c.to_string()).collect();
-            let err = parse_caps(Some(&caps)).unwrap_err();
-            assert!(err.starts_with("unknown capability \"voice:record\""), "{err}");
-            assert!(!err.split_once("accepted: ").expect("list").1.contains("voice:record"), "{err}");
-        }
-        crate::recording::set_for_tests(true, false);
+        assert!(crate::recording::RECORDING_IN_APPS, "the pin's const is on");
         let err = parse_caps(Some(&["voice:record".into()])).unwrap_err();
         assert!(err.contains("voice:record only widens voice:join"), "{err}");
         let err = parse_caps(Some(&["voice:record".into(), "chat:post".into()])).unwrap_err();

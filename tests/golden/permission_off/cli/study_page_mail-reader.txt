@@ -1,0 +1,52 @@
+$ k2 study mail-reader
+exit: 0
+--- stdout
+k2 study mail-reader — people open this server's inboxes; agents can't
+
+WHO OPENS WHAT
+  The Owner and Admins open every inbox on the server: agents' and people's,
+  hosted and linked. Anyone else opens only their own mailbox: a hosted
+  mailbox that is theirs, or a linked inbox they linked themselves. Asking for
+  any other inbox answers "not found" (exit 1), the same as an address that
+  doesn't exist. Agents are refused on every reader command (exit 3,
+  owner_only).
+
+IF YOU ARE AN AGENT
+  Don't use k2 mail reader. Use k2 mail inboxes / messages / read / move /
+  reply / send on the inboxes your workspace can use. If you need a person's
+  mailbox, ask your human (k2 thread, or k2 feedback ask); they can open it in
+  K2's Mail page or with k2 mail reader, or give your workspace access.
+
+PEEK ONLY
+  Opening a message or a thread never marks it read, for anyone (the agent's
+  own k2 mail read still does). The only way the reader changes read state is
+  k2 mail reader flag <id> --read / --unread.
+
+EVERY ACCESS IS LOGGED
+  Before any mail is fetched, K2 writes who, their role, which inbox, what
+  they did, the message id and where the call came from (never the subject or
+  body). If the log can't be written, nothing opens (audit_unavailable). The
+  mailbox's person isn't notified. --reason "<why>" is kept in the row.
+  k2 mail reader log shows it: Owners and Admins every row; you the rows
+  about your own mailboxes. Settings → Email → Reader log shows the same.
+
+ACTING ON MAIL
+  flag, move, archive, delete (to Trash), reply, draft and send run the same
+  k2 mail command the inbox's own workspace would, so its rules apply: its
+  level (read < draft < send), whether it may organize or delete, and its
+  send rule (off refuses, approval queues it for the owner, on sends). If the
+  workspace may not do it you get exit 3 (not_allowed) and the fix. Reader
+  sends can't attach files yet.
+
+WHAT YOU SEE
+  Plain text by default; --html prints the HTML as K2 cleaned it: no script,
+  no remote pictures, links shown as data, not clickable. Attachments save
+  with attachment <id> <n> --out <file> (up to 25 MB).
+
+EXAMPLES
+  k2 mail reader inboxes
+  k2 mail reader messages sales@acme.com --unread --since 7d
+  k2 mail reader show m_8f2c --reason "customer says they wrote on Monday"
+  k2 mail reader log --inbox pat@acme.com --since 30d
+--- stderr
+--- requests

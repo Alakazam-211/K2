@@ -78,6 +78,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   folder-trust        Folder trust: the card, asking vs deciding, re-scan, honest limits
   email-notifications  Email from senders: K2's resets, an App's email.send, scope, limits
   mail-watch          Hear that mail arrived: VIPs, the digest, what's safe
+  mail-reader         The mail reader: who opens which inbox, peek only, the log; agents refused
   box-move            Move a box: carry the vault (tunnel token too), freeze, undo, who confirms
   board               The Board Garden's whiteboards: k2 board, grants, cascade, no cut values
   chat-refresh        Refresh your own chat: k2 agent refresh, the note, what carries on

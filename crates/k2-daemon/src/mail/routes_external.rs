@@ -192,7 +192,14 @@ pub fn handle_external_add(body: &[u8]) -> CliResponse {
         &spec,
         &password,
     ) {
-        Ok(v) => ok_json(v),
+        Ok(v) => {
+            // OA3 (0288): a login (or the owner token) linking an inbox links
+            // its own account; an agent's link records nobody.
+            if let Some(person) = crate::mail::mailbox_guard::viewer_person() {
+                external::set_linked_by(&spec.email_address, &person);
+            }
+            ok_json(v)
+        }
         Err(e) => ext_error_response(e),
     }
 }

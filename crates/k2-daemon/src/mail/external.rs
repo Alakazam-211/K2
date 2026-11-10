@@ -106,6 +106,27 @@ pub fn inbox_by_ref(raw: &str) -> Option<MailExternalInbox> {
     .ok()
 }
 
+/// OA3 (0288): record whose own account a linked inbox is: the person key
+/// of the login (or the owner token) that linked it. Only fills an empty
+/// value, so a re-link or an upgrade never moves an inbox to someone else.
+/// Best effort: a failure leaves the inbox a person's mailbox with no known
+/// person (open to the Owner and Admins only).
+pub fn set_linked_by(address: &str, person: &str) {
+    let person = person.trim();
+    if person.is_empty() {
+        return;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if let Err(e) = conn.execute(
+        "UPDATE mail_external_inboxes SET linked_by_principal = ?1 \
+         WHERE lower(email_address) = lower(?2) AND linked_by_principal IS NULL",
+        rusqlite::params![person, address.trim()],
+    ) {
+        k2_core::log_debug!("[mail/external] record who linked {address}: {e}");
+    }
+}
+
 /// The §17.5 seam lookup: is this (normalized) address an external
 /// inbox? Used by [`crate::mail::messages::backend_for_address`] —
 /// and nowhere else above the ops layer.

@@ -184,6 +184,9 @@ pub mod routes_external;
 pub mod routes_link_oauth;
 pub mod routes_messages;
 pub mod routes_oauth_config;
+/// The mail reader (prd-ocmail-admin-in-k2-v1 OA1–OA9): a person's tool for
+/// opening this server's inboxes, peek only, every access logged.
+pub mod routes_reader;
 pub mod routes_send;
 pub mod routes_server;
 pub mod schedule;

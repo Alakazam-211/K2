@@ -1389,6 +1389,10 @@ mod unix_impl {
             // Wave 0: agent mail verbs (identity forced from principal above +
             // with_request_principal). M5 extra-gated by the same helper as
             // TCP (flag on this principal's path). M6 stay owner_only.
+            // The mail reader is a person's tool: refused to every agent.
+            p if crate::mail::routes_reader::is_reader_path(p) => {
+                from_cli(crate::mail::routes_reader::agent_refusal())
+            }
             p if p.starts_with("/cli/mail/") && is_post => {
                 if let Err(r) =
                     crate::mail_routes::mail_manage_authorized(p, false, Some(principal))

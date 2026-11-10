@@ -75,6 +75,10 @@ struct LinkPlan {
     features: Features,
     address: String,
     target: LinkTarget,
+    /// OA3 (0288): the person key of the login (or the owner token) that
+    /// started a new link, recorded on the row when it lands. `None` for an
+    /// agent's link and for upgrades (the row keeps what it has).
+    linked_by: Option<String>,
 }
 
 // ── Response helpers (the shared {code, hint} error contract) ───────────
@@ -353,7 +357,11 @@ fn complete_with_tokens(
     match &plan.target {
         LinkTarget::New { project_id } => {
             match external::add_oauth_inbox(secrets, project_id, plan.provider, address, tokens, &meta, now) {
-                Ok(_) => set_terminal(
+                Ok(_) => {
+                    if let Some(person) = plan.linked_by.as_deref() {
+                        external::set_linked_by(address, person);
+                    }
+                    set_terminal(
                     link_id,
                     LinkStatus::Connected,
                     Some(if features.mail {
@@ -371,7 +379,8 @@ fn complete_with_tokens(
                              link upgrade {address} --features mail'."
                         )
                     }),
-                ),
+                    );
+                }
                 Err(e) => set_terminal(link_id, LinkStatus::Error, Some(ext_error_hint(e))),
             }
         }
@@ -847,6 +856,7 @@ pub fn handle_link_oauth_start(body: &[u8]) -> CliResponse {
         features,
         address: b.address.trim().to_string(),
         target: LinkTarget::New { project_id },
+        linked_by: crate::mail::mailbox_guard::viewer_person(),
     };
     start_plan(plan, b.client_capture, b.redirect_uri.trim())
 }
@@ -914,6 +924,7 @@ fn start_upgrade(b: &StartBody, requested: Option<Features>) -> CliResponse {
         features: have.union(add),
         address: row.email_address.clone(),
         target: LinkTarget::Upgrade { row_id: row.id.clone() },
+        linked_by: None,
     };
     start_plan(plan, b.client_capture, b.redirect_uri.trim())
 }
@@ -1525,6 +1536,7 @@ mod tests {
             features,
             address: address.to_string(),
             target: LinkTarget::New { project_id: project.to_string() },
+            linked_by: None,
         }
     }
 

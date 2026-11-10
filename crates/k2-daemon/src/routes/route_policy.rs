@@ -1396,6 +1396,25 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/queue/retry", Admin),
     both("/cli/mail/quota", Admin),
     get("/cli/mail/read", Member),
+    // The mail reader (prd-ocmail-admin-in-k2-v1 OA1–OA9). Member floor: a
+    // Member opens only their own mailbox and the Owner and Admins every
+    // one (decided in `mail::routes_reader`); agents are refused there.
+    // Reads are peeks (never mark read); writes run the k2 mail verb as the
+    // inbox's workspace.
+    post("/cli/mail/reader/archive", Member),
+    get("/cli/mail/reader/attachment", Member),
+    post("/cli/mail/reader/delete", Member),
+    post("/cli/mail/reader/draft", Member),
+    post("/cli/mail/reader/flag", Member),
+    get("/cli/mail/reader/folders", Member),
+    get("/cli/mail/reader/inboxes", Member),
+    get("/cli/mail/reader/log", Member),
+    get("/cli/mail/reader/message", Member),
+    get("/cli/mail/reader/messages", Member),
+    post("/cli/mail/reader/move", Member),
+    post("/cli/mail/reader/reply", Member),
+    post("/cli/mail/reader/send", Member),
+    get("/cli/mail/reader/thread", Member),
     post("/cli/mail/reply", Member),
     both("/cli/mail/self/forward", Member),
     post("/cli/mail/self/forward/add", Member),

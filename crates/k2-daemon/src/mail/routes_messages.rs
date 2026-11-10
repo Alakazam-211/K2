@@ -76,7 +76,7 @@ fn read_error_response(err: ReadError) -> CliResponse {
 /// is a 502 `engine`; a mistyped `--folder`/`--junk` OR a linked-IMAP
 /// search-window/SEARCH-cap failure is a 400 `usage`. Both backends
 /// classify identically (§17.5 uniform seam).
-fn list_error_response(err: ListError) -> CliResponse {
+pub(crate) fn list_error_response(err: ListError) -> CliResponse {
     match err {
         ListError::Engine(hint) => error_response("502 Bad Gateway", "engine", &hint),
         ListError::Usage(hint) => error_response("400 Bad Request", "usage", &hint),
@@ -197,7 +197,7 @@ fn mail_from_filter(params: &HashMap<String, String>) -> Option<String> {
 /// `mail_external_inboxes` row + its vault credential (503 when the
 /// credential is gone — re-add fixes it). Callers only ever see
 /// `dyn ReadBackend`.
-fn backend_for(address: &str) -> Result<Box<dyn ReadBackend>, CliResponse> {
+pub(crate) fn backend_for(address: &str) -> Result<Box<dyn ReadBackend>, CliResponse> {
     match messages::backend_for_address(address) {
         MailBackend::LocalStalwart => {
             let (client, hostname) = domains::engine_from_db().map_err(|hint| {
@@ -1113,7 +1113,7 @@ pub fn handle_wait(params: &HashMap<String, String>) -> CliResponse {
 /// the [`ManageBackend`] surface. `LocalStalwart` → the JMAP manage
 /// backend; `ExternalImap` → the linked IMAP inbox + its vault
 /// credential (mirrors [`backend_for`]).
-fn manage_backend_for(address: &str) -> Result<Box<dyn ManageBackend>, CliResponse> {
+pub(crate) fn manage_backend_for(address: &str) -> Result<Box<dyn ManageBackend>, CliResponse> {
     match messages::backend_for_address(address) {
         MailBackend::LocalStalwart => {
             let (client, _hostname) = domains::engine_from_db().map_err(|hint| {

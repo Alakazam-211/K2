@@ -28,6 +28,12 @@
 //! **Read state.** [`may_mark_seen`] is true only for the mailbox's own
 //! reader (its person, or its agent through a passport). Everyone else
 //! reads without marking the mail read.
+//!
+//! **The mail reader** (`mail::routes_reader`, OA1–OA9) uses the same
+//! context and log under a stricter rule, [`Rule::Reader`]: the Owner and
+//! Admins open every inbox, anyone else only their own person mailbox. A
+//! linked inbox's person is who linked it (`linked_by_principal`, 0288),
+//! for both rules. The viewer's `reason` rides in the row ([`set_reason`]).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -93,6 +99,8 @@ struct Ctx {
     action: String,
     message_ref: Option<String>,
     ip_hint: Option<String>,
+    /// The viewer's own words for why (the mail reader's `reason`).
+    reason: Option<String>,
     /// `(source, inbox_id)` → the decision already made in this request.
     decided: HashMap<(&'static str, String), bool>,
     /// Rows this request wrote (their `status` is filled in at the end).
@@ -127,6 +135,9 @@ fn is_list_action(action: &str) -> bool {
             | "calendar/list"
             | "calendar/events"
             | "calendar/freebusy"
+            | "reader/inboxes"
+            | "reader/folders"
+            | "reader/messages"
     )
 }
 
@@ -181,6 +192,7 @@ pub fn run(
             action,
             message_ref: message_ref.filter(|m| !m.trim().is_empty()),
             ip_hint: ip_hint.map(str::to_string),
+            reason: None,
             decided: HashMap::new(),
             rows: Vec::new(),
             own: HashSet::new(),
@@ -229,7 +241,16 @@ pub fn may_mark_seen(address: &str) -> bool {
 /// person's mailbox (fail closed).
 fn inbox_kind(conn: &rusqlite::Connection, source: Source, inbox_id: &str) -> (bool, Option<String>) {
     match source {
-        Source::Linked => (true, None),
+        // A linked inbox is always someone's own account; whose, when the
+        // login that linked it is on record (0288).
+        Source::Linked => conn
+            .query_row(
+                "SELECT linked_by_principal FROM mail_external_inboxes WHERE id = ?1",
+                rusqlite::params![inbox_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .map(|person| (true, person))
+            .unwrap_or((true, None)),
         Source::Hosted => conn
             .query_row(
                 "SELECT person_mailbox, person_principal FROM mail_addresses WHERE id = ?1",
@@ -278,8 +299,8 @@ fn write_row(
     }
     conn.execute(
         "INSERT INTO mail_reader_audit (at, actor, actor_role, inbox_source, inbox_id, address, \
-         inbox_kind, own, workspace_id, action, message_ref, ip_hint, outcome) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+         inbox_kind, own, workspace_id, action, message_ref, ip_hint, outcome, reason) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         rusqlite::params![
             at,
             actor,
@@ -294,17 +315,44 @@ fn write_row(
             ctx.message_ref.as_deref(),
             ctx.ip_hint.as_deref(),
             outcome,
+            ctx.reason.as_deref(),
         ],
     )?;
     Ok(Some(conn.last_insert_rowid()))
 }
 
+/// Which rule a decision follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rule {
+    /// OA0, a call naming a workspace: a person's mailbox needs its own
+    /// person, an Admin or the Owner; an agent inbox is open to every login
+    /// (the agent tab's Inbox).
+    Workspace,
+    /// The mail reader (OA1/OA3): the Owner and Admins open every inbox;
+    /// anyone else only their own person mailbox.
+    Reader,
+}
+
 /// May this request act on the inbox `(source, inbox_id)` (`address`),
-/// reached through `workspace`? Always true with no context. With one: a
-/// person's mailbox needs its own person, an Admin or the Owner; an agent
-/// inbox is open to every login. Logs the decision first; a failed write
+/// reached through `workspace`? Always true with no context. With one, the
+/// [`Rule::Workspace`] rule. Logs the decision first; a failed write
 /// refuses (and the call answers 503). The caller must not hold the DB lock.
 pub fn check(workspace: Option<&str>, source: Source, inbox_id: &str, address: &str) -> bool {
+    check_with(workspace, source, inbox_id, address, Rule::Workspace, true)
+}
+
+/// [`check`] under `rule`. `log_refused = false` decides a refusal without
+/// writing a row (the reader's inbox list leaves out what a Member can't
+/// open instead of logging every other inbox on the box); an allowed
+/// access is always logged. A decision is made once per inbox per request.
+pub fn check_with(
+    workspace: Option<&str>,
+    source: Source,
+    inbox_id: &str,
+    address: &str,
+    rule: Rule,
+    log_refused: bool,
+) -> bool {
     let key = (source.as_str(), inbox_id.to_string());
     let prior = CTX.with(|c| c.borrow().as_ref().map(|ctx| ctx.decided.get(&key).copied()));
     let prior = match prior {
@@ -323,7 +371,14 @@ pub fn check(workspace: Option<&str>, source: Source, inbox_id: &str, address: &
         let own = person_kind
             && person.is_some()
             && ctx.person.as_deref().is_some_and(|me| Some(me) == person.as_deref());
-        let allowed = !person_kind || own || ctx.viewer.opens_any();
+        let allowed = match rule {
+            Rule::Workspace => !person_kind || own || ctx.viewer.opens_any(),
+            Rule::Reader => own || ctx.viewer.opens_any(),
+        };
+        if !allowed && !log_refused {
+            ctx.decided.insert(key, false);
+            return false;
+        }
         let written = write_row(&conn, ctx, source, inbox_id, address, person_kind, own, workspace, allowed);
         let allowed = match written {
             Ok(id) => {
@@ -344,6 +399,59 @@ pub fn check(workspace: Option<&str>, source: Source, inbox_id: &str, address: &
         ctx.decided.insert(key, allowed);
         allowed
     })
+}
+
+/// What the mail reader knows about the viewer of this request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewerInfo {
+    /// `owner-token` | `user:<login>` (the log's `actor`).
+    pub actor: String,
+    /// `owner` | `admin` | `member` | `voice_chat` | `unknown`.
+    pub role: &'static str,
+    /// The Owner or an Admin: may open every inbox.
+    pub opens_any: bool,
+    /// The person key mailboxes record for this viewer (`person_principal`,
+    /// `linked_by_principal`), when it has one.
+    pub person: Option<String>,
+}
+
+/// The viewer of this request, while a [`run`] is active.
+pub fn viewer_info() -> Option<ViewerInfo> {
+    CTX.with(|c| {
+        c.borrow().as_ref().map(|ctx| ViewerInfo {
+            actor: ctx.viewer.actor(),
+            role: ctx.viewer.role_wire(),
+            opens_any: ctx.viewer.opens_any(),
+            person: ctx.person.clone(),
+        })
+    })
+}
+
+/// The person key of the login (or the owner token) making this request,
+/// if a [`run`] is active and the viewer has one. `None` for an agent
+/// passport and background work. Recorded as who linked an inbox (0288).
+pub fn viewer_person() -> Option<String> {
+    CTX.with(|c| c.borrow().as_ref().and_then(|ctx| ctx.person.clone()))
+}
+
+/// Record the viewer's reason for the rest of this request's log rows
+/// (trimmed, at most 500 characters; blank = none).
+pub fn set_reason(reason: Option<&str>) {
+    let reason = reason
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(|r| r.chars().take(500).collect::<String>());
+    CTX.with(|c| {
+        if let Some(ctx) = c.borrow_mut().as_mut() {
+            ctx.reason = reason;
+        }
+    });
+}
+
+/// Whether this request's log couldn't be written (the call will answer
+/// 503 when it ends). Long reads check it before dialling the engine.
+pub fn audit_failed() -> bool {
+    CTX.with(|c| c.borrow().as_ref().is_some_and(|ctx| ctx.audit_failed))
 }
 
 /// [`check`] for an address (hosted or linked). An address K2 has no row

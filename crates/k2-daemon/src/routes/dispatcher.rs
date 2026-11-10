@@ -10090,6 +10090,48 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // The mail reader (prd-ocmail-admin-in-k2-v1 OA1–OA9): a person's
+        // tool, ahead of every other mail arm. The owner token or a Connect
+        // login only; an agent passport gets 403 owner_only before anything
+        // else (the cell socket answers the same, and the reader is never
+        // in `cli::dispatch`). Every inbox it reaches is decided and logged
+        // in `mailbox_guard` (Rule::Reader) before the engine is dialled.
+        p if crate::mail::routes_reader::is_reader_path(p) => {
+            let body_bytes = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let r = if !super::http::token_ok(&query, state.token.as_str()) {
+                let presented = presented_bearer(&query, bearer_token.as_deref());
+                if !presented.is_empty() && crate::session_token::validate_hook(presented).is_some() {
+                    crate::mail::routes_reader::agent_refusal()
+                } else {
+                    crate::cli_response::CliResponse::forbidden()
+                }
+            } else {
+                let viewer = mail_viewer(&query, state.token.as_str(), None);
+                let params = super::http::parse_params(&path, &query);
+                let message_ref = if is_post {
+                    serde_json::from_slice::<serde_json::Value>(&body_bytes)
+                        .ok()
+                        .and_then(|v| v.get("id").and_then(|i| i.as_str()).map(str::to_string))
+                } else {
+                    params.get("id").cloned()
+                };
+                let ip_hint = mail_ip_hint(ingress, stream);
+                let p_owned = p.to_string();
+                tokio::task::spawn_blocking(move || {
+                    crate::mail::mailbox_guard::run(viewer, &p_owned, message_ref, Some(ip_hint.as_str()), || {
+                        crate::mail::routes_reader::dispatch(&p_owned, is_post, &params, &body_bytes)
+                    })
+                })
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")))
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // 0.44.4: `/cli/mail/attachments` POST (the `out=` write form) goes
         // to the params arm below, not the JSON-body POST table.
         p if is_post && post_allowed && p.starts_with("/cli/mail/") && p != "/cli/mail/attachments" => {

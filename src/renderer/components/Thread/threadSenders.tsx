@@ -3,14 +3,18 @@
 // left with that sender's picture, so a Thread with a second agent or
 // another person reads like a group chat.
 //
-//   - Who counts: the distinct senders of the rows the Thread has drawn
-//     (the render window: the newest 30, plus what scrolling back brought
-//     in, minus what rolled off; useRenderWindow). Not the scroll position
-//     inside those rows. You never count. Two or more others: the column
-//     shows; none or one: it goes.
+//   - Who counts (Rosson 2026-11-09, "in the loaded list of messages";
+//     the phone will build the same rule): the distinct senders of every
+//     message the Thread has loaded (all fetched pages, plus sends in
+//     progress), not just the rows drawn. You never count, from any
+//     device. Two or more others: the column shows. Once on it stays on
+//     while that Thread is open (`useStickyOn`), so nothing jumps back
+//     when older pages load or the render window moves; a different
+//     Thread starts over.
 //   - Every message from another sender gets the column, so they line up;
 //     the picture draws on the first message of a run from one sender (the
-//     rest of the run leaves the space empty). Your messages never move.
+//     rest of the run leaves the space empty), beside its bubble, under the
+//     name line (threadRuns). Your messages never move.
 //   - The picture is the one K2 already paints for that principal: an
 //     agent's own image and colour (`ProjectAvatar`, the Agents page and
 //     the Connections picker; another server's agent from the Home avatar
@@ -103,34 +107,45 @@ export function threadSender(doc: OverlayDoc, currentAddr?: string, pastAddresse
 }
 
 /** The distinct senders of `rows` other than the viewer. */
-export function threadOtherSenders(rows: readonly ThreadSenderRow[]): Set<string> {
+export function threadOtherSenders(rows: readonly Pick<ThreadSenderRow, 'sender' | 'mine'>[]): Set<string> {
   const out = new Set<string>()
   for (const r of rows) if (!r.mine) out.add(r.sender.key)
   return out
 }
 
 /** Show the column: two or more others among the drawn rows. */
-export function threadSendersShown(rows: readonly ThreadSenderRow[]): boolean {
+export function threadSendersShown(rows: readonly Pick<ThreadSenderRow, 'sender' | 'mine'>[]): boolean {
   return threadOtherSenders(rows).size >= 2
 }
 
+/** `on` once it has been true, until `key` (the Thread) changes. */
+export function useStickyOn(on: boolean, key: string): boolean {
+  const ref = useRef({ key, on })
+  if (ref.current.key !== key) ref.current = { key, on }
+  else if (on && !ref.current.on) ref.current = { key, on: true }
+  return ref.current.on
+}
+
 /** The column for each drawn row (`slots`, by row id). Rows of the viewer
- *  get none; every other row gets one, `first` on the first of a run (a
- *  run ends at any row from someone else, the viewer included). `on` is
- *  the same for all: the column is there for the whole list or for none. */
+ *  get none; every other row gets one, `first` on the first of a run: the
+ *  Thread's runs (`starts`, threadRunStarts: the same rows the name line
+ *  goes on), else a run ends at any row from someone else, the viewer
+ *  included. `on` is the same for all: the column is there for the whole
+ *  list or for none. */
 export function threadSenderSlots(
   rows: readonly ThreadSenderRow[],
-  opts: { motion: boolean; host: string | null },
+  opts: { motion: boolean; host: string | null; starts?: readonly boolean[]; on?: boolean },
 ): { on: boolean; slots: Map<string, ThreadSenderSlot> } {
-  const on = threadSendersShown(rows)
+  // `on`: the caller's answer (the loaded messages, kept on); else these rows.
+  const on = opts.on ?? threadSendersShown(rows)
   const out = new Map<string, ThreadSenderSlot>()
   let prev: string | null = null
-  for (const r of rows) {
+  rows.forEach((r, i) => {
     const key = r.mine ? null : r.sender.key
     if (key != null) {
       out.set(r.id, {
         on,
-        first: key !== prev,
+        first: opts.starts ? opts.starts[i] !== false : key !== prev,
         motion: opts.motion,
         kind: r.sender.kind,
         label: r.sender.label,
@@ -139,7 +154,7 @@ export function threadSenderSlots(
       })
     }
     prev = key
-  }
+  })
   return { on, slots: out }
 }
 

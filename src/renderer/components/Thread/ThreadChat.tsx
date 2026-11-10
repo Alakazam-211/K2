@@ -1,8 +1,9 @@
 // The Thread's look for chats that are not Threads (Rosson 2026-10-18): a
 // ticket's discussion (the Tickets page's rail) and the project chat (the
 // Projects page). Their data, routes and keys stay their own; what they
-// draw is the Thread's: the same bubbles ("author · time" under each,
-// markdown inside), the same message box and round Send, the same list
+// draw is the Thread's: the same bubbles (markdown inside; by run, as the
+// Thread: another author's "name • time" over the first of their run, your
+// status line under the last of yours), the same message box and round Send, the same list
 // spacing, all from `ThreadZenKit`. Nothing here is a copy of the Thread's
 // CSS: the pieces are the kit's, and so are the tokens.
 //
@@ -138,8 +139,11 @@ export function threadChatItem(m: {
   }
 }
 
-/** One message: mine on the right in the accent, others on the left;
- *  "author · time" under it, and `footer` under that. */
+/** One message: mine on the right in the accent, others on the left.
+ *  With its run (`runStart`, `tail`: threadRuns) the details go where the
+ *  Thread puts them; without, "author · time" under it and `footer` under
+ *  that. Inside a Garden (`ThreadChatZenContext`) always without: Gardens
+ *  draw their own. */
 export function ThreadChatBubble({
   id,
   seq,
@@ -151,6 +155,8 @@ export function ThreadChatBubble({
   footer,
   still,
   attachments,
+  runStart,
+  tail,
 }: {
   id: string
   seq?: number
@@ -165,7 +171,11 @@ export function ThreadChatBubble({
   still?: boolean
   /** The message's files; `id` is the doc id their door reads by. */
   attachments?: ThreadFileObject[] | null
+  /** The first and last bubble of its run (threadRunWindow). */
+  runStart?: boolean
+  tail?: boolean
 }): JSX.Element {
+  const inZen = useContext(ThreadChatZenContext)
   // One item per message (not per render), so the memoized bubble skips.
   const item = useMemo(
     () => threadChatItem({ id, seq, author, body, createdAt, attachments }),
@@ -180,6 +190,8 @@ export function ThreadChatBubble({
       viewer={null}
       footer={footer}
       still={still}
+      runStart={inZen ? undefined : runStart}
+      tail={inZen ? undefined : tail}
     />
   )
 }

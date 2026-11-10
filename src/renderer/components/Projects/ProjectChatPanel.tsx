@@ -75,6 +75,7 @@ import {
 import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadLoadOlder, ThreadWindowSpacer } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
+import { threadRunWindow } from '@/components/Thread/threadRuns'
 import { useFollowOnResize } from '@/hooks/useStickToBottom'
 import { useChatSessionTurn, type ChatSessionTarget } from '@/components/Thread/sessionTurn'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
@@ -228,6 +229,10 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   // opening, at most ~50 while reading back), spacers of the measured
   // height standing in for the rest.
   const keys = useMemo(() => (messages ?? []).map((m) => m.id), [messages])
+  const runInputs = useMemo(
+    () => (messages ?? []).map((m) => ({ mine: isYou(m.author), from: m.author, at: m.createdAt })),
+    [messages, isYou],
+  )
   const followingRef = useRef(true)
   const win = useRenderWindow({
     room: show.id,
@@ -240,6 +245,9 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     },
   })
   const toNewest = win.toNewest
+  // The Thread's runs (threadRuns): names over others' runs, your status
+  // line under yours, Glass's tail on the last of each.
+  const runs = useMemo(() => threadRunWindow(runInputs, win.lo, win.hi), [runInputs, win.lo, win.hi])
   // At the bottom, the list stays at its true bottom when the message box
   // grows (a new line) or the rows change size; typing never moves it
   // (Rosson 2026-10-24). Scrolled up, nothing moves.
@@ -516,7 +524,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                 </div>
               )}
               <ThreadWindowSpacer px={win.above} gap={THREAD_LIST_GAP} edge="top" />
-              {messages.slice(win.lo, win.hi).map((m) => {
+              {messages.slice(win.lo, win.hi).map((m, j) => {
                 const delivery =
                   lastPost?.messageId === m.id
                     ? deliveredLine(lastPost.delivered, lastPost.deliveryReason, poc)
@@ -533,6 +541,8 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                     timeLabel={formatRelativeTime(m.createdAt, nowSec)}
                     footer={delivery ? <span data-project-chat-delivery="" style={DELIVERY_STYLE}>{delivery}</span> : undefined}
                     still={win.wasDrawn(m.id)}
+                    runStart={runs.starts[j]}
+                    tail={runs.ends[j]}
                   />
                 )
               })}

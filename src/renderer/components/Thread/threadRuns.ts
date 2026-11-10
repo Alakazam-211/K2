@@ -1,10 +1,15 @@
-// Runs of messages, for the bubble tail (Glass, from K2 Companion's
-// `chatRuns` in src/zen/chatReceipt.ts, release 4.2.2).
+// Runs of messages (K2 Companion's `chatRuns` in src/zen/chatReceipt.ts,
+// release 4.2.2): the bubble tail (Glass) and where a message's details go.
 //
 // A run is consecutive messages from one side no more than `RUN_GAP_S`
 // apart: all of the viewer's own, or one other sender's (by the sender key
-// the Thread's sender column uses, threadSenders). Only the last bubble of
-// a run draws a tail. A row with no time stays in the run (as the phone).
+// the Thread's sender column uses, threadSenders). A row with no time stays
+// in the run (as the phone). As on the phone:
+//   - the last bubble of a run draws the tail; under your last, the status
+//     line (the time, Sending…, Not sent, or the receipt);
+//   - the first bubble of another sender's run has their name and time
+//     over it (and their picture beside it, when the sender column shows);
+//   - the bubbles of one run sit closer together than two runs do.
 
 /** Messages this far apart (seconds) start a new run. */
 export const RUN_GAP_S = 120
@@ -41,4 +46,29 @@ export function threadRunEnds(rows: readonly ThreadRunInput[], next?: ThreadRunI
     const after = i + 1 < rows.length ? rows[i + 1] : next
     return !after || !sameThreadRun(r, after, gapS)
   })
+}
+
+/** For each row, whether it starts its run (the name line, the picture).
+ *  `prev` is the row before the first one (outside a render window), so a
+ *  run coming in from above the window isn't taken for a new one. */
+export function threadRunStarts(rows: readonly ThreadRunInput[], prev?: ThreadRunInput | null, gapS = RUN_GAP_S): boolean[] {
+  return rows.map((r, i) => {
+    const before = i > 0 ? rows[i - 1] : prev
+    return !before || !sameThreadRun(before, r, gapS)
+  })
+}
+
+/** Starts and ends for rows `lo`..`hi` of `all` (a render window): the rows
+ *  just outside it count, as above. */
+export function threadRunWindow(
+  all: readonly ThreadRunInput[],
+  lo: number,
+  hi: number,
+  gapS = RUN_GAP_S,
+): { starts: boolean[]; ends: boolean[] } {
+  const rows = all.slice(lo, hi)
+  return {
+    starts: threadRunStarts(rows, lo > 0 ? all[lo - 1] : null, gapS),
+    ends: threadRunEnds(rows, hi < all.length ? all[hi] : null, gapS),
+  }
 }

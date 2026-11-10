@@ -4,7 +4,12 @@
 // garden"). One set of pieces, so the two stay in sync:
 //
 //   - `ThreadBubble`: a message as a text bubble (mine right, others left),
-//     the choice and secret cards inside it, "author · time" under it.
+//     the choice and secret cards inside it. Where the Thread knows its runs
+//     (threadRuns: the desktop Thread, the project chat, a ticket's chat),
+//     as on the phone: "name • time" over the first bubble of another
+//     sender's run, and under the last of yours one status line (the time,
+//     Sending…, Not sent, or the receipt). Elsewhere (Gardens): "author ·
+//     time" under each.
 //   - `ThreadTypingIndicator`, `ThreadLoadOlder`, `ThreadEmptyNote`.
 //   - The message box parts (`ThreadComposeBox`, `ThreadRoundButton`,
 //     `ThreadSendButton`, `ThreadAttachmentChip`).
@@ -31,6 +36,7 @@ import { ThreadContextLine } from './ThreadContextChip'
 import { ThreadFileObjects } from './ThreadFileObjects'
 import { THREAD_SENDER_CSS, ThreadSenderFrame, sameSenderSlot, threadSenderRootProps, type ThreadSenderSlot } from './threadSenders'
 import { useThreadAttachmentSource } from './ThreadImageObjects'
+import { RECEIPT_LABEL, type ThreadReceipt } from './threadReceipt'
 import {
   permissionCardActions,
   permissionClient,
@@ -163,6 +169,8 @@ ${SCOPE} [data-zen-compose-input]::placeholder { color: var(--zen-text-muted); o
 ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
 ${SCOPE} [data-zen-message-more] { opacity: 0; transition: opacity 120ms ease; }
 ${SCOPE} [data-zen-message]:hover [data-zen-message-more], ${SCOPE} [data-zen-message-more]:focus-visible { opacity: 1; }
+${SCOPE} [data-thread-hover-status] { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+${SCOPE} [data-zen-message]:hover [data-thread-hover-status], ${SCOPE} [data-thread-hover-status]:focus-within { opacity: 1; pointer-events: auto; }
 [${THREAD_ZEN_SCOPE_ATTR}] [data-zen-compose] [data-zen-soft-button]:hover:not(:disabled) { background: var(--zen-surface); }
 [${THREAD_ZEN_SCOPE_ATTR}] [data-zen-bubble="agent"] *::selection,
 [${THREAD_ZEN_SCOPE_ATTR}] [data-zen-bubble="agent"]::selection { background: color-mix(in srgb, var(--zen-accent) 30%, transparent); color: var(--zen-bubble-agent-text); }
@@ -173,6 +181,7 @@ ${SCOPE} [data-zen-message]:hover [data-zen-message-more], ${SCOPE} [data-zen-me
 @keyframes zen-typing { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
 @media (prefers-reduced-motion: reduce) {
   ${SCOPE} [data-zen-message], ${SCOPE} [data-zen-pulse], ${SCOPE} [data-zen-typing] span { animation: none !important; transition: none !important; }
+  ${SCOPE} [data-thread-hover-status] { transition: none !important; }
 }
 `
 
@@ -340,6 +349,9 @@ export function ThreadZenStyles(): JSX.Element {
  *  the project chat). */
 export const THREAD_LIST_PADDING = '14px var(--zen-gap) 8px'
 export const THREAD_LIST_GAP = 10
+/** The space between two bubbles of one run (the phone's: 4px in a run,
+ *  10px between runs). A run's later rows take the difference back. */
+export const THREAD_RUN_GAP = 4
 
 /** The empty Thread's line (Zen and the desktop Thread). */
 export const zenEmptyThreadText = (label: string): string => `Message ${label}. It reads this like a text.`
@@ -415,7 +427,8 @@ export interface ThreadBubbleProps {
    *  its own server (accept cards from Home, 0.46.6). */
   handoffRemoteHost?: string | null
   /** A line under "author · time", on the same side (the project chat's
-   *  "delivered to …"). Absent (the Thread): nothing is drawn. */
+   *  "delivered to …"; a failed send's Retry · Discard). With runs, on
+   *  your own message it joins the status line. Absent: nothing is drawn. */
   footer?: ReactNode
   /** Drawn again by the render window (useRenderWindow): no message-in
    *  animation, it was on screen before. */
@@ -432,7 +445,96 @@ export interface ThreadBubbleProps {
    *  (THREAD_TAIL_CSS); false on the others, which round every corner.
    *  Absent (Gardens, the chats without runs): the bubble as before. */
   tail?: boolean
+  /** Where the Thread knows its runs (threadRuns): true on the first
+   *  bubble of a run. Given, the details go where the phone puts them:
+   *  another sender's name and time over the first of their run, your
+   *  status line under the last of yours (`tail`) or a pending send; none
+   *  under the bubbles between. Absent (Gardens): "author · time" under
+   *  every bubble, as before. */
+  runStart?: boolean
+  /** The Thread's one receipt (threadReceipt), on your newest confirmed
+   *  message: its status line says it instead of the time. */
+  receipt?: ThreadReceipt | null
 }
+
+/** The name line over another sender's run, and your status line under
+ *  yours (K2 Companion's: 11px, muted; a 16px status line). */
+const META_TYPE: CSSProperties = {
+  fontSize: 'var(--type-sm)',
+  lineHeight: '16px',
+  color: 'var(--zen-text-muted)',
+}
+const META_NAME_STYLE: CSSProperties = {
+  ...META_TYPE,
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 6,
+  minWidth: 0,
+  maxWidth: '100%',
+  // The bubble's text edge (its 14px padding), as the phone lines them up.
+  padding: '0 14px',
+}
+const META_NAME_TEXT: CSSProperties = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+const META_STATUS_STYLE: CSSProperties = {
+  ...META_TYPE,
+  position: 'relative',
+  alignSelf: 'flex-end',
+  minHeight: 16,
+  padding: '0 10px',
+  textAlign: 'right',
+}
+/** The hover status line's corners (the Thread's small radius). */
+const THREAD_HOVER_STATUS_RADIUS = 'calc(var(--zen-radius) / 2)'
+/** Yours: the menu's button at the status line's inner end (before the
+ *  time or receipt, pointing back into the Thread; Rosson 2026-11-09).
+ *  Out of the flow, so the words never move when it shows. */
+const MORE_STATUS_SLOT: CSSProperties = {
+  position: 'absolute',
+  right: 'calc(100% - 8px)',
+  top: 0,
+  height: 16,
+  display: 'flex',
+  alignItems: 'center',
+}
+const HOVER_MORE_SLOT: CSSProperties = { display: 'flex', alignItems: 'center', marginRight: 2 }
+/** A bubble of yours with no status line (inside a run): hovering it (or
+ *  the menu's button taking focus) shows one with its time and the
+ *  button, laid over the space below, so nothing below moves. The
+ *  canvas behind it keeps it readable over the next bubble. */
+const HOVER_STATUS_STYLE: CSSProperties = {
+  ...META_STATUS_STYLE,
+  // As short as the words, so it covers as little of the next bubble's
+  // top padding as it can.
+  lineHeight: '14px',
+  minHeight: 14,
+  display: 'flex',
+  alignItems: 'center',
+  padding: '0 10px 0 2px',
+  position: 'absolute',
+  top: '100%',
+  right: 0,
+  zIndex: 2,
+  whiteSpace: 'nowrap',
+  background: 'var(--zen-canvas)',
+  borderRadius: THREAD_HOVER_STATUS_RADIUS,
+  userSelect: 'none',
+}
+/** Another sender's message menu button beside the bubble (runs: no line
+ *  under each bubble to hold it): on the open side, level with the
+ *  bubble's last line, shown on hover (THREAD_ZEN_CSS). */
+const MORE_SLOT_BASE: CSSProperties = {
+  position: 'absolute',
+  bottom: 0,
+  height: 'calc(var(--zen-line-height) * 1em + 18px)',
+  display: 'flex',
+  alignItems: 'center',
+  color: 'var(--zen-text-muted)',
+  fontSize: 'var(--type-sm)',
+}
+const MORE_SLOT_THEIRS: CSSProperties = { ...MORE_SLOT_BASE, left: '100%' }
+/** Holds the bubble with runs: the picture and the menu's button sit
+ *  against the bubble itself, not the name line over it. */
+const BUBBLE_ROW_STYLE: CSSProperties = { position: 'relative', display: 'flex', flexDirection: 'column', minWidth: 0 }
 
 function shallowSame(a: object | null | undefined, b: object | null | undefined): boolean {
   if (a === b) return true
@@ -468,6 +570,8 @@ export function sameBubbleProps(a: ThreadBubbleProps, b: ThreadBubbleProps): boo
     a.still === b.still &&
     a.pending === b.pending &&
     a.tail === b.tail &&
+    a.runStart === b.runStart &&
+    (a.receipt ?? null) === (b.receipt ?? null) &&
     sameSenderSlot(a.sender, b.sender) &&
     shallowSame(a.secret, b.secret) &&
     sameChatNode(a.footer, b.footer)
@@ -492,6 +596,8 @@ export const ThreadBubble = memo(function ThreadBubble({
   pending,
   sender = null,
   tail,
+  runStart,
+  receipt = null,
 }: ThreadBubbleProps): JSX.Element {
   const kind = item.doc.kind
   // A handoff doc as it arrived (a live frame, another server's row) is
@@ -546,6 +652,114 @@ export const ThreadBubble = memo(function ThreadBubble({
   const gestures = useThreadMessageGestures(bubbleRef, menuOn ? openMenu : null)
   const maxWidth = threadBubbleMaxWidth(narrow)
   const column = threadSenderRootProps(mine ? null : sender, maxWidth, narrow)
+  // Runs (the phone's layout): which details this bubble carries.
+  const runs = runStart !== undefined
+  const nameAbove = runs && !mine && runStart
+  const statusBelow = runs && mine && (!!tail || pending != null || footer != null)
+  const hoverStatus = runs && mine && !statusBelow
+  // "You · via Notes": the widget part stays on your status line.
+  const via = mine ? author.split(' · via ')[1] : undefined
+  const shownReceipt = statusBelow && !pending && receipt ? receipt : null
+  // (A post that is only files has no words to act on: no menu, no bubble.)
+  const more = menuOn ? <ThreadMessageMoreButton onOpen={(x, y) => openMenu(x, y, null)} /> : null
+  const bubbleNode = bubble ? (
+    <div
+      ref={bubbleRef}
+      className="selectable-copy"
+      {...(menuOn ? gestures : {})}
+      data-zen-bubble={mine ? 'me' : 'agent'}
+      data-zen-tail={tail === undefined ? undefined : tail ? (mine ? 'mine' : 'theirs') : 'none'}
+      data-chamfer=""
+      style={{
+        padding: '9px 14px',
+        borderRadius: 'var(--zen-bubble-radius)',
+        borderBottomRightRadius: mine ? 6 : 'var(--zen-bubble-radius)',
+        borderBottomLeftRadius: mine ? 'var(--zen-bubble-radius)' : 6,
+        background: mine ? 'var(--zen-bubble-me)' : 'var(--zen-bubble-agent)',
+        color: mine ? 'var(--zen-bubble-me-text)' : 'var(--zen-bubble-agent-text)',
+        minWidth: 0,
+        overflowWrap: 'anywhere',
+        // Markdown inside reads Styles variables; here they are this bubble's text.
+        ...zenBubbleShield(mine ? 'me' : 'agent'),
+        ...THREAD_CARD_TOKENS,
+        // Terminal Style: cut corners; the tail corner stays sharp.
+        ...chamferVars({
+          cut: mine ? [CHAMFER_CUT.surface, CHAMFER_CUT.surface, 0, CHAMFER_CUT.surface] : [CHAMFER_CUT.surface, CHAMFER_CUT.surface, CHAMFER_CUT.surface, 0],
+          fill: mine ? 'var(--zen-bubble-me)' : 'var(--zen-bubble-agent)',
+        }),
+      }}
+    >
+      {reply && <ThreadReplyQuote reply={reply} />}
+      {bodyText && <ChatMessageBody text={bodyText} style={BUBBLE_BODY_STYLE} />}
+      {kind === 'choice' && item.doc.choice && (
+        <ChoiceCard
+          options={item.doc.choice.options}
+          allowCustom={item.doc.choice.allow_custom}
+          status={item.doc.choice.status}
+          answer={item.doc.choice.answer}
+          answeredBy={cardAnswererLabel(item.doc.choice.answeredBy, viewer)}
+          expiresAt={item.doc.choice.expiresAt}
+          nowSec={nowSec}
+          resultMessage={item.doc.choice.resultMessage}
+          openPinForm={item.doc.choice.openPinForm}
+          pinScope={permissionActions?.confirmScope}
+          permission={item.doc.choice.permission ?? null}
+          permissionActions={permissionActions}
+          from={item.doc.from || ''}
+          error={pickError}
+          onPick={(label) => {
+            // A refusal (not the owner, already answered, the folder
+            // changed) is shown on the card in the daemon's words: a tap
+            // that does nothing visible reads as broken (2026-11-05).
+            const shown = (err: unknown): void => {
+              console.warn('[thread] answer failed:', err)
+              setPickError(daemonErrorText(err) || 'K2 couldn’t record that answer.')
+            }
+            setPickError(null)
+            try {
+              const sent = onAnswer?.({ answer: label })
+              if (sent instanceof Promise) sent.catch(shown)
+              else if (!onAnswer) setPickError('This view can’t answer cards.')
+            } catch (err) {
+              shown(err)
+            }
+          }}
+        />
+      )}
+      {kind === 'secret' && item.doc.secret && (
+        <div style={{ marginTop: 6 }}>
+          <SecretCard
+            compact={secret?.compact}
+            secret={item.doc.secret}
+            answeredBy={cardAnswererLabel(item.doc.secret.answeredBy, viewer)}
+            agent={item.doc.from || ''}
+            workspace={secret?.workspace}
+            server={secret?.server}
+            onSubmit={async (payload) => {
+              await onAnswer?.(payload)
+            }}
+            onDismiss={() => onVoid?.()}
+            onMoreOptions={secret?.onMoreOptions}
+          />
+        </div>
+      )}
+      {offer && (
+        <StashOfferCard docId={item.id} offer={offer} scope={source?.scope ?? null} agent={item.doc.from || null} agentName={author} />
+      )}
+      {changes && <ChangesCard changes={changes} />}
+      {handoff && (
+        <div style={{ marginTop: 6 }}>
+          <HandoffCard
+            handoff={handoff}
+            answeredBy={cardAnswererLabel(handoff.answeredBy, viewer)}
+            nowSec={nowSec}
+            onDecide={onHandoffDecide ?? (() => Promise.reject(new Error('no server to decide on')))}
+            remoteHost={onHandoffDecide ? handoffRemoteHost : (handoffRemoteHost ?? 'the agent’s server')}
+          />
+        </div>
+      )}
+    </div>
+  ) : null
   return (
     <div
       data-zen-message={item.id}
@@ -563,123 +777,85 @@ export const ThreadBubble = memo(function ThreadBubble({
         maxWidth,
         minWidth: 0,
         gap: 3,
+        ...(runs && !runStart ? { marginTop: THREAD_RUN_GAP - THREAD_LIST_GAP } : {}),
+        ...(hoverStatus ? { position: 'relative' } : {}),
         ...(pending === 'sending' ? { opacity: 0.6 } : {}),
         ...column.style,
       }}
+      data-run={runs ? (runStart ? (tail ? 'solo' : 'first') : tail ? 'last' : 'middle') : undefined}
     >
+      {/* Top-left, level with the name line (the phone's place). */}
       {!mine && sender ? <ThreadSenderFrame slot={sender} /> : null}
-      {bubble && <div
-        ref={bubbleRef}
-        className="selectable-copy"
-        {...(menuOn ? gestures : {})}
-        data-zen-bubble={mine ? 'me' : 'agent'}
-        data-zen-tail={tail === undefined ? undefined : tail ? (mine ? 'mine' : 'theirs') : 'none'}
-        data-chamfer=""
-        style={{
-          padding: '9px 14px',
-          borderRadius: 'var(--zen-bubble-radius)',
-          borderBottomRightRadius: mine ? 6 : 'var(--zen-bubble-radius)',
-          borderBottomLeftRadius: mine ? 'var(--zen-bubble-radius)' : 6,
-          background: mine ? 'var(--zen-bubble-me)' : 'var(--zen-bubble-agent)',
-          color: mine ? 'var(--zen-bubble-me-text)' : 'var(--zen-bubble-agent-text)',
-          minWidth: 0,
-          overflowWrap: 'anywhere',
-          // Markdown inside reads Styles variables; here they are this bubble's text.
-          ...zenBubbleShield(mine ? 'me' : 'agent'),
-          ...THREAD_CARD_TOKENS,
-          // Terminal Style: cut corners; the tail corner stays sharp.
-          ...chamferVars({
-            cut: mine ? [CHAMFER_CUT.surface, CHAMFER_CUT.surface, 0, CHAMFER_CUT.surface] : [CHAMFER_CUT.surface, CHAMFER_CUT.surface, CHAMFER_CUT.surface, 0],
-            fill: mine ? 'var(--zen-bubble-me)' : 'var(--zen-bubble-agent)',
-          }),
-        }}
-      >
-        {reply && <ThreadReplyQuote reply={reply} />}
-        {bodyText && <ChatMessageBody text={bodyText} style={BUBBLE_BODY_STYLE} />}
-        {kind === 'choice' && item.doc.choice && (
-          <ChoiceCard
-            options={item.doc.choice.options}
-            allowCustom={item.doc.choice.allow_custom}
-            status={item.doc.choice.status}
-            answer={item.doc.choice.answer}
-            answeredBy={cardAnswererLabel(item.doc.choice.answeredBy, viewer)}
-            expiresAt={item.doc.choice.expiresAt}
-            nowSec={nowSec}
-            resultMessage={item.doc.choice.resultMessage}
-            openPinForm={item.doc.choice.openPinForm}
-            pinScope={permissionActions?.confirmScope}
-            permission={item.doc.choice.permission ?? null}
-            permissionActions={permissionActions}
-            from={item.doc.from || ''}
-            error={pickError}
-            onPick={(label) => {
-              // A refusal (not the owner, already answered, the folder
-              // changed) is shown on the card in the daemon's words: a tap
-              // that does nothing visible reads as broken (2026-11-05).
-              const shown = (err: unknown): void => {
-                console.warn('[thread] answer failed:', err)
-                setPickError(daemonErrorText(err) || 'K2 couldn’t record that answer.')
-              }
-              setPickError(null)
-              try {
-                const sent = onAnswer?.({ answer: label })
-                if (sent instanceof Promise) sent.catch(shown)
-                else if (!onAnswer) setPickError('This view can’t answer cards.')
-              } catch (err) {
-                shown(err)
-              }
-            }}
-          />
-        )}
-        {kind === 'secret' && item.doc.secret && (
-          <div style={{ marginTop: 6 }}>
-            <SecretCard
-              compact={secret?.compact}
-              secret={item.doc.secret}
-              answeredBy={cardAnswererLabel(item.doc.secret.answeredBy, viewer)}
-              agent={item.doc.from || ''}
-              workspace={secret?.workspace}
-              server={secret?.server}
-              onSubmit={async (payload) => {
-                await onAnswer?.(payload)
-              }}
-              onDismiss={() => onVoid?.()}
-              onMoreOptions={secret?.onMoreOptions}
-            />
-          </div>
-        )}
-        {offer && (
-          <StashOfferCard docId={item.id} offer={offer} scope={source?.scope ?? null} agent={item.doc.from || null} agentName={author} />
-        )}
-        {changes && <ChangesCard changes={changes} />}
-        {handoff && (
-          <div style={{ marginTop: 6 }}>
-            <HandoffCard
-              handoff={handoff}
-              answeredBy={cardAnswererLabel(handoff.answeredBy, viewer)}
-              nowSec={nowSec}
-              onDecide={onHandoffDecide ?? (() => Promise.reject(new Error('no server to decide on')))}
-              remoteHost={onHandoffDecide ? handoffRemoteHost : (handoffRemoteHost ?? 'the agent’s server')}
-            />
-          </div>
-        )}
-      </div>}
+      {nameAbove && (
+        <span data-zen-message-meta="" data-thread-meta="name" style={META_NAME_STYLE}>
+          <span data-thread-author="" style={META_NAME_TEXT}>
+            {author}
+          </span>
+          <span aria-hidden="true">•</span>
+          <span data-thread-time="" style={{ flexShrink: 0 }}>
+            {timeLabel}
+          </span>
+        </span>
+      )}
+      {bubble && (runs && !mine ? (
+        <div data-zen-bubble-row="" style={BUBBLE_ROW_STYLE}>
+          {bubbleNode}
+          {more && <span data-zen-message-more-slot="" style={MORE_SLOT_THEIRS}>{more}</span>}
+        </div>
+      ) : (
+        bubbleNode
+      ))}
       <ThreadFileObjects files={files} mine={mine} docId={item.id} />
       {/* thread-context-v1: a Garden widget's line that rode this post, marked as the widget's. */}
       {item.doc.context && <ThreadContextLine context={item.doc.context} mine={mine} />}
-      <span
-        data-zen-message-meta=""
-        style={{
-          alignSelf: mine ? 'flex-end' : 'flex-start',
-          padding: '0 6px',
-          fontSize: '0.72em',
-          color: 'var(--zen-text-muted)',
-        }}
-      >
-        <span data-thread-author="">{author}</span> · <span data-thread-time="">{timeLabel}</span>
-        {menuOn ? <ThreadMessageMoreButton onOpen={(x, y) => openMenu(x, y, null)} /> : null}
-      </span>
-      {footer != null && (
+      {statusBelow && (
+        <span
+          data-zen-message-meta=""
+          data-thread-meta="status"
+          data-send-status={pending ?? 'sent'}
+          data-receipt={shownReceipt ?? undefined}
+          style={META_STATUS_STYLE}
+        >
+          {more && <span data-zen-message-more-slot="" style={MORE_STATUS_SLOT}>{more}</span>}
+          {via ? <>via {via} · </> : null}
+          {shownReceipt ? (
+            <span data-thread-receipt="" title={timeLabel}>
+              {RECEIPT_LABEL[shownReceipt]}
+            </span>
+          ) : (
+            <span data-thread-time="">{timeLabel}</span>
+          )}
+          {footer != null && (
+            <>
+              {' · '}
+              <span data-zen-message-footer="">{footer}</span>
+            </>
+          )}
+        </span>
+      )}
+      {hoverStatus && more && (
+        <span data-thread-meta="status-hover" data-thread-hover-status="" style={HOVER_STATUS_STYLE}>
+          {/* Inside the line here (it has its own background). */}
+          <span data-zen-message-more-slot="" style={HOVER_MORE_SLOT}>{more}</span>
+          {via ? <>via {via} · </> : null}
+          <span data-thread-time="">{timeLabel}</span>
+        </span>
+      )}
+      {!runs && (
+        <span
+          data-zen-message-meta=""
+          style={{
+            alignSelf: mine ? 'flex-end' : 'flex-start',
+            padding: '0 6px',
+            fontSize: '0.72em',
+            color: 'var(--zen-text-muted)',
+          }}
+        >
+          <span data-thread-author="">{author}</span> · <span data-thread-time="">{timeLabel}</span>
+          {more}
+        </span>
+      )}
+      {footer != null && !(runs && mine) && (
         <span
           data-zen-message-footer=""
           style={{

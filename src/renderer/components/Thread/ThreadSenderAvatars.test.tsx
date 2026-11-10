@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-// Sender pictures in a Thread (Rosson 2026-11-04): only once more than two
-// people are talking among the drawn rows; one picture per run; never on
-// your own messages; no motion class under reduced motion.
+// Sender pictures in a Thread (Rosson 2026-11-04, 2026-11-09): only once
+// two or more other senders are among the loaded messages, then on while
+// that Thread is open; one picture per run; never on your own messages; no
+// motion class under reduced motion.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
@@ -207,7 +208,7 @@ describe('Thread pane sender pictures', () => {
     }
   })
 
-  it('the third sender rolling off the window hides the pictures', () => {
+  it('once on, the pictures stay on while that Thread is open (the third sender rolling off the window)', () => {
     vi.useFakeTimers({ now: 1_700_000_000_000 })
     // ops posts once, at the start of the newest 30.
     const first = Array.from({ length: 30 }, (_, i) => (i === 0 ? agent(i, 'ops') : i % 2 ? me(i) : agent(i)))
@@ -216,39 +217,43 @@ describe('Thread pane sender pictures', () => {
     stubListBox(list(), { scrollHeight: 2000, clientHeight: 400, scrollTop: 1600 })
     expect(drawnIds()).toHaveLength(30)
     expect(columnsOn()).toContain('ops0')
-    // Ten more arrive while following the newest: they draw at once, and
-    // once scrolling is quiet the oldest roll off, ops with them.
+    // Ten more arrive while following the newest: once scrolling is quiet
+    // the oldest roll off, ops with them. ops is still loaded: still on.
     threadHook.items = [...first, ...Array.from({ length: 10 }, (_, j) => (j % 2 ? me(30 + j) : agent(30 + j)))]
     // (A new prop re-renders the memoized pane, as the hook's state would.)
     view.rerender(<ThreadOverlayPane addr="sales" conversationId="c" agentName="Sales" />)
-    expect(drawnIds()).toHaveLength(40)
     act(() => {
       vi.advanceTimersByTime(1_000)
     })
     expect(drawnIds()).toHaveLength(30)
     expect(drawnIds()).not.toContain('ops0')
+    expect(row('sales30').getAttribute('data-sender-column')).toBe('on')
+    // Even a re-read that no longer holds ops keeps them on: nothing jumps.
+    threadHook.items = Array.from({ length: 10 }, (_, j) => (j % 2 ? me(40 + j) : agent(40 + j)))
+    view.rerender(<ThreadOverlayPane addr="sales" conversationId="c" agentName="Sales." />)
+    expect(row('sales40').getAttribute('data-sender-column')).toBe('on')
+    // Another Thread starts over.
+    view.rerender(<ThreadOverlayPane addr="ops" conversationId="c2" agentName="Ops" />)
     expect(columnsOn()).toEqual([])
-    expect(row('sales30').getAttribute('data-sender-column')).toBe('off')
+    expect(row('sales40').getAttribute('data-sender-column')).toBe('off')
   })
 
-  it('reading back draws the third sender again and the pictures come back', () => {
+  it('counts every loaded message, not just the drawn rows: a third sender above the window turns them on', () => {
     // 100 in memory; the newest 30 are only you and sales; ops is at 55.
     threadHook.items = Array.from({ length: 100 }, (_, i) => (i === 55 ? agent(i, 'ops') : i % 2 ? me(i) : agent(i)))
     renderInRoom(room, <ThreadOverlayPane addr="sales" conversationId="c" />)
     expect(drawnIds()[0]).toBe('sales70')
+    expect(drawnIds()).not.toContain('ops55')
+    expect(columnsOn()).toContain('sales70')
+    expect(row('sales70').querySelector('[data-sender-avatar="agent"]')).not.toBeNull()
+    // Your sends in progress are yours: they never count as a sender.
+  })
+
+  it('your own posts from another device are you, not a second sender', () => {
+    const other: OverlayThreadItem = { ...me(2), id: 'm2b', doc: { ...me(2).doc, id: 'm2b', from: 'rosson-phone' } }
+    threadHook.items = [me(0), agent(1), other, agent(3)]
+    renderInRoom(room, <ThreadOverlayPane addr="sales" conversationId="c" />)
     expect(columnsOn()).toEqual([])
-    const el = list()
-    const box = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
-    stubListBox(el, box)
-    // The first scroll after the list gets a height is a resize (re-pin).
-    fireEvent.scroll(el)
-    box.scrollTop = 0
-    fireEvent.scroll(el)
-    // The window grew 20 rows from memory: 50..99, ops55 among them.
-    expect(drawnIds()).toContain('ops55')
-    expect(columnsOn()).toContain('ops55')
-    expect(columnsOn()).toContain('sales98')
-    expect(row('ops55').querySelector('[data-sender-avatar="agent"]')).not.toBeNull()
   })
 
   it('moves by CSS transition; reduced motion: no transition class', () => {

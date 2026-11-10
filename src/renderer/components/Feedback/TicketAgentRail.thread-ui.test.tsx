@@ -161,7 +161,12 @@ describe('a ticket’s discussion in the Thread look', () => {
       expect(agent.querySelector('[data-zen-bubble]')?.getAttribute('data-zen-bubble')).toBe('agent')
       expect(agent.querySelector('[data-thread-author]')?.textContent).toBe('scout')
       expect(mine.querySelector('[data-zen-bubble]')?.getAttribute('data-zen-bubble')).toBe('me')
-      expect(mine.querySelector('[data-thread-author]')?.textContent).toBe('You')
+      // As the Thread: the name over another's run; yours has none, and its
+      // status line under it.
+      expect(agent.querySelector('[data-thread-meta="name"]')?.compareDocumentPosition(agent.querySelector('[data-zen-bubble]')!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+      expect(mine.hasAttribute('data-mine')).toBe(true)
+      expect(mine.querySelector('[data-thread-author]')).toBeNull()
+      expect(mine.querySelector('[data-thread-meta="status"]')).not.toBeNull()
       // Markdown in the bubble.
       const body = agent.querySelector('[data-zen-bubble]') as HTMLElement
       expect(body.querySelector('strong')?.textContent).toBe('SQLite')

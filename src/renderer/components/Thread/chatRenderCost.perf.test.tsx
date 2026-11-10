@@ -315,6 +315,15 @@ describe('the Thread beside an agent (500 messages)', () => {
     })
     note('Thread 500', 'one keystroke', key)
 
+    // A turn's first frame can turn the receipt under your newest message
+    // into "Read" (threadReceipt): that one row, once, no markdown.
+    const first = await measure(() => {
+      thread.set({ turn: turnOf(0) })
+    })
+    note('Thread 500', 'first activity frame', first)
+    expect(first.rows).toBeLessThanOrEqual(1)
+    expect(first.md).toBe(0)
+
     const frames = await measure(() => {
       thread.set({ turn: turnOf(1) })
       thread.set({ turn: turnOf(2) })

@@ -119,7 +119,7 @@ describe('DesignThreadColumn', () => {
     h.items = [DESIGN_POST]
     renderInRoom(room, <DesignThreadColumn projectPath="/w/docs" agentName="docs" visible />)
     await flush()
-    expect(screen.getByText('You · via Design')).toBeTruthy()
+    expect(screen.getByText(/^via Design/)).toBeTruthy()
     expect(screen.getByText(/make it bigger/)).toBeTruthy()
   })
 

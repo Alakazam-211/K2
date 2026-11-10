@@ -47,10 +47,13 @@ import {
   sameSenderSlot,
   threadSender,
   threadSenderSlots,
+  threadSendersShown,
+  useStickyOn,
   useThreadSenderAnchor,
   type ThreadSenderSlot,
 } from '@/components/Thread/threadSenders'
-import { threadRunEnds } from '@/components/Thread/threadRuns'
+import { threadRunEnds, threadRunStarts } from '@/components/Thread/threadRuns'
+import { threadReceiptFor, threadReceiptRow, type ThreadReceipt } from '@/components/Thread/threadReceipt'
 import { useReducedMotion } from '@/hooks/useReducedMotion'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { handoffApi, type HandoffDecideBody, type HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
@@ -68,11 +71,94 @@ const ThreadSenderPicture = lazy(() =>
 
 // 2026-10-16 (Rosson: "update the thread UI in K2 to match what we have in
 // mobile/the zen garden"): the desktop Thread draws the Zen Thread widget's
-// pieces (`components/Thread/ThreadZenKit`): text bubbles, "author · time"
-// under each, the cards inside, "Earlier messages", the empty line, and the
+// pieces (`components/Thread/ThreadZenKit`): text bubbles, the cards inside, "Earlier messages", the empty line, and the
 // activity drawer (`ZenActivityDrawer`) in place of the old working strip,
 // with the strip's Stop kept. Colours come from the app's Style
 // (`THREAD_ZEN_DESKTOP_TOKENS`); the shapes are Zen's.
+//
+// 2026-11-09 (Rosson: "In mobile, the answers from others go at the top of
+// the message while the delivery details from you go at the bottom"): the
+// details sit where the phone puts them, by run (threadRuns): another
+// sender's "name • time" over the first bubble of their run, and under the
+// last of yours one status line (the time, Sending…, Not sent, or the
+// Thread's "Delivered" / "Read", threadReceipt). Thread view and Split
+// draw this one pane, so they always agree (the sender pictures too).
+
+/** Who a drawn row is, for runs and the sender column. */
+function paneRow(
+  it: OverlayThreadItem,
+  viewer: ThreadViewer | null,
+  currentAddr?: string,
+  pastAddresses?: readonly string[],
+): { id: string; sender: ReturnType<typeof threadSender>; mine: boolean; at: number | undefined } {
+  return {
+    id: it.id,
+    sender: threadSender(it.doc, currentAddr, pastAddresses),
+    // A pending bubble is always this window's own send (as ThreadItemRow).
+    mine: it.pending ? true : threadAuthorLabel(it.doc, viewer, currentAddr, pastAddresses).mine,
+    at: it.doc.created_at,
+  }
+}
+
+/** The drawn rows' runs and sender column (rows `lo`..`hi` of `visible`):
+ *  the bubbles that start a run (the name line, the picture) and end one
+ *  (the tail, your status line). The rows just outside the window count,
+ *  so a run going on past either edge isn't cut there. */
+export function threadPaneRuns(
+  visible: readonly OverlayThreadItem[],
+  o: {
+    lo: number
+    hi: number
+    viewer: ThreadViewer | null
+    currentAddr?: string
+    pastAddresses?: readonly string[]
+    motion: boolean
+    host: string | null
+    /** The pictures are on (`threadPanePictures`, kept on); absent: by the
+     *  drawn rows. */
+    pictures?: boolean
+  },
+): { senders: ReturnType<typeof threadSenderSlots>; tails: Set<string>; starts: Set<string> } {
+  const row = (it: OverlayThreadItem) => paneRow(it, o.viewer, o.currentAddr, o.pastAddresses)
+  const run = (r: ReturnType<typeof row>) => ({ mine: r.mine, from: r.sender.key, at: r.at })
+  const rows = visible.slice(o.lo, o.hi).map(row)
+  const before = o.lo > 0 && o.lo <= visible.length ? row(visible[o.lo - 1]) : null
+  const after = o.hi < visible.length ? row(visible[o.hi]) : null
+  const ends = threadRunEnds(rows.map(run), after ? run(after) : null)
+  const starts = threadRunStarts(rows.map(run), before ? run(before) : null)
+  return {
+    senders: threadSenderSlots(rows, { motion: o.motion, host: o.host, starts, on: o.pictures }),
+    tails: new Set(rows.filter((_, i) => ends[i]).map((r) => r.id)),
+    starts: new Set(rows.filter((_, i) => starts[i]).map((r) => r.id)),
+  }
+}
+
+/** Sender pictures for a Thread (threadSenders): two or more other senders
+ *  among every message it has loaded (all pages, sends in progress), not
+ *  just the drawn rows. The pane keeps it on once on (`useStickyOn`). */
+export function threadPanePictures(
+  visible: readonly OverlayThreadItem[],
+  o: { viewer: ThreadViewer | null; currentAddr?: string; pastAddresses?: readonly string[] },
+): boolean {
+  return threadSendersShown(visible.map((it) => paneRow(it, o.viewer, o.currentAddr, o.pastAddresses)))
+}
+
+/** The Thread's one receipt (threadReceipt): the row it sits on and what
+ *  it says, over every message in memory (not just the drawn ones). */
+export function threadPaneReceipt(
+  visible: readonly OverlayThreadItem[],
+  o: { viewer: ThreadViewer | null; currentAddr?: string; pastAddresses?: readonly string[]; turn?: ThreadTurn | null },
+): { id: string; state: ThreadReceipt } | null {
+  const rows = visible.map((it) => ({
+    mine: it.pending ? true : threadAuthorLabel(it.doc, o.viewer, o.currentAddr, o.pastAddresses).mine,
+    confirmed: !it.pending,
+    agent: !it.pending && !isPersonPost(it.doc),
+    at: it.doc.created_at,
+  }))
+  const i = threadReceiptRow(rows)
+  const state = i >= 0 ? threadReceiptFor(rows, i, o.turn) : null
+  return state ? { id: visible[i].id, state } : null
+}
 
 /** The `--zen-*` tokens + the scope attribute for a desktop Thread box. */
 export function threadZenScopeProps(fontSize?: number): Record<string, unknown> & { style: CSSProperties } {
@@ -338,31 +424,38 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     onScrollWrite: onSearchScroll,
   })
 
-  // Sender pictures (Rosson 2026-11-04): more than two people among the
-  // drawn rows (the window, not the scroll position inside it) puts each
-  // other sender's picture on their left. Recomputed when the rows or the
-  // window move, never per keystroke or frame.
+  // Sender pictures (Rosson 2026-11-04, 2026-11-09): two or more other
+  // senders among every loaded message put each other sender's picture on
+  // their left; once on, on until another Thread opens. Runs (threadRuns):
+  // the name line, the tail, your status line. Recomputed when the rows or
+  // the window move, never per keystroke or frame.
   const reducedMotion = useReducedMotion()
   const senderHost = roomScope.isPrimary ? null : roomScope.hostKey
-  // Glass's bubble tail (threadRuns): on the last bubble of each run. The
-  // row after the window counts, so a run going on past it has no tail here.
-  const { senders, tails } = useMemo(() => {
-    const row = (it: OverlayThreadItem) => ({
-      id: it.id,
-      sender: threadSender(it.doc, currentAddr, pastAddresses),
-      // A pending bubble is always this window's own send (as ThreadItemRow).
-      mine: it.pending ? true : threadAuthorLabel(it.doc, viewer, currentAddr, pastAddresses).mine,
-      at: it.doc.created_at,
-    })
-    const rows = visible.slice(win.lo, win.hi).map(row)
-    const after = win.hi < visible.length ? row(visible[win.hi]) : null
-    const run = (r: ReturnType<typeof row>) => ({ mine: r.mine, from: r.sender.key, at: r.at })
-    const ends = threadRunEnds(rows.map(run), after ? run(after) : null)
-    return {
-      senders: threadSenderSlots(rows, { motion: !reducedMotion, host: senderHost }),
-      tails: new Set(rows.filter((_, i) => ends[i]).map((r) => r.id)),
-    }
-  }, [visible, win.lo, win.hi, viewer, currentAddr, pastAddresses, reducedMotion, senderHost])
+  const loadedPictures = useMemo(
+    () => threadPanePictures(visible, { viewer, currentAddr, pastAddresses }),
+    [visible, viewer, currentAddr, pastAddresses],
+  )
+  const pictures = useStickyOn(loadedPictures, `${roomScope.hostKey ?? ''}|${addr}|${conversationId ?? ''}`)
+  const { senders, tails, starts } = useMemo(
+    () =>
+      threadPaneRuns(visible, {
+        lo: win.lo,
+        hi: win.hi,
+        viewer,
+        currentAddr,
+        pastAddresses,
+        motion: !reducedMotion,
+        host: senderHost,
+        pictures,
+      }),
+    [visible, win.lo, win.hi, viewer, currentAddr, pastAddresses, reducedMotion, senderHost, pictures],
+  )
+  // "Delivered" / "Read" under your newest confirmed message (its own memo:
+  // the turn moves with every activity frame, the runs don't).
+  const receipt = useMemo(
+    () => threadPaneReceipt(visible, { viewer, currentAddr, pastAddresses, turn: liveTurn }),
+    [visible, viewer, currentAddr, pastAddresses, liveTurn],
+  )
   useThreadSenderAnchor(
     senders.on,
     () => listRef.current,
@@ -469,6 +562,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
                 still={win.wasDrawn(it.id) || wasPendingBubble(it.id)}
                 sender={senders.slots.get(it.id) ?? null}
                 tail={tails.has(it.id)}
+                runStart={starts.has(it.id)}
+                receipt={receipt?.id === it.id ? receipt.state : null}
               />
             ))}
             <ThreadWindowSpacer px={win.below} gap={THREAD_LIST_GAP} edge="bottom" />
@@ -526,6 +621,8 @@ interface OverlayRowProps {
   still: boolean
   sender: ThreadSenderSlot | null
   tail: boolean
+  runStart: boolean
+  receipt: ThreadReceipt | null
 }
 
 /** One Thread row, memoized (0.46.2): a keystroke, an activity frame, a
@@ -552,6 +649,8 @@ const OverlayRow = memo(
     a.handoffRemoteHost === b.handoffRemoteHost &&
     a.still === b.still &&
     a.tail === b.tail &&
+    a.runStart === b.runStart &&
+    a.receipt === b.receipt &&
     sameSenderSlot(a.sender, b.sender),
 )
 
@@ -569,6 +668,8 @@ export function ThreadItemRow({
   still,
   sender = null,
   tail,
+  runStart,
+  receipt = null,
 }: {
   item: OverlayThreadItem
   /** Who is looking (`useThreadViewer` on the room's server). Defaults to
@@ -591,8 +692,14 @@ export function ThreadItemRow({
   still?: boolean
   /** The sender column (more than two people in the Thread). */
   sender?: ThreadSenderSlot | null
-  /** The last bubble of its run (threadRuns): Glass draws its tail. */
+  /** The last bubble of its run (threadRuns): Glass draws its tail; yours
+   *  has the status line under it. */
   tail?: boolean
+  /** The first bubble of its run (threadRuns): another sender's name and
+   *  time go over it. Absent: the details under every bubble (no runs). */
+  runStart?: boolean
+  /** The Thread's receipt sits on this row (threadReceipt). */
+  receipt?: ThreadReceipt | null
 }): JSX.Element {
   const { label: author, mine } = threadAuthorLabel(item.doc, viewer, currentAddr, pastAddresses)
   const now = nowSec ?? Math.floor(Date.now() / 1000)
@@ -618,6 +725,8 @@ export function ThreadItemRow({
       still={still}
       sender={sender}
       tail={tail}
+      runStart={runStart}
+      receipt={receipt}
       pending={pending?.state}
       footer={pending?.state === 'failed' ? <PendingSendActions clientMsgId={pending.clientMsgId} error={pending.error} /> : undefined}
     />

@@ -57,6 +57,7 @@ import {
 import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadWindowSpacer } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
+import { threadRunWindow } from '@/components/Thread/threadRuns'
 import { useFollowOnResize } from '@/hooks/useStickToBottom'
 import { useChatSessionTurn, type ChatSessionTarget } from '@/components/Thread/sessionTurn'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
@@ -411,6 +412,10 @@ export function ThreadTab({
   // A row's key is its comment id (0.46.6, TA12): the doc id its files are
   // read by. An older daemon sends no ids: the place in the thread.
   const keys = useMemo(() => (comments ?? []).map((c, i) => c.id || `${ticketId}:${i}`), [comments, ticketId])
+  const runInputs = useMemo(
+    () => (comments ?? []).map((c) => ({ mine: isYou(c.author), from: c.author, at: c.at })),
+    [comments, isYou],
+  )
 
   // Files (0.46.6): the ticket door when the server has it.
   const scope = primaryScope()
@@ -440,6 +445,9 @@ export function ThreadTab({
     },
   })
   const onWindowScroll = win.onScroll
+  // The Thread's runs (threadRuns): names over others' runs, your status
+  // line under yours, Glass's tail on the last of each.
+  const runs = useMemo(() => threadRunWindow(runInputs, win.lo, win.hi), [runInputs, win.lo, win.hi])
   // The list (and its scroller) mounts once the ticket loads.
   const listShown = item !== null && !error
   // At the bottom, the list stays at its true bottom when the message box
@@ -634,6 +642,8 @@ export function ThreadTab({
                     timeLabel={formatRelativeTime(c.at, nowSec)}
                     still={win.wasDrawn(keys[i])}
                     attachments={c.attachments}
+                    runStart={runs.starts[j]}
+                    tail={runs.ends[j]}
                   />
                 )
               })}

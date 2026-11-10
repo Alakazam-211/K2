@@ -471,8 +471,12 @@ describe('Thread overlay choice chips + secret field', () => {
       renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
       const rows = screen.getAllByTestId('thread-item')
       expect(rows).toHaveLength(2)
-      expect(rows[0].textContent).toContain('You')
-      expect(rows[1].textContent).toContain('Rosson')
+      // Yours (as the phone): right side, no name; someone else's: their
+      // name over the bubble.
+      expect(rows[0].hasAttribute('data-mine')).toBe(true)
+      expect(rows[0].querySelector('[data-thread-author]')).toBeNull()
+      expect(rows[1].hasAttribute('data-mine')).toBe(false)
+      expect(rows[1].querySelector('[data-thread-author]')?.textContent).toBe('Rosson')
       expect(rows[1].textContent).not.toContain('You')
     })
   })

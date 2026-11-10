@@ -159,6 +159,10 @@ export type SettingsSection =
    *  §1): one switch per core (Markdown, Text and code, Any other file).
    *  Needs `docs-cores-v1`. */
   | 'multiplayer'
+  /** Settings → Access → Remote Desktop (Beta, prd-remote-desktop-tab-v1
+   *  §8): the switch, hidden apps, grants, viewers, the access log. Needs
+   *  `remote-desktop-v1`. */
+  | 'remote-desktop'
 
 export interface TerminalSettings {
   fontFamily: string

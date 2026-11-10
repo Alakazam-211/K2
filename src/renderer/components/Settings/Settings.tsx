@@ -52,6 +52,7 @@ import { MultiplayerSection, MULTIPLAYER_MANIFEST } from './sections/Multiplayer
 import { multiplayerCoresAvailable } from './sections/multiplayer-cores-api'
 import { SewSection, SEW_MANIFEST } from './sections/SewSection'
 import { VoiceRoomsSection, VOICE_ROOMS_MANIFEST } from './sections/VoiceRoomsSection'
+import { RemoteDesktopSection, REMOTE_DESKTOP_MANIFEST, remoteDesktopAvailable } from './sections/RemoteDesktopSection'
 import { voice } from '@/stores/voice'
 import { SkinAccessSection, SKIN_ACCESS_MANIFEST } from './sections/SkinAccessSection'
 import { AppApprovalsSection, APP_APPROVALS_MANIFEST } from './sections/AppApprovalsSection'
@@ -136,6 +137,17 @@ function thirdPartyBotLeaves(): NavLeaf[] {
 function voiceRoomsShown(): boolean {
   if (useSettingsStore.getState().voiceRoomsPreview) return true
   return voice.store.getState().servers.some((s) => s.isWindow && s.kind === 'live')
+}
+
+/** Settings → Access → Remote Desktop shows only for a server that reports
+ *  `remote-desktop-v1` (prd-remote-desktop-tab-v1 §5); an older one has no
+ *  routes. */
+function remoteDesktopShown(): boolean {
+  try {
+    return remoteDesktopAvailable(settingsPrimaryScope())
+  } catch {
+    return false
+  }
 }
 
 /** Settings → Cores → Multiplayer shows only for a server that reports
@@ -234,6 +246,9 @@ export function settingsNav({
         // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1): the
         // owner's global switch, each agent's switch, Waiting on you.
         { id: 'permission-cards', label: 'Permission Cards', beta: true },
+        // prd-remote-desktop-tab-v1 §8: this computer's screen in a Desktop
+        // tab; only with `remote-desktop-v1` (remoteDesktopShown).
+        { id: 'remote-desktop', label: 'Remote Desktop', beta: true, hide: !remoteDesktopShown() },
       ],
     },
     {
@@ -326,6 +341,8 @@ export default function Settings(): React.JSX.Element {
   const notificationsShown = threadPushAvailable()
   // Multiplayer cores: only on a server that reports `docs-cores-v1`.
   const multiplayerPageShown = multiplayerShown()
+  // Remote desktop: only on a server that reports `remote-desktop-v1`.
+  const remoteDesktopPageShown = remoteDesktopShown()
   // Garden access (always on from 0.46.3): pages read the daemon's answer
   // from this store; read it with the Gardens list, once per open.
   useEffect(() => {
@@ -377,6 +394,7 @@ export default function Settings(): React.JSX.Element {
       ...DATA_MANIFEST,
       ...COMPUTE_MANIFEST,
       ...(multiplayerShown() ? MULTIPLAYER_MANIFEST : []),
+      ...(remoteDesktopShown() ? REMOTE_DESKTOP_MANIFEST : []),
       ...APPS_SERVER_MANIFEST,
       ...APPS_RESOURCES_MANIFEST,
       ...SKIN_ACCESS_MANIFEST,
@@ -413,6 +431,10 @@ export default function Settings(): React.JSX.Element {
     if (!multiplayerPageShown && activeSection === 'multiplayer') {
       setSection('general')
     }
+    // A server without the desktop routes has no Remote Desktop page.
+    if (!remoteDesktopPageShown && activeSection === 'remote-desktop') {
+      setSection('general')
+    }
     // 0.46.3: Local Data and External Data live in Settings → Gardens on a
     // client with Gardens; an old deep link lands there ("Not in a Garden"
     // unless a search result already asked for a Garden).
@@ -421,7 +443,7 @@ export default function Settings(): React.JSX.Element {
       if (landing && !useGardensLandingStore.getState().landing) requestGardensLanding(landing)
       setSection(section)
     }
-  }, [activeSection, setSection, notificationsShown, multiplayerPageShown, zenGardensShown])
+  }, [activeSection, setSection, notificationsShown, multiplayerPageShown, remoteDesktopPageShown, zenGardensShown])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -813,6 +835,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'compute' && (
           <SectionErrorBoundary>
             <ComputeSection />
+          </SectionErrorBoundary>
+        )}
+        {remoteDesktopPageShown && activeSection === 'remote-desktop' && (
+          <SectionErrorBoundary>
+            <RemoteDesktopSection scope={settingsPrimaryScope()} />
           </SectionErrorBoundary>
         )}
         {multiplayerPageShown && activeSection === 'multiplayer' && (

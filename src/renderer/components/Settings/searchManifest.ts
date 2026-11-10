@@ -191,6 +191,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'app-approvals': 'App Approvals',
   compute: 'Compute',
   multiplayer: 'Multiplayer',
+  'remote-desktop': 'Remote Desktop',
 }
 
 /** Suppress unused-type warning since IndexedEntry is reserved for future optimization. */

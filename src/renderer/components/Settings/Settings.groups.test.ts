@@ -97,7 +97,9 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
     for (const zenGardens of [true, false]) {
       const nav = settingsNav({ zenGardens })
       // Permission Cards (Beta, 0.46.3, prd-agent-settings-cards-v1 §2.1) closes Access.
-      expect(group(nav, 'Access').items.map((i) => i.id)).toEqual(['k2-access', 'people', 'user-templates', 'api-tokens', 'vault', 'permission-cards'])
+      // Remote Desktop (Beta, prd-remote-desktop-tab-v1 §8) after it; hidden
+      // without `remote-desktop-v1`.
+      expect(group(nav, 'Access').items.map((i) => i.id)).toEqual(['k2-access', 'people', 'user-templates', 'api-tokens', 'vault', 'permission-cards', 'remote-desktop'])
       expect(group(nav, 'Network').items.map((i) => i.id)).toEqual(
         zenGardens
           ? ['k2-connect', 'domains', 'connections', 'companion', 'homes-sync']

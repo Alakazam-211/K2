@@ -46577,6 +46577,7 @@ cmd_schema() {
         {"name": "--id", "arg": "client-id", "description": "Your key for this database: a new key makes a new database, the same key answers the one it made."},
         {"name": "--db-access", "arg": "off|read|write", "description": "Set the create-only db_agent_access flag on this workspace (hire convenience). Default stays off. Does not gate list/dsn/store."},
         {"name": "--major", "arg": "16|17", "description": "The Postgres major to create on. Default: the box's (17 on new boxes; an existing box keeps its current major until the owner runs k2 db default-major 17). A major other than the default needs the agent switch \"Allow this agent to manage Postgres versions\". Unsupported or past-EOL majors exit 3."},
+        {"name": "--cluster", "arg": "name", "description": "Create in this workspace's named cluster (k2 db cluster create) instead of a main one. Needs \"Allow this agent to manage Postgres versions\" for an agent; with --major, it must be the cluster's major. Not with --test."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -46592,9 +46593,31 @@ cmd_schema() {
     },
     {
       "name": "db clusters",
-      "usage": "k2 db clusters [--json]",
-      "description": "Postgres majors side by side: one cluster per major (the first on 5432, the rest 5433-5449), how many databases each serves, the default major for new databases, and the databases that can move up (k2 db upgrade <db> --check).",
+      "usage": "k2 db clusters [--health] [--json]",
+      "description": "The Postgres clusters on this box: each major's main cluster (the first on 5432, the rest 5433-5449), the named clusters K2 made (17/feedback), and any cluster made outside K2 (recorded foreign: K2 never touches it). How many databases each serves, the default major for new databases, and the databases that can move up (k2 db upgrade <db> --check). --health adds, for each K2 cluster (never a foreign one), its connections, each database's size and the WAL archive's counters: what a monitor reads.",
       "args": [],
+      "flags": [
+        {"name": "--health", "arg": null, "description": "Connections, database sizes and the WAL archiver for each K2 cluster."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster create",
+      "usage": "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] [--json]",
+      "description": "Make a named Postgres cluster (17/feedback) beside each major's main one, through the root helper (protocol 15; no root session): for one database that needs a cluster to itself, such as point-in-time restore or its own restarts. It runs in K2's band (5433-5449, never 5432; without --port the first free one), loopback only, with K2's settings and RAM cap, and belongs to this workspace: only it creates databases there (k2 db create --cluster <name>). The name is the box's: 2-24 of a-z, 0-9 and _, starting with a letter, never main, and never one any cluster already has, so a cluster made outside K2 is never taken over. --wal-archive copies every finished WAL segment to /var/lib/postgresql/k2-wal/<major>-<name> for a backup to ship and prune. The owner, or an agent with \"Allow this agent to manage Postgres versions\" (exit 3 otherwise). K2 never removes a cluster.",
+      "args": [{"name": "major", "required": true}],
+      "flags": [
+        {"name": "--name", "arg": "name", "description": "The cluster's name (required)."},
+        {"name": "--port", "arg": "port", "description": "A free port in 5433-5449 (default: the first free one)."},
+        {"name": "--wal-archive", "arg": null, "description": "Archive WAL into the cluster's spool (archive_mode on, archive_timeout 300 s)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster restart",
+      "usage": "k2 db cluster restart <name> [--json]",
+      "description": "Restart one named cluster K2 made (a minor update, a drill), nothing else: its databases' connections drop and come back. The owner, or an agent with \"Allow this agent to manage Postgres versions\" for its own workspace's cluster.",
+      "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
@@ -53136,6 +53159,16 @@ MAJORS SIDE BY SIDE
   18 waits for K2's SQL parser (guest doors) and Supabase. Moving a
   database never removes a major: 16 stays for the databases still on it
   (`k2 db clusters`).
+
+NAMED CLUSTERS (0.46.11)
+  One database that needs a cluster to itself (its own WAL archive and
+  point-in-time restore, its own restarts) gets a named one beside the
+  major's main cluster: `k2 db cluster create 17 --name feedback
+  [--wal-archive]`, then `k2 db create --cluster feedback --name feedback`.
+  It belongs to the workspace that made it, keeps its major (k2 db upgrade
+  refuses its databases: named_cluster_fixed) and is never removed by K2.
+  A cluster made outside K2 (another name on the same major) is listed as
+  foreign and never touched, offered to an App or taken over.
 
 THE MOVE (one database at a time, by copy)
   k2 db upgrade <db> --check      read-only: majors, the target cluster
@@ -83208,6 +83241,14 @@ elif verb == "clusters":
              "defaultMajor": d.get("defaultMajor"), "defaultMajorPinned": d.get("defaultMajorPinned"),
              "defaultMajorSource": d.get("defaultMajorSource"),
              "upgradeAvailable": d.get("upgradeAvailable") or []}
+        # 0.46.11: the helper's view, named clusters and (--health) each K2
+        # cluster's health block, from GET /cli/db/clusters.
+        cstatus, craw = request("GET", "/cli/db/clusters", {"health": "1"} if os.environ.get("D_HEALTH") == "true" else {})
+        cd = load(craw)
+        if cstatus == 200 and isinstance(cd, dict) and isinstance(cd.get("clusters"), list):
+            d["clusters"] = cd["clusters"]
+            if cd.get("helperView"):
+                d["helperView"] = cd["helperView"]
 elif verb == "default_major":
     status, raw = request("POST", "/cli/db/server/default-major", body={"major": int(os.environ.get("D_MAJOR") or 0)})
     d = load(raw)
@@ -83361,8 +83402,30 @@ elif verb == "clusters":
     cl = d.get("clusters") or []
     print("%s cluster(s) · new databases go on Postgres %s%s" % (len(cl), d.get("defaultMajor"), " (pinned)" if d.get("defaultMajorPinned") else ""))
     for c in cl:
-        n = len([x for x in d.get("databases") or [] if x.get("major") == c.get("major")])
-        print("  Postgres %s  port %s  %s  %s/%s  %s database(s)" % (c.get("major"), c.get("port"), c.get("unit"), c.get("role"), c.get("state"), n))
+        label = c.get("label") or ("%s/%s" % (c.get("major"), c.get("name") or "main"))
+        named = (c.get("name") or "main") != "main"
+        if named:
+            n = len([x for x in d.get("databases") or [] if x.get("cluster") == label])
+        else:
+            n = len([x for x in d.get("databases") or [] if x.get("major") == c.get("major") and not x.get("cluster")])
+        extra = ""
+        if c.get("role") == "foreign":
+            extra = "  made outside K2: never touched"
+        elif named:
+            extra = "  named%s" % (", WAL archive" if c.get("walArchive") else "")
+        print("  %-14s port %s  %s  %s/%s  %s database(s)%s" % (label, c.get("port"), c.get("unit"), c.get("role"), c.get("state"), n, extra))
+        h = c.get("health")
+        if isinstance(h, dict):
+            if h.get("error"):
+                print("      health: %s" % h["error"])
+            elif h.get("online") is False:
+                print("      health: not running")
+            else:
+                sizes = ", ".join("%s %s MB" % (x.get("name"), round((x.get("bytes") or 0) / 1048576)) for x in h.get("databases") or [])
+                a = h.get("archiver") or {}
+                print("      %s/%s connections · %s" % (h.get("connections"), h.get("maxConnections"), sizes or "no databases"))
+                if h.get("archiveMode") == "on":
+                    print("      WAL archive: %s archived (last %s), %s failed (last %s)" % (a.get("archivedCount"), a.get("lastArchivedAt") or "-", a.get("failedCount"), a.get("lastFailedAt") or "-"))
     for u in d.get("upgradeAvailable") or []:
         print("  upgrade available: %s (%s → %s)" % (u.get("name"), u.get("from"), "/".join(str(x) for x in u.get("to") or [])))
 elif verb == "default_major":
@@ -83455,7 +83518,15 @@ Owner token only for a foreign workspace; a cell stamp still pins identity.
 
 OWNER (engine — server-side owner/admin gate; agents exit 3)
   status [--health] [--json]     supported, state, pg major, clusters, upgrades available
-  clusters [--json]              Postgres majors side by side (one cluster per major, 5432-5449)
+  clusters [--health] [--json]   Postgres clusters: each major's main one (5432-5449), the
+                                 named ones K2 made, and any made outside K2 (foreign:
+                                 never touched). --health: connections, sizes, WAL archive
+  cluster create <M> --name <n> [--port <p>] [--wal-archive]
+                                 a named cluster (17/feedback) for this workspace, via the
+                                 root helper (protocol 15): band port, K2's settings; K2
+                                 never takes over or removes a cluster. Owner, or an agent
+                                 with "Allow this agent to manage Postgres versions"
+  cluster restart <name>         restart that one named cluster (same rule)
   default-major <M> [--json]     owner: the major new databases go on (new boxes: 17;
                                  existing boxes keep their current major until set)
   enable [--json]                catalog + start unit if baked (--bake --with-db)
@@ -83492,6 +83563,10 @@ AGENT (workspace — identity from token, never body project=)
                                  workspace's default database. Shows no password: get the
                                  DSN with k2 db dsn [--db <name>]
   create --test                  disposable scratch DB (not cap; owner/cell only)
+  create --cluster <name> [--name <db>] [--id <id>]
+                                 a database in this workspace's named cluster (k2 db
+                                 cluster create); then point the App at it:
+                                 k2 db dsn --ref --db <db>
   create --major 16|17           pick the Postgres major (default: the box's: 17 on new
                                  boxes, the current major on existing ones until
                                  k2 db default-major); another major needs "Allow this agent to
@@ -83769,6 +83844,44 @@ print("database cap: %s%s" % ("unlimited (0)" if cap == 0 else out["cap"], " (th
 '
 }
 
+# `POST /cli/db/clusters` (named Postgres clusters, 0.46.11): print the
+# refusal ({"error":{code,hint}} on stderr; exit 2 usage, 3 refused) or the
+# answer (`--json` raw).
+_db_named_post() {
+    local body="$1" as_json="$2" what="$3"
+    _compute_split "$(K2_CP_MAX_TIME=900 _compute_send POST /cli/db/clusters "$body")"
+    if [ "$_CP_STATUS" != "200" ]; then
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+raw=sys.stdin.read()
+try: v=json.loads(raw)
+except Exception: v={"error":{"code":"daemon_unreachable","hint":raw[:200] or "no answer from the K2 daemon"}}
+e=v.get("error")
+if not isinstance(e, dict): e={"code": e or "error", "hint": v.get("hint", "")}
+print(json.dumps({"error": {"code": e.get("code"), "hint": e.get("hint", "")}}))' >&2
+        case "$_CP_STATUS" in 400) exit 2 ;; 404) exit 1 ;; *) exit 3 ;; esac
+    fi
+    if [ "$as_json" = true ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | K2_DN_WHAT="$what" python3 -c 'import json,os,sys
+v=json.load(sys.stdin)
+w=os.environ["K2_DN_WHAT"]
+if w == "cluster":
+    c=v.get("cluster") or {}
+    print("cluster %s on port %s (%s, %s)" % (c.get("label"), c.get("port"), c.get("unit"), c.get("state")))
+    if c.get("walSpool"):
+        print("WAL archive: %s (a backup ships and prunes it)" % c["walSpool"])
+    print("next: k2 db create --cluster %s --name <db>" % (c.get("name")))
+elif w == "restart":
+    print("restarted %s" % v.get("cluster"))
+else:
+    print("created %s in %s" % (v.get("name"), v.get("cluster") or "?"))
+    if v.get("existing"):
+        print("(already there: same --id or name)")
+    if v.get("dsn"):
+        print("dsn: %s" % v.get("dsn"))
+    if v.get("dsnHint"):
+        print("no password shown; %s" % v["dsnHint"])'
+}
+
 cmd_db() {
     if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_db; exit 0; fi
     if [ "$1" = "home" ]; then shift; _db_home "$@"; exit $?; fi
@@ -83826,7 +83939,7 @@ on=v["agentsCanUpgradePostgres"]
 print("Allow this agent to manage Postgres versions: %s for %s%s" % ("on" if on else "off", v["workspace"], " (check, move, roll back and create --major on its own and its Apps databases; each act is in Access Audit; deleting the old copy stays yours)" if on else ""))'
             ;;
         create)
-            local access="" test=false major=""
+            local access="" test=false major="" cluster=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
@@ -83836,9 +83949,22 @@ print("Allow this agent to manage Postgres versions: %s for %s%s" % ("on" if on 
                     --test) test=true; shift ;;
                     --major) major="${2:-}"; shift 2 ;;
                     --major=*) major="${1#*=}"; shift ;;
+                    --cluster) cluster="${2:-}"; shift 2 ;;
+                    --cluster=*) cluster="${1#*=}"; shift ;;
                     *) _db_err "usage" "unexpected '$1'"; exit 2 ;;
                 esac
             done
+            if [ -n "$cluster" ]; then
+                if $test || [ -n "$access" ]; then
+                    _db_err "usage" "k2 db create --cluster takes --name, --id and --major only (no --test, no --db-access)"
+                    exit 2
+                fi
+                if [ -n "$major" ]; then
+                    case "$major" in [1-9][0-9]) ;; *) _db_err "usage" "--major takes a Postgres major, e.g. 16 or 17"; exit 2 ;; esac
+                fi
+                _db_named_post "$(_compute_json K2_CJ_op=create-db K2_CJ_project="$(_compute_ws "")" K2_CJ_cluster="$cluster" K2_CJ_name="$name" K2_CJ_id="$client_id" K2_CJ_major_n="$major")" "$as_json" create-db
+                exit $?
+            fi
             if [ -n "$major" ]; then
                 case "$major" in [1-9][0-9]) ;; *) _db_err "usage" "--major takes a Postgres major, e.g. 16 or 17"; exit 2 ;; esac
             fi
@@ -84004,8 +84130,39 @@ else:
                 esac
             done ;;
         clusters)
-            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
-            D_VERB="clusters" D_JSON="$as_json" _db_py ;;
+            while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; --health) health=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+            D_VERB="clusters" D_JSON="$as_json" D_HEALTH="$health" _db_py ;;
+        cluster)
+            # Named clusters (0.46.11, prd-named-pg-clusters-v1): POST
+            # /cli/db/clusters over the cell socket (an agent's switch is
+            # checked as local there) or the owner token.
+            local c_op="${1:-}"; shift 2>/dev/null || true
+            local c_major="" c_name="" c_port="" c_wal=""
+            case "$c_op" in
+                create)
+                    c_major="${1:-}"; shift 2>/dev/null || true
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --json) as_json=true; shift ;;
+                            --name) c_name="${2:-}"; shift 2 ;;
+                            --name=*) c_name="${1#*=}"; shift ;;
+                            --port) c_port="${2:-}"; shift 2 ;;
+                            --port=*) c_port="${1#*=}"; shift ;;
+                            --wal-archive) c_wal=1; shift ;;
+                            *) _db_err "usage" "unexpected '$1' — k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive]"; exit 2 ;;
+                        esac
+                    done
+                    case "$c_major" in [1-9][0-9]) ;; *) _db_err "usage" "k2 db cluster create <major> --name <name> (e.g. k2 db cluster create 17 --name feedback)"; exit 2 ;; esac
+                    [ -n "$c_name" ] || { _db_err "usage" "k2 db cluster create <major> --name <name>"; exit 2; }
+                    if [ -n "$c_port" ]; then case "$c_port" in 54[3-4][0-9]) ;; *) _db_err "usage" "--port takes a port in 5433-5449"; exit 2 ;; esac; fi
+                    _db_named_post "$(_compute_json K2_CJ_op=create K2_CJ_project="$(_compute_ws "")" K2_CJ_major_n="$c_major" K2_CJ_name="$c_name" K2_CJ_port_n="$c_port" K2_CJ_walArchive_b="$c_wal")" "$as_json" cluster ;;
+                restart)
+                    c_name="${1:-}"; shift 2>/dev/null || true
+                    while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
+                    [ -n "$c_name" ] || { _db_err "usage" "k2 db cluster restart <name>"; exit 2; }
+                    _db_named_post "$(_compute_json K2_CJ_op=restart K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name")" "$as_json" restart ;;
+                *) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name>"; exit 2 ;;
+            esac ;;
         default-major)
             local major="${1:-}"; shift || true
             while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done

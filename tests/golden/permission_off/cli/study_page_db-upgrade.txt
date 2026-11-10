@@ -10,6 +10,16 @@ MAJORS SIDE BY SIDE
   database never removes a major: 16 stays for the databases still on it
   (`k2 db clusters`).
 
+NAMED CLUSTERS (0.46.11)
+  One database that needs a cluster to itself (its own WAL archive and
+  point-in-time restore, its own restarts) gets a named one beside the
+  major's main cluster: `k2 db cluster create 17 --name feedback
+  [--wal-archive]`, then `k2 db create --cluster feedback --name feedback`.
+  It belongs to the workspace that made it, keeps its major (k2 db upgrade
+  refuses its databases: named_cluster_fixed) and is never removed by K2.
+  A cluster made outside K2 (another name on the same major) is listed as
+  foreign and never touched, offered to an App or taken over.
+
 THE MOVE (one database at a time, by copy)
   k2 db upgrade <db> --check      read-only: majors, the target cluster
                                    (created on a free band port if needed),

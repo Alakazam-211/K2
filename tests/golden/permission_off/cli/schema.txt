@@ -907,6 +907,7 @@ exit: 0
         {"name": "--id", "arg": "client-id", "description": "Your key for this database: a new key makes a new database, the same key answers the one it made."},
         {"name": "--db-access", "arg": "off|read|write", "description": "Set the create-only db_agent_access flag on this workspace (hire convenience). Default stays off. Does not gate list/dsn/store."},
         {"name": "--major", "arg": "16|17", "description": "The Postgres major to create on. Default: the box's (17 on new boxes; an existing box keeps its current major until the owner runs k2 db default-major 17). A major other than the default needs the agent switch \"Allow this agent to manage Postgres versions\". Unsupported or past-EOL majors exit 3."},
+        {"name": "--cluster", "arg": "name", "description": "Create in this workspace's named cluster (k2 db cluster create) instead of a main one. Needs \"Allow this agent to manage Postgres versions\" for an agent; with --major, it must be the cluster's major. Not with --test."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -922,9 +923,31 @@ exit: 0
     },
     {
       "name": "db clusters",
-      "usage": "k2 db clusters [--json]",
-      "description": "Postgres majors side by side: one cluster per major (the first on 5432, the rest 5433-5449), how many databases each serves, the default major for new databases, and the databases that can move up (k2 db upgrade <db> --check).",
+      "usage": "k2 db clusters [--health] [--json]",
+      "description": "The Postgres clusters on this box: each major's main cluster (the first on 5432, the rest 5433-5449), the named clusters K2 made (17/feedback), and any cluster made outside K2 (recorded foreign: K2 never touches it). How many databases each serves, the default major for new databases, and the databases that can move up (k2 db upgrade <db> --check). --health adds, for each K2 cluster (never a foreign one), its connections, each database's size and the WAL archive's counters: what a monitor reads.",
       "args": [],
+      "flags": [
+        {"name": "--health", "arg": null, "description": "Connections, database sizes and the WAL archiver for each K2 cluster."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster create",
+      "usage": "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] [--json]",
+      "description": "Make a named Postgres cluster (17/feedback) beside each major's main one, through the root helper (protocol 15; no root session): for one database that needs a cluster to itself, such as point-in-time restore or its own restarts. It runs in K2's band (5433-5449, never 5432; without --port the first free one), loopback only, with K2's settings and RAM cap, and belongs to this workspace: only it creates databases there (k2 db create --cluster <name>). The name is the box's: 2-24 of a-z, 0-9 and _, starting with a letter, never main, and never one any cluster already has, so a cluster made outside K2 is never taken over. --wal-archive copies every finished WAL segment to /var/lib/postgresql/k2-wal/<major>-<name> for a backup to ship and prune. The owner, or an agent with \"Allow this agent to manage Postgres versions\" (exit 3 otherwise). K2 never removes a cluster.",
+      "args": [{"name": "major", "required": true}],
+      "flags": [
+        {"name": "--name", "arg": "name", "description": "The cluster's name (required)."},
+        {"name": "--port", "arg": "port", "description": "A free port in 5433-5449 (default: the first free one)."},
+        {"name": "--wal-archive", "arg": null, "description": "Archive WAL into the cluster's spool (archive_mode on, archive_timeout 300 s)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster restart",
+      "usage": "k2 db cluster restart <name> [--json]",
+      "description": "Restart one named cluster K2 made (a minor update, a drill), nothing else: its databases' connections drop and come back. The owner, or an agent with \"Allow this agent to manage Postgres versions\" for its own workspace's cluster.",
+      "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]

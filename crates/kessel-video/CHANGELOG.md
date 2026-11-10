@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.6
 
-The encoder report now matches what VideoToolbox actually used.
+The encoder report now matches what VideoToolbox actually used. No API
+changes; the Apple backend gains the `log` crate for one line per encoder
+session open.
 
 ### The hardware check reads the encoder list before the ask (macOS and iOS)
 

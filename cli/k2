@@ -97169,8 +97169,9 @@ People (a terminal outside K2):
   k2 permission approve <id>
   k2 permission deny <id> [--reason "…"]
   k2 permission beta on|off|status                 the server switch (owner; on by default)
-  k2 permission agent <workspace> on|off           one agent's switch (owner or admin; off
-                                                   until someone turns it on)
+  k2 permission agent <workspace> on|off           one agent's "Let this agent ask for
+                                                   permission" (owner or admin; off until
+                                                   someone turns it on)
 
 Rules: k2 study permissions
 EOF

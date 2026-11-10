@@ -14,6 +14,7 @@
 // render the graceful "not available yet" state instead of an error.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { primaryScope } from '@/kessel/server-scope'
 import { onMailChanged } from '@/stores/session-events'
 
@@ -197,6 +198,13 @@ export interface ApprovalItem extends OutboundItem {
  *  (daemon-cli surfaces non-2xx bodies as the Error message; mail
  *  routes answer `{"ok":false,"error":{"code","hint"}}`). */
 export function mailErrorInfo(err: unknown): { code?: string; hint?: string } {
+  // daemon-cli's DaemonHttpError already unpacked the body: the hint is the
+  // message and the code rides alongside.
+  if (err instanceof DaemonHttpError) {
+    const d = err.details
+    const hint = d && typeof d.hint === 'string' && d.hint !== '' ? d.hint : undefined
+    return { code: err.code ?? undefined, hint }
+  }
   const msg = err instanceof Error ? err.message : String(err)
   try {
     const parsed = JSON.parse(msg)
@@ -492,8 +500,7 @@ export interface InboxCapabilities {
 /** GET /cli/mail/inboxes — the unified catalog (hosted + linked). Access
  *  is cross-platform; no `supported` gate. */
 export async function fetchInboxes(): Promise<Inbox[]> {
-  const res = await daemonCliGet<{ ok: boolean; count: number; inboxes: Inbox[] }>(primaryScope(), 'mail/inboxes')
-  return Array.isArray(res?.inboxes) ? res.inboxes : []
+  return parseInboxes(await daemonCliGet<unknown>(primaryScope(), 'mail/inboxes'))
 }
 
 /** POST /cli/mail/access/grant — the Primary grants a workspace access, or
@@ -599,7 +606,16 @@ export interface LinkInboxBody {
 export async function addLinkedInbox(
   body: LinkInboxBody,
 ): Promise<{ ok: boolean; address: string; workspace?: string; draftsFolder?: string | null; hint?: string }> {
-  return daemonCliPost(primaryScope(), 'mail/link/add', body)
+  const raw = await daemonCliPost<unknown>(primaryScope(), 'mail/link/add', body)
+  const r = isRecord(raw) ? raw : {}
+  // The account the person typed stays the name when the reply leaves it out.
+  return {
+    ok: r.ok !== false,
+    address: str(r.address) ?? body.address,
+    workspace: str(r.workspace) ?? undefined,
+    draftsFolder: str(r.draftsFolder),
+    hint: str(r.hint) ?? undefined,
+  }
 }
 
 /** POST /cli/mail/link/remove — deletes the linked inbox AND its vault
@@ -659,7 +675,7 @@ export async function linkOauthStart(args: {
   /** `http://127.0.0.1:<port>/cb` from `oauth_loopback_bind`. */
   redirectUri?: string
 }): Promise<OauthStartResult> {
-  return daemonCliPost(primaryScope(), 'mail/link/oauth/start', args)
+  return parseOauthStart(await daemonCliPost<unknown>(primaryScope(), 'mail/link/oauth/start', args))
 }
 
 /** POST /cli/mail/link/oauth/start `{inbox, features}` — MCS1's in-place
@@ -676,7 +692,7 @@ export async function linkOauthUpgrade(args: {
   /** `http://127.0.0.1:<port>/cb` from `oauth_loopback_bind`. */
   redirectUri?: string
 }): Promise<OauthStartResult> {
-  return daemonCliPost(primaryScope(), 'mail/link/oauth/start', args)
+  return parseOauthStart(await daemonCliPost<unknown>(primaryScope(), 'mail/link/oauth/start', args))
 }
 
 /** POST /cli/mail/link/oauth/complete — relay a client-captured code (or
@@ -694,9 +710,7 @@ export async function linkOauthComplete(args: {
 /** GET /cli/mail/link/oauth/status?linkId=… — long-poll the consent flow.
  *  Owner-gated. `connected` carries the discovered `address`; failure states
  *  may carry a `hint`. Never returns tokens or codes. */
-export async function linkOauthStatus(
-  linkId: string,
-): Promise<{
+export interface OauthLinkStatus {
   state: 'pending' | 'connected' | 'denied' | 'expired' | 'error'
   address?: string
   hint?: string
@@ -705,8 +719,10 @@ export async function linkOauthStatus(
   code?: string
   /** admin_consent_required only: the page a tenant admin approves K2 on. */
   adminConsentUrl?: string
-}> {
-  return daemonCliGet(primaryScope(), 'mail/link/oauth/status', { linkId })
+}
+
+export async function linkOauthStatus(linkId: string): Promise<OauthLinkStatus> {
+  return parseOauthStatus(await daemonCliGet<unknown>(primaryScope(), 'mail/link/oauth/status', { linkId }))
 }
 
 // ── Bring-your-own OAuth client (BYO-OAuth — per-provider app override) ──
@@ -752,7 +768,7 @@ export type OauthClientProvider = 'gmail' | 'microsoft'
 
 /** GET /cli/mail/oauth-config — the per-provider client override state. */
 export async function fetchOauthConfig(): Promise<OauthConfig> {
-  return daemonCliGet<OauthConfig>(primaryScope(), 'mail/oauth-config')
+  return parseOauthConfig(await daemonCliGet<unknown>(primaryScope(), 'mail/oauth-config'))
 }
 
 /** POST /cli/mail/oauth-config/set — set a provider's own OAuth app.
@@ -776,6 +792,190 @@ export async function setOauthClient(args: {
  *  default client (deletes the vaulted custom client id + secret). */
 export async function clearOauthClient(provider: OauthClientProvider): Promise<void> {
   await daemonCliPost(primaryScope(), 'mail/oauth-config/clear', { provider })
+}
+
+// ── Reply guards (Email Link) ─────────────────────────────────────────
+//
+// Every reply the Email Link page reads goes through one of these before it
+// reaches React. A missing optional field becomes its default; a reply that
+// isn't the expected shape at all (an empty object, a list, a string)
+// throws MailReplyError, which the page shows as a failed read with Try
+// again, never a crash and never a silently empty list.
+
+/** A daemon reply that isn't the shape this page reads. */
+export class MailReplyError extends Error {
+  /** What K2 was reading, in plain words ("your email accounts"). */
+  readonly what: string
+  constructor(what: string, why: string) {
+    super(`K2 got an answer it couldn't read while loading ${what} (${why}).`)
+    this.name = 'MailReplyError'
+    this.what = what
+  }
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
+}
+function str(v: unknown): string | null {
+  return typeof v === 'string' ? v : null
+}
+function shapeOf(v: unknown): string {
+  if (Array.isArray(v)) return 'a list'
+  if (v === null || v === undefined) return 'nothing'
+  if (typeof v === 'object') return 'an object without the expected fields'
+  return `a ${typeof v}`
+}
+
+const LEVELS: readonly InboxLevel[] = ['read', 'draft', 'send']
+const AGENT_SEND: readonly AgentSendMode[] = ['off', 'approval', 'on']
+const SEND_STATES: readonly SendState[] = ['no_send_level', 'on', 'approval', 'blocked_off', 'blocked_approval']
+const CAP_SOURCES: readonly InboxCapabilities['source'][] = ['hosted', 'imap', 'google', 'microsoft']
+
+function oneOf<T extends string>(v: unknown, allowed: readonly T[]): T | undefined {
+  return typeof v === 'string' && (allowed as readonly string[]).includes(v) ? (v as T) : undefined
+}
+
+function parseParticipant(v: unknown, where: string): InboxParticipant {
+  if (!isRecord(v) || typeof v.projectId !== 'string' || v.projectId === '') {
+    throw new MailReplyError('your email accounts', `${where} has no workspace`)
+  }
+  const canManage = v.canManage === true
+  return {
+    projectId: v.projectId,
+    workspace: str(v.workspace),
+    level: oneOf(v.level, LEVELS) ?? 'read',
+    canManage,
+    // Delete needs management; never carry the pair the daemon refuses.
+    canDelete: canManage && v.canDelete === true,
+    agentSend: oneOf(v.agentSend, AGENT_SEND),
+    sendState: oneOf(v.sendState, SEND_STATES),
+  }
+}
+
+function parseCapabilities(v: unknown): InboxCapabilities | undefined {
+  if (!isRecord(v)) return undefined
+  const source = oneOf(v.source, CAP_SOURCES)
+  if (!source) return undefined
+  const missing: MissingCapability[] = Array.isArray(v.missing)
+    ? v.missing.flatMap((m) =>
+        isRecord(m) && typeof m.cap === 'string'
+          ? [{ cap: m.cap, reason: str(m.reason) ?? '', fix: str(m.fix) ?? '' }]
+          : [],
+      )
+    : []
+  return {
+    source,
+    mail: isRecord(v.mail) ? (v.mail as Record<string, boolean>) : undefined,
+    calendar: isRecord(v.calendar) ? (v.calendar as Record<string, boolean | string>) : undefined,
+    missing,
+  }
+}
+
+/** One row of GET /cli/mail/inboxes. Throws on a row without an address,
+ *  a source or a Primary workspace. */
+export function parseInbox(v: unknown): Inbox {
+  if (!isRecord(v) || typeof v.address !== 'string' || v.address === '') {
+    throw new MailReplyError('your email accounts', 'an account has no address')
+  }
+  const source = v.source === 'hosted' || v.source === 'linked' ? v.source : null
+  if (!source) throw new MailReplyError('your email accounts', `${v.address} has no source`)
+  const grants = Array.isArray(v.grants)
+    ? v.grants.map((g) => parseParticipant(g, `a workspace on ${v.address}`))
+    : []
+  return {
+    address: v.address,
+    source,
+    displayName: str(v.displayName),
+    status: str(v.status) ?? 'unknown',
+    primary: parseParticipant(v.primary, `${v.address}`),
+    grants,
+    yourLevel: oneOf(v.yourLevel, LEVELS) ?? null,
+    yourAgentSend: oneOf(v.yourAgentSend, AGENT_SEND) ?? null,
+    yourSendState: oneOf(v.yourSendState, SEND_STATES) ?? null,
+    maxLevel: v.maxLevel === 'send' ? 'send' : 'draft',
+    domain: str(v.domain),
+    host: str(v.host),
+    tls: str(v.tls),
+    capabilities: parseCapabilities(v.capabilities),
+  }
+}
+
+/** GET /cli/mail/inboxes → `{ok, count, inboxes: [...]}`. */
+export function parseInboxes(raw: unknown): Inbox[] {
+  if (!isRecord(raw) || !Array.isArray(raw.inboxes)) {
+    throw new MailReplyError('your email accounts', `the server sent ${shapeOf(raw)}`)
+  }
+  return raw.inboxes.map(parseInbox)
+}
+
+function parseProviderConfig(v: unknown): OauthProviderConfig {
+  // A provider the reply leaves out reads as K2's own app, with no claim
+  // that it is set up (an older server), so its Connect button stays off.
+  if (!isRecord(v)) return { source: 'default', secretSet: false }
+  return {
+    source: v.source === 'custom' ? 'custom' : 'default',
+    clientId: str(v.clientId) ?? undefined,
+    secretSet: v.secretSet === true,
+    configured: typeof v.configured === 'boolean' ? v.configured : undefined,
+    tenant: str(v.tenant) ?? undefined,
+  }
+}
+
+/** GET /cli/mail/oauth-config → `{ok, providers: {gmail, microsoft}}`. */
+export function parseOauthConfig(raw: unknown): OauthConfig {
+  if (!isRecord(raw) || !isRecord(raw.providers)) {
+    throw new MailReplyError('the sign-in settings', `the server sent ${shapeOf(raw)}`)
+  }
+  return {
+    providers: {
+      gmail: parseProviderConfig(raw.providers.gmail),
+      microsoft: parseProviderConfig(raw.providers.microsoft),
+    },
+  }
+}
+
+/** POST /cli/mail/link/oauth/start → a device or loopback flow. */
+export function parseOauthStart(raw: unknown): OauthStartResult {
+  if (!isRecord(raw) || typeof raw.linkId !== 'string' || raw.linkId === '') {
+    throw new MailReplyError('the sign-in step', `the server sent ${shapeOf(raw)}`)
+  }
+  if (raw.flow === 'device') {
+    const userCode = str(raw.userCode)
+    const verificationUrl = str(raw.verificationUrl)
+    if (!userCode || !verificationUrl) {
+      throw new MailReplyError('the sign-in step', 'the sign-in code is missing')
+    }
+    const expiresIn = typeof raw.expiresIn === 'number' && Number.isFinite(raw.expiresIn) ? raw.expiresIn : 0
+    return { flow: 'device', linkId: raw.linkId, userCode, verificationUrl, expiresIn }
+  }
+  if (raw.flow === 'loopback') {
+    return {
+      flow: 'loopback',
+      linkId: raw.linkId,
+      hint: str(raw.hint) ?? undefined,
+      clientCapture: raw.clientCapture === true ? true : undefined,
+      authorizationUrl: str(raw.authorizationUrl) ?? undefined,
+      state: str(raw.state) ?? undefined,
+    }
+  }
+  throw new MailReplyError('the sign-in step', 'the server named no sign-in method')
+}
+
+const LINK_STATES: readonly OauthLinkStatus['state'][] = ['pending', 'connected', 'denied', 'expired', 'error']
+
+/** GET /cli/mail/link/oauth/status → `{state, …}`. */
+export function parseOauthStatus(raw: unknown): OauthLinkStatus {
+  const state = isRecord(raw) ? oneOf(raw.state, LINK_STATES) : undefined
+  if (!isRecord(raw) || !state) {
+    throw new MailReplyError('the sign-in progress', `the server sent ${shapeOf(raw)}`)
+  }
+  return {
+    state,
+    address: str(raw.address) ?? undefined,
+    hint: str(raw.hint) ?? undefined,
+    code: str(raw.code) ?? undefined,
+    adminConsentUrl: str(raw.adminConsentUrl) ?? undefined,
+  }
 }
 
 // ── Sample fixture (unsupported/Mac example mode — pre-mortem #15) ──────

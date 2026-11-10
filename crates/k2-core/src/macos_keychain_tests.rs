@@ -246,11 +246,9 @@ fn claude_with_mcp(n: usize) -> Vec<u8> {
 
 #[test]
 fn k2_owned_items_never_go_on_argv_and_claudes_big_logins_do_as_one_hex_argument() {
-    // K2-owned: the Connect sign-in and the companion hash, with the exact
-    // options their writers use.
+    // K2-owned: the Connect sign-in, with the exact options its writer uses.
     for (what, opts) in [
         ("Connect sign-in", crate::tunnel::lease::item_write_options()),
-        ("companion hash", crate::companion::keychain::item_write_options()),
     ] {
         assert!(!opts.cli_owned, "{what} is K2-owned");
         assert!(opts.replace_acl && opts.trusted_apps.iter().any(|a| a == "/usr/bin/security"), "{what}: {opts:?}");
@@ -529,12 +527,6 @@ fn the_connect_sign_in_item_keeps_apple_tool_and_a_broken_one_repairs_itself_on_
     opts.label = Some("K2 Connect sign-in (test)".into());
     let blob = br#"{"refreshToken":"K2TEST_KEYCHAIN_SECRET-v1-refresh-0123456789abcdef","email":"person@example.test"}"#;
     k2_owned_round_trip_and_repair("connect", opts, blob);
-}
-
-#[test]
-fn the_companion_hash_item_keeps_apple_tool_and_a_broken_one_repairs_itself_on_read() {
-    let hash = b"$argon2id$v=19$m=19456,t=2,p=1$K2TESTsalt0123456$K2TESThashabcdefghijklmnopqrstuvwxyz0123";
-    k2_owned_round_trip_and_repair("companion", crate::companion::keychain::item_write_options(), hash);
 }
 
 #[test]

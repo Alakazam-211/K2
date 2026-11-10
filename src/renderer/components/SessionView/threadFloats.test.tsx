@@ -60,6 +60,7 @@ describe('floatProps', () => {
       'data-frost-shape': 'round',
     })
     expect(floatProps(true, 'name')['data-frost-shape']).toBe('pill')
+    expect(floatProps(true, 'capsule')['data-frost-shape']).toBe('pill')
     expect(floatProps(false, 'pill')).toEqual({})
   })
 })
@@ -71,7 +72,7 @@ describe('the header', () => {
     expect(h.hasAttribute('data-thread-floats')).toBe(true)
     expect(h.className).not.toContain('border-b')
     expect(screen.getByTestId('session-view-button').getAttribute('data-k2-float')).toBe('pill')
-    expect(screen.getByTestId('thread-terminal-toggle').getAttribute('data-k2-float')).toBe('round')
+    expect(screen.getByTestId('thread-drawer-selector').getAttribute('data-k2-float')).toBe('capsule')
     expect(screen.getByRole('button', { name: 'Refresh session' }).getAttribute('data-k2-float')).toBe('round')
     expect(screen.getByTestId('thread-float-scrim')).not.toBeNull()
     // Still finds its pane the way the reveal chord and the identity do.

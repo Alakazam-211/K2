@@ -8,7 +8,7 @@
 // underline; since 0.46.3 it is the last one, right of the Wiki tab. Rendered in the workspace TopBar, overlay pages, AND
 // Settings so the switcher stays available while Settings is open.
 
-import { useEffect, type ReactNode } from 'react'
+import { useEffect } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { usePageViewStore, type AppPage } from '@/stores/page-view'
 import { useFeedbackStore, initFeedbackEvents } from '@/stores/feedback'
@@ -23,6 +23,11 @@ import { openWikiTab } from '@/lib/wiki-open'
 import { pageShortcutLabel } from '@/lib/page-shortcuts'
 import { isMacPlatform, type DesktopOs } from '@/lib/desktop-chrome'
 import { HomesSyncBadge } from '@/components/Home/HomesSyncBadge'
+import { PageTab } from './PageTab'
+
+// The tab itself is its own light module, so Thread view's drawer selector
+// can use it without this file's stores.
+export { PageTab, badgeText } from './PageTab'
 
 /** The Tickets tab's badge from the feedback store (prd-tickets-badge-
  *  orphans TB8/TB15/TB17 + Appa A3): a fresh count; the last count dimmed
@@ -86,72 +91,6 @@ export function settingsTabTitle(keybindings: Record<string, string>, os: Deskto
     (c): c is string => !!c,
   )
   return chords.length > 0 ? `Settings (${chords.join(', ')})` : 'Settings'
-}
-
-/** What a tab badge shows: nothing, a number, or `?` (unknown). */
-export function badgeText(badge: number | '?' | undefined): string | null {
-  if (badge === '?') return '?'
-  if (badge === undefined || badge <= 0) return null
-  return badge > 99 ? '99+' : String(badge)
-}
-
-export function PageTab({
-  selected,
-  onSelect,
-  badge,
-  badgeClass,
-  badgeStale = false,
-  badgeTitle,
-  title,
-  ariaLabel,
-  children,
-}: {
-  selected: boolean
-  onSelect: () => void
-  /** A count (0 hides) or `?` when the server cannot give one. */
-  badge?: number | '?'
-  badgeClass?: string
-  /** Dim the badge: the number may be out of date, or is unknown. */
-  badgeStale?: boolean
-  /** Tooltip on the badge saying why it is dimmed. */
-  badgeTitle?: string
-  title: string
-  /** Accessible name when the tab shows only an icon. */
-  ariaLabel?: string
-  children: ReactNode
-}): React.JSX.Element {
-  const text = badgeText(badge)
-  return (
-    <button
-      onClick={onSelect}
-      data-page-tab=""
-      data-selected={selected ? '' : undefined}
-      className={`relative flex h-6 items-center justify-center px-2 text-[11px] font-medium transition-colors ${
-        selected
-          ? 'text-[var(--color-text-primary)] bg-white/[0.08] shadow-[inset_0_-2px_0_var(--color-accent)]'
-          : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]'
-      }`}
-      style={{
-        // @ts-expect-error -- Electron-specific CSS property
-        WebkitAppRegion: 'no-drag'
-      }}
-      title={title}
-      aria-label={ariaLabel}
-      aria-pressed={selected}
-    >
-      {children}
-      {text !== null && (
-        <span
-          data-testid="page-tab-badge"
-          data-stale={badgeStale ? 'true' : 'false'}
-          title={badgeTitle}
-          className={`absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[8px] font-bold text-[var(--color-on-accent)] rounded-[var(--radius-badge)] px-0.5 ${badgeClass ?? 'bg-[var(--color-accent)]'}${badgeStale ? ' opacity-50' : ''}`}
-        >
-          {text}
-        </span>
-      )}
-    </button>
-  )
 }
 
 export default function PageTabs(): React.JSX.Element {

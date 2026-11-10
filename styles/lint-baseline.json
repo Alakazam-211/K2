@@ -101,7 +101,7 @@
     "src/renderer/components/Thread/ThreadZenKit.tsx": 1,
     "src/renderer/components/Timer/UsageButton.tsx": 3,
     "src/renderer/components/TopBar/AppMenuPanel.tsx": 1,
-    "src/renderer/components/TopBar/PageTabs.tsx": 1,
+    "src/renderer/components/TopBar/PageTab.tsx": 1,
     "src/renderer/components/TopBar/ServerSwitcher.tsx": 4,
     "src/renderer/components/TopBar/TopBar.tsx": 1,
     "src/renderer/components/TopBar/WindowControls.tsx": 2,

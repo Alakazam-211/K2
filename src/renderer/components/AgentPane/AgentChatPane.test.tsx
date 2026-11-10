@@ -676,6 +676,24 @@ describe('S2 overlay chrome (C3/C4/C10)', () => {
     expect(screen.getByTestId('session-view-button').getAttribute('data-k2-float')).toBe('pill')
     expect(screen.getByLabelText('Switch pinned chat session').getAttribute('data-k2-float')).toBe('pill')
     expect(screen.getByLabelText('Refresh chat session').getAttribute('data-k2-float')).toBe('round')
+    // Terminal, Chatter and Heartbeats: one capsule after the view menu.
+    const capsule = screen.getByTestId('thread-drawer-selector')
+    expect(floating.contains(capsule)).toBe(true)
+    expect(capsule.getAttribute('data-k2-float')).toBe('capsule')
+    expect(Array.from(capsule.querySelectorAll('button')).map((b) => b.getAttribute('data-thread-drawer-segment'))).toEqual([
+      'terminal',
+      'chatter',
+      'heartbeats',
+    ])
+    const chatter = screen.getByTestId('thread-panel-toggle-chatter')
+    const beats = screen.getByTestId('thread-panel-toggle-heartbeats')
+    fireEvent.click(chatter)
+    expect(chatter.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(beats)
+    expect(chatter.getAttribute('aria-pressed')).toBe('false')
+    expect(beats.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(beats)
+    expect(beats.getAttribute('aria-pressed')).toBe('false')
     unmount()
 
     localStorage.clear()
@@ -686,6 +704,7 @@ describe('S2 overlay chrome (C3/C4/C10)', () => {
     expect(bar.hasAttribute('data-thread-floats')).toBe(false)
     expect(bar.className).toContain('border-b')
     expect(screen.getByLabelText('Refresh chat session').hasAttribute('data-k2-float')).toBe(false)
+    expect(screen.queryByTestId('thread-drawer-selector')).toBeNull()
     localStorage.clear()
   })
 

@@ -42,9 +42,8 @@ import { ThreadFloatBell } from '@/components/SessionView/ThreadFloatBell'
 import { ThreadFloatSearch } from '@/components/SessionView/ThreadFloatSearch'
 import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, threadFloatShown, useThreadFloats, type ThreadFloatId } from '@/components/SessionView/threadFloats'
 import { PlacedSessionHeader, SplitChromeSlotsContext, useSplitChrome } from '@/components/SessionView/splitChrome'
-import { ThreadTerminalToggle } from '@/components/SessionView/ThreadTerminalToggle'
-import { ThreadPanelToggles } from '@/components/SessionView/ThreadPanelToggles'
-import { THREAD_PANEL_KINDS, type ThreadPanelKind } from '@/components/SessionView/threadPanels'
+import { ThreadDrawerSelector } from '@/components/SessionView/ThreadDrawerSelector'
+import type { ThreadPanelKind } from '@/components/SessionView/threadPanels'
 import { FolderTrustHoldPanel, useFolderTrustHold } from './FolderTrustHold'
 import { folderTrustMessage } from '@/kessel-term/folderTrustMessage'
 import { httpStatusOf } from '@/lib/daemon-http-error'
@@ -221,7 +220,7 @@ interface ChatHeaderProps {
   onToggleTerminal: () => void
   /** A terminal is running (ready); the toggle waits for one. */
   terminalAvailable: boolean
-  /** Thread view's Chatter / Heartbeats panel. No `onThreadPanel`: no buttons. */
+  /** Thread view's Chatter / Heartbeats panel. No `onThreadPanel`: the drawer selector has the terminal only. */
   threadPanel?: ThreadPanelKind | null
   onThreadPanel?: (next: ThreadPanelKind | null) => void
   /** Live pinned harness, including non-v1 (pi, cursor, hermes). */
@@ -375,7 +374,6 @@ function ChatHeader({
   const floating = place !== null
   // A bar draws its own controls; floats draw what their place shows.
   const shows = (id: ThreadFloatId): boolean => (place === null ? BAR_CONTROLS.has(id) : threadFloatShown(id, place))
-  const panelKinds = THREAD_PANEL_KINDS.filter(shows)
   const floatsRef = useThreadFloats(floating)
 
   return (
@@ -402,15 +400,14 @@ function ChatHeader({
           floating={floating}
         />
       ) : null}
-      {shows('terminal') ? (
-        <ThreadTerminalToggle
-          revealed={terminalRevealed}
-          disabled={!terminalAvailable}
-          onToggle={onToggleTerminal}
+      {shows('drawers') ? (
+        <ThreadDrawerSelector
+          terminalRevealed={terminalRevealed}
+          terminalAvailable={terminalAvailable}
+          onToggleTerminal={onToggleTerminal}
+          panel={threadPanel ?? null}
+          onPanel={onThreadPanel}
         />
-      ) : null}
-      {onThreadPanel && panelKinds.length > 0 ? (
-        <ThreadPanelToggles open={threadPanel ?? null} onChange={onThreadPanel} kinds={panelKinds} />
       ) : null}
       {shows('bell') && projectId ? <ThreadFloatBell projectId={projectId} /> : null}
       {shows('search') ? <ThreadFloatSearch /> : null}

@@ -2061,6 +2061,14 @@ button[data-k2-float][role="switch"] { color: var(--color-text-primary); }
 button[data-k2-float]:disabled { opacity: 0.5; }
 html:is([data-style="glass"], [data-style="glass-classic"]) button[data-k2-float]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 
+/* The drawers' selector (ThreadDrawerSelector): the terminal, Chatter and
+   Heartbeats as one object holding the page tabs (`PageTab`). Terminal: square
+   24px cells inside the chamfered box, the selected one filled. Glass takes
+   the page tabs' capsule (styles/glass/overrides.css). Focus as Segmented's. */
+[data-k2-float="capsule"] { padding: 0 1px; gap: 2px; }
+[data-k2-float="capsule"] > [data-page-tab] { width: 24px; padding: 0; }
+[data-k2-float="capsule"] > [data-page-tab]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+
 /* The name's object: the picture overlaps its top edge. */
 [data-k2-float="name"] { flex-shrink: 1; height: auto; padding: 11px 14px 6px; margin-top: -8px; max-width: 100%; }
 [data-compact] > [data-k2-float="name"] { height: var(--k2-float-h); padding: 0 12px 0 4px; margin-top: 0; }

@@ -12,9 +12,8 @@ import {
 } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from './SessionViewMenu'
 import { ThreadViewIdentity } from './ThreadViewIdentity'
-import { ThreadTerminalToggle } from './ThreadTerminalToggle'
-import { ThreadPanelToggles } from './ThreadPanelToggles'
-import { THREAD_PANEL_KINDS, type ThreadPanelKind } from './threadPanels'
+import { ThreadDrawerSelector } from './ThreadDrawerSelector'
+import type { ThreadPanelKind } from './threadPanels'
 import { ThreadFloatBell } from './ThreadFloatBell'
 import { ThreadFloatSearch } from './ThreadFloatSearch'
 import {
@@ -297,7 +296,7 @@ export function SidecarSessionHeader({
   /** thread-read-v1: this chat's Thread, for the view menu's unread + mute. */
   threadConversationId?: string | null
   threadScope?: ServerScope
-  /** Thread view's Chatter / Heartbeats panel. No `onThreadPanel`: no buttons. */
+  /** Thread view's Chatter / Heartbeats panel. No `onThreadPanel`: the drawer selector has the terminal only. */
   threadPanel?: ThreadPanelKind | null
   onThreadPanel?: (next: ThreadPanelKind | null) => void
   /** Split view: drawn into the Thread's column (`splitChrome.tsx`), as
@@ -308,7 +307,6 @@ export function SidecarSessionHeader({
   const floating = place !== null
   // A bar draws its own controls; floats draw what their place shows.
   const shows = (id: ThreadFloatId): boolean => (place === null ? BAR_CONTROLS.has(id) : threadFloatShown(id, place))
-  const panelKinds = THREAD_PANEL_KINDS.filter(shows)
   const floatsRef = useThreadFloats(floating)
   return (
     <div
@@ -337,15 +335,14 @@ export function SidecarSessionHeader({
             floating={floating}
           />
         ) : null}
-        {shows('terminal') ? (
-          <ThreadTerminalToggle
-            revealed={terminalRevealed}
-            disabled={!terminalAvailable}
-            onToggle={onToggleTerminal}
+        {shows('drawers') ? (
+          <ThreadDrawerSelector
+            terminalRevealed={terminalRevealed}
+            terminalAvailable={terminalAvailable}
+            onToggleTerminal={onToggleTerminal}
+            panel={threadPanel ?? null}
+            onPanel={onThreadPanel}
           />
-        ) : null}
-        {onThreadPanel && panelKinds.length > 0 ? (
-          <ThreadPanelToggles open={threadPanel ?? null} onChange={onThreadPanel} kinds={panelKinds} />
         ) : null}
         {shows('bell') ? bell : null}
         {shows('search') ? <ThreadFloatSearch /> : null}

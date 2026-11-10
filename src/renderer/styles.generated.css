@@ -920,6 +920,17 @@
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16), 0 1px 4px color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
 
+/* Thread view's drawers' selector is the same capsule as a floating object:
+   it grows to hold its circles (24 + 2 × 3 + the 0.5px rim = 31px) rather
+   than take the other floats' height, and gives the extra back in margin so
+   the row keeps its centre line. On the accent circle, focus shows in the
+   accent's ink (Segmented's rule). */
+[data-style="glass"] [data-k2-float="capsule"]:not([data-zen-root] *) {
+  height: auto;
+  margin-block: calc((var(--k2-float-h) - 31px) / 2);
+}
+[data-style="glass"]:not([data-palette="veil"]) [data-k2-float="capsule"] > [data-page-tab][data-selected]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-on-accent); }
+
 /* Light glass inverts the selected pill: a dark wash, normal ink. */
 [data-style="glass"][data-palette="veil"] [data-page-tab][data-selected]:not([data-zen-root] *) {
   background: rgba(0, 0, 0, 0.07);

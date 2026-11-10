@@ -172,24 +172,29 @@ describe('Thread view header (S2)', () => {
     expect(screen.getByTestId('thread-view-picture')).toBeTruthy()
   })
 
-  it('Chatter and Heartbeats follow the terminal button in the left group, in Thread view only', async () => {
+  it('Terminal, Chatter and Heartbeats are one capsule after the view menu, in Thread view only', async () => {
     renderIn('thread')
     const terminal = await waitFor(() => {
       const el = screen.queryByTestId('thread-terminal-toggle')
       if (!el) throw new Error('no toggle')
       return el
     })
-    const group = terminal.parentElement!
+    const capsule = terminal.parentElement!
+    expect(capsule.getAttribute('data-testid')).toBe('thread-drawer-selector')
+    expect(capsule.getAttribute('role')).toBe('toolbar')
+    const group = capsule.parentElement!
     expect(group.classList.contains('thread-float-group')).toBe(true)
-    const order = Array.from(group.querySelectorAll('[data-testid^="thread-"]'))
-      .map((el) => el.getAttribute('data-testid'))
-      .filter((id) => id === 'thread-terminal-toggle' || id?.startsWith('thread-panel-toggle-'))
+    expect(capsule.previousElementSibling?.contains(screen.getByTestId('session-view-button'))).toBe(true)
+    const order = Array.from(capsule.querySelectorAll('button')).map((el) => el.getAttribute('data-testid'))
     expect(order).toEqual(['thread-terminal-toggle', 'thread-panel-toggle-chatter', 'thread-panel-toggle-heartbeats'])
+    // One Tab stop for the three.
+    expect(Array.from(capsule.querySelectorAll('button')).filter((b) => b.tabIndex === 0)).toHaveLength(1)
     cleanup()
     renderIn('terminal')
     await waitFor(() => expect(screen.queryByTestId('sidecar-session-title')).not.toBeNull())
     expect(screen.queryByTestId('thread-panel-toggle-chatter')).toBeNull()
     expect(screen.queryByTestId('thread-panel-toggle-heartbeats')).toBeNull()
+    expect(screen.queryByTestId('thread-drawer-selector')).toBeNull()
   })
 
   it('one drawer at a time: a panel hides the terminal, the terminal closes the panel', async () => {

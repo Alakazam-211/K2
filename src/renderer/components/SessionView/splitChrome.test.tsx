@@ -51,7 +51,7 @@ const room = testRoom({
   projects: [{ id: 'p1', path: '/ws/one', completionSoundEnabled: 1, workspaces: [] } as never],
 })
 
-const EVERY_FLOAT: ThreadFloatId[] = ['view', 'terminal', 'bell', 'search', 'identity', 'token', 'history', 'refresh', 'chatter', 'heartbeats']
+const EVERY_FLOAT: ThreadFloatId[] = ['view', 'drawers', 'bell', 'search', 'identity', 'token', 'history', 'refresh']
 
 beforeEach(() => localStorage.clear())
 afterEach(() => {
@@ -62,8 +62,8 @@ afterEach(() => {
 describe('SPLIT_VIEW_THREAD_FLOATS', () => {
   it('is the picture and name, the bell, search, Token, session and restart, and nothing else', () => {
     expect([...SPLIT_VIEW_THREAD_FLOATS].sort()).toEqual(['bell', 'history', 'identity', 'refresh', 'search', 'token'])
-    expect(threadFloatShown('chatter', 'split')).toBe(false)
-    expect(threadFloatShown('heartbeats', 'split')).toBe(false)
+    // The drawers' selector (terminal, Chatter, Heartbeats) is one object.
+    expect(threadFloatShown('drawers', 'split')).toBe(false)
     const shownInSplit = EVERY_FLOAT.filter((id) => threadFloatShown(id, 'split'))
     expect(shownInSplit.sort()).toEqual(['bell', 'history', 'identity', 'refresh', 'search', 'token'])
   })
@@ -123,6 +123,7 @@ describe('the header in a split Thread column', () => {
     expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
     expect(screen.queryByTestId('thread-panel-toggle-chatter')).toBeNull()
     expect(screen.queryByTestId('thread-panel-toggle-heartbeats')).toBeNull()
+    expect(screen.queryByTestId('thread-drawer-selector')).toBeNull()
     expect(screen.queryByTestId('sidecar-session-title')).toBeNull()
     // The right-hand group, as in Thread view: Token, then restart, floating.
     const token = screen.getByTestId('token-stub')
@@ -140,6 +141,7 @@ describe('the header in a split Thread column', () => {
     expect(screen.getByTestId('thread-terminal-toggle')).toBeTruthy()
     expect(screen.getByTestId('thread-panel-toggle-chatter')).toBeTruthy()
     expect(screen.getByTestId('thread-panel-toggle-heartbeats')).toBeTruthy()
+    expect(screen.getByTestId('thread-drawer-selector').contains(screen.getByTestId('thread-terminal-toggle'))).toBe(true)
     expect(screen.getByTestId('bell-stub')).toBeTruthy()
     expect(screen.getByTestId('thread-search-button')).toBeTruthy()
     expect(screen.getByTestId('token-stub')).toBeTruthy()
@@ -227,6 +229,7 @@ describe('split view in a session', () => {
     expect(screen.queryByTestId('thread-terminal-toggle')).toBeNull()
     expect(screen.queryByTestId('thread-panel-toggle-chatter')).toBeNull()
     expect(screen.queryByTestId('thread-panel-toggle-heartbeats')).toBeNull()
+    expect(screen.queryByTestId('thread-drawer-selector')).toBeNull()
     expect(screen.queryByTestId('sidecar-session-title')).toBeNull()
     // Restart is back on the Thread's right, floating.
     const refresh = screen.getByLabelText('Refresh session')

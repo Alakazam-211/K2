@@ -19,7 +19,6 @@ vi.mock('@/kessel/daemon-ws', async (importOriginal) => ({
 }))
 
 import { SplitSessionColumns } from './SplitSessionColumns'
-import { ThreadPanelToggles } from './ThreadPanelToggles'
 import { ThreadDrawerPanel } from './ThreadDrawerPanel'
 import { SessionViewChromeContext, type SessionViewChromeValue } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
@@ -146,44 +145,7 @@ describe('useSessionViewTab: one drawer at a time', () => {
   })
 })
 
-// ── The buttons ─────────────────────────────────────────────────────────
-
-describe('ThreadPanelToggles', () => {
-  function Toggles({ start = null }: { start?: ThreadPanelKind | null }): React.JSX.Element {
-    const [open, setOpen] = useState<ThreadPanelKind | null>(start)
-    return <ThreadPanelToggles open={open} onChange={setOpen} />
-  }
-
-  it('two round floating buttons, Chatter then Heartbeats, with tooltips', () => {
-    render(<Toggles />)
-    const buttons = screen.getAllByRole('button')
-    expect(buttons.map((b) => b.getAttribute('data-thread-panel-toggle'))).toEqual(['chatter', 'heartbeats'])
-    for (const b of buttons) {
-      expect(b.getAttribute('data-k2-float')).toBe('round')
-      expect(b.getAttribute('data-k2-chamfer')).toBe('control')
-      expect(b.getAttribute('data-material')).toBe('frost')
-      expect(b.getAttribute('aria-pressed')).toBe('false')
-      expect(b.getAttribute('type')).toBe('button')
-    }
-    expect(buttons[0].title).toBe('Chatter: messages between agents')
-    expect(buttons[1].title).toBe('Heartbeats: recent heartbeats and other outside input')
-    expect(buttons[0].getAttribute('aria-label')).toBe('Show Chatter')
-  })
-
-  it('opening one closes the other; pressing the open one closes it', () => {
-    render(<Toggles />)
-    const chat = screen.getByTestId('thread-panel-toggle-chatter')
-    const beats = screen.getByTestId('thread-panel-toggle-heartbeats')
-    fireEvent.click(chat)
-    expect(chat.getAttribute('aria-pressed')).toBe('true')
-    expect(chat.getAttribute('aria-label')).toBe('Hide Chatter')
-    fireEvent.click(beats)
-    expect(chat.getAttribute('aria-pressed')).toBe('false')
-    expect(beats.getAttribute('aria-pressed')).toBe('true')
-    fireEvent.click(beats)
-    expect(beats.getAttribute('aria-pressed')).toBe('false')
-  })
-})
+// The buttons are ThreadDrawerSelector's (ThreadDrawerSelector.test.tsx).
 
 // ── The panel column ────────────────────────────────────────────────────
 

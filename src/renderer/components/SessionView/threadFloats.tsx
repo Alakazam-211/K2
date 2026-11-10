@@ -31,7 +31,9 @@ export const THREAD_FLOAT_TOP_VAR = '--thread-float-top'
 export const THREAD_FLOATS_GRID =
   'grid grid-cols-[minmax(max-content,1fr)_minmax(0,auto)_minmax(max-content,1fr)] gap-x-2 items-start px-3'
 
-export type ThreadFloatShape = 'round' | 'pill' | 'name' | 'note'
+/** `capsule`: several controls in one object, the page tabs' pattern
+ *  (`ThreadDrawerSelector`). */
+export type ThreadFloatShape = 'round' | 'pill' | 'name' | 'note' | 'capsule'
 
 /** Where a pane's floating objects are drawn: over the Thread on its own
  *  (Thread view), or over the Thread's column in split view. */
@@ -40,22 +42,21 @@ export type ThreadFloatsPlace = 'thread' | 'split'
 /** Each floating object, by name. */
 export type ThreadFloatId =
   | 'view'
-  | 'terminal'
+  /** One capsule: the terminal, Chatter and Heartbeats drawers. */
+  | 'drawers'
   | 'bell'
   | 'search'
   | 'identity'
   | 'token'
   | 'history'
   | 'refresh'
-  | 'chatter'
-  | 'heartbeats'
 
 /** The only objects split view's Thread column shows: the agent's picture
  *  and name, the bell and search (Rosson, 2026-11-09), and on the right, as
  *  in Thread view, restart, the pinned chat's session and Token, since split
  *  view has no top bar of its own to hold them (2026-11-10). Split view
- *  already picks what each side shows, so the view menu, the terminal and
- *  the drawers stay in Thread view. An object not listed here is hidden in
+ *  already picks what each side shows, so the view menu and the drawers'
+ *  selector (terminal, Chatter, Heartbeats) stay in Thread view. An object not listed here is hidden in
  *  split view, so a new one needs no rule of its own. */
 export const SPLIT_VIEW_THREAD_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>([
   'identity',

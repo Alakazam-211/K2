@@ -15,6 +15,7 @@ vi.mock('@/lib/daemon-cli', () => ({ daemonCliGet: (...a: [unknown, string, Reco
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import HelpButton from './HelpButton'
 import HelpExplorer from './HelpExplorer'
+import { FrostCapsule, expectModalOnTopLayer } from '@/test-utils/popover-layer'
 import catalog from '@shared/cli-catalog.generated.json'
 import { buildExplorerModel, searchExplorer, glossaryPages, type CliCatalog } from './cli-explorer'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -69,6 +70,16 @@ describe('Help button', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(button.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('opens the explorer at the top of <body>, out of the frosted top-bar capsule', async () => {
+    render(
+      <FrostCapsule>
+        <HelpButton />
+      </FrostCapsule>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Help' }))
+    expectModalOnTopLayer(await screen.findByRole('dialog', { name: 'Help' }))
   })
 })
 

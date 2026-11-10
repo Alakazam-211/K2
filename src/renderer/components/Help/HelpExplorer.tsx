@@ -5,6 +5,7 @@
 // all of it (⌘K / Ctrl+K focuses it).
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { floatMaterial } from '@/components/ui/float-material'
 import { DialogScrim, Input, Surface } from '@/components/ui'
 import { daemonCliGet } from '@/lib/daemon-cli'
@@ -481,7 +482,11 @@ export default function HelpExplorer({
   }
 
   const k2 = MODEL.tools[0]
-  return (
+  // A modal covers the window, so it renders at the top of <body>: inside
+  // the top bar's frosted capsule (Glass), whose backdrop-filter makes it a
+  // containing block and a stacking context, it was placed against the
+  // capsule and painted under the tiles.
+  return createPortal(
     <>
       <DialogScrim
         onMouseDown={(e) => {
@@ -666,6 +671,7 @@ export default function HelpExplorer({
           </div>
         </div>
       </Surface>
-    </>
+    </>,
+    document.body,
   )
 }

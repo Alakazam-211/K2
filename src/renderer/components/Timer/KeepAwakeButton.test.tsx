@@ -57,6 +57,7 @@ vi.mock('@/stores/timer', () => {
 })
 
 import KeepAwakeButton from './KeepAwakeButton'
+import { FrostCapsule, expectOnPopoverLayer } from '@/test-utils/popover-layer'
 import TimerButton from './TimerButton'
 
 function status(over: Partial<KeepAwakeStatus>): KeepAwakeStatus {
@@ -226,6 +227,27 @@ async function renderWith(s: KeepAwakeStatus): Promise<HTMLElement> {
 }
 
 describe('KeepAwakeButton', () => {
+  it('opens on the popover layer, out of the frosted top-bar capsule; inside clicks keep it, outside or Esc close it', async () => {
+    h.daemonCliGet.mockResolvedValue({ keepAwake: STATES[0].s })
+    render(
+      <FrostCapsule>
+        <KeepAwakeButton />
+      </FrostCapsule>,
+    )
+    const button = await screen.findByTestId('keep-awake')
+    fireEvent.click(button)
+    const menu = await screen.findByTestId('keep-awake-menu')
+    expectOnPopoverLayer(menu)
+    fireEvent.mouseDown(menu)
+    expect(screen.queryByTestId('keep-awake-menu')).not.toBeNull()
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByTestId('keep-awake-menu')).toBeNull()
+    fireEvent.click(button)
+    await screen.findByTestId('keep-awake-menu')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('keep-awake-menu')).toBeNull()
+  })
+
   it('asks the window server for power/status', async () => {
     await renderWith(STATES[0].s)
     expect(h.daemonCliGet).toHaveBeenCalledWith('power/status')

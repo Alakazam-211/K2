@@ -13,7 +13,18 @@
 // but there is more above (`prefer: 'up'` reverses that: Zen's bottom band
 // opens toward the page). It lines up with the trigger's left edge, or its
 // right edge with `align: 'end'`. It follows the trigger on scroll and resize, and
-// closes on a mousedown outside both the trigger and the menu, or on Escape.
+// closes on a mousedown outside both the trigger and the menu (a pick in a
+// dropdown the menu opened, itself portalled, is not outside), or on Escape.
+// `tabOrder: true` keeps the menu where it was in the Tab order before it
+// moved to <body>: Tab from the trigger goes into the menu, Shift+Tab from
+// its first stop goes back to the trigger, and Tab past its last stop goes on
+// to whatever follows the trigger.
+//
+// This is the app's popover layer: anything that floats over the page from a
+// bar, a card or a tile renders through it. A menu left inside its trigger's
+// tree is caught by any ancestor that makes a stacking context or a
+// containing block (Glass's frosted top-bar capsule does both, through
+// `backdrop-filter`), and then the tiles below paint over it.
 //
 // Usage:
 //   const menu = useAnchoredMenu<HTMLDivElement>({ open, onClose })
@@ -29,6 +40,14 @@ import { useBrowserOverlay } from '@/lib/browser-overlay'
 export const ZEN_ANCHORED_MENU_LAYER = 40
 /** Kept clear of the window's edges. */
 export const ANCHORED_MENU_MARGIN = 8
+
+/** What Tab can land on. */
+const TABBABLE =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+function tabbables(root: ParentNode): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => el.tabIndex >= 0 && !el.closest('[inert]'))
+}
 
 export interface AnchoredMenuBox {
   placement: 'down' | 'up'
@@ -102,6 +121,7 @@ export function useAnchoredMenu<A extends HTMLElement = HTMLElement>({
   estimatedHeight = 240,
   prefer = 'down',
   align = 'start',
+  tabOrder = false,
 }: {
   open: boolean
   onClose(): void
@@ -117,6 +137,8 @@ export function useAnchoredMenu<A extends HTMLElement = HTMLElement>({
   prefer?: 'down' | 'up'
   /** Line up with the trigger's left (`start`) or right (`end`) edge. */
   align?: 'start' | 'end'
+  /** Keep the menu right after its trigger in the Tab order. */
+  tabOrder?: boolean
 }): AnchoredMenu<A> {
   const anchorRef = useRef<A | null>(null)
   const menuEl = useRef<HTMLDivElement | null>(null)
@@ -171,6 +193,8 @@ export function useAnchoredMenu<A extends HTMLElement = HTMLElement>({
       const t = e.target
       if (!(t instanceof Node)) return
       if (anchorRef.current?.contains(t) || menuEl.current?.contains(t)) return
+      // A dropdown inside the menu (SettingDropdown) portals its list too.
+      if (t instanceof Element && t.closest('[data-setting-dropdown-menu]')) return
       onCloseRef.current()
     }
     const onKey = (e: KeyboardEvent): void => {
@@ -183,6 +207,38 @@ export function useAnchoredMenu<A extends HTMLElement = HTMLElement>({
       document.removeEventListener('keydown', onKey)
     }
   }, [open])
+
+  // The menu sits at the end of <body>; Tab still reaches it from its trigger.
+  useEffect(() => {
+    if (!open || !tabOrder) return
+    const onTab = (e: KeyboardEvent): void => {
+      if (e.key !== 'Tab' || e.defaultPrevented) return
+      const anchor = anchorRef.current
+      const menu = menuEl.current
+      const active = document.activeElement
+      if (!anchor || !menu || !(active instanceof HTMLElement)) return
+      const inside = tabbables(menu)
+      if (inside.length === 0) return
+      const go = (el: HTMLElement | undefined): void => {
+        if (!el) return
+        e.preventDefault()
+        el.focus()
+      }
+      const ownStops = tabbables(anchor)
+      if (!e.shiftKey && ownStops.length > 0 && active === ownStops[ownStops.length - 1]) return go(inside[0])
+      if (e.shiftKey && active === inside[0]) return go(ownStops[ownStops.length - 1] ?? anchor)
+      if (!e.shiftKey && active === inside[inside.length - 1]) {
+        // On to the first stop after the trigger, outside the menu.
+        const all = tabbables(document)
+        const after = all.find(
+          (el) => !menu.contains(el) && !anchor.contains(el) && anchor.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING,
+        )
+        return go(after)
+      }
+    }
+    document.addEventListener('keydown', onTab)
+    return () => document.removeEventListener('keydown', onTab)
+  }, [open, tabOrder])
 
   // Every anchored menu claims its box over a native Browser page.
   useBrowserOverlay({ active: open, ref: menuEl, kind: 'menu', watch: box })

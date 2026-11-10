@@ -122,6 +122,7 @@ import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import TopBarUtilities from './TopBarUtilities'
 import AdminProfileButton from './AdminProfileButton'
+import { expectModalOnTopLayer } from '@/test-utils/popover-layer'
 import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
 import { useSettingsStore } from '@/stores/settings'
 import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
@@ -287,6 +288,14 @@ describe('the Admin profile modal: Your phones (phone-web-off)', () => {
 })
 
 describe('the Admin profile button in the top bar', () => {
+  it('opens its modal at the top of <body>, out of the frosted capsule', async () => {
+    render(<TopBarUtilities />)
+    act(() => void fireEvent.click(button()))
+    const dialog = await screen.findByTestId('admin-profile-dialog')
+    expectModalOnTopLayer(dialog)
+    expectModalOnTopLayer(screen.getByTestId('admin-profile-scrim'))
+  })
+
   it('sits immediately right of the Zen toggle and matches its look', () => {
     render(
       <TopBarUtilities>

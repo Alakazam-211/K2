@@ -12,6 +12,7 @@
 // fixed-centered surface on the same z-band).
 
 import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { DialogFrame, DialogScrim } from '@/components/ui'
 import { usePresenceStore, type RosterUser } from '@/stores/presence'
 import PresenceAvatar, { presenceDisplayName, useSelfPresenceUser } from './PresenceAvatar'
@@ -60,7 +61,11 @@ export default function PresenceModal({ onClose, roster: otherRoster, serverLabe
     return () => window.removeEventListener('keydown', handleKeyDown, true)
   }, [onClose])
 
-  return (
+  // A modal covers the window, so it renders at the top of <body>: inside
+  // the top bar's frosted capsule (Glass), whose backdrop-filter makes it a
+  // containing block and a stacking context, it was placed against the
+  // capsule and painted under the tiles.
+  return createPortal(
     <>
       {/* Semi-transparent backdrop */}
       <DialogScrim
@@ -112,7 +117,8 @@ export default function PresenceModal({ onClose, roster: otherRoster, serverLabe
           )}
         </div>
       </DialogFrame>
-    </>
+    </>,
+    document.body,
   )
 }
 

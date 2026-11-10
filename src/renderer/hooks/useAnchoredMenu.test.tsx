@@ -18,7 +18,8 @@ vi.mock('@tauri-apps/api/event', () => ({
 import FocusGroupDropdown from '@/components/Sidebar/FocusGroupDropdown'
 import HomePicker from '@/components/Home/HomePicker'
 import { useHomesStore } from '@/stores/homes'
-import { ANCHORED_MENU_MARGIN, ZEN_ANCHORED_MENU_LAYER, anchoredMenuBox } from './useAnchoredMenu'
+import { useState } from 'react'
+import { ANCHORED_MENU_MARGIN, ZEN_ANCHORED_MENU_LAYER, anchoredMenuBox, useAnchoredMenu } from './useAnchoredMenu'
 
 const OPTIONS = [
   { id: 'g-work', name: 'Work', color: '#f00' },
@@ -322,5 +323,83 @@ describe('Home picker (Home sidebar)', () => {
     } finally {
       act(() => useHomesStore.getState().deleteHome(second))
     }
+  })
+})
+
+/** A top-bar style popover: a trigger, the menu on the popover layer, and
+ *  the next control after the trigger. */
+function Popover(): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const menu = useAnchoredMenu<HTMLDivElement>({ open, onClose: () => setOpen(false), width: 'min', tabOrder: true })
+  return (
+    <div data-capsule="">
+      <div ref={menu.anchorRef}>
+        <button type="button" data-trigger="" onClick={() => setOpen((o) => !o)}>
+          Open
+        </button>
+      </div>
+      <button type="button" data-next="">
+        Next
+      </button>
+      {open &&
+        menu.portal(
+          <div ref={menu.menuRef} style={menu.style} data-menu="">
+            <button type="button" data-first="">
+              First
+            </button>
+            <button type="button" data-last="">
+              Last
+            </button>
+          </div>,
+        )}
+    </div>
+  )
+}
+
+describe('a popover on the popover layer', () => {
+  const q = (sel: string): HTMLElement => {
+    const el = document.querySelector(sel)
+    if (!(el instanceof HTMLElement)) throw new Error(`no ${sel}`)
+    return el
+  }
+  const tab = (shiftKey = false): void => {
+    act(() => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Tab', shiftKey })
+    })
+  }
+
+  it('`tabOrder`: Tab goes from the trigger into the menu, and on from its last stop to what follows the trigger', () => {
+    render(<Popover />)
+    act(() => {
+      fireEvent.click(q('[data-trigger]'))
+    })
+    expect(q('[data-menu]').parentElement).toBe(document.body)
+    q('[data-trigger]').focus()
+    tab()
+    expect(document.activeElement).toBe(q('[data-first]'))
+    tab(true)
+    expect(document.activeElement).toBe(q('[data-trigger]'))
+    q('[data-last]').focus()
+    tab()
+    expect(document.activeElement).toBe(q('[data-next]'))
+  })
+
+  it('a pick in a dropdown the menu opened (portalled too) is not an outside click', () => {
+    render(<Popover />)
+    act(() => {
+      fireEvent.click(q('[data-trigger]'))
+    })
+    const nested = document.createElement('div')
+    nested.setAttribute('data-setting-dropdown-menu', '')
+    document.body.appendChild(nested)
+    act(() => {
+      fireEvent.mouseDown(nested)
+    })
+    expect(document.querySelector('[data-menu]')).not.toBeNull()
+    nested.remove()
+    act(() => {
+      fireEvent.mouseDown(document.body)
+    })
+    expect(document.querySelector('[data-menu]')).toBeNull()
   })
 })

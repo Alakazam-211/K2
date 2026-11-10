@@ -123,6 +123,7 @@ import VoiceButton from './VoiceButton'
 import CallLayer from './CallLayer'
 import { voice } from '@/stores/voice'
 import { overlayClaims } from '@/lib/browser-overlay'
+import { FrostCapsule, expectOnPopoverLayer } from '@/test-utils/popover-layer'
 
 function entry(hostKey: string, patch: Partial<HostEntry> = {}, features = ['voice-rooms-v1']): HostEntry {
   return {
@@ -168,6 +169,29 @@ beforeEach(async () => {
 afterEach(cleanup)
 
 describe('VoiceButton', () => {
+  // Rosson 2026-11-09: "the drop-down menu for the meeting rooms … is hidden
+  // behind things." Glass's frosted capsule trapped it under the tiles.
+  it('the voice rooms list opens on the popover layer, out of the frosted top-bar capsule', () => {
+    h.entries = { 'sewlab.k2.dev': entry('sewlab.k2.dev') }
+    act(() => voice.recompute())
+    render(
+      <FrostCapsule>
+        <VoiceButton />
+      </FrostCapsule>,
+    )
+    fireEvent.click(screen.getByTestId('voice-button'))
+    const list = screen.getByTestId('voice-popover')
+    expectOnPopoverLayer(list)
+    fireEvent.mouseDown(list)
+    expect(screen.queryByTestId('voice-popover')).not.toBeNull()
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByTestId('voice-popover')).toBeNull()
+    fireEvent.click(screen.getByTestId('voice-button'))
+    expect(screen.queryByTestId('voice-popover')).not.toBeNull()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('voice-popover')).toBeNull()
+  })
+
   it('renders nothing while no signed-in server reports voice rooms (preview off)', () => {
     h.entries = { 'zed.k2.dev': entry('zed.k2.dev', {}, []), 'sewlab.k2.dev': entry('sewlab.k2.dev', {}, []) }
     act(() => voice.recompute())
@@ -259,7 +283,7 @@ describe('VoiceButton', () => {
 
     fireEvent.click(screen.getByTestId('voice-button'))
     const popover = screen.getByTestId('voice-popover')
-    expect(overlayClaims().map((c) => [c.kind, c.element])).toEqual([['popover', popover]])
+    expect(overlayClaims().map((c) => [c.kind, c.element])).toEqual([['menu', popover]])
 
     fireEvent.click(screen.getByTestId('voice-button'))
     expect(overlayClaims()).toEqual([])

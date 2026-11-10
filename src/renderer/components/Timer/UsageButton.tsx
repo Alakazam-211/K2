@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { startUsageCachePoll, useSubscriptionUsageStore } from '@/stores/subscription-usage'
 import { scopeMayWrite } from '@/kessel/server-scope'
@@ -70,9 +71,36 @@ export default function UsageButton(): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [now, setNow] = useState(() => Date.now())
-  const rootRef = useRef<HTMLDivElement>(null)
-  const popoverRef = useRef<HTMLDivElement>(null)
-  useBrowserOverlay({ active: open, ref: popoverRef, kind: 'menu' })
+  // The menu floats over the page on the app's popover layer (portalled to
+  // <body>), so the top bar's frosted capsule can't trap it under the tiles.
+  // In Zen it stays inline: Zen restyles and places it (`ZenUsageTool`).
+  const [inZen, setInZen] = useState(false)
+  const close = useCallback(() => setOpen(false), [])
+  const menu = useAnchoredMenu<HTMLDivElement>({
+    open: open && !inZen,
+    onClose: close,
+    width: 'min',
+    minWidth: 240,
+    align: 'end',
+    gap: 4,
+    tabOrder: true,
+  })
+  const rootRef = menu.anchorRef
+  useLayoutEffect(() => {
+    setInZen(rootRef.current?.closest('[data-zen-root]') != null)
+  }, [rootRef])
+  const popoverRef = useRef<HTMLDivElement | null>(null)
+  const { menuRef } = menu
+  const setPopover = useCallback(
+    (el: HTMLDivElement | null) => {
+      popoverRef.current = el
+      menuRef(el)
+    },
+    [menuRef],
+  )
+  const float = (node: React.ReactNode): React.ReactNode => (inZen ? node : menu.portal(node))
+  // The anchored menu claims its own box; the inline Zen one claims here.
+  useBrowserOverlay({ active: open && inZen, ref: popoverRef, kind: 'menu' })
 
   // Countdowns, "updated X ago" and windows past their reset stay true
   // without a fetch.
@@ -99,8 +127,12 @@ export default function UsageButton(): React.JSX.Element {
   }, [serverState, target])
 
   useEffect(() => {
-    if (!open) return
-    setNow(Date.now())
+    if (open) setNow(Date.now())
+  }, [open])
+
+  // Zen's inline menu closes itself; the anchored one closes in its hook.
+  useEffect(() => {
+    if (!open || !inZen) return
     function onPointer(ev: MouseEvent) {
       if (!rootRef.current?.contains(ev.target as Node)) setOpen(false)
     }
@@ -113,7 +145,7 @@ export default function UsageButton(): React.JSX.Element {
       document.removeEventListener('mousedown', onPointer)
       document.removeEventListener('keydown', onKey)
     }
-  }, [open])
+  }, [open, inZen])
 
   const roomLabel = target.label
   // The daemon is in air-gap mode: it never checks usage, so say so calmly.
@@ -176,14 +208,14 @@ export default function UsageButton(): React.JSX.Element {
           </span>
         ) : null}
       </button>
-      {open && (
+      {open && float(
         <div
-          ref={popoverRef}
+          ref={setPopover}
           role="dialog"
           aria-label="Subscription usage"
           data-testid="subscription-usage-menu"
-          {...floatMaterial('popover')} className="absolute right-0 top-full z-50 mt-1 min-w-[240px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
-          style={noDrag}
+          {...floatMaterial('popover')} className={`${inZen ? 'absolute right-0 top-full z-50 mt-1 ' : ''}min-w-[240px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg`}
+          style={inZen ? noDrag : { ...menu.style, ...noDrag }}
         >
           {whose !== null && (
             <p data-testid="subscription-usage-whose" className="mb-2 text-[11px] text-[var(--color-text-muted)]">
@@ -259,7 +291,7 @@ export default function UsageButton(): React.JSX.Element {
               {refreshing ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
-        </div>
+        </div>,
       )}
     </div>
   )

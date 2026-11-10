@@ -42,6 +42,7 @@
 // of that user).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { floatMaterial } from '@/components/ui/float-material'
 import { Button, DialogScrim, Surface } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -654,7 +655,11 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
     </button>
   )
 
-  return (
+  // A modal covers the window, so it renders at the top of <body>: inside
+  // the top bar's frosted capsule (Glass), whose backdrop-filter makes it a
+  // containing block and a stacking context, it was placed against the
+  // capsule and painted under the tiles.
+  return createPortal(
     <>
       <DialogScrim
         data-testid="admin-profile-scrim"
@@ -713,7 +718,8 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
           </>
         )}
       </Surface>
-    </>
+    </>,
+    document.body,
   )
 }
 

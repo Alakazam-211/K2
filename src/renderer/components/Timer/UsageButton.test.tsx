@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetSubscriptionUsageForTests } from '@/stores/subscription-usage'
 import type { SubscriptionDoc } from '@/lib/subscription-usage'
+import { FrostCapsule, expectOnPopoverLayer } from '@/test-utils/popover-layer'
 
 const h = vi.hoisted(() => ({
   remote: false,
@@ -84,6 +85,44 @@ beforeEach(() => {
 })
 
 describe('UsageButton', () => {
+  it('opens on the popover layer, out of the frosted top-bar capsule; inside clicks keep it, outside or Esc close it', async () => {
+    h.daemonCliGet.mockResolvedValue(claudeDoc(new Date().toISOString()))
+    render(
+      <FrostCapsule>
+        <UsageButton />
+      </FrostCapsule>,
+    )
+    const chip = screen.getByTestId('subscription-usage')
+    fireEvent.click(chip)
+    const menu = await screen.findByTestId('subscription-usage-menu')
+    expectOnPopoverLayer(menu)
+    fireEvent.mouseDown(menu)
+    expect(screen.queryByTestId('subscription-usage-menu')).not.toBeNull()
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByTestId('subscription-usage-menu')).toBeNull()
+    fireEvent.click(chip)
+    await screen.findByTestId('subscription-usage-menu')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('subscription-usage-menu')).toBeNull()
+  })
+
+  it('stays inline in Zen, where Zen places and restyles it', async () => {
+    h.daemonCliGet.mockResolvedValue(claudeDoc(new Date().toISOString()))
+    render(
+      <div data-zen-root="">
+        <div data-zen-usage="">
+          <UsageButton />
+        </div>
+      </div>,
+    )
+    fireEvent.click(screen.getByTestId('subscription-usage'))
+    const menu = await screen.findByTestId('subscription-usage-menu')
+    expect(menu.closest('[data-zen-usage]')).not.toBeNull()
+    expect(menu.classList.contains('absolute')).toBe(true)
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByTestId('subscription-usage-menu')).toBeNull()
+  })
+
   it('shows Claude 31% used and keeps the model-scoped row, not Grok', async () => {
     const checkedAt = new Date().toISOString()
     h.daemonCliGet.mockResolvedValue(claudeDoc(checkedAt))

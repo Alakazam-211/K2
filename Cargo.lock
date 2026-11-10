@@ -343,9 +343,9 @@ dependencies = [
 
 [[package]]
 name = "async-executor"
-version = "1.14.0"
+version = "1.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c96bf972d85afc50bf5ab8fe2d54d1586b4e0b46c97c50a0c9e71e2f7bcd812a"
+checksum = "f426a31126c735126297bc5ea7a521263c9faff4f63ca415267ee625651c4f37"
 dependencies = [
  "async-task",
  "concurrent-queue",
@@ -2295,11 +2295,10 @@ checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
 
 [[package]]
 name = "event-listener"
-version = "5.4.1"
+version = "5.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13b66accf52311f30a0db42147dadea9850cb48cd070028831ae5f5d4b856ab"
+checksum = "5a23add41df1562121a9393cb065eab5146a1242410f23a644851e90cfd669d2"
 dependencies = [
- "concurrent-queue",
  "parking",
  "pin-project-lite",
 ]
@@ -4333,6 +4332,7 @@ dependencies = [
  "instant-acme",
  "jsonwebtoken",
  "k2-core",
+ "k2-deskd-proto",
  "k2-export",
  "k2-mpc-base",
  "k2-mpc-board",
@@ -4383,6 +4383,30 @@ dependencies = [
  "windows-sys 0.61.2",
  "x509-parser",
  "zeroize",
+]
+
+[[package]]
+name = "k2-deskd"
+version = "0.1.0"
+dependencies = [
+ "k2-deskd-proto",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "serde",
+ "serde_json",
+ "x11rb",
+ "zbus",
+]
+
+[[package]]
+name = "k2-deskd-proto"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

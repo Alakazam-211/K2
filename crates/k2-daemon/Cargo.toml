@@ -218,6 +218,11 @@ k2-ptyd = { path = "../k2-ptyd" }
 # links k2-core; the daemon embeds it like k2-ptyd (build.rs).
 k2-export = { path = "../k2-export" }
 
+# Remote desktop (prd-remote-desktop-tab-v1 D3): the wire to k2-deskd ("K2
+# Screen"). Only the protocol crate: k2-deskd itself (AppKit, x11rb, zbus)
+# is never linked; Linux release daemons embed its binary (build.rs).
+k2-deskd-proto = { path = "../k2-deskd-proto" }
+
 # base64 — Phase 2 Unit 6 `/cli/fs/read-binary` encodes file bytes
 # into the JSON response so the existing `/cli/*` dispatcher (JSON
 # only) can carry them. ~33% wire overhead, but stays within the

@@ -27,6 +27,7 @@ fn main() {
 
     embed_ptyd();
     embed_export();
+    embed_deskd();
 
     // Link libkrun ONLY for linux + sandbox-microvm. Anywhere else: do nothing.
     if target_os != "linux" || !feature_on {
@@ -103,4 +104,32 @@ fn embed_export() {
         }
     };
     std::fs::write(&out, code).expect("write export_embed.rs");
+}
+
+/// Remote desktop (prd-remote-desktop-tab-v1 D3, vs-live R8b): embed the
+/// release-built `k2-deskd` (path in `K2_DESKD_EMBED`) and its sha256, as
+/// `embed_ptyd` does, so a Linux daemon's self-update (which fetches only
+/// `k2-daemon`) never leaves deskd a version behind. macOS ships deskd in
+/// `K2 Screen.app` instead and never sets it. `K2_REQUIRE_DESKD_EMBED=1`
+/// (Linux release builds) makes a missing binary a build failure.
+fn embed_deskd() {
+    use sha2::{Digest, Sha256};
+    println!("cargo:rerun-if-env-changed=K2_DESKD_EMBED");
+    println!("cargo:rerun-if-env-changed=K2_REQUIRE_DESKD_EMBED");
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR")).join("deskd_embed.rs");
+    let required = std::env::var("K2_REQUIRE_DESKD_EMBED").map(|v| v == "1").unwrap_or(false);
+    let code = match std::env::var("K2_DESKD_EMBED").ok().filter(|p| !p.is_empty()) {
+        Some(path) => {
+            println!("cargo:rerun-if-changed={path}");
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("K2_DESKD_EMBED={path}: {e}"));
+            assert!(bytes.len() > 4096, "K2_DESKD_EMBED={path} is too small to be k2-deskd");
+            let sha = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>();
+            format!("pub static DESKD_EMBED: Option<(&[u8], &str)> = Some((include_bytes!({path:?}), {sha:?}));\n")
+        }
+        None => {
+            assert!(!required, "K2_REQUIRE_DESKD_EMBED=1 but K2_DESKD_EMBED is not set (vs-live R8b)");
+            "pub static DESKD_EMBED: Option<(&[u8], &str)> = None;\n".to_string()
+        }
+    };
+    std::fs::write(&out, code).expect("write deskd_embed.rs");
 }

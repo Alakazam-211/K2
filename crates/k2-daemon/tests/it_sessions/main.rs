@@ -1,4 +1,4 @@
-//! k2-daemon integration tests: Sessions, the reaper and spawn.
+//! k2-daemon integration tests: Sessions, the reaper, spawn, heartbeats and activity.
 //!
 //! One test binary per area. Each module here was its own test binary
 //! (`tests/<module>.rs`) and keeps that name, so `<module>::` selects

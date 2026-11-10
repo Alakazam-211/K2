@@ -1,4 +1,4 @@
-//! k2-daemon integration tests: Guests, rooms, hubs and live access.
+//! k2-daemon integration tests: Guests, rooms, hubs, presence and live access.
 //!
 //! One test binary per area. Each module here was its own test binary
 //! (`tests/<module>.rs`) and keeps that name, so `<module>::` selects

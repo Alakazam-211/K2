@@ -23,6 +23,7 @@ mod context_catalog_create_integration;
 mod custom_preset_agent_integration;
 mod db_upgrade_switch_integration;
 mod federation_peer_rosters_integration;
+mod desktop_routes_integration;
 mod folder_trust_integration;
 mod git_tools_integration;
 mod grokbots_routes_integration;

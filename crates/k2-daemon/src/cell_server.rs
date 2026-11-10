@@ -853,6 +853,25 @@ mod unix_impl {
                 let port = crate::apps::box_service_routes::daemon_ports().first().copied().unwrap_or(0);
                 from_cli(crate::firewall::routes::handle(p, &who, is_post, body, params, port))
             }
+            // 0.46.11: remote desktop from a K2 terminal. A shell tab (a
+            // person) manages it; an agent's passport is
+            // `desktop_people_only`. The cell is this machine (no watching).
+            p if crate::desktop::routes::is_route(p) => {
+                if body.len() > crate::desktop::routes::MAX_BODY {
+                    return from_cli(crate::desktop::routes::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                let req = crate::desktop::routes::Req {
+                    path: p,
+                    is_post,
+                    body,
+                    params,
+                    ingress: "cell",
+                    ip: "-",
+                    token: "",
+                };
+                from_cli(crate::desktop::routes::handle(&who, &req))
+            }
             p if crate::hire_routes::is_route(p) => {
                 if body.len() > crate::hire_routes::MAX_BODY {
                     return from_cli(crate::hire_routes::too_large());

@@ -21,6 +21,6 @@ Topics:
   publish-visibility  publish-dev  compute  compute-shared  ci  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  jobs  heartbeats
-  folder-trust  email-notifications  box-move  board  chat-refresh
+  folder-trust  email-notifications  box-move  board  chat-refresh  desktop
 --- stderr
 --- requests

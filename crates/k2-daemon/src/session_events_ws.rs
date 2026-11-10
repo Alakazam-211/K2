@@ -794,6 +794,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::OpenChanges { .. } => None,
         // Mobile dev (0.46.6): app-level; clients match the workspace.
         SessionEvent::SimState { .. } | SessionEvent::OpenMobile { .. } | SessionEvent::SimHold { .. } => None,
+        // Remote desktop: app-level; one desktop per machine.
+        SessionEvent::DesktopState { .. } | SessionEvent::OpenDesktop { .. } => None,
         // Room-scope R9/R16 (0.46.1) — APP-LEVEL refetch signals for owner
         // clients; Apps get them per room on the activity socket.
         SessionEvent::RoomMembersChanged { .. } => None,
@@ -1201,6 +1203,8 @@ mod tests {
             SessionEvent::SimState { payload: Default::default() },
             SessionEvent::OpenMobile { payload: Default::default() },
             SessionEvent::SimHold { payload: Default::default() },
+            SessionEvent::DesktopState { payload: Default::default() },
+            SessionEvent::OpenDesktop { payload: Default::default() },
             SessionEvent::RoomMembersChanged { room: None },
             SessionEvent::AppDeployed {
                 app_id: "jobs".into(),

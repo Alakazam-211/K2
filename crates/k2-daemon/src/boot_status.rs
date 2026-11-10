@@ -1255,6 +1255,9 @@ pub fn features() -> Vec<&'static str> {
     if post_idempotency_ready() {
         out.push(FEATURE_POST_IDEMPOTENCY);
     }
+    // Remote desktop (prd-remote-desktop-tab-v1 §5): whenever the routes
+    // exist, so clients show + → Desktop (Beta) and the off card.
+    out.push(crate::desktop::FEATURE);
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1, §10):
     // listed only while the global switch is on (setting or env). Its flip
     // publishes a settings frame (`settings_routes::permission_cards_flipped`)
@@ -1423,6 +1426,7 @@ mod tests {
                 "files-download-v1",
                 "transfers-v1",
                 "post-idempotency-v1",
+                "remote-desktop-v1",
                 "boot-status-views-v1"
             ]
         );

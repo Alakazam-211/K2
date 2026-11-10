@@ -126,6 +126,17 @@ pub enum PushEvent {
         outbox_id: String,
         approvers: Vec<String>,
     },
+    /// Remote desktop (prd-remote-desktop-tab-v1 S15, P3): the desktop was
+    /// turned on or off, its policy changed, a grant was made, or someone
+    /// started watching. To every paired phone of an Owner login, the one
+    /// copy a process on the machine can't take back. `line` is K2's own
+    /// words (who and what, never a frame or a keystroke); `kind_id` is
+    /// `enable` | `disable` | `policy` | `grant` | `viewer`.
+    DesktopNotice {
+        line: String,
+        kind_id: String,
+        owners: Vec<String>,
+    },
 }
 
 /// One person's project chat push (thread-read-v1).
@@ -564,6 +575,7 @@ impl PushEvent {
             | Self::ProjectMessageCreated { .. }
             | Self::ProjectPost(_)
             | Self::ChatApprovalRequested { .. } => "K2".to_string(),
+            Self::DesktopNotice { .. } => "Remote desktop".to_string(),
             // Silent: no visible text.
             Self::Badge(_) => String::new(),
             // Permission cards (rev 3.1 §17.7): "billing asks for a permission".
@@ -596,6 +608,7 @@ impl PushEvent {
             Self::ChatApprovalRequested { agent_name, .. } => {
                 format!("{agent_name} has a chat post waiting for your approval")
             }
+            Self::DesktopNotice { line, .. } => line.clone(),
         }
     }
 
@@ -610,7 +623,8 @@ impl PushEvent {
             | Self::ProjectPost(_)
             | Self::Badge(_)
             | Self::ThreadPost(_)
-            | Self::ChatApprovalRequested { .. } => "",
+            | Self::ChatApprovalRequested { .. }
+            | Self::DesktopNotice { .. } => "",
         }
     }
 
@@ -631,6 +645,8 @@ impl PushEvent {
             Self::Badge(b) => Some(b.device_usernames.as_slice()),
             // Always targeted: only the people who may approve.
             Self::ChatApprovalRequested { approvers, .. } => Some(approvers.as_slice()),
+            // Always targeted: the Owner logins' phones only.
+            Self::DesktopNotice { owners, .. } => Some(owners.as_slice()),
             _ => None,
         }
     }
@@ -776,6 +792,10 @@ impl PushEvent {
                 ("outboxId", outbox_id.clone()),
                 ("agentName", agent_name.clone()),
             ]),
+            Self::DesktopNotice { kind_id, .. } => PushData::of(&[
+                ("kind", PUSH_KIND_DESKTOP.to_string()),
+                ("desktopEvent", kind_id.clone()),
+            ]),
             // Legacy desktop-era events carry no mobile deep link.
             Self::AgentNeedsAttention { .. } | Self::HeartbeatFailed { .. } => PushData::default(),
         }
@@ -860,6 +880,9 @@ pub const PUSH_KIND_BADGE: &str = "badge";
 
 /// Push `data.kind` for a Sew chat post waiting for approval (S30).
 pub const PUSH_KIND_CHAT_APPROVAL: &str = "chat_approval";
+
+/// Push `data.kind` for a remote desktop notice (prd-remote-desktop-tab-v1).
+pub const PUSH_KIND_DESKTOP: &str = "desktop";
 
 /// What happens when a push attempt fails. Adapters return `Err` after
 /// exhausting their own retry policy; the daemon does not queue events for

@@ -931,6 +931,28 @@ pub enum SessionEvent {
         payload: serde_json::Map<String, serde_json::Value>,
     },
 
+    /// Remote desktop (prd-remote-desktop-tab-v1 D2): the desktop's switch,
+    /// state, policy, grants or viewer count changed. APP-LEVEL; Settings
+    /// and open Desktop tabs refetch `GET /cli/desktop/status`.
+    ///
+    /// Wire: `{ "kind": "desktop_state", "desktop", "enabled", "state",
+    /// "viewers" }`.
+    DesktopState {
+        #[serde(flatten)]
+        payload: serde_json::Map<String, serde_json::Value>,
+    },
+
+    /// Remote desktop: `k2 desktop open` asks the caller's client to open
+    /// (or focus) its Desktop tab. APP-LEVEL; a client acts only when `for`
+    /// is its own identity on this server (its login, or `owner` for the
+    /// owner token).
+    ///
+    /// Wire: `{ "kind": "open_desktop", "desktop", "display", "for" }`.
+    OpenDesktop {
+        #[serde(flatten)]
+        payload: serde_json::Map<String, serde_json::Value>,
+    },
+
     /// Room-scope R9 (0.46.1): a room's access list may have changed (a
     /// grant, role or guest change, or the owner's hide-names switch).
     /// APP-LEVEL refetch signal for owner clients (Settings, Gardens); the
@@ -1184,6 +1206,8 @@ impl SessionEvent {
             SessionEvent::SimState { .. } => "sim_state",
             SessionEvent::OpenMobile { .. } => "open_mobile",
             SessionEvent::SimHold { .. } => "sim_hold",
+            SessionEvent::DesktopState { .. } => "desktop_state",
+            SessionEvent::OpenDesktop { .. } => "open_desktop",
             SessionEvent::RoomMembersChanged { .. } => "room_members_changed",
             SessionEvent::AppDeployed { .. } => "app_deployed",
             SessionEvent::ThreadRead(_) => "thread_read",
@@ -1505,6 +1529,24 @@ pub fn emit_sim(kind: &str, payload: serde_json::Value) {
         "sim_hold" => SessionEvent::SimHold { payload },
         other => {
             k2_core::log_debug!("[sim] WARN unknown sim event kind {other}");
+            return;
+        }
+    };
+    let _ = emit(ev);
+}
+
+/// Remote desktop: `desktop_state` / `open_desktop` (`desktop::routes`).
+/// Unknown kinds are dropped loudly in the log.
+pub fn emit_desktop(kind: &str, payload: serde_json::Value) {
+    let serde_json::Value::Object(payload) = payload else {
+        k2_core::log_debug!("[desktop] WARN event {kind} payload is not an object");
+        return;
+    };
+    let ev = match kind {
+        "desktop_state" => SessionEvent::DesktopState { payload },
+        "open_desktop" => SessionEvent::OpenDesktop { payload },
+        other => {
+            k2_core::log_debug!("[desktop] WARN unknown desktop event kind {other}");
             return;
         }
     };

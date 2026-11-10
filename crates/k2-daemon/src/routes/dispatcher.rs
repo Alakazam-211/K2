@@ -4179,6 +4179,54 @@ async fn handle_one_request(
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Remote desktop (prd-remote-desktop-tab-v1 §5, 0.46.11):
+        // `/cli/desktop/*`. Floors in route_policy; the handler classifies
+        // the caller (people only: an agent passport, App pass or API key
+        // is `desktop_people_only`), and every write is POST-only here and
+        // in the handler.
+        p if crate::desktop::routes::is_route(p) => {
+            if crate::desktop::routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::desktop::routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::desktop::routes::too_large();
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let token = super::http::extract_token(&query)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .or_else(|| bearer_token.clone())
+                .unwrap_or_default();
+            let params = super::http::parse_params(&path, &query);
+            let ip = client_ip_for(ingress, stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
+            let ingress_label = ingress.as_str().to_string();
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                let req = crate::desktop::routes::Req {
+                    path: &p_owned,
+                    is_post,
+                    body: &body_bytes,
+                    params: &params,
+                    ingress: &ingress_label,
+                    ip: &ip,
+                    token: &token,
+                };
+                crate::desktop::routes::handle(&who, &req)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // front443 — GET /cli/front/status: the box :443 SNI router (socket,
         // routes, cap, per-outcome counters).
         // Who (0.46.6): the firewall's people (the owner, an Admin login, a

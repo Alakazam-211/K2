@@ -1037,6 +1037,23 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/front/passthrough/add",
         "/cli/front/passthrough/rm",
         "/cli/front/http",
+        // 0.46.11: remote desktop. People only: these are here so a
+        // passport reaches the handler, which admits a K2 shell tab (a
+        // person) and answers an agent `desktop_people_only` ("It can't
+        // be requested.") instead of a bare 403.
+        "/cli/desktop/status",
+        "/cli/desktop/displays",
+        "/cli/desktop/enable",
+        "/cli/desktop/disable",
+        "/cli/desktop/policy",
+        "/cli/desktop/grant",
+        "/cli/desktop/revoke",
+        "/cli/desktop/grants",
+        "/cli/desktop/viewers",
+        "/cli/desktop/kick",
+        "/cli/desktop/audit",
+        "/cli/desktop/open",
+        "/cli/desktop/ticket",
         // 0.46.4: extra subdomains of its own workspace on its App.
         "/cli/app/domains",
         "/cli/app/domain/add",

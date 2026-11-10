@@ -25315,6 +25315,275 @@ print(json.dumps(b))' "$hash" "$provider" "$applied" "$managed")" || exit 2
     esac
 }
 
+# ── k2 desktop — this computer's screen, for people (0.46.11) ──────────
+# prd-remote-desktop-tab-v1 §7. Thin: every verb calls /cli/desktop/*;
+# the daemon decides who may do what. People only: an agent's call is
+# desktop_people_only (exit 3) and "It can't be requested."
+_desktop_usage() {
+    cat <<'EOF'
+k2 desktop — this computer's screen in a Desktop tab (Remote desktop, Beta)
+
+People only: the owner, and the logins the owner allows. Agents can't use
+this in v1: they can't see or drive the screen with K2, and can't ask to
+(an agent gets desktop_people_only, exit 3, "It can't be requested.").
+
+  k2 desktop [status] [--json]      on or off, the machine's state, what you may do;
+                                    the owner also sees viewers, grants, hidden apps
+  k2 desktop enable [--json]        turn it on (Owner); prints what that allows
+  k2 desktop disable [--json]       turn it off (Owner); closes every viewer
+  k2 desktop policy --hide-app <bundle id> [--hide-app …] | --no-hide-apps [--json]
+                                    the apps viewers never see on macOS (Owner);
+                                    replaces the list (default: Passwords,
+                                    Keychain Access, 1Password, Bitwarden)
+  k2 desktop grant <login> [--view] [--json]
+                                    let a Member login watch (Owner). --view is the
+                                    default and the only kind: Members never drive.
+                                    Owners and Admins open it without a grant. A
+                                    grant lasts until revoked, or until that login
+                                    is removed, disabled or changes role. Refused:
+                                    an Owner or Admin (grant_not_needed), a Voice &
+                                    Chat only or disabled login, an unknown login
+                                    (no_such_user, exit 4)
+  k2 desktop revoke <login> [--json] end a grant; closes that login's viewers
+  k2 desktop grants [--json]        the grants (Owner)
+  k2 desktop viewers [--json]       who is watching or driving, from where (Owner)
+  k2 desktop kick <viewer-id|login> [--json]
+                                    close one viewer, or every viewer of a login (Owner)
+  k2 desktop audit [--since 1d] [--limit 50] [--json]
+                                    the access log, newest first (Owner). Who,
+                                    when, from where; never what was on screen
+                                    or typed
+  k2 desktop open [--display <id>] [--json]
+                                    open the Desktop tab in your own K2 client. Run
+                                    from a terminal on this computer it succeeds,
+                                    but the tab opens in this computer's K2 app and
+                                    only says "You're on this computer"; run it on
+                                    the device you watch from
+  k2 desktop displays [--json]      the screens you can pick in the tab
+
+(Owner) means an Owner login, or the owner at this computer: a plain
+terminal or a K2 shell tab here. The owner at this computer can run every
+verb above; they just never watch from here. You watch from another device, over K2 Connect or the LAN, signed in
+with a login: Owner and Admin logins watch and drive; a Member login only
+with a grant, and only to watch; Voice & Chat only never. No one at the
+screen has to click Allow. It stays on until an Owner turns it off. Also:
+Settings → Remote Desktop, and + → Desktop (Beta) in a tab strip. More:
+k2 study desktop.
+EOF
+}
+
+_desktop_render() {
+    # _desktop_render <as_json> <verb> <raw "body\ncode">
+    local as_json="$1" verb="$2" raw="$3" code body
+    code="${raw##*$'\n'}"
+    body="${raw%$'\n'*}"
+    if [ -z "$raw" ] || [ "$code" = "$raw" ] || [ "$code" = "000" ]; then
+        echo "k2 desktop: daemon unreachable" >&2
+        exit 1
+    fi
+    if [ "$code" != "200" ]; then
+        K2_DT_BODY="$body" K2_DT_CODE="$code" python3 -c '
+import json, os, sys
+raw, code = os.environ["K2_DT_BODY"], os.environ["K2_DT_CODE"]
+try:
+    d = json.loads(raw)
+except Exception:
+    print("k2 desktop: error: HTTP " + code + ": " + raw.strip()[:300], file=sys.stderr); sys.exit(0)
+e = d.get("error")
+c = ""
+if isinstance(e, dict):
+    c = e.get("code") or ""
+    print("k2 desktop: error: %s: %s" % (c, e.get("hint") or ""), file=sys.stderr)
+elif e is not None:
+    c = str(e)
+    print("k2 desktop: error: %s" % e, file=sys.stderr)
+else:
+    print("k2 desktop: error: HTTP " + code, file=sys.stderr)
+p = d.get("permission")
+if isinstance(p, dict) and p.get("command"):
+    print("Ask with: " + p["command"], file=sys.stderr)
+elif c == "desktop_people_only" or (isinstance(p, dict) and p.get("requestable") is False):
+    print("It can\x27t be requested.", file=sys.stderr)
+'
+        [ "$as_json" = "1" ] && printf '%s\n' "$body"
+        exit "$(_sidecar_exit_for "$code")"
+    fi
+    if [ "$as_json" = "1" ]; then
+        printf '%s\n' "$body"
+        return 0
+    fi
+    K2_DT_BODY="$body" K2_DT_VERB="$verb" python3 -c '
+import datetime, json, os
+d = json.loads(os.environ["K2_DT_BODY"])
+verb = os.environ["K2_DT_VERB"]
+def when(ms):
+    try:
+        return datetime.datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return "-"
+if verb == "status":
+    y = d.get("you") or {}
+    print("remote desktop : %s on %s" % ("on" if d.get("enabled") else "off", d.get("machine") or "this computer"))
+    print("state          : %s (%s)" % (d.get("state"), d.get("message") or ""))
+    print("backend        : %s, lane %s" % (d.get("backend"), d.get("lane")))
+    if y.get("sameMachine"):
+        you = "you are on this computer: you can manage it, but you watch it from another device"
+    elif y.get("mayControl"):
+        you = "you may watch and drive"
+    elif y.get("mayView"):
+        you = "you may watch (view only)"
+    else:
+        you = "you have no access to this screen"
+    print("you            : %s (%s)%s" % (you, y.get("role"), "; you manage it" if y.get("mayManage") and not y.get("sameMachine") else ""))
+    if "hideApps" in d:
+        print("hidden apps    : %s" % (", ".join(d["hideApps"]) or "none"))
+    if "grants" in d:
+        g = d["grants"]
+        print("grants         : %s" % (", ".join("%s (%s)" % (x["user"], x["mode"]) for x in g) or "none"))
+    if "viewers" in d:
+        v = d["viewers"]
+        print("viewers        : %s" % (", ".join("%s %s (%s)" % (x["user"], x["mode"], x["ingress"]) for x in v) or "none"))
+elif verb in ("enable", "disable"):
+    if d.get("enabled"):
+        print("Remote desktop is on%s. State: %s (%s)" % ("" if d.get("changed") else " (it already was)", d.get("state"), d.get("message") or ""))
+        if d.get("card"):
+            print()
+            print(d["card"])
+    else:
+        print("Remote desktop is off%s; closed %s viewer(s)." % ("" if d.get("changed") else " (it already was)", d.get("closed", 0)))
+elif verb == "policy":
+    print("hidden apps: %s" % (", ".join(d.get("hideApps") or []) or "none"))
+elif verb == "grant":
+    g = d.get("grant") or {}
+    print("%s may watch (%s) until you revoke it: k2 desktop revoke %s" % (g.get("user"), g.get("mode"), g.get("user")))
+elif verb == "revoke":
+    print("%s; closed %s viewer(s)." % ("revoked" if d.get("revoked") else "there was no grant", d.get("closed", 0)))
+elif verb == "grants":
+    g = d.get("grants") or []
+    if not g:
+        print("no grants (Owners and Admins open it without one; k2 desktop grant <login> lets a Member watch)")
+    for x in g:
+        print("%-20s %-8s by %s" % (x["user"], x["mode"], x.get("grantedBy")))
+elif verb == "viewers":
+    v = d.get("viewers") or []
+    if not v:
+        print("nobody is watching")
+    for x in v:
+        print("%-14s %-16s %-8s %-8s %s since %s" % (x["id"], x["user"], x["mode"], x["ingress"], x.get("ip") or "-", when(x.get("since", 0))))
+elif verb == "kick":
+    print("closed %s viewer(s)" % d.get("kicked", 0))
+elif verb == "audit":
+    lines = d.get("lines") or []
+    if not lines:
+        print("no access log lines")
+    for l in lines:
+        extra = " ".join("%s=%s" % (k, l[k]) for k in ("target", "mode", "display", "viewer", "ip") if l.get(k))
+        print("%s  %-20s %-18s %-8s %s %s" % (l.get("ts", "-"), l.get("event"), l.get("who", "-"), l.get("ingress", "-"), l.get("outcome", ""), extra))
+elif verb == "open":
+    print("asked your K2 client to open the Desktop tab (for %s)" % d.get("for"))
+elif verb == "displays":
+    ds = d.get("displays") or []
+    if not ds:
+        print("no displays yet (k2 desktop status says why)")
+    for x in ds:
+        print("%-8s %-20s %sx%s pt%s" % (x["id"], x["name"], x["widthPt"], x["heightPt"], "  main" if x.get("main") else ""))
+'
+}
+
+cmd_desktop() {
+    local sub="${1:-status}"
+    [ $# -gt 0 ] && shift
+    case "$sub" in
+        help|--help|-h) _desktop_usage; return 0 ;;
+        --json) sub=status; set -- --json "$@" ;;
+    esac
+    local as_json=0 since="" limit="" display="" no_hide=0 raw body mode=view qs
+    local args=() hides=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --since) since="${2:-}"; shift 2 || { echo "usage: --since 1d|2h|30m|<RFC 3339 time>" >&2; exit 2; } ;;
+            --since=*) since="${1#--since=}"; shift ;;
+            --limit) limit="${2:-}"; shift 2 || { echo "usage: --limit N" >&2; exit 2; } ;;
+            --limit=*) limit="${1#--limit=}"; shift ;;
+            --display) display="${2:-}"; shift 2 || { echo "usage: --display <id> (k2 desktop displays)" >&2; exit 2; } ;;
+            --display=*) display="${1#--display=}"; shift ;;
+            --hide-app) hides+=("${2:-}"); shift 2 || { echo "usage: --hide-app <bundle id>" >&2; exit 2; } ;;
+            --hide-app=*) hides+=("${1#--hide-app=}"); shift ;;
+            --no-hide-apps) no_hide=1; shift ;;
+            --view) mode=view; shift ;;
+            --control)
+                echo "usage: grants are view only: Members never drive (Owners and Admins drive without a grant). Use --view." >&2
+                exit 2 ;;
+            --ttl|--ttl=*)
+                echo "usage: grants have no length: they last until k2 desktop revoke <login>" >&2
+                exit 2 ;;
+            --consent|--consent=*|--active-window|--active-window=*)
+                echo "usage: there is no consent policy in this version (no Allow click at the screen); k2 desktop policy takes --hide-app" >&2
+                exit 2 ;;
+            -h|--help) _desktop_usage; return 0 ;;
+            -*) echo "usage: unknown flag '$1' (k2 desktop --help)" >&2; exit 2 ;;
+            *) args+=("$1"); shift ;;
+        esac
+    done
+    case "$sub" in
+        status)
+            raw="$(_sidecar_send GET /cli/desktop/status "")" ;;
+        enable|on)
+            sub=enable
+            raw="$(_sidecar_send POST /cli/desktop/enable "{}")" ;;
+        disable|off)
+            sub=disable
+            raw="$(_sidecar_send POST /cli/desktop/disable "{}")" ;;
+        policy)
+            if [ "$no_hide" = 1 ] && [ "${#hides[@]}" -gt 0 ]; then
+                echo "usage: --no-hide-apps or --hide-app, not both" >&2; exit 2
+            fi
+            if [ "$no_hide" = 0 ] && [ "${#hides[@]}" -eq 0 ]; then
+                echo "usage: k2 desktop policy --hide-app <bundle id> [--hide-app …] | --no-hide-apps" >&2; exit 2
+            fi
+            body="$(python3 -c 'import json,sys; print(json.dumps({"hideApps": sys.argv[1:]}))' ${hides[@]+"${hides[@]}"})"
+            raw="$(_sidecar_send POST /cli/desktop/policy "$body")" ;;
+        grant)
+            [ "${#args[@]}" -eq 1 ] || { echo "usage: k2 desktop grant <login> [--view]" >&2; exit 2; }
+            body="$(python3 -c 'import json,sys; print(json.dumps({"user": sys.argv[1], "mode": sys.argv[2]}))' "${args[0]}" "$mode")"
+            raw="$(_sidecar_send POST /cli/desktop/grant "$body")" ;;
+        revoke)
+            [ "${#args[@]}" -eq 1 ] || { echo "usage: k2 desktop revoke <login>" >&2; exit 2; }
+            body="$(python3 -c 'import json,sys; print(json.dumps({"user": sys.argv[1]}))' "${args[0]}")"
+            raw="$(_sidecar_send POST /cli/desktop/revoke "$body")" ;;
+        grants)
+            raw="$(_sidecar_send GET /cli/desktop/grants "")" ;;
+        viewers)
+            raw="$(_sidecar_send GET /cli/desktop/viewers "")" ;;
+        kick)
+            [ "${#args[@]}" -eq 1 ] || { echo "usage: k2 desktop kick <viewer-id|login> (k2 desktop viewers lists them)" >&2; exit 2; }
+            case "${args[0]}" in
+                dv_*) body="$(python3 -c 'import json,sys; print(json.dumps({"viewer": sys.argv[1]}))' "${args[0]}")" ;;
+                *) body="$(python3 -c 'import json,sys; print(json.dumps({"user": sys.argv[1]}))' "${args[0]}")" ;;
+            esac
+            raw="$(_sidecar_send POST /cli/desktop/kick "$body")" ;;
+        audit)
+            if [ -n "$limit" ] && ! [[ "$limit" =~ ^[0-9]+$ ]]; then echo "usage: --limit N" >&2; exit 2; fi
+            qs="limit=${limit:-50}"
+            [ -n "$since" ] && qs="${qs}&since=$(urlencode "$since")"
+            raw="$(_sidecar_send GET /cli/desktop/audit "$qs")" ;;
+        open)
+            if [ -n "$display" ]; then
+                body="$(python3 -c 'import json,sys; print(json.dumps({"display": sys.argv[1]}))' "$display")"
+            else
+                body="{}"
+            fi
+            raw="$(_sidecar_send POST /cli/desktop/open "$body")" ;;
+        displays)
+            raw="$(_sidecar_send GET /cli/desktop/displays "")" ;;
+        *)
+            echo "usage: unknown desktop verb '$sub' (status|enable|disable|policy|grant|revoke|grants|viewers|kick|audit|open|displays)" >&2
+            exit 2 ;;
+    esac
+    _desktop_render "$as_json" "$sub" "$raw"
+}
+
 # k2 front passthrough (0.46.6): names the owner's own web server answers,
 # passed through by SNI from the :443 front to a loopback port.
 _front_passthrough() {
@@ -45710,6 +45979,7 @@ cmd_schema() {
     {"name": "changes open", "usage": "k2 changes open [--workspace <path>] [--json]", "description": "Ask a K2 window that shows this workspace to open (or focus) its Changes tab (daemon event open_changes). Agents: their own workspace. 200 means asked; a window opens it only while it shows that workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, workspacePath}."}]},
     {"name": "changes init", "usage": "k2 changes init [--workspace <path>] [--json]", "description": "Make the workspace root a git repository (git init, no commit), like the Changes tab's Initialize repository. Only a workspace root; refused inside an existing repository (already_a_repo) or for a folder that is not a workspace root (bad_path / not_found). Agents: their own workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, repoRoot, rev}."}]},
     {"name": "sim", "usage": "k2 sim status | list-devices [--platform android|ios] | boot [--platform android|ios] [--device \"Pixel 9\"] [--no-tab] | stop | erase [--yes]", "description": "This workspace's mobile device (prd-mobile-dev-v1): one Android emulator (iOS Simulator on a Mac) owned by the daemon, shown live in the Mobile tab. status lists the lanes this server can run and the device; boot opens the Mobile tab for your human unless --no-tab; stop keeps the device's data, erase deletes it (--yes off a terminal). Agents need the workspace's \"Allow mobile devices\" switch (exit 3 + Ask with: otherwise). See k2 study sim.", "args": [], "flags": [{"name": "--platform", "arg": "android|ios", "description": "boot: the lane (default: the first this server can run)."}, {"name": "--device", "arg": "profile", "description": "boot: a profile from k2 sim list-devices."}, {"name": "--no-tab", "arg": null, "description": "boot: do not open the Mobile tab."}, {"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
+    {"name": "desktop", "usage": "k2 desktop [status] | enable | disable | policy --hide-app <bundle id>... | --no-hide-apps | grant <login> [--view] | revoke <login> | grants | viewers | kick <viewer-id|login> | audit [--since 1d] [--limit 50] | open [--display <id>] | displays", "description": "Remote desktop (Beta): this computer's real screen in a Desktop tab on another device. PEOPLE ONLY: agents can't see or drive the screen with K2 and can't ask to; every verb answers an agent desktop_people_only (exit 3, It can't be requested). Owner and Admin logins watch and drive; a Member only with a grant, view only; the owner token and K2 terminals manage but never watch. On until an Owner turns it off. See k2 study desktop.", "args": [{"name": "verb", "required": false, "description": "status (default) | enable | disable | policy | grant | revoke | grants | viewers | kick | audit | open | displays"}], "flags": [{"name": "--hide-app", "arg": "bundle id", "description": "policy: an app viewers never see on macOS (repeatable; replaces the list)."}, {"name": "--no-hide-apps", "arg": null, "description": "policy: hide no apps."}, {"name": "--view", "arg": null, "description": "grant: view only (the only kind; Members never drive)."}, {"name": "--since", "arg": "1d|2h|30m|time", "description": "audit: lines from then on."}, {"name": "--limit", "arg": "N", "description": "audit: at most N lines (default 50)."}, {"name": "--display", "arg": "id", "description": "open: the display to show (k2 desktop displays)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is."}]},
     {"name": "sim tree", "usage": "k2 sim tree [--all] [--find <text>] [--boxes] [--json]", "description": "What is on the device's screen, one format for every lane: interactive elements by default with short ids (e5) tied to a snapshot (t7). Ids of elements still on screen carry over; a gone or older id fails loudly (stale_element / stale_snapshot, exit 3). Read this before acting.", "args": [], "flags": [{"name": "--all", "arg": null, "description": "Every element, not only interactive ones."}, {"name": "--find", "arg": "text", "description": "Only elements whose label, value or id contain it."}, {"name": "--boxes", "arg": null, "description": "Each element's frame in dp."}, {"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
     {"name": "sim tap", "usage": "k2 sim tap e5 | tap --at x,y · type [--into e3] \"text\" | type [--into e3] --secret <vault-name> · swipe up|down|left|right [--from e7] · key enter|backspace|tab|arrow-up|… · button home|back|lock|dev-menu|… · rotate left|right · open-url <url> · location <lat,lon> · appearance dark|light", "description": "Act on the device (POST /cli/sim/act). Each prints one line with the result and what changed: ok tap e5 · 140ms · +e9 text \"Saved\". --secret types a vault secret you never see. While a person is using the device (3 s after their tap, or Take over) an action exits 2 held: run k2 sim wait, then k2 sim tree.", "args": [{"name": "element", "required": false, "description": "An id from k2 sim tree (e5, or t7:e5)."}], "flags": [{"name": "--at", "arg": "x,y", "description": "tap: a point in dp (screens with no tree)."}, {"name": "--into", "arg": "element", "description": "type: focus this field first."}, {"name": "--secret", "arg": "vault-name", "description": "type: a vault secret instead of text."}, {"name": "--from", "arg": "element", "description": "swipe: start on this element."}, {"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
     {"name": "sim install", "usage": "k2 sim install <app.apk|App.app> · launch <package|bundleId> · terminate <id>", "description": "Install an app you built in your own terminal, then launch or stop it.", "args": [{"name": "path", "required": true, "description": "The built .apk (Android) or .app (iOS Simulator)."}], "flags": [{"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
@@ -49756,7 +50026,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs heartbeats mail-watch folder-trust email-notifications box-move board chat-refresh"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs heartbeats mail-watch folder-trust email-notifications box-move board chat-refresh desktop"
 
 _study_usage() {
     cat <<'EOF'
@@ -49780,7 +50050,7 @@ Topics:
   publish-visibility  publish-dev  compute  compute-shared  ci  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  jobs  heartbeats
-  folder-trust  email-notifications  box-move  board  chat-refresh
+  folder-trust  email-notifications  box-move  board  chat-refresh  desktop
 EOF
 }
 
@@ -49848,6 +50118,7 @@ _study_title() {
         box-move) echo "Moving a box: the vault and the tunnel token" ;;
         board) echo "The Board Garden: k2 board, grants, the rules" ;;
         chat-refresh) echo "Refreshing your own chat: k2 agent refresh, the note, what carries on" ;;
+        desktop) echo "Remote desktop: this computer's screen in a Desktop tab (people only)" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
         projects) echo "K2 projects and who may change them" ;;
@@ -49984,6 +50255,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   box-move            Move a box: carry the vault (tunnel token too), freeze, undo, who confirms
   board               The Board Garden's whiteboards: k2 board, grants, cascade, no cut values
   chat-refresh        Refresh your own chat: k2 agent refresh, the note, what carries on
+  desktop             Remote desktop: this computer's screen in a Desktop tab, people only
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -50074,8 +50346,92 @@ _study_page() {
         box-move) _study_page_box_move ;;
         board) _study_page_board ;;
         chat-refresh) _study_page_chat_refresh ;;
+        desktop) _study_page_desktop ;;
         *) return 1 ;;
     esac
+}
+
+_study_page_desktop() {
+    cat <<'EOF'
+k2 study desktop — Remote desktop: this computer's screen in a Desktop tab
+(Beta, 0.46.11)
+
+FOR PEOPLE ONLY
+  Remote desktop shows this computer's real screen, live, in a Desktop tab
+  on another device, and lets an allowed person drive it with keyboard and
+  mouse. It is for people: the owner, and the logins the owner allows.
+  If you are an agent: you can't see or drive the screen with K2's
+  commands, and you can't ask for it. Every k2 desktop verb answers an
+  agent desktop_people_only (exit 3) and "It can't be requested." If your
+  human wants it, tell them the steps below (k2 thread); don't try.
+
+WHO MAY DO WHAT
+  Owner login            watch, drive, and manage (switch, grants, kick, log),
+                         signed in from another device
+  Admin login            watch and drive (no grant needed); can't manage
+  Member login           watch only, and only with the owner's grant
+  Voice & Chat only      never
+  the owner at this      manage only (every k2 desktop verb), from a plain
+  computer               terminal or a K2 shell tab; never watch it from here
+  agents, App passes,    refused: desktop_people_only
+  API keys
+  Nobody watches from this same computer, a login included ("You're on
+  this computer"): you watch from another device, over K2 Connect or the
+  LAN, signed in with a login.
+
+TURN IT ON (the owner, at this computer or over K2 Connect)
+  1. k2 desktop enable          (or Settings → Remote Desktop → Turn on).
+     It prints what that allows: anyone allowed can see and do anything you
+     can on this computer, mail, files and passwords included.
+  2. On a Mac, someone at the Mac allows "K2 Screen" once for Screen
+     Recording and Accessibility (System Settings asks).
+  3. On another device: + → Desktop (Beta) in any tab strip, or
+     k2 desktop open from that device's own K2.
+  It stays on until an Owner turns it off: k2 desktop disable (every
+  viewer closes at once). No consent click at the screen in this version.
+
+LET A MEMBER WATCH
+  k2 desktop grant <login>            view only (--view is the default and
+                                      the only kind)
+  k2 desktop revoke <login>           ends it and closes their tab
+  A grant has no length: it lasts until revoked, or until that login is
+  removed, disabled or changes role (it follows the login itself, so a new
+  login with the same name gets nothing). Owners and Admins need no grant.
+
+OPEN THE TAB
+  k2 desktop open runs on the device you watch from and opens the tab in
+  that device's own K2. Run from a terminal on this computer, it opens the
+  tab in this computer's K2 app, which only says "You're on this computer".
+
+SEE WHO IS WATCHING, AND WHAT HAPPENED
+  k2 desktop viewers                  who, from where, since when
+  k2 desktop kick <viewer-id|login>   close one viewer, or a login's
+  k2 desktop audit --since 1d         the access log (~/.k2/desktop-audit.jsonl):
+                                      who, role, from where, when. Never
+                                      what was on screen or typed
+  Every turn on, turn off, policy change, new grant and new viewer also
+  goes to the paired phones of every Owner login.
+
+PRIVACY
+  macOS hides password apps from viewers (Passwords, Keychain Access,
+  1Password, Bitwarden; k2 desktop policy --hide-app <bundle id> changes
+  the list). Linux can't hide apps. Notifications (2FA codes too) show in
+  the picture. The clipboard moves only on a button, text only. Nothing is
+  recorded.
+
+WHAT THIS VERSION DOESN'T GUARD
+  Code running on this computer as this user (agents, a Member's or an
+  Admin's K2 terminal, a remote shell) can reach the desktop through the
+  machine itself, around K2's checks. That is accepted for this version;
+  agent isolation (0.49) closes it. K2's checks guard against people and
+  machines off this computer.
+
+STATES THE TAB SHOWS
+  off, not allowed, needs permission (K2 Screen), locked, no one logged in,
+  no screen, Allow once (Wayland), K2 Screen and K2 don't match, You're on
+  this computer, unavailable (no K2 Screen in this build yet), running.
+  k2 desktop status prints the machine's state and what you may do.
+EOF
 }
 
 _study_page_ci() {
@@ -95683,6 +96039,10 @@ case "${1:-help}" in
     firewall)
         # The public-ports view and the owner's firewall options (0.46.6).
         shift; cmd_firewall "$@"
+        ;;
+    desktop)
+        # This computer's screen in a Desktop tab, for people (0.46.11).
+        shift; cmd_desktop "$@"
         ;;
     git-tools)
         # First run without git (0.46.4): Apple's command line tools / Linux git.

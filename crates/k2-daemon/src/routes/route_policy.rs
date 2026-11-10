@@ -881,6 +881,25 @@ pub const ROUTES: &[Route] = &[
     // `k2 db upgrade` (0.46.3 S5): logins need Admin (check only); the
     // handler's versions_access gate decides the rest (§12).
     both("/cli/db/upgrade", Admin),
+    // Remote desktop (prd-remote-desktop-tab-v1 §5, 0.46.11). The switch,
+    // policy, grants, viewers, kick and the access log are the Owner's
+    // (S1: never an Admin). Status, displays, open and the stream ticket
+    // are Member-floor: the handler then admits Owners and Admins, and a
+    // Member only with a grant (`k2_core::desktop::policy`). Voice & Chat
+    // only is refused here (Member floor).
+    get("/cli/desktop/audit", Owner),
+    post("/cli/desktop/disable", Owner),
+    get("/cli/desktop/displays", Member),
+    post("/cli/desktop/enable", Owner),
+    post("/cli/desktop/grant", Owner),
+    get("/cli/desktop/grants", Owner),
+    post("/cli/desktop/kick", Owner),
+    post("/cli/desktop/open", Member),
+    post("/cli/desktop/policy", Owner),
+    post("/cli/desktop/revoke", Owner),
+    get("/cli/desktop/status", Member),
+    post("/cli/desktop/ticket", Member),
+    get("/cli/desktop/viewers", Owner),
     post("/cli/dns-manage", Admin),
     both("/cli/dns/access", Member),
     both("/cli/dns/records", Member),

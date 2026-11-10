@@ -838,6 +838,15 @@ pub fn notify_chat_approval_requested(agent_name: &str, outbox_id: &str, approve
     });
 }
 
+/// Remote desktop (prd-remote-desktop-tab-v1 S15, P3): the desktop was
+/// turned on or off, its policy changed, a grant was made, or someone
+/// started watching → a push to every paired phone of an Owner login.
+/// `owners` is the Owner logins' names; empty = nobody. `line` is K2's own
+/// sentence (who and what; never a frame or a keystroke).
+pub fn notify_desktop(kind_id: &str, line: &str, owners: Vec<String>) {
+    dispatch_push(PushEvent::DesktopNotice { line: line.to_string(), kind_id: kind_id.to_string(), owners });
+}
+
 /// How long a resolved gateway config is reused before it is read again
 /// (settings JSON + `tunnel.json`, maybe the token vault). Short, so a
 /// pairing or a settings change applies without a restart.

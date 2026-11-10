@@ -133,6 +133,11 @@ const IN_SETTINGS: &str = "a person with the owner role does this, in Settings o
 const FIREWALL_WHERE: &str =
     "the owner or an admin does this, in Settings → Network → Custom Domains → Firewall or with k2 firewall from a terminal outside K2";
 
+/// Remote desktop (0.46.11): people only; an agent can't see or drive the
+/// screen, and can't ask to.
+const DESKTOP_WHERE: &str =
+    "remote desktop is for people only: the owner turns it on and lets logins watch, in Settings → Remote Desktop or with k2 desktop from a terminal outside K2";
+
 /// K2's front on :443 (`k2 front`): the owner, an Admin or a shell tab.
 const FRONT_WHERE: &str = "the owner or an admin does this, with k2 front over SSH or in a K2 shell tab";
 
@@ -757,6 +762,9 @@ pub(crate) const ROWS: &[Row] = &[
     row(Target::Cannot { r#where: FIREWALL_WHERE }, code(403, "owner_only"), "/cli/front/passthrough", POST),
     // `k2 front status|enable|disable`: the same people, reads included.
     row(Target::Cannot { r#where: FRONT_WHERE }, code(403, "owner_only"), "/cli/front/", ANY),
+    // ── remote desktop (0.46.11) ───────────────────────────────────────
+    // People only, reads included: never requestable.
+    row(Target::Cannot { r#where: DESKTOP_WHERE }, code(403, "desktop_people_only"), "/cli/desktop/", ANY),
     // ── connections ────────────────────────────────────────────────────
     row(ask("connections.create", Floor::Admin), code(403, "agents_create_connections_disabled"), "/cli/", ANY),
     Row {

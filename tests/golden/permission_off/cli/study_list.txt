@@ -79,6 +79,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   box-move            Move a box: carry the vault (tunnel token too), freeze, undo, who confirms
   board               The Board Garden's whiteboards: k2 board, grants, cascade, no cut values
   chat-refresh        Refresh your own chat: k2 agent refresh, the note, what carries on
+  desktop             Remote desktop: this computer's screen in a Desktop tab, people only
 
 Usage: k2 study [list|<topic>|--json]
 --- stderr

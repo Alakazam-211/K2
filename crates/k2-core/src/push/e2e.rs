@@ -309,6 +309,8 @@ pub fn alert_kind(event: &PushEvent) -> Option<&'static str> {
         // Sew S30: an agent's chat post waits for approval. Sealed like the
         // other alerts (it names the agent; it never carries the body).
         PushEvent::ChatApprovalRequested { .. } => Some(super::PUSH_KIND_CHAT_APPROVAL),
+        // Remote desktop notices: sealed like the other alerts.
+        PushEvent::DesktopNotice { .. } => Some(super::PUSH_KIND_DESKTOP),
         PushEvent::Badge(_) | PushEvent::AgentNeedsAttention { .. } | PushEvent::HeartbeatFailed { .. } => None,
     }
 }
@@ -328,6 +330,7 @@ pub fn alert_group(event: &PushEvent) -> String {
         PushEvent::ProjectMessageCreated { group_id, .. } => format!("project:{group_id}"),
         PushEvent::ProjectPost(p) => format!("project:{}", p.group_id),
         PushEvent::ChatApprovalRequested { outbox_id, .. } => format!("chat_approval:{outbox_id}"),
+        PushEvent::DesktopNotice { .. } => "desktop".to_string(),
         _ => String::new(),
     }
 }

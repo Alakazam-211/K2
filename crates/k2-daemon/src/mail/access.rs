@@ -305,6 +305,11 @@ fn resolve(project_id: &str, raw_address: &str, need: Level) -> Result<AccessInb
         if eff < need {
             return Err(masked());
         }
+        // OA0: a login or the owner token through a named workspace — a
+        // linked inbox is someone's own (logged; masked when refused).
+        if !crate::mail::mailbox_guard::check(Some(project_id), source, &row.id, &address) {
+            return Err(masked());
+        }
         return Ok(AccessInbox {
             source,
             address,
@@ -334,6 +339,10 @@ fn resolve(project_id: &str, raw_address: &str, need: Level) -> Result<AccessInb
         return Err(masked());
     }
     if need == Level::Send && eff != Level::Send {
+        return Err(masked());
+    }
+    // OA0: a person's mailbox through a named workspace (logged; masked).
+    if !crate::mail::mailbox_guard::check(Some(project_id), source, &row.id, &address) {
         return Err(masked());
     }
     Ok(AccessInbox {
@@ -404,6 +413,10 @@ fn resolve_caps(
         )
         .unwrap_or(Level::Read);
         drop(conn);
+        // OA0 (move / flag / archive / delete / folders): same rule as reads.
+        if !crate::mail::mailbox_guard::check(Some(project_id), source, &row.id, &address) {
+            return Err(masked());
+        }
         let inbox = AccessInbox {
             source,
             address,
@@ -439,6 +452,9 @@ fn resolve_caps(
     )
     .unwrap_or(Level::Read);
     drop(conn);
+    if !crate::mail::mailbox_guard::check(Some(project_id), source, &row.id, &address) {
+        return Err(masked());
+    }
     let inbox = AccessInbox {
         source,
         address,
@@ -492,6 +508,21 @@ pub fn can_delete(project_id: &str, raw_address: &str) -> Result<AccessInbox, Re
 /// `(address, stalwart_account_id)` pairs (rows without a Stalwart
 /// account are skipped, mirroring the pre-S11 behavior).
 pub fn readable_hosted(project_id: &str) -> Vec<(String, String)> {
+    guard_by_address(project_id, readable_hosted_rows(project_id))
+}
+
+/// OA0: keep only the inboxes this request may reach (a login or the owner
+/// token through a named workspace; a no-op otherwise). Each one is logged.
+fn guard_by_address<T>(project_id: &str, rows: Vec<(String, T)>) -> Vec<(String, T)> {
+    if !crate::mail::mailbox_guard::active() {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|(address, _)| crate::mail::mailbox_guard::check_address(Some(project_id), address))
+        .collect()
+}
+
+fn readable_hosted_rows(project_id: &str) -> Vec<(String, String)> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let Ok(mut stmt) = conn.prepare(
@@ -521,6 +552,14 @@ pub fn readable_hosted(project_id: &str) -> Vec<(String, String)> {
 /// gate (`can_read`/`can_draft`), so the owner's own `primary_level`
 /// still applies. A read error is an error, never an empty list.
 pub fn primary_hosted(project_id: &str) -> Result<Vec<String>, String> {
+    let rows = primary_hosted_rows(project_id)?;
+    Ok(guard_by_address(project_id, rows.into_iter().map(|a| (a, ())).collect())
+        .into_iter()
+        .map(|(a, ())| a)
+        .collect())
+}
+
+fn primary_hosted_rows(project_id: &str) -> Result<Vec<String>, String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let mut stmt = conn
@@ -551,6 +590,18 @@ pub fn draftable_linked(project_id: &str) -> Vec<(String, String)> {
 /// Every LINKED inbox a workspace can READ (primary or grant) — the
 /// no-address sweep's linked half. Returns `(address, inbox_id)` pairs.
 pub fn readable_linked(project_id: &str) -> Vec<(String, String)> {
+    let rows = readable_linked_rows(project_id);
+    if !crate::mail::mailbox_guard::active() {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|(address, id)| {
+            crate::mail::mailbox_guard::check(Some(project_id), Source::Linked, id, address)
+        })
+        .collect()
+}
+
+fn readable_linked_rows(project_id: &str) -> Vec<(String, String)> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let Ok(mut stmt) = conn.prepare(
@@ -578,6 +629,10 @@ pub fn readable_linked(project_id: &str) -> Vec<(String, String)> {
 /// the implicit-`from` resolver for `k2 mail send`, and it stays
 /// hosted-only so the ambiguity story is unchanged).
 pub fn sendable_hosted(project_id: &str) -> Vec<(String, String)> {
+    guard_by_address(project_id, sendable_hosted_rows(project_id))
+}
+
+fn sendable_hosted_rows(project_id: &str) -> Vec<(String, String)> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let Ok(mut stmt) = conn.prepare(

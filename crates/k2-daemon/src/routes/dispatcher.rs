@@ -10054,9 +10054,18 @@ async fn handle_one_request(
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
             let daemon_port = state.port;
+            // OA0: a login or the owner token naming a workspace is held to
+            // the person-mailbox rule and logged (agents: unchanged).
+            let viewer = mail_viewer(&query, state.token.as_str(), scoped_principal.as_ref());
+            let message_ref = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+                .ok()
+                .and_then(|v| v.get("id").and_then(|i| i.as_str()).map(str::to_string));
+            let ip_hint = mail_ip_hint(ingress, stream);
             let result = tokio::task::spawn_blocking(move || {
                 crate::caller_workspace::with_request_principal(scoped_principal, || {
-                    crate::mail_routes::dispatch_post_at(&p_owned, &body_bytes, Some(daemon_port))
+                    crate::mail::mailbox_guard::run(viewer, &p_owned, message_ref, Some(ip_hint.as_str()), || {
+                        crate::mail_routes::dispatch_post_at(&p_owned, &body_bytes, Some(daemon_port))
+                    })
                 })
             })
             .await
@@ -14400,9 +14409,14 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let p_owned = p.to_string();
+            // OA0: a login naming the workspace lists only what it may open.
+            let viewer = mail_viewer(&query, state.token.as_str(), scoped_principal.as_ref());
+            let ip_hint = mail_ip_hint(ingress, stream);
             let resp = tokio::task::spawn_blocking(move || {
                 crate::caller_workspace::with_request_principal(scoped_principal, || {
-                    crate::cli::dispatch(&p_owned, &params)
+                    crate::mail::mailbox_guard::run(viewer, &p_owned, None, Some(ip_hint.as_str()), || {
+                        crate::cli::dispatch(&p_owned, &params)
+                    })
                 })
             })
             .await
@@ -14557,9 +14571,16 @@ async fn handle_one_request(
                 );
             }
             let p_owned = p.to_string();
+            // OA0: a login or the owner token naming a workspace is held to
+            // the person-mailbox rule and logged (agents: unchanged).
+            let viewer = mail_viewer(&query, state.token.as_str(), scoped_principal.as_ref());
+            let message_ref = params.get("id").cloned();
+            let ip_hint = mail_ip_hint(ingress, stream);
             let resp = tokio::task::spawn_blocking(move || {
                 crate::caller_workspace::with_request_principal(scoped_principal, || {
-                    crate::cli::dispatch(&p_owned, &params)
+                    crate::mail::mailbox_guard::run(viewer, &p_owned, message_ref, Some(ip_hint.as_str()), || {
+                        crate::cli::dispatch(&p_owned, &params)
+                    })
                 })
             })
             .await
@@ -15929,6 +15950,41 @@ fn label_caller_for(
         return Caller::Manager { actor };
     }
     Caller::Member
+}
+
+/// OA0: who a mail call is from when it carries no agent passport — the
+/// owner token or a Connect login (local or through the tunnel). `None`
+/// for a passport (agents keep their own rules). An authenticated caller
+/// that is neither is held to a Member's rule ([`Viewer::Unknown`]).
+///
+/// [`Viewer::Unknown`]: crate::mail::mailbox_guard::Viewer::Unknown
+fn mail_viewer(
+    query: &str,
+    owner_token: &str,
+    scoped: Option<&crate::session_token::HookPrincipal>,
+) -> Option<crate::mail::mailbox_guard::Viewer> {
+    use crate::mail::mailbox_guard::Viewer;
+    if scoped.is_some() {
+        return None;
+    }
+    if super::http::token_is_owner(query, owner_token) {
+        return Some(Viewer::OwnerToken);
+    }
+    // The role is read fresh from the user store, never the session's copy.
+    let login = super::http::extract_token(query)
+        .filter(|t| !t.is_empty())
+        .and_then(k2_core::connect_users::validate_session)
+        .and_then(|u| k2_core::connect_users::role_for_user(&u).map(|r| (u, r)));
+    Some(match login {
+        Some((username, role)) => Viewer::Login { username, role },
+        None => Viewer::Unknown,
+    })
+}
+
+/// OA0: where a mail call came in, for the access log ("tunnel 203.0.113.5").
+fn mail_ip_hint(ingress: Ingress, stream: &tokio::net::TcpStream) -> String {
+    let ip = client_ip_for(ingress, stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
+    format!("{} {ip}", ingress.as_str())
 }
 
 fn token_or_scoped_hook_auth(

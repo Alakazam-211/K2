@@ -21,6 +21,7 @@ import {
   parseMailCatalog,
   parseMailMessages,
   parseMailRead,
+  mailReadMarkedRead,
   parseTrayList,
   parseTrayRead,
   mailHtmlIsEmpty,
@@ -265,9 +266,13 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
       })
       const message = parseMailRead(raw)
       setMailBody(message)
-      setMailMessages((prev) =>
-        prev.map((m) => (m.id === item.id ? { ...m, unread: false } : m)),
-      )
+      // Someone other than the mailbox's own agent or person reads without
+      // marking it read (OA0): keep the dot then.
+      if (mailReadMarkedRead(raw)) {
+        setMailMessages((prev) =>
+          prev.map((m) => (m.id === item.id ? { ...m, unread: false } : m)),
+        )
+      }
       if (stampKind === 'hosted' || stampKind === 'linked') {
         setChatAboutStamp({
           kind: stampKind,

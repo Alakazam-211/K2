@@ -176,6 +176,14 @@ export function parseMailRead(raw: unknown): MailMessageFull {
   return raw.message as MailMessageFull
 }
 
+/** Whether `mail/read` marked the message read. The daemon leaves mail
+ *  unread when someone other than the mailbox's own agent or person opens
+ *  it (`markedRead: false`); an older daemon sends no field and always
+ *  marked it. */
+export function mailReadMarkedRead(raw: unknown): boolean {
+  return !(isRecord(raw) && raw.markedRead === false)
+}
+
 export function stripExternalEmailMarkers(body: string): { inner: string; hadMarkers: boolean } {
   const lines = body.split('\n')
   const kept: string[] = []

@@ -163,6 +163,9 @@ pub mod imap_listeners;
 pub mod import;
 pub mod jmap;
 pub mod lists;
+/// OA0 (0.46.11): people's mailboxes through a named workspace, and the
+/// mailbox access log (`mail_reader_audit`, 0284).
+pub mod mailbox_guard;
 pub mod messages;
 pub mod oauth;
 pub mod oauth_config;

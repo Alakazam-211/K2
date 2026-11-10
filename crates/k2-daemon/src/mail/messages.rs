@@ -1351,7 +1351,10 @@ pub fn wait_for_match(
                 // Fetch-full can race a deletion; a vanished id keeps
                 // polling rather than failing the whole wait.
                 if let Some(full) = backend.fetch_full(&w.account_id, &hit.id)? {
-                    backend.mark_seen(&w.account_id, &hit.id)?;
+                    // OA0: only the mailbox's own reader marks it read.
+                    if crate::mail::mailbox_guard::may_mark_seen(&w.address) {
+                        backend.mark_seen(&w.account_id, &hit.id)?;
+                    }
                     k2_core::log_debug!(
                         "[mail/wait] matched subject={:?} at {}",
                         full.summary.subject,

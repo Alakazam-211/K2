@@ -231,6 +231,11 @@ pub fn handle_inbox(params: &HashMap<String, String>) -> CliResponse {
     let Some((source, inbox_id)) = digest::inbox_ids_for(address) else {
         return err("404 Not Found", "not_found", &format!("no address '{address}'"));
     };
+    // OA0: a login sees who hears about a person's mailbox only when it may
+    // open that mailbox; otherwise the same answer as an unknown address.
+    if !crate::mail::mailbox_guard::check(None, source, &inbox_id, address) {
+        return err("404 Not Found", "not_found", &format!("no address '{address}'"));
+    }
     let mut agents = Vec::new();
     {
         let db = k2_core::db::shared();
@@ -275,12 +280,25 @@ pub fn handle_log(params: &HashMap<String, String>) -> CliResponse {
         Err(r) => return r,
     };
     let limit = params.get("limit").and_then(|l| l.parse::<i64>().ok()).unwrap_or(50).clamp(1, 500);
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    match store::log_of(&conn, &project_id, limit) {
-        Ok(v) => ok(serde_json::json!({ "log": v })),
-        Err(e) => db_err(e),
-    }
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match store::log_of(&conn, &project_id, limit) {
+            Ok(v) => v,
+            Err(e) => return db_err(e),
+        }
+    };
+    // OA0: notices about a person's mailbox stay out of a login's view
+    // unless it may open that mailbox.
+    let rows: Vec<serde_json::Value> = rows
+        .into_iter()
+        .filter(|r| {
+            r["inbox"]
+                .as_str()
+                .is_none_or(|a| crate::mail::mailbox_guard::check_address(Some(project_id.as_str()), a))
+        })
+        .collect();
+    ok(serde_json::json!({ "log": rows }))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -528,6 +546,11 @@ pub fn handle_inboxes(body: &[u8]) -> CliResponse {
     }
     for raw in &b.remove {
         let Some((source, inbox_id)) = digest::inbox_ids_for(raw) else { continue };
+        // OA0: a person's mailbox this login may not open is skipped like
+        // an unknown one.
+        if !crate::mail::mailbox_guard::check(Some(project_id.as_str()), source, &inbox_id, raw) {
+            continue;
+        }
         let db = k2_core::db::shared();
         let conn = db.lock();
         if let Err(e) = store::remove_inbox(&conn, &project_id, source, &inbox_id) {

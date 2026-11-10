@@ -221,6 +221,18 @@ pub fn handle_external_remove(body: &[u8]) -> CliResponse {
             "missing 'address' — the connected account to remove ('k2 mail external list')",
         );
     }
+    // OA0: a linked inbox is always someone's own account, so only an Admin
+    // or the Owner may unlink it (logged); anyone else hears what an
+    // unknown address gets.
+    if let Ok(address) = crate::mail::addresses::normalize_address(&b.address) {
+        if external::inbox_for_address(&address).is_some()
+            && !crate::mail::mailbox_guard::check_address(None, &address)
+        {
+            return ext_error_response(ExtError::NotFound(format!(
+                "no external inbox '{address}' — 'k2 mail external list' shows what's connected"
+            )));
+        }
+    }
     match external::remove_inbox(&FileSecretStore::default(), &b.address) {
         Ok(v) => {
             // Waiting messages from it can't leave any more; their files go now.

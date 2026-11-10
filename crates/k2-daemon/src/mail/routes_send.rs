@@ -1799,8 +1799,13 @@ pub fn handle_outbox(params: &HashMap<String, String>) -> CliResponse {
             Ok(r) => r,
             Err(hint) => return error_response("502 Bad Gateway", "engine", &hint),
         };
-        // Masked: a foreign row answers exactly like a missing one.
-        let Some(row) = row.filter(|r| r.owner_project_id == project_id) else {
+        // Masked: a foreign row answers exactly like a missing one — and so
+        // does a row sent from a person's mailbox this login may not open
+        // (OA0).
+        let Some(row) = row.filter(|r| {
+            r.owner_project_id == project_id
+                && crate::mail::mailbox_guard::check_address(Some(project_id.as_str()), &r.from_address)
+        }) else {
             return error_response(
                 "404 Not Found",
                 "not_found",
@@ -1814,7 +1819,11 @@ pub fn handle_outbox(params: &HashMap<String, String>) -> CliResponse {
     }
 
     let rows = send::list_for_project(&project_id, limit);
-    let list: Vec<serde_json::Value> = rows.iter().map(send::outbound_json).collect();
+    let list: Vec<serde_json::Value> = rows
+        .iter()
+        .filter(|r| crate::mail::mailbox_guard::check_address(Some(project_id.as_str()), &r.from_address))
+        .map(send::outbound_json)
+        .collect();
     ok_json(serde_json::json!({
         "ok": true,
         "count": list.len(),
@@ -1849,6 +1858,15 @@ pub fn handle_outbox_cancel(body: &[u8]) -> CliResponse {
     };
     let agent_name = k2_core::workspace::display::agent_display_name(&path);
     let store = DbOutboundStore::default();
+    // OA0: a send from a person's mailbox this login may not open answers
+    // like a missing one.
+    if let Ok(Some(row)) = store.load(id) {
+        if row.owner_project_id == project_id
+            && !crate::mail::mailbox_guard::check_address(Some(project_id.as_str()), &row.from_address)
+        {
+            return send_error_response(SendError::NotFound(format!("no outbound message '{id}'")));
+        }
+    }
     match crate::mail::schedule::cancel_scheduled(
         &store,
         id,

@@ -630,9 +630,19 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
         Ok(b) => b,
         Err(resp) => return resp,
     };
+    // OA0: only the mailbox's own reader (its agent, or its person) marks
+    // mail read; anyone else (a Member on the agent tab, an Owner or Admin
+    // in someone's mailbox) reads without changing it. `fetch_full` is a
+    // peek on every backend (JMAP Email/get, IMAP BODY.PEEK[], Graph GET).
+    let mark = crate::mail::mailbox_guard::may_mark_seen(&address);
     // Linked IMAP: one session (FETCH then STORE). Two round-trips
     // STATUS-storm Gmail (dozens of labels) and blow the CLI's 30s.
-    let full = match backend.fetch_full_and_mark_seen(&account_id, &email_id) {
+    let fetched = if mark {
+        backend.fetch_full_and_mark_seen(&account_id, &email_id)
+    } else {
+        backend.fetch_full(&account_id, &email_id)
+    };
+    let full = match fetched {
         Ok(Some(f)) => f,
         // The backend not knowing the id answers the same masked
         // not_found as a foreign id.
@@ -662,12 +672,16 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
             "ok": true,
             "id": token,
             "rawBase64": B64.encode(&bytes),
+            "markedRead": mark,
         }));
     }
     let include_html = crate::cli::bool_param(params, "html");
     ok_json(serde_json::json!({
         "ok": true,
         "message": messages::shape_full_json(&address, &full, include_html, &backend.auth_authority()),
+        // OA0: false when someone other than the mailbox's own reader opened
+        // it, so the agent tab keeps showing it unread.
+        "markedRead": mark,
     }))
 }
 

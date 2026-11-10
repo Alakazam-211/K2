@@ -237,6 +237,18 @@ pub fn handle_address_delete(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // OA0: retiring a person's mailbox is that person's, an Admin's or the
+    // Owner's; anyone else hears what an unknown address gets.
+    if let Ok(address) = addresses::normalize_address(&b.address) {
+        let owned_here = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            addresses::load_address(&conn, &address).is_some_and(|r| r.owner_project_id == project_id)
+        };
+        if owned_here && !crate::mail::mailbox_guard::check_address(Some(project_id.as_str()), &address) {
+            return addr_error_response(AddrError::NotFound(format!("no address '{address}' in this workspace")));
+        }
+    }
     // The engine is only needed when the row has a Stalwart account;
     // an installed-but-unreachable server fails CLOSED inside
     // retire_address (mirrors the S2 domain-remove contract).
@@ -396,7 +408,21 @@ pub fn handle_address_list(params: &HashMap<String, String>) -> CliResponse {
         }
     };
     let cap = k2_core::workspace::settings::mail_address_cap_for_path(&path);
-    ok_json(addresses::list_for_project_json(&project_id, cap))
+    let mut v = addresses::list_for_project_json(&project_id, cap);
+    // OA0: a login naming the workspace doesn't see the people's mailboxes
+    // it may not open (logged per address).
+    if crate::mail::mailbox_guard::active() {
+        if let Some(list) = v.get_mut("addresses").and_then(|a| a.as_array_mut()) {
+            list.retain(|row| {
+                row["address"]
+                    .as_str()
+                    .is_some_and(|a| crate::mail::mailbox_guard::check_address(Some(project_id.as_str()), a))
+            });
+            let n = list.len();
+            v["cap"]["used"] = serde_json::json!(n);
+        }
+    }
+    ok_json(v)
 }
 
 // ──────────────────────────────────────────────────────────────────────

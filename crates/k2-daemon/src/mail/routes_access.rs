@@ -102,7 +102,26 @@ fn resolve_project(project: &str) -> Result<String, CliResponse> {
 ///   (owner-or-admin gate lives in the dispatcher).
 pub fn handle_inboxes(params: &HashMap<String, String>) -> CliResponse {
     match crate::mail::identity::resolve_caller_params(params) {
-        Ok((_path, project_id)) => ok_json(access::catalog_json(Some(&project_id))),
+        Ok((_path, project_id)) => {
+            let mut catalog = access::catalog_json(Some(&project_id));
+            // OA0: a login naming the workspace sees only the inboxes it may
+            // open (a person's mailbox is theirs, an Admin's or the Owner's);
+            // each listed inbox is logged.
+            if crate::mail::mailbox_guard::active() {
+                if let Some(list) = catalog.get_mut("inboxes").and_then(|v| v.as_array_mut()) {
+                    list.retain(|row| {
+                        row["address"].as_str().is_some_and(|a| {
+                            crate::mail::mailbox_guard::check_address(Some(project_id.as_str()), a)
+                        })
+                    });
+                    let n = list.len();
+                    if catalog.get("count").is_some() {
+                        catalog["count"] = serde_json::json!(n);
+                    }
+                }
+            }
+            ok_json(catalog)
+        }
         Err(resp) => {
             // Missing identity → owner catalog. Any other resolve error
             // (unknown claim, unresolvable principal) surfaces as-is so

@@ -14,6 +14,7 @@ import {
   parseMailCatalog,
   parseMailMessages,
   parseMailRead,
+  mailReadMarkedRead,
   parseTrayList,
   parseTrayRead,
   preferMailHtml,
@@ -82,6 +83,12 @@ describe('inbox-browser helpers', () => {
     expect(src).not.toMatch(/javascript:/i)
     expect(src).toContain('<p>')
     expect(() => parseMailRead({ ok: true })).toThrow(/mail\/read/)
+  })
+
+  it('keeps the unread dot when the daemon left the mail unread (OA0)', () => {
+    expect(mailReadMarkedRead({ ok: true, message: { id: 'm1' }, markedRead: false })).toBe(false)
+    expect(mailReadMarkedRead({ ok: true, message: { id: 'm1' }, markedRead: true })).toBe(true)
+    expect(mailReadMarkedRead({ ok: true, message: { id: 'm1' } })).toBe(true)
   })
 
   it('prefers text over HTML unless text is empty', () => {

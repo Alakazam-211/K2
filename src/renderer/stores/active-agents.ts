@@ -215,19 +215,8 @@ export interface ActiveAgent {
 // ChildExit codes and already retries wakes); a renderer timing guess is
 // the wrong layer. A genuinely dead spawn is visible in its own pane.
 
-/** A terminal that needs to be briefly mounted off-screen to spawn its PTY */
-export interface BackgroundSpawn {
-  id: string
-  terminalId: string
-  cwd: string
-  command: string
-  args: string[]
-}
-
 interface ActiveAgentsState {
   agents: Map<string, ActiveAgent>
-  /** Terminals waiting to be briefly mounted off-screen to spawn their PTY */
-  backgroundSpawns: BackgroundSpawn[]
   /** cwds of every live PTY — drives the Active-bar "has a live session" dot.
    *  Derived from the list-running poll; a workspace is "live" when any PTY's
    *  cwd is inside it. See `projectHasLiveSession`. */
@@ -235,8 +224,6 @@ interface ActiveAgentsState {
 
   getActiveAgentsList: () => ActiveAgent[]
   getAgentsInTab: (tabId: string) => ActiveAgent[]
-  addBackgroundSpawn: (spawn: BackgroundSpawn) => void
-  removeBackgroundSpawn: (id: string) => void
   /** #688 — push a live PTY's cwd into `liveSessionCwds` (from a daemon
    *  `SessionAdded` broadcast) so the Active-bar dot turns green without a
    *  poll. Idempotent; keeps the existing Set reference when the cwd is
@@ -251,16 +238,7 @@ interface ActiveAgentsState {
 
 export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
   agents: new Map(),
-  backgroundSpawns: [],
   liveSessionCwds: new Set(),
-
-  addBackgroundSpawn: (spawn: BackgroundSpawn) => {
-    set((s) => ({ backgroundSpawns: [...s.backgroundSpawns, spawn] }))
-    setTimeout(() => get().removeBackgroundSpawn(spawn.id), 10000)
-  },
-  removeBackgroundSpawn: (id: string) => {
-    set((s) => ({ backgroundSpawns: s.backgroundSpawns.filter((b) => b.id !== id) }))
-  },
 
   addLiveSessionCwd: (cwd: string) => {
     if (!cwd) return
@@ -1080,7 +1058,6 @@ export function __resetAgentStateForHostSwitch(): void {
   resetActivity(primaryScope())
   useActiveAgentsStore.setState({
     agents: new Map(),
-    backgroundSpawns: [],
     liveSessionCwds: new Set(),
   })
 }

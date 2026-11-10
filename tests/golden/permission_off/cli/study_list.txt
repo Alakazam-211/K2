@@ -83,6 +83,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   chat-refresh        Refresh your own chat: k2 agent refresh, the note, what carries on
   desktop             Remote desktop: this computer's screen in a Desktop tab, people only
   send-feedback       Tell Alakazam Labs about K2 itself: what is sent, never sent, agents' limits
+  organization        The Org Chart: read the bulletin daily, reach a head, heads and members
 
 Usage: k2 study [list|<topic>|--json]
 --- stderr

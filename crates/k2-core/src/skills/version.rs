@@ -324,7 +324,8 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// Bumped to 50 (0.46.8): the Study topics gain `chat-refresh`.
 /// Bumped to 51 (0.46.8): the k2-cli skill names `k2 sidecar archive`.
 /// Bumped to 52 (0.46.10): K2 is MIT-licensed (was Fair Source, FSL).
-pub const SKILL_VERSION_WORKSPACE: u32 = 52;
+/// Bumped to 53 (0.46.11): the Study topics gain `organization` (the Org Chart).
+pub const SKILL_VERSION_WORKSPACE: u32 = 53;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

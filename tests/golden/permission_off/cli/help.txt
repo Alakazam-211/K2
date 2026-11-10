@@ -54,6 +54,8 @@ AGENTS
   llm tokens list                       This server's LLM subscriptions and API tokens
                                         (one server default per tool); read-only from
                                         K2 terminals — `k2 llm tokens --help`
+  organization bulletin                 The Org Chart: today's bulletin of orgs and heads;
+                                        reach / update / ask — `k2 organization --help`
 
 ASK A HUMAN
   feedback ask "<title>"                File a durable ask for human input (survives

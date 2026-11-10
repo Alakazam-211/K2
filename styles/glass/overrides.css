@@ -67,17 +67,43 @@
   overflow: hidden;
 }
 
-/* ── Veil: the light glass recipe ─────────────────────────────────────── */
+/* ── Veil: the light glass recipe ───────────────────────────────────────
+   Every glass object carries the rim: everything Frost (the top-bar
+   capsules, pills, round buttons, search fields, the Thread's floating
+   objects, segmented tracks) and the Thread's round Send. Tiles and cards
+   don't: they keep their border and soft drop. */
 [data-style="glass"][data-palette="veil"] [data-material="frost"]:not([data-zen-root] *) {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 2px 5px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04);
 }
 [data-style="glass"][data-palette="veil"] [data-material="frost"][data-float]:not([data-zen-root] *) { background: var(--material-tint); }
-/* The ring needs a positioned frost box; a menu placed absolute or fixed
-   already is one. */
-[data-style="glass"][data-palette="veil"] [data-material="frost"]:not([class~="absolute"], [class~="fixed"]):not([data-zen-root] *) { position: relative; }
+/* On a white tile (the nav, a drawer, a card, a menu, a pane) glass would
+   vanish, so it keeps the rim and its fill becomes a grey wash. Hover and lit
+   sit on top of that wash. The Settings page's content pane is the page, not
+   a tile. Segmented tracks always take the wash, so the white thumb reads. */
+[data-style="glass"][data-palette="veil"] :is([data-material="tile"], [data-material="raised"], [data-drawer-side]):not([data-settings-shell] > [data-material="tile"]:not([data-clip])) [data-material="frost"]:not([data-zen-root] *),
+[data-style="glass"][data-palette="veil"] .k2-segmented[data-material="frost"]:not([data-zen-root] *) {
+  --material-tint: rgba(0, 0, 0, 0.05);
+  --k2-float-fill-hover: rgba(0, 0, 0, 0.09);
+  --k2-float-fill-lit: rgba(0, 0, 0, 0.12);
+}
+/* The Thread's Send is a round glass button on the composer's white tile.
+   While it has nothing to send it takes the wash; with something to send it
+   is the accent, rim and all. */
+[data-style="glass"][data-palette="veil"] [data-k2-thread-zen] [data-zen-send]:not([data-zen-root] *) {
+  border: 0.5px solid var(--material-edge);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+/* (Its fill is an inline var(--zen-surface), so the wash goes through that.) */
+[data-style="glass"][data-palette="veil"]:not([data-frost="tile"]) [data-k2-thread-zen] [data-zen-send]:disabled:not([data-zen-root] *) {
+  --zen-surface: rgba(0, 0, 0, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 2px 5px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+/* The ring needs a positioned box; a menu placed absolute or fixed already
+   is one. */
+[data-style="glass"][data-palette="veil"] :is([data-material="frost"]:not([class~="absolute"], [class~="fixed"]), [data-k2-thread-zen] [data-zen-send]):not([data-zen-root] *) { position: relative; }
 /* The 1px gradient ring that follows the corners: dark down the sides, bright
-   at top and bottom. */
-[data-style="glass"][data-palette="veil"] [data-material="frost"]:not([data-zen-root] *)::before {
+   at top and bottom, fading gradually between them. */
+[data-style="glass"][data-palette="veil"] :is([data-material="frost"], [data-k2-thread-zen] [data-zen-send]):not([data-zen-root] *)::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -112,7 +138,7 @@
   box-shadow: var(--tile-sheen), var(--shadow-3);
 }
 [data-style="glass"][data-frost="tile"] [data-material="frost"][data-frost-shape]:not([data-zen-root] *) { box-shadow: var(--tile-sheen); }
-[data-style="glass"][data-frost="tile"] [data-material="frost"]:not([data-zen-root] *)::before { content: none; }
+[data-style="glass"][data-frost="tile"] :is([data-material="frost"], [data-k2-thread-zen] [data-zen-send]):not([data-zen-root] *)::before { content: none; }
 
 /* ── TILE: solid fill, the edge is the glass ────────────────────────────── */
 [data-style="glass"] [data-material="tile"]:not([data-zen-root] *),
@@ -249,6 +275,8 @@
 [data-style="glass"] [data-mode-toggle] button[aria-pressed="true"]:not([data-zen-root] *) {
   background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
 }
+/* Light glass: the lit half is the same dark wash as any selected state. */
+[data-style="glass"][data-palette="veil"] [data-mode-toggle] button[aria-pressed="true"]:not([data-zen-root] *) { background: rgba(0, 0, 0, 0.07); }
 [data-style="glass"] [data-mode-toggle] button[aria-pressed="false"]:hover:not(:disabled):not([data-zen-root] *) {
   background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
 }
@@ -309,16 +337,12 @@
   transition: color 180ms ease;
 }
 [data-style="glass"] .k2-segment[aria-checked="true"]:not([data-zen-root] *) { color: #ffffff; }
-/* Veil's picker: a white pill on a pale track, ink for the label. Frost would
-   vanish on a white tile, so the track is a plain wash with a control edge. */
+/* Veil's picker: a white pill on a pale track, ink for the label. The track is
+   light glass with a grey wash (the Veil recipe above), unblurred. */
 [data-style="glass"][data-palette="veil"] .k2-segmented[data-material="frost"]:not([data-zen-root] *) {
-  background: #f5f5f5;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-  border: 1px solid var(--color-control-edge);
-  box-shadow: none;
 }
-[data-style="glass"][data-palette="veil"] .k2-segmented[data-material="frost"]:not([data-zen-root] *)::before { content: none; }
 [data-style="glass"][data-palette="veil"] .k2-segment-thumb:not([data-zen-root] *) {
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06);

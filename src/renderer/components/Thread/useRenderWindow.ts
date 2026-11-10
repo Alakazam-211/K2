@@ -37,6 +37,7 @@ import {
   WINDOW_RESPAWN_SCREENS,
   WINDOW_ROWS,
   WINDOW_STEP,
+  windowAround,
   type ChatWindow,
   type WindowRange,
 } from './threadWindow'
@@ -82,6 +83,13 @@ export interface RenderWindow extends WindowRange {
   growTop: () => boolean
   /** The scroller scrolled (call from its scroll handler). */
   onScroll: () => void
+  /** Draw the row `key` (a search's match). True once it is or will be
+   *  drawn on the next commit; false when it isn't in memory. The caller
+   *  scrolls it into view (and stops following the newest first). */
+  show: (key: string) => boolean
+  /** On: rows loaded above the first in memory wait above the window
+   *  (a search reading the whole history), instead of drawing at once. */
+  holdOldest: (on: boolean) => void
 }
 
 export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
@@ -98,6 +106,8 @@ export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
   const dir = useRef(0)
   const lastTop = useRef(0)
   const lastScrollAt = useRef(0)
+  /** `holdOldest`: the window names its first row, never "from the first". */
+  const holdTop = useRef(false)
   const [, bump] = useReducer((n: number) => n + 1, 0)
 
   const { room, keys } = o
@@ -289,7 +299,10 @@ export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
   useLayoutEffect(() => {
     const { keys: k, scroller, stick, following, onScrollWrite } = opts.current
     drawn.current = { keys: k, lo: range.lo, hi: range.hi }
-    if (k.length) winRef.current = { room: opts.current.room, win: pinWindow(k, range) }
+    if (k.length) {
+      const win = pinWindow(k, range)
+      winRef.current = { room: opts.current.room, win: holdTop.current && win.lo === null ? { ...win, lo: k[0] } : win }
+    }
     const a = anchor.current
     anchor.current = null
     const el = scroller()
@@ -345,6 +358,26 @@ export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
     scheduleIdle.current()
   }, [])
 
+  const show = useCallback((key: string): boolean => {
+    const k = opts.current.keys
+    const at = k.indexOf(key)
+    if (at < 0) return false
+    const view = drawn.current
+    if (view && view.keys === k && at >= view.lo && at < view.hi) return true
+    // The rows leaving keep their height (a spacer, not a jump).
+    rememberHeights(rows())
+    setWindow(pinWindow(k, windowAround(k.length, at)), false)
+    return true
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const holdOldest = useCallback((on: boolean): void => {
+    holdTop.current = on
+    const w = winRef.current
+    const k = drawn.current?.keys ?? opts.current.keys
+    if (on && w && w.win.lo === null && k.length) winRef.current = { ...w, win: { ...w.win, lo: k[0] } }
+  }, [])
+
   const px = heights.current.px
   const wasDrawn = useCallback((key: string): boolean => px.has(key), [px])
 
@@ -358,5 +391,7 @@ export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
     toNewest,
     growTop,
     onScroll,
+    show,
+    holdOldest,
   }
 }

@@ -39,6 +39,7 @@ import { useSessionViewTab } from '@/components/SessionView/useSessionViewTab'
 import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
 import { ThreadViewIdentity } from '@/components/SessionView/ThreadViewIdentity'
 import { ThreadFloatBell } from '@/components/SessionView/ThreadFloatBell'
+import { ThreadFloatSearch } from '@/components/SessionView/ThreadFloatSearch'
 import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, useThreadFloats } from '@/components/SessionView/threadFloats'
 import { ThreadTerminalToggle } from '@/components/SessionView/ThreadTerminalToggle'
 import { FolderTrustHoldPanel, useFolderTrustHold } from './FolderTrustHold'
@@ -391,6 +392,7 @@ function ChatHeader({
         />
       ) : null}
       {floating && projectId ? <ThreadFloatBell projectId={projectId} /> : null}
+      {floating ? <ThreadFloatSearch /> : null}
       </div>
       {viewTab === 'thread' ? (
         <ThreadViewIdentity name={displayName} addr={overlayAddr} />

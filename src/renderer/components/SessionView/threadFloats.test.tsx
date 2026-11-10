@@ -45,6 +45,7 @@ function header(viewTab: SessionViewTab) {
         onSplitRight={() => {}}
         onRefresh={() => {}}
         refreshing={false}
+        bell={<button type="button" data-testid="bell-stub" />}
       />
     </div>
   )
@@ -77,6 +78,13 @@ describe('the header', () => {
     expect(h.parentElement?.getAttribute('data-testid')).toBe('pane')
   })
 
+  it('has the search object on the left, right after the bell', () => {
+    renderInRoom(room, header('thread'))
+    const search = screen.getByTestId('thread-search-button')
+    expect(search.getAttribute('data-k2-float')).toBe('round')
+    expect(search.closest('[data-testid="thread-search"]')?.previousElementSibling?.getAttribute('data-testid')).toBe('bell-stub')
+  })
+
   it('stays a bar in every other view', () => {
     for (const view of ['terminal', 'split', 'chatter'] as const) {
       renderInRoom(room, header(view))
@@ -85,6 +93,7 @@ describe('the header', () => {
       expect(h.className).toContain('border-b')
       expect(screen.getByTestId('session-view-button').hasAttribute('data-k2-float')).toBe(false)
       expect(screen.queryByTestId('thread-float-scrim')).toBeNull()
+      expect(screen.queryByTestId('thread-search-button')).toBeNull()
       cleanup()
     }
   })

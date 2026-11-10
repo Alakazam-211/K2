@@ -8,6 +8,7 @@ import { formatRelativeTime } from '@/lib/format-relative-time'
 import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
 import { useSettingsStore } from '@/stores/settings'
 import { useOverlayThread } from './useOverlayThread'
+import { useThreadSearchPane } from './useThreadSearchPane'
 import { useRoom } from '@/components/Room/RoomContext'
 import { displayThreadAddress } from '@/lib/thread-address-bus'
 import { wasPendingBubble } from './threadOutbox'
@@ -156,7 +157,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const viewer = useMemo(() => viewerNow, [viewerKey])
   const isTabVisible = useIsTabVisible()
-  const { items, outbox, error, answer, voidCard, hasMore, loadOlder, loadingOlder, loaded, turn, currentAddr, pastAddresses } = useOverlayThread({
+  const { items, outbox, error, answer, voidCard, hasMore, loadOlder, loadAll, loadingOlder, loaded, turn, currentAddr, pastAddresses } = useOverlayThread({
     // Home M4: the room's server (B's thread in B's room).
     scope: roomScope,
     addr,
@@ -315,6 +316,26 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     onScrollWrite: (top) => {
       savedScrollTopRef.current = top
     },
+  })
+
+  // Thread view's search (the object beside the bell): this Thread finds,
+  // draws, scrolls to and paints the matches.
+  const unfollow = useCallback(() => {
+    pinBottomRef.current = false
+  }, [])
+  const onSearchScroll = useCallback((top: number) => {
+    savedScrollTopRef.current = top
+  }, [])
+  useThreadSearchPane({
+    list: listRef,
+    content: contentRef,
+    items: visible,
+    hasMore,
+    loadAll,
+    show: win.show,
+    holdOldest: win.holdOldest,
+    unfollow,
+    onScrollWrite: onSearchScroll,
   })
 
   // Sender pictures (Rosson 2026-11-04): more than two people among the

@@ -48,6 +48,8 @@ export function threadCardsQuery(scope: Pick<ServerScope, 'serverSupports'>): st
 }
 
 export const OVERLAY_PAGE_SIZE = 25
+/** A search reads the rest of a Thread in pages this big (the route's most). */
+export const OVERLAY_SEARCH_PAGE_SIZE = 500
 
 /** `widget` / `author` / `design` / `attachments` when the daemon sent
  *  them (left off otherwise, so a coerced doc stays equal to the socket's).

@@ -2,7 +2,7 @@
 import type { ServerScope } from '@/kessel/server-scope'
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { OVERLAY_PAGE_SIZE, threadCardsParams } from './overlayThread'
+import { OVERLAY_PAGE_SIZE, OVERLAY_SEARCH_PAGE_SIZE, threadCardsParams } from './overlayThread'
 
 const daemonCliGet = vi.hoisted(() => vi.fn())
 const daemonCliPost = vi.hoisted(() => vi.fn())
@@ -117,6 +117,27 @@ describe('useOverlayThread paging', () => {
     expect(result.current.items).toHaveLength(40)
     expect(result.current.items[0].seq).toBe(1)
     expect(result.current.hasMore).toBe(false)
+  })
+
+  it('loadAll (a search) reads every older page, 500 at a time, to the start', async () => {
+    daemonCliGet
+      .mockResolvedValueOnce({ conversation_id: '', has_more: true, items: pageItems(1001, 1025, 'thread') })
+      .mockResolvedValueOnce({ conversation_id: '', has_more: true, items: pageItems(501, 1000, 'thread') })
+      .mockResolvedValueOnce({ conversation_id: '', has_more: false, items: pageItems(1, 500, 'thread') })
+    const { result } = renderHook(() =>
+      useOverlayThread({ scope: primaryScope(), addr: 'sales', conversationId: null, enabled: true }),
+    )
+    await waitFor(() => expect(result.current.items).toHaveLength(25))
+    await act(async () => {
+      await result.current.loadAll()
+    })
+    const cards = threadCardsParams(primaryScope())
+    expect(daemonCliGet).toHaveBeenCalledWith('thread', { addr: 'sales', limit: OVERLAY_SEARCH_PAGE_SIZE, before_seq: 1001, ...cards })
+    expect(daemonCliGet).toHaveBeenCalledWith('thread', { addr: 'sales', limit: OVERLAY_SEARCH_PAGE_SIZE, before_seq: 501, ...cards })
+    expect(result.current.items).toHaveLength(1025)
+    expect(result.current.items[0].seq).toBe(1)
+    expect(result.current.hasMore).toBe(false)
+    expect(result.current.loadingOlder).toBe(false)
   })
 
   it('loaded stays false until the first snapshot lands, then true on an empty list', async () => {

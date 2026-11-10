@@ -2062,5 +2062,45 @@ html[data-style="terminal"] [data-k2-float-picture] { border: 1px solid var(--co
 }
 html[data-style="glass"] .thread-float-scrim { display: none; }
 
+/* Thread view's search: the field opens as a pill beside the bell. The
+   outline follows the pill's shape (the chamfer's band in Terminal through
+   `border-color`). Short of room (ThreadFloatSearch measures the row), the
+   name and the right-hand objects step aside while searching (`narrow`);
+   in a very narrow pane the field has the row to itself (`tight`). */
+[data-thread-search] { justify-content: flex-start; }
+[data-thread-search]:focus-within { border-color: var(--color-accent); }
+html:is([data-style="glass"], [data-style="glass-classic"]) [data-thread-search]:focus-within { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+.thread-search-input { width: 168px; font: inherit; color: inherit; height: 100%; }
+.thread-search-input::-webkit-search-cancel-button,
+.thread-search-input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
+.thread-search-count { font-size: var(--type-xs); padding-inline: 2px 4px; min-width: 7ch; text-align: end; }
+.thread-search-count[data-empty] { color: var(--color-text-secondary); }
+[data-thread-searching].grid,
+[data-thread-searching] > .grid { grid-template-columns: minmax(0, 1fr); }
+:is([data-thread-searching].grid, [data-thread-searching] > .grid) > :not(.thread-float-scrim):not(:has([data-thread-search])) { display: none; }
+[data-thread-searching] .thread-float-group:has([data-thread-search]) { min-width: 0; }
+[data-thread-searching] [data-testid="thread-search"],
+[data-thread-searching] [data-thread-search] { flex: 1 1 auto; min-width: 0; }
+[data-thread-searching] .thread-search-input { flex: 1 1 auto; width: auto; min-width: 3ch; }
+[data-thread-searching="tight"] .thread-float-group > :not([data-testid="thread-search"]) { display: none; }
+
+/* The matches, painted over the drawn text (CSS Custom Highlights; the
+   message's own nodes are never touched). Find colours, the same in every
+   Style and palette as in a browser, so they read on either bubble (the
+   accent one too): pale yellow for each match, orange for the current one. */
+:root {
+  --thread-search-hit: #ffe680;
+  --thread-search-hit-current: #ff9f43;
+  --thread-search-hit-text: #1a1400;
+}
+::highlight(k2-thread-search) {
+  background-color: var(--thread-search-hit);
+  color: var(--thread-search-hit-text);
+}
+::highlight(k2-thread-search-current) {
+  background-color: var(--thread-search-hit-current);
+  color: var(--thread-search-hit-text);
+}
+
 /* A banner at the top of the Thread stays below the objects. */
 [data-thread-floats-host] [data-testid="clone-proposals-banner"] { margin-top: var(--thread-float-inset, 0px); }

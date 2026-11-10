@@ -67,6 +67,15 @@ export function pinWindow(keys: readonly string[], range: WindowRange): ChatWind
   }
 }
 
+/** A window of `size` rows with row `index` a third of the way down (a
+ *  search's match: read in context, more of what led up to it). */
+export function windowAround(len: number, index: number, size = WINDOW_ROWS): WindowRange {
+  if (len <= 0) return { lo: 0, hi: 0 }
+  const at = Math.min(Math.max(0, index), len - 1)
+  const lo = Math.max(0, Math.min(at - Math.floor(size / 3), len - size))
+  return { lo, hi: Math.min(len, lo + size) }
+}
+
 /** Grow `range` by `step` rows at `edge`, keeping at most `max` drawn: past
  *  it, rows at the other end leave, but never one of `keep` (the rows on
  *  screen), which may leave the window a little over `max`. Returns

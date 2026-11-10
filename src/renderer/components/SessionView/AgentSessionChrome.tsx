@@ -14,6 +14,7 @@ import { SessionViewMenu } from './SessionViewMenu'
 import { ThreadViewIdentity } from './ThreadViewIdentity'
 import { ThreadTerminalToggle } from './ThreadTerminalToggle'
 import { ThreadFloatBell } from './ThreadFloatBell'
+import { ThreadFloatSearch } from './ThreadFloatSearch'
 import { THREAD_FLOATS_GRID, ThreadFloatScrim, floatProps, useThreadFloats } from './threadFloats'
 import { chatHarnessName } from './chatHarness'
 import { SessionViewChromeContext } from './sessionViewChrome'
@@ -277,6 +278,7 @@ export function SidecarSessionHeader({
           />
         ) : null}
         {bell}
+        {floating ? <ThreadFloatSearch /> : null}
         </div>
         {viewTab === 'thread' ? (
           <div className="relative z-[1] min-w-0">

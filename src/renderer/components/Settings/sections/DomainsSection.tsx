@@ -1,81 +1,53 @@
 // Settings → Network → Custom Domains (prd-custom-domains-and-certs-v1 D4/D11).
-// Thin client on GET /cli/domains. Attach ≠ NS transfer.
+// Thin client on GET /cli/domains and GET /cli/firewall; every answer is
+// checked in `domains-parse.ts`, so a bad answer is a failed read, never a
+// crash. Adding a domain attaches it to this server; it never moves the
+// domain's nameservers by itself.
+//
+// The page follows Settings → Workspaces / Agents: a title with one line
+// under it, then card groups of rows at one content width. A person comes
+// here to point their own domain at this server and see whether it works:
+// Your domains (add, status, nameservers to set), Names (what each address
+// is for, its certificate, the DNS records an App name still needs),
+// Certificates, then Firewall.
 
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import type { SettingEntry } from '../searchManifest'
-import { SettingDropdown } from '../controls/SettingControls'
+import {
+  SaveError,
+  SaveNote,
+  SettingDropdown,
+  SettingRow,
+  SettingsGroup,
+  SettingsLoadState,
+  SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
+  useSaveStatus,
+} from '../controls/SettingControls'
+import { Button, Callout, Input, OverflowMenu, Surface, Tag, Toggle, type TagTone } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { onDomainsChanged } from '@/stores/session-events'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import {
+  DomainsParseError,
+  parseDomainAnswer,
+  parseDomainList,
+  parseFirewallStatus,
+  type AppNameStatus,
+  type DomainNameRow,
+  type DomainRow,
+  type FirewallPort,
+  type FirewallStatus,
+} from './domains-parse'
 
-type CertState = { state: string; issuer?: string; expiresAt?: string | null }
+export type { AppNameStatus, DomainRow, FirewallPort, FirewallStatus } from './domains-parse'
 
-/** 0.46.6: a custom App name's serving state (daemon `custom_domains::status_json`). */
-export type AppNameStatus = {
-  app: string
-  state: string
-  live: boolean
-  notServedYet: boolean
-  /** Grandfathered at 0.46.6: served by your own web server, not by K2. */
-  external?: boolean
-  words: string
-  primary?: boolean
-  served?: 'this_box' | 'elsewhere' | 'nothing'
-  lastError?: string | null
-  warning?: string
-  error?: string
-  txt?: { type: string; name: string; value: string }
-  /** 0.46.8 (Path B): K2 Connect routes this name to this server. */
-  viaRelay?: boolean
-  /** The DNS to set, for the path in `recordsPath`. */
-  records?: { type: string; name: string; value: string; note?: string }[]
-  recordsPath?: 'direct' | 'connect'
-  /** Path B before K2 Connect accepted a claim: it picks the TXT value. */
-  txtPending?: string
-  pathB?: {
-    available: boolean
-    why?: string | null
-    meter: string
-    upgrade?: string | null
-  }
-}
+const CONTENT_WIDTH = 'max-w-[52rem]'
+const TEXTAREA =
+  'k2-focus no-drag w-full border border-[var(--color-control-edge)] rounded-[var(--radius-field-multiline)] [box-shadow:var(--ring-field)] bg-[var(--color-bg)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] type-control font-mono px-2 py-1 outline-none focus:border-[var(--color-accent)]'
 
-type DomainNameRow = {
-  hostname: string
-  role: string
-  cert?: CertState
-  app?: AppNameStatus
-}
-
-/** The chip for an App name: never "issued" for a name nothing serves. */
-export function appStateLabel(a: AppNameStatus): string {
-  if (a.error === 'unknown_app') return `not served · no App ${a.app}`
-  if (a.external) return `served by your own web server (not by K2)${a.primary ? ' · primary' : ''}`
-  if (a.notServedYet) return `not served yet · ${a.state.replace('_', ' ')}`
-  return a.primary ? 'live · primary' : 'live'
-}
-
-export type DomainRow = {
-  apex: string
-  zoneId: string | null
-  dnsWrite: boolean
-  /** A8.1: `active` | `pending_ns` from k2.dev bind; null for BYO rows. */
-  status?: string | null
-  /** Nameservers k2.dev wants at the registrar. */
-  nameservers?: string[]
-  /** k2.dev auto-added the zone to this account on bind. */
-  created?: boolean
-  /** `winddown` / `suspended` on k2.dev: records serve, no writes. */
-  readOnly?: boolean
-  /** The zone was not in k2.dev's last zones list for this server (DN12d). */
-  zoneMissing?: boolean
-  /** Unix seconds of the server's last check with k2.dev, if any since boot. */
-  checkedAt?: number | null
-  names: DomainNameRow[]
-}
-
-/** Copy for a 409 `zone_owned_elsewhere` attach. */
-export const OWNED_ELSEWHERE_COPY = 'This domain belongs to another k2.dev account.'
+// ── Talking to the daemon ───────────────────────────────────────────
 
 /** Daemon error with its machine code kept (`zone_owned_elsewhere`, …). */
 class DomainApiError extends Error {
@@ -87,174 +59,259 @@ class DomainApiError extends Error {
 }
 
 function toApiError(status: number, body: unknown): DomainApiError {
-  const err = (body as { error?: { hint?: string; code?: string } | string })?.error
+  const err = (body as { error?: { hint?: string; code?: string } | string } | null)?.error
   if (typeof err === 'string') return new DomainApiError(err, null)
-  return new DomainApiError(err?.hint || `domains ${status}`, err?.code ?? null)
+  return new DomainApiError(err?.hint || `the server answered ${status}`, err?.code ?? null)
 }
 
-/** What the user reads for a failed domain call. */
+async function cliCall(path: string, payload?: unknown): Promise<unknown> {
+  const creds = await getDaemonWs(primaryScope())
+  const res = await fetch(`${daemonHttpBase(creds)}${path}?token=${creds.token}`, payload === undefined
+    ? { method: 'GET' }
+    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw toApiError(res.status, body)
+  return body
+}
+
+/** Copy for a 409 `zone_owned_elsewhere` attach. */
+export const OWNED_ELSEWHERE_COPY = 'This domain belongs to another k2.dev account.'
+
+/** The server's reason for a failed call, in its own words (shown quietly). */
 export function domainErrorText(e: unknown): string {
   if (e instanceof DomainApiError && e.code === 'zone_owned_elsewhere') return OWNED_ELSEWHERE_COPY
   return e instanceof Error ? e.message : String(e)
 }
 
-export function isPendingNs(d: DomainRow): boolean {
-  return d.status === 'pending_ns'
+/** What failed, in plain words, and the server's reason after it. */
+type ActionFailure = { title: string; detail: string }
+
+function failure(title: string, e: unknown): ActionFailure {
+  return { title, detail: domainErrorText(e) }
 }
 
-async function cliGet(path: string): Promise<unknown> {
-  const creds = await getDaemonWs(primaryScope())
-  const res = await fetch(`${daemonHttpBase(creds)}${path}?token=${creds.token}`, {
-    method: 'GET',
-  })
-  const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw toApiError(res.status, body)
-  return body
+function ActionError({ error, onDismiss }: { error: ActionFailure | null; onDismiss(): void }): React.JSX.Element | null {
+  if (!error) return null
+  const plain = error.detail === OWNED_ELSEWHERE_COPY
+  return (
+    <div className="px-4 py-3">
+      <Callout tone="error" role="alert" className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="type-row">{error.title}</p>
+          <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 break-words">
+            {plain ? error.detail : `The server said: ${error.detail.replace(/[.\s]+$/, '')}.`} Nothing changed; try again.
+          </p>
+        </div>
+        <Button variant="quiet" className="flex-shrink-0" onClick={onDismiss}>
+          Dismiss
+        </Button>
+      </Callout>
+    </div>
+  )
 }
 
-async function cliPost(path: string, payload: Record<string, string>): Promise<unknown> {
-  const creds = await getDaemonWs(primaryScope())
-  const res = await fetch(`${daemonHttpBase(creds)}${path}?token=${creds.token}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw toApiError(res.status, body)
-  return body
-}
-
-/** One nameserver with a copy button (square, matches the section's buttons). */
-function NameserverCopyRow({ ns }: { ns: string }): React.JSX.Element {
+function CopyButton({ value, label }: { value: string; label: string }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
-  const copy = () => {
-    void navigator.clipboard.writeText(ns)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
+  useEffect(() => {
+    if (!copied) return
+    const t = window.setTimeout(() => setCopied(false), 2000)
+    return () => window.clearTimeout(t)
+  }, [copied])
   return (
-    <div className="flex items-center justify-between gap-2 py-0.5">
-      <span className="type-hint font-mono text-[var(--color-text-primary)] select-all">{ns}</span>
-      <button
-        type="button"
-        onClick={copy}
-        aria-label={`Copy ${ns}`}
-        className="px-2 py-0.5 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] no-drag cursor-pointer"
-      >
-        {copied ? 'Copied' : 'Copy'}
-      </button>
-    </div>
-  )
-}
-
-/** Pending-nameservers block for a `pending_ns` row (A8.1). */
-export function PendingNameservers({
-  domain,
-  busy,
-  onCheckAgain,
-}: {
-  domain: DomainRow
-  busy: boolean
-  onCheckAgain: (apex: string) => void
-}): React.JSX.Element {
-  const ns = domain.nameservers ?? []
-  return (
-    <div
-      className="mt-1 ml-2 px-2 py-2 border border-[var(--color-border)]"
-      data-testid={`pending-ns-${domain.apex}`}
+    <Button
+      variant="quiet"
+      className="flex-shrink-0"
+      aria-label={`Copy ${label}`}
+      onClick={() => {
+        void navigator.clipboard.writeText(value)
+        setCopied(true)
+      }}
     >
-      <p className="type-hint text-[var(--color-text-muted)] mb-1 leading-relaxed">
-        Point this domain&apos;s nameservers to these at your registrar. DNS records
-        can&apos;t be changed until k2.dev sees them. This server checks with k2.dev
-        by itself and updates here when it does.
-      </p>
-      {ns.length === 0 ? (
-        <p className="type-hint text-[var(--color-text-muted)]">
-          k2.dev didn&apos;t list nameservers. See your k2.dev dashboard.
-        </p>
-      ) : (
-        ns.map((n) => <NameserverCopyRow key={n} ns={n} />)
-      )}
-      {domain.created && (
-        <p className="type-hint text-[var(--color-text-muted)] mt-1">
-          Auto-added to your k2.dev account
-        </p>
-      )}
-      <button
-        type="button"
-        onClick={() => onCheckAgain(domain.apex)}
-        disabled={busy}
-        className="mt-2 px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
-      >
-        Check again
-      </button>
-    </div>
+      {copied ? 'Copied' : 'Copy'}
+    </Button>
   )
 }
 
-function dnsLabel(d: DomainRow): string {
-  if (isPendingNs(d)) return 'Pending nameservers'
-  if (d.readOnly) return `K2-hosted DNS (read-only: ${d.status ?? 'on hold'} on k2.dev)`
-  return d.dnsWrite ? 'K2-hosted DNS (writable)' : 'BYO DNS (inventory only)'
+const DAY = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+const day = (unix: number): string => DAY.format(new Date(unix * 1000))
+
+// ── Words ───────────────────────────────────────────────────────────
+
+export function isPendingNs(d: Pick<DomainRow, 'status'>): boolean {
+  return d.status === 'pending_ns'
 }
 
 /** Copy for a zone missing from k2.dev's list for this server (DN12d). */
 export const ZONE_MISSING_COPY =
-  'Not found on k2.dev for this server. The zone may have been removed or moved to another account. Check again, or remove and attach it again.'
+  'k2.dev no longer lists this domain for this server. It may have been removed or moved to another account. Check again, or remove it and add it again.'
+
+/** A domain's status chip and the one line under its name. */
+export function domainStatus(d: DomainRow): { tone: TagTone; label: string; hint: string } {
+  if (d.zoneMissing) return { tone: 'danger', label: 'Not found', hint: ZONE_MISSING_COPY }
+  if (isPendingNs(d)) {
+    return { tone: 'warn', label: 'Waiting for nameservers', hint: 'Set its nameservers at your registrar. K2 checks by itself and updates this page.' }
+  }
+  if (d.readOnly) {
+    return {
+      tone: 'warn',
+      label: 'On hold',
+      hint: `Its records still work, but your k2.dev plan is ${d.status ?? 'on hold'}, so they can’t change. Check your plan on k2.dev.`,
+    }
+  }
+  if (d.dnsWrite) return { tone: 'ok', label: 'Working', hint: 'K2 hosts its DNS, so K2 adds the records each name needs.' }
+  return { tone: 'neutral', label: 'Your DNS', hint: 'Its DNS stays where you manage it. Add the records each name needs there.' }
+}
+
+const ROLE_OPTIONS = [
+  { value: 'mail', label: 'Mail' },
+  { value: 'publish', label: 'Published pages' },
+  { value: 'app', label: 'An App' },
+  { value: 'direct', label: 'Direct to this server' },
+  { value: 'other', label: 'Something else' },
+]
+
+function roleWords(role: string): string {
+  if (role.startsWith('app:')) return `For the App ${role.slice(4)}`
+  if (role === 'mail') return 'For mail'
+  if (role === 'publish') return 'For published pages'
+  if (role === 'direct') return 'Direct to this server'
+  return 'Other use'
+}
+
+/** An App name's chip (never "ready" for a name nothing serves). */
+export function appStatus(a: AppNameStatus): { tone: TagTone; label: string } {
+  if (a.error === 'unknown_app') return { tone: 'danger', label: 'No such App' }
+  if (a.external) return { tone: 'neutral', label: 'Your web server' }
+  if (a.live && !a.notServedYet) return { tone: 'ok', label: 'Live' }
+  if (a.state === 'verifying') return { tone: 'warn', label: 'Checking DNS' }
+  if (a.state === 'issuing') return { tone: 'warn', label: 'Getting a certificate' }
+  if (a.state === 'failing') return { tone: 'danger', label: 'Not working' }
+  return { tone: 'warn', label: 'Waiting for DNS' }
+}
+
+/** A name's chip and the line under it. */
+export function nameStatus(n: DomainNameRow): { tone: TagTone; label: string; hint: string } {
+  const role = roleWords(n.role)
+  if (n.app) {
+    const s = appStatus(n.app)
+    if (n.app.error === 'unknown_app') return { ...s, hint: `There’s no App called ${n.app.app} on this server. Remove this name, or add it again for another App.` }
+    if (n.app.external) return { ...s, hint: `${role}. Your own web server answers for it, not K2.` }
+    const extra = n.app.viaRelay ? ' Reaches this server through K2 Connect.' : ''
+    const main = n.app.primary ? ' Its main address.' : ''
+    return { ...s, hint: `${role}.${main}${extra}` }
+  }
+  const c = n.cert
+  const uploaded = n.renewal?.state === 'uploaded'
+  if (c.state === 'expired') {
+    return { tone: 'danger', label: 'Certificate expired', hint: `${role}. Its certificate expired${c.expiresAt ? ` on ${day(c.expiresAt)}` : ''}, so browsers warn visitors.` }
+  }
+  if (c.state === 'self-signed') {
+    return { tone: 'warn', label: 'Temporary certificate', hint: `${role}. Browsers warn visitors until K2 gets a real certificate.` }
+  }
+  if (c.state === 'issued') {
+    const until = c.expiresAt ? ` until ${day(c.expiresAt)}` : ''
+    const how = uploaded ? 'Your own certificate' : 'Certificate'
+    const renew = uploaded ? '' : ', renews by itself'
+    return { tone: 'ok', label: 'Working', hint: `${role}. ${how}${until}${renew}.` }
+  }
+  return { tone: 'muted', label: 'No certificate', hint: `${role}. No certificate yet: get one from its menu.` }
+}
+
+/** Plain words for a firewall row: who opened it and what it's for. */
+export function firewallPortWords(r: FirewallPort): { who: 'K2' | 'You'; what: string } {
+  const only = r.allowFrom.length > 0 ? `, only from ${r.allowFrom.join(', ')}` : ''
+  switch (r.source) {
+    case 'ssh':
+      return { who: 'You', what: `SSH, to sign in to this server${only}` }
+    case 'front443':
+      return { who: 'K2', what: 'Secure web: Apps on your domains, mail on the web and calls' }
+    case 'front80':
+      return { who: 'K2', what: 'Web: sends visitors to the secure address and proves your domains for certificates' }
+    case 'skin-direct':
+      return { who: 'K2', what: 'Apps served straight from this server' }
+    case 'hostmail': {
+      const mail: Record<number, string> = {
+        25: 'Mail: receives mail from other servers',
+        465: 'Mail: mail apps send through it',
+        587: 'Mail: mail apps send through it',
+        993: 'Mail: mail apps read through it',
+        143: 'Mail: mail apps read through it',
+        80: 'Mail: proves the domain for its certificate',
+        443: 'Mail on the web',
+      }
+      return { who: 'K2', what: mail[r.port] ?? 'Mail' }
+    }
+    case 'sew-voice':
+      return { who: 'K2', what: 'Chat / Voice: calls' }
+    case 'daemon':
+      return { who: 'K2', what: 'K2 on your local network' }
+    case 'owner':
+    {
+      const label = r.why.replace(/^owner:\s*/, '')
+      return { who: 'You', what: `${label ? label[0].toUpperCase() + label.slice(1) : 'Opened by you'}${only}` }
+    }
+    default:
+      return { who: 'K2', what: r.why || r.source }
+  }
+}
 
 export const DOMAINS_MANIFEST: SettingEntry[] = [
   {
-    id: 'domains.firewall',
-    section: 'domains',
-    label: 'Firewall',
-    description: 'Public ports on this server, who may reach SSH, ports you open, the App guard',
-    keywords: ['firewall', 'ports', 'ssh', 'open port', 'guard', 'rate limit', 'nft', 'ufw'],
-  },
-  {
     id: 'domains.inventory',
     section: 'domains',
-    label: 'Custom domains',
-    description: 'Names this machine terminates — attach an apex, then hostnames under it',
-    keywords: ['domain', 'apex', 'hostname', 'dns', 'cert', 'tls', 'bind'],
+    label: 'Your domains',
+    description: 'Domains you own, pointed at this server, and whether each one works',
+    keywords: ['domain', 'apex', 'hostname', 'dns', 'nameservers', 'cert', 'tls', 'bind'],
   },
   {
     id: 'domains.add',
     section: 'domains',
     label: 'Add domain',
-    description: 'Attach an apex to this server (does not transfer NS)',
-    keywords: ['add', 'attach', 'apex', 'bind'],
+    description: 'Point a domain you own at this server',
+    keywords: ['add', 'attach', 'apex', 'bind', 'domain'],
+  },
+  {
+    id: 'domains.names',
+    section: 'domains',
+    label: 'Names',
+    description: 'Addresses on your domains and what each is for: mail, pages or an App',
+    keywords: ['hostname', 'subdomain', 'mail', 'app', 'records', 'certificate'],
+  },
+  {
+    id: 'domains.certificates',
+    section: 'domains',
+    label: 'Certificates',
+    description: 'The certificate service K2 uses, or upload your own certificate',
+    keywords: ['certificate', 'acme', 'lets encrypt', 'zerossl', 'pem', 'upload', 'tls'],
+  },
+  {
+    id: 'domains.firewall',
+    section: 'domains',
+    label: 'Firewall',
+    description: 'Ports open to the internet on this server, who can reach SSH, ports you open',
+    keywords: ['firewall', 'ports', 'ssh', 'open port', 'guard', 'rate limit', 'nft', 'ufw'],
   },
 ]
 
-function certLabel(cert?: CertState): string {
-  const state = cert?.state || 'missing'
-  if (state === 'missing') return '—'
-  if (cert?.issuer) return `${state} (${cert.issuer})`
-  return state
+// ── The page ────────────────────────────────────────────────────────
+
+type Load<T> = { kind: 'loading' } | { kind: 'error'; detail: string; unreadable: boolean } | { kind: 'ready'; data: T }
+
+/** A failed read: the server's reason, or an answer K2 can't read. */
+function readFailure(e: unknown): { kind: 'error'; detail: string; unreadable: boolean } {
+  return { kind: 'error', detail: domainErrorText(e), unreadable: e instanceof DomainsParseError }
 }
 
 export function DomainsSection(): React.JSX.Element {
-  const [domains, setDomains] = useState<DomainRow[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [apex, setApex] = useState('')
-  const [hostname, setHostname] = useState('')
-  const [role, setRole] = useState('other')
-  const [appId, setAppId] = useState('')
-  const [apps, setApps] = useState<string[]>([])
-  const [busy, setBusy] = useState(false)
-  const [acmeEmail, setAcmeEmail] = useState('')
-  const [acmeDir, setAcmeDir] = useState('')
-  const [uploadHost, setUploadHost] = useState('')
-  const [uploadCert, setUploadCert] = useState('')
-  const [uploadKey, setUploadKey] = useState('')
+  const [state, setState] = useState<Load<DomainRow[]>>({ kind: 'loading' })
+  /** The domain just added: its row says what to do next. */
+  const [justAdded, setJustAdded] = useState<string | null>(null)
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<void> => {
     try {
-      const body = (await cliGet('/cli/domains')) as { domains?: DomainRow[] }
-      setDomains(body.domains ?? [])
-      setError(null)
+      setState({ kind: 'ready', data: parseDomainList(await cliCall('/cli/domains')) })
     } catch (e) {
-      setError(domainErrorText(e))
+      setState(readFailure(e))
     }
   }, [])
 
@@ -263,587 +320,892 @@ export function DomainsSection(): React.JSX.Element {
   }, [refresh])
 
   // DN12e: the daemon re-checks pending zones by itself (and other clients
-  // attach / remove); repaint when it says the inventory changed.
-  useEffect(
-    () =>
-      onDomainsChanged(primaryScope(), () => {
-        void refresh()
-      }),
-    [refresh],
+  // add or remove); repaint when it says the list changed.
+  useEffect(() => onDomainsChanged(primaryScope(), () => void refresh()), [refresh])
+
+  const domains = state.kind === 'ready' ? state.data : []
+  return (
+    <div className="h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]" data-testid="domains-page">
+      <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`}>
+        <header className="min-w-0">
+          <h2 className="type-title text-[var(--color-text-primary)]">Custom Domains</h2>
+          <p className={SETTING_ROW_HINT}>
+            Use domains you own for this server’s Apps, mail and pages. Add a domain, point it here, and K2 gets and
+            renews the certificates.
+          </p>
+        </header>
+        <DomainsGroup
+          state={state}
+          justAdded={justAdded}
+          onAdded={(apex) => {
+            setJustAdded(apex)
+            void refresh()
+          }}
+          refresh={refresh}
+        />
+        {state.kind === 'ready' && domains.length > 0 && <NamesGroup domains={domains} refresh={refresh} />}
+        {state.kind === 'ready' && domains.length > 0 && <CertificatesGroup domains={domains} refresh={refresh} />}
+        <FirewallPanel />
+      </div>
+    </div>
+  )
+}
+
+// ── Your domains ────────────────────────────────────────────────────
+
+function DomainsGroup({
+  state,
+  justAdded,
+  onAdded,
+  refresh,
+}: {
+  state: Load<DomainRow[]>
+  justAdded: string | null
+  onAdded(apex: string): void
+  refresh(): Promise<void>
+}): React.JSX.Element {
+  const [adding, setAdding] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<ActionFailure | null>(null)
+  const addRef = useRef<HTMLButtonElement>(null)
+
+  const run = async (title: string, fn: () => Promise<unknown>): Promise<boolean> => {
+    if (busy) return false
+    setBusy(true)
+    setError(null)
+    try {
+      await fn()
+      await refresh()
+      return true
+    } catch (e) {
+      setError(failure(title, e))
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const checkAgain = (apex: string): void =>
+    void run(`K2 couldn’t check ${apex} with k2.dev.`, async () => {
+      const body = (await cliCall('/cli/domains/refresh', { apex })) as { checked?: boolean; hint?: string } | null
+      if (body?.checked === false) throw new DomainApiError(body.hint || 'k2.dev didn’t answer', null)
+    })
+
+  const remove = async (d: DomainRow): Promise<void> => {
+    const yes = await useConfirmDialogStore.getState().confirm({
+      title: `Remove ${d.apex}?`,
+      message: `This server stops answering for ${d.apex}${d.names.length > 0 ? ` and its ${d.names.length === 1 ? 'name' : `${d.names.length} names`}` : ''}. Its nameservers at your registrar stay as they are.`,
+      confirmLabel: 'Remove',
+      destructive: true,
+    })
+    if (yes) void run(`K2 couldn’t remove ${d.apex}.`, () => cliCall('/cli/domains/remove', { apex: d.apex }))
+  }
+
+  const domains = state.kind === 'ready' ? state.data : []
+  const canAdd = state.kind === 'ready' && !adding
+  const openForm = (): void => {
+    setError(null)
+    setAdding(true)
+  }
+
+  let body: React.ReactNode
+  if (state.kind === 'loading') {
+    body = null
+  } else if (state.kind === 'error') {
+    body = null
+  } else if (domains.length === 0 && !adding) {
+    body = null
+  } else {
+    body = (
+      <>
+        {adding && (
+          <AddDomainForm
+            onCancel={() => {
+              setAdding(false)
+              requestAnimationFrame(() => addRef.current?.focus())
+            }}
+            onAdded={(apex) => {
+              setAdding(false)
+              onAdded(apex)
+            }}
+            onError={setError}
+          />
+        )}
+        {domains.map((d) => (
+          <DomainItem
+            key={d.apex}
+            domain={d}
+            busy={busy}
+            justAdded={justAdded === d.apex}
+            onCheckAgain={() => checkAgain(d.apex)}
+            onRemove={() => void remove(d)}
+          />
+        ))}
+      </>
+    )
+  }
+
+  const group = (
+    <SettingsGroup
+      title="Your domains"
+      hint="Each domain you own that points at this server. Adding one doesn’t change anything at your registrar."
+      settingId="domains.inventory"
+      card
+      action={
+        canAdd && domains.length > 0 ? (
+          <Button ref={addRef} variant="accent" data-settings-id="domains.add" onClick={openForm}>
+            Add domain
+          </Button>
+        ) : undefined
+      }
+    >
+      <ActionError error={error} onDismiss={() => setError(null)} />
+      {body}
+    </SettingsGroup>
   )
 
-  const addApex = async () => {
-    const v = apex.trim()
-    if (!v || busy) return
-    setBusy(true)
-    try {
-      await cliPost('/cli/domains', { apex: v })
-      setApex('')
-      await refresh()
-    } catch (e) {
-      setError(domainErrorText(e))
-    } finally {
-      setBusy(false)
-    }
+  if (state.kind === 'loading') {
+    return (
+      <section data-settings-id="domains.inventory" className="space-y-2">
+        <GroupHeading title="Your domains" />
+        <SettingsLoadState kind="loading" title="Loading your domains…" testId="domains-loading" />
+      </section>
+    )
   }
-
-  const checkAgain = async (value: string) => {
-    if (busy) return
-    setBusy(true)
-    try {
-      const body = (await cliPost('/cli/domains/refresh', { apex: value })) as {
-        checked?: boolean
-        hint?: string
-      }
-      await refresh()
-      if (body.checked === false) setError(body.hint || 'Could not check with k2.dev')
-    } catch (e) {
-      setError(domainErrorText(e))
-    } finally {
-      setBusy(false)
-    }
+  if (state.kind === 'error') {
+    return (
+      <section data-settings-id="domains.inventory" className="space-y-2">
+        <GroupHeading title="Your domains" />
+        <SettingsLoadState
+          kind="error"
+          title="K2 couldn’t read your domains from this server"
+          detail={state.unreadable ? null : state.detail}
+          testId="domains-load-error"
+          action={<Button variant="quiet" onClick={() => void refresh()}>Try again</Button>}
+        >
+          {state.unreadable
+            ? 'Its answer wasn’t a list of domains K2 can read. Your domains still work. Try again, or update K2 on the server.'
+            : 'Your domains still work. Try again in a moment.'}
+        </SettingsLoadState>
+      </section>
+    )
   }
-
-  const removeApex = async (value: string) => {
-    if (busy) return
-    setBusy(true)
-    try {
-      await cliPost('/cli/domains/remove', { apex: value })
-      await refresh()
-    } catch (e) {
-      setError(domainErrorText(e))
-    } finally {
-      setBusy(false)
-    }
+  if (domains.length === 0 && !adding) {
+    return (
+      <section data-settings-id="domains.inventory" className="space-y-2">
+        <GroupHeading title="Your domains" />
+        <SettingsLoadState
+          kind="empty"
+          title="No domains yet"
+          testId="domains-empty"
+          action={
+            <Button ref={addRef} variant="accent" data-settings-id="domains.add" onClick={openForm}>
+              Add domain
+            </Button>
+          }
+        >
+          Add a domain you own, like example.com, to use it for this server’s Apps, mail and pages.
+        </SettingsLoadState>
+      </section>
+    )
   }
+  return group
+}
 
-  // 0.46.6: the role picker's "App…" lists this server's Apps.
+function GroupHeading({ title }: { title: string }): React.JSX.Element {
+  return <h3 className="type-heading text-[var(--color-text-primary)] min-h-[1.5rem] flex items-center">{title}</h3>
+}
+
+function AddDomainForm({
+  onCancel,
+  onAdded,
+  onError,
+}: {
+  onCancel(): void
+  onAdded(apex: string): void
+  onError(e: ActionFailure | null): void
+}): React.JSX.Element {
+  const [apex, setApex] = useState('')
+  const [saving, setSaving] = useState(false)
+  const ref = useRef<HTMLInputElement>(null)
   useEffect(() => {
-    if (role !== 'app' || apps.length > 0) return
-    void (async () => {
-      try {
-        const body = (await cliGet('/cli/app/list')) as {
-          apps?: { app?: string; appId?: string; id?: string }[]
+    requestAnimationFrame(() => ref.current?.focus())
+  }, [])
+  const value = apex.trim().toLowerCase()
+  const looksLikeOne = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(value)
+
+  const save = async (): Promise<void> => {
+    if (!looksLikeOne || saving) return
+    setSaving(true)
+    onError(null)
+    try {
+      const body = await cliCall('/cli/domains', { apex: value })
+      onAdded(parseDomainAnswer(body)?.apex ?? value)
+    } catch (e) {
+      onError(failure(`K2 couldn’t add ${value}.`, e))
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div
+      className="bg-[var(--color-wash-1)] divide-y divide-[var(--color-border)]"
+      role="group"
+      aria-label="New domain"
+      data-testid="add-domain-form"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          e.stopPropagation()
+          onCancel()
+        } else if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') {
+          e.preventDefault()
+          void save()
         }
-        const ids = (body.apps ?? [])
-          .map((a) => a.app ?? a.appId ?? a.id ?? '')
-          .filter((s) => s.length > 0)
-        setApps(ids)
-        if (ids.length > 0 && !appId) setAppId(ids[0])
-      } catch (e) {
-        setError(domainErrorText(e))
+      }}
+    >
+      <SettingRow label="Domain name" hint="The name you bought, like example.com. Add names under it, like mail.example.com, once it’s here." field>
+        <Input
+          ref={ref}
+          aria-label="Domain name"
+          value={apex}
+          placeholder="example.com"
+          spellCheck={false}
+          autoCapitalize="off"
+          onChange={(e) => setApex(e.target.value)}
+          className="w-full type-control"
+        />
+      </SettingRow>
+      <div className="px-4 py-3 flex items-center justify-end gap-2">
+        {!looksLikeOne && (
+          <span className="type-hint text-[var(--color-text-secondary)] mr-auto">
+            {value === '' ? 'Enter a domain name to add it.' : 'Enter a full domain name, like example.com.'}
+          </span>
+        )}
+        <Button variant="quiet" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="accent" disabled={!looksLikeOne || saving} onClick={() => void save()}>
+          {saving ? 'Adding…' : 'Add domain'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function DomainItem({
+  domain: d,
+  busy,
+  justAdded,
+  onCheckAgain,
+  onRemove,
+}: {
+  domain: DomainRow
+  busy: boolean
+  justAdded: boolean
+  onCheckAgain(): void
+  onRemove(): void
+}): React.JSX.Element {
+  const s = domainStatus(d)
+  const pending = isPendingNs(d)
+  const onK2 = d.zoneId !== null
+  return (
+    <div className="px-4 py-3 hover:bg-[var(--color-wash-1)] transition-colors" data-testid={`domain-${d.apex}`}>
+      <div className="flex items-start justify-between gap-6">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="type-name text-[var(--color-text-primary)] truncate">{d.apex}</span>
+            <Tag tone={s.tone} data-testid={`domain-status-${d.apex}`}>{s.label}</Tag>
+            {justAdded && <SaveNoteText text="Added" />}
+          </div>
+          <p className={SETTING_ROW_HINT} data-testid={d.zoneMissing ? `zone-missing-${d.apex}` : undefined}>
+            {s.hint}
+          </p>
+          {d.checkError && <p className={SETTING_ROW_HINT}>The last check didn’t finish. The server said: {d.checkError.replace(/[.\s]+$/, '')}.</p>}
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {(d.zoneMissing || pending) && (
+            <Button variant="quiet" disabled={busy} onClick={onCheckAgain}>
+              Check again
+            </Button>
+          )}
+          <OverflowMenu
+            label={`More actions for ${d.apex}`}
+            items={[
+              ...(onK2 && !d.zoneMissing && !pending
+                ? [{ id: 'check', label: 'Check with k2.dev', onSelect: onCheckAgain, disabled: busy }]
+                : []),
+              { id: 'remove', label: 'Remove…', onSelect: onRemove, danger: true, group: onK2 && !d.zoneMissing && !pending, disabled: busy },
+            ]}
+          />
+        </div>
+      </div>
+      {pending && <PendingNameservers domain={d} />}
+    </div>
+  )
+}
+
+/** "Added" with a check, beside a new domain's name. */
+function SaveNoteText({ text }: { text: string }): React.JSX.Element {
+  return (
+    <span role="status" className="inline-flex items-center gap-1 type-hint text-[var(--color-status-ok-soft)] whitespace-nowrap">
+      <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+        <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+      </svg>
+      {text}
+    </span>
+  )
+}
+
+/** The nameservers to set for a domain still waiting for them (A8.1). */
+export function PendingNameservers({ domain }: { domain: DomainRow }): React.JSX.Element {
+  const ns = domain.nameservers
+  return (
+    <Surface chamfer material="tile" className="mt-3 p-3 space-y-2" data-testid={`pending-ns-${domain.apex}`}>
+      <p className={SETTING_ROW_HINT}>
+        Next: where you bought {domain.apex}, replace its nameservers with {ns.length === 1 ? 'this one' : `these ${ns.length === 2 ? 'two' : ns.length}`}.
+        Changes can take a few hours to reach everyone.
+      </p>
+      {ns.length === 0 ? (
+        <p className={SETTING_ROW_HINT}>k2.dev didn’t list the nameservers. They’re on your k2.dev dashboard.</p>
+      ) : (
+        <ul className="space-y-1">
+          {ns.map((n) => (
+            <li key={n} className="flex items-center justify-between gap-4">
+              <span className="type-row font-mono text-[var(--color-text-primary)] select-all">{n}</span>
+              <CopyButton value={n} label={n} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {domain.created && <p className={SETTING_ROW_HINT}>K2 also added {domain.apex} to your k2.dev account.</p>}
+    </Surface>
+  )
+}
+
+// ── Names ───────────────────────────────────────────────────────────
+
+function NamesGroup({ domains, refresh }: { domains: DomainRow[]; refresh(): Promise<void> }): React.JSX.Element {
+  const [adding, setAdding] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<ActionFailure | null>(null)
+  const [done, setDone] = useState<{ host: string; text: string } | null>(null)
+  const addRef = useRef<HTMLButtonElement>(null)
+  const names = domains.flatMap((d) => d.names)
+
+  useEffect(() => {
+    if (!done) return
+    const t = window.setTimeout(() => setDone(null), 2500)
+    return () => window.clearTimeout(t)
+  }, [done])
+
+  const run = async (host: string, title: string, ok: string, fn: () => Promise<unknown>): Promise<void> => {
+    if (busy) return
+    setBusy(host)
+    setError(null)
+    try {
+      await fn()
+      await refresh()
+      setDone({ host, text: ok })
+    } catch (e) {
+      setError(failure(title, e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const certificate = (n: DomainNameRow): void => {
+    const renew = n.cert.state === 'issued' || n.cert.state === 'expired'
+    void run(
+      n.hostname,
+      `K2 couldn’t get a certificate for ${n.hostname}.`,
+      renew ? 'Renewed' : 'Certificate ready',
+      () => cliCall(renew ? '/cli/certs/renew' : '/cli/certs/issue', { hostname: n.hostname }),
+    )
+  }
+  const checkNow = (n: DomainNameRow): void =>
+    void run(n.hostname, `K2 couldn’t check ${n.hostname}.`, 'Checked', () => cliCall('/cli/app/domain/check', { app: n.app?.app, host: n.hostname }))
+  const remove = async (n: DomainNameRow): Promise<void> => {
+    const yes = await useConfirmDialogStore.getState().confirm({
+      title: `Remove ${n.hostname}?`,
+      message: `This server stops answering for ${n.hostname}. Its DNS records stay where you manage them.`,
+      confirmLabel: 'Remove',
+      destructive: true,
+    })
+    if (yes) void run(n.hostname, `K2 couldn’t remove ${n.hostname}.`, 'Removed', () => cliCall('/cli/domains/names/remove', { hostname: n.hostname }))
+  }
+
+  return (
+    <SettingsGroup
+      title="Names"
+      hint="The addresses on your domains, like mail.example.com, and what each one is for."
+      settingId="domains.names"
+      card
+      action={
+        !adding ? (
+          <Button
+            ref={addRef}
+            variant="quiet"
+            onClick={() => {
+              setError(null)
+              setAdding(true)
+            }}
+          >
+            Add name
+          </Button>
+        ) : undefined
       }
-    })()
-  }, [role, apps.length, appId])
+    >
+      <ActionError error={error} onDismiss={() => setError(null)} />
+      {adding && (
+        <AddNameForm
+          domains={domains}
+          onCancel={() => {
+            setAdding(false)
+            requestAnimationFrame(() => addRef.current?.focus())
+          }}
+          onAdded={(host) => {
+            setAdding(false)
+            setDone({ host, text: 'Added' })
+            void refresh()
+          }}
+          onError={setError}
+        />
+      )}
+      {names.length === 0 && !adding ? (
+        <div className="px-4 py-3" data-testid="names-empty">
+          <p className={SETTING_ROW_LABEL}>No names yet</p>
+          <p className={SETTING_ROW_HINT}>Add a name, like mail.example.com or the domain itself, and say what it’s for.</p>
+        </div>
+      ) : (
+        names.map((n) => (
+          <NameItem
+            key={n.hostname}
+            name={n}
+            busy={busy === n.hostname}
+            done={done?.host === n.hostname ? done.text : null}
+            onCertificate={() => certificate(n)}
+            onCheckNow={() => checkNow(n)}
+            onRemove={() => void remove(n)}
+          />
+        ))
+      )}
+    </SettingsGroup>
+  )
+}
 
-  const checkAppName = async (app: string, host: string) => {
-    if (busy) return
-    setBusy(true)
-    try {
-      await cliPost('/cli/app/domain/check', { app, host })
-      await refresh()
-    } catch (e) {
-      setError(domainErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
+function NameItem({
+  name: n,
+  busy,
+  done,
+  onCertificate,
+  onCheckNow,
+  onRemove,
+}: {
+  name: DomainNameRow
+  busy: boolean
+  done: string | null
+  onCertificate(): void
+  onCheckNow(): void
+  onRemove(): void
+}): React.JSX.Element {
+  const s = nameStatus(n)
+  const a = n.app
+  const waiting = a !== null && a.notServedYet && !a.external && a.error !== 'unknown_app'
+  const hasCert = n.cert.state === 'issued' || n.cert.state === 'expired'
+  return (
+    <div className="px-4 py-3 hover:bg-[var(--color-wash-1)] transition-colors" data-testid={`domain-name-${n.hostname}`}>
+      <div className="flex items-start justify-between gap-6">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="type-name text-[var(--color-text-primary)] truncate">{n.hostname}</span>
+            <Tag tone={s.tone} data-testid={`name-status-${n.hostname}`}>{s.label}</Tag>
+            {done && <SaveNoteText text={done} />}
+          </div>
+          <p className={SETTING_ROW_HINT}>{s.hint}</p>
+          {n.renewal?.lastError && n.cert.state !== 'issued' && (
+            <p className={SETTING_ROW_HINT}>K2 is trying again. The server said: {n.renewal.lastError.replace(/[.\s]+$/, '')}.</p>
+          )}
+          {a?.warning && (
+            <p className={`${SETTING_ROW_HINT} text-[var(--color-status-warn-amber-soft)]`}>
+              It’s marked live, but this server isn’t the one answering for it. Its DNS may point somewhere else.
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {n.cert.state === 'expired' && !a && (
+            <Button variant="quiet" disabled={busy} onClick={onCertificate}>
+              {busy ? 'Renewing…' : 'Renew'}
+            </Button>
+          )}
+          <OverflowMenu
+            label={`More actions for the name ${n.hostname}`}
+            items={[
+              ...(a && !a.error ? [{ id: 'check', label: 'Check now', onSelect: onCheckNow, disabled: busy }] : []),
+              { id: 'cert', label: hasCert ? 'Renew certificate' : 'Get a certificate', onSelect: onCertificate, disabled: busy },
+              { id: 'remove', label: 'Remove…', onSelect: onRemove, danger: true, group: true, disabled: busy },
+            ]}
+          />
+        </div>
+      </div>
+      {waiting && a && <AppRecords host={n.hostname} app={a} busy={busy} onCheckNow={onCheckNow} />}
+    </div>
+  )
+}
 
-  const addName = async () => {
-    const v = hostname.trim()
-    if (!v || busy) return
-    if (role === 'app' && !appId) return
-    setBusy(true)
-    try {
-      await cliPost('/cli/domains/names', { hostname: v, role: role === 'app' ? `app:${appId}` : role })
-      setHostname('')
-      await refresh()
-    } catch (e) {
-      setError(domainErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
+/** What an App name still needs: the DNS records to set, and Check now. */
+function AppRecords({ host, app: a, busy, onCheckNow }: { host: string; app: AppNameStatus; busy: boolean; onCheckNow(): void }): React.JSX.Element {
+  const records = a.records.length > 0 ? a.records : a.txt ? [a.txt] : []
+  const failing = a.state === 'failing'
+  return (
+    <Surface chamfer material="tile" className="mt-3 p-3 space-y-2" data-testid={`app-records-${host}`}>
+      <div className="flex items-start justify-between gap-4">
+        <p className={SETTING_ROW_HINT}>
+          {failing
+            ? 'These records stopped pointing here. Check them where you manage this domain’s DNS.'
+            : 'Next: add these records where you manage this domain’s DNS. K2 checks by itself, or check now.'}
+          {a.recordsPath === 'connect' ? ' Visitors reach this server through K2 Connect.' : ''}
+        </p>
+        <Button variant="quiet" className="flex-shrink-0" disabled={busy} onClick={onCheckNow}>
+          {busy ? 'Checking…' : 'Check now'}
+        </Button>
+      </div>
+      {records.length > 0 && (
+        <ul className="divide-y divide-[var(--color-border)]">
+          {records.map((r) => (
+            <li key={`${r.type} ${r.name}`} className="flex items-center gap-3 py-1.5" data-testid={`app-record-${r.type}`}>
+              <span className="w-14 flex-shrink-0 type-hint font-mono text-[var(--color-text-secondary)]">{r.type}</span>
+              <span className="min-w-0 flex-1 type-row font-mono text-[var(--color-text-primary)] truncate" title={r.name}>{r.name}</span>
+              <span className="min-w-0 flex-1 type-row font-mono text-[var(--color-text-primary)] truncate select-all" title={r.value}>{r.value}</span>
+              <CopyButton value={r.value} label={`the ${r.type} value for ${r.name}`} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {a.txtPending && <p className={SETTING_ROW_HINT} data-testid={`app-txt-pending-${host}`}>{a.txtPending}</p>}
+      {a.pathB?.available && a.pathB.meter && <p className={SETTING_ROW_HINT} data-testid={`app-path-b-meter-${host}`}>{a.pathB.meter}</p>}
+      {a.pathB && !a.pathB.available && a.pathB.why && (
+        <p className={SETTING_ROW_HINT}>
+          Through K2 Connect: {a.pathB.why}
+          {a.pathB.upgrade && (
+            <>
+              {' '}
+              <a href={a.pathB.upgrade} target="_blank" rel="noreferrer" data-testid={`app-path-b-upgrade-${host}`} className="k2-focus text-[var(--color-accent)] underline">
+                Upgrade
+              </a>
+            </>
+          )}
+        </p>
+      )}
+      {a.lastError && <p className={SETTING_ROW_HINT}>Last check: {a.lastError.replace(/[.\s]+$/, '')}.</p>}
+    </Surface>
+  )
+}
 
-  const issue = async (value: string) => {
-    if (busy) return
-    setBusy(true)
-    try {
-      await cliPost('/cli/certs/issue', { hostname: value })
-      await refresh()
-    } catch (e) {
-      setError(domainErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
+function AddNameForm({
+  domains,
+  onCancel,
+  onAdded,
+  onError,
+}: {
+  domains: DomainRow[]
+  onCancel(): void
+  onAdded(host: string): void
+  onError(e: ActionFailure | null): void
+}): React.JSX.Element {
+  const [host, setHost] = useState('')
+  const [role, setRole] = useState('mail')
+  const [apps, setApps] = useState<string[] | null>(null)
+  const [appsError, setAppsError] = useState<string | null>(null)
+  const [appId, setAppId] = useState('')
+  const [saving, setSaving] = useState(false)
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    requestAnimationFrame(() => ref.current?.focus())
+  }, [])
 
-  const renew = async (value: string) => {
-    if (busy) return
-    setBusy(true)
-    try {
-      await cliPost('/cli/certs/renew', { hostname: value })
-      await refresh()
-    } catch (e) {
-      setError(domainErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const saveAcme = async () => {
-    if (busy) return
-    setBusy(true)
-    try {
-      await cliPost('/cli/certs/config', { email: acmeEmail, directory: acmeDir })
-    } catch (e) {
-      setError(domainErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const uploadPem = async () => {
-    if (busy || !uploadHost.trim()) return
-    if (!window.confirm(`Replace the cert for ${uploadHost.trim()} with this PEM?`)) return
-    setBusy(true)
-    try {
-      await cliPost('/cli/certs/upload', {
-        hostname: uploadHost.trim(),
-        certPem: uploadCert,
-        keyPem: uploadKey,
+  // "An App" lists this server's Apps.
+  useEffect(() => {
+    if (role !== 'app' || apps !== null) return
+    let live = true
+    cliCall('/cli/app/list')
+      .then((body) => {
+        if (!live) return
+        const list = (body as { apps?: unknown } | null)?.apps
+        const ids = Array.isArray(list)
+          ? list
+              .map((a) => (a && typeof a === 'object' ? ((a as Record<string, unknown>).app ?? (a as Record<string, unknown>).appId ?? (a as Record<string, unknown>).id) : null))
+              .filter((s): s is string => typeof s === 'string' && s !== '')
+          : []
+        setApps(ids)
+        if (ids.length > 0) setAppId((cur) => cur || ids[0])
       })
-      setUploadCert('')
-      setUploadKey('')
-      await refresh()
+      .catch((e: unknown) => live && setAppsError(domainErrorText(e)))
+    return () => {
+      live = false
+    }
+  }, [role, apps])
+
+  const value = host.trim().toLowerCase()
+  const under = domains.find((d) => value === d.apex || value.endsWith(`.${d.apex}`))
+  const needApp = role === 'app' && !appId
+  const valid = value !== '' && under !== undefined && !needApp
+
+  const save = async (): Promise<void> => {
+    if (!valid || saving) return
+    setSaving(true)
+    onError(null)
+    try {
+      await cliCall('/cli/domains/names', { hostname: value, role: role === 'app' ? `app:${appId}` : role })
+      onAdded(value)
     } catch (e) {
-      setError(domainErrorText(e))
-    } finally {
-      setBusy(false)
+      onError(failure(`K2 couldn’t add ${value}.`, e))
+      setSaving(false)
     }
   }
 
-  const removeName = async (value: string) => {
-    if (busy) return
-    setBusy(true)
+  return (
+    <div
+      className="bg-[var(--color-wash-1)] divide-y divide-[var(--color-border)]"
+      role="group"
+      aria-label="New name"
+      data-testid="add-name-form"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          e.stopPropagation()
+          onCancel()
+        } else if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') {
+          e.preventDefault()
+          void save()
+        }
+      }}
+    >
+      <SettingRow label="Name" hint={`An address on one of your domains, like mail.${domains[0]?.apex ?? 'example.com'}.`} field>
+        <Input
+          ref={ref}
+          aria-label="Name"
+          value={host}
+          placeholder={`mail.${domains[0]?.apex ?? 'example.com'}`}
+          spellCheck={false}
+          autoCapitalize="off"
+          onChange={(e) => setHost(e.target.value)}
+          className="w-full type-control"
+        />
+      </SettingRow>
+      <SettingRow label="Used for" hint="Tells K2 what to serve on it and which certificate it needs." field>
+        <SettingDropdown fullWidth ariaLabel="Used for" value={role} options={ROLE_OPTIONS} onChange={setRole} />
+      </SettingRow>
+      {role === 'app' && (
+        <SettingRow
+          label="App"
+          hint={appsError ? `K2 couldn’t list this server’s Apps. The server said: ${appsError.replace(/[.\s]+$/, '')}.` : 'The App this name opens.'}
+          field
+        >
+          <SettingDropdown
+            fullWidth
+            ariaLabel="App"
+            value={appId}
+            options={(apps ?? []).map((a) => ({ value: a, label: a }))}
+            placeholder={apps === null ? (appsError ? 'Apps didn’t load' : 'Loading…') : 'No Apps on this server'}
+            disabled={!apps || apps.length === 0}
+            onChange={setAppId}
+          />
+        </SettingRow>
+      )}
+      <div className="px-4 py-3 flex items-center justify-end gap-2">
+        {!valid && (
+          <span className="type-hint text-[var(--color-text-secondary)] mr-auto">
+            {value === ''
+              ? 'Enter a name to add it.'
+              : !under
+                ? `Use a name on one of your domains: ${domains.map((d) => d.apex).join(', ')}.`
+                : 'Pick the App this name opens.'}
+          </span>
+        )}
+        <Button variant="quiet" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="accent" disabled={!valid || saving} onClick={() => void save()}>
+          {saving ? 'Adding…' : 'Add name'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+// ── Certificates ────────────────────────────────────────────────────
+
+function CertificatesGroup({ domains, refresh }: { domains: DomainRow[]; refresh(): Promise<void> }): React.JSX.Element {
+  const [uploading, setUploading] = useState(false)
+  const names = domains.flatMap((d) => d.names.map((n) => n.hostname))
+  return (
+    <SettingsGroup
+      title="Certificates"
+      hint="K2 gets free certificates from Let’s Encrypt and renews them before they expire. Change these only to use another service."
+      settingId="domains.certificates"
+      card
+    >
+      <CertConfigRow
+        field="email"
+        label="Contact email"
+        hint="Where the certificate service sends notices. Saves when you press Return or leave the field."
+        placeholder="you@example.com"
+      />
+      <CertConfigRow
+        field="directory"
+        label="Certificate service"
+        hint="Another service’s address, like ZeroSSL’s. Leave it empty for Let’s Encrypt."
+        placeholder="Let’s Encrypt"
+      />
+      <SettingRow
+        label="Your own certificate"
+        hint="Use a certificate you already have for one of your names. K2 stops renewing that name."
+        below={uploading ? <UploadForm names={names} onDone={(ok) => { setUploading(false); if (ok) void refresh() }} /> : undefined}
+      >
+        {!uploading && (
+          <Button variant="quiet" disabled={names.length === 0} title={names.length === 0 ? 'Add a name first' : undefined} onClick={() => setUploading(true)}>
+            Upload…
+          </Button>
+        )}
+      </SettingRow>
+    </SettingsGroup>
+  )
+}
+
+/** One certificate-service field, saved on Return or blur (`POST /cli/certs/config`
+ *  with that field only, so the other keeps its value). */
+function CertConfigRow({ field, label, hint, placeholder }: { field: 'email' | 'directory'; label: string; hint: string; placeholder: string }): React.JSX.Element {
+  const [value, setValue] = useState('')
+  const [savedValue, setSavedValue] = useState('')
+  const save = useSaveStatus()
+  const commit = async (): Promise<void> => {
+    const v = value.trim()
+    if (v === '' || v === savedValue) return
+    save.reset()
     try {
-      await cliPost('/cli/domains/names/remove', { hostname: value })
-      await refresh()
+      await cliCall('/cli/certs/config', { [field]: v })
+      setSavedValue(v)
+      save.saved()
     } catch (e) {
-      setError(domainErrorText(e))
-    } finally {
+      save.failed(domainErrorText(e))
+    }
+  }
+  return (
+    <SettingRow
+      label={<span className="inline-flex items-center gap-2">{label}<SaveNote state={save.state} /></span>}
+      hint={hint}
+      field
+      below={typeof save.state === 'object' ? <SaveError state={save.state} /> : undefined}
+    >
+      <Input
+        aria-label={label}
+        type={field === 'email' ? 'email' : 'text'}
+        value={value}
+        placeholder={placeholder}
+        spellCheck={false}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => void commit()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') void commit()
+        }}
+        className="w-full type-control"
+      />
+    </SettingRow>
+  )
+}
+
+function UploadForm({ names, onDone }: { names: string[]; onDone(ok: boolean): void }): React.JSX.Element {
+  const [host, setHost] = useState(names[0] ?? '')
+  const [cert, setCert] = useState('')
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<ActionFailure | null>(null)
+  const valid = host !== '' && cert.trim() !== '' && key.trim() !== ''
+
+  const upload = async (): Promise<void> => {
+    if (!valid || busy) return
+    const yes = await useConfirmDialogStore.getState().confirm({
+      title: `Replace the certificate for ${host}?`,
+      message: 'K2 uses this certificate and its key from now on, and stops renewing the name by itself.',
+      confirmLabel: 'Replace',
+      destructive: true,
+    })
+    if (!yes) return
+    setBusy(true)
+    setError(null)
+    try {
+      await cliCall('/cli/certs/upload', { hostname: host, certPem: cert, keyPem: key })
+      onDone(true)
+    } catch (e) {
+      setError(failure(`K2 couldn’t use this certificate for ${host}.`, e))
       setBusy(false)
     }
   }
 
   return (
-    <div className="max-w-2xl p-6">
-      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Domains</h2>
-      <p className="type-hint text-[var(--color-text-muted)] mb-4 leading-relaxed">
-        Names this machine answers for. Adding an apex does not steal NS at the
-        registrar — it attaches the name to this server for inventory, certs, and
-        (only if K2 hosts the zone) DNS writes. Tunnel names like foo.k2.dev stay
-        under Tunnel.
-      </p>
-
-      <div
-        className="mb-4 px-3 py-3 border border-[var(--color-border)]"
-        data-settings-id="domains.add"
-      >
-        <div className="type-row text-[var(--color-text-primary)]">Add domain</div>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5 mb-2">
-          Apex only (example.com). Then add hostnames such as mail.example.com.
-        </p>
-        <div className="flex gap-2">
-          <input
-            value={apex}
-            onChange={(e) => setApex(e.target.value)}
-            placeholder="example.com"
-            className="flex-1 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void addApex()
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => void addApex()}
-            disabled={busy || !apex.trim()}
-            className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
-          >
-            Attach
-          </button>
+    <Surface chamfer material="tile" className="p-3 space-y-3" data-testid="upload-cert-form">
+      <div className="flex items-center justify-between gap-6">
+        <span className={SETTING_ROW_LABEL}>For</span>
+        <div className="w-60 flex-shrink-0">
+          <SettingDropdown fullWidth ariaLabel="Name for the certificate" value={host} options={names.map((n) => ({ value: n, label: n }))} onChange={setHost} />
         </div>
       </div>
-
-      <div
-        className="mb-4 px-3 py-3 border border-[var(--color-border)]"
-        data-settings-id="domains.inventory"
-      >
-        <div className="type-row text-[var(--color-text-primary)] mb-2">Attached</div>
-        {error && (
-          <p className="type-hint text-[var(--color-status-error)] mb-2">{error}</p>
-        )}
-        {domains.length === 0 && !error && (
-          <p className="type-hint text-[var(--color-text-muted)]">
-            No custom domains on this server yet. Attach an apex to inventory names
-            and certs. This is not a nameserver cutover.
-          </p>
-        )}
-        {domains.map((d) => (
-          <div key={d.apex} className="mb-3 last:mb-0">
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <div className="type-row font-mono text-[var(--color-text-primary)]">{d.apex}</div>
-                <div className="type-hint text-[var(--color-text-muted)]">
-                  {dnsLabel(d)}
-                  {d.zoneId ? ` · zone ${d.zoneId}` : ''}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => void removeApex(d.apex)}
-                className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
-              >
-                Remove
-              </button>
-            </div>
-            {d.zoneMissing && (
-              <div
-                className="mt-1 ml-2 px-2 py-2 border border-[var(--color-border)]"
-                data-testid={`zone-missing-${d.apex}`}
-              >
-                <p className="type-hint text-[var(--color-status-error)] leading-relaxed">
-                  {ZONE_MISSING_COPY}
-                </p>
-                {!isPendingNs(d) && (
-                  <button
-                    type="button"
-                    onClick={() => void checkAgain(d.apex)}
-                    disabled={busy}
-                    className="mt-2 px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
-                  >
-                    Check again
-                  </button>
-                )}
-              </div>
-            )}
-            {isPendingNs(d) && (
-              <PendingNameservers
-                domain={d}
-                busy={busy}
-                onCheckAgain={(a) => void checkAgain(a)}
-              />
-            )}
-            <div className="mt-1 ml-2">
-              {d.names.length === 0 && (
-                <div className="type-hint text-[var(--color-text-muted)]">No hostnames yet</div>
-              )}
-              {d.names.map((n) => (
-                <div key={n.hostname} className="flex items-center justify-between gap-2 py-0.5">
-                  <span className="type-hint font-mono text-[var(--color-text-secondary)]">
-                    {n.hostname}
-                    <span className="ml-2 type-hint text-[var(--color-text-muted)]">
-                      {n.role} · cert {certLabel(n.cert)}
-                    </span>
-                    {n.app && (
-                      <span
-                        data-testid={`app-state-${n.hostname}`}
-                        className={`ml-2 px-1 type-hint border border-[var(--color-border)] ${
-                          n.app.notServedYet
-                            ? 'text-[var(--color-text-muted)]'
-                            : 'text-[var(--color-accent)]'
-                        }`}
-                      >
-                        {appStateLabel(n.app)}
-                      </span>
-                    )}
-                    {n.app && (n.app.viaRelay || (n.app.notServedYet && n.app.recordsPath === 'connect')) && (
-                      <span
-                        data-testid={`app-path-b-${n.hostname}`}
-                        className="ml-2 px-1 type-hint border border-[var(--color-border)] text-[var(--color-text-muted)]"
-                      >
-                        Through K2 Connect (Pro)
-                      </span>
-                    )}
-                    {n.app && n.app.notServedYet && (
-                      <span className="block mt-0.5 type-hint text-[var(--color-text-muted)] whitespace-normal">
-                        {n.app.words}
-                        {n.app.lastError ? ` — ${n.app.lastError}` : ''}
-                        {n.app.records && n.app.records.length > 0 ? (
-                          n.app.records.map((r) => (
-                            <span key={`${r.type} ${r.name}`} className="block font-mono" data-testid={`app-record-${r.type}`}>
-                              {r.type} {r.name} {r.type === 'TXT' ? `"${r.value}"` : r.value} (DNS-only)
-                            </span>
-                          ))
-                        ) : n.app.txt ? (
-                          <span className="block font-mono">
-                            TXT {n.app.txt.name} &quot;{n.app.txt.value}&quot; (DNS-only)
-                          </span>
-                        ) : null}
-                        {n.app.txtPending && (
-                          <span className="block" data-testid={`app-txt-pending-${n.hostname}`}>
-                            {n.app.txtPending}
-                          </span>
-                        )}
-                        {n.app.pathB?.available && (
-                          <span className="block" data-testid={`app-path-b-meter-${n.hostname}`}>
-                            {n.app.pathB.meter}
-                          </span>
-                        )}
-                        {n.app.pathB && !n.app.pathB.available && n.app.pathB.why && (
-                          <span className="block">
-                            Through K2 Connect: {n.app.pathB.why}
-                            {n.app.pathB.upgrade && (
-                              <>
-                                {' '}
-                                <a
-                                  href={n.app.pathB.upgrade}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  data-testid={`app-path-b-upgrade-${n.hostname}`}
-                                  className="text-[var(--color-accent)]"
-                                >
-                                  Upgrade
-                                </a>
-                              </>
-                            )}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                    {n.app?.warning && (
-                      <span className="block mt-0.5 type-hint text-[var(--color-status-error)]">
-                        {n.app.warning}
-                      </span>
-                    )}
-                  </span>
-                  <span className="flex gap-2">
-                    {n.app && !n.app.error && (
-                      <button
-                        type="button"
-                        onClick={() => void checkAppName(n.app!.app, n.hostname)}
-                        className="type-hint text-[var(--color-accent)] no-drag cursor-pointer"
-                      >
-                        Check now
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => void issue(n.hostname)}
-                      className="type-hint text-[var(--color-accent)] no-drag cursor-pointer"
-                    >
-                      Issue
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void renew(n.hostname)}
-                      className="type-hint text-[var(--color-accent)] no-drag cursor-pointer"
-                    >
-                      Renew
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void removeName(n.hostname)}
-                      className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
-                    >
-                      Remove
-                    </button>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
+      <textarea
+        data-k2-chamfer="control"
+        aria-label="Certificate"
+        value={cert}
+        rows={3}
+        spellCheck={false}
+        placeholder="Paste the certificate, BEGIN and END lines included"
+        onChange={(e) => setCert(e.target.value)}
+        className={TEXTAREA}
+      />
+      <textarea
+        data-k2-chamfer="control"
+        aria-label="Private key"
+        value={key}
+        rows={3}
+        spellCheck={false}
+        placeholder="Paste its private key, BEGIN and END lines included"
+        onChange={(e) => setKey(e.target.value)}
+        className={TEXTAREA}
+      />
+      {error && (
+        <Callout tone="error" role="alert">
+          <p className="type-row">{error.title}</p>
+          <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 break-words">The server said: {error.detail.replace(/[.\s]+$/, '')}.</p>
+        </Callout>
+      )}
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="quiet" onClick={() => onDone(false)}>
+          Cancel
+        </Button>
+        <Button variant="accent" disabled={!valid || busy} onClick={() => void upload()}>
+          {busy ? 'Uploading…' : 'Upload'}
+        </Button>
       </div>
-
-      <div className="px-3 py-3 border border-[var(--color-border)]">
-        <div className="type-row text-[var(--color-text-primary)]">Add hostname</div>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5 mb-2">
-          Must be an attached apex or a label under one.
-        </p>
-        <div className="flex gap-2">
-          <input
-            value={hostname}
-            onChange={(e) => setHostname(e.target.value)}
-            placeholder="mail.example.com"
-            className="flex-1 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void addName()
-            }}
-          />
-          <SettingDropdown
-            value={role}
-            onChange={setRole}
-            ariaLabel="Hostname role"
-            options={[
-              { value: 'other', label: 'other' },
-              { value: 'mail', label: 'mail' },
-              { value: 'publish', label: 'publish' },
-              { value: 'direct', label: 'direct' },
-              { value: 'app', label: 'App…' },
-            ]}
-          />
-          {role === 'app' && (
-            <SettingDropdown
-              value={appId}
-              onChange={setAppId}
-              ariaLabel="App"
-              options={apps.map((a) => ({ value: a, label: a }))}
-            />
-          )}
-          <button
-            type="button"
-            onClick={() => void addName()}
-            disabled={busy || !hostname.trim()}
-            className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
-          >
-            Add
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-4 px-3 py-3 border border-[var(--color-border)]">
-        <div className="type-row text-[var(--color-text-primary)]">ACME override</div>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5 mb-2">
-          Optional email and directory URL (ZeroSSL / staging). Default is Let&apos;s Encrypt.
-        </p>
-        <div className="flex gap-2 mb-2">
-          <input
-            value={acmeEmail}
-            onChange={(e) => setAcmeEmail(e.target.value)}
-            placeholder="acme@example.com"
-            className="flex-1 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)]"
-          />
-          <input
-            value={acmeDir}
-            onChange={(e) => setAcmeDir(e.target.value)}
-            placeholder="https://acme-v02.api.letsencrypt.org/directory"
-            className="flex-1 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)]"
-          />
-          <button
-            type="button"
-            onClick={() => void saveAcme()}
-            className="px-2 py-1 type-control border border-[var(--color-border)] no-drag cursor-pointer"
-          >
-            Save
-          </button>
-        </div>
-        <div className="type-row text-[var(--color-text-primary)] mt-3">Upload PEM</div>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5 mb-2">
-          Owner only. Replaces the on-box key for one attached hostname.
-        </p>
-        <input
-          value={uploadHost}
-          onChange={(e) => setUploadHost(e.target.value)}
-          placeholder="mail.example.com"
-          className="w-full mb-2 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)]"
-        />
-        <textarea
-          value={uploadCert}
-          onChange={(e) => setUploadCert(e.target.value)}
-          placeholder="-----BEGIN CERTIFICATE-----"
-          className="w-full mb-2 px-2 py-1 type-control font-mono h-16 rounded-[var(--radius-field-multiline)] bg-[var(--color-bg)] border border-[var(--color-border)]"
-        />
-        <textarea
-          value={uploadKey}
-          onChange={(e) => setUploadKey(e.target.value)}
-          placeholder="-----BEGIN PRIVATE KEY-----"
-          className="w-full mb-2 px-2 py-1 type-control font-mono h-16 rounded-[var(--radius-field-multiline)] bg-[var(--color-bg)] border border-[var(--color-border)]"
-        />
-        <button
-          type="button"
-          onClick={() => void uploadPem()}
-          disabled={busy || !uploadHost.trim() || !uploadCert.trim() || !uploadKey.trim()}
-          className="px-2 py-1 type-control border border-[var(--color-border)] disabled:opacity-40 no-drag cursor-pointer"
-        >
-          Upload
-        </button>
-      </div>
-      <FirewallPanel />
-    </div>
+    </Surface>
   )
 }
 
-// ── Settings → Network → Custom Domains → Firewall (0.46.6, prd-custom-domains-path-a-0466-v1 §4.5) ──
-// Thin client on GET /cli/firewall (the daemon computes the view; never a
-// scan). K2-owned rows are read-only and say which feature opened them.
-
-export type FirewallPort = {
-  port: number
-  proto: 'tcp' | 'udp'
-  source: string
-  allowFrom?: string[]
-  why: string
-}
-
-export type FirewallStatus = {
-  view: {
-    hash: string
-    public: FirewallPort[]
-    knownNotPublic: FirewallPort[]
-    box: { label?: string | null; behindNat?: boolean | null }
-    upstream: { managedBy: string; applied?: { provider: string; appliedAt: number; current: boolean } | null }
-  }
-  ssh: { port: number; allowFrom: string[] }
-  applies: string
-  guard: {
-    settings: { enabled: boolean; connsPerIp: number; writesPerMin: number }
-    counters: { perIpRefused: number; guardLimited: number }
-  }
-  /** 0.46.8: the :443 front and the :80 front's switch. */
-  front?: { enabled: boolean; http?: { on: boolean; serving: boolean; relayNames?: number | null } }
-}
-
-/** Plain words for a row's source (K2-owned rows say which feature). */
-export function firewallSourceLabel(source: string): string {
-  switch (source) {
-    case 'ssh':
-      return 'SSH'
-    case 'front443':
-      return 'K2: the :443 front'
-    case 'front80':
-      return 'K2: the :80 front'
-    case 'skin-direct':
-      return 'K2: Skin Direct'
-    case 'hostmail':
-      return 'K2: hosted mail'
-    case 'sew-voice':
-      return 'K2: Chat / Voice Hosting'
-    case 'daemon':
-      return 'K2: API (LAN)'
-    case 'owner':
-      return 'You'
-    default:
-      return source
-  }
-}
-
-async function cliPostJson(path: string, payload: unknown): Promise<unknown> {
-  const creds = await getDaemonWs(primaryScope())
-  const res = await fetch(`${daemonHttpBase(creds)}${path}?token=${creds.token}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw toApiError(res.status, body)
-  return body
-}
+// ── Firewall (0.46.6, prd-custom-domains-path-a-0466-v1 §4.5) ────────
+// Thin client on GET /cli/firewall (the daemon works the view out; never a
+// scan). Ports K2 opened say which feature; only yours can be closed here.
 
 export function FirewallPanel(): React.JSX.Element {
-  const [st, setSt] = useState<FirewallStatus | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [state, setState] = useState<Load<FirewallStatus>>({ kind: 'loading' })
   const [busy, setBusy] = useState(false)
-  const [port, setPort] = useState('')
-  const [label, setLabel] = useState('')
-  const [sshFrom, setSshFrom] = useState('')
+  const [error, setError] = useState<ActionFailure | null>(null)
+  const [opening, setOpening] = useState(false)
+  const [sshOpen, setSshOpen] = useState(false)
+  const openRef = useRef<HTMLButtonElement>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<void> => {
     try {
-      setSt((await cliGet('/cli/firewall')) as FirewallStatus)
-      setError(null)
+      setState({ kind: 'ready', data: parseFirewallStatus(await cliCall('/cli/firewall')) })
     } catch (e) {
-      setError(domainErrorText(e))
+      setState(readFailure(e))
     }
   }, [])
 
@@ -851,141 +1213,283 @@ export function FirewallPanel(): React.JSX.Element {
     void load()
   }, [load])
 
-  const act = async (path: string, payload: unknown) => {
+  const act = async (title: string, path: string, payload: unknown): Promise<boolean> => {
     setBusy(true)
+    setError(null)
     try {
-      await cliPostJson(path, payload)
+      await cliCall(path, payload)
       await load()
+      return true
     } catch (e) {
-      setError(domainErrorText(e))
+      setError(failure(title, e))
+      return false
     } finally {
       setBusy(false)
     }
   }
 
-  const rows = st?.view.public ?? []
-  const sshOnly = (st?.ssh.allowFrom ?? []).length > 0
-  return (
-    <div className="mt-6" data-testid="firewall-panel">
-      <h3 className="type-heading text-[var(--color-text-primary)] mb-1">Firewall</h3>
-      <p className="type-hint text-[var(--color-text-muted)] mb-2 leading-relaxed">
-        Public ports on this server, worked out from what K2 runs. {st?.applies ?? ''}
-      </p>
-      {error && <p className="type-hint text-red-400 mb-2">{error}</p>}
-      {st?.view.box.behindNat && (
-        <p className="type-hint text-[var(--color-text-muted)] mb-2">
-          This server is on a home or office connection: your own domains use K2 Connect (Pro).
-        </p>
-      )}
-      <div className="border border-[var(--color-border)]">
-        {rows.map((r) => (
-          <div
-            key={`${r.port}/${r.proto}`}
-            className="flex items-center justify-between gap-2 px-2 py-1 border-b border-[var(--color-border)] last:border-b-0"
-            data-testid={`fw-row-${r.port}-${r.proto}`}
-          >
-            <span className="type-hint font-mono w-20">
-              {r.port}/{r.proto}
-            </span>
-            <span className="type-hint w-32 text-[var(--color-text-muted)]">{firewallSourceLabel(r.source)}</span>
-            <span className="type-hint flex-1 truncate" title={r.why}>
-              {r.why}
-              {r.allowFrom && r.allowFrom[0] !== 'any' ? ` · only ${r.allowFrom.join(', ')}` : ''}
-            </span>
-            {r.source === 'owner' ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void act('/cli/firewall/close', { port: `${r.port}/${r.proto}` })}
-                className="px-2 py-0.5 type-control border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
-              >
-                Remove
-              </button>
-            ) : (
-              <span className="type-hint text-[var(--color-text-muted)] w-14 text-right">read-only</span>
-            )}
-          </div>
-        ))}
-      </div>
-      <div className="mt-2 flex items-center gap-2">
-        <span className="type-hint w-20">SSH from</span>
-        <button
-          type="button"
-          disabled={busy || !sshOnly}
-          onClick={() => void act('/cli/firewall/ssh', { any: true })}
-          className="px-2 py-0.5 type-control border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
-        >
-          Anyone
-        </button>
-        <input
-          value={sshFrom}
-          onChange={(e) => setSshFrom(e.target.value)}
-          placeholder={sshOnly ? (st?.ssh.allowFrom ?? []).join(', ') : '198.51.100.0/24'}
-          className="flex-1 px-2 py-0.5 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)]"
-        />
-        <button
-          type="button"
-          disabled={busy || !sshFrom.trim()}
-          onClick={() => void act('/cli/firewall/ssh', { allow: sshFrom.split(',').map((s) => s.trim()).filter(Boolean) })}
-          className="px-2 py-0.5 type-control border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
-        >
-          Only these
-        </button>
-      </div>
-      <div className="mt-2 flex items-center gap-2">
-        <span className="type-hint w-20">Add a port</span>
-        <input
-          value={port}
-          onChange={(e) => setPort(e.target.value)}
-          placeholder="6000/udp"
-          className="w-24 px-2 py-0.5 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)]"
-        />
-        <input
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          placeholder="what it's for"
-          className="flex-1 px-2 py-0.5 type-control bg-[var(--color-bg)] border border-[var(--color-border)]"
-        />
-        <button
-          type="button"
-          disabled={busy || !port.trim() || !label.trim()}
-          onClick={() => {
-            void act('/cli/firewall/open', { port: port.trim(), label: label.trim() })
-            setPort('')
-            setLabel('')
-          }}
-          className="px-2 py-0.5 type-control border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
-        >
-          Add
-        </button>
-      </div>
-      {st?.front?.http && (st.front.enabled || (st.front.http.relayNames ?? 0) > 0) && (
-        <div className="mt-2 flex items-center gap-2" data-testid="fw-http">
-          <span className="type-hint flex-1">
-            Redirect http:// to https: {st.front.http.on ? 'on' : 'off'}
-            {st.front.enabled && st.front.http.on && !st.front.http.serving ? ' (not holding port 80 yet)' : ''}
-          </span>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() =>
-              void act('/cli/front/http', {
-                on: !(st.front?.http?.on && (st.front.http.serving || !st.front.enabled)),
-              })
-            }
-            className="px-2 py-0.5 type-control border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
-          >
-            {st.front.http.on && (st.front.http.serving || !st.front.enabled) ? 'Turn off' : 'Turn on'}
-          </button>
-        </div>
-      )}
-      {st && (
-        <p className="mt-2 type-hint text-[var(--color-text-muted)]" data-testid="fw-guard">
-          App guard {st.guard.settings.enabled ? 'on' : 'off'}: {st.guard.settings.connsPerIp} connections and{' '}
-          {st.guard.settings.writesPerMin} writes a minute per visitor · refused {st.guard.counters.perIpRefused} ·
-          limited {st.guard.counters.guardLimited}
-        </p>
-      )}
+  const close = async (r: FirewallPort): Promise<void> => {
+    const what = firewallPortWords(r).what
+    const yes = await useConfirmDialogStore.getState().confirm({
+      title: `Close port ${r.port}/${r.proto}?`,
+      message: `Nothing on the internet can reach ${what.toLowerCase()} on this port any more.`,
+      confirmLabel: 'Close port',
+      destructive: true,
+    })
+    if (yes) void act(`K2 couldn’t close port ${r.port}/${r.proto}.`, '/cli/firewall/close', { port: `${r.port}/${r.proto}` })
+  }
+
+  const heading = (
+    <div className="mb-2">
+      <GroupHeading title="Firewall" />
     </div>
+  )
+  if (state.kind === 'loading') {
+    return (
+      <section data-testid="firewall-panel" data-settings-id="domains.firewall">
+        {heading}
+        <SettingsLoadState kind="loading" title="Loading the firewall…" />
+      </section>
+    )
+  }
+  if (state.kind === 'error') {
+    return (
+      <section data-testid="firewall-panel" data-settings-id="domains.firewall">
+        {heading}
+        <SettingsLoadState
+          kind="error"
+          title="K2 couldn’t read the firewall from this server"
+          detail={state.unreadable ? null : state.detail}
+          testId="firewall-load-error"
+          action={<Button variant="quiet" onClick={() => void load()}>Try again</Button>}
+        >
+          {state.unreadable
+            ? 'Its answer wasn’t a list of ports K2 can read. The ports stay as they were. Try again, or update K2 on the server.'
+            : 'The ports stay as they were. Try again in a moment.'}
+        </SettingsLoadState>
+      </section>
+    )
+  }
+
+  const st = state.data
+  const sshOnly = st.ssh.allowFrom.length > 0
+  const front = st.front
+  const httpShown = front !== null && (front.enabled || front.relayNames > 0)
+  const httpOn = front !== null && front.httpOn && (front.httpServing || !front.enabled)
+  return (
+    <div data-testid="firewall-panel">
+      <SettingsGroup
+        title="Firewall"
+        hint={`The ports open to the internet on this server, worked out from what K2 runs. ${
+          st.managedBy === 'k2' ? 'K2 sets the same list at your provider.' : 'Nothing sets this list at your provider: set the same rules in its firewall.'
+        }`}
+        settingId="domains.firewall"
+        card
+        action={
+          !opening ? (
+            <Button
+              ref={openRef}
+              variant="quiet"
+              onClick={() => {
+                setError(null)
+                setOpening(true)
+              }}
+            >
+              Open a port
+            </Button>
+          ) : undefined
+        }
+      >
+        <ActionError error={error} onDismiss={() => setError(null)} />
+        {st.behindNat && (
+          <div className="px-4 py-3">
+            <Callout tone="info">
+              <p className="type-hint text-[var(--color-text-primary)]">
+                This server is on a home or office connection, so your domains reach it through K2 Connect (Pro).
+              </p>
+            </Callout>
+          </div>
+        )}
+        {opening && (
+          <OpenPortForm
+            busy={busy}
+            onCancel={() => {
+              setOpening(false)
+              requestAnimationFrame(() => openRef.current?.focus())
+            }}
+            onOpen={async (port, label) => {
+              if (await act(`K2 couldn’t open port ${port}.`, '/cli/firewall/open', { port, label })) setOpening(false)
+            }}
+          />
+        )}
+        {st.ports.map((r) => {
+          const w = firewallPortWords(r)
+          return (
+            <div
+              key={`${r.port}/${r.proto}`}
+              className="px-4 py-3 flex items-center justify-between gap-6 hover:bg-[var(--color-wash-1)] transition-colors"
+              data-testid={`fw-row-${r.port}-${r.proto}`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="type-name font-mono text-[var(--color-text-primary)]">
+                    {r.port}/{r.proto}
+                  </span>
+                  <Tag tone={w.who === 'K2' ? 'muted' : 'neutral'}>{w.who === 'K2' ? 'K2' : 'You'}</Tag>
+                </div>
+                <p className={SETTING_ROW_HINT}>{w.what}</p>
+              </div>
+              {r.source === 'owner' ? (
+                <Button variant="danger-quiet" className="flex-shrink-0" disabled={busy} onClick={() => void close(r)}>
+                  Close…
+                </Button>
+              ) : (
+                <span className="type-hint text-[var(--color-text-secondary)] flex-shrink-0">
+                  {r.source === 'ssh' ? 'Set below' : 'Set by K2'}
+                </span>
+              )}
+            </div>
+          )
+        })}
+        <SettingRow
+          label="Who can reach SSH"
+          hint={sshOnly ? `Only ${st.ssh.allowFrom.join(', ')}, on port ${st.ssh.port}.` : `Anyone on the internet, on port ${st.ssh.port}. K2 records this; it doesn’t move SSH.`}
+          testId="fw-ssh"
+          below={
+            sshOpen ? (
+              <SshEditor
+                current={st.ssh.allowFrom}
+                busy={busy}
+                onCancel={() => setSshOpen(false)}
+                onSave={async (payload) => {
+                  if (await act('K2 couldn’t change who can reach SSH.', '/cli/firewall/ssh', payload)) setSshOpen(false)
+                }}
+              />
+            ) : undefined
+          }
+        >
+          {!sshOpen && (
+            <Button variant="quiet" onClick={() => setSshOpen(true)}>
+              Change…
+            </Button>
+          )}
+        </SettingRow>
+        {httpShown && front && (
+          <SettingRow
+            label="Send http to https"
+            hint={`Visitors who type http:// go to the secure address.${
+              front.enabled && front.httpOn && !front.httpServing ? ' Something else holds port 80, so this isn’t working yet.' : ''
+            }`}
+            testId="fw-http"
+          >
+            <Toggle
+              checked={httpOn}
+              disabled={busy}
+              aria-label="Send http to https"
+              onChange={(next) => void act('K2 couldn’t change the http redirect.', '/cli/front/http', { on: next })}
+            />
+          </SettingRow>
+        )}
+        {st.guard && (
+          <SettingRow
+            label="Visitor limits"
+            testId="fw-guard"
+            hint={
+              st.guard.enabled
+                ? `Each visitor can hold ${st.guard.connsPerIp ?? '–'} connections and make ${st.guard.writesPerMin ?? '–'} changes a minute to your Apps. Turned away ${st.guard.refused} · slowed ${st.guard.limited} since K2 started.`
+                : 'Off: visitors to your Apps have no limits.'
+            }
+          >
+            <Tag tone={st.guard.enabled ? 'ok' : 'muted'}>{st.guard.enabled ? 'On' : 'Off'}</Tag>
+          </SettingRow>
+        )}
+      </SettingsGroup>
+    </div>
+  )
+}
+
+function OpenPortForm({ busy, onCancel, onOpen }: { busy: boolean; onCancel(): void; onOpen(port: string, label: string): void }): React.JSX.Element {
+  const [port, setPort] = useState('')
+  const [label, setLabel] = useState('')
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    requestAnimationFrame(() => ref.current?.focus())
+  }, [])
+  const p = port.trim().toLowerCase()
+  const portOk = /^\d{1,5}(\/(tcp|udp))?$/.test(p) && Number(p.split('/')[0]) > 0 && Number(p.split('/')[0]) < 65536
+  const valid = portOk && label.trim() !== ''
+  return (
+    <div
+      className="bg-[var(--color-wash-1)] divide-y divide-[var(--color-border)]"
+      role="group"
+      aria-label="Open a port"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          e.stopPropagation()
+          onCancel()
+        } else if (e.key === 'Enter' && valid) {
+          e.preventDefault()
+          onOpen(p, label.trim())
+        }
+      }}
+    >
+      <SettingRow label="Port" hint="A number, with /udp for UDP. TCP if you leave it off." field>
+        <Input ref={ref} aria-label="Port" value={port} placeholder="6000/udp" onChange={(e) => setPort(e.target.value)} className="w-full type-control font-mono" />
+      </SettingRow>
+      <SettingRow label="What it’s for" hint="So you know later why it’s open." field>
+        <Input aria-label="What it’s for" value={label} placeholder="Game server" onChange={(e) => setLabel(e.target.value)} className="w-full type-control" />
+      </SettingRow>
+      <div className="px-4 py-3 flex items-center justify-end gap-2">
+        {!valid && (
+          <span className="type-hint text-[var(--color-text-secondary)] mr-auto">
+            {p !== '' && !portOk ? 'Enter a port from 1 to 65535, like 6000 or 6000/udp.' : 'Enter a port and what it’s for.'}
+          </span>
+        )}
+        <Button variant="quiet" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="accent" disabled={!valid || busy} onClick={() => onOpen(p, label.trim())}>
+          Open port
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function SshEditor({
+  current,
+  busy,
+  onCancel,
+  onSave,
+}: {
+  current: string[]
+  busy: boolean
+  onCancel(): void
+  onSave(payload: { any: true } | { allow: string[] }): void
+}): React.JSX.Element {
+  const [value, setValue] = useState(current.join(', '))
+  const list = value.split(',').map((s) => s.trim()).filter(Boolean)
+  return (
+    <Surface chamfer material="tile" className="p-3 space-y-3" data-testid="fw-ssh-editor">
+      <div className="flex items-center justify-between gap-6">
+        <div className="min-w-0">
+          <p className={SETTING_ROW_LABEL}>Only these addresses</p>
+          <p className={SETTING_ROW_HINT}>IP addresses or ranges, separated by commas.</p>
+        </div>
+        <Input aria-label="Addresses that can reach SSH" value={value} placeholder="198.51.100.0/24" onChange={(e) => setValue(e.target.value)} className="w-60 flex-shrink-0 type-control font-mono" />
+      </div>
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="quiet" className="mr-auto" disabled={busy || current.length === 0} onClick={() => onSave({ any: true })}>
+          Let anyone in
+        </Button>
+        <Button variant="quiet" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="accent" disabled={busy || list.length === 0} onClick={() => onSave({ allow: list })}>
+          Only these
+        </Button>
+      </div>
+    </Surface>
   )
 }

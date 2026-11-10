@@ -61,6 +61,15 @@ pub const INPUT_QUEUE: usize = 64;
 /// What the socket gave (a client frame, an error, or its end).
 pub type WsFrame = Option<Result<Message, tokio_tungstenite::tungstenite::Error>>;
 
+/// [`Auth::may_input`]: may this viewer send this input now?
+pub type InputCheck<M> = Box<dyn FnMut(&M) -> Result<(), Refusal> + Send>;
+/// [`Hooks::limits`]: input caps and rate at a time.
+pub type InputLimits<M> = Box<dyn FnMut(&M, Instant) -> Result<(), Refusal> + Send>;
+/// [`Hooks::hello`]: the route's `hello` fields.
+pub type HelloExtras = Box<dyn FnOnce(&Negotiated) -> Map<String, Value> + Send>;
+/// [`Hooks::ended`]: text before the 4410 close, from the source's reason.
+pub type EndedText = Box<dyn FnMut(&str) -> Option<String> + Send>;
+
 /// A refused input, sent back as `{"t":"error","code":…,"message":…}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refusal {
@@ -118,7 +127,7 @@ pub struct Auth<M> {
     pub frame: Box<dyn FnMut(&WsFrame) -> Verdict + Send>,
     /// Each input message: may this viewer send it now? (View-only is a
     /// refusal here, per message.)
-    pub may_input: Box<dyn FnMut(&M) -> Result<(), Refusal> + Send>,
+    pub may_input: InputCheck<M>,
 }
 
 /// Where a viewer's input goes: one call per message, in order, on the
@@ -255,20 +264,20 @@ pub struct Hooks<M> {
     pub auth: Auth<M>,
     /// Input caps and rate, before the queue (sim: `check_input` +
     /// `InputBudget`; desktop: D1's limits).
-    pub limits: Box<dyn FnMut(&M, Instant) -> Result<(), Refusal> + Send>,
+    pub limits: InputLimits<M>,
     pub sink: Box<dyn InputSink<M>>,
     pub coalesce: Box<dyn Coalesce<M>>,
     /// The `hello` fields besides the engine's, built once after the
     /// upgrade. The engine's `t`, `codec`, `window`, `fps` and `path` win
     /// a clash.
-    pub hello: Box<dyn FnOnce(&Negotiated) -> Map<String, Value> + Send>,
+    pub hello: HelloExtras,
     /// The route's own messages and closes, in order, after `hello`.
     pub push: Option<mpsc::UnboundedReceiver<Push>>,
     /// The answer when the input queue is full (sim: `sim_busy`).
     pub busy: Refusal,
     /// Text to send before the 4410 close when the source ends (sim: a
     /// `state: stopped`), from the source's reason.
-    pub ended: Box<dyn FnMut(&str) -> Option<String> + Send>,
+    pub ended: EndedText,
     /// The 4410 close's reason (sim: "device stopped").
     pub ended_reason: String,
     /// Log prefix and thread names (`sim` → `[sim]`, `k2-sim-input-<n>`).

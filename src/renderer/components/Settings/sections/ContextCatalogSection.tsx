@@ -1,102 +1,73 @@
+// Settings → Context Catalog: this server's library of context packs, the
+// standing instructions a workspace's agents always keep in mind once the
+// pack is added to that workspace (Workspaces / Agents → Context). Two
+// groups: the packs people here wrote (New pack, Edit, Delete) and the ones
+// K2 ships. Creating a pack never adds it to a workspace. Words and rules:
+// context-catalog-copy.ts; dialogs: ContextCatalogDialogs.tsx.
+
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   contextErrorMessage,
-  createContextCatalogPack,
-  DEFAULT_CATALOG_ENTRIES,
-  deleteContextCatalogPack,
   fetchContextCatalog,
   mergeContextCatalog,
   type ContextCatalogEntry,
+  type CreatedCatalogPack,
 } from '@/lib/context-stack'
-import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { Button, Input, OverflowMenu, Tag } from '@/components/ui'
+import { useSettingsStore } from '@/stores/settings'
 import type { SettingEntry } from '../searchManifest'
 import { ContextCatalogCreator } from '../ContextCatalogCreator'
+import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { DeletePackDialog, NewPackDialog } from './ContextCatalogDialogs'
+import { isLivePack, isUserPack, packMatches, packSummary } from './context-catalog-copy'
+import { useActiveHostRole } from './useActiveHostRole'
 
 export const CONTEXT_CATALOG_MANIFEST: SettingEntry[] = [
   {
     id: 'context-catalog.library',
     section: 'context-catalog',
     label: 'Context Catalog',
-    description: 'Host library of context packs (builtins + user packs). Does not stack on a workspace.',
-    keywords: ['context', 'catalog', 'pack', 'library', 'layer', 'agents.md'],
+    description: 'Ready-made instructions you can add to any workspace’s agents: the ones K2 ships and your own.',
+    keywords: ['context', 'catalog', 'pack', 'library', 'layer', 'agents.md', 'instructions', 'standing orders'],
   },
   {
     id: 'context-catalog.add',
     section: 'context-catalog',
-    label: 'Add context',
-    description: 'Stub a user pack (pack.toml + layer.md) and author it with the AI File Editor',
-    keywords: ['add', 'create', 'pack', 'author', 'new context'],
+    label: 'New context pack',
+    description: 'Write your own instructions once, with an agent’s help, then add them to any workspace.',
+    keywords: ['add', 'create', 'new', 'pack', 'write', 'author', 'new context'],
   },
 ]
 
-type CatalogFilter = 'all' | 'live' | 'static' | 'user'
+/** Your packs get a search field past this many. */
+const SEARCH_FROM = 7
 
-const FILTERS: { id: CatalogFilter; label: string }[] = [
-  { id: 'all', label: 'All' },
-  { id: 'live', label: 'Live' },
-  { id: 'static', label: 'Static' },
-  { id: 'user', label: 'User' },
-]
+type Load = { kind: 'loading' } | { kind: 'error'; detail: string } | { kind: 'ready'; list: ContextCatalogEntry[] }
+type Dialog = { kind: 'new' } | { kind: 'delete'; pack: ContextCatalogEntry } | null
 
-function hasTag(p: ContextCatalogEntry, tag: string): boolean {
-  return (p.tags ?? []).some((t) => t.toLowerCase() === tag.toLowerCase())
-}
-
-function isUserPack(p: ContextCatalogEntry): boolean {
-  return p.source.startsWith('catalog:user:') || p.id.startsWith('user:')
-}
-
-function isLiveRoster(p: ContextCatalogEntry): boolean {
-  return (
-    p.kind === 'live' ||
-    hasTag(p, 'live') ||
-    p.source.endsWith('-roster') ||
-    p.id.endsWith(':roster')
-  )
-}
-
-function catalogOrigin(p: ContextCatalogEntry): string {
-  if (isUserPack(p)) return `user (${p.source})`
-  if (p.source.startsWith('catalog:wiki')) return p.source
-  return p.source
-}
-
-function matchesFilter(p: ContextCatalogEntry, filter: CatalogFilter): boolean {
-  switch (filter) {
-    case 'all':
-      return true
-    case 'live':
-      return isLiveRoster(p)
-    case 'static':
-      return p.kind === 'static' || p.kind === 'path'
-    case 'user':
-      return isUserPack(p)
-    default:
-      return true
-  }
-}
+const byName = (a: ContextCatalogEntry, b: ContextCatalogEntry): number =>
+  a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })
 
 export function ContextCatalogSection(): React.JSX.Element {
-  const [catalog, setCatalog] = useState<ContextCatalogEntry[]>(DEFAULT_CATALOG_ENTRIES)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [load, setLoad] = useState<Load>({ kind: 'loading' })
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<CatalogFilter>('all')
-  const [adding, setAdding] = useState(false)
-  const [slugDraft, setSlugDraft] = useState('')
-  const [slugOpen, setSlugOpen] = useState(false)
+  const [dialog, setDialog] = useState<Dialog>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [editor, setEditor] = useState<{ dir: string; label: string } | null>(null)
-  const confirm = useConfirmDialogStore((s) => s.confirm)
+  const { role } = useActiveHostRole()
+  // Packs are the server's: an Owner or Admin adds, changes and deletes
+  // them. A role not read yet (or this computer) is allowed; the server
+  // still decides.
+  const readOnly = role.kind === 'known' && role.role === 'member'
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<void> => {
     try {
       const api = await fetchContextCatalog()
-      setCatalog(mergeContextCatalog(api))
-      setError(null)
+      setLoad({ kind: 'ready', list: mergeContextCatalog(api) })
     } catch (err) {
-      setError(contextErrorMessage(err, 'Failed to load catalog'))
-    } finally {
-      setLoading(false)
+      setLoad((prev) =>
+        prev.kind === 'ready' ? prev : { kind: 'error', detail: contextErrorMessage(err, 'The server didn’t answer') },
+      )
     }
   }, [])
 
@@ -104,82 +75,10 @@ export function ContextCatalogSection(): React.JSX.Element {
     void refresh()
   }, [refresh])
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    let list = catalog.filter((p) => matchesFilter(p, filter))
-    if (q) {
-      list = list.filter((p) => {
-        const hay = [
-          p.label,
-          p.description ?? '',
-          p.path,
-          p.id,
-          p.source,
-          p.kind ?? '',
-          p.author ?? '',
-          p.version ?? '',
-          ...(p.tags ?? []),
-        ]
-          .join(' ')
-          .toLowerCase()
-        return hay.includes(q)
-      })
-    }
-    list.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
-    return list
-  }, [catalog, query, filter])
-
-  const filterCounts = useMemo(() => {
-    const counts: Record<CatalogFilter, number> = {
-      all: catalog.length,
-      live: 0,
-      static: 0,
-      user: 0,
-    }
-    for (const p of catalog) {
-      if (isLiveRoster(p)) counts.live += 1
-      if (p.kind === 'static' || p.kind === 'path') counts.static += 1
-      if (isUserPack(p)) counts.user += 1
-    }
-    return counts
-  }, [catalog])
-
-  const handleCreate = useCallback(async () => {
-    const raw = slugDraft.trim()
-    if (!raw) return
-    setAdding(true)
-    setError(null)
-    try {
-      const id = raw.startsWith('user:') ? raw : `user:${raw}`
-      const created = await createContextCatalogPack({ id })
-      setSlugOpen(false)
-      setSlugDraft('')
-      setEditor({ dir: created.dir, label: created.entry.label || id })
-    } catch (err) {
-      setError(contextErrorMessage(err, 'Could not create pack'))
-    } finally {
-      setAdding(false)
-    }
-  }, [slugDraft])
-
-  const handleDelete = useCallback(
-    async (p: ContextCatalogEntry) => {
-      const ok = await confirm({
-        title: 'Delete catalog pack',
-        message: `Remove ${p.id} from the host library? Workspace stacks that already added it are left alone.`,
-        confirmLabel: 'Delete',
-        destructive: true,
-      })
-      if (!ok) return
-      try {
-        await deleteContextCatalogPack(p.id)
-        await refresh()
-      } catch (err) {
-        setError(contextErrorMessage(err, 'Could not delete pack'))
-      }
-    },
-    [confirm, refresh],
-  )
+  const list = load.kind === 'ready' ? load.list : []
+  const yours = useMemo(() => list.filter(isUserPack).sort(byName), [list])
+  const shownYours = useMemo(() => yours.filter((p) => packMatches(p, query)), [yours, query])
+  const builtIn = useMemo(() => list.filter((p) => !isUserPack(p)), [list])
 
   if (editor) {
     return (
@@ -196,192 +95,239 @@ export function ContextCatalogSection(): React.JSX.Element {
     )
   }
 
-  return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="flex-shrink-0 px-6 pt-5 pb-3 border-b border-[var(--color-border)] space-y-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0" data-settings-id="context-catalog.library">
-            <h2 className="type-title text-[var(--color-text-primary)]">Context Catalog</h2>
-            <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-snug">
-              Host library of context packs. Creating a pack does not stack it on a workspace —
-              apply later via Browse catalog or <span className="font-mono">k2 agent context add</span>.
-            </p>
-          </div>
-          <button
-            type="button"
-            data-settings-id="context-catalog.add"
-            onClick={() => setSlugOpen(true)}
-            className="flex-shrink-0 px-3 py-1.5 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/20 no-drag cursor-pointer"
-          >
-            Add context
-          </button>
-        </div>
+  const newButton = (
+    <Button
+      variant="accent"
+      data-settings-id="context-catalog.add"
+      disabled={readOnly}
+      title={readOnly ? 'Only an Owner or Admin of this server can add packs.' : undefined}
+      onClick={() => {
+        setNotice(null)
+        setDialog({ kind: 'new' })
+      }}
+    >
+      New pack
+    </Button>
+  )
 
-        {slugOpen && (
-          <form
-            className="flex items-center gap-2"
-            onSubmit={(e) => {
-              e.preventDefault()
-              void handleCreate()
-            }}
-          >
-            <input
-              autoFocus
-              value={slugDraft}
-              onChange={(e) => setSlugDraft(e.target.value)}
-              placeholder="slug (becomes user:&lt;slug&gt;)"
-              aria-label="Pack slug"
-              className="flex-1 px-3 py-2 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)]/50 no-drag"
-            />
-            <button
-              type="submit"
-              disabled={adding || !slugDraft.trim()}
-              className="px-3 py-1.5 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] no-drag cursor-pointer disabled:opacity-50"
-            >
-              {adding ? 'Creating…' : 'Create'}
-            </button>
+  const retry = (): void => {
+    setLoad({ kind: 'loading' })
+    void refresh()
+  }
+
+  return (
+    <div className="h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]">
+      <div className="w-full max-w-[52rem] space-y-6 pb-6">
+        <header className="min-w-0" data-settings-id="context-catalog.library">
+          <h2 className="type-title text-[var(--color-text-primary)]">Context Catalog</h2>
+          <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed max-w-[75ch]">
+            Ready-made instructions a workspace’s agents always keep in mind, like how to keep the wiki tidy. A pack does
+            nothing until you add it to a workspace.
+          </p>
+          <p className="type-hint text-[var(--color-text-secondary)] mt-1">
+            Add a pack to a workspace in{' '}
             <button
               type="button"
-              onClick={() => setSlugOpen(false)}
-              className="px-2 py-1.5 type-control text-[var(--color-text-secondary)] no-drag cursor-pointer"
+              className="k2-focus underline hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+              onClick={() => useSettingsStore.getState().setSection('projects')}
             >
-              Cancel
-            </button>
-          </form>
-        )}
+              Workspaces / Agents
+            </button>{' '}
+            → the workspace → Context.
+          </p>
+        </header>
 
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search catalog…"
-          aria-label="Search context catalog"
-          className="w-full px-3 py-2 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)]/50 no-drag"
-        />
-
-        <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Catalog filters">
-          {FILTERS.map((f) => {
-            const active = filter === f.id
-            return (
-              <button
-                key={f.id}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setFilter(f.id)}
-                className={`px-2.5 py-1 type-control no-drag cursor-pointer border transition-colors ${
-                  active
-                    ? 'text-[var(--color-accent)] bg-[var(--color-accent)]/15 border-[var(--color-accent)]/40'
-                    : 'text-[var(--color-text-secondary)] border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)]'
-                }`}
+        <SettingsGroup
+          title="Your packs"
+          hint={
+            readOnly
+              ? 'Packs people on this server wrote. Only an Owner or Admin can add, change or delete them.'
+              : 'Packs you and others on this server wrote. Edit one to change what it says.'
+          }
+          action={load.kind === 'ready' ? newButton : undefined}
+          card
+          testId="context-catalog-yours"
+          state={
+            load.kind === 'loading' ? (
+              <SettingsLoadState kind="loading" title="Loading the catalog…" testId="context-catalog-loading">
+                Reading the packs on this server.
+              </SettingsLoadState>
+            ) : load.kind === 'error' ? (
+              <SettingsLoadState
+                kind="error"
+                title="Couldn’t load the catalog"
+                detail={load.detail}
+                action={<Button onClick={retry}>Try again</Button>}
+                testId="context-catalog-error"
               >
-                {f.label}
-                <span className="ml-1 tabular-nums opacity-70">{filterCounts[f.id]}</span>
-              </button>
-            )
-          })}
-        </div>
+                Try again in a moment. Nothing in the catalog or in your workspaces has changed.
+              </SettingsLoadState>
+            ) : yours.length === 0 && !notice ? (
+              <SettingsLoadState kind="empty" title="No packs of your own yet" testId="context-catalog-empty">
+                {readOnly
+                  ? 'An Owner or Admin can write one here.'
+                  : 'Write instructions once, then add them to any workspace. Start with New pack.'}
+              </SettingsLoadState>
+            ) : undefined
+          }
+        >
+          {notice ? (
+            <div role="status" className="px-4 py-2.5 flex items-center justify-between gap-4" data-testid="context-catalog-notice">
+              <span className="inline-flex items-center gap-1.5 type-hint text-[var(--color-status-ok-soft)]">
+                <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3 flex-shrink-0">
+                  <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+                </svg>
+                {notice}
+              </span>
+              <Button variant="quiet" onClick={() => setNotice(null)}>
+                Dismiss
+              </Button>
+            </div>
+          ) : null}
+          {yours.length >= SEARCH_FROM ? (
+            <div className="px-4 py-2.5">
+              <Input
+                variant="search"
+                className="w-full"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search your packs"
+                aria-label="Search your packs"
+              />
+            </div>
+          ) : null}
+          {shownYours.map((p) => (
+            <PackRow
+              key={p.id}
+              pack={p}
+              readOnly={readOnly}
+              onEdit={() => {
+                if (!p.dir) return
+                setNotice(null)
+                setEditor({ dir: p.dir, label: p.label })
+              }}
+              onDelete={() => {
+                setNotice(null)
+                setDialog({ kind: 'delete', pack: p })
+              }}
+            />
+          ))}
+          {yours.length > 0 && shownYours.length === 0 ? (
+            <p className={`px-4 py-3 ${SETTING_ROW_HINT}`}>No packs match “{query.trim()}”.</p>
+          ) : null}
+        </SettingsGroup>
 
-        {error ? (
-          <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>
+        {load.kind === 'ready' && builtIn.length > 0 ? (
+          <SettingsGroup
+            title="Built into K2"
+            hint="These come with K2 and stay up to date with it. Recommended ones suit most workspaces."
+            card
+            testId="context-catalog-builtin"
+          >
+            {builtIn.map((p) => (
+              <PackRow key={p.id} pack={p} readOnly />
+            ))}
+          </SettingsGroup>
         ) : null}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        {loading ? (
-          <div className="px-6 py-10 type-hint text-[var(--color-text-muted)]">Loading catalog…</div>
-        ) : filtered.length === 0 ? (
-          <div className="px-6 py-10 type-hint text-[var(--color-text-muted)] text-center">
-            {query.trim() ? `No catalog items match “${query.trim()}”.` : 'No items in this filter.'}
+      {dialog?.kind === 'new' ? (
+        <NewPackDialog
+          taken={list.map((p) => p.id)}
+          onCreated={() => void refresh()}
+          onClose={(created) => {
+            setDialog(null)
+            if (created) {
+              const name = created.entry.label
+              setNotice(`${name} is in the catalog. Edit it to write what it says, then add it to a workspace.`)
+            }
+          }}
+          onWrite={(created: CreatedCatalogPack) => {
+            setDialog(null)
+            setEditor({ dir: created.dir, label: created.entry.label })
+          }}
+        />
+      ) : null}
+      {dialog?.kind === 'delete' ? (
+        <DeletePackDialog
+          pack={dialog.pack}
+          onClose={() => setDialog(null)}
+          onDeleted={(p) => {
+            setDialog(null)
+            setNotice(`${p.label} was deleted from the catalog. Workspaces that use it keep their own copy.`)
+            setLoad((prev) => (prev.kind === 'ready' ? { kind: 'ready', list: prev.list.filter((x) => x.id !== p.id) } : prev))
+            void refresh()
+          }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+/** One pack: its name and short name, what it does, and (for a pack someone
+ *  here wrote) Edit and a menu with Delete. */
+function PackRow({
+  pack: p,
+  readOnly,
+  onEdit,
+  onDelete,
+}: {
+  pack: ContextCatalogEntry
+  readOnly: boolean
+  onEdit?: () => void
+  onDelete?: () => void
+}): React.JSX.Element {
+  const mine = isUserPack(p)
+  const summary = packSummary(p)
+  const tags = mine ? (p.tags ?? []) : []
+  const lock = readOnly ? 'Only an Owner or Admin of this server can change packs.' : undefined
+  return (
+    <div
+      className={`px-4 py-3 ${mine ? 'transition-colors hover:bg-[var(--color-wash-1)]' : ''}`}
+      data-testid={`pack-row-${p.id}`}
+    >
+      <div className="flex items-start justify-between gap-6">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
+            <span className="type-name text-[var(--color-text-primary)]">{p.label}</span>
+            <span className="type-hint text-[var(--color-text-secondary)] font-mono truncate">{p.id}</span>
+            {p.recommended ? <Tag tone="accent">Recommended</Tag> : null}
+            {!mine && isLivePack(p) ? (
+              <Tag tone="muted" title="K2 rebuilds this list from current data each time it updates the agent’s instructions.">
+                Updates itself
+              </Tag>
+            ) : null}
           </div>
-        ) : (
-          <ul className="divide-y divide-[var(--color-border)]">
-            {filtered.map((p) => {
-              const live = isLiveRoster(p)
-              const user = isUserPack(p)
-              const metaBits = [
-                p.kind ?? null,
-                catalogOrigin(p),
-                p.author ?? null,
-                p.version ? `v${p.version}` : null,
-              ].filter(Boolean) as string[]
-              return (
-                <li key={p.id} className="px-6 py-3.5 flex items-start gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-baseline gap-2 min-w-0 flex-wrap">
-                      <span className="type-heading text-[var(--color-text-primary)]">
-                        {p.label}
-                      </span>
-                      {p.recommended ? (
-                        <span className="px-1.5 py-0.5 type-hint text-[var(--color-accent)] bg-[var(--color-accent)]/12 border border-[var(--color-accent)]/30">
-                          Recommended
-                        </span>
-                      ) : null}
-                      {live ? (
-                        <span className="px-1.5 py-0.5 type-hint text-[var(--color-text-muted)] border border-[var(--color-border)]">
-                          Live · view only
-                        </span>
-                      ) : null}
-                      {metaBits.length > 0 ? (
-                        <span className="type-hint text-[var(--color-text-muted)] tabular-nums">
-                          {metaBits.join(' · ')}
-                        </span>
-                      ) : null}
-                    </div>
-                    {p.description ? (
-                      <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-snug">
-                        {p.description}
-                      </p>
-                    ) : null}
-                    {(p.tags ?? []).length > 0 ? (
-                      <div className="flex flex-wrap gap-1 mt-1.5">
-                        {(p.tags ?? []).map((tag) => (
-                          <span
-                            key={tag}
-                            className="px-1.5 py-0.5 type-hint text-[var(--color-text-muted)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)]/40"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                    <div className="type-hint font-mono text-[var(--color-text-muted)] mt-1.5 truncate" title={p.id}>
-                      {p.id}
-                    </div>
-                  </div>
-                  <div className="flex-shrink-0 pt-0.5 flex items-center gap-1.5">
-                    {user ? (
-                      <>
-                        <button
-                          type="button"
-                          disabled={!p.dir}
-                          onClick={() => {
-                            if (!p.dir) return
-                            setEditor({ dir: p.dir, label: p.label })
-                          }}
-                          className="px-2.5 py-1 type-control text-[var(--color-accent)] bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 no-drag cursor-pointer disabled:opacity-40"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleDelete(p)}
-                          className="px-2.5 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer"
-                        >
-                          Delete
-                        </button>
-                      </>
-                    ) : (
-                      <span className="type-hint text-[var(--color-text-muted)]">
-                        {live ? 'View only' : 'Built-in'}
-                      </span>
-                    )}
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
-        )}
+          {summary || mine ? (
+            <p className={SETTING_ROW_HINT}>{summary ?? 'Nothing written yet. Edit it to say what it asks of agents.'}</p>
+          ) : null}
+          {tags.length > 0 ? <p className={SETTING_ROW_HINT}>Tagged {tags.join(', ')}</p> : null}
+        </div>
+        {mine && onEdit && onDelete ? (
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Button
+              onClick={onEdit}
+              disabled={readOnly || !p.dir}
+              title={lock ?? (!p.dir ? 'This server didn’t say where the pack is kept, so it can’t be opened here.' : undefined)}
+              aria-label={`Edit ${p.label}`}
+            >
+              Edit
+            </Button>
+            <OverflowMenu
+              label={`More actions for ${p.label}`}
+              items={[
+                {
+                  id: 'delete',
+                  label: 'Delete pack…',
+                  danger: true,
+                  disabled: readOnly,
+                  hint: lock,
+                  onSelect: onDelete,
+                },
+              ]}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   )

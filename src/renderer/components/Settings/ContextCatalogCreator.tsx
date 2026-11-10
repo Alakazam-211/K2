@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { contextErrorMessage } from '@/lib/context-stack'
 import { AIFileEditor } from '../AIFileEditor/AIFileEditor'
 import { CodeEditor } from '../FileViewerPane/CodeEditor'
 import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
@@ -7,6 +8,8 @@ import { buildEditorAgentArgs } from '@/lib/editor-agent-args'
 import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { primaryScope } from '@/kessel/server-scope'
+import { Button } from '@/components/ui'
+import { SettingsLoadState } from './controls/SettingControls'
 
 const CATALOG_PACK_SYSTEM_PROMPT = `You are authoring a K2 context catalog pack (library), not AGENTS.md, not a skill.
 
@@ -29,7 +32,7 @@ interface Props {
 export function ContextCatalogCreator({ packDir, title, onClose }: Props): React.JSX.Element {
   const packTomlPath = `${packDir.replace(/\/$/, '')}/pack.toml`
   const layerMdPath = `${packDir.replace(/\/$/, '')}/layer.md`
-  const [activePath, setActivePath] = useState(packTomlPath)
+  const [activePath, setActivePath] = useState(layerMdPath)
   const [tomlContent, setTomlContent] = useState('')
   const [layerContent, setLayerContent] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -52,7 +55,7 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
         setReady(true)
       } catch (err) {
         if (cancelled) return
-        setError(err instanceof Error ? err.message : String(err))
+        setError(contextErrorMessage(err, 'The server didn’t answer'))
       }
     }
     void load()
@@ -96,23 +99,37 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <p className="type-row text-[var(--color-status-error-soft)]">Failed to open pack: {error}</p>
-        <button
-          type="button"
-          onClick={onClose}
-          className="type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer no-drag"
-        >
-          &larr; Back to Catalog
-        </button>
+      <div className="h-full overflow-y-auto p-6">
+        <div className="w-full max-w-[52rem] space-y-6">
+          <h2 className="type-title text-[var(--color-text-primary)]">{title}</h2>
+          <SettingsLoadState
+            kind="error"
+            title={`Couldn’t open ${title}`}
+            detail={error}
+            action={<Button onClick={onClose}>Back to the catalog</Button>}
+            testId="pack-editor-error"
+          >
+            The pack is unchanged. Go back and try again in a moment.
+          </SettingsLoadState>
+        </div>
       </div>
     )
   }
 
   if (!ready || !agentCommand) {
     return (
-      <div className="flex items-center justify-center h-64 type-hint text-[var(--color-text-muted)]">
-        {error ? null : !agentCommand ? 'Resolving agent…' : 'Opening pack editor…'}
+      <div className="h-full overflow-y-auto p-6">
+        <div className="w-full max-w-[52rem] space-y-6">
+          <h2 className="type-title text-[var(--color-text-primary)]">{title}</h2>
+          <SettingsLoadState
+            kind="loading"
+            title={!agentCommand ? 'Starting the agent…' : `Opening ${title}…`}
+            action={<Button variant="quiet" onClick={onClose}>Back</Button>}
+            testId="pack-editor-loading"
+          >
+            An agent opens the pack with you and asks what it should say.
+          </SettingsLoadState>
+        </div>
       </div>
     )
   }
@@ -121,17 +138,17 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
 
   return (
     <AIFileEditor
-      filePath={packTomlPath}
+      filePath={layerMdPath}
       files={[
-        { path: packTomlPath, label: 'Metadata' },
-        { path: layerMdPath, label: 'Layer' },
+        { path: layerMdPath, label: 'Instructions' },
+        { path: packTomlPath, label: 'Details' },
       ]}
       watchDir={packDir}
       cwd={packDir}
       command={terminalCommand}
       args={terminalArgs}
       title={`Context pack: ${title}`}
-      instructions="Author pack.toml (metadata) and layer.md (standing orders). Library only — this does not stack on a workspace."
+      instructions="Tell the agent what this pack should ask of agents; it writes the instructions and the pack’s details. No workspace changes until you add the pack to it."
       onFileChange={handleFileChange}
       onActiveFileChange={setActivePath}
       onClose={onClose}
@@ -139,14 +156,14 @@ export function ContextCatalogCreator({ packDir, title, onClose }: Props): React
       preview={
         <div className="h-full flex flex-col">
           <div className="flex-shrink-0 px-3 py-1.5 border-b border-[var(--color-border)] type-hint text-[var(--color-text-muted)]">
-            {activePath.endsWith('pack.toml') ? 'pack.toml' : 'layer.md'}
+            {activePath.endsWith('pack.toml') ? 'Details' : 'Instructions'}
           </div>
           <div className="flex-1 min-h-0 overflow-hidden">
             {activePath.endsWith('layer.md') ? (
               <div className="h-full overflow-auto p-4">
                 <div className="markdown-content">
                   <Markdown remarkPlugins={[remarkGfm]}>
-                    {layerContent.trim() || '*Empty layer*'}
+                    {layerContent.trim() || '*Nothing written yet.*'}
                   </Markdown>
                 </div>
               </div>

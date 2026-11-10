@@ -193,6 +193,9 @@ pub mod mail_forward;
 pub mod handoff_state;
 /// App runtime stage 1: Seeds, deployments, deploy audit (prd-k2-app-runtime-v1).
 pub mod deploy;
+// Remote desktop (prd-remote-desktop-tab-v1 D1, 0.46.11): the switch,
+// grants, lease, access log and stream wire behind the Desktop tab.
+pub mod desktop;
 /// The disk guard's shared contract (prd-app-resources-disk-guard-v1, 0.46.3).
 pub mod disk_guard;
 /// Mobile dev: sim sessions, the `SimLane` trait, tree format, control

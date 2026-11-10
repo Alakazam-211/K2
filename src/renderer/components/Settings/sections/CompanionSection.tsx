@@ -10,6 +10,7 @@ import googlePlayBadge from '@/assets/google-play-badge.png'
 import { primaryScope } from '@/kessel/server-scope'
 import { PhonePairing } from '../shared/PhonePairing'
 import { BetaTag } from '@/components/ui/Tag'
+import { usePhonePairingFocus, usePhonePairingFocusStore } from '@/stores/phone-pairing-focus'
 
 // K2 Companion (task #615) — the mobile app and K2 Connect now share ONE
 // tunnel (the frpc reverse tunnel exposed by K2 Connect at <sub>.k2.dev).
@@ -46,8 +47,34 @@ export const COMPANION_MANIFEST: SettingEntry[] = [
   { id: 'companion.pair', section: 'companion', label: 'Pair a phone', description: 'A one-time code and QR that pair the K2 phone app; every paired phone, with Revoke', keywords: ['pair', 'phone', 'qr', 'code', 'companion', 'mobile', 'device', 'revoke', 'iphone', 'android', 'web access'] },
 ]
 
+/** Bring the Pair a phone block into view and put the cursor on its first
+ *  control. Looks for a few frames: the block lays out after mount. */
+export function revealPhonePairing(): void {
+  let tries = 0
+  const reveal = (): void => {
+    const el = document.querySelector<HTMLElement>('[data-settings-id="companion.pair"]')
+    if (!el) {
+      if (++tries < 30) requestAnimationFrame(reveal)
+      return
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled])')?.focus({
+      preventScroll: true,
+    })
+    el.classList.add('settings-search-pulse')
+    window.setTimeout(() => el.classList.remove('settings-search-pulse'), 1500)
+  }
+  requestAnimationFrame(() => requestAnimationFrame(reveal))
+}
+
 export function CompanionSection(): React.JSX.Element {
   const [status, setStatus] = useState<TunnelStatus | null>(null)
+
+  // The setup checklist's phone row: open on pairing (once per request).
+  const pairingFocusSeq = usePhonePairingFocus()
+  useEffect(() => {
+    if (usePhonePairingFocusStore.getState().takeRequest()) revealPhonePairing()
+  }, [pairingFocusSeq])
 
   // 0.39.39 (#675.5) — push-primary with snapshot-on-connect. The 5s tunnel-
   // status poll is replaced by a subscription to the app-level

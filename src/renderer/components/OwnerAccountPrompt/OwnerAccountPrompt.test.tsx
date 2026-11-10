@@ -50,6 +50,7 @@ import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import OwnerAccountPrompt, { CREATE_TITLE, PROMPT_TITLE, PROMPT_WHY, parsePromptView } from './OwnerAccountPrompt'
 import { RADIO_CLASS } from '@/components/ui'
+import { useOwnerAccountPromptReopenStore } from '@/stores/owner-account-prompt-reopen'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -64,6 +65,7 @@ function pickView(candidates: Record<string, unknown>[], preselect: string | nul
 const CREATE_VIEW = { ok: true, show: true, mode: 'create', candidates: [], preselect: null }
 
 beforeEach(() => {
+  useOwnerAccountPromptReopenStore.setState({ forced: false })
   h.label = 'main'
   h.remote = false
   h.gets = []
@@ -336,5 +338,38 @@ describe('owner account prompt: no admins (create is required)', () => {
     act(() => void fireEvent.click(screen.getByRole('button', { name: 'Create and use this account' })))
     await waitFor(() => expect(prompt()).toBeNull())
     expect(h.posts.map((p) => p.route)).toEqual(['users/add', 'users/set-role', 'owner/accounts', 'users/set-role', 'owner/accounts'])
+  })
+})
+
+describe('owner account prompt: reopened from the setup checklist', () => {
+  const DISMISSED = { ok: true, show: false, mode: 'pick', reason: 'dismissed', linked: null, candidates: [cand('julie')], preselect: null }
+
+  it('a dismissed prompt reopens on request, and Not now closes it and clears the flag', async () => {
+    h.routes['owner/account-prompt'] = DISMISSED
+    render(<OwnerAccountPrompt />)
+    await settled()
+    expect(prompt()).toBeNull()
+    act(() => useOwnerAccountPromptReopenStore.getState().reopen())
+    expect(await screen.findByTestId('owner-account-prompt')).toBeTruthy()
+    act(() => void fireEvent.click(screen.getByTestId('owner-account-not-now')))
+    await waitFor(() => expect(prompt()).toBeNull())
+    expect(useOwnerAccountPromptReopenStore.getState().forced).toBe(false)
+  })
+
+  it('does not reopen once an account is linked', async () => {
+    h.routes['owner/account-prompt'] = { ...DISMISSED, reason: 'linked', linked: 'julie' }
+    render(<OwnerAccountPrompt />)
+    await settled()
+    act(() => useOwnerAccountPromptReopenStore.getState().reopen())
+    await settled()
+    expect(prompt()).toBeNull()
+    expect(useOwnerAccountPromptReopenStore.getState().forced).toBe(false)
+  })
+
+  it('parsePromptView: reopenable only while nothing is linked and there is something to offer', () => {
+    expect(parsePromptView(DISMISSED).reopenable).toBe(true)
+    expect(parsePromptView({ ...DISMISSED, reason: 'linked', linked: 'julie' }).reopenable).toBe(false)
+    expect(parsePromptView({ ...DISMISSED, candidates: [] }).reopenable).toBe(false)
+    expect(parsePromptView(CREATE_VIEW).reopenable).toBe(true)
   })
 })

@@ -50,6 +50,7 @@ import {
 } from '@/stores/llm-accounts'
 import type { ServerScope } from '@/kessel/server-scope'
 import { LlmLoginSheet, type LoginSheetStart } from './LlmLoginSheet'
+import { SIGN_IN_TOOLS, useLlmSignInRequestStore } from '@/stores/llm-sign-in-request'
 import { useDialogEscape } from '../settings-esc'
 import { Button, Tag } from '@/components/ui'
 
@@ -569,6 +570,23 @@ export function AgentAccountsColumn(): React.JSX.Element {
     setKeyDialog(null)
     setError(null)
   }, [hostKey])
+  // A sign-in asked for from outside Settings (the setup checklist): once
+  // the list is here, open the sheet for that tool, or for the first of
+  // Claude, Codex and Grok that can sign in. Declared after the reset
+  // above, so a request that arrives with the page's first render wins.
+  const signInRequest = useLlmSignInRequestStore((s) => s.pending)
+  const loadedDoc = entry?.doc ?? null
+  useEffect(() => {
+    if (!signInRequest || !loadedDoc) return
+    useLlmSignInRequestStore.getState().take()
+    if (loadedDoc.airgap) return
+    const canSignIn = (tool: string): boolean => {
+      const t = loadedDoc.tools.find((x) => x.tool === tool)
+      return t?.supported === true && t.subscription === true
+    }
+    const pick = [signInRequest, ...SIGN_IN_TOOLS].find((r) => canSignIn(r.tool))
+    if (pick) setSheet({ kind: 'add', tool: pick.tool, toolLabel: pick.toolLabel })
+  }, [signInRequest, loadedDoc])
   // Opening the page re-reads every token's usage on that server (the
   // daemon runs it at most once a minute); the list reloads when the
   // daemon says it changed. A failure here is not the page's error: each

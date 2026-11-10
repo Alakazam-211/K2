@@ -32,6 +32,7 @@ import { setOwnerAccounts } from '@/components/Settings/sections/notify-api'
 import { CHAMFER_CLIP, resolvePersonColor } from '@/components/Presence/PresenceChip'
 import { PERSON_NAME_MAX, realName } from '@/lib/person-name'
 import { PersonColorPicker } from '@/components/Presence/PersonColorPicker'
+import { useOwnerAccountPromptReopenStore } from '@/stores/owner-account-prompt-reopen'
 
 export const OWNER_ACCOUNT_PROMPT_PATH = 'owner/account-prompt'
 export const OWNER_ACCOUNT_PROMPT_DISMISS_PATH = 'owner/account-prompt/dismiss'
@@ -56,6 +57,9 @@ export interface PromptView {
   mode: 'pick' | 'create'
   candidates: PromptCandidate[]
   preselect: string | null
+  /** No account is linked and there is something to offer, so the prompt
+   *  may be reopened after "Not now" (the setup checklist's sign-in row). */
+  reopenable: boolean
 }
 
 function str(v: unknown): string | null {
@@ -81,11 +85,14 @@ export function parsePromptView(raw: unknown): PromptView {
   }
   const preselect = str(o.preselect)
   const mode = o.mode === 'create' ? 'create' : 'pick'
+  const offers = mode === 'create' || candidates.length > 0
+  const linked = o.reason === 'linked' || str(o.linked) !== null
   return {
-    show: o.show === true && (mode === 'create' || candidates.length > 0),
+    show: o.show === true && offers,
     mode,
     candidates,
     preselect: preselect && candidates.some((c) => c.username === preselect) ? preselect : null,
+    reopenable: offers && !linked,
   }
 }
 
@@ -254,16 +261,32 @@ export default function OwnerAccountPrompt(): React.JSX.Element | null {
   const [err, setErr] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const eligible = useRef(promptEligible())
+  // Reopened from the setup checklist after "Not now": shown while the
+  // daemon still says nothing is linked.
+  const forced = useOwnerAccountPromptReopenStore((s) => s.forced)
 
   const refresh = useCallback(async () => {
     if (!eligible.current) return
     const v = await fetchPromptView()
+    const wantForced = useOwnerAccountPromptReopenStore.getState().forced
+    if (wantForced && !v?.reopenable) useOwnerAccountPromptReopenStore.getState().clear()
     setView((prev) => {
       // Keep the person's own pick across re-reads.
-      if (!prev?.show && v?.show) setPicked(v.preselect)
+      const wasShown = prev?.show === true || (wantForced && prev?.reopenable === true)
+      const nowShown = v?.show === true || (wantForced && v?.reopenable === true)
+      if (!wasShown && nowShown && v) setPicked(v.preselect)
       return v
     })
   }, [])
+
+  useEffect(() => {
+    if (!forced) return
+    if (!eligible.current) {
+      useOwnerAccountPromptReopenStore.getState().clear()
+      return
+    }
+    void refresh()
+  }, [forced, refresh])
 
   useEffect(() => {
     void refresh()
@@ -278,9 +301,12 @@ export default function OwnerAccountPrompt(): React.JSX.Element | null {
     }
   }, [refresh])
 
-  if (!view?.show) return null
+  if (!view || !(view.show || (forced && view.reopenable))) return null
 
-  const hide = (): void => setView((v) => (v ? { ...v, show: false } : v))
+  const hide = (): void => {
+    useOwnerAccountPromptReopenStore.getState().clear()
+    setView((v) => (v ? { ...v, show: false } : v))
+  }
   // No Owner/Admin login yet: the create form is required (no Not now;
   // the scrim and Esc don't close it, since nothing here listens for them).
   const required = view.mode === 'create'

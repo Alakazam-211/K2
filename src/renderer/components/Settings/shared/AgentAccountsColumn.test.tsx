@@ -38,6 +38,7 @@ import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { AGENTS_MANIFEST } from '../sections/AgentsSection'
 import { LLM_TOKENS_MANIFEST, LlmTokensSection } from '../sections/LlmTokensSection'
+import { useLlmSignInRequestStore } from '@/stores/llm-sign-in-request'
 
 function account(over: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -487,6 +488,29 @@ describe('Workspace/chat tokens and API tokens', () => {
 })
 
 describe('Sign-in sheet', () => {
+  it('a sign-in asked for from outside Settings opens the sheet for that tool once the list loads', async () => {
+    act(() => useLlmSignInRequestStore.getState().request({ tool: 'codex', toolLabel: 'Codex' }))
+    await renderColumn()
+    expect(await screen.findByRole('dialog', { name: 'Add a Codex subscription' })).toBeTruthy()
+    expect(useLlmSignInRequestStore.getState().pending).toBeNull()
+  })
+
+  it('a request for a tool that cannot sign in falls back to the first of Claude, Codex and Grok that can', async () => {
+    act(() => useLlmSignInRequestStore.getState().request({ tool: 'gemini', toolLabel: 'Gemini' }))
+    await renderColumn()
+    expect(await screen.findByRole('dialog', { name: 'Add a Claude subscription' })).toBeTruthy()
+  })
+
+  it('in air-gap mode a request opens no sheet', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) =>
+      route === 'llm/accounts/list' ? { ...(doc() as object), airgap: true } : routeGet(route, params),
+    )
+    act(() => useLlmSignInRequestStore.getState().request())
+    await renderColumn()
+    await waitFor(() => expect(useLlmSignInRequestStore.getState().pending).toBeNull())
+    expect(screen.queryByTestId('llm-login-sheet')).toBeNull()
+  })
+
   it('Add posts tool, label and mode, then offers Open sign-in page, Copy code and Paste code', async () => {
     const writeText = vi.fn(async () => {})
     Object.assign(navigator, { clipboard: { writeText } })

@@ -19,8 +19,10 @@ import {
   fetchProjectGroupShow,
   normalizeHexColor,
   partitionPinned,
+  projectDefaultView,
   reorderProjectGroupDashboards,
   setProjectGroupColor,
+  setProjectGroupDefaultView,
   setProjectGroupIcon,
 } from './projects-api'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -129,6 +131,29 @@ describe('icon + color route wrappers (§6.7.7 contract shapes)', () => {
     post.mockResolvedValueOnce({ ok: true })
     await setProjectGroupColor(primaryScope(), 'g1', null)
     expect(post).toHaveBeenCalledWith(primaryScope(), 'project-group/set-color', { group: 'g1', color: null })
+  })
+
+  it('set-default-view posts {group, view} and answers the updated group', async () => {
+    post.mockResolvedValueOnce({ ok: true, id: 'g1', defaultView: 'chatter' })
+    const g = await setProjectGroupDefaultView(primaryScope(), 'g1', 'chatter')
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'project-group/set-default-view', {
+      group: 'g1',
+      view: 'chatter',
+    })
+    expect(g.defaultView).toBe('chatter')
+  })
+})
+
+describe('projectDefaultView', () => {
+  it('reads the three views as sent', () => {
+    expect(projectDefaultView({ defaultView: 'terminal' })).toBe('terminal')
+    expect(projectDefaultView({ defaultView: 'thread' })).toBe('thread')
+    expect(projectDefaultView({ defaultView: 'chatter' })).toBe('chatter')
+  })
+
+  it('treats a daemon before 0282 (absent) and unknown words as thread', () => {
+    expect(projectDefaultView({})).toBe('thread')
+    expect(projectDefaultView({ defaultView: 'split' as never })).toBe('thread')
   })
 })
 

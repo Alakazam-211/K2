@@ -68,7 +68,18 @@ pub struct ProjectGroup {
     /// ~10-50KB dataUrl. Always serialized (`null` = no icon), so a client
     /// can tell an older daemon (field absent) from "no icon".
     pub icon_key: Option<String>,
+    /// The view the project's agent tiles open in (0282,
+    /// prd-projects-threads-v1 §4): one of [`DEFAULT_VIEWS`], `"thread"`
+    /// for every project until someone changes it. Always serialized, so a
+    /// client can tell an older daemon (field absent) from a set value.
+    pub default_view: String,
 }
+
+/// The views a project can open its agents in (`default_view`). Split is
+/// an Agents-page view only and never a project default.
+/// New projects, and every project from before 0282, get `thread` from the
+/// column default.
+pub const DEFAULT_VIEWS: [&str; 3] = ["terminal", "thread", "chatter"];
 
 /// One `project_group_members` row.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -178,7 +189,7 @@ fn now_secs() -> i64 {
 const GROUP_SELECT: &str = "SELECT g.id, g.name, g.poc_workspace_id, g.pinned, \
     g.sort_order, g.created_at, g.updated_at, g.color, \
     (SELECT COUNT(*) FROM project_group_members m WHERE m.group_id = g.id), \
-    g.icon \
+    g.icon, g.default_view \
     FROM project_groups g";
 
 /// The icon cache key (see [`ProjectGroup::icon_key`]): FNV-1a 64 over
@@ -211,6 +222,7 @@ fn row_to_group(row: &rusqlite::Row) -> rusqlite::Result<ProjectGroup> {
             .as_str_or_null()
             .map_err(|e| rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(e)))?
             .map(icon_key),
+        default_view: row.get(10)?,
     })
 }
 
@@ -557,6 +569,31 @@ pub fn set_group_color(id: &str, color: Option<&str>) -> Result<ProjectGroup, St
     }
     drop(conn);
     get_group_by_id(id).ok_or_else(|| "project group vanished after color set".to_string())
+}
+
+/// Set the view a group's agent tiles open in (prd-projects-threads-v1
+/// §4.1): `terminal`, `thread` or `chatter`, exactly (no trimming or case
+/// folding, so the stored word is always one the renderer knows). Anything
+/// else is a `usage` error and the stored view is untouched. Bumps
+/// `updated_at`. `id` must be a FULL id.
+pub fn set_group_default_view(id: &str, view: &str) -> Result<ProjectGroup, String> {
+    if !DEFAULT_VIEWS.contains(&view) {
+        return Err(format!("usage: view must be terminal, thread or chatter, got '{view}'"));
+    }
+    let now = now_secs();
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let updated = conn
+        .execute(
+            "UPDATE project_groups SET default_view = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, view, now],
+        )
+        .map_err(|e| format!("default view update failed: {e}"))?;
+    if updated == 0 {
+        return Err(format!("no project group with id {id}"));
+    }
+    drop(conn);
+    get_group_by_id(id).ok_or_else(|| "project group vanished after default view set".to_string())
 }
 
 /// Delete a group. SQL CASCADE (foreign_keys=ON at connection open)
@@ -2325,6 +2362,46 @@ mod tests {
 
         // Unknown group fails loudly.
         assert!(set_group_color("nope", Some("#112233")).is_err());
+    }
+
+    #[test]
+    fn default_view_starts_on_thread_and_takes_only_the_three_views() {
+        let g = create_group(&gname("view")).expect("create");
+        assert_eq!(g.default_view, "thread", "a new project opens its agents in thread");
+        let wire = serde_json::to_value(&g).expect("serialize");
+        assert_eq!(wire["defaultView"], "thread", "camelCase on the wire: {wire}");
+        assert!(wire.get("default_view").is_none(), "no snake_case key: {wire}");
+
+        // Each view round-trips through the answer, a fetch and the list.
+        for view in DEFAULT_VIEWS {
+            let set = set_group_default_view(&g.id, view).expect("set view");
+            assert_eq!(set.default_view, view);
+            assert_eq!(get_group_by_id(&g.id).expect("get").default_view, view);
+            let listed = list_groups().expect("list");
+            let mine = listed.iter().find(|x| x.id == g.id).expect("listed");
+            assert_eq!(mine.default_view, view, "list carries the view");
+        }
+
+        // A set bumps updated_at (backdate first: the clock is in seconds).
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE project_groups SET updated_at = 1 WHERE id = ?1", params![g.id])
+                .expect("backdate");
+        }
+        let bumped = set_group_default_view(&g.id, "thread").expect("set thread");
+        assert!(bumped.updated_at > 1, "updated_at bumps: {}", bumped.updated_at);
+
+        // Anything else is usage, and the stored view is untouched.
+        for bad in ["split", "Thread", " thread", "", "terminal ", "chat"] {
+            let err = set_group_default_view(&g.id, bad).expect_err("bad view must fail");
+            assert!(err.starts_with("usage: view must be terminal, thread or chatter"), "'{bad}' got: {err}");
+            assert!(err.contains(&format!("'{bad}'")), "names the bad value: {err}");
+        }
+        assert_eq!(get_group_by_id(&g.id).expect("get").default_view, "thread", "refusals change nothing");
+
+        // An unknown group fails loudly.
+        assert!(set_group_default_view("nope", "thread").is_err());
     }
 
     fn key<'a>(ns: &'a str, id: &'a str, at_ms: i64) -> ClientKey<'a> {

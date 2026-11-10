@@ -1861,6 +1861,12 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // only. Renumber freely on a slip (and edit the migration-order
         // tests).
         ("0279_mail_watch", include_str!("../../drizzle_sql/0279_mail_watch.sql")),
+        // 0282 — a project's default view (0.46.11, prd-projects-threads-v1
+        // §4.1): `project_groups.default_view`, 'thread' for every row.
+        // 0282 is reserved by K2 (0278–0281 belong to other branches); edit
+        // the migration-order tests if it moves. The store is
+        // `crate::project_groups`.
+        ("0282_project_group_default_view", include_str!("../../drizzle_sql/0282_project_group_default_view.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2540,7 +2546,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0279_mail_watch",
+            last_name, "0282_project_group_default_view",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2763,6 +2769,8 @@ mod tests {
                 "0278_heartbeat_reminders",
                 // 0.46.11: agent mail notices.
                 "0279_mail_watch",
+                // 0.46.11: a project's default view.
+                "0282_project_group_default_view",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2921,6 +2929,8 @@ mod tests {
                 "0278_heartbeat_reminders",
                 // 0.46.11: agent mail notices.
                 "0279_mail_watch",
+                // 0.46.11: a project's default view.
+                "0282_project_group_default_view",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3193,7 +3203,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0279_mail_watch", "0279 (0.46.11) runs last");
+        assert_eq!(top, "0282_project_group_default_view", "0282 (0.46.11) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3257,9 +3267,10 @@ mod tests {
                 "0276_compute_gpu_grant",
                 "0277_workspace_sessions_unstarted_id",
                 "0278_heartbeat_reminders",
-                "0279_mail_watch"
+                "0279_mail_watch",
+                "0282_project_group_default_view"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278 and 0279)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279 and 0282)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -4101,6 +4112,9 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
+            // 0282 (a project's default view, 0.46.11) is the newest: its
+            // record goes (its column re-add is skipped as a duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0282_project_group_default_view'", []).unwrap();
             // 0279 (mail notices, 0.46.11) is the newest: its record goes
             // (its tables and indexes are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0279_mail_watch'", []).unwrap();
@@ -5656,5 +5670,53 @@ mod tests {
         let once: i64 = conn.query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0230_compute_job_tiers'", [], |r| r.get(0)).unwrap();
         assert_eq!(once, 1, "0230 is recorded once");
         assert_eq!(tier("j-gate"), "ci");
+    }
+
+    /// 0282 (prd-projects-threads-v1 §4.1) on a database from before it
+    /// (last migration 0277): every existing project gets 'thread', a new
+    /// row gets it too, the column refuses NULL, and a second run is a no-op.
+    #[test]
+    fn a_0277_database_upgrades_through_0282_project_default_view() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0277_workspace_sessions_unstarted_id")).unwrap();
+        let cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('project_groups')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert!(!cols.iter().any(|c| c == "default_view"), "0277 has no default_view: {cols:?}");
+        conn.execute_batch(
+            "INSERT INTO project_groups (id, name, created_at, updated_at) VALUES ('g-old', 'Launch', 1, 1), ('g-pin', 'Ops', 1, 1);",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        let views: Vec<(String, String)> = conn
+            .prepare("SELECT id, default_view FROM project_groups ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            views,
+            vec![("g-old".to_string(), "thread".to_string()), ("g-pin".to_string(), "thread".to_string())],
+            "every existing project starts on thread"
+        );
+        conn.execute("INSERT INTO project_groups (id, name, created_at, updated_at) VALUES ('g-new', 'Fresh', 2, 2)", [])
+            .unwrap();
+        let fresh: String =
+            conn.query_row("SELECT default_view FROM project_groups WHERE id = 'g-new'", [], |r| r.get(0)).unwrap();
+        assert_eq!(fresh, "thread", "a new project starts on thread");
+        let null = conn.execute("UPDATE project_groups SET default_view = NULL WHERE id = 'g-old'", []);
+        assert!(null.is_err(), "default_view is NOT NULL");
+
+        run_migrations(&conn).unwrap();
+        let once: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0282_project_group_default_view'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(once, 1, "0282 is recorded once");
     }
 }

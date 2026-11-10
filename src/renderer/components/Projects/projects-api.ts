@@ -12,6 +12,13 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { asArray } from '@/lib/as-array'
 import type { ServerScope } from '@/kessel/server-scope'
 
+/** The views a project can open its agents in (prd-projects-threads-v1 §4;
+ *  k2-core `project_groups::DEFAULT_VIEWS`). Split is an Agents-page view
+ *  only and never a project default. */
+export type ProjectDefaultView = 'terminal' | 'thread' | 'chatter'
+
+export const PROJECT_DEFAULT_VIEWS: readonly ProjectDefaultView[] = ['terminal', 'thread', 'chatter']
+
 /** One group row (`/cli/project-group/list` + the create/pin responses). */
 export interface ProjectGroup {
   id: string
@@ -35,6 +42,17 @@ export interface ProjectGroup {
    *  does; null = no icon). Absent (undefined) from older daemons — then
    *  the icon cache falls back to event-driven invalidation. */
   iconKey?: string | null
+  /** The view the project's agent tiles open in (migration 0282). Absent
+   *  (undefined) from daemons before it: read it through
+   *  `projectDefaultView`, which treats absent as `thread`. */
+  defaultView?: ProjectDefaultView
+}
+
+/** A project's default view, `thread` when the daemon predates 0282 (field
+ *  absent) or sends a word this client doesn't know. */
+export function projectDefaultView(group: Pick<ProjectGroup, 'defaultView'>): ProjectDefaultView {
+  const v = group.defaultView
+  return v !== undefined && PROJECT_DEFAULT_VIEWS.includes(v) ? v : 'thread'
 }
 
 /** A member row as `show` enriches it (workspace registry name/path +
@@ -216,6 +234,18 @@ export async function setProjectGroupColor(
   color: string | null,
 ): Promise<void> {
   await daemonCliPost(scope, 'project-group/set-color', { group, color })
+}
+
+/** POST /cli/project-group/set-default-view — `{group, view}`; answers the
+ *  updated group. Owner or admin (an agent needs 'Manage K2 projects'); a
+ *  Member gets 403 `forbidden`, a bad view 400 `usage`. Emits
+ *  groups-changed, so the list refetch carries the new `defaultView`. */
+export async function setProjectGroupDefaultView(
+  scope: ServerScope,
+  group: string,
+  view: ProjectDefaultView,
+): Promise<ProjectGroup> {
+  return daemonCliPost<ProjectGroup>(scope, 'project-group/set-default-view', { group, view })
 }
 
 /** POST /cli/project-group/dashboard/rename — P8's §6.5 Main-row

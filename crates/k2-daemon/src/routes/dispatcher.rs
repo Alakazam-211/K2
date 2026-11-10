@@ -10259,7 +10259,8 @@ async fn handle_one_request(
         }
         // Projects V1 P2 — `/cli/project-group/*` mutations (create /
         // rename / delete / pin / sort / add-member / remove-member /
-        // set-poc / msg / set-icon / set-color / dashboard/save-layout /
+        // set-poc / msg / set-icon / set-color / set-default-view /
+        // dashboard/save-layout /
         // dashboard/rename / dashboard/create / dashboard/delete /
         // dashboard/reorder).
         // JSON-bodied POSTs; token_ok (owner OR connect-user session —

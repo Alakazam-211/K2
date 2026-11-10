@@ -1560,6 +1560,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/project-group/rename", Member),
     get("/cli/project-group/resources", Member),
     post("/cli/project-group/set-color", Admin),
+    // prd-projects-threads-v1 §4.2: the view everyone's agent tiles open in.
+    // Owner or admin among logins; an agent passes to the handler, which
+    // follows its 'Manage K2 projects' switch.
+    post("/cli/project-group/set-default-view", Admin),
     post("/cli/project-group/set-icon", Admin),
     post("/cli/project-group/set-poc", Member),
     get("/cli/project-group/show", Member),

@@ -32,7 +32,9 @@
 //! unchanged; app passes and API sessions stay refused.
 //! Project chat post (`msg`) is open to every login. The
 //! `dashboard/*` mutations — and the §6.7.7 `set-icon` / `set-color`
-//! appearance mutations — additionally require the owner-or-admin bit
+//! appearance mutations, and `set-default-view` (prd-projects-threads-v1
+//! §4.2: it changes the view everyone's agent tiles open in) — additionally
+//! require the owner-or-admin bit
 //! (PRD §6.3 resolved Q2 — viewers see but cannot save), enforced in
 //! the dispatcher arm where the query string lives. Human chat author
 //! attribution is resolved from the session token in the dispatcher
@@ -59,7 +61,7 @@
 //!   — `dashboard/save-layout` (freshness on next open, never a live
 //!   rearrange).
 //! - `project-group:groups-changed` `{groupId?}` — create / rename /
-//!   delete / pin / sort / set-icon / set-color / dashboard
+//!   delete / pin / sort / set-icon / set-color / set-default-view / dashboard
 //!   create/rename/delete/reorder (nav-list + open-`show` liveness;
 //!   §4.2 has no dashboards-changed event, so the dashboard mutations
 //!   ride the structural sibling).
@@ -209,6 +211,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/project-group/msg"
         | "/cli/project-group/set-icon"
         | "/cli/project-group/set-color"
+        | "/cli/project-group/set-default-view"
         | "/cli/project-group/dashboard/save-layout"
         | "/cli/project-group/dashboard/rename"
         | "/cli/project-group/dashboard/create"
@@ -485,6 +488,7 @@ pub fn dispatch_post(path: &str, body: &[u8], session_author: &str) -> CliRespon
         "/cli/project-group/msg" => handle_msg(body, session_author),
         "/cli/project-group/set-icon" => handle_set_icon(body),
         "/cli/project-group/set-color" => handle_set_color(body),
+        "/cli/project-group/set-default-view" => handle_set_default_view(body),
         "/cli/project-group/dashboard/save-layout" => handle_save_layout(body),
         "/cli/project-group/dashboard/rename" => handle_dashboard_rename(body),
         "/cli/project-group/dashboard/create" => handle_dashboard_create(body),
@@ -505,17 +509,22 @@ pub fn is_gated_mutation(path: &str) -> bool {
     path.starts_with("/cli/project-group/") && path != "/cli/project-group/msg"
 }
 
-/// Dashboards and project appearance (PRD §6.3 Q2, §6.7.7), and
-/// deleting a project with its chat (Rosson 2026-10-18): owner or admin
-/// among logins. A Member login sees them but cannot change them. An
-/// agent follows its 'Manage K2 projects' switch (delete included,
-/// Rosson 2026-10-18).
+/// Dashboards and project appearance (PRD §6.3 Q2, §6.7.7), a project's
+/// default view (prd-projects-threads-v1 §4.2: it changes what everyone's
+/// agent tiles open in), and deleting a project with its chat (Rosson
+/// 2026-10-18): owner or admin among logins. A Member login sees them but
+/// cannot change them. An agent follows its 'Manage K2 projects' switch
+/// (delete included, Rosson 2026-10-18).
 fn is_admin_only(path: &str) -> bool {
     path.starts_with("/cli/project-group/dashboard/")
         || path == "/cli/project-group/set-icon"
         || path == "/cli/project-group/set-color"
+        || path == SET_DEFAULT_VIEW_PATH
         || path == "/cli/project-group/delete"
 }
+
+/// `POST /cli/project-group/set-default-view` (prd-projects-threads-v1 §4.2).
+pub const SET_DEFAULT_VIEW_PATH: &str = "/cli/project-group/set-default-view";
 
 /// The refusal a Member login gets for deleting a project.
 fn delete_needs_admin() -> CliResponse {
@@ -703,6 +712,13 @@ pub fn dispatch_post_as(
             if !admin {
                 return refuse(if path == "/cli/project-group/delete" {
                     delete_needs_admin()
+                } else if path == SET_DEFAULT_VIEW_PATH {
+                    error_response(
+                        "403 Forbidden",
+                        "forbidden",
+                        "only the owner, an admin, or an agent with 'Manage K2 projects' can change \
+                         the view a project opens its agents in (it changes it for everyone)",
+                    )
                 } else {
                     error_response(
                         "403 Forbidden",
@@ -1273,6 +1289,44 @@ pub fn handle_set_color(body: &[u8]) -> CliResponse {
         Err(e) => return resolve_error_response(&b.group, e),
     };
     match project_groups::set_group_color(&group_id, b.color.as_deref()) {
+        Ok(group) => {
+            emit_groups_changed(&group.id);
+            group_ok_json(&group)
+        }
+        Err(e) => core_error(e),
+    }
+}
+
+/// `POST /cli/project-group/set-default-view` body.
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct SetDefaultViewBody {
+    group: String,
+    view: Option<String>,
+}
+
+/// Handler for `POST /cli/project-group/set-default-view`
+/// (prd-projects-threads-v1 §4.2): `{group, view}` with `view` one of
+/// `terminal`, `thread`, `chatter`. Owner or admin among logins, an agent
+/// with 'Manage K2 projects' (both checked in [`dispatch_post_as`]). The
+/// view rides the group wire shape (`defaultView`), so the updated group is
+/// the response. Emits `project-group:groups-changed`. Never injects.
+pub fn handle_set_default_view(body: &[u8]) -> CliResponse {
+    let b: SetDefaultViewBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    if b.group.is_empty() {
+        return usage_error("missing 'group' (a project name, id, or unique prefix)");
+    }
+    let Some(view) = b.view else {
+        return usage_error("missing 'view' (terminal, thread or chatter)");
+    };
+    let group_id = match project_groups::resolve_group(&b.group) {
+        Ok(id) => id,
+        Err(e) => return resolve_error_response(&b.group, e),
+    };
+    match project_groups::set_group_default_view(&group_id, &view) {
         Ok(group) => {
             emit_groups_changed(&group.id);
             group_ok_json(&group)
@@ -3542,6 +3596,7 @@ mod tests {
             "/cli/project-group/msg",
             "/cli/project-group/set-icon",
             "/cli/project-group/set-color",
+            "/cli/project-group/set-default-view",
             "/cli/project-group/dashboard/save-layout",
             "/cli/project-group/dashboard/rename",
             "/cli/project-group/dashboard/create",
@@ -3684,6 +3739,96 @@ mod tests {
         }
         let resp = icon_get("");
         assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+    }
+
+    /// prd-projects-threads-v1 §4.2 — `set-default-view` through the
+    /// routes: every project starts on `thread` (create, show, list all
+    /// carry `defaultView`), each of the three views round-trips through the
+    /// answer and show, a set emits groups-changed, anything else is a loud
+    /// `usage` that changes nothing, and addressing misses are 404/400.
+    #[test]
+    fn project_group_default_view_route() {
+        install_capture_sink();
+        let name = gname("default-view");
+        let g = create_group_via_route(&name);
+        let gid = g["id"].as_str().expect("id").to_string();
+        assert_eq!(g["defaultView"], "thread", "a new project starts on thread: {g}");
+        assert_eq!(ok_json(show(&name))["defaultView"], "thread");
+        let listed = ok_json(
+            dispatch("/cli/project-group/list", &get_params(&[])).expect("list claimed"),
+        );
+        let row = listed["groups"]
+            .as_array()
+            .expect("groups")
+            .iter()
+            .find(|r| r["id"] == gid.as_str())
+            .expect("listed")
+            .clone();
+        assert_eq!(row["defaultView"], "thread", "list rows carry defaultView: {row}");
+
+        for view in ["terminal", "chatter", "thread"] {
+            let mark = event_mark();
+            let set = ok_json(post_json(
+                "/cli/project-group/set-default-view",
+                serde_json::json!({ "group": name, "view": view }),
+            ));
+            // The answer is the updated group, flat, with ok:true.
+            assert_eq!(set["ok"], true, "{set}");
+            assert_eq!(set["id"], gid.as_str(), "{set}");
+            assert_eq!(set["name"], name.as_str(), "{set}");
+            assert_eq!(set["defaultView"], view, "{set}");
+            assert!(set.get("default_view").is_none(), "camelCase only: {set}");
+            assert_eq!(
+                events_for_group(mark, &gid)
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["project-group:groups-changed"],
+                "view={view}"
+            );
+            assert_eq!(ok_json(show(&gid))["defaultView"], view);
+        }
+        ok_json(post_json(
+            "/cli/project-group/set-default-view",
+            serde_json::json!({ "group": gid, "view": "terminal" }),
+        ));
+
+        // Anything but the three words is usage (400), stored view untouched.
+        for body in [
+            serde_json::json!({ "group": gid, "view": "split" }),
+            serde_json::json!({ "group": gid, "view": "Thread" }),
+            serde_json::json!({ "group": gid, "view": "" }),
+            serde_json::json!({ "group": gid, "view": null }),
+            serde_json::json!({ "group": gid }),
+            serde_json::json!({ "group": gid, "view": 3 }),
+            serde_json::json!({ "view": "thread" }),
+        ] {
+            let resp = post_json("/cli/project-group/set-default-view", body.clone());
+            assert_eq!(resp.status, "400 Bad Request", "body={body} resp={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["ok"], false, "{v}");
+            assert_eq!(v["error"]["code"], "usage", "body={body}");
+        }
+        let resp = post_json(
+            "/cli/project-group/set-default-view",
+            serde_json::json!({ "group": gid, "view": "split" }),
+        );
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(
+            v["error"]["hint"], "view must be terminal, thread or chatter, got 'split'",
+            "clear error: {v}"
+        );
+        assert_eq!(ok_json(show(&gid))["defaultView"], "terminal", "refusals change nothing");
+
+        // Unknown project: 404 not_found.
+        let unknown = format!("zzz-no-such-{}", uuid::Uuid::new_v4());
+        let resp = post_json(
+            "/cli/project-group/set-default-view",
+            serde_json::json!({ "group": unknown, "view": "thread" }),
+        );
+        assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["error"]["code"], "not_found");
     }
 
     // ── §4.5 — the PoC workspace-removal guard ────────────────────────
@@ -4471,6 +4616,84 @@ mod agent_switch_tests {
         }
     }
 
+    /// prd-projects-threads-v1 §4.2: a project's default view changes what
+    /// everyone sees, so among logins only the owner or an admin may set it
+    /// (a Member gets 403 forbidden and nothing changes). An agent follows
+    /// its 'Manage K2 projects' switch: on, it may; off, 403
+    /// agent_permission_off. The owner token and a person in a shell tab
+    /// may. The route policy floor (Admin) and the switch agree with the arm.
+    #[test]
+    fn only_admins_and_managing_agents_set_a_projects_default_view() {
+        let _home = crate::test_support::TempHome::new();
+        use k2_core::connect_users::{add_user, role_for_user, set_role, Role};
+        let member = format!("pgvm{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let admin = format!("pgva{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        add_user(&member, "password123").expect("member");
+        add_user(&admin, "password123").expect("admin");
+        set_role(&admin, Role::Admin).expect("make admin");
+        assert_eq!(role_for_user(&member), Some(Role::Member));
+        let (on_id, _, _) = insert_workspace("view-agent-on");
+        assert!(k2_core::workspace::settings::agents_can_manage_projects(&on_id), "switch defaults on");
+        let (off_id, _, _) = insert_workspace("view-agent-off");
+        k2_core::workspace::settings::set_agents_can_manage_projects(&off_id, false).expect("switch off");
+
+        let name = format!("pgs-view-{}", uuid::Uuid::new_v4());
+        let created = ok(post("/cli/project-group/create", serde_json::json!({ "name": name }), &Caller::Owner));
+        let gid = created["id"].as_str().expect("id").to_string();
+        let set = |view: &str, caller: &Caller| {
+            post(SET_DEFAULT_VIEW_PATH, serde_json::json!({ "group": gid, "view": view }), caller)
+        };
+        let stored = || project_groups::get_group_by_id(&gid).expect("group").default_view;
+
+        // A Member login: forbidden, with a clear hint; nothing changes.
+        let r = set("terminal", &Caller::Login { username: member.clone() });
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("JSON body");
+        assert_eq!(v["error"]["code"], "forbidden", "{v}");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("owner, an admin, or an agent with 'Manage K2 projects'"), "{hint}");
+        assert!(hint.contains("view a project opens its agents in"), "{hint}");
+        // A login that does not exist is not an admin either.
+        let r = set("terminal", &Caller::Login { username: format!("nobody-{}", uuid::Uuid::new_v4()) });
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        // An agent with the switch off: agent_permission_off.
+        refused_off(&set("terminal", &agent(&off_id)));
+        // App passes and bad tokens: refused.
+        for c in [Caller::WrongCredential, Caller::Invalid] {
+            assert_eq!(set("terminal", &c).status, "403 Forbidden", "{c:?}");
+        }
+        assert_eq!(stored(), "thread", "refusals change nothing");
+
+        // An admin login, an agent with the switch on, a shell tab, the owner.
+        assert_eq!(ok(set("terminal", &Caller::Login { username: admin.clone() }))["defaultView"], "terminal");
+        assert_eq!(ok(set("chatter", &agent(&on_id)))["defaultView"], "chatter");
+        assert_eq!(ok(set("terminal", &Caller::Shell { project_id: on_id.clone() }))["defaultView"], "terminal");
+        assert_eq!(ok(set("thread", &Caller::Owner))["defaultView"], "thread");
+        assert_eq!(stored(), "thread");
+
+        // A bad view from an allowed caller is still usage.
+        let r = set("split", &Caller::Login { username: admin });
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+
+        // The refusal is audited as the Member.
+        let lines = audit_lines(&name);
+        assert!(
+            lines.iter().any(|e| e["event"] == "project-set-default-view"
+                && e["user"] == Caller::Login { username: member.clone() }.audit_user().as_str()
+                && e["outcome"].as_str().is_some_and(|o| o.starts_with("refused:forbidden"))),
+            "no refused set-default-view line for the Member: {lines:?}"
+        );
+
+        // The wiring agrees: Admin floor, behind the switch, owner-or-admin.
+        assert_eq!(
+            crate::routes::route_policy::lookup(SET_DEFAULT_VIEW_PATH).and_then(|r| r.post),
+            Some(crate::routes::route_policy::Floor::Admin)
+        );
+        assert!(crate::routes::route_policy::post_allowed(SET_DEFAULT_VIEW_PATH));
+        assert!(is_gated_mutation(SET_DEFAULT_VIEW_PATH));
+        assert!(is_admin_only(SET_DEFAULT_VIEW_PATH));
+    }
+
     /// Two clients add a pane to the same dashboard at the same time:
     /// both panes land (the old whole-layout save lost one). Remove takes
     /// one pane off, the rest stay; non-members and non-HTML files are
@@ -4645,6 +4868,7 @@ mod agent_switch_tests {
             "/cli/project-group/set-poc",
             "/cli/project-group/set-icon",
             "/cli/project-group/set-color",
+            "/cli/project-group/set-default-view",
             "/cli/project-group/dashboard/save-layout",
             "/cli/project-group/dashboard/rename",
             "/cli/project-group/dashboard/create",

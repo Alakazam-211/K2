@@ -490,10 +490,10 @@ mod tests {
     #[tokio::test]
     async fn a_lane_gone_between_two_reads_refuses() {
         // Control: a lane both reads see.
-        let (n, ts) = node_src(Some(Arc::new(Vanishing(std::sync::atomic::AtomicIsize::new(2), lane(true, Isolation::JobUid)))), true, Some(1), 9, Some(true)).await;
+        let (n, ts) = node_src(Some(Arc::new(Vanishing(std::sync::atomic::AtomicIsize::new(2), lane(true, Isolation::JobUid))) as Arc<dyn super::LaneSource>), true, Some(1), 9, Some(true)).await;
         assert_eq!(n.secret_plan_refusal(&ts[1], &secret_plan(&ts[1], false), UidShare::Own), None, "control: the lane is there both times");
         // Gone by the second read.
-        let (n, ts) = node_src(Some(Arc::new(Vanishing(std::sync::atomic::AtomicIsize::new(1), lane(true, Isolation::JobUid)))), true, Some(1), 9, Some(true)).await;
+        let (n, ts) = node_src(Some(Arc::new(Vanishing(std::sync::atomic::AtomicIsize::new(1), lane(true, Isolation::JobUid))) as Arc<dyn super::LaneSource>), true, Some(1), 9, Some(true)).await;
         let r = n.secret_plan_refusal(&ts[1], &secret_plan(&ts[1], false), UidShare::Own);
         assert_eq!(r.map(|r| r.0), Some(codes::UNTRUSTED_SERVER), "the second read found no lane");
     }

@@ -27,7 +27,7 @@ import {
 } from '@/lib/ensure-cli'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { primaryScope } from '@/kessel/server-scope'
-import { SettingDropdown, SettingRow, SettingsGroup, SETTING_ROW_HINT } from '../controls/SettingControls'
+import { SaveError, SaveNote, SettingDropdown, SettingRow, SettingsGroup, SETTING_ROW_HINT, useSaveStatus } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import type { DesktopOs } from '@/lib/desktop-chrome'
@@ -106,7 +106,7 @@ export const AGENTS_MANIFEST: SettingEntry[] = [
   {
     id: 'agents.default-agent',
     section: 'agents',
-    group: 'Default agent',
+    group: 'Starting agents',
     label: 'Default agent',
     description: defaultAgentLaunchCopy(),
     keywords: ['agent', 'default', 'claude', 'codex', 'gemini', 'llm', 'llms', 'models', 'language models'],
@@ -114,7 +114,7 @@ export const AGENTS_MANIFEST: SettingEntry[] = [
   {
     id: 'agents.show-launch-bar',
     section: 'agents',
-    group: 'Default agent',
+    group: 'Starting agents',
     label: 'Show launch bar',
     description: 'The row of agent buttons under the tabs',
     keywords: ['launch', 'bar', 'strip', 'presets', 'hide', 'llm'],
@@ -162,8 +162,9 @@ export function AgentsSection(): React.JSX.Element {
       <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`}>
         <header className="min-w-0">
           <h2 className="type-title text-[var(--color-text-primary)]">Providers / Models</h2>
-          <p className="type-hint text-[var(--color-text-secondary)] mt-1">
-            Choose the agent K2 opens, the agents on the launch bar, and the agent tools on {where}.
+          <p className={SETTING_ROW_HINT}>
+            The AI agents K2 starts and the providers behind them: which agent opens by default, the
+            presets on the launch bar, and the agent tools installed on {where}.
           </p>
         </header>
         <DefaultAgentGroup />
@@ -184,7 +185,7 @@ function DefaultAgentGroup(): React.JSX.Element {
   const setShowLaunchBar = usePresetsStore((s) => s.setShowLaunchBar)
   const defaultAgent = useSettingsStore((s) => s.defaultAgent)
   const setDefaultAgent = useSettingsStore((s) => s.setDefaultAgent)
-  const [saveError, setSaveError] = useState<string | null>(null)
+  const save = useSaveStatus()
 
   const selected = matchAgentPreset(presets, defaultAgent)
   const options = presets.map((p) => ({
@@ -195,22 +196,21 @@ function DefaultAgentGroup(): React.JSX.Element {
   }))
 
   const choose = async (id: string): Promise<void> => {
-    setSaveError(null)
+    save.reset()
     await setDefaultAgent(id)
     // The store puts the old value back when the save fails.
-    if (useSettingsStore.getState().defaultAgent !== id) {
-      setSaveError('K2 couldn’t save the default agent, so it’s unchanged. Try again.')
-    }
+    if (useSettingsStore.getState().defaultAgent !== id) save.failed('K2 couldn’t reach this server')
+    else save.saved()
   }
 
   return (
-    <SettingsGroup title="Default agent" card>
+    <SettingsGroup title="Starting agents" card>
       <SettingRow
-        label="Default agent"
+        label={<span className="inline-flex items-center gap-2">Default agent<SaveNote state={save.state} /></span>}
         hint={defaultAgentLaunchCopy()}
         settingId="agents.default-agent"
         field
-        below={saveError ? <p role="alert" className="type-hint text-[var(--color-status-error-text)]">{saveError}</p> : undefined}
+        below={typeof save.state === 'object' ? <SaveError state={save.state} /> : undefined}
       >
         <SettingDropdown
           fullWidth
@@ -286,6 +286,12 @@ function PresetsGroup(): React.JSX.Element {
   const updatePreset = usePresetsStore((s) => s.updatePreset)
   const deletePreset = usePresetsStore((s) => s.deletePreset)
   const reorderPresets = usePresetsStore((s) => s.reorderPresets)
+  const showPresetsBar = usePresetsStore((s) => s.showPresetsBar)
+  const setShowLaunchBar = usePresetsStore((s) => s.setShowLaunchBar)
+  const defaultAgent = useSettingsStore((s) => s.defaultAgent)
+  const defaultId = matchAgentPreset(presets, defaultAgent)?.id ?? null
+  /** A preset just added while the launch bar is off: say where it went. */
+  const [addedOffBar, setAddedOffBar] = useState<string | null>(null)
   const [form, setForm] = useState<PresetFormState | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [savedId, setSavedId] = useState<string | null>(null)
@@ -353,8 +359,10 @@ function PresetsGroup(): React.JSX.Element {
 
   const closeForm = (savedPresetId?: string): void => {
     const wasNew = form?.editingId === null
+    const label = form?.label.trim() ?? ''
     setForm(null)
     if (savedPresetId) setSavedId(savedPresetId)
+    setAddedOffBar(wasNew && savedPresetId && !usePresetsStore.getState().showPresetsBar ? label || 'Your preset' : null)
     if (wasNew && !savedPresetId) requestAnimationFrame(() => addButtonRef.current?.focus())
   }
 
@@ -452,6 +460,7 @@ function PresetsGroup(): React.JSX.Element {
                 dropBefore={dragOverIdx === i}
                 dropAfter={dragOverIdx === presets.length && i === presets.length - 1}
                 saved={savedId === p.id}
+                isDefault={defaultId === p.id}
                 onGripMouseDown={(e) => onGripMouseDown(e, i)}
                 onToggle={() => toggle(p)}
                 onEdit={() => edit(p)}
@@ -504,6 +513,22 @@ function PresetsGroup(): React.JSX.Element {
               Dismiss
             </Button>
           </Callout>
+        </div>
+      )}
+      {addedOffBar && !showPresetsBar && (
+        <div className="px-4 py-3 flex items-center justify-between gap-6" role="status" data-testid="preset-added-launch-bar-off">
+          <div className="min-w-0">
+            <div className="type-row text-[var(--color-text-primary)]">{addedOffBar} is added</div>
+            <div className={SETTING_ROW_HINT}>It&rsquo;s in the tab + menu. Turn on Show launch bar to see it as a button.</div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Button variant="accent" onClick={() => { setShowLaunchBar(true); setAddedOffBar(null) }}>
+              Show launch bar
+            </Button>
+            <Button variant="quiet" onClick={() => setAddedOffBar(null)}>
+              Not now
+            </Button>
+          </div>
         </div>
       )}
       {loadError && !nothingYet && (
@@ -583,6 +608,7 @@ function PresetRow({
   dropBefore,
   dropAfter,
   saved,
+  isDefault,
   onGripMouseDown,
   onToggle,
   onEdit,
@@ -596,6 +622,8 @@ function PresetRow({
   dropBefore: boolean
   dropAfter: boolean
   saved: boolean
+  /** The preset the default agent uses. */
+  isDefault: boolean
   onGripMouseDown: (e: React.MouseEvent) => void
   onToggle: () => void
   onEdit: () => void
@@ -626,12 +654,9 @@ function PresetRow({
           <span className={`type-name truncate ${on ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}>
             {preset.label}
           </span>
+          {isDefault && <Tag tone="neutral" title="The default agent uses this preset">Default</Tag>}
           {!preset.isBuiltIn && <Tag tone="muted">Custom</Tag>}
-          {saved && (
-            <span role="status" className="type-hint text-[var(--color-status-ok-soft)]">
-              Saved
-            </span>
-          )}
+          <SaveNote state={saved ? 'saved' : 'idle'} />
         </div>
         <code className="block type-hint font-mono text-[var(--color-text-secondary)] truncate mt-0.5" title={preset.command}>
           {preset.command}
@@ -1098,7 +1123,7 @@ function ToolRow({
   return (
     <SettingRow
       label={
-        <span className="flex items-center gap-2 min-w-0">
+        <span className="flex items-center gap-3 min-w-0">
           <span className="w-5 flex items-center justify-center flex-shrink-0" aria-hidden="true">
             <AgentIcon agent={tool.command} size={16} />
           </span>
@@ -1106,14 +1131,14 @@ function ToolRow({
           {isInstalled && <Tag tone="ok">Installed</Tag>}
         </span>
       }
-      hint={<span className="block pl-7">{statusLine}</span>}
+      hint={<span className="block pl-8">{statusLine}</span>}
       settingId={`agents.cli-${tool.command}`}
       testId={`tool-row-${tool.command}`}
       below={
         open ? (
-          <div className="pl-7 space-y-3" data-testid={`tool-help-${tool.command}`}>
+          <div className="pl-8 space-y-3" data-testid={`tool-help-${tool.command}`}>
             <div className="flex items-start gap-2">
-              <code className="flex-1 min-w-0 break-all select-text type-hint font-mono px-2 py-1.5 rounded-[var(--radius-field)] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]">
+              <code data-k2-chamfer="control" className="flex-1 min-w-0 break-all select-text type-hint font-mono px-2 py-1.5 rounded-[var(--radius-field)] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]">
                 {tool.installCommand}
               </code>
               <Button variant="quiet" className="flex-shrink-0" onClick={copy}>

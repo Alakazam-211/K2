@@ -5,6 +5,7 @@ import { AgentsSection, injectFlowSummary } from '@/components/Settings/sections
 import { CLI_INSTALL_COMMANDS, useCliInstallStore } from '@/lib/ensure-cli'
 import * as daemonCli from '@/lib/daemon-cli'
 import { usePresetsStore, type AgentPreset } from '@/stores/presets'
+import { useSettingsStore } from '@/stores/settings'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -21,6 +22,7 @@ const realReset = usePresetsStore.getState().resetPresetsToBuiltIns
 const realDelete = usePresetsStore.getState().deletePreset
 const realUpdate = usePresetsStore.getState().updatePreset
 const realConfirm = useConfirmDialogStore.getState().confirm
+const realSettings = { defaultAgent: useSettingsStore.getState().defaultAgent, setDefaultAgent: useSettingsStore.getState().setDefaultAgent }
 
 const preset = (id: string, label: string, command: string, extra: Partial<AgentPreset> = {}): AgentPreset => ({
   id, label, command, icon: '', enabled: 1, sortOrder: 0, isBuiltIn: 1, createdAt: 1, inject_flow: null, ...extra,
@@ -64,14 +66,17 @@ afterEach(() => {
     fetchPresets: realFetch, resetPresetsToBuiltIns: realReset, deletePreset: realDelete, updatePreset: realUpdate,
   })
   useConfirmDialogStore.setState({ confirm: realConfirm })
+  useSettingsStore.setState(realSettings)
 })
 
 describe('Settings → Language Models → Providers / Models page', () => {
-  it('is one page: a header, then Default agent, Launch presets and Agent tools card groups', async () => {
+  it('is one page: a header, then Starting agents, Launch presets and Agent tools card groups', async () => {
     render(<AgentsSection />)
     expect(screen.getByRole('heading', { level: 2, name: 'Providers / Models' })).toBeTruthy()
     const headings = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)
-    expect(headings).toEqual(['Default agent', 'Launch presets', 'Agent tools on this computer'])
+    expect(headings).toEqual(['Starting agents', 'Launch presets', 'Agent tools on this computer'])
+    // The header bridges the nav name to what the page holds.
+    expect(screen.getByRole('heading', { level: 2 }).nextElementSibling?.textContent).toContain('the providers behind them')
     for (const id of ['agents.default-agent', 'agents.show-launch-bar', 'agents.agent-presets', 'agents.add-preset', 'agents.reset-built-ins']) {
       expect(document.querySelector(`[data-settings-id="${id}"]`), id).not.toBeNull()
     }
@@ -160,6 +165,44 @@ describe('Settings → Language Models → Providers / Models page', () => {
     expect(add.disabled).toBe(false)
     fireEvent.keyDown(within(form).getByLabelText('Name'), { key: 'Escape' })
     expect(screen.queryByTestId('preset-form')).toBeNull()
+  })
+
+  it('marks the preset the default agent uses, and confirms a new default with Saved', async () => {
+    useSettingsStore.setState({ defaultAgent: 'b1', setDefaultAgent: async (id: string) => { useSettingsStore.setState({ defaultAgent: id }) } } as never)
+    render(<AgentsSection />)
+    expect(within(screen.getByTestId('preset-row-b1')).getByText('Default')).toBeTruthy()
+    expect(within(screen.getByTestId('preset-row-b2')).queryByText('Default')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Default agent' }))
+    fireEvent.click(within(screen.getByTestId('setting-dropdown-menu')).getByRole('button', { name: /Codex/ }))
+    expect(await screen.findByText('Saved')).toBeTruthy()
+    expect(within(screen.getByTestId('preset-row-b2')).getByText('Default')).toBeTruthy()
+  })
+
+  it('says a failed default agent save out loud', async () => {
+    useSettingsStore.setState({ defaultAgent: 'b1', setDefaultAgent: async () => {} } as never)
+    render(<AgentsSection />)
+    fireEvent.click(screen.getByRole('button', { name: 'Default agent' }))
+    fireEvent.click(within(screen.getByTestId('setting-dropdown-menu')).getByRole('button', { name: /Codex/ }))
+    expect((await screen.findByRole('alert')).textContent).toContain('Couldn’t save')
+  })
+
+  it('a preset added while the launch bar is off says where it is, with the switch one click away', async () => {
+    const created = preset('n1', 'Aider', 'aider', { isBuiltIn: 0 })
+    setPresets(SAMPLE, { showPresetsBar: false, createPreset: vi.fn(async () => created) } as never)
+    const setShowLaunchBar = vi.fn((shown: boolean) => usePresetsStore.setState({ showPresetsBar: shown }))
+    usePresetsStore.setState({ setShowLaunchBar } as never)
+    render(<AgentsSection />)
+    fireEvent.click(screen.getByRole('button', { name: 'Add preset' }))
+    const form = screen.getByTestId('preset-form')
+    fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'Aider' } })
+    fireEvent.change(within(form).getByLabelText('Command'), { target: { value: 'aider' } })
+    fireEvent.click(within(form).getByRole('button', { name: 'Add preset' }))
+    const note = await screen.findByTestId('preset-added-launch-bar-off')
+    expect(note.textContent).toContain('Aider is added')
+    expect(note.textContent).toContain('It’s in the tab + menu. Turn on Show launch bar to see it as a button.')
+    fireEvent.click(within(note).getByRole('button', { name: 'Show launch bar' }))
+    expect(setShowLaunchBar).toHaveBeenCalledWith(true)
+    expect(screen.queryByTestId('preset-added-launch-bar-off')).toBeNull()
   })
 
   it('sums up the message keys in one line', () => {

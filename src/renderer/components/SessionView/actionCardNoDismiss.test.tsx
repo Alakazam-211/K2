@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
-// C13 (lane B): `thread/void` refuses every caller on a card with
-// `choice.action` (403 `action_card_person_only`), the owner included. So no
-// Thread surface may draw a dismiss (X / void) on an action card: keep-as-mine
-// and permission cards close only through their own answers (Deny, "Leave it
-// as X's", Close). Every Thread surface draws cards through the shared
-// ThreadBubble: the desktop Thread (ThreadItemRow), Zen's conversation and
-// the ticket / project chat (ThreadChat). A secret card keeps its dismiss.
+// C13 (lane B), as changed in 0.46.11 (prd-popup-close-and-card-dismiss-v1,
+// Rosson: cards need a dismiss "because sometimes the question is no longer
+// relevant"): a person who may answer an action card may now dismiss it
+// (`thread/void`, the daemon checks the answer gate; nothing is applied or
+// denied). It is never a one-tap X: a Dismiss link opens a confirm line
+// first, and a viewer who only waits on a permission card gets none. Every
+// Thread surface draws cards through the shared ThreadBubble: the desktop
+// Thread (ThreadItemRow), Zen's conversation and the ticket / project chat
+// (ThreadChat). A secret card keeps its one-tap dismiss.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ThreadItemRow } from './ThreadOverlayPane'
@@ -45,11 +47,13 @@ const ACTION_CARDS: Array<[string, Record<string, unknown>]> = [
 ]
 
 /** Anything that reads as a dismiss: a void/dismiss test id, an X glyph, or
- *  a dismiss/void/remove label. */
+ *  a dismiss/void/remove label. The two-step Dismiss link (0.46.11) is
+ *  reported apart, by `twoStep`. */
 function dismissControls(root: HTMLElement): string[] {
   const out: string[] = []
   for (const el of Array.from(root.querySelectorAll<HTMLElement>('button, [role="button"], [data-testid]'))) {
     const id = el.getAttribute('data-testid') ?? ''
+    if (id === 'thread-card-dismiss') continue
     const label = `${el.getAttribute('aria-label') ?? ''} ${el.getAttribute('title') ?? ''}`
     const text = (el.textContent ?? '').trim()
     if (/void|dismiss/i.test(id) || /dismiss|void|remove card/i.test(label) || /^[×✕✖xX]$/.test(text)) out.push(id || label || text)
@@ -57,19 +61,32 @@ function dismissControls(root: HTMLElement): string[] {
   return out
 }
 
-describe('no dismiss on an action card, on any Thread surface (C13)', () => {
+const twoStep = (root: HTMLElement): number => root.querySelectorAll('[data-testid="thread-card-dismiss"]').length
+
+/** Cards whose viewer may answer them: they get the two-step Dismiss. The
+ *  waiting viewer (no answer) gets none. */
+const DISMISSABLE = new Set(['keep-as-mine', 'permission, approver', 'permission, already on', 'permission fallback (no view)'])
+
+describe('an action card is never closed in one tap, on any Thread surface (C13, 0.46.11)', () => {
   for (const [name, doc] of ACTION_CARDS) {
-    it(`${name}: the desktop Thread row and the shared bubble draw no X`, () => {
+    it(`${name}: no X; a Dismiss only for a viewer who may answer, and only behind its confirm`, () => {
       const onVoid = vi.fn()
       const item = itemOf(doc)
       expect(item.doc.kind).toBe('choice')
       const a = render(<ThreadItemRow item={item} nowSec={1761062000} onAnswer={() => undefined} onVoid={onVoid} />)
       expect([name, dismissControls(a.container)]).toEqual([name, []])
+      if (DISMISSABLE.has(name)) expect([name, twoStep(a.container)]).toEqual([name, 1])
+      if (name === 'permission, waiting') expect([name, twoStep(a.container)]).toEqual([name, 0])
       cleanup()
       const b = render(
         <ThreadBubble item={item} mine={false} author="billing" timeLabel="now" viewer={null} nowSec={1761062000} onAnswer={() => undefined} onVoid={onVoid} />,
       )
       expect([name, dismissControls(b.container)]).toEqual([name, []])
+      if (DISMISSABLE.has(name)) {
+        // Pressing Dismiss only opens the confirm line: nothing is sent yet.
+        fireEvent.click(screen.getByTestId('thread-card-dismiss'))
+        expect(screen.getByTestId('thread-card-dismiss-form')).toBeTruthy()
+      }
       expect(onVoid).not.toHaveBeenCalled()
     })
   }

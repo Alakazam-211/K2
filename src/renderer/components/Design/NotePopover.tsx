@@ -142,7 +142,7 @@ export function NotePopover({
     >
       <div
         data-design-tile=""
-        className="flex flex-col border border-[var(--color-border)] rounded-[var(--radius-field)] bg-[var(--color-bg-elevated,var(--color-bg))]"
+        className="flex flex-col border border-[var(--color-border)] rounded-[var(--radius-field-multiline)] bg-[var(--color-bg-elevated,var(--color-bg))]"
       >
         <div className="flex items-center gap-1.5 px-3 py-1.5" data-testid="design-new-note-header">
           <NavSectionLabel>New Note</NavSectionLabel>

@@ -61915,8 +61915,10 @@ HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
 
   agents create                   → skills create <name>
   agents running                  → workspace list --running
+  agents work <n>                 → inbox  (the route answers 410 and points here)
 
   work create --title --body      → inbox compose --title "..." --body "..."
+  work inbox                      → inbox  (the route answers 410 and points here)
   work move --from <a> --to <b>   → inbox move <id> <folder>
   work send <ws> --title --body   → msg <ws> --inbox-wake|--inbox-silent --title "..." --body "..."
 

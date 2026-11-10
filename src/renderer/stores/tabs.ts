@@ -1110,12 +1110,15 @@ export interface TabsState {
   extraGroups: Array<{ tabs: Tab[], activeTabId: string | null }>
   activeGroupIndex: number  // which group receives new tabs by default
 
-  /** Add a column (max 3). `fromGroup` is the column whose tab bar holds the
-   *  split button (default: the rightmost). On that column's pinned Chat/Inbox
-   *  tab the new column starts EMPTY; on any other tab that tab MOVES into
-   *  the new column and the source column shows its pinned tab. Without a
-   *  pinned tab and only one tab to move, the new column gets a fresh
-   *  terminal (the pre-0.46 behaviour). */
+  /** Add a column (max 3). The same rule for every new column (2nd, 3rd):
+   *  the source is `fromGroup`, else the focused column (`activeGroupIndex`).
+   *  If its selected tab is a regular tab and the column keeps something
+   *  (its pinned Chat/Inbox tab or another tab), that tab MOVES into the new
+   *  column and the source shows its pinned tab (else its neighbour).
+   *  Otherwise (on the pinned tab, an empty column, or the column's only
+   *  tab) the new column starts EMPTY. A split never makes a terminal
+   *  (Rosson 2026-11-09: the third column opened with a fresh terminal).
+   *  `cwd` is unused; kept for the callers. */
   splitTerminalArea: (cwd: string, fromGroup?: number) => void
   unsplitTerminalArea: () => void              // remove rightmost column
   setActiveGroup: (index: number) => void
@@ -5611,36 +5614,39 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
 
     // ── Tab Groups ──────────────────────────────────────────────────────
 
-    splitTerminalArea: (cwd: string, fromGroup?: number) => {
+    splitTerminalArea: (_cwd: string, fromGroup?: number) => {
       const state = get()
-      if (state.splitCount >= 3) return
+      if (state.splitCount >= 3) return  // MAX_COLUMNS (lib/column-sizes)
 
       const newGroup = state.splitCount
-      const sourceGroup = fromGroup !== undefined && fromGroup >= 0 && fromGroup < state.splitCount
+      const inRange = (g: number | undefined): g is number =>
+        g !== undefined && g >= 0 && g < state.splitCount
+      // The split button sits on the rightmost bar and keeps the focus where
+      // it was (TabBar), so the focused column is the one the user picked a
+      // tab in.
+      const sourceGroup = inRange(fromGroup)
         ? fromGroup
-        : state.splitCount - 1
+        : inRange(state.activeGroupIndex) ? state.activeGroupIndex : state.splitCount - 1
       const source = state.getGroupTabs(sourceGroup)
       const current = source.tabs.find((t) => t.id === source.activeTabId) ?? null
       const pinned = pinnedTabOf(source.tabs)
+      // The pinned tab (Chat / Inbox, or the fixed pinned Design / Mobile tab
+      // next to them) never leaves its column; a column's only tab stays too
+      // (column 0 can't be left empty, and moving a lone tab right would just
+      // open the empty column in the middle).
+      const toMove = current && !current.isSystemAgent && !isPinnedFeatureTab(current)
+        && (pinned !== null || source.tabs.length > 1)
+        ? current
+        : null
 
-      if (current?.isSystemAgent || isPinnedFeatureTab(current)) {
-        // Case 1 — on the pinned tab (or the fixed pinned Design / Mobile
-        // tab, which stays next to Chat and Inbox): the new column starts empty (its
-        // empty state tells the user to drag a tab there).
-        set({
-          splitCount: state.splitCount + 1,
-          extraGroups: [...state.extraGroups, { tabs: [], activeTabId: null }],
-          activeGroupIndex: newGroup,
-        })
-      } else if (current && (pinned || source.tabs.length > 1)) {
-        // Case 2 — move (not copy) the tab being viewed into the new column;
-        // the source column shows its pinned tab. Same move path as a tab
-        // drag, so the PTY is untouched.
-        set({
-          splitCount: state.splitCount + 1,
-          extraGroups: [...state.extraGroups, { tabs: [], activeTabId: null }],
-        })
-        get().moveTabToGroup(sourceGroup, newGroup, current.id)
+      set({
+        splitCount: state.splitCount + 1,
+        extraGroups: [...state.extraGroups, { tabs: [], activeTabId: null }],
+      })
+      if (toMove) {
+        // Move (not copy), the same path as a tab drag, so the PTY is
+        // untouched. The source column shows its pinned tab.
+        get().moveTabToGroup(sourceGroup, newGroup, toMove.id)
         if (pinned) {
           if (sourceGroup === 0) {
             persistGroup0Selection(get(), pinned.id)
@@ -5654,26 +5660,10 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
             })
           }
         }
-        set({ activeGroupIndex: newGroup })
-      } else {
-        // No pinned tab and nothing to spare in the source column: a fresh
-        // terminal in the new column (never leave the source empty).
-        tabCounter++
-        const tabId = crypto.randomUUID()
-        const pgId = crypto.randomUUID()
-        const pg = makeTerminalPaneGroup(pgId, cwd)
-        const tab: Tab = {
-          id: tabId,
-          title: `Terminal ${tabCounter}`,
-          mosaicTree: pgId,
-          paneGroups: new Map([[pgId, pg]])
-        }
-        set({
-          splitCount: state.splitCount + 1,
-          extraGroups: [...state.extraGroups, { tabs: [tab], activeTabId: tabId }],
-          activeGroupIndex: newGroup  // focus the new group
-        })
       }
+      // Otherwise the new column starts empty: its empty state says to drag
+      // a tab there or press +.
+      set({ activeGroupIndex: newGroup })
       // 0.40.48: a split must HOLD against a remote host — save immediately
       // instead of riding the 1s debounce, so a competing TabOrderChanged
       // can't refetch the pre-split layout while the save is still queued

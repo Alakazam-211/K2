@@ -190,8 +190,10 @@ vi.stubGlobal('localStorage', {
 const CWD = '/ws/proj'
 
 /** Seed the daemon layout store with a plain 1-tab v2 layout (the shape
- *  serializeCurrentLayout writes), optionally with a split column. */
-function seedLayout(key: string, opts?: { extraPgId?: string }): void {
+ *  serializeCurrentLayout writes), optionally with a split column, or with
+ *  a second column-0 tab (`tab-two`, the one a split moves: a split never
+ *  makes a terminal). */
+function seedLayout(key: string, opts?: { extraPgId?: string; secondTab?: boolean }): void {
   const pg = 'pg-main'
   const layout: Record<string, unknown> = {
     version: 2,
@@ -209,6 +211,20 @@ function seedLayout(key: string, opts?: { extraPgId?: string }): void {
         },
       },
     ],
+  }
+  if (opts?.secondTab) {
+    (layout.tabs as unknown[]).push({
+      id: 'tab-two',
+      title: 'Terminal 2',
+      mosaicTree: 'pg-two',
+      paneGroups: {
+        'pg-two': {
+          id: 'pg-two',
+          items: [{ id: 'item-two', type: 'terminal', paneGroupId: 'pg-two' }],
+          activeItemIndex: 0,
+        },
+      },
+    })
   }
   if (opts?.extraPgId) {
     layout.extraGroups = [
@@ -299,8 +315,10 @@ describe('split-into-columns lifecycle', () => {
   }
 
   it('split survives its own save broadcast racing the save response (the reported collapse)', async () => {
-    seedLayout(key)
+    seedLayout(key, { secondTab: true })
     const { useTabsStore } = await loadWorkspace()
+    // The split moves the selected tab into the new column.
+    useTabsStore.getState().setActiveTabInGroup(0, 'tab-two')
 
     // A PTY-title flap fired the debounced autosave just before the
     // click: the PRE-SPLIT layout's save POST is IN FLIGHT (response
@@ -320,6 +338,8 @@ describe('split-into-columns lifecycle', () => {
     expect(afterClick.splitCount).toBe(2)
     const splitPgId = [...afterClick.extraGroups[0].tabs[0].paneGroups.keys()][0]
     const splitTabId = afterClick.extraGroups[0].tabs[0].id
+    expect(splitTabId).toBe('tab-two')
+    expect(splitPgId).toBe('pg-two')
     const mainTabId = afterClick.tabs[0].id
 
     // The echo broadcast was already delivered synchronously inside the
@@ -331,7 +351,7 @@ describe('split-into-columns lifecycle', () => {
     daemon.deferSaveResponse = false
     await flush()
 
-    // The split terminal's spawn registered on the daemon → push.
+    // The moved terminal's session (re)registers on the daemon → push.
     pushSessionAdded(splitPgId, 'sess-split')
     await flush()
 
@@ -356,11 +376,13 @@ describe('split-into-columns lifecycle', () => {
   }, 20000)
 
   it('session_added for the split terminal is deduped against extraGroups', async () => {
-    seedLayout(key)
+    seedLayout(key, { secondTab: true })
     const { useTabsStore } = await loadWorkspace()
 
+    useTabsStore.getState().setActiveTabInGroup(0, 'tab-two')
     useTabsStore.getState().splitTerminalArea(CWD)
     const splitPgId = [...useTabsStore.getState().extraGroups[0].tabs[0].paneGroups.keys()][0]
+    expect(splitPgId).toBe('pg-two')
 
     pushSessionAdded(splitPgId, 'sess-split')
     await flush()

@@ -499,6 +499,33 @@ describe('tab bar plus menu', () => {
     expect(add.compareDocumentPosition(split) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
   })
 
+  it('the split button keeps the focused column and moves its selected tab (the 3rd column too)', () => {
+    // Two columns, focus on column 0 where the user picked a regular tab.
+    seedTabs(0, 2)
+    seedTabs(1, 1)
+    const col0 = useTabsStore.getState().tabs
+    const picked = col0[1]
+    const col1Only = useTabsStore.getState().extraGroups[0].tabs[0]
+    useTabsStore.setState({ activeTabId: picked.id, activeGroupIndex: 0 })
+    const columnMouseDown = vi.fn()
+    renderInPrimaryRoom(
+      // The column's own mousedown focuses it (TerminalArea TabGroupColumn).
+      <div onMouseDown={columnMouseDown}>
+        <TabBar cwd="/ws" groupIndex={1} />
+      </div>,
+    )
+    const split = screen.getByTitle('Split into columns')
+    fireEvent.mouseDown(split)
+    expect(columnMouseDown).not.toHaveBeenCalled()
+    fireEvent.click(split)
+    const s = useTabsStore.getState()
+    expect(s.splitCount).toBe(3)
+    expect(s.tabs.map((t) => t.id)).toEqual([col0[0].id])
+    expect(s.extraGroups[0].tabs.map((t) => t.id)).toEqual([col1Only.id])
+    expect(s.extraGroups[1].tabs.map((t) => t.id)).toEqual([picked.id])
+    expect(s.activeGroupIndex).toBe(2)
+  })
+
   it('Cmd+T and Cmd+Shift+T stay direct and do not open the menu', () => {
     usePresetsStore.setState({
       presets: [preset({ id: 'claude', label: 'Claude', command: 'claude' })],

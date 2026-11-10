@@ -4,10 +4,14 @@
 //      new column, which gets focus, and the source column shows the
 //      pinned tab.
 //   Fallbacks: no pinned tab → still move the tab when the source keeps
-//   another one; the source's only tab → a fresh terminal (old behaviour).
+//   another one; the source's only tab stays and the new column starts
+//   empty. A split never makes a terminal (Rosson 2026-11-09).
+//   Every new column (2nd, 3rd) follows the same rule, from the FOCUSED
+//   column (the split button keeps the focus where it was).
 //   An empty column must survive serialize → restore and the 409 merge.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { invoke } from '@tauri-apps/api/core'
 import { useTabsStore, type Tab, type SerializedLayout } from './tabs'
 import { mergeSerializedLayouts, layoutColumns } from '@/lib/layout-merge'
 
@@ -74,6 +78,29 @@ function seed(
 
 function ids(tabs: Tab[]): string[] {
   return tabs.map((t) => t.id)
+}
+
+/** Every pane-group id and terminal item across all columns: a split that
+ *  minted a terminal shows up as a new id here. */
+function liveTerminals(): { paneGroups: string[]; terminals: string[] } {
+  const s = useTabsStore.getState()
+  const all = [...s.tabs, ...s.extraGroups.flatMap((g) => g.tabs)]
+  const paneGroups = all.flatMap((t) => [...t.paneGroups.keys()]).sort()
+  const terminals = all
+    .flatMap((t) => [...t.paneGroups.values()].flatMap((pg) => pg.items))
+    .filter((i) => i.type === 'terminal')
+    .map((i) => i.id)
+    .sort()
+  return { paneGroups, terminals }
+}
+
+/** Split, and fail if it made a terminal or called the backend (a spawn). */
+function splitNoSpawn(fromGroup?: number): void {
+  const before = liveTerminals()
+  vi.mocked(invoke).mockClear()
+  useTabsStore.getState().splitTerminalArea('/ws', fromGroup)
+  expect(liveTerminals()).toEqual(before)
+  expect(vi.mocked(invoke)).not.toHaveBeenCalled()
 }
 
 describe('split button on the pinned tab (case 1)', () => {
@@ -181,17 +208,13 @@ describe('split button fallbacks (no pinned tab)', () => {
     expect(s.activeGroupIndex).toBe(1)
   })
 
-  it('the column’s only tab stays; the new column gets a fresh terminal', () => {
+  it('the column’s only tab stays; the new column starts empty (no fresh terminal)', () => {
     seed([termTab('t1')], 't1')
-    useTabsStore.getState().splitTerminalArea('/ws', 0)
+    splitNoSpawn(0)
     const s = useTabsStore.getState()
     expect(ids(s.tabs)).toEqual(['t1'])
-    expect(s.extraGroups).toHaveLength(1)
-    expect(s.extraGroups[0].tabs).toHaveLength(1)
-    const fresh = s.extraGroups[0].tabs[0]
-    expect(fresh.id).not.toBe('t1')
-    expect([...fresh.paneGroups.values()][0].items[0].type).toBe('terminal')
-    expect(s.extraGroups[0].activeTabId).toBe(fresh.id)
+    expect(s.activeTabId).toBe('t1')
+    expect(s.extraGroups).toEqual([{ tabs: [], activeTabId: null }])
     expect(s.activeGroupIndex).toBe(1)
   })
 
@@ -209,14 +232,14 @@ describe('split button fallbacks (no pinned tab)', () => {
     expect(s.activeGroupIndex).toBe(2)
   })
 
-  it('3 columns: splitting from an empty rightmost column adds a fresh terminal', () => {
+  it('3 columns: splitting from an empty rightmost column adds an empty column (no terminal)', () => {
     seed([systemTab('chat', 'chat'), termTab('t1')], 'chat', [{ tabs: [], activeTabId: null }])
-    useTabsStore.getState().splitTerminalArea('/ws', 1)
+    splitNoSpawn(1)
     const s = useTabsStore.getState()
     expect(s.splitCount).toBe(3)
-    expect(s.extraGroups[0]).toEqual({ tabs: [], activeTabId: null })
-    expect(s.extraGroups[1].tabs).toHaveLength(1)
+    expect(s.extraGroups).toEqual([{ tabs: [], activeTabId: null }, { tabs: [], activeTabId: null }])
     expect(ids(s.tabs)).toEqual(['chat', 't1'])
+    expect(s.activeGroupIndex).toBe(2)
   })
 
   it('no split past 3 columns', () => {
@@ -230,13 +253,105 @@ describe('split button fallbacks (no pinned tab)', () => {
     expect(s.extraGroups.map((g) => ids(g.tabs))).toEqual([['a'], ['b']])
   })
 
-  it('without fromGroup it splits from the rightmost column', () => {
+  it('without fromGroup it splits from the focused column', () => {
     seed([termTab('t1')], 't1', [{ tabs: [termTab('a'), termTab('b')], activeTabId: 'b' }])
+    useTabsStore.setState({ activeGroupIndex: 1 })
     useTabsStore.getState().splitTerminalArea('/ws')
     const s = useTabsStore.getState()
     expect(ids(s.tabs)).toEqual(['t1'])
     expect(ids(s.extraGroups[0].tabs)).toEqual(['a'])
     expect(ids(s.extraGroups[1].tabs)).toEqual(['b'])
+  })
+})
+
+describe('every new column follows the 2nd column’s rule (Rosson 2026-11-09)', () => {
+  // The reported path: Chat pinned in column 0, the 2nd column opened from a
+  // regular tab, then the 3rd column opened with a fresh terminal.
+  beforeEach(() => {
+    seed([systemTab('chat', 'chat'), systemTab('inbox', 'inbox'), termTab('t1'), termTab('t2'), termTab('t3')], 't3')
+    splitNoSpawn()
+    const s = useTabsStore.getState()
+    expect(ids(s.tabs)).toEqual(['chat', 'inbox', 't1', 't2'])
+    expect(ids(s.extraGroups[0].tabs)).toEqual(['t3'])
+    expect(s.activeGroupIndex).toBe(1)
+  })
+
+  it('3rd column: the regular tab selected in the focused column moves there; that column shows Chat', () => {
+    const before = useTabsStore.getState().tabs.find((t) => t.id === 't1')
+    if (!before) throw new Error('seed lost t1')
+    useTabsStore.getState().setActiveTabInGroup(0, 't1')
+    useTabsStore.getState().setActiveGroup(0)
+    splitNoSpawn()
+    const s = useTabsStore.getState()
+    expect(s.splitCount).toBe(3)
+    expect(ids(s.tabs)).toEqual(['chat', 'inbox', 't2'])
+    expect(s.activeTabId).toBe('chat')
+    expect(ids(s.extraGroups[0].tabs)).toEqual(['t3'])
+    expect(s.extraGroups[0].activeTabId).toBe('t3')
+    expect(ids(s.extraGroups[1].tabs)).toEqual(['t1'])
+    expect(s.extraGroups[1].activeTabId).toBe('t1')
+    expect(s.extraGroups[1].tabs[0]).toBe(before)
+    expect(s.activeGroupIndex).toBe(2)
+  })
+
+  it('3rd column: the same from the focused 2nd column when it has a tab to spare', () => {
+    useTabsStore.getState().moveTabToGroup(0, 1, 't2')  // column 1 = [t3, t2], t2 selected
+    splitNoSpawn()
+    const s = useTabsStore.getState()
+    expect(ids(s.extraGroups[0].tabs)).toEqual(['t3'])
+    expect(s.extraGroups[0].activeTabId).toBe('t3')
+    expect(ids(s.extraGroups[1].tabs)).toEqual(['t2'])
+    expect(s.activeGroupIndex).toBe(2)
+  })
+
+  it('3rd column with Chat selected in the focused column: an empty column, like the 2nd', () => {
+    useTabsStore.getState().setActiveGroup(0)
+    splitNoSpawn()
+    const s = useTabsStore.getState()
+    expect(s.splitCount).toBe(3)
+    expect(ids(s.tabs)).toEqual(['chat', 'inbox', 't1', 't2'])
+    expect(s.activeTabId).toBe('chat')
+    expect(ids(s.extraGroups[0].tabs)).toEqual(['t3'])
+    expect(s.extraGroups[1]).toEqual({ tabs: [], activeTabId: null })
+    expect(s.activeGroupIndex).toBe(2)
+  })
+
+  it('3rd column from the 2nd column’s only tab: it stays, the new column is empty', () => {
+    splitNoSpawn()
+    const s = useTabsStore.getState()
+    expect(ids(s.extraGroups[0].tabs)).toEqual(['t3'])
+    expect(s.extraGroups[1]).toEqual({ tabs: [], activeTabId: null })
+    expect(s.activeGroupIndex).toBe(2)
+  })
+
+  it('3rd column from an empty 2nd column (opened on Chat): an empty column', () => {
+    seed([systemTab('chat', 'chat'), termTab('t1')], 'chat')
+    splitNoSpawn()
+    expect(useTabsStore.getState().extraGroups).toEqual([{ tabs: [], activeTabId: null }])
+    splitNoSpawn()
+    const s = useTabsStore.getState()
+    expect(s.splitCount).toBe(3)
+    expect(s.extraGroups).toEqual([{ tabs: [], activeTabId: null }, { tabs: [], activeTabId: null }])
+    expect(ids(s.tabs)).toEqual(['chat', 't1'])
+  })
+
+  it('the 3-column layout round-trips through the remembered layout', () => {
+    useTabsStore.getState().setActiveTabInGroup(0, 't1')
+    useTabsStore.getState().setActiveGroup(0)
+    splitNoSpawn()
+    const layout = useTabsStore.getState().serializeCurrentLayout()
+    expect(layout.splitCount).toBe(3)
+    expect(layoutColumns(layout).map((c) => c.map((t) => t.id))).toEqual([['chat', 'inbox', 't2'], ['t3'], ['t1']])
+
+    seed([], null)
+    useTabsStore.getState().restoreLayout(JSON.parse(JSON.stringify(layout)) as SerializedLayout, '/ws')
+    const s = useTabsStore.getState()
+    expect(s.splitCount).toBe(3)
+    expect(ids(s.tabs)).toEqual(['chat', 'inbox', 't2'])
+    expect(s.extraGroups.map((g) => ids(g.tabs))).toEqual([['t3'], ['t1']])
+    // The moved tab keeps its pane group (its PTY re-attaches, none minted).
+    expect([...s.extraGroups[1].tabs[0].paneGroups.keys()]).toEqual(['pg-t1'])
+    expect(JSON.stringify(s.serializeCurrentLayout())).toBe(JSON.stringify(layout))
   })
 })
 

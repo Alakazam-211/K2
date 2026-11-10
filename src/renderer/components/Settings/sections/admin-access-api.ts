@@ -63,11 +63,14 @@ export async function answeredTemporary(res: Response, fallback: boolean): Promi
   return fallback
 }
 
-/** The daemon's `{error}` (or the raw body) for a failed answer. */
+/** Why a write failed, for a person: the daemon's `message` when it sends
+ *  one (a code like `role_change_not_allowed` comes with a sentence), else
+ *  its `error`, else the raw body. */
 export async function errText(res: Response): Promise<string> {
   const text = await res.text()
   try {
     const parsed = JSON.parse(text)
+    if (parsed && typeof parsed.message === 'string' && parsed.message.trim()) return parsed.message
     if (parsed && typeof parsed.error === 'string') return parsed.error
   } catch {
     /* raw text */

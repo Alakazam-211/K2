@@ -76,7 +76,7 @@ beforeEach(() => {
       if (path === '/cli/users/policy') return json(POLICY)
       if (path === '/cli/tunnel/config') return json({ publicUrl: 'https://alex.k2.dev' })
       if (path === '/cli/users/set-role') {
-        if (cli.roleError) return json({ error: cli.roleError }, 403)
+        if (cli.roleError) return json({ error: 'role_change_not_allowed', message: cli.roleError }, 403)
         const row = (cli.users ?? []).find((u) => u.username === body?.username)
         if (!row) throw new Error('no such user')
         row.role = body?.role
@@ -186,12 +186,12 @@ describe('Admin Access: changes', () => {
   })
 
   it('a refused role change puts the role back and says why', async () => {
-    cli.roleError = 'role_change_not_allowed'
+    cli.roleError = "An Admin moves people only between Member and Voice & Chat only. Other role changes are the Owner's."
     render(<AdminAccessPanel />)
     await screen.findByTestId('person-row-jordan')
     act(() => void fireEvent.click(screen.getByRole('button', { name: 'Role for jordan' })))
     act(() => void fireEvent.click(screen.getByTestId('setting-dropdown-menu').querySelector('button[data-value="admin"]') as HTMLElement))
-    await waitFor(() => expect(screen.getByTestId('person-row-jordan').textContent).toContain('Couldn’t save: role_change_not_allowed. Nothing changed; try again.'))
+    await waitFor(() => expect(screen.getByTestId('person-row-jordan').textContent).toContain("Couldn’t save: An Admin moves people only between Member and Voice & Chat only. Other role changes are the Owner's. Nothing changed; try again."))
     expect(screen.getByRole('button', { name: 'Role for jordan' }).textContent).toContain('Member')
   })
 

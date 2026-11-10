@@ -297,6 +297,7 @@ export function DashboardAgentTile({
               attachAgentName={workspaceId}
               sessionId={phase.sessionId}
               syncSizeOnShow
+              pauseHiddenPaint
             />
           </PinnedSessionBody>
         </div>

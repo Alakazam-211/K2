@@ -149,6 +149,7 @@ import {
 import { computeResyncScrollPx } from './resyncAnchor'
 import { colToTextIndex, runColSpan } from './runCols'
 import { hexToCss, TerminalRow } from './rowRender'
+import { HIDDEN_PAINT_PAUSE_MS, shouldPauseHiddenPaint } from './hiddenPaint'
 import { createWebglPainter } from './webgl/webglPainter'
 import type {
   PainterFrame,
@@ -532,6 +533,14 @@ export interface TerminalPaneProps {
    * steal the PTY size (multiplayer).
    */
   syncSizeOnShow?: boolean
+  /**
+   * Stop drawing the grid while it's hidden (Thread, Chatter or Heartbeats
+   * view) for `HIDDEN_PAINT_PAUSE_MS`. Client-only: the grid socket stays
+   * open, every frame still merges into the live grid and is acked, and
+   * nothing about it reaches the daemon. On show the pane commits the live
+   * grid before the first paint. Set by Projects tiles; omitted elsewhere.
+   */
+  pauseHiddenPaint?: boolean
 }
 
 type Phase =
@@ -608,6 +617,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     retainWhileHidden,
     showComposeBar = true,
     syncSizeOnShow = false,
+    pauseHiddenPaint = false,
   } = props
   const sessionChrome = useSessionViewChrome()
   const viewTab = sessionChrome?.viewTab ?? 'terminal'
@@ -801,6 +811,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   useEffect(() => {
     snapshotRef.current = snapshot
   }, [snapshot])
+  // P4 — the hidden grid has stopped drawing (`hiddenPaint.ts`). While
+  // true, frames still merge into `liveGridRef` and are acked, but the
+  // rendered `snapshot` (and `scrollPx` state) isn't committed.
+  const paintPausedRef = useRef(false)
   // S7b pin-to-size — daemon-owned pin state for THIS session,
   // mirrored from the grid-WS `pin_initial`/`pin_changed` frames
   // (set inside `applyPinFrame` in the onmessage handler, reset on
@@ -986,7 +1000,9 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
           ch,
         )
         if (re !== null) {
-          commitScrollPx(clampScrollPx(re, next.scrollback.length, ch))
+          const resynced = clampScrollPx(re, next.scrollback.length, ch)
+          if (paintPausedRef.current) scrollPxRef.current = resynced
+          else commitScrollPx(resynced)
           appendedRows = 0
         }
       }
@@ -1001,7 +1017,10 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     if (appendedRows > 0 && scrollPxRef.current > 0) {
       const ch = cellMetricsRef.current.height || 20
       const sbLen = next?.scrollback.length ?? 0
-      commitScrollPx((px) => anchorScrollPx(px, appendedRows, sbLen, ch))
+      const anchored = anchorScrollPx(scrollPxRef.current, appendedRows, sbLen, ch)
+      // Paused: keep the anchor in the ref; the show commits it.
+      if (paintPausedRef.current) scrollPxRef.current = anchored
+      else commitScrollPx(anchored)
     }
     // Resize hold, content half: a resize's clear-then-repaint gap can
     // arrive as a BLANK grid (an old daemon broadcasts the cleared
@@ -1013,7 +1032,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
     // advances in `liveGridRef` until it has content again or the
     // hold times out (which promotes whatever is live).
     const rendered = snapshotRef.current
-    if (
+    if (paintPausedRef.current) {
+      // Hidden grid: the live grid above is current; nothing to draw. An
+      // older server still reads the busy footer from each frame.
+      if (next) noteLegacyScreenRef.current(next)
+    } else if (
       resizeHoldActiveRef.current &&
       rendered &&
       !isGridEmpty(rendered) &&
@@ -1299,10 +1322,14 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // screen scan of its own: there the pane hands its bottom rows to the
   // legacy adapter (`stores/activity-legacy.ts`), which looks for a busy
   // footer. Nothing is read on a server with daemon activity.
-  useEffect(() => {
-    if (!snapshot || !isLegacyActivityServer(room.scope)) return
-    const bottom = snapshot.grid.slice(-LEGACY_SCREEN_ROWS).map(rowToText)
+  const noteLegacyScreenRef = useRef<(snap: TermGridSnapshot) => void>(() => {})
+  noteLegacyScreenRef.current = (snap: TermGridSnapshot): void => {
+    if (!isLegacyActivityServer(room.scope)) return
+    const bottom = snap.grid.slice(-LEGACY_SCREEN_ROWS).map(rowToText)
     noteLegacyScreen(room.scope, attachAgentName ?? `tab-${terminalId}`, bottom, cwd || null)
+  }
+  useEffect(() => {
+    if (snapshot) noteLegacyScreenRef.current(snapshot)
   }, [snapshot, room, attachAgentName, terminalId, cwd])
   useEffect(() => {
     const agentName = attachAgentName ?? `tab-${terminalId}`
@@ -2950,6 +2977,33 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // painter is rebuilt before the first frame of the slide.
   const terminalOnScreen = !hidePty || revealShown
   const webglSurfaceActive = useWebgl && isTabVisible && !settingsOpen && terminalOnScreen
+
+  // P4 — a hidden grid stops drawing after HIDDEN_PAINT_PAUSE_MS
+  // (`hiddenPaint.ts`). The socket, the merge into `liveGridRef` and the
+  // acks carry on; only the commits stop. A layout effect, so the commit
+  // that puts the grid back on screen also commits the live grid before
+  // the browser paints: no stale frame, no catch-up.
+  const wantPaintPause = shouldPauseHiddenPaint({
+    enabled: pauseHiddenPaint,
+    terminalOnScreen,
+  })
+  useLayoutEffect(() => {
+    if (wantPaintPause) {
+      const timer = setTimeout(() => {
+        paintPausedRef.current = true
+      }, HIDDEN_PAINT_PAUSE_MS)
+      return () => clearTimeout(timer)
+    }
+    if (!paintPausedRef.current) return
+    paintPausedRef.current = false
+    // Frames queued for the next rAF apply now (and commit, unpaused).
+    frameCoalescerRef.current?.flushNow()
+    const live = liveGridRef.current
+    if (live && !(resizeHoldActiveRef.current && isGridEmpty(live))) {
+      setSnapshot(live)
+    }
+    setScrollPx(scrollPxRef.current)
+  }, [wantPaintPause])
 
   // Coming back visible after a demotion from unrestored context loss:
   // give WebGL another chance (common after workspace switch / Settings).

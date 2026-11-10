@@ -1767,8 +1767,33 @@ html:not([data-style="terminal"]) .k2-segmented { overflow: hidden; }
   color: var(--color-on-accent);
   cursor: default;
 }
+/* Keyboard focus: a 2px ring in the readable accent (--color-accent-text).
+   An unselected segment rings just inside its own box, on the track. The
+   selected segment is the accent fill, which a ring can't reliably read
+   against in every palette (Paper's accent is its fill; a white ring vanished
+   on the pale tracks), so its ring sits outside the fill with 1px of track
+   between: the ring only ever meets the track, at 3:1 or better in all four
+   looks, and covers the track's edge beside the segment. Glass rounds it with
+   the pill; Terminal cuts it parallel to the thumb (3px inside the track, so
+   the selected ring's outer edge is the track's own cut). */
 .k2-segment:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: -2px; }
-.k2-segment[aria-checked="true"]:focus-visible { outline-color: var(--color-on-accent); }
+.k2-segment[aria-checked="true"]:focus-visible { outline-offset: 1px; }
+html[data-style="terminal"] .k2-segment:focus-visible:not([data-zen-root] *) { outline: none; }
+html[data-style="terminal"] .k2-segment:focus-visible:not([data-zen-root] *)::after {
+  --k2-ch-cut: calc(var(--chamfer-control) - 1.757px);
+  --k2-ch-fr: 2px;
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: var(--color-accent-text);
+  clip-path: polygon(evenodd, var(--k2-ch-cut) 0, calc(100% - var(--k2-ch-cut)) 0, 100% var(--k2-ch-cut), 100% calc(100% - var(--k2-ch-cut)), calc(100% - var(--k2-ch-cut)) 100%, var(--k2-ch-cut) 100%, 0 calc(100% - var(--k2-ch-cut)), 0 var(--k2-ch-cut), var(--k2-ch-cut) 0, calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr), calc(100% - var(--k2-ch-fr)) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr)) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) calc(100% - var(--k2-ch-fr)), var(--k2-ch-fr) calc(100% - var(--k2-ch-fr) - max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), var(--k2-ch-fr) calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))), calc(var(--k2-ch-fr) + max(0px, calc(var(--k2-ch-cut) - 0.586 * var(--k2-ch-fr)))) var(--k2-ch-fr));
+}
+html[data-style="terminal"] .k2-segment[aria-checked="true"]:focus-visible:not([data-zen-root] *)::after {
+  --k2-ch-cut: var(--chamfer-control);
+  inset: -3px;
+}
 .k2-segment:disabled { cursor: default; opacity: 0.45; }
 
 /* Tags: the small uppercase labels (BETA, SOON, NEW, ON, OFF…), ui/Tag.tsx.

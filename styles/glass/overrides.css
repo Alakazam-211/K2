@@ -124,6 +124,9 @@
   border-color: var(--color-border);
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08), 0 1px 1px rgba(0, 0, 0, 0.06);
 }
+/* A tile you press (Usage's totals) is edged in the control edge, 3:1 on
+   the page; the soft drop would darken the page beside that edge under it. */
+[data-style="glass"][data-palette="veil"] button[data-material="tile"]:not([data-floating]):not([data-zen-root] *) { box-shadow: none; }
 /* Small accent text: #0a84ff is under 4.5:1 here, so text darkens. Fills and
    icons drawn with --color-accent are untouched. */
 [data-style="glass"][data-palette="veil"] {

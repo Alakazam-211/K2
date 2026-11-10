@@ -141,7 +141,9 @@ function ErrorDot(): React.JSX.Element {
   return <span aria-hidden="true" className="inline-block h-2 w-2 flex-shrink-0 rounded-[var(--radius-status)] bg-[var(--color-status-error)]" />
 }
 
-/** One total. A button: pressing it charts this total below. */
+/** One total. A button: pressing it charts this total below. On the
+ *  charted tile's accent wash the small count steps up to secondary text, so
+ *  it keeps 4.5:1. */
 function Tile({
   measure,
   value,
@@ -169,7 +171,7 @@ function Tile({
       />
       <span className="relative block type-hint text-[var(--color-text-secondary)] truncate">{label}</span>
       <span className="relative block type-title text-[var(--color-text-primary)] tabular-nums mt-1 truncate">{value}</span>
-      <span className="relative block type-hint text-[var(--color-text-muted)] tabular-nums mt-0.5 truncate">{sub}</span>
+      <span className={`relative block type-hint tabular-nums mt-0.5 truncate ${on ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-muted)]'}`}>{sub}</span>
     </>
   )
   const box = 'group relative min-w-0 text-left border border-[var(--color-border)] bg-[var(--color-bg-surface)] rounded-[var(--radius-box)] px-3 py-2.5'
@@ -191,7 +193,10 @@ function Tile({
       title={title}
       onClick={onPick}
       className={`k2-focus no-drag cursor-pointer transition-colors ${box}`}
-      style={on ? { borderColor: 'var(--color-accent)' } : undefined}
+      // A tile you can press carries the control edge (3:1 on the page and
+      // its own fill); the charted one, the accent. Inline, because Glass's
+      // tile material sets its own edge.
+      style={{ borderColor: on ? 'var(--color-accent-text)' : 'var(--color-control-edge)' }}
     >
       {inner}
     </button>

@@ -261,7 +261,10 @@ const FROZEN: &[(&str, &str)] = &[
     ("theme:basic", "11c438f504e8ae19"),
     // 0.46.0 (GS45, Rosson 2026-10-16): K2 Companion's look, Garden 1's
     // default theme; working is its accent (#0a84ff) like the others.
-    ("theme:glass", "e7b3d59b42da5b9b"),
+    // 0.46.11 (GS45, Rosson 2026-11-10): the activity drawer takes K2
+    // Companion's proportions (`[shape] drawer-radius = 17`). WHATS_NEW:
+    // "Gardens that sync with K2's default get the phone's activity drawer".
+    ("theme:glass", "9c8839d688923df6"),
     // The Diary's study (Rosson 2026-10-08), new in 0.45.1; 0.45.2 draws
     // a creepier one (haunted-background-2.webp; GS45, Rosson 2026-10-08).
     ("theme:haunted", "8f38cf1f22b2735f"),

@@ -350,6 +350,9 @@ add a background image next to it if asked, run `k2 zen validate`, then\n\
     for n in NUM_TOKENS.iter().filter(|n| n.table == "shape") {
         s.push_str(&format!("- `{}`: {} to {}\n", n.key, fmt_num(n.min), fmt_num(n.max)));
     }
+    s.push_str(
+        "- `drawer-radius` is optional: the top corners of the activity drawer that sits on the message box. Its sides sit in from the box's edges by two thirds of it. A value above `radius` + 2 is used as `radius` + 2 (no error). Leave it out and the corners are `radius` + 2 and the sides sit 14px in.\n",
+    );
 
     s.push_str("\n### `[terminal.light]` and `[terminal.dark]`\n\n");
     s.push_str("The palette of the agent terminals shown in Zen. Each is a colour, like `[colors.*]`:\n\n");

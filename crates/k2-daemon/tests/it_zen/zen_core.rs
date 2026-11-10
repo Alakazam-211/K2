@@ -131,6 +131,10 @@ fn builtin_theme_is_clean_and_resolves_every_token() {
     }
     for n in schema::NUM_TOKENS.iter().filter(|n| n.table == "shape") {
         let v = &rt.tokens["shape"][n.key];
+        if schema::OPTIONAL_SHAPE.contains(&n.key) {
+            assert!(v.is_null(), "basic leaves the optional shape.{} unset (the key is absent), got {v}", n.key);
+            continue;
+        }
         assert!(v.is_number(), "builtin shape.{} must be set, got {v}", n.key);
     }
     assert_eq!(rt.font["family"], "system");

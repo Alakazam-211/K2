@@ -44,6 +44,7 @@ import {
 } from '@/lib/zen/zen-compose-drafts'
 import { takeZenComposeFocus, useZenComposeFocusStore } from '@/lib/zen/zen-compose-focus'
 import { useZenRecentFirstStore } from '@/lib/zen/zen-recent-first'
+import { ZEN_EAR_INSET } from '@/lib/zen/zen-tokens'
 import {
   clearZenThreadContextNote,
   removeZenThreadContext,
@@ -385,7 +386,7 @@ export function ZenCompose({
             // The stash slides up in the drawer's place, over it.
             <div className="grid min-w-0 items-end">
               {drawer ? <div style={{ gridArea: '1 / 1', minWidth: 0 }}>{drawer}</div> : null}
-              <div data-zen-stash-slot="" style={{ gridArea: '1 / 1', minWidth: 0, position: 'relative', zIndex: 1, margin: '0 14px -1px' }}>
+              <div data-zen-stash-slot="" style={{ gridArea: '1 / 1', minWidth: 0, position: 'relative', zIndex: 1, margin: `0 ${ZEN_EAR_INSET} -1px` }}>
                 <ConnectedStashDrawer
                   look="zen"
                   closing={stashDrawer.closing}

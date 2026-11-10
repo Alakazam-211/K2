@@ -39,6 +39,10 @@ size = 14
 [shape]
 radius = 22
 bubble-radius = 18
+# The activity drawer on the message box takes K2 Companion's proportions:
+# 0.75 of the box's drawn corner (a 46px pill, so 23px), sides two thirds
+# of that in. Unset, the drawer would follow radius (24px, a dome).
+drawer-radius = 17
 
 [terminal.dark]
 foreground = "#ffffff"

@@ -87105,7 +87105,8 @@ THEME TABLES (zen.toml, a theme bundle, or one Garden's file)
                                 against canvas
   [font]                        family (system, rounded, serif, mono,
                                 meslo, ...), size, line-height
-  [shape]                       radius, bubble-radius, gap, list-width
+  [shape]                       radius, bubble-radius, gap, list-width,
+                                drawer-radius (optional)
   [terminal.light] [terminal.dark]   the agent terminals' palette
   [chrome]                      the window itself: corners, stoplights,
                                 stoplight-offset (not the Zen controls)

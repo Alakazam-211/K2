@@ -93,6 +93,9 @@ export interface ZenNumToken {
   min: number
   max: number
   unit: 'px' | ''
+  /** No default: unset, the engine writes nothing and the CSS that reads
+   *  it keeps its own fallback. */
+  optional?: true
 }
 
 /** Numeric tokens with their inclusive ranges (daemon `NUM_TOKENS`). */
@@ -103,7 +106,20 @@ export const ZEN_NUM_TOKENS: readonly ZenNumToken[] = [
   { table: 'shape', key: 'bubble-radius', jsonKey: 'bubble-radius', cssVar: '--zen-bubble-radius', min: 0, max: 28, unit: 'px' },
   { table: 'shape', key: 'gap', jsonKey: 'gap', cssVar: '--zen-gap', min: 4, max: 24, unit: 'px' },
   { table: 'shape', key: 'list-width', jsonKey: 'list-width', cssVar: '--zen-list-width', min: 240, max: 420, unit: 'px' },
+  { table: 'shape', key: 'drawer-radius', jsonKey: 'drawer-radius', cssVar: '--zen-drawer-radius', min: 0, max: 28, unit: 'px', optional: true },
 ]
+
+/**
+ * The ear on a message box's top edge (the activity drawer, and the prompt
+ * stash in its place): its top-corner radius and side inset. A Garden theme
+ * may set `shape.drawer-radius` (K2 Companion's drawer: 0.75 × the message
+ * box's radius, inset by half that radius, so 2/3 of the drawer's); the
+ * engine then writes both variables. Unset (the desktop Thread, any theme
+ * that doesn't set it), the ear keeps 2px over the theme radius and 14px.
+ */
+export const ZEN_DRAWER_INSET_VAR = '--zen-drawer-inset'
+export const ZEN_EAR_RADIUS = 'var(--zen-drawer-radius, calc(var(--zen-radius) + 2px))'
+export const ZEN_EAR_INSET = `var(${ZEN_DRAWER_INSET_VAR}, 14px)`
 
 export const ZEN_FONT_FAMILY_VAR = '--zen-font-family'
 
@@ -116,6 +132,7 @@ export const ZEN_THEME_VARS: readonly string[] = [
   ...ZEN_COLOR_TOKENS.map(zenColorVar),
   ZEN_FONT_FAMILY_VAR,
   ...ZEN_NUM_TOKENS.map((t) => t.cssVar),
+  ZEN_DRAWER_INSET_VAR,
 ]
 
 export type ZenSchemeMode = 'auto' | 'light' | 'dark'

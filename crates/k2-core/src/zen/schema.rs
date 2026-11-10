@@ -183,8 +183,16 @@ pub const NUM_TOKENS: &[NumToken] = &[
     NumToken { table: "shape", key: "bubble-radius", min: 0.0, max: 28.0 },
     NumToken { table: "shape", key: "gap", min: 4.0, max: 24.0 },
     NumToken { table: "shape", key: "list-width", min: 240.0, max: 420.0 },
+    // The activity drawer's top corners (K2 Companion's drawer: 0.75 × the
+    // message box's radius). Optional: see `OPTIONAL_SHAPE`.
+    NumToken { table: "shape", key: "drawer-radius", min: 0.0, max: 28.0 },
     NumToken { table: "background", key: "opacity", min: 0.0, max: 1.0 },
 ];
+
+/// `[shape]` tokens with no built-in default: the resolved theme carries
+/// one only when a layer sets it, and the renderer keeps its own fallback
+/// otherwise (`drawer-radius`: the ear's corners follow `radius`).
+pub const OPTIONAL_SHAPE: &[&str] = &["drawer-radius"];
 
 /// The animation tree (Z22): `(name, parent)`. A child takes its parent's
 /// line until it is set.
@@ -2864,7 +2872,11 @@ pub fn resolve(builtin: &Layer, user: &Layer) -> ResolvedTheme {
     };
     let mut shape = Map::new();
     for n in NUM_TOKENS.iter().filter(|n| n.table == "shape") {
-        shape.insert(n.key.to_string(), s(&format!("shape.{}", n.key)));
+        let v = s(&format!("shape.{}", n.key));
+        if v.is_null() && OPTIONAL_SHAPE.contains(&n.key) {
+            continue;
+        }
+        shape.insert(n.key.to_string(), v);
     }
     let tokens = json!({
         "scheme": s("theme.scheme"),

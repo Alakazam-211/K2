@@ -56,6 +56,7 @@ import {
   ZEN_FONT_FAMILY_VAR,
   ZEN_FONT_STACKS,
   ZEN_NUM_TOKENS,
+  ZEN_DRAWER_INSET_VAR,
   ZEN_TERMINAL_ANSI_KEYS,
   ZEN_TERMINAL_FONT_VAR,
   ZEN_TERMINAL_KEYS,
@@ -193,6 +194,7 @@ export function buildZenTheme(input: ZenThemeInput, lastGood?: ZenLastGood): Zen
   if (fontObj) for (const k of Object.keys(fontObj)) if (!FONT_KEYS.has(k)) rejected.push(`font.${k}`)
   const fontTerm = obj(fontObj?.terminal)
   if (fontTerm) for (const k of Object.keys(fontTerm)) if (!FONT_TERMINAL_KEYS.has(k)) rejected.push(`font.terminal.${k}`)
+  const nums: Record<string, number> = {}
   for (const tok of ZEN_NUM_TOKENS) {
     const raw =
       tok.table === 'shape'
@@ -201,8 +203,21 @@ export function buildZenTheme(input: ZenThemeInput, lastGood?: ZenLastGood): Zen
           ? fontObj[tok.jsonKey]
           : type[tok.key]
     const key = `${tok.table}.${tok.key}`
-    const n = pick<number>(key, raw, zenNumInRange(tok, raw), ZEN_DEFAULT_NUMS[key])
-    vars[tok.cssVar] = `${n}${tok.unit}`
+    const n = tok.optional
+      ? pick<number | null>(key, raw, zenNumInRange(tok, raw), null)
+      : pick<number>(key, raw, zenNumInRange(tok, raw), ZEN_DEFAULT_NUMS[key])
+    if (n === null) continue
+    nums[key] = n
+    if (!tok.optional) vars[tok.cssVar] = `${n}${tok.unit}`
+  }
+  // The ear's shape (`ZEN_EAR_RADIUS`), only when the theme sets it. Never
+  // rounder than the unset ear, so a smaller `radius` on top of the theme
+  // (zen.toml, a Garden's own file) still gets an ear that fits its box.
+  const drawer = nums['shape.drawer-radius']
+  if (drawer !== undefined) {
+    const r = Math.min(drawer, nums['shape.radius'] + 2)
+    vars['--zen-drawer-radius'] = `${r}px`
+    vars[ZEN_DRAWER_INSET_VAR] = `${Math.round(((r * 2) / 3) * 100) / 100}px`
   }
 
   // The one font (Omarchy 5): UI and terminals. `font.family`, else a bare

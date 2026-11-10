@@ -74,6 +74,7 @@ import { SessionViewChromeContext, type SessionViewChromeValue } from './session
 import { ThreadComposeDrawerContext } from './threadComposeDrawer'
 import { ThreadItemRow, ThreadOverlayPane } from './ThreadOverlayPane'
 import { ThreadOverlayColumn } from './ThreadOverlayColumn'
+import { ZEN_EAR_RADIUS } from '@/lib/zen/zen-tokens'
 
 const room = testRoom({ tabs: {}, scope: primaryScope(), projects: [] })
 const OWNER: ThreadViewer = { principal: 'owner', aliases: [] }
@@ -625,7 +626,7 @@ describe('chamfered corners in K2\'s Terminal Style', () => {
     expect(drawer.querySelectorAll('button[aria-label="Close stash"]')).toHaveLength(1)
     // Terminal: chamfered; Glass: the Thread's round top corners.
     expect(cut(drawer)).toBe(style === 'terminal')
-    expect(drawer.style.borderRadius).toBe('calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0')
+    expect(drawer.style.borderRadius).toBe(`${ZEN_EAR_RADIUS} ${ZEN_EAR_RADIUS} 0 0`)
     // It takes the activity bar's place on the box's top edge.
     expect(el('[data-zen-stash-row]').contains(drawer)).toBe(true)
   })

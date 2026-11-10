@@ -24,6 +24,7 @@ import type { ThreadTurn } from '@/components/SessionView/overlayThread'
 import { CHAMFER_CUT, THREAD_ZEN_SCOPE_ATTR, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
 import { WorkingGrid } from '@/components/AgentStatus/StatusGlyphs'
 import { ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
+import { ZEN_EAR_INSET, ZEN_EAR_RADIUS } from '@/lib/zen/zen-tokens'
 import {
   COUNTER_CHECK_PX,
   COUNTER_GAP_PX,
@@ -526,7 +527,7 @@ export function ZenActivityDrawer({
 
   return (
     // The clip box: the tile slides up out of the message box's top edge.
-    <div data-zen-drawer-clip="" style={{ overflow: 'hidden', margin: margin ?? (attached ? '0 14px -1px' : '0 var(--zen-gap, 12px) 8px') }}>
+    <div data-zen-drawer-clip="" style={{ overflow: 'hidden', margin: margin ?? (attached ? `0 ${ZEN_EAR_INSET} -1px` : '0 var(--zen-gap, 12px) 8px') }}>
       <style data-zen-drawer-styles="">{ZEN_DRAWER_CSS}</style>
       <div
         role="status"
@@ -566,8 +567,8 @@ export function ZenActivityDrawer({
             border: '1px solid var(--zen-border)',
             borderStyle: display.tone === 'unverifiable' ? 'dashed' : 'solid',
             ...(attached
-              ? { borderBottom: 'none', borderRadius: 'calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0' }
-              : { borderRadius: 'calc(var(--zen-radius) + 2px)' }),
+              ? { borderBottom: 'none', borderRadius: `${ZEN_EAR_RADIUS} ${ZEN_EAR_RADIUS} 0 0` }
+              : { borderRadius: ZEN_EAR_RADIUS }),
             ...chamferVars({
               cut: attached ? [CHAMFER_CUT.drawer, CHAMFER_CUT.drawer, 0, 0] : CHAMFER_CUT.drawer,
               fill: ZEN_DRAWER_EAR_FILL,

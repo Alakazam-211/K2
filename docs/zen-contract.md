@@ -421,6 +421,7 @@ follow. Theme tables restyle that Garden only.
     "scheme": "auto",           // auto | light | dark
     "colors": { "light": { "canvas": "#…", …, "idle": "#…", … }, "dark": { … } },  // `idle`, no `unread` (decision 9)
     "shape": { "radius": 14, "bubble-radius": 18, "gap": 12, "list-width": 300 }
+                                // + "drawer-radius" (the activity drawer's corners) only when a layer sets it (Glass: 17)
   },
   "font": {                     // one font for the whole Zen page AND its terminals
     "family": "system", "stack": "-apple-system, …", "monospace": false,

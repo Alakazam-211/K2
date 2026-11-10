@@ -96,8 +96,11 @@ describe('tokens: only known names, never raw CSS', () => {
       ].sort(),
     )
     for (const k of Object.keys(r.vars)) expect(ALLOWED.has(k), `unexpected property ${k}`).toBe(true)
-    // Every allowed property is written (the root never inherits a stale one).
-    expect(Object.keys(r.vars).sort()).toEqual([...ALLOWED].sort())
+    // Every allowed property is written (the root never inherits a stale
+    // one), but the ear's pair, which only a theme that sets
+    // `shape.drawer-radius` writes (unset, the ear's CSS keeps its fallback).
+    const EAR = new Set(['--zen-drawer-radius', '--zen-drawer-inset'])
+    expect(Object.keys(r.vars).sort()).toEqual([...ALLOWED].filter((k) => !EAR.has(k)).sort())
     const all = Object.values(r.vars).join('\n')
     for (const bad of ['url(', 'display', '@keyframes', '#ff0000', '#800080', '#00ff00']) {
       expect(all.includes(bad), `"${bad}" leaked into CSS`).toBe(false)
@@ -572,5 +575,37 @@ describe('theme bundles (Omarchy additions 1 and 5)', () => {
     const arr = buildZenTheme({ systemScheme: 'light', page: page({ theme: { tokens: {}, terminal: { palette: ansi } } }) })
     expect(arr.terminal?.black).toBe('rgb(0, 0, 0)')
     expect(arr.terminal?.brightWhite).toBe('rgb(0, 0, 15)')
+  })
+})
+
+describe('the activity drawer ear (shape.drawer-radius, optional)', () => {
+  const vars = (shape: Record<string, unknown>): Record<string, string> =>
+    buildZenTheme({ systemScheme: 'dark', page: page({ theme: { scheme: 'dark', shape } }) }).vars
+
+  it('unset writes nothing, so the ear keeps its fallback (2px over the radius, 14px in)', () => {
+    const v = vars({ radius: 22 })
+    expect(v['--zen-drawer-radius']).toBeUndefined()
+    expect(v['--zen-drawer-inset']).toBeUndefined()
+    expect(vars({ radius: 22, 'drawer-radius': 'x' })['--zen-drawer-radius']).toBeUndefined()
+    expect(vars({ radius: 22, 'drawer-radius': 40 })['--zen-drawer-radius']).toBeUndefined()
+  })
+
+  it('set: its corners, and sides two thirds of it in (K2 Companion: 0.75 and 0.5 of the box)', () => {
+    const v = vars({ radius: 22, 'drawer-radius': 17 })
+    expect(v['--zen-drawer-radius']).toBe('17px')
+    expect(v['--zen-drawer-inset']).toBe('11.33px')
+  })
+
+  it('never rounder than the unset ear, so a smaller radius on top still fits its box', () => {
+    const v = vars({ radius: 4, 'drawer-radius': 17 })
+    expect(v['--zen-drawer-radius']).toBe('6px')
+    expect(v['--zen-drawer-inset']).toBe('4px')
+  })
+
+  it("K2's Glass theme sets it; the other built-in themes leave it unset", () => {
+    const dir = resolve(__dirname, '../../../../crates/k2-core/src/zen/themes')
+    const shapeOf = (name: string): string => readFileSync(resolve(dir, `${name}.toml`), 'utf8').split('[shape]')[1]?.split(/\n\[/)[0] ?? ''
+    expect(shapeOf('glass')).toMatch(/^drawer-radius = 17$/m)
+    for (const name of ['basic', 'paper', 'midnight', 'haunted']) expect(shapeOf(name), name).not.toMatch(/drawer-radius/)
   })
 })

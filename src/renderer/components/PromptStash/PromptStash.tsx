@@ -22,6 +22,7 @@ import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { ZEN_DRAWER_EAR_FILL } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { CHAMFER_CUT, CHAMFER_SCOPE, chamferPolygon, chamferVars } from '@/components/Thread/chamfer'
 import { Checkbox } from '@/components/ui/Checkbox'
+import { ZEN_EAR_RADIUS } from '@/lib/zen/zen-tokens'
 
 /** Open: slide + fade in (ms). */
 export const STASH_DRAWER_MS = 200
@@ -57,8 +58,9 @@ ${CHAMFER_SCOPE} [data-stash-row] { border-radius: 0 !important; clip-path: ${ch
 }
 `
 
-/** The drawer's top corners on the Thread box. */
-const STASH_EAR_RADIUS = 'calc(var(--zen-radius) + 2px)'
+/** The drawer's top corners on the Thread box: the activity drawer's ear
+ *  (a Garden theme's `shape.drawer-radius`, else 2px over the radius). */
+const STASH_EAR_RADIUS = ZEN_EAR_RADIUS
 
 export function StashGlyph({ size = 12 }: { size?: number }): JSX.Element {
   return (

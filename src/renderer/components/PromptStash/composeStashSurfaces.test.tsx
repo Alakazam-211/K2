@@ -26,6 +26,7 @@ import { useContextMenuStore } from '@/stores/context-menu'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { usePromptStashStore } from '@/stores/prompt-stash'
 import type { StashRecord } from '@/lib/prompt-stash/record'
+import { ZEN_EAR_RADIUS } from '@/lib/zen/zen-tokens'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -148,7 +149,7 @@ describe('the Zen Conversation box (Gardens and Apps)', () => {
     expect(drawer.getAttribute('data-look')).toBe('zen')
     expect(drawer.querySelectorAll('button[aria-label="Close stash"]')).toHaveLength(1)
     // Garden themes are Zen's own: round corners, never the square Style's cuts.
-    expect(drawer.style.borderRadius).toBe('calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0')
+    expect(drawer.style.borderRadius).toBe(`${ZEN_EAR_RADIUS} ${ZEN_EAR_RADIUS} 0 0`)
     fireEvent.click(drawer.querySelector('[data-stash-row]') as HTMLElement)
     await waitFor(() => expect(box().value).toBe('saved prompt'))
     await waitFor(() => expect(document.querySelector('[data-testid="stash-drawer"]')).toBeNull())

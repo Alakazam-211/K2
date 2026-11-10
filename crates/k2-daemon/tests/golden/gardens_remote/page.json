@@ -582,6 +582,7 @@
         "scheme": "dark",
         "shape": {
           "bubble-radius": 18,
+          "drawer-radius": 17,
           "gap": 12,
           "list-width": 300,
           "radius": 22

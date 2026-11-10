@@ -387,6 +387,11 @@ KillMode=process
 # them). systemd waits for its own ExecStop: SIGTERM the main process
 # and wait until it is gone. The daemon hands off only with this line.
 ExecStop=/bin/sh -c 'kill -TERM "\$\$MAINPID" 2>/dev/null; while kill -0 "\$\$MAINPID" 2>/dev/null; do sleep 0.2; done' k2-wait-mainpid
+# k2-deskd (remote desktop, off until an Owner turns it on) is the daemon's
+# child too: it reads the console session's DISPLAY / WAYLAND_DISPLAY from
+# `systemctl --user show-environment` (or loginctl), so this unit needs no
+# Environment= for it, and it exits by itself (releasing any held key) when
+# the daemon's pipe closes, so KillMode=process leaves no stray helper.
 # Agents run in this unit's cgroup. The default OOMPolicy=stop turns one
 # OOM-killed agent into a stop + restart of the whole daemon; continue lets
 # only that process die. (The stage H drop-in carries the same line.)

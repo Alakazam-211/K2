@@ -5,10 +5,11 @@
 # k2_build_mac_binaries, so the three build the same binaries the same way:
 #
 #   1. `bun run tauri build`: the frontend, src-tauri (`k2`) and the bundle.
-#   2. k2-daemon + k2-power-helper, k2-ptyd, k2-node, k2-menubar, in ONE
+#   2. k2-daemon + k2-power-helper, k2-ptyd, k2-node, k2-menubar, k2-deskd, in ONE
 #      cargo call (K2_MAC_SIDECAR_CARGO_ARGS in macos-daemon-helper-app.sh).
 #   3. Checks + copies the sidecars into K2.app (nested K2 Daemon.app for
-#      k2-daemon + k2-ptyd; Contents/MacOS for the rest).
+#      k2-daemon + k2-ptyd; nested K2 Screen.app for k2-deskd;
+#      Contents/MacOS for the rest).
 #
 # Signing, the AMFI launch check and notarizing stay in the callers.
 #
@@ -106,15 +107,15 @@ k2_build_mac_binaries() {
     bun run tauri build || { echo "FATAL: tauri build failed" >&2; return 1; }
     [ -d "$app" ] || { echo "FATAL: $app missing after tauri build" >&2; return 1; }
 
-    echo ""; echo "  Build 2/2: k2-daemon, k2-power-helper, k2-ptyd, k2-export, k2-node, k2-menubar (one cargo call)..."
+    echo ""; echo "  Build 2/2: k2-daemon, k2-power-helper, k2-ptyd, k2-export, k2-node, k2-menubar, k2-deskd (one cargo call)..."
     # k2-ptyd rides beside the daemon in K2 Daemon.app (prd-k2-ptyd-v1 §7.1);
     # k2-node never links k2-core (CN26). One call, one feature resolution
     # (see the header); k2_build_standalone_macos_daemon uses the same array.
     cargo build --release "${K2_MAC_SIDECAR_CARGO_ARGS[@]}" \
-        || { echo "FATAL: sidecar build (k2-daemon, k2-ptyd, k2-export, k2-node, k2-menubar) failed" >&2; return 1; }
+        || { echo "FATAL: sidecar build (k2-daemon, k2-ptyd, k2-export, k2-node, k2-menubar, k2-deskd) failed" >&2; return 1; }
 
     local bin
-    for bin in k2-daemon k2-power-helper k2-ptyd k2-export k2-node k2-menubar; do
+    for bin in k2-daemon k2-power-helper k2-ptyd k2-export k2-node k2-menubar k2-deskd; do
         [ -x "$out/$bin" ] || { echo "FATAL: $bin missing at $out/$bin after cargo build" >&2; return 1; }
     done
     assert_daemon_oauth_not_placeholder "$out/k2-daemon" || return 1
@@ -124,6 +125,10 @@ k2_build_mac_binaries() {
     # Monitor shows the K2 icon + "K2 Daemon"; k2-ptyd and k2-export sit beside it.
     k2_daemon_helper_assemble "$app" "$out/k2-daemon" "$out/k2-ptyd" "$out/k2-export" || return 1
     k2_daemon_helper_verify "$app" || return 1
+    # Remote desktop (prd-remote-desktop-tab-v1 D3): K2 Screen.app, the one
+    # K2 process that holds Screen Recording and Accessibility, beside it.
+    k2_screen_helper_assemble "$app" "$out/k2-deskd" || return 1
+    k2_screen_helper_verify "$app" || return 1
     # Heartbeat S2 (D11): the wake helper. The daemon copies it to
     # /Library/PrivilegedHelperTools only after the user approves the one
     # admin dialog.

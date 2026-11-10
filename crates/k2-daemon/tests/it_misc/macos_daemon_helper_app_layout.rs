@@ -180,6 +180,53 @@ fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
     assert!(call.contains("$EXPORT_SRC"), "{script} assembles without k2-export: {call}");
 }
 
+/// Remote desktop (prd-remote-desktop-tab-v1 D3): K2 Screen.app is built in
+/// the one sidecar call, assembled by the shared step and by build-local.sh,
+/// and its names match what the daemon looks for (k2_deskd_proto and
+/// desktop::launch_agent::screen_exe_for). A drift would leave a release
+/// whose daemon reports `needs_app` on every Mac.
+#[cfg(unix)]
+#[test]
+fn k2_screen_is_nested_beside_the_daemon_by_every_build_script() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let read = |rel: &str| std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"));
+    let screen = read("scripts/macos-screen-helper-app.sh");
+    for (key, want) in [
+        ("K2_SCREEN_HELPER_APP", k2_deskd_proto::APP_NAME),
+        ("K2_SCREEN_HELPER_BUNDLE_ID", k2_deskd_proto::BUNDLE_ID),
+        ("K2_SCREEN_HELPER_EXE", k2_deskd_proto::BINARY_NAME),
+        ("K2_SCREEN_DEV_MARKER", k2_deskd_proto::DEV_REQUIREMENT_MARKER),
+    ] {
+        assert!(screen.contains(&format!("{key}=\"{want}\"")), "scripts/macos-screen-helper-app.sh {key} drifted from k2_deskd_proto ({want})");
+    }
+    let helper = read("scripts/macos-daemon-helper-app.sh");
+    assert!(helper.contains("macos-screen-helper-app.sh"), "macos-daemon-helper-app.sh no longer sources the K2 Screen script");
+    let array_start = helper.lines().position(|l| l.trim_end() == "K2_MAC_SIDECAR_CARGO_ARGS=(").expect("the sidecar array");
+    let in_array = helper.lines().skip(array_start + 1).take_while(|l| l.trim() != ")").any(|l| l.trim() == "-p k2-deskd --bin k2-deskd");
+    assert!(in_array, "K2_MAC_SIDECAR_CARGO_ARGS no longer builds k2-deskd");
+    let shared = read("scripts/lib/build-binaries.sh");
+    assert!(
+        shared.lines().any(|l| l.trim().starts_with("k2_screen_helper_assemble ") && l.contains("\"$out/k2-deskd\"")),
+        "k2_build_mac_binaries no longer assembles K2 Screen.app from $out/k2-deskd"
+    );
+    let local = read("scripts/build-local.sh");
+    assert!(local.contains("cargo build --release -p k2-deskd --bin k2-deskd"), "build-local.sh does not build k2-deskd");
+    assert!(local.lines().any(|l| l.trim_start().starts_with("k2_screen_helper_assemble ")), "build-local.sh does not assemble K2 Screen.app");
+    for script in ["scripts/release.sh", "scripts/build-app.sh", "scripts/dev-build.sh", "scripts/build-local.sh"] {
+        let src = read(script);
+        let code: Vec<&str> = src.lines().map(str::trim).filter(|t| !t.starts_with('#')).collect();
+        for f in ["k2_screen_helper_sign ", "k2_screen_helper_verify_signed "] {
+            assert!(code.iter().any(|t| t.starts_with(f)), "{script} never calls {}", f.trim());
+        }
+    }
+    // The daemon resolves the same nested path.
+    let exe = Path::new("/Applications/K2.app/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon");
+    assert_eq!(
+        k2_daemon::desktop::launch_agent::screen_exe_for(exe).unwrap(),
+        Path::new("/Applications/K2.app/Contents/Helpers/K2 Screen.app/Contents/MacOS/k2-deskd")
+    );
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn app_resolves_nested_daemon_on_macos() {

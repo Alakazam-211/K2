@@ -24,6 +24,11 @@
 # Never hand-edit versions: CFBundleShortVersionString/CFBundleVersion come
 # from src-tauri/tauri.conf.json, which scripts/release.sh bumps.
 
+# K2 Screen.app (the remote desktop helper) sits beside K2 Daemon.app;
+# every caller of this file gets its functions too.
+# shellcheck source=scripts/macos-screen-helper-app.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/macos-screen-helper-app.sh"
+
 K2_DAEMON_HELPER_APP="K2 Daemon.app"
 K2_DAEMON_HELPER_BUNDLE_ID="dev.k2.app.daemon"
 K2_DAEMON_HELPER_NAME="K2 Daemon"
@@ -50,6 +55,7 @@ K2_MAC_SIDECAR_CARGO_ARGS=(
     -p k2-export --bin k2-export
     -p k2-node --bin k2-node
     -p k2-menubar --bin k2-menubar
+    -p k2-deskd --bin k2-deskd
 )
 
 # Path of the nested helper app inside APP.

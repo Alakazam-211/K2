@@ -73,7 +73,8 @@ part_web() {
 part_rust_check() {
     step "cargo check -D warnings, all targets"
     RUSTFLAGS="-D warnings" cargo check -p k2-core -p k2-client -p k2-daemon -p k2-node-proto -p k2-node \
-        -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd -p k2-release-keys -p k2-export --all-targets
+        -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd -p k2-release-keys -p k2-export \
+        -p k2-deskd-proto -p k2-deskd --all-targets
     step "cargo check airgap feature"
     RUSTFLAGS="-D warnings" cargo check -p k2-core -p k2-daemon --features airgap --all-targets
 }
@@ -109,6 +110,10 @@ part_rust_test() {
     step "cargo nextest k2-ptyd (Linux)"
     cargo build -p k2-ptyd --bin k2-ptyd
     cargo nextest run --profile ci -p k2-ptyd
+    # The remote desktop helper and its wire (prd-remote-desktop-tab-v1 D3/D4);
+    # the Xvfb integration tests need a display: scripts/test/deskd-checks.sh xvfb.
+    step "cargo nextest k2-deskd (Linux)"
+    cargo nextest run --profile ci -p k2-deskd-proto -p k2-deskd
     # The export worker's limits against the real binary (hostile exporters).
     step "cargo nextest k2-export (Linux)"
     cargo nextest run --profile ci -p k2-export --features test-hostile

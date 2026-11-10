@@ -74,6 +74,9 @@ echo "package-daemon-deb: building k2-daemon v$VERSION ($ARCH, release)"
 # shellcheck source=scripts/linux-ptyd-embed.sh
 . "$_ROOT/scripts/linux-ptyd-embed.sh"
 k2_ptyd_build_for_embed
+# The remote desktop helper rides inside the daemon the same way
+# (prd-remote-desktop-tab-v1 D3; no separate /usr/bin file).
+k2_deskd_build_for_embed
 cargo build --release -p k2-daemon --bin k2-daemon
 cargo build --release -p k2-node --bin k2-node
 BIN="${CARGO_TARGET_DIR:-target}/release/k2-daemon"
@@ -81,6 +84,7 @@ NODE_BIN="${CARGO_TARGET_DIR:-target}/release/k2-node"
 [ -x "$BIN" ] || { echo "package-daemon-deb: FATAL — $BIN missing after build" >&2; exit 1; }
 assert_daemon_oauth_not_placeholder "$BIN"
 assert_daemon_embeds_ptyd "$BIN"
+assert_daemon_embeds_deskd "$BIN"
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT

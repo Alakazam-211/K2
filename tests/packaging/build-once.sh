@@ -84,11 +84,12 @@ echo "Step 2 (k2_build_mac_binaries):"
     source "$ROOT/scripts/lib/build-binaries.sh"
     # plutil is macOS-only; the helper's layout is checked below instead.
     k2_daemon_helper_verify() { [ -x "$(k2_daemon_helper_exe "$1")" ]; }
+    k2_screen_helper_verify() { [ -x "$(k2_screen_helper_exe "$1")" ]; }
     assert_daemon_oauth_not_placeholder() { [ -x "$1" ]; }
     k2_build_mac_binaries "target/release/bundle/macos/K2.app" > "$work/step2.log" 2>&1
 ) && pass "k2_build_mac_binaries succeeds" || fail "k2_build_mac_binaries" "$(cat "$work/step2.log")"
 
-want="build --release -p k2-daemon --bin k2-daemon --bin k2-power-helper -p k2-ptyd --bin k2-ptyd -p k2-export --bin k2-export -p k2-node --bin k2-node -p k2-menubar --bin k2-menubar"
+want="build --release -p k2-daemon --bin k2-daemon --bin k2-power-helper -p k2-ptyd --bin k2-ptyd -p k2-export --bin k2-export -p k2-node --bin k2-node -p k2-menubar --bin k2-menubar -p k2-deskd --bin k2-deskd"
 [ "$(wc -l < "$CALLS" | tr -d ' ')" = 1 ] && pass "one cargo call builds every sidecar" \
     || fail "cargo calls" "$(cat "$CALLS")"
 [ "$(head -1 "$CALLS")" = "$want	embed=	export=" ] && pass "the call is K2_MAC_SIDECAR_CARGO_ARGS, release, no embed" \
@@ -97,10 +98,11 @@ app="$proj/target/release/bundle/macos/K2.app"
 helper="$app/Contents/Helpers/K2 Daemon.app/Contents/MacOS"
 ok=1
 for f in "$helper/k2-daemon" "$helper/k2-ptyd" "$helper/k2-export" "$app/Contents/MacOS/k2-power-helper" \
-    "$app/Contents/MacOS/k2-node" "$app/Contents/MacOS/k2-menubar"; do
+    "$app/Contents/MacOS/k2-node" "$app/Contents/MacOS/k2-menubar" \
+    "$app/Contents/Helpers/K2 Screen.app/Contents/MacOS/k2-deskd"; do
     [ -x "$f" ] || { ok=0; echo "        missing: $f" >&2; }
 done
-[ "$ok" = 1 ] && pass "every sidecar is in K2.app (daemon + ptyd + export nested)" || fail "bundle" "see missing files above"
+[ "$ok" = 1 ] && pass "every sidecar is in K2.app (daemon + ptyd + export nested, K2 Screen beside)" || fail "bundle" "see missing files above"
 grep -q "bin k2-ptyd" "$helper/k2-ptyd" && grep -q "bin k2-daemon" "$helper/k2-daemon" \
     && pass "the nested binaries are the ones that call built" || fail "nested bytes" "$(cat "$helper/k2-daemon")"
 
@@ -137,7 +139,7 @@ grep -q 'cargo build --release "${K2_MAC_SIDECAR_CARGO_ARGS\[@\]}"' "$ROOT/scrip
 grep -q '^k2_build_mac_binaries "target/release/bundle/macos/K2.app"$' "$ROOT/scripts/release.sh" \
     && pass "release.sh Step 2 calls k2_build_mac_binaries" || fail "release.sh" "Step 2 no longer calls k2_build_mac_binaries"
 for s in build-binaries.sh; do bash -n "$ROOT/scripts/lib/$s" && pass "bash -n $s" || fail "bash -n $s" syntax; done
-for s in macos-daemon-helper-app.sh measure-clean-build.sh; do bash -n "$ROOT/scripts/$s" && pass "bash -n $s" || fail "bash -n $s" syntax; done
+for s in macos-daemon-helper-app.sh macos-screen-helper-app.sh measure-clean-build.sh; do bash -n "$ROOT/scripts/$s" && pass "bash -n $s" || fail "bash -n $s" syntax; done
 
 echo ""
 echo "build-once: $pass passed, $fail failed"

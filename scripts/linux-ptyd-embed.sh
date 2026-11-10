@@ -21,6 +21,15 @@
 #   k2_export_build_for_embed [<rust target triple>]
 #   assert_daemon_embeds_export path/to/k2-daemon
 #
+# The remote desktop helper rides the same way on Linux
+# (prd-remote-desktop-tab-v1 D3, vs-live R8b): k2_deskd_build_for_embed
+# exports K2_DESKD_EMBED (+ K2_REQUIRE_DESKD_EMBED=1) and
+# assert_daemon_embeds_deskd checks it; the daemon places it at
+# ~/.k2/bin/deskd/<ver>-<sha12>/k2-deskd and runs it as the console
+# session's child. (macOS ships it in K2.app's K2 Screen.app instead.)
+#   k2_deskd_build_for_embed [<rust target triple>]
+#   assert_daemon_embeds_deskd path/to/k2-daemon
+#
 # Sourced: sets no shell options (the PKGBUILD runs with nounset off).
 
 # Build k2-ptyd (release, optional target) and export K2_PTYD_EMBED (an
@@ -68,6 +77,26 @@ k2_export_build_for_embed() {
     echo "  k2-export built for embedding: $K2_EXPORT_EMBED"
 }
 
+# Build k2-deskd (release, optional target; never --features xvfb-tests)
+# and export K2_DESKD_EMBED + K2_REQUIRE_DESKD_EMBED=1.
+k2_deskd_build_for_embed() {
+    local target="${1:-}" dir
+    if [ -n "$target" ]; then
+        cargo build --release --target "$target" -p k2-deskd --bin k2-deskd \
+            || { echo "FATAL: k2-deskd build failed ($target)" >&2; return 1; }
+        dir="${CARGO_TARGET_DIR:-target}/$target/release"
+    else
+        cargo build --release -p k2-deskd --bin k2-deskd \
+            || { echo "FATAL: k2-deskd build failed" >&2; return 1; }
+        dir="${CARGO_TARGET_DIR:-target}/release"
+    fi
+    [ -x "$dir/k2-deskd" ] || { echo "FATAL: k2-deskd missing at $dir/k2-deskd after cargo build" >&2; return 1; }
+    K2_DESKD_EMBED="$(cd "$dir" && pwd)/k2-deskd"
+    K2_REQUIRE_DESKD_EMBED=1
+    export K2_DESKD_EMBED K2_REQUIRE_DESKD_EMBED
+    echo "  k2-deskd built for embedding: $K2_DESKD_EMBED"
+}
+
 _k2_sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | cut -d' ' -f1
@@ -105,4 +134,19 @@ assert_daemon_embeds_export() {
         return 1
     fi
     echo "  ✓ $daemon embeds k2-export (sha256 ${sha:0:12}…)."
+}
+
+# Fail unless DAEMON carries the k2-deskd that K2_DESKD_EMBED names.
+assert_daemon_embeds_deskd() {
+    local daemon="$1" sha
+    [ -n "${K2_DESKD_EMBED:-}" ] && [ -f "$K2_DESKD_EMBED" ] \
+        || { echo "FATAL: K2_DESKD_EMBED is not set to a file (run k2_deskd_build_for_embed first)" >&2; return 1; }
+    [ -f "$daemon" ] || { echo "FATAL: daemon binary missing at $daemon" >&2; return 1; }
+    sha="$(_k2_sha256_of "$K2_DESKD_EMBED")"
+    [ "${#sha}" -eq 64 ] || { echo "FATAL: could not hash $K2_DESKD_EMBED" >&2; return 1; }
+    if ! grep -a -q "$sha" "$daemon"; then
+        echo "FATAL: $daemon does not embed k2-deskd (sha256 $sha not found; vs-live R8b)" >&2
+        return 1
+    fi
+    echo "  ✓ $daemon embeds k2-deskd (sha256 ${sha:0:12}…)."
 }

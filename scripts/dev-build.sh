@@ -71,6 +71,7 @@ k2_build_mac_binaries "$APP" || exit 1
 echo ""; echo "Step 3: signing with hardened runtime + entitlements..."
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2"
 k2_daemon_helper_sign "$APP" "$SIGNING_IDENTITY" "$DAEMON_ENTITLEMENTS" || exit 1
+k2_screen_helper_sign "$APP" "$SIGNING_IDENTITY" || exit 1
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-menubar"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-power-helper"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-node"
@@ -83,6 +84,8 @@ codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --
 echo "  Signed (main + K2 Daemon.app + frpc + bundle)."
 k2_daemon_helper_verify "$APP" || exit 1
 k2_daemon_helper_verify_signed "$APP" || exit 1
+k2_screen_helper_verify "$APP" || exit 1
+k2_screen_helper_verify_signed "$APP" || exit 1
 
 echo ""; echo "Step 4: launch smoke-test (AMFI exec check)..."
 # `k2 --version` prints and exits before the app starts (0.46.6), so this

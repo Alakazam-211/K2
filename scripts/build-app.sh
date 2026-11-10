@@ -73,6 +73,7 @@ codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --
 DAEMON_ENTITLEMENTS="${PROJECT_DIR}/src-tauri/entitlements-daemon.plist"
 [ -f "$DAEMON_ENTITLEMENTS" ] || { echo "FATAL: daemon entitlements not found at $DAEMON_ENTITLEMENTS" >&2; exit 1; }
 k2_daemon_helper_sign "$APP" "$SIGNING_IDENTITY" "$DAEMON_ENTITLEMENTS" || exit 1
+k2_screen_helper_sign "$APP" "$SIGNING_IDENTITY" || exit 1
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-menubar"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-power-helper"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-node"
@@ -85,6 +86,8 @@ codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --
 echo "  Signed (main + K2 Daemon.app + frpc + bundle)."
 k2_daemon_helper_verify "$APP" || exit 1
 k2_daemon_helper_verify_signed "$APP" || exit 1
+k2_screen_helper_verify "$APP" || exit 1
+k2_screen_helper_verify_signed "$APP" || exit 1
 
 # ── Step 4: Launch smoke-test (AMFI exec check) ──
 # A GUI app ignores SIGTERM and runs an event loop, so SIGKILL it + children and

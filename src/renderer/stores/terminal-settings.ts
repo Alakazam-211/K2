@@ -312,7 +312,7 @@ async function initTerminalZoomListeners(): Promise<void> {
     // REJECTS in the headless test env — no Tauri window) funnels into
     // this function's returned promise instead of escaping as an
     // unhandled rejection that flips vitest's exit code. Same fix as
-    // `initWorkspaceOpsListeners` in tabs.ts; this module is pulled in
+    // the old workspace-op listeners in tabs.ts had; this module is pulled in
     // transitively by tabs.test.ts, so its rejections surface there too.
     await listen('terminal:zoom-in', () => {
       useTerminalSettingsStore.getState().incrementFontSize()

@@ -72,7 +72,6 @@ import { menuNewTab } from './lib/menu-new-tab'
 import { primaryRoom } from './stores/room'
 import { focusedRoom, installRoomFocusTracking } from './stores/window-room'
 import { RoomProvider } from './components/Room/RoomContext'
-import { mountWorkspaceOpsRouter } from './lib/workspace-ops-router'
 import { useWorkspaceIndexShortcuts } from './hooks/useWorkspaceIndexShortcuts'
 import { useSidebarStore } from './stores/sidebar'
 import { useActiveAgentsStore, startAgentPolling, stopAgentPolling, type ActiveAgent } from './stores/active-agents'
@@ -489,10 +488,8 @@ function AppRoot(): React.JSX.Element {
   useEffect(() => mountExternalDropRouter(), [])
 
   // Home M3 (MS17/MS18) — window-level input acts on the FOCUSED room:
-  // pointer-down / focus-in inside a room root focuses it, and the
-  // assistant's `workspace:*` ops are delivered to it alone.
+  // pointer-down / focus-in inside a room root focuses it.
   useEffect(() => installRoomFocusTracking(document), [])
-  useEffect(() => mountWorkspaceOpsRouter(), [])
 
   // Cmd+1–9 / Cmd+Opt+1–9 — one window-level handler (MS18). On Home,
   // Cmd+1–9 selects Home row N (answer Q5).

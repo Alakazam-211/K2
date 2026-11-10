@@ -201,8 +201,20 @@ describe('retired style ids (the alias table)', () => {
 
   it('Bezel still compiles, hidden, but a selection can never resolve to it', () => {
     expect(getStyle('bezel')?.hidden).toBe(true)
-    expect(STYLES.filter((s) => s.hidden).map((s) => s.id)).toEqual(['bezel', 'glass-next'])
+    expect(STYLES.filter((s) => s.hidden).map((s) => s.id)).toEqual(['bezel', 'glass-classic'])
     expect(resolveStyleSelection(sel({ styleId: 'bezel' }), false).style.id).toBe('glass')
+  })
+
+  it('old Glass still compiles, hidden, but a selection can never resolve to it', () => {
+    expect(getStyle('glass-classic')?.hidden).toBe(true)
+    expect(resolveStyleSelection(sel({ styleId: 'glass-classic', paletteId: 'veil', schemeMode: 'light' }), false).style.id).toBe('glass')
+    expect(canonicalStyleSelection(sel({ styleId: 'glass-classic' })).styleId).toBe('glass')
+  })
+
+  it('a saved glass-next is Glass, with its palette and scheme', () => {
+    const r = resolveStyleSelection(sel({ styleId: 'glass-next', paletteId: 'yellow', schemeMode: 'dark' }), false)
+    expect([r.style.id, r.resolvedPalette.id, r.resolvedScheme]).toEqual(['glass', 'yellow', 'dark'])
+    expect(getStyle('glass-next')).toBeUndefined()
   })
 })
 

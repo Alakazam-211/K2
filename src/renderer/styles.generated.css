@@ -367,362 +367,8 @@
   --term-ansi-15: #0a0906;
 }
 
-/* ── Style: Liquid Glass (glass) v0.1.0 ── */
+/* ── Style: Glass (glass) v0.1.0 ── */
 [data-style="glass"] {
-  --radius-box: 14px;
-  --radius-field: 9px;
-  --radius-selector: 9999px;
-  --radius-pill: 9999px;
-  --radius-badge: 9999px;
-  --chamfer-surface: 0px;
-  --chamfer-control: 0px;
-  --chamfer-chip: 0px;
-  --chamfer-send: 0px;
-  --control-check: 14px;
-  --control-switch-width: 36px;
-  --control-switch-height: 20px;
-  --control-switch-knob: 16px;
-  --control-switch-sm-width: 28px;
-  --control-switch-sm-height: 14px;
-  --control-switch-sm-knob: 10px;
-  --control-slider-track: 3.5px;
-  --control-slider-thumb: 10px;
-  --gap-pane: 8px;
-  --gap-tile: 6px;
-  --gap-section: 8px;
-  --inset-window: 10px;
-  --divider-width: 12px;
-  --divider-color: transparent;
-  --ring-surface: inset 0 1px 0 0 var(--color-ring-edge-strong), inset 0 0 0 1px var(--color-ring-hairline);
-  --ring-field: inset 0 1px 0 0 var(--color-ring-edge), inset 0 0 0 1px var(--color-ring-hairline-soft);
-  --ring-focus: 0 0 0 2px rgba(90, 162, 255, 0.35);
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.25);
-  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.35);
-  --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.45);
-  --shadow-4: 0 16px 40px rgba(0, 0, 0, 0.50);
-  --shadow-5: 0 24px 64px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.35);
-  --material-blur: 18px;
-  --material-saturate: 180%;
-  --material-tint: rgba(16, 20, 32, 0.58);
-  --material-tint-opacity: 0.58;
-  --material-edge: transparent;
-  --material-sheen: 0 0 #0000;
-  --tile-fill: var(--color-bg-surface);
-  --tile-raised: var(--color-bg-elevated);
-  --tile-edge: var(--color-border);
-  --tile-sheen: 0 0 #0000;
-  --tile-shadow: 0 0 #0000;
-  --density-scale: 1;
-  --motion-duration-fast: 140ms;
-  --motion-duration-medium: 220ms;
-  --motion-duration-slow: 340ms;
-  --motion-ease-standard: cubic-bezier(0.32, 0.72, 0, 1);
-  --motion-ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
-  --motion-press-scale: 1;
-  --font-ui: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
-  --font-display: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
-  --font-code: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
-  --type-micro: 9px;
-  --type-xs: 10px;
-  --type-sm: 11px;
-  --type-md: 12px;
-  --type-lg: 13px;
-  --type-xl: 15px;
-}
-[data-style="glass"][data-palette="obsidian"] {
-  --color-bg: #0a0c12;
-  --color-bg-surface: rgba(16, 20, 32, 0.58);
-  --color-bg-elevated: rgba(30, 36, 56, 0.62);
-  --color-bg-inset: #0e1118;
-  --color-bg-stripe: rgba(12, 15, 24, 0.50);
-  --color-bg-canvas: #05060a;
-  --color-bg-hover: rgba(255, 255, 255, 0.07);
-  --color-border: rgba(255, 255, 255, 0.09);
-  --color-border-strong: rgba(255, 255, 255, 0.28);
-  --color-control-edge: #6a7084;
-  --color-text-primary: #eef1f8;
-  --color-text-secondary: #a8b0c2;
-  --color-text-muted: #7f869f;
-  --color-accent: #5aa2ff;
-  --color-accent-hover: #82b8ff;
-  --color-accent-soft: #b3d4ff;
-  --color-on-accent: #ffffff;
-  --color-status-working: #5aa2ff;
-  --color-status-error: #ff5d5d;
-  --color-status-ok: #3ddc84;
-  --color-status-warn: #ffc043;
-  --color-status-ok-soft: #6ee7a0;
-  --color-status-warn-soft: #ffd166;
-  --color-status-error-soft: #ff8080;
-  --color-neutral: #7c849c;
-  --color-control-track-off: rgba(255, 255, 255, 0.14);
-  --color-status-error-bright: #ffb3b3;
-  --color-status-error-text: #ff7a7a;
-  --color-status-working-soft: #ffb877;
-  --color-status-warn-text: #ffd166;
-  --color-status-needs-you: #ffc043;
-  --color-status-warn-amber: #ffc043;
-  --color-status-warn-amber-soft: #ffd685;
-  --color-status-warn-amber-bright: #ffe7b3;
-  --color-status-ok-hover: #2fbf70;
-  --color-danger: #e0454f;
-  --color-danger-active: #c23540;
-  --color-wash-1: rgba(255, 255, 255, 0.05);
-  --color-wash-2: rgba(255, 255, 255, 0.10);
-  --color-wash-3: rgba(255, 255, 255, 0.20);
-  --color-scrim: rgba(3, 5, 10, 0.40);
-  --color-danger-muted: #b53a44;
-  --color-diff-add-text: #a5e075;
-  --color-diff-remove-text: #ffb3b3;
-  --color-diff-modified-border: #6ee7a0;
-  --color-code-inline: #e8c586;
-  --color-danger-hover: #ff8080;
-  --color-overlay-soft-bg: rgba(255, 255, 255, 0.06);
-  --color-overlay-soft-border: rgba(255, 255, 255, 0.08);
-  --color-scrollbar-thumb: rgba(255, 255, 255, 0.12);
-  --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
-  --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.28);
-  --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.42);
-  --color-ring-edge-strong: rgba(255, 255, 255, 0.10);
-  --color-ring-edge: rgba(255, 255, 255, 0.07);
-  --color-ring-hairline: rgba(255, 255, 255, 0.06);
-  --color-ring-hairline-soft: rgba(255, 255, 255, 0.05);
-  --term-fg: #e6e9f2;
-  --term-bg: #0a0c12;
-  --term-cursor: #e6e9f2;
-  --term-selection: #2a3350;
-  --term-ansi-0: #10131c;
-  --term-ansi-1: #ff5d5d;
-  --term-ansi-2: #3ddc84;
-  --term-ansi-3: #ffc043;
-  --term-ansi-4: #5aa2ff;
-  --term-ansi-5: #b58aff;
-  --term-ansi-6: #4dd0e1;
-  --term-ansi-7: #c3c9d9;
-  --term-ansi-8: #5b6378;
-  --term-ansi-9: #ff8080;
-  --term-ansi-10: #6ee7a0;
-  --term-ansi-11: #ffd166;
-  --term-ansi-12: #82b8ff;
-  --term-ansi-13: #cbaaff;
-  --term-ansi-14: #7ee3ef;
-  --term-ansi-15: #f2f5fc;
-}
-[data-style="glass"][data-palette="veil"] {
-  --color-bg: #f2f4f8;
-  --color-bg-surface: rgba(255, 255, 255, 0.55);
-  --color-bg-elevated: rgba(255, 255, 255, 0.68);
-  --color-bg-inset: #eef1f6;
-  --color-bg-stripe: rgba(248, 250, 253, 0.50);
-  --color-bg-canvas: #e6eaf2;
-  --color-bg-hover: rgba(20, 40, 90, 0.06);
-  --color-border: rgba(20, 30, 60, 0.10);
-  --color-border-strong: rgba(20, 30, 60, 0.30);
-  --color-control-edge: #7c8294;
-  --color-text-primary: #1a1d26;
-  --color-text-secondary: #4c5568;
-  --color-text-muted: #616776;
-  --color-accent: #2f6fe0;
-  --color-accent-hover: #2258bd;
-  --color-accent-soft: #6d9ae8;
-  --color-on-accent: #ffffff;
-  --color-status-working: #2f6fe0;
-  --color-status-error: #c22f2f;
-  --color-status-ok: #1e7c46;
-  --color-status-warn: #a3720a;
-  --color-status-ok-soft: #27994f;
-  --color-status-warn-soft: #b07f0c;
-  --color-status-error-soft: #a82a2a;
-  --color-neutral: #76829c;
-  --color-control-track-off: rgba(20, 30, 60, 0.14);
-  --color-status-error-bright: #8c1f1f;
-  --color-status-error-text: #a82a2a;
-  --color-status-working-soft: #cf7434;
-  --color-status-warn-text: #8f6508;
-  --color-status-needs-you: #c2620a;
-  --color-status-warn-amber: #99610a;
-  --color-status-warn-amber-soft: #7f5407;
-  --color-status-warn-amber-bright: #6e4805;
-  --color-status-ok-hover: #16613a;
-  --color-danger: #c22f2f;
-  --color-danger-active: #9c2424;
-  --color-wash-1: rgba(20, 30, 60, 0.04);
-  --color-wash-2: rgba(20, 30, 60, 0.08);
-  --color-wash-3: rgba(20, 30, 60, 0.15);
-  --color-scrim: rgba(18, 24, 40, 0.30);
-  --color-danger-muted: #ab3535;
-  --color-diff-add-text: #47691a;
-  --color-diff-remove-text: #9c2c2c;
-  --color-diff-modified-border: #3fa06a;
-  --color-code-inline: #8a5a14;
-  --color-danger-hover: #c22f2f;
-  --color-overlay-soft-bg: rgba(20, 30, 60, 0.05);
-  --color-overlay-soft-border: rgba(20, 30, 60, 0.08);
-  --color-scrollbar-thumb: rgba(20, 30, 60, 0.14);
-  --color-scrollbar-thumb-hover: rgba(20, 30, 60, 0.26);
-  --color-scrollbar-thumb-strong: rgba(20, 30, 60, 0.30);
-  --color-scrollbar-thumb-strong-hover: rgba(20, 30, 60, 0.44);
-  --color-ring-edge-strong: rgba(255, 255, 255, 0.9);
-  --color-ring-edge: rgba(255, 255, 255, 0.85);
-  --color-ring-hairline: rgba(20, 30, 60, 0.08);
-  --color-ring-hairline-soft: rgba(20, 30, 60, 0.06);
-  --term-fg: #1a1d26;
-  --term-bg: #f2f4f8;
-  --term-cursor: #1a1d26;
-  --term-selection: #c8d2e6;
-  --term-ansi-0: #1a1d26;
-  --term-ansi-1: #c22f2f;
-  --term-ansi-2: #1e7c46;
-  --term-ansi-3: #a3720a;
-  --term-ansi-4: #2f6fe0;
-  --term-ansi-5: #7a4b9e;
-  --term-ansi-6: #0e7a80;
-  --term-ansi-7: #8a93a8;
-  --term-ansi-8: #4c5568;
-  --term-ansi-9: #dc4b4b;
-  --term-ansi-10: #27994f;
-  --term-ansi-11: #c28d12;
-  --term-ansi-12: #4f86e6;
-  --term-ansi-13: #9463b8;
-  --term-ansi-14: #159299;
-  --term-ansi-15: #080a10;
-}
-[data-style="glass"][data-palette="yellow"] {
-  --color-bg: #100f0e;
-  --color-bg-surface: rgba(27, 26, 24, 0.58);
-  --color-bg-elevated: rgba(37, 35, 32, 0.62);
-  --color-bg-inset: #171614;
-  --color-bg-stripe: rgba(20, 19, 18, 0.50);
-  --color-bg-canvas: #0c0b0a;
-  --color-bg-hover: rgba(255, 255, 255, 0.07);
-  --color-border: rgba(255, 255, 255, 0.09);
-  --color-border-strong: rgba(255, 255, 255, 0.28);
-  --color-control-edge: #7d776c;
-  --color-text-primary: #eae6de;
-  --color-text-secondary: #a89f92;
-  --color-text-muted: #a09a8e;
-  --color-accent: #ffc700;
-  --color-accent-hover: #ffd54d;
-  --color-accent-soft: #ffe38a;
-  --color-on-accent: #1a1400;
-  --color-status-working: #4c8dff;
-  --color-status-error: #ee5757;
-  --color-status-ok: #4fbf6f;
-  --color-status-warn: #e5b83c;
-  --color-status-ok-soft: #7ad494;
-  --color-status-warn-soft: #eec964;
-  --color-status-error-soft: #f38585;
-  --color-neutral: #8a8275;
-  --color-control-track-off: rgba(255, 255, 255, 0.14);
-  --color-status-error-bright: #f9b0b0;
-  --color-status-error-text: #f07a7a;
-  --color-status-working-soft: #f6a967;
-  --color-status-warn-text: #eec964;
-  --color-status-needs-you: #e5b83c;
-  --color-status-warn-amber: #e5b83c;
-  --color-status-warn-amber-soft: #efd382;
-  --color-status-warn-amber-bright: #f7e4ad;
-  --color-status-ok-hover: #3da45c;
-  --color-danger: #d13b3b;
-  --color-danger-active: #b02f2f;
-  --color-wash-1: rgba(255, 250, 235, 0.04);
-  --color-wash-2: rgba(255, 250, 235, 0.08);
-  --color-wash-3: rgba(255, 250, 235, 0.16);
-  --color-scrim: rgba(8, 7, 5, 0.55);
-  --color-danger-muted: #a83636;
-  --color-diff-add-text: #a9d16f;
-  --color-diff-remove-text: #f9b0b0;
-  --color-diff-modified-border: #7ad494;
-  --color-code-inline: #e0b56e;
-  --color-danger-hover: #f38585;
-  --color-overlay-soft-bg: rgba(255, 250, 235, 0.05);
-  --color-overlay-soft-border: rgba(255, 250, 235, 0.08);
-  --color-scrollbar-thumb: rgba(255, 250, 235, 0.10);
-  --color-scrollbar-thumb-hover: rgba(255, 250, 235, 0.20);
-  --color-scrollbar-thumb-strong: rgba(255, 250, 235, 0.25);
-  --color-scrollbar-thumb-strong-hover: rgba(255, 250, 235, 0.40);
-  --color-ring-edge-strong: rgba(255, 255, 255, 0.10);
-  --color-ring-edge: rgba(255, 255, 255, 0.07);
-  --color-ring-hairline: rgba(255, 255, 255, 0.06);
-  --color-ring-hairline-soft: rgba(255, 255, 255, 0.05);
-  --term-fg: #e5e1d8;
-  --term-bg: #100f0e;
-  --term-cursor: #ffc700;
-  --term-selection: #3a372f;
-  --term-ansi-0: #171614;
-  --term-ansi-1: #ee5757;
-  --term-ansi-2: #4fbf6f;
-  --term-ansi-3: #e5b83c;
-  --term-ansi-4: #6fa7d8;
-  --term-ansi-5: #c08ac4;
-  --term-ansi-6: #5cc0b8;
-  --term-ansi-7: #c9c2b4;
-  --term-ansi-8: #6f695f;
-  --term-ansi-9: #f38585;
-  --term-ansi-10: #7ad494;
-  --term-ansi-11: #eec964;
-  --term-ansi-12: #93c0e8;
-  --term-ansi-13: #d5a8d8;
-  --term-ansi-14: #84d5cd;
-  --term-ansi-15: #f4f0e7;
-}
-/* ── glass/overrides.css (policy-checked: scoped, no !important/url/@import) ── */
-/* Liquid Glass — bounded overrides (policy: scoped, no !important/url/@import).
- *
- * 1. The ambient canvas: a barely-there aurora the frost can actually
- *    diffuse — backdrop-filter over flat color shows nothing.
- * 2. The material: blur+saturate on chrome-layer surfaces only
- *    (data-surface = surface/elevated/stripe). `solid`, `canvas`, and
- *    `inset` roles never frost — terminals and content wells stay opaque
- *    (Apple layering law + WebGL perf).
- * 3. Fallbacks: no backdrop-filter support, or the user prefers reduced
- *    transparency → the same surfaces repaint with the opaque bg slot.
- */
-
-[data-style="glass"] body {
-  background:
-    radial-gradient(1200px 800px at 12% -8%, rgba(46, 66, 122, 0.28), transparent 60%),
-    radial-gradient(1000px 700px at 88% 108%, rgba(84, 48, 110, 0.20), transparent 62%),
-    radial-gradient(700px 500px at 70% 20%, rgba(28, 82, 96, 0.12), transparent 65%),
-    var(--color-bg-canvas);
-}
-
-/* Light scheme (Veil): a pale daylight aurora — same geometry, washed tints. */
-[data-style="glass"][data-scheme="light"] body {
-  background:
-    radial-gradient(1200px 800px at 12% -8%, rgba(120, 150, 220, 0.25), transparent 60%),
-    radial-gradient(1000px 700px at 88% 108%, rgba(190, 150, 220, 0.18), transparent 62%),
-    radial-gradient(700px 500px at 70% 20%, rgba(120, 190, 200, 0.14), transparent 65%),
-    var(--color-bg-canvas);
-}
-
-[data-style="glass"] [data-surface="surface"],
-[data-style="glass"] [data-surface="elevated"],
-[data-style="glass"] [data-surface="stripe"] {
-  -webkit-backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
-  backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
-}
-
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  [data-style="glass"] [data-surface="surface"],
-  [data-style="glass"] [data-surface="elevated"],
-  [data-style="glass"] [data-surface="stripe"] {
-    background-color: var(--color-bg);
-  }
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  [data-style="glass"] [data-surface="surface"],
-  [data-style="glass"] [data-surface="elevated"],
-  [data-style="glass"] [data-surface="stripe"] {
-    -webkit-backdrop-filter: saturate(var(--material-saturate));
-    backdrop-filter: saturate(var(--material-saturate));
-    background-color: var(--color-bg);
-  }
-}
-
-/* ── Style: Glass (glass-next) v0.1.0 ── */
-[data-style="glass-next"] {
   --radius-box: 16px;
   --radius-field: 22px;
   --radius-selector: 16px;
@@ -783,7 +429,7 @@
   --type-lg: 13px;
   --type-xl: 15px;
 }
-[data-style="glass-next"][data-palette="obsidian"] {
+[data-style="glass"][data-palette="obsidian"] {
   --color-bg: #0a0a0a;
   --color-bg-surface: #1c1c1e;
   --color-bg-elevated: #2c2c2e;
@@ -869,7 +515,7 @@
   --term-ansi-14: #8fe1ff;
   --term-ansi-15: #ffffff;
 }
-[data-style="glass-next"][data-palette="veil"] {
+[data-style="glass"][data-palette="veil"] {
   --color-bg: #fafafa;
   --color-bg-surface: #ffffff;
   --color-bg-elevated: #f7f7f8;
@@ -955,7 +601,7 @@
   --term-ansi-14: #32ade6;
   --term-ansi-15: #000000;
 }
-[data-style="glass-next"][data-palette="yellow"] {
+[data-style="glass"][data-palette="yellow"] {
   --color-bg: #100f0e;
   --color-bg-surface: #1b1a18;
   --color-bg-elevated: #252320;
@@ -1041,7 +687,7 @@
   --term-ansi-14: #84d5cd;
   --term-ansi-15: #f4f0e7;
 }
-/* ── glass-next/overrides.css (policy-checked: scoped, no !important/url/@import) ── */
+/* ── glass/overrides.css (policy-checked: scoped, no !important/url/@import) ── */
 /* Glass: K2 Companion's look on the desktop. Two materials, kept strictly
  * apart (prd-themes-terminal-glass-v1 §3.2):
  *
@@ -1066,7 +712,7 @@
  * Change this one line to recolour Glass: every blue in both palettes
  * (accent, its hover and soft mixes, the working status, Thread bubbles from
  * me, focus rings, on-state switches and checkmarks) follows it. */
-[data-style="glass-next"] {
+[data-style="glass"] {
   --glass-accent: #0a84ff;
 }
 
@@ -1074,7 +720,7 @@
  * their look, and Zen reuses a few app components. */
 
 /* ── FROST: only ever data-material="frost" ─────────────────────────────── */
-[data-style="glass-next"] [data-material="frost"]:not([data-zen-root] *) {
+[data-style="glass"] [data-material="frost"]:not([data-zen-root] *) {
   background: var(--material-tint);
   -webkit-backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
   backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
@@ -1082,11 +728,11 @@
   border-radius: var(--radius-box);
   box-shadow: var(--material-sheen);
 }
-[data-style="glass-next"] [data-frost-shape="pill"]:not([data-zen-root] *) { border-radius: var(--radius-pill); }
-[data-style="glass-next"] [data-frost-shape="round"]:not([data-zen-root] *) { border-radius: var(--radius-selector); }
-[data-style="glass-next"] [data-frost-shape="field"]:not([data-zen-root] *) { border-radius: var(--radius-field); }
+[data-style="glass"] [data-frost-shape="pill"]:not([data-zen-root] *) { border-radius: var(--radius-pill); }
+[data-style="glass"] [data-frost-shape="round"]:not([data-zen-root] *) { border-radius: var(--radius-selector); }
+[data-style="glass"] [data-frost-shape="field"]:not([data-zen-root] *) { border-radius: var(--radius-field); }
 /* Frost inside frost would double the blur. */
-[data-style="glass-next"] [data-material="frost"] [data-material="frost"]:not([data-zen-root] *) {
+[data-style="glass"] [data-material="frost"] [data-material="frost"]:not([data-zen-root] *) {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -1096,27 +742,27 @@
    components/ui/float-material.ts. When frosted, a menu gets the phone's
    denser fill so its text stays legible over busy content; as a tile it
    takes the raised tile rule below. */
-[data-style="glass-next"] [data-material="frost"][data-float]:not([data-zen-root] *) {
+[data-style="glass"] [data-material="frost"][data-float]:not([data-zen-root] *) {
   background: rgba(36, 36, 40, 0.62);
   box-shadow: var(--material-sheen), var(--shadow-3);
 }
 /* A menu's rows stay inside its rounded corners. Excludes menus with flyouts
    outside the box and panels that scroll on their own (those already clip). */
-[data-style="glass-next"] [data-float]:not([data-context-menu], [data-context-submenu], [class*="overflow-"]):not([data-zen-root] *) {
+[data-style="glass"] [data-float]:not([data-context-menu], [data-context-submenu], [class*="overflow-"]):not([data-zen-root] *) {
   overflow: hidden;
 }
 
 /* ── Veil: the light glass recipe ─────────────────────────────────────── */
-[data-style="glass-next"][data-palette="veil"] [data-material="frost"]:not([data-zen-root] *) {
+[data-style="glass"][data-palette="veil"] [data-material="frost"]:not([data-zen-root] *) {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 2px 5px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04);
 }
-[data-style="glass-next"][data-palette="veil"] [data-material="frost"][data-float]:not([data-zen-root] *) { background: var(--material-tint); }
+[data-style="glass"][data-palette="veil"] [data-material="frost"][data-float]:not([data-zen-root] *) { background: var(--material-tint); }
 /* The ring needs a positioned frost box; a menu placed absolute or fixed
    already is one. */
-[data-style="glass-next"][data-palette="veil"] [data-material="frost"]:not([class~="absolute"], [class~="fixed"]):not([data-zen-root] *) { position: relative; }
+[data-style="glass"][data-palette="veil"] [data-material="frost"]:not([class~="absolute"], [class~="fixed"]):not([data-zen-root] *) { position: relative; }
 /* The 1px gradient ring that follows the corners: dark down the sides, bright
    at top and bottom. */
-[data-style="glass-next"][data-palette="veil"] [data-material="frost"]:not([data-zen-root] *)::before {
+[data-style="glass"][data-palette="veil"] [data-material="frost"]:not([data-zen-root] *)::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -1130,77 +776,77 @@
   mask-composite: exclude;
 }
 /* Tiles: white, soft shadow, no inner sheen. Raised controls keep the rim. */
-[data-style="glass-next"][data-palette="veil"] :is([data-material="tile"], [data-material="raised"]):not([data-floating]):not([data-zen-root] *) {
+[data-style="glass"][data-palette="veil"] :is([data-material="tile"], [data-material="raised"]):not([data-floating]):not([data-zen-root] *) {
   border-color: var(--color-border);
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08), 0 1px 1px rgba(0, 0, 0, 0.06);
 }
 /* Small accent text: #0a84ff is under 4.5:1 here, so text darkens. Fills and
    icons drawn with --color-accent are untouched. */
-[data-style="glass-next"][data-palette="veil"] {
+[data-style="glass"][data-palette="veil"] {
   --color-accent-text: color-mix(in srgb, var(--color-accent) 80%, black);
 }
 
 /* ── Fallback (G5): Frost becomes a tile ────────────────────────────────
    lib/frost-support.ts stamps data-frost="tile" on <html> for reduced
    transparency, no working backdrop-filter, or a platform forced tile-only. */
-[data-style="glass-next"][data-frost="tile"] [data-material="frost"]:not([data-zen-root] *) {
+[data-style="glass"][data-frost="tile"] [data-material="frost"]:not([data-zen-root] *) {
   background: var(--tile-raised);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   border: 1px solid var(--tile-edge);
   box-shadow: var(--tile-sheen), var(--shadow-3);
 }
-[data-style="glass-next"][data-frost="tile"] [data-material="frost"][data-frost-shape]:not([data-zen-root] *) { box-shadow: var(--tile-sheen); }
-[data-style="glass-next"][data-frost="tile"] [data-material="frost"]:not([data-zen-root] *)::before { content: none; }
+[data-style="glass"][data-frost="tile"] [data-material="frost"][data-frost-shape]:not([data-zen-root] *) { box-shadow: var(--tile-sheen); }
+[data-style="glass"][data-frost="tile"] [data-material="frost"]:not([data-zen-root] *)::before { content: none; }
 
 /* ── TILE: solid fill, the edge is the glass ────────────────────────────── */
-[data-style="glass-next"] [data-material="tile"]:not([data-zen-root] *),
-[data-style="glass-next"] [data-material="raised"]:not([data-zen-root] *) {
+[data-style="glass"] [data-material="tile"]:not([data-zen-root] *),
+[data-style="glass"] [data-material="raised"]:not([data-zen-root] *) {
   border: 1px solid var(--tile-edge);
   border-radius: var(--radius-box);
   box-shadow: var(--tile-sheen), var(--tile-shadow);
 }
-[data-style="glass-next"] [data-material="tile"]:not([data-zen-root] *) { background: var(--tile-fill); }
-[data-style="glass-next"] [data-material="raised"]:not([data-zen-root] *) { background: var(--tile-raised); }
+[data-style="glass"] [data-material="tile"]:not([data-zen-root] *) { background: var(--tile-fill); }
+[data-style="glass"] [data-material="raised"]:not([data-zen-root] *) { background: var(--tile-raised); }
 /* A pane group holds a terminal or editor: keep its contents inside the
    rounded rim. (Menus portal to <body>, so they aren't clipped.) */
-[data-style="glass-next"] [data-material="tile"][data-clip]:not([data-zen-root] *) { overflow: hidden; }
+[data-style="glass"] [data-material="tile"][data-clip]:not([data-zen-root] *) { overflow: hidden; }
 /* A dialog or sheet floats above the app: tile rim, dialog drop shadow. */
-[data-style="glass-next"] [data-material][data-floating]:not([data-zen-root] *) {
+[data-style="glass"] [data-material][data-floating]:not([data-zen-root] *) {
   box-shadow: var(--tile-sheen), var(--shadow-5);
 }
 /* A menu or toast sits closer to the page than a dialog does. */
-[data-style="glass-next"] [data-material][data-floating="menu"]:not([data-zen-root] *) {
+[data-style="glass"] [data-material][data-floating="menu"]:not([data-zen-root] *) {
   box-shadow: var(--tile-sheen), var(--shadow-3);
 }
 
 /* ── Window chrome ──────────────────────────────────────────────────────
    A title bar is not a tile: it sits straight on the canvas, as the phone's
    header sits on the conversation. Its controls carry the frost. */
-[data-style="glass-next"] [data-chrome="bar"]:not([data-zen-root] *) {
+[data-style="glass"] [data-chrome="bar"]:not([data-zen-root] *) {
   background: transparent;
   border-color: transparent;
 }
 /* Open canvas under every title bar. */
-[data-style="glass-next"] [data-chrome="bar"]:not([data-zen-root] *) { margin-bottom: var(--gap-pane); }
-[data-style="glass-next"] [data-top-bar-cluster]:not([data-zen-root] *),
-[data-style="glass-next"] [data-page-tabs]:not([data-zen-root] *) {
+[data-style="glass"] [data-chrome="bar"]:not([data-zen-root] *) { margin-bottom: var(--gap-pane); }
+[data-style="glass"] [data-top-bar-cluster]:not([data-zen-root] *),
+[data-style="glass"] [data-page-tabs]:not([data-zen-root] *) {
   padding: 2px 8px;
   gap: 4px;
 }
 /* Drawers are tiles of their own: no line between them and the room. */
-[data-style="glass-next"] [data-drawer-side]:not([data-zen-root] *) { border-color: transparent; }
+[data-style="glass"] [data-drawer-side]:not([data-zen-root] *) { border-color: transparent; }
 
 /* The selected page tab is the phone's Home | Agents thumb: a blue pill. */
-[data-style="glass-next"] [data-page-tab]:not([data-zen-root] *) { border-radius: var(--radius-pill); }
-[data-style="glass-next"] [data-page-tab][data-selected]:not([data-zen-root] *) {
+[data-style="glass"] [data-page-tab]:not([data-zen-root] *) { border-radius: var(--radius-pill); }
+[data-style="glass"] [data-page-tab][data-selected]:not([data-zen-root] *) {
   background: var(--color-accent);
   color: var(--color-on-accent);
   box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.45), 0 1px 4px color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
 
 /* Light glass inverts the selected pill: a dark wash, normal ink. */
-[data-style="glass-next"][data-palette="veil"] [data-page-tab][data-selected]:not([data-zen-root] *) {
+[data-style="glass"][data-palette="veil"] [data-page-tab][data-selected]:not([data-zen-root] *) {
   background: rgba(0, 0, 0, 0.07);
   color: var(--color-text-primary);
   box-shadow: none;
@@ -1209,68 +855,68 @@
 /* ── Controls still written by hand ─────────────────────────────────────
    Many buttons, inputs and dropdown triggers don't use the primitives yet.
    They read the field radius here, so Glass has no square controls. */
-[data-style="glass-next"] :is(button[class~="border"], button[class~="bg-[var(--color-accent)]"], select, textarea, input:not([type="checkbox"], [type="radio"], [type="range"])):not([data-zen-root] *, [data-k2-thread-zen] *) {
+[data-style="glass"] :is(button[class~="border"], button[class~="bg-[var(--color-accent)]"], select, textarea, input:not([type="checkbox"], [type="radio"], [type="range"])):not([data-zen-root] *, [data-k2-thread-zen] *) {
   border-radius: var(--radius-field);
 }
 
 /* Filled controls, not outlines. A field or select inside a tile sits one step
    lighter than the tile (the phone's raised tile), and a secondary button is a
    filled tile rather than a bare outline. */
-[data-style="glass-next"] [data-material] :is(button, input, select, textarea)[class~="bg-[var(--color-bg)]"]:not([data-zen-root] *, [data-k2-thread-zen] *) {
+[data-style="glass"] [data-material] :is(button, input, select, textarea)[class~="bg-[var(--color-bg)]"]:not([data-zen-root] *, [data-k2-thread-zen] *) {
   background: var(--tile-raised);
 }
-[data-style="glass-next"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):not([data-zen-root] *, [data-k2-thread-zen] *) {
+[data-style="glass"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):not([data-zen-root] *, [data-k2-thread-zen] *) {
   background: var(--tile-raised);
 }
 /* Shared controls keep their own edge, at 3:1 on the tile. Frosted pieces keep
    the phone's frost edge; hand-built controls join as they move to the shared
    ones. */
-[data-style="glass-next"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):not([class~="border-[var(--color-control-edge)]"]):not([data-zen-root] *, [data-k2-thread-zen] *) {
+[data-style="glass"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):not([class~="border-[var(--color-control-edge)]"]):not([data-zen-root] *, [data-k2-thread-zen] *) {
   border-color: var(--tile-edge);
 }
-[data-style="glass-next"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):hover:not(:disabled):not([data-zen-root] *, [data-k2-thread-zen] *) {
+[data-style="glass"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):hover:not(:disabled):not([data-zen-root] *, [data-k2-thread-zen] *) {
   background: color-mix(in srgb, var(--tile-raised) 90%, var(--color-text-primary));
 }
 
 /* The Settings page: a nav tile and small cards on the near-black page, as on
    the phone. The content pane is the page, not one more big tile. */
-[data-style="glass-next"] [data-settings-shell]:not([data-zen-root] *) { gap: var(--gap-pane); }
-[data-style="glass-next"] [data-settings-shell] > [data-material="tile"]:not([data-clip]):not([data-zen-root] *) {
+[data-style="glass"] [data-settings-shell]:not([data-zen-root] *) { gap: var(--gap-pane); }
+[data-style="glass"] [data-settings-shell] > [data-material="tile"]:not([data-clip]):not([data-zen-root] *) {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
 }
-[data-style="glass-next"] [data-settings-card]:not([data-zen-root] *) { border-radius: var(--radius-box); }
-[data-style="glass-next"] [data-mode-toggle]:not([data-zen-root] *) { border-radius: var(--radius-pill); overflow: hidden; }
+[data-style="glass"] [data-settings-card]:not([data-zen-root] *) { border-radius: var(--radius-box); }
+[data-style="glass"] [data-mode-toggle]:not([data-zen-root] *) { border-radius: var(--radius-pill); overflow: hidden; }
 
 /* ── Form controls, tuned to the phone ────────────────────────────────── */
-[data-style="glass-next"] .k2-checkbox:not([data-zen-root] *),
-[data-style="glass-next"] .k2-radio:not([data-zen-root] *) { border-width: 1.5px; }
-[data-style="glass-next"] .k2-checkbox:checked:not([data-zen-root] *),
-[data-style="glass-next"] .k2-checkbox:indeterminate:not([data-zen-root] *),
-[data-style="glass-next"] .k2-radio:checked:not([data-zen-root] *) { border-color: transparent; }
-[data-style="glass-next"] .k2-radio:checked:not([data-zen-root] *) {
+[data-style="glass"] .k2-checkbox:not([data-zen-root] *),
+[data-style="glass"] .k2-radio:not([data-zen-root] *) { border-width: 1.5px; }
+[data-style="glass"] .k2-checkbox:checked:not([data-zen-root] *),
+[data-style="glass"] .k2-checkbox:indeterminate:not([data-zen-root] *),
+[data-style="glass"] .k2-radio:checked:not([data-zen-root] *) { border-color: transparent; }
+[data-style="glass"] .k2-radio:checked:not([data-zen-root] *) {
   background-image: radial-gradient(circle, var(--color-on-accent) 0 34%, transparent 38%);
 }
 /* Switch: a soft track, a white knob that sits above it. */
-[data-style="glass-next"] .k2-switch:not([data-zen-root] *) { box-shadow: none; }
-[data-style="glass-next"] .k2-switch[aria-checked="false"]:not([data-zen-root] *) { box-shadow: inset 0 0 0 1px var(--color-control-edge); }
-[data-style="glass-next"] .k2-switch-knob:not([data-zen-root] *),
-[data-style="glass-next"] .k2-switch[aria-checked="true"] .k2-switch-knob:not([data-zen-root] *) {
+[data-style="glass"] .k2-switch:not([data-zen-root] *) { box-shadow: none; }
+[data-style="glass"] .k2-switch[aria-checked="false"]:not([data-zen-root] *) { box-shadow: inset 0 0 0 1px var(--color-control-edge); }
+[data-style="glass"] .k2-switch-knob:not([data-zen-root] *),
+[data-style="glass"] .k2-switch[aria-checked="true"] .k2-switch-knob:not([data-zen-root] *) {
   background-color: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
 }
-[data-style="glass-next"] .k2-switch:not([data-zen-root] *),
-[data-style="glass-next"] .k2-switch-knob:not([data-zen-root] *) {
+[data-style="glass"] .k2-switch:not([data-zen-root] *),
+[data-style="glass"] .k2-switch-knob:not([data-zen-root] *) {
   transition: background-color var(--motion-duration-medium) var(--motion-ease-standard),
     transform var(--motion-duration-medium) var(--motion-ease-standard);
 }
 /* Slider: a white round thumb on a pill track. */
-[data-style="glass-next"] .k2-slider:not([data-zen-root] *)::-webkit-slider-thumb {
+[data-style="glass"] .k2-slider:not([data-zen-root] *)::-webkit-slider-thumb {
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
 }
-[data-style="glass-next"] .k2-slider:focus-visible:not([data-zen-root] *)::-webkit-slider-thumb {
+[data-style="glass"] .k2-slider:focus-visible:not([data-zen-root] *)::-webkit-slider-thumb {
   background: #ffffff;
   box-shadow: 0 0 0 2px var(--color-accent);
   transform: none;
@@ -1278,40 +924,394 @@
 /* Segmented: a Frost pill with a blue thumb that slides inside it, inset 3px,
    the phone's Home | Agents toggle. Segmented.tsx places the thumb from the
    padding box, so its top, bottom and the track's padding move together. */
-[data-style="glass-next"] .k2-segmented:not([data-zen-root] *) { padding: 3px; }
-[data-style="glass-next"] .k2-segment-thumb:not([data-zen-root] *) {
+[data-style="glass"] .k2-segmented:not([data-zen-root] *) { padding: 3px; }
+[data-style="glass"] .k2-segment-thumb:not([data-zen-root] *) {
   top: 3px;
   bottom: 3px;
   background: color-mix(in srgb, var(--color-accent) 92%, transparent);
   box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.45), 0 1px 4px color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
-[data-style="glass-next"] .k2-segment-thumb[data-ready]:not([data-zen-root] *) {
+[data-style="glass"] .k2-segment-thumb[data-ready]:not([data-zen-root] *) {
   transition: transform 180ms cubic-bezier(0.25, 0.8, 0.25, 1), width 180ms cubic-bezier(0.25, 0.8, 0.25, 1);
 }
-[data-style="glass-next"] .k2-segment:not([data-zen-root] *) {
+[data-style="glass"] .k2-segment:not([data-zen-root] *) {
   padding: 2px 12px;
   border-radius: var(--radius-pill);
   color: rgba(235, 235, 245, 0.55);
   transition: color 180ms ease;
 }
-[data-style="glass-next"] .k2-segment[aria-checked="true"]:not([data-zen-root] *) { color: #ffffff; }
+[data-style="glass"] .k2-segment[aria-checked="true"]:not([data-zen-root] *) { color: #ffffff; }
 /* Veil's picker: a white pill on a pale track, ink for the label. Frost would
    vanish on a white tile, so the track is a plain wash with a control edge. */
-[data-style="glass-next"][data-palette="veil"] .k2-segmented[data-material="frost"]:not([data-zen-root] *) {
+[data-style="glass"][data-palette="veil"] .k2-segmented[data-material="frost"]:not([data-zen-root] *) {
   background: #f5f5f5;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   border: 1px solid var(--color-control-edge);
   box-shadow: none;
 }
-[data-style="glass-next"][data-palette="veil"] .k2-segmented[data-material="frost"]:not([data-zen-root] *)::before { content: none; }
-[data-style="glass-next"][data-palette="veil"] .k2-segment-thumb:not([data-zen-root] *) {
+[data-style="glass"][data-palette="veil"] .k2-segmented[data-material="frost"]:not([data-zen-root] *)::before { content: none; }
+[data-style="glass"][data-palette="veil"] .k2-segment-thumb:not([data-zen-root] *) {
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
 }
-[data-style="glass-next"][data-palette="veil"] .k2-segment:not([data-zen-root] *) { color: #666666; }
-[data-style="glass-next"][data-palette="veil"] .k2-segment[aria-checked="true"]:not([data-zen-root] *) { color: #000000; }
-[data-style="glass-next"][data-palette="veil"] .k2-segment[aria-checked="true"]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-accent); }
+[data-style="glass"][data-palette="veil"] .k2-segment:not([data-zen-root] *) { color: #666666; }
+[data-style="glass"][data-palette="veil"] .k2-segment[aria-checked="true"]:not([data-zen-root] *) { color: #000000; }
+[data-style="glass"][data-palette="veil"] .k2-segment[aria-checked="true"]:focus-visible:not([data-zen-root] *) { outline-color: var(--color-accent); }
+
+/* ── Style: Glass Classic (glass-classic) v0.1.0 ── */
+[data-style="glass-classic"] {
+  --radius-box: 14px;
+  --radius-field: 9px;
+  --radius-selector: 9999px;
+  --radius-pill: 9999px;
+  --radius-badge: 9999px;
+  --chamfer-surface: 0px;
+  --chamfer-control: 0px;
+  --chamfer-chip: 0px;
+  --chamfer-send: 0px;
+  --control-check: 14px;
+  --control-switch-width: 36px;
+  --control-switch-height: 20px;
+  --control-switch-knob: 16px;
+  --control-switch-sm-width: 28px;
+  --control-switch-sm-height: 14px;
+  --control-switch-sm-knob: 10px;
+  --control-slider-track: 3.5px;
+  --control-slider-thumb: 10px;
+  --gap-pane: 8px;
+  --gap-tile: 6px;
+  --gap-section: 8px;
+  --inset-window: 10px;
+  --divider-width: 12px;
+  --divider-color: transparent;
+  --ring-surface: inset 0 1px 0 0 var(--color-ring-edge-strong), inset 0 0 0 1px var(--color-ring-hairline);
+  --ring-field: inset 0 1px 0 0 var(--color-ring-edge), inset 0 0 0 1px var(--color-ring-hairline-soft);
+  --ring-focus: 0 0 0 2px rgba(90, 162, 255, 0.35);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-4: 0 16px 40px rgba(0, 0, 0, 0.50);
+  --shadow-5: 0 24px 64px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.35);
+  --material-blur: 18px;
+  --material-saturate: 180%;
+  --material-tint: rgba(16, 20, 32, 0.58);
+  --material-tint-opacity: 0.58;
+  --material-edge: transparent;
+  --material-sheen: 0 0 #0000;
+  --tile-fill: var(--color-bg-surface);
+  --tile-raised: var(--color-bg-elevated);
+  --tile-edge: var(--color-border);
+  --tile-sheen: 0 0 #0000;
+  --tile-shadow: 0 0 #0000;
+  --density-scale: 1;
+  --motion-duration-fast: 140ms;
+  --motion-duration-medium: 220ms;
+  --motion-duration-slow: 340ms;
+  --motion-ease-standard: cubic-bezier(0.32, 0.72, 0, 1);
+  --motion-ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-press-scale: 1;
+  --font-ui: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-display: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-code: 'MesloLGM Nerd Font', Menlo, Monaco, 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, monospace, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --type-micro: 9px;
+  --type-xs: 10px;
+  --type-sm: 11px;
+  --type-md: 12px;
+  --type-lg: 13px;
+  --type-xl: 15px;
+}
+[data-style="glass-classic"][data-palette="obsidian"] {
+  --color-bg: #0a0c12;
+  --color-bg-surface: rgba(16, 20, 32, 0.58);
+  --color-bg-elevated: rgba(30, 36, 56, 0.62);
+  --color-bg-inset: #0e1118;
+  --color-bg-stripe: rgba(12, 15, 24, 0.50);
+  --color-bg-canvas: #05060a;
+  --color-bg-hover: rgba(255, 255, 255, 0.07);
+  --color-border: rgba(255, 255, 255, 0.09);
+  --color-border-strong: rgba(255, 255, 255, 0.28);
+  --color-control-edge: #6a7084;
+  --color-text-primary: #eef1f8;
+  --color-text-secondary: #a8b0c2;
+  --color-text-muted: #7f869f;
+  --color-accent: #5aa2ff;
+  --color-accent-hover: #82b8ff;
+  --color-accent-soft: #b3d4ff;
+  --color-on-accent: #ffffff;
+  --color-status-working: #5aa2ff;
+  --color-status-error: #ff5d5d;
+  --color-status-ok: #3ddc84;
+  --color-status-warn: #ffc043;
+  --color-status-ok-soft: #6ee7a0;
+  --color-status-warn-soft: #ffd166;
+  --color-status-error-soft: #ff8080;
+  --color-neutral: #7c849c;
+  --color-control-track-off: rgba(255, 255, 255, 0.14);
+  --color-status-error-bright: #ffb3b3;
+  --color-status-error-text: #ff7a7a;
+  --color-status-working-soft: #ffb877;
+  --color-status-warn-text: #ffd166;
+  --color-status-needs-you: #ffc043;
+  --color-status-warn-amber: #ffc043;
+  --color-status-warn-amber-soft: #ffd685;
+  --color-status-warn-amber-bright: #ffe7b3;
+  --color-status-ok-hover: #2fbf70;
+  --color-danger: #e0454f;
+  --color-danger-active: #c23540;
+  --color-wash-1: rgba(255, 255, 255, 0.05);
+  --color-wash-2: rgba(255, 255, 255, 0.10);
+  --color-wash-3: rgba(255, 255, 255, 0.20);
+  --color-scrim: rgba(3, 5, 10, 0.40);
+  --color-danger-muted: #b53a44;
+  --color-diff-add-text: #a5e075;
+  --color-diff-remove-text: #ffb3b3;
+  --color-diff-modified-border: #6ee7a0;
+  --color-code-inline: #e8c586;
+  --color-danger-hover: #ff8080;
+  --color-overlay-soft-bg: rgba(255, 255, 255, 0.06);
+  --color-overlay-soft-border: rgba(255, 255, 255, 0.08);
+  --color-scrollbar-thumb: rgba(255, 255, 255, 0.12);
+  --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
+  --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.28);
+  --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.42);
+  --color-ring-edge-strong: rgba(255, 255, 255, 0.10);
+  --color-ring-edge: rgba(255, 255, 255, 0.07);
+  --color-ring-hairline: rgba(255, 255, 255, 0.06);
+  --color-ring-hairline-soft: rgba(255, 255, 255, 0.05);
+  --term-fg: #e6e9f2;
+  --term-bg: #0a0c12;
+  --term-cursor: #e6e9f2;
+  --term-selection: #2a3350;
+  --term-ansi-0: #10131c;
+  --term-ansi-1: #ff5d5d;
+  --term-ansi-2: #3ddc84;
+  --term-ansi-3: #ffc043;
+  --term-ansi-4: #5aa2ff;
+  --term-ansi-5: #b58aff;
+  --term-ansi-6: #4dd0e1;
+  --term-ansi-7: #c3c9d9;
+  --term-ansi-8: #5b6378;
+  --term-ansi-9: #ff8080;
+  --term-ansi-10: #6ee7a0;
+  --term-ansi-11: #ffd166;
+  --term-ansi-12: #82b8ff;
+  --term-ansi-13: #cbaaff;
+  --term-ansi-14: #7ee3ef;
+  --term-ansi-15: #f2f5fc;
+}
+[data-style="glass-classic"][data-palette="veil"] {
+  --color-bg: #f2f4f8;
+  --color-bg-surface: rgba(255, 255, 255, 0.55);
+  --color-bg-elevated: rgba(255, 255, 255, 0.68);
+  --color-bg-inset: #eef1f6;
+  --color-bg-stripe: rgba(248, 250, 253, 0.50);
+  --color-bg-canvas: #e6eaf2;
+  --color-bg-hover: rgba(20, 40, 90, 0.06);
+  --color-border: rgba(20, 30, 60, 0.10);
+  --color-border-strong: rgba(20, 30, 60, 0.30);
+  --color-control-edge: #7c8294;
+  --color-text-primary: #1a1d26;
+  --color-text-secondary: #4c5568;
+  --color-text-muted: #616776;
+  --color-accent: #2f6fe0;
+  --color-accent-hover: #2258bd;
+  --color-accent-soft: #6d9ae8;
+  --color-on-accent: #ffffff;
+  --color-status-working: #2f6fe0;
+  --color-status-error: #c22f2f;
+  --color-status-ok: #1e7c46;
+  --color-status-warn: #a3720a;
+  --color-status-ok-soft: #27994f;
+  --color-status-warn-soft: #b07f0c;
+  --color-status-error-soft: #a82a2a;
+  --color-neutral: #76829c;
+  --color-control-track-off: rgba(20, 30, 60, 0.14);
+  --color-status-error-bright: #8c1f1f;
+  --color-status-error-text: #a82a2a;
+  --color-status-working-soft: #cf7434;
+  --color-status-warn-text: #8f6508;
+  --color-status-needs-you: #c2620a;
+  --color-status-warn-amber: #99610a;
+  --color-status-warn-amber-soft: #7f5407;
+  --color-status-warn-amber-bright: #6e4805;
+  --color-status-ok-hover: #16613a;
+  --color-danger: #c22f2f;
+  --color-danger-active: #9c2424;
+  --color-wash-1: rgba(20, 30, 60, 0.04);
+  --color-wash-2: rgba(20, 30, 60, 0.08);
+  --color-wash-3: rgba(20, 30, 60, 0.15);
+  --color-scrim: rgba(18, 24, 40, 0.30);
+  --color-danger-muted: #ab3535;
+  --color-diff-add-text: #47691a;
+  --color-diff-remove-text: #9c2c2c;
+  --color-diff-modified-border: #3fa06a;
+  --color-code-inline: #8a5a14;
+  --color-danger-hover: #c22f2f;
+  --color-overlay-soft-bg: rgba(20, 30, 60, 0.05);
+  --color-overlay-soft-border: rgba(20, 30, 60, 0.08);
+  --color-scrollbar-thumb: rgba(20, 30, 60, 0.14);
+  --color-scrollbar-thumb-hover: rgba(20, 30, 60, 0.26);
+  --color-scrollbar-thumb-strong: rgba(20, 30, 60, 0.30);
+  --color-scrollbar-thumb-strong-hover: rgba(20, 30, 60, 0.44);
+  --color-ring-edge-strong: rgba(255, 255, 255, 0.9);
+  --color-ring-edge: rgba(255, 255, 255, 0.85);
+  --color-ring-hairline: rgba(20, 30, 60, 0.08);
+  --color-ring-hairline-soft: rgba(20, 30, 60, 0.06);
+  --term-fg: #1a1d26;
+  --term-bg: #f2f4f8;
+  --term-cursor: #1a1d26;
+  --term-selection: #c8d2e6;
+  --term-ansi-0: #1a1d26;
+  --term-ansi-1: #c22f2f;
+  --term-ansi-2: #1e7c46;
+  --term-ansi-3: #a3720a;
+  --term-ansi-4: #2f6fe0;
+  --term-ansi-5: #7a4b9e;
+  --term-ansi-6: #0e7a80;
+  --term-ansi-7: #8a93a8;
+  --term-ansi-8: #4c5568;
+  --term-ansi-9: #dc4b4b;
+  --term-ansi-10: #27994f;
+  --term-ansi-11: #c28d12;
+  --term-ansi-12: #4f86e6;
+  --term-ansi-13: #9463b8;
+  --term-ansi-14: #159299;
+  --term-ansi-15: #080a10;
+}
+[data-style="glass-classic"][data-palette="yellow"] {
+  --color-bg: #100f0e;
+  --color-bg-surface: rgba(27, 26, 24, 0.58);
+  --color-bg-elevated: rgba(37, 35, 32, 0.62);
+  --color-bg-inset: #171614;
+  --color-bg-stripe: rgba(20, 19, 18, 0.50);
+  --color-bg-canvas: #0c0b0a;
+  --color-bg-hover: rgba(255, 255, 255, 0.07);
+  --color-border: rgba(255, 255, 255, 0.09);
+  --color-border-strong: rgba(255, 255, 255, 0.28);
+  --color-control-edge: #7d776c;
+  --color-text-primary: #eae6de;
+  --color-text-secondary: #a89f92;
+  --color-text-muted: #a09a8e;
+  --color-accent: #ffc700;
+  --color-accent-hover: #ffd54d;
+  --color-accent-soft: #ffe38a;
+  --color-on-accent: #1a1400;
+  --color-status-working: #4c8dff;
+  --color-status-error: #ee5757;
+  --color-status-ok: #4fbf6f;
+  --color-status-warn: #e5b83c;
+  --color-status-ok-soft: #7ad494;
+  --color-status-warn-soft: #eec964;
+  --color-status-error-soft: #f38585;
+  --color-neutral: #8a8275;
+  --color-control-track-off: rgba(255, 255, 255, 0.14);
+  --color-status-error-bright: #f9b0b0;
+  --color-status-error-text: #f07a7a;
+  --color-status-working-soft: #f6a967;
+  --color-status-warn-text: #eec964;
+  --color-status-needs-you: #e5b83c;
+  --color-status-warn-amber: #e5b83c;
+  --color-status-warn-amber-soft: #efd382;
+  --color-status-warn-amber-bright: #f7e4ad;
+  --color-status-ok-hover: #3da45c;
+  --color-danger: #d13b3b;
+  --color-danger-active: #b02f2f;
+  --color-wash-1: rgba(255, 250, 235, 0.04);
+  --color-wash-2: rgba(255, 250, 235, 0.08);
+  --color-wash-3: rgba(255, 250, 235, 0.16);
+  --color-scrim: rgba(8, 7, 5, 0.55);
+  --color-danger-muted: #a83636;
+  --color-diff-add-text: #a9d16f;
+  --color-diff-remove-text: #f9b0b0;
+  --color-diff-modified-border: #7ad494;
+  --color-code-inline: #e0b56e;
+  --color-danger-hover: #f38585;
+  --color-overlay-soft-bg: rgba(255, 250, 235, 0.05);
+  --color-overlay-soft-border: rgba(255, 250, 235, 0.08);
+  --color-scrollbar-thumb: rgba(255, 250, 235, 0.10);
+  --color-scrollbar-thumb-hover: rgba(255, 250, 235, 0.20);
+  --color-scrollbar-thumb-strong: rgba(255, 250, 235, 0.25);
+  --color-scrollbar-thumb-strong-hover: rgba(255, 250, 235, 0.40);
+  --color-ring-edge-strong: rgba(255, 255, 255, 0.10);
+  --color-ring-edge: rgba(255, 255, 255, 0.07);
+  --color-ring-hairline: rgba(255, 255, 255, 0.06);
+  --color-ring-hairline-soft: rgba(255, 255, 255, 0.05);
+  --term-fg: #e5e1d8;
+  --term-bg: #100f0e;
+  --term-cursor: #ffc700;
+  --term-selection: #3a372f;
+  --term-ansi-0: #171614;
+  --term-ansi-1: #ee5757;
+  --term-ansi-2: #4fbf6f;
+  --term-ansi-3: #e5b83c;
+  --term-ansi-4: #6fa7d8;
+  --term-ansi-5: #c08ac4;
+  --term-ansi-6: #5cc0b8;
+  --term-ansi-7: #c9c2b4;
+  --term-ansi-8: #6f695f;
+  --term-ansi-9: #f38585;
+  --term-ansi-10: #7ad494;
+  --term-ansi-11: #eec964;
+  --term-ansi-12: #93c0e8;
+  --term-ansi-13: #d5a8d8;
+  --term-ansi-14: #84d5cd;
+  --term-ansi-15: #f4f0e7;
+}
+/* ── glass-classic/overrides.css (policy-checked: scoped, no !important/url/@import) ── */
+/* Liquid Glass — bounded overrides (policy: scoped, no !important/url/@import).
+ *
+ * 1. The ambient canvas: a barely-there aurora the frost can actually
+ *    diffuse — backdrop-filter over flat color shows nothing.
+ * 2. The material: blur+saturate on chrome-layer surfaces only
+ *    (data-surface = surface/elevated/stripe). `solid`, `canvas`, and
+ *    `inset` roles never frost — terminals and content wells stay opaque
+ *    (Apple layering law + WebGL perf).
+ * 3. Fallbacks: no backdrop-filter support, or the user prefers reduced
+ *    transparency → the same surfaces repaint with the opaque bg slot.
+ */
+
+[data-style="glass-classic"] body {
+  background:
+    radial-gradient(1200px 800px at 12% -8%, rgba(46, 66, 122, 0.28), transparent 60%),
+    radial-gradient(1000px 700px at 88% 108%, rgba(84, 48, 110, 0.20), transparent 62%),
+    radial-gradient(700px 500px at 70% 20%, rgba(28, 82, 96, 0.12), transparent 65%),
+    var(--color-bg-canvas);
+}
+
+/* Light scheme (Veil): a pale daylight aurora — same geometry, washed tints. */
+[data-style="glass-classic"][data-scheme="light"] body {
+  background:
+    radial-gradient(1200px 800px at 12% -8%, rgba(120, 150, 220, 0.25), transparent 60%),
+    radial-gradient(1000px 700px at 88% 108%, rgba(190, 150, 220, 0.18), transparent 62%),
+    radial-gradient(700px 500px at 70% 20%, rgba(120, 190, 200, 0.14), transparent 65%),
+    var(--color-bg-canvas);
+}
+
+[data-style="glass-classic"] [data-surface="surface"],
+[data-style="glass-classic"] [data-surface="elevated"],
+[data-style="glass-classic"] [data-surface="stripe"] {
+  -webkit-backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
+  backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  [data-style="glass-classic"] [data-surface="surface"],
+  [data-style="glass-classic"] [data-surface="elevated"],
+  [data-style="glass-classic"] [data-surface="stripe"] {
+    background-color: var(--color-bg);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  [data-style="glass-classic"] [data-surface="surface"],
+  [data-style="glass-classic"] [data-surface="elevated"],
+  [data-style="glass-classic"] [data-surface="stripe"] {
+    -webkit-backdrop-filter: saturate(var(--material-saturate));
+    backdrop-filter: saturate(var(--material-saturate));
+    background-color: var(--color-bg);
+  }
+}
 
 /* ── Style: Terminal (terminal) v1.0.0 ── */
 [data-style="terminal"] {

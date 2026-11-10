@@ -1,11 +1,11 @@
 {
   "$schema": "../style.schema.json#/$defs/manifest",
   "id": "glass",
-  "name": "Liquid Glass",
+  "name": "Glass",
   "author": "Alakazam Labs",
   "version": "0.1.0",
   "schemaVersion": 1,
-  "description": "Experimental preview — frosted instrument glass over a deep ambient canvas. Chrome floats as translucent cards; terminals stay pure and opaque.",
+  "description": "Rounded and calm, like the K2 phone app. Solid tiles on a plain background, with frosted glass only on things that float.",
   "defaultPalette": "obsidian",
   "defaultPalettes": {
     "dark": "obsidian",
@@ -17,6 +17,6 @@
     "schemes": ["dark", "light"]
   },
   "dials": [
-    { "id": "frost", "label": "Frost", "token": "--material-blur", "min": 0, "max": 30, "step": 1, "unit": "px", "default": 18 }
+    { "id": "frost", "label": "Frost", "token": "--material-blur", "min": 0, "max": 40, "step": 1, "unit": "px", "default": 28 }
   ]
 }

@@ -11,11 +11,11 @@
       "$type": "color"
     },
     "bg-surface": {
-      "$value": "#1b1a18",
+      "$value": "rgba(27, 26, 24, 0.58)",
       "$type": "color"
     },
     "bg-elevated": {
-      "$value": "#252320",
+      "$value": "rgba(37, 35, 32, 0.62)",
       "$type": "color"
     },
     "bg-inset": {
@@ -23,19 +23,19 @@
       "$type": "color"
     },
     "bg-stripe": {
-      "$value": "#1b1a18",
+      "$value": "rgba(20, 19, 18, 0.50)",
       "$type": "color"
     },
     "bg-canvas": {
-      "$value": "#100f0e",
+      "$value": "#0c0b0a",
       "$type": "color"
     },
     "bg-hover": {
-      "$value": "rgba(255, 255, 255, 0.08)",
+      "$value": "rgba(255, 255, 255, 0.07)",
       "$type": "color"
     },
     "border": {
-      "$value": "#33302b",
+      "$value": "rgba(255, 255, 255, 0.09)",
       "$type": "color"
     },
     "border-strong": {
@@ -158,7 +158,7 @@
       "$type": "color"
     },
     "control-track-off": {
-      "$value": "rgba(120, 120, 128, 0.32)",
+      "$value": "rgba(255, 255, 255, 0.14)",
       "$type": "color"
     },
     "wash-1": {
@@ -218,11 +218,11 @@
       "$type": "color"
     },
     "ring-edge-strong": {
-      "$value": "rgba(255, 255, 255, 0.22)",
+      "$value": "rgba(255, 255, 255, 0.10)",
       "$type": "color"
     },
     "ring-edge": {
-      "$value": "rgba(255, 255, 255, 0.14)",
+      "$value": "rgba(255, 255, 255, 0.07)",
       "$type": "color"
     },
     "ring-hairline": {
@@ -231,34 +231,6 @@
     },
     "ring-hairline-soft": {
       "$value": "rgba(255, 255, 255, 0.05)",
-      "$type": "color"
-    },
-    "frost-fill": {
-      "$value": "rgba(255, 255, 255, 0.10)",
-      "$type": "color"
-    },
-    "frost-edge": {
-      "$value": "rgba(255, 255, 255, 0.22)",
-      "$type": "color"
-    },
-    "frost-sheen": {
-      "$value": "rgba(255, 255, 255, 0.28)",
-      "$type": "color"
-    },
-    "bubble-agent": {
-      "$value": "#38352f",
-      "$type": "color"
-    },
-    "shadow": {
-      "$value": "rgba(0, 0, 0, 0.5)",
-      "$type": "color"
-    },
-    "shadow-soft": {
-      "$value": "rgba(0, 0, 0, 0.3)",
-      "$type": "color"
-    },
-    "thread-raised": {
-      "$value": "var(--color-bg-surface)",
       "$type": "color"
     }
   },

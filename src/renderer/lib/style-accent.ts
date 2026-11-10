@@ -136,7 +136,7 @@ export function accentTextFor(hex: string, palette: StylePaletteMeta, scheme: St
   return toHex(target)
 }
 
-/** The palette's own accent as #rrggbb. glass-next's is a var() reference to
+/** The palette's own accent as #rrggbb. Glass's is a var() reference to
  *  its one blue, which an override repaints, so it is named here. */
 export function defaultAccentHex(palette: StylePaletteMeta): string {
   return parseHex(palette.swatch.accent) ? palette.swatch.accent : '#0a84ff'

@@ -176,178 +176,9 @@ export const STYLES: readonly StyleMeta[] = [
   },
   {
     "id": "glass",
-    "name": "Liquid Glass",
-    "author": "Alakazam Labs",
-    "description": "Experimental preview — frosted instrument glass over a deep ambient canvas. Chrome floats as translucent cards; terminals stay pure and opaque.",
-    "defaultPalette": "obsidian",
-    "defaultPalettes": {
-      "dark": "obsidian",
-      "light": "veil"
-    },
-    "capabilities": {
-      "gaps": false,
-      "backdrop": true,
-      "schemes": [
-        "dark",
-        "light"
-      ]
-    },
-    "gapPresets": [],
-    "dials": [
-      {
-        "id": "frost",
-        "label": "Frost",
-        "token": "--material-blur",
-        "min": 0,
-        "max": 30,
-        "step": 1,
-        "unit": "px",
-        "default": 18
-      }
-    ],
-    "palettes": [
-      {
-        "id": "obsidian",
-        "name": "Obsidian",
-        "schemes": [
-          "dark"
-        ],
-        "swatch": {
-          "bg": "#0a0c12",
-          "surface": "rgba(16, 20, 32, 0.58)",
-          "elevated": "rgba(30, 36, 56, 0.62)",
-          "accent": "#5aa2ff",
-          "textPrimary": "#eef1f8",
-          "border": "rgba(255, 255, 255, 0.09)"
-        },
-        "terminal": {
-          "foreground": 15133170,
-          "background": 658450,
-          "palette": [
-            1053468,
-            16735581,
-            4054148,
-            16760899,
-            5939967,
-            11897599,
-            5099745,
-            12831193,
-            5989240,
-            16744576,
-            7268256,
-            16765286,
-            8567039,
-            13347583,
-            8315887,
-            15922684
-          ],
-          "cursor": {
-            "text": null,
-            "cursor": 15133170
-          },
-          "selection": {
-            "text": null,
-            "background": 2765648
-          }
-        }
-      },
-      {
-        "id": "veil",
-        "name": "Veil",
-        "schemes": [
-          "light"
-        ],
-        "swatch": {
-          "bg": "#f2f4f8",
-          "surface": "rgba(255, 255, 255, 0.55)",
-          "elevated": "rgba(255, 255, 255, 0.68)",
-          "accent": "#2f6fe0",
-          "textPrimary": "#1a1d26",
-          "border": "rgba(20, 30, 60, 0.10)"
-        },
-        "terminal": {
-          "foreground": 1711398,
-          "background": 15922424,
-          "palette": [
-            1711398,
-            12726063,
-            1997894,
-            10711562,
-            3108832,
-            8014750,
-            948864,
-            9081768,
-            5002600,
-            14437195,
-            2595151,
-            12750098,
-            5211878,
-            9724856,
-            1413785,
-            526864
-          ],
-          "cursor": {
-            "text": null,
-            "cursor": 1711398
-          },
-          "selection": {
-            "text": null,
-            "background": 13161190
-          }
-        }
-      },
-      {
-        "id": "yellow",
-        "name": "Yellow",
-        "schemes": [
-          "dark"
-        ],
-        "swatch": {
-          "bg": "#100f0e",
-          "surface": "rgba(27, 26, 24, 0.58)",
-          "elevated": "rgba(37, 35, 32, 0.62)",
-          "accent": "#ffc700",
-          "textPrimary": "#eae6de",
-          "border": "rgba(255, 255, 255, 0.09)"
-        },
-        "terminal": {
-          "foreground": 15065560,
-          "background": 1052430,
-          "palette": [
-            1512980,
-            15619927,
-            5226351,
-            15054908,
-            7317464,
-            12618436,
-            6078648,
-            13222580,
-            7301471,
-            15959429,
-            8049812,
-            15649124,
-            9683176,
-            14002392,
-            8705485,
-            16052455
-          ],
-          "cursor": {
-            "text": null,
-            "cursor": 16762624
-          },
-          "selection": {
-            "text": null,
-            "background": 3815215
-          }
-        }
-      }
-    ]
-  },
-  {
-    "id": "glass-next",
     "name": "Glass",
     "author": "Alakazam Labs",
-    "description": "K2 Companion's look on the desktop: solid tiles on a near-black canvas, frost only on floating chrome.",
+    "description": "Rounded and calm, like the K2 phone app. Solid tiles on a plain background, with frosted glass only on things that float.",
     "defaultPalette": "obsidian",
     "defaultPalettes": {
       "dark": "obsidian",
@@ -478,6 +309,175 @@ export const STYLES: readonly StyleMeta[] = [
           "accent": "#ffc700",
           "textPrimary": "#eae6de",
           "border": "#33302b"
+        },
+        "terminal": {
+          "foreground": 15065560,
+          "background": 1052430,
+          "palette": [
+            1512980,
+            15619927,
+            5226351,
+            15054908,
+            7317464,
+            12618436,
+            6078648,
+            13222580,
+            7301471,
+            15959429,
+            8049812,
+            15649124,
+            9683176,
+            14002392,
+            8705485,
+            16052455
+          ],
+          "cursor": {
+            "text": null,
+            "cursor": 16762624
+          },
+          "selection": {
+            "text": null,
+            "background": 3815215
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "glass-classic",
+    "name": "Glass Classic",
+    "author": "Alakazam Labs",
+    "description": "The first Glass, kept for one release as a fallback. Not selectable.",
+    "defaultPalette": "obsidian",
+    "defaultPalettes": {
+      "dark": "obsidian",
+      "light": "veil"
+    },
+    "capabilities": {
+      "gaps": false,
+      "backdrop": true,
+      "schemes": [
+        "dark",
+        "light"
+      ]
+    },
+    "gapPresets": [],
+    "dials": [
+      {
+        "id": "frost",
+        "label": "Frost",
+        "token": "--material-blur",
+        "min": 0,
+        "max": 30,
+        "step": 1,
+        "unit": "px",
+        "default": 18
+      }
+    ],
+    "palettes": [
+      {
+        "id": "obsidian",
+        "name": "Obsidian",
+        "schemes": [
+          "dark"
+        ],
+        "swatch": {
+          "bg": "#0a0c12",
+          "surface": "rgba(16, 20, 32, 0.58)",
+          "elevated": "rgba(30, 36, 56, 0.62)",
+          "accent": "#5aa2ff",
+          "textPrimary": "#eef1f8",
+          "border": "rgba(255, 255, 255, 0.09)"
+        },
+        "terminal": {
+          "foreground": 15133170,
+          "background": 658450,
+          "palette": [
+            1053468,
+            16735581,
+            4054148,
+            16760899,
+            5939967,
+            11897599,
+            5099745,
+            12831193,
+            5989240,
+            16744576,
+            7268256,
+            16765286,
+            8567039,
+            13347583,
+            8315887,
+            15922684
+          ],
+          "cursor": {
+            "text": null,
+            "cursor": 15133170
+          },
+          "selection": {
+            "text": null,
+            "background": 2765648
+          }
+        }
+      },
+      {
+        "id": "veil",
+        "name": "Veil",
+        "schemes": [
+          "light"
+        ],
+        "swatch": {
+          "bg": "#f2f4f8",
+          "surface": "rgba(255, 255, 255, 0.55)",
+          "elevated": "rgba(255, 255, 255, 0.68)",
+          "accent": "#2f6fe0",
+          "textPrimary": "#1a1d26",
+          "border": "rgba(20, 30, 60, 0.10)"
+        },
+        "terminal": {
+          "foreground": 1711398,
+          "background": 15922424,
+          "palette": [
+            1711398,
+            12726063,
+            1997894,
+            10711562,
+            3108832,
+            8014750,
+            948864,
+            9081768,
+            5002600,
+            14437195,
+            2595151,
+            12750098,
+            5211878,
+            9724856,
+            1413785,
+            526864
+          ],
+          "cursor": {
+            "text": null,
+            "cursor": 1711398
+          },
+          "selection": {
+            "text": null,
+            "background": 13161190
+          }
+        }
+      },
+      {
+        "id": "yellow",
+        "name": "Yellow",
+        "schemes": [
+          "dark"
+        ],
+        "swatch": {
+          "bg": "#100f0e",
+          "surface": "rgba(27, 26, 24, 0.58)",
+          "elevated": "rgba(37, 35, 32, 0.62)",
+          "accent": "#ffc700",
+          "textPrimary": "#eae6de",
+          "border": "rgba(255, 255, 255, 0.09)"
         },
         "terminal": {
           "foreground": 15065560,

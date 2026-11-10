@@ -26,7 +26,7 @@ const cardNames = (): (string | null)[] => cards().map((c) => c.querySelector('s
 describe('the Styles picker', () => {
   it('lists Terminal and Glass, and not Bezel, though Bezel still compiles', () => {
     render(<StylesSection />)
-    expect(cardNames().sort()).toEqual(['Liquid Glass', 'Terminal'])
+    expect(cardNames().sort()).toEqual(['Glass', 'Terminal'])
     expect(getStyle('bezel')).toBeDefined()
   })
 
@@ -34,12 +34,14 @@ describe('the Styles picker', () => {
     useStyleStore.getState().applyStyle({ styleId: 'bezel', paletteId: 'graphite' })
     render(<StylesSection />)
     const active = cards().find((c) => within(c).queryByText('Active'))
-    expect(active?.querySelector('span')?.textContent).toBe('Liquid Glass')
+    expect(active?.querySelector('span')?.textContent).toBe('Glass')
     expect(screen.queryByText('Bezel')).toBeNull()
   })
 
   it('checks no scheme while the detail shows a style that is not the active one', () => {
-    useStyleStore.getState().applyStyle({ styleId: 'glass-next', paletteId: 'obsidian', schemeMode: 'dark' })
+    // A style with no card: applyStyle can't reach this any more (old Glass
+    // aliases to Glass), so the state is set directly.
+    useStyleStore.setState({ styleId: 'glass-classic', paletteId: 'obsidian', schemeMode: 'dark' })
     render(<StylesSection />)
     const group = screen.getByRole('radiogroup', { name: 'Scheme' })
     expect(within(group).getAllByRole('radio').filter((r) => r.getAttribute('aria-checked') === 'true')).toHaveLength(0)

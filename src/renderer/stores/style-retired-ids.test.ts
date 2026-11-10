@@ -85,6 +85,16 @@ describe('pre-paint bootstrap (index.html)', () => {
     expect(stamped().palette).toBe('charcoal')
   })
 
+  it('a saved glass-next or old Glass paints as Glass', () => {
+    seed('glass-next', 'yellow', 'dark')
+    runBootstrap()
+    expect(stamped()).toEqual({ style: 'glass', palette: 'yellow', scheme: 'dark', gaps: null })
+    mem.clear()
+    seed('glass-classic', 'veil', 'light')
+    runBootstrap()
+    expect(stamped()).toEqual({ style: 'glass', palette: 'veil', scheme: 'light', gaps: null })
+  })
+
   it('a palette that is on Terminal survives, and Glass is untouched', () => {
     seed('terminal', 'paper', 'light')
     runBootstrap()

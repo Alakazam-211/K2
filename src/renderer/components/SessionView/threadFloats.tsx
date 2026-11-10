@@ -5,7 +5,7 @@ import { useLayoutEffect, useRef, type JSX, type RefObject } from 'react'
 // stays where it is in the DOM (`data-session-header` still finds the pane);
 // CSS lifts it out of the flow. The look is in globals.css ("Thread view's
 // floating objects"). Terminal: chamfered and solid. Glass: Frost, from
-// `data-material="frost"` (styles/glass-next/overrides.css).
+// `data-material="frost"` (styles/glass/overrides.css).
 //
 // Values go on the pane, for what's inside it:
 // - the floats' height, which the Thread's list pads by so the first message

@@ -3,7 +3,7 @@
 K2's entire visual language — colors, corner radii, borders/rings, shadows, glass
 materials, spacing, motion, and terminal colors — is driven by **Style packages**:
 schema-validated data folders under [`styles/`](styles/). The app ships Terminal
-(the original look) and Liquid Glass; community Styles arrive as pull
+(the original look) and Glass; community Styles arrive as pull
 requests adding a folder here. No component code required, and none accepted —
 if a look can't be expressed through the contract, open an issue about extending
 the contract instead.

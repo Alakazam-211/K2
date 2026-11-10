@@ -37,7 +37,9 @@
           try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
         }
         var savedStyle = read('k2.style', 'terminal');
-        var style = savedStyle === 'square' ? 'terminal' : savedStyle === 'bezel' ? 'glass' : savedStyle;
+        var style = savedStyle === 'square' ? 'terminal'
+          : savedStyle === 'bezel' || savedStyle === 'glass-next' || savedStyle === 'glass-classic' ? 'glass'
+          : savedStyle;
         html.setAttribute('data-style', style);
         var mode = read('k2.scheme', 'dark');
         // The side of the mode: under Auto, the OS appearance.

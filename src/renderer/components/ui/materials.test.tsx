@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { Surface } from './Surface'
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
-const overrides = readFileSync(join(repo, 'styles', 'glass-next', 'overrides.css'), 'utf8')
+const overrides = readFileSync(join(repo, 'styles', 'glass', 'overrides.css'), 'utf8')
 const rules = Array.from(overrides.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^}]*)\}/g), (m) => ({
   selector: m[1].trim(),
   body: m[2],
@@ -36,7 +36,7 @@ describe('Surface material', () => {
   })
 })
 
-describe('glass-next overrides', () => {
+describe('Glass overrides', () => {
   it('draws a backdrop blur only for data-material="frost"', () => {
     const frosted = rules.filter((r) => /backdrop-filter/.test(r.body))
     expect(frosted.length).toBeGreaterThan(0)
@@ -45,7 +45,7 @@ describe('glass-next overrides', () => {
 
   it('keeps every rule out of Gardens', () => {
     // A block on the root element only sets variables; the Zen shield resets those.
-    const rootBlock = /^\[data-style="glass-next"\](\[data-palette="\w+"\])?$/
+    const rootBlock = /^\[data-style="glass"\](\[data-palette="\w+"\])?$/
     for (const r of rules.filter((x) => !rootBlock.test(x.selector))) {
       expect(r.selector, r.selector).toMatch(/:not\(\[data-zen-root\] \*(, \[data-k2-thread-zen\] \*)?\)/)
     }

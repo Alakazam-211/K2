@@ -105,6 +105,30 @@ describe('migrateRetiredStyleKeys', () => {
     })
   })
 
+  it('a saved glass-next becomes Glass, keeping palette, accent and tuning', () => {
+    mem.set('k2.style', 'glass-next')
+    mem.set('k2.palette', 'yellow')
+    mem.set('k2.accent.glass-next', '#ff00aa')
+    mem.set('k2.dial.glass-next.frost', '12')
+    mem.set('k2.textGamma.glass-next.dark', '1.4')
+    migrateRetiredStyleKeys()
+    expect(snapshot()).toEqual({
+      'k2.style': 'glass',
+      'k2.palette': 'yellow',
+      'k2.accent.glass': '#ff00aa',
+      'k2.dial.glass.frost': '12',
+      'k2.textGamma.glass.dark': '1.4',
+    })
+  })
+
+  it('a saved glass stays as it is, palette and accent included', () => {
+    mem.set('k2.style', 'glass')
+    mem.set('k2.palette', 'veil')
+    mem.set('k2.accent.glass', 'yellow')
+    migrateRetiredStyleKeys()
+    expect(snapshot()).toEqual({ 'k2.style': 'glass', 'k2.palette': 'veil', 'k2.accent.glass': 'yellow' })
+  })
+
   it('moves the tuning even when the saved style is not Square any more', () => {
     mem.set('k2.style', 'glass')
     mem.set('k2.textGamma.square.dark', '1.75')

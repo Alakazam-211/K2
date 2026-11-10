@@ -1,7 +1,8 @@
 // One-shot localStorage migration for retired style ids.
 //
 // Square became Terminal. Bezel users land on Glass: Graphite on the Yellow
-// palette, Porcelain on Veil with Bezel's gold accent. The pre-paint bootstrap and every incoming id
+// palette, Porcelain on Veil with Bezel's gold accent. glass-next became Glass,
+// keeping its palette, accent and tuning. The pre-paint bootstrap and every incoming id
 // already go through the alias table in lib/style-resolve; this moves what's
 // SAVED so per-style keys follow.
 //
@@ -22,6 +23,9 @@ const PALETTE_KEYS = ['k2.palette', 'k2.palette.dark', 'k2.palette.light'] as co
 
 /** Where a per-style key moves, or null if it stays. */
 function movedKey(key: string): string | null {
+  for (const [id, alias] of STYLE_ID_ALIASES) {
+    if (alias.keepsTuning && key === accentStorageKey(id)) return accentStorageKey(alias.to)
+  }
   for (const prefix of PER_STYLE_PREFIXES) {
     if (!key.startsWith(prefix)) continue
     const rest = key.slice(prefix.length)

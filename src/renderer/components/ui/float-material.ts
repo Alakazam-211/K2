@@ -1,7 +1,7 @@
 // Which floating surfaces are Frost on Glass. Every menu, popover, command
 // palette, toast and dialog takes its material from this table, so one line
 // flips a group between 'tile' and 'frost'. Frost itself stays one CSS rule
-// (data-material="frost", styles/glass-next/overrides.css).
+// (data-material="frost", styles/glass/overrides.css).
 
 export type FloatRole = 'menu' | 'popover' | 'palette' | 'toast' | 'dialog'
 

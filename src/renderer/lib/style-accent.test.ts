@@ -140,7 +140,7 @@ describe('accentFillHex', () => {
 })
 
 describe('the Yellow palettes', () => {
-  it.each(['terminal', 'glass', 'glass-next'])('%s has three palettes, with Yellow as a dark one', (id) => {
+  it.each(['terminal', 'glass', 'glass-classic'])('%s has three palettes, with Yellow as a dark one', (id) => {
     const style = getStyle(id)!
     expect(style.palettes).toHaveLength(3)
     const yellow = style.palettes.find((p) => p.id === 'yellow')!

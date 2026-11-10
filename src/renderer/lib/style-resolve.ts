@@ -57,11 +57,16 @@ export const DEFAULT_SELECTION: StyleSelection = {
  *
  * On the retirement ledger (prd-themes-terminal-glass-v1 §7): remove once
  * Terminal is proven, together with lib/style-id-migration.ts and the copy
- * of this table in index.html's pre-paint bootstrap.
+ * of this table in index.html's pre-paint bootstrap. styles/glass-classic is
+ * the old Glass, compiled for one release as a fallback; its alias is what
+ * makes it impossible to select, from the UI, the daemon or the CLI. Delete
+ * the package and the two Glass aliases the release after new Glass is proven.
  */
 export const STYLE_ID_ALIASES: ReadonlyMap<string, StyleAlias> = new Map<string, StyleAlias>([
   ['square', { to: 'terminal', keepsTuning: true }],
   ['bezel', { to: 'glass', keepsTuning: false, palettes: { dark: 'yellow', light: 'veil' }, accentOnLight: 'yellow' }],
+  ['glass-next', { to: 'glass', keepsTuning: true }],
+  ['glass-classic', { to: 'glass', keepsTuning: true }],
 ])
 
 export interface StyleAlias {

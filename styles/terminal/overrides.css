@@ -22,3 +22,22 @@
   height: 14px;
 }
 [data-style="terminal"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-bar] [data-pane-tab-id]):is(:last-child, :hover, [data-dragging], :has(+ [data-selected]), :has(+ :hover), :has(+ [data-dragging])):not([data-selected]):not([data-zen-root] *)::after { content: none; }
+
+/* ── The selected tab in a light palette ──────────────────────────────────
+   The tab strip lights its selected tab with 8% white, which vanishes on a
+   light strip. In a light palette it takes the strongest wash instead (about
+   1.4:1 on Paper's strip), laid over the strip so the pinned tabs stay opaque
+   and the status badge's mask matches. Hover takes the lightest wash. Dark
+   palettes keep their white. */
+[data-style="terminal"][data-scheme="light"] [data-room-tab-bar]:not([data-zen-root] *) {
+  --k2-rail-lit: linear-gradient(var(--color-wash-3), var(--color-wash-3)), var(--color-bg-surface);
+}
+[data-style="terminal"][data-scheme="light"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail])[data-selected]:not([data-zen-root] *) {
+  background: linear-gradient(var(--color-wash-3), var(--color-wash-3)), var(--color-bg-surface);
+}
+[data-style="terminal"][data-scheme="light"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail], [data-selected]):hover:not([data-zen-root] *) {
+  background: var(--color-wash-1);
+}
+[data-style="terminal"][data-scheme="light"] [data-room-tab-bar] [data-tab-id][data-selected] :is([data-tab-close-slot], [data-tab-status-slot]):not([data-zen-root] *) {
+  --tab-bg: linear-gradient(var(--color-wash-3), var(--color-wash-3)), var(--color-bg-surface);
+}

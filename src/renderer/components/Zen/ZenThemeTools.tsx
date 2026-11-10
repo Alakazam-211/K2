@@ -28,6 +28,7 @@ import type { ZenChromePlace } from './ZenTemplateControls'
 /** The theme control's default place: the top band's end group. */
 const ZEN_TOP_END_PLACE: ZenChromePlace = { row: 'top', opens: 'down', align: 'end' }
 import { zenThemeLabel, type ZenThemeEntry } from '@/lib/zen/zen-page'
+import { DialogCloseButton, useDialogCancel } from '@/components/ui/dialog-cancel'
 import {
   closeZenOverlays,
   useZenOverlayStore,
@@ -222,7 +223,8 @@ export function ZenThemePicker({
 export function ZenShortcutSheet({ os }: { os: DesktopOs }): React.JSX.Element | null {
   const open = useZenOverlayStore((s) => s.sheet)
   const overlayRef = useK2Overlay()
-  useEscCloses(open)
+  // Esc, the × and a press outside close the sheet (useDialogCancel).
+  const cancel = useDialogCancel(open ? closeZenOverlays : undefined)
   const [groups] = useState(() =>
     zenShortcutGroups(os, pageShortcutKeys(useSettingsStore.getState().keybindings, os === 'mac')),
   )
@@ -232,7 +234,6 @@ export function ZenShortcutSheet({ os }: { os: DesktopOs }): React.JSX.Element |
       ref={overlayRef}
       data-zen-shortcut-sheet=""
       className="no-drag"
-      onClick={closeZenOverlays}
       style={{
         position: 'absolute',
         inset: 0,
@@ -247,7 +248,7 @@ export function ZenShortcutSheet({ os }: { os: DesktopOs }): React.JSX.Element |
         role="dialog"
         aria-modal="true"
         aria-label="Zen shortcuts"
-        onClick={(e) => e.stopPropagation()}
+        {...cancel}
         style={{
           width: 'min(560px, calc(100% - 48px))',
           maxHeight: 'calc(100% - 64px)',
@@ -262,14 +263,7 @@ export function ZenShortcutSheet({ os }: { os: DesktopOs }): React.JSX.Element |
       >
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12 }}>
           <h2 style={{ margin: 0, fontSize: '1.15em', fontWeight: 600 }}>Zen shortcuts</h2>
-          <button
-            className="cursor-pointer"
-            type="button"
-            onClick={closeZenOverlays}
-            style={{ border: 0, background: 'transparent', color: 'var(--zen-text-muted)', cursor: 'pointer', font: 'inherit' }}
-          >
-            Close
-          </button>
+          <DialogCloseButton tone="zen" className="-mr-2" onClick={closeZenOverlays} />
         </div>
         {groups.map((g) => (
           <section key={g.title} style={{ marginTop: 12 }}>

@@ -1,13 +1,14 @@
 // K2's own overlay in Zen (New Garden, and any K2 dialog over a Garden):
 // portalled into the Zen root so it keeps the Garden's `--zen-*` tokens,
 // registered as a K2 overlay (FC18) so the required-controls check reads a
-// control under it as covered by K2, closed by Escape or a backdrop click.
+// control under it as covered by K2, closed by the ×, Esc or a press outside
+// (components/ui/dialog-cancel.tsx; an open K2 menu inside takes Esc first).
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
 import { ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
-import { settingMenuOpen } from '@/components/Settings/settings-esc'
+import { DialogCloseButton, useDialogCancel } from '@/components/ui/dialog-cancel'
 
 /** Portal target: the Zen root (keeps Zen's tokens), else the body. */
 function useZenLayer(anchor: React.RefObject<HTMLElement | null>): HTMLElement | null {
@@ -26,6 +27,7 @@ export function ZenOverlay({
   testId,
   vars,
   width = 480,
+  closeButton = true,
 }: {
   label: string
   onClose(): void
@@ -34,6 +36,9 @@ export function ZenOverlay({
   /** Extra CSS variables on the overlay (Settings maps `--zen-*` here). */
   vars?: React.CSSProperties
   width?: number
+  /** false: the content puts its own `<DialogCloseButton tone="zen">` in
+   *  its header (no corner ×). Esc and a press outside still close. */
+  closeButton?: boolean
 }): React.JSX.Element {
   const anchor = useRef<HTMLSpanElement | null>(null)
   const layer = useZenLayer(anchor)
@@ -46,18 +51,7 @@ export function ZenOverlay({
     offOverlay.current?.()
     offOverlay.current = el ? registerZenK2Overlay(el) : null
   }, [])
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      // An open K2 menu inside (Garden settings' Theme) closes first.
-      if (settingMenuOpen()) return
-      e.preventDefault()
-      e.stopPropagation()
-      onClose()
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  const cancel = useDialogCancel(onClose)
   useEffect(() => {
     // A field inside that took focus as it mounted (New Garden's name) keeps it.
     if (boxRef.current && !boxRef.current.contains(document.activeElement)) boxRef.current.focus({ preventScroll: true })
@@ -72,12 +66,10 @@ export function ZenOverlay({
             className="no-drag flex items-center justify-center"
             data-zen-overlay=""
             style={{ ...vars, position: 'fixed', inset: 0, zIndex: 50, background: 'rgba(0, 0, 0, 0.32)' }}
-            onMouseDown={(e) => {
-              if (e.target === e.currentTarget) onClose()
-            }}
           >
             <div
               ref={boxRef}
+              {...cancel}
               role="dialog"
               aria-modal="true"
               aria-label={label}
@@ -86,6 +78,7 @@ export function ZenOverlay({
               {...ZEN_TILE_RAISED_PROPS}
               className="flex flex-col"
               style={{
+                position: 'relative',
                 width: `min(${width}px, calc(100vw - 32px))`,
                 maxHeight: 'calc(100vh - 48px)',
                 overflowY: 'auto',
@@ -99,6 +92,7 @@ export function ZenOverlay({
                 outline: 'none',
               }}
             >
+              {closeButton && <DialogCloseButton tone="zen" className="absolute" style={{ top: 8, right: 8 }} onClick={onClose} />}
               {children}
             </div>
           </div>,

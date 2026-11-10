@@ -329,7 +329,7 @@ export function PaneTabBar({
         fontSize: '11px'
       }}
     >
-      <div className="flex flex-1 items-center overflow-x-auto">
+      <div className="flex flex-1 items-center overflow-x-auto" data-pane-tab-scroller="">
         {items.map((item, index) => {
           const isActive = index === activeItemIndex
           // Pin-to-size context menu, only on items with a LIVE

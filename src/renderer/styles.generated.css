@@ -1122,42 +1122,120 @@
   padding-inline: 8px;
 }
 /* ── Tab strip and pane: one tile ─────────────────────────────────────────
-   A workspace column is a single tile. Its tab strip is the top of that tile
-   with no rule or gap under it, and the selected tab is a lit pill, as in the
-   drawers' strips. Split panes inside a tab are tiles within the column tile,
-   each with its own strip of the same pills. Terminals stay solid. */
+   A workspace column is a single tile. Its tab strip is the raised top of that
+   tile, and the selected tab is Chrome's wave: the pane's own surface rising
+   into the strip, rounded on top and flaring out at the foot. Unselected tabs
+   show a pill on hover, with short dividers between them. Split panes inside a
+   tab are tiles within the column, with the same strip. Terminals stay solid. */
+[data-style="glass"] [data-tab-group-index]:not([data-zen-root] *) {
+  --k2-wave-fill: var(--color-bg);
+  --k2-strip-fill: var(--tile-fill);
+  --k2-wave-r: 8px;
+  background: var(--k2-wave-fill);
+}
+/* Veil's strip and panes are both white, so the strip takes a soft tint for the
+   wave to rise out of, and every pane is the terminal's white. */
+[data-style="glass"][data-palette="veil"] [data-tab-group-index]:not([data-zen-root] *) {
+  --color-bg: var(--tile-fill);
+  --k2-strip-fill: color-mix(in srgb, var(--color-text-primary) 6%, var(--tile-fill));
+}
+/* A pane's own header band is the pane's surface, so the wave runs into it. */
+[data-style="glass"] [data-toast-host="workspace"]:not([data-zen-root] *) { --color-bg-stripe: var(--color-bg); }
 [data-style="glass"] [data-room-tab-bar]:not([data-zen-root] *) {
-  background: transparent;
+  background: var(--k2-strip-fill);
   border-bottom-width: 0;
-  padding: 4px 6px;
+  padding: 0 6px 0 0;
   gap: 2px;
 }
-[data-style="glass"] [data-tab-scroller]:not([data-zen-root] *) { gap: 2px; }
+/* The vertical padding lives on the scroller, not the strip, so the selected
+   tab can reach the strip's foot; the side padding holds its flares in view. */
+[data-style="glass"] [data-tab-scroller]:not([data-zen-root] *) {
+  padding: 4px var(--k2-wave-r);
+  gap: 2px;
+}
 [data-style="glass"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail]):not([data-zen-root] *) {
   border-right-width: 0;
   border-radius: var(--radius-pill);
-  overflow: hidden;
 }
 [data-style="glass"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail], [data-selected]):hover:not([data-zen-root] *) { background: var(--color-wash-1); }
-[data-style="glass"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail])[data-selected]:not([data-zen-root] *) {
-  background: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+[data-style="glass"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail]) [data-tab-sandbox-bar]:not([data-zen-root] *) {
+  left: 10px;
+  right: 10px;
+  border-radius: var(--radius-pill);
 }
+
+/* The selected tab: 4px taller than its neighbours, down to the strip's foot,
+   with its label still on their line. */
+[data-style="glass"] [data-room-tab-bar] [data-tab-id]:is([data-tab-rail], :not([data-tab-rail]))[data-selected]:not([data-zen-root] *) {
+  height: calc(100% + 4px);
+  margin-bottom: -4px;
+  padding-bottom: 4px;
+  background: var(--k2-wave-fill);
+  border-radius: var(--k2-wave-r) var(--k2-wave-r) 0 0;
+}
+[data-style="glass"] [data-room-tab-bar] [data-tab-id]:not([data-tab-rail])[data-selected]:not([data-zen-root] *) { z-index: 1; }
+/* The wave's feet: quarter-circle cut-outs just outside the tab. */
+[data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id])[data-selected]:not([data-zen-root] *)::before,
+[data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id])[data-selected]:not([data-zen-root] *)::after {
+  content: "";
+  position: absolute;
+  top: auto;
+  bottom: 0;
+  width: var(--k2-wave-r);
+  height: var(--k2-wave-r);
+  border-radius: 0;
+  transform: none;
+  pointer-events: none;
+}
+[data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id])[data-selected]:not([data-zen-root] *)::before {
+  left: calc(-1 * var(--k2-wave-r));
+  right: auto;
+  background: radial-gradient(circle at 0 0, transparent calc(var(--k2-wave-r) - 0.5px), var(--k2-wave-fill) var(--k2-wave-r));
+}
+[data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id])[data-selected]:not([data-zen-root] *)::after {
+  right: calc(-1 * var(--k2-wave-r));
+  left: auto;
+  background: radial-gradient(circle at 100% 0, transparent calc(var(--k2-wave-r) - 0.5px), var(--k2-wave-fill) var(--k2-wave-r));
+}
+
+/* Short dividers between unselected tabs. None beside the selected tab, beside
+   a hovered pill, or at the end of the row. */
+[data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id]):not([data-selected]):not([data-zen-root] *)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -1.5px;
+  width: 1px;
+  height: 14px;
+  background: var(--color-border);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+[data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id]):is(:last-child, :hover, :has(+ [data-selected]), :has(+ :hover)):not([data-selected]):not([data-zen-root] *)::after { content: none; }
+
 /* The status badge's mask sits on whatever is behind the tab's slot. */
 [data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id]) :is([data-tab-close-slot], [data-tab-status-slot], [data-pane-tab-close-slot]):not([data-zen-root] *) {
-  --tab-bg: var(--tile-fill);
+  --tab-bg: var(--k2-strip-fill);
   border-radius: var(--radius-pill);
 }
 [data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id])[data-selected] :is([data-tab-close-slot], [data-tab-status-slot], [data-pane-tab-close-slot]):not([data-zen-root] *) {
-  --tab-bg: color-mix(in srgb, var(--color-text-primary) 10%, var(--tile-fill));
+  --tab-bg: var(--k2-wave-fill);
 }
-/* Pinned tabs stay opaque so scrolled tabs pass behind them; the pill is drawn
-   above that fill and below the icon. */
+/* Pinned tabs stay opaque so scrolled tabs pass behind them. The first one also
+   covers the sliver of scroller to its left. */
 [data-style="glass"] [data-room-tab-bar] [data-tab-rail]:not([data-zen-root] *) {
-  --k2-rail-rest: var(--tile-fill);
-  --k2-rail-lit: var(--tile-fill);
+  --k2-rail-rest: var(--k2-strip-fill);
+  --k2-rail-lit: var(--k2-wave-fill);
+  --k2-rail-step: 38px;
+  --tab-bg: var(--k2-strip-fill);
   border-right-width: 0;
 }
-[data-style="glass"] [data-room-tab-bar] [data-tab-rail]:not([data-zen-root] *)::before {
+[data-style="glass"] [data-room-tab-bar] [data-tab-rail][data-selected]:not([data-zen-root] *) { --tab-bg: var(--k2-wave-fill); }
+/* The 2px between pinned tabs, and the sliver left of the first, are strip
+   too, so a scrolled tab never shows through. */
+[data-style="glass"] [data-room-tab-bar] [data-tab-rail]:not([data-zen-root] *) { box-shadow: 2px 0 0 var(--k2-strip-fill); }
+[data-style="glass"] [data-room-tab-bar] [data-tab-rail]:first-child:not([data-zen-root] *) { box-shadow: 2px 0 0 var(--k2-strip-fill), calc(-1 * var(--k2-wave-r)) 0 0 var(--k2-strip-fill); }
+[data-style="glass"] [data-room-tab-bar] [data-tab-rail]:not([data-selected]):not([data-zen-root] *)::before {
   content: "";
   position: absolute;
   inset: 0 2px;
@@ -1165,33 +1243,44 @@
   border-radius: var(--radius-pill);
 }
 [data-style="glass"] [data-room-tab-bar] [data-tab-rail]:not([data-selected]):hover:not([data-zen-root] *)::before { background: var(--color-wash-1); }
-[data-style="glass"] [data-room-tab-bar] [data-tab-rail][data-selected]:not([data-zen-root] *)::before {
-  background: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
-}
 /* +, split, remove column and the drawer toggle: small round controls. */
 [data-style="glass"] [data-room-tab-bar] > button:not([data-zen-root] *) {
   width: 28px;
+  height: 28px;
   border-width: 0;
   border-radius: var(--radius-pill);
 }
+[data-style="glass"] [data-room-tab-bar] > button:first-child:not([data-zen-root] *) { margin-left: 6px; }
 [data-style="glass"] [data-room-tab-bar] > button:hover:not([data-zen-root] *) { background: var(--color-wash-2); }
 
-/* A split pane's strip: the same pills, a size smaller. */
+/* A split pane's strip: the same tabs, a size smaller. */
 [data-style="glass"] [data-pane-tab-bar]:not([data-zen-root] *) {
   --k2-pane-strip-h: 32px;
   --k2-pane-tab-h: 24px;
-  --k2-pane-tab-lit: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+  --k2-pane-tab-lit: var(--k2-wave-fill);
   --k2-pane-tab-rule: 0;
-  background: transparent;
+  --k2-wave-r: 6px;
+  background: var(--k2-strip-fill);
   border-bottom-width: 0;
-  padding: 4px;
-  gap: 2px;
+  padding: 0 4px 0 0;
+}
+[data-style="glass"] [data-pane-tab-scroller]:not([data-zen-root] *) {
+  align-self: stretch;
+  padding: 4px var(--k2-wave-r);
 }
 [data-style="glass"] [data-pane-tab-bar] [data-pane-tab-id]:not([data-zen-root] *) {
+  position: relative;
   border-radius: var(--radius-pill);
   margin-right: 2px;
 }
 [data-style="glass"] [data-pane-tab-bar] [data-pane-tab-id]:not([data-selected]):hover:not([data-zen-root] *) { --k2-pane-tab-rest: var(--color-wash-1); }
+[data-style="glass"] [data-pane-tab-bar] [data-pane-tab-id][data-selected]:not([data-zen-root] *) {
+  --k2-pane-tab-h: 28px;
+  margin-bottom: -4px;
+  padding-bottom: 4px;
+  z-index: 1;
+  border-radius: var(--k2-wave-r) var(--k2-wave-r) 0 0;
+}
 [data-style="glass"] [data-pane-tab-bar] > button:not([data-zen-root] *) { border-radius: var(--radius-pill); }
 
 /* Split panes sit inside the column tile, one even gap from its rim and from

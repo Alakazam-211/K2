@@ -1157,7 +1157,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
                 }`}
                 style={{
-                  left: railIndex * 36,
+                  // Glass sets the step (its rail tabs have a 2px gap).
+                  left: `calc(${railIndex} * var(--k2-rail-step, 36px))`,
                   // Glass fills these with --k2-rail-* (the lit pill is drawn
                   // above this opaque cell, so scrolled tabs stay hidden).
                   background: isActive
@@ -1252,7 +1253,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
                 }`}
                 style={{
-                  left: railIndex * 36,
+                  // Glass sets the step (its rail tabs have a 2px gap).
+                  left: `calc(${railIndex} * var(--k2-rail-step, 36px))`,
                   // Glass fills these with --k2-rail-* (the lit pill is drawn
                   // above this opaque cell, so scrolled tabs stay hidden).
                   background: isActive
@@ -1320,6 +1322,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   click/drag and sits below the drag indicators. */}
               {isSandboxed && (
                 <div
+                  data-tab-sandbox-bar=""
                   className="absolute top-0 left-0 right-0 h-[2px] z-10 pointer-events-none"
                   style={{ background: 'var(--color-status-warn)' }}
                 />

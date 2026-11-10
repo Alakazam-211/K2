@@ -1962,8 +1962,7 @@ html[data-style="glass"][data-palette="veil"] {
 }
 html[data-style="glass"] button[data-k2-float][data-k2-float][aria-pressed="true"],
 html[data-style="glass"] button[data-k2-float][data-k2-float][aria-expanded="true"] { background: var(--k2-float-fill-lit); }
-html[data-style="glass"][data-palette="veil"] button[data-k2-float="round"][aria-pressed="true"],
-html[data-style="glass"][data-palette="veil"] button[data-k2-float="round"][role="switch"][aria-checked="true"] {
+html[data-style="glass"][data-palette="veil"] button[data-k2-float="round"][aria-pressed="true"] {
   background: color-mix(in srgb, var(--color-accent) 12%, #ffffff);
   color: var(--color-accent-text);
 }
@@ -2005,9 +2004,8 @@ html[data-style="glass"] [data-thread-floats-host] .k2-header-blur:not([data-zen
 button[data-k2-float]:hover:not(:disabled) { background: var(--k2-float-fill-hover); }
 button[data-k2-float][aria-pressed="true"],
 button[data-k2-float][aria-expanded="true"] { background: var(--k2-float-fill-lit); }
-/* The bell: on is an accent glyph with an accent edge; off is a muted, slashed glyph on a plain edge. */
-button[data-k2-float][role="switch"][aria-checked="true"] { color: var(--color-accent); border-color: color-mix(in srgb, var(--color-accent) 60%, transparent); }
-button[data-k2-float][role="switch"][aria-checked="false"] { color: var(--color-text-muted); }
+/* The bell is the same plain colour on or off; a cross-out marks it muted (Rosson, 2026-11-09). */
+button[data-k2-float][role="switch"] { color: var(--color-text-primary); }
 button[data-k2-float]:disabled { opacity: 0.5; }
 html:is([data-style="glass"], [data-style="glass-classic"]) button[data-k2-float]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 

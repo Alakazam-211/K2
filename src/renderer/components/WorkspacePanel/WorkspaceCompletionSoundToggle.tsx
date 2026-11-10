@@ -119,11 +119,7 @@ export function WorkspaceCompletionSoundBell({
       disabled={busy}
       data-testid="workspace-completion-bell"
       {...floatProps(floating, 'round')}
-      className={`flex-shrink-0 p-0.5 no-drag cursor-pointer disabled:opacity-50 ${
-        enabled
-          ? 'text-[var(--color-accent)]'
-          : 'text-[var(--color-text-muted)]'
-      }`}
+      className="flex-shrink-0 p-0.5 no-drag cursor-pointer disabled:opacity-50 text-[var(--color-text-primary)]"
       title={
         enabled
           ? 'Completion sound on — click to mute this workspace'

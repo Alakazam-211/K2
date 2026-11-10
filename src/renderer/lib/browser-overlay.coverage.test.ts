@@ -38,7 +38,6 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'App.tsx': 'the app root frame itself',
   'components/ConnectionGate.tsx': 'connection gate replaces the window before a room exists',
   'components/RemoteSignIn.tsx': 'sign-in screen replaces the window before a room exists',
-  'components/BackgroundTerminalSpawner.tsx': 'off-screen terminal host (negative offset, invisible)',
   'components/Home/room/HomeRoomsHost.tsx': 'hosts the rooms themselves (the Browser lives inside it)',
   'components/AgentPane/PinnedChatRetainer.tsx': 'docks pinned chats into their pane slots, not above other panes',
   // Inline in a column that never reaches a pane.

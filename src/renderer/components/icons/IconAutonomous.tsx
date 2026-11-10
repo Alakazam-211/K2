@@ -9,7 +9,7 @@
  * is what lets the user tell "the agent did this on its own" apart from
  * "I'm driving this." A single pulse trace reads as a heartbeat without
  * leaning on emoji, matching the hand-rolled inline-SVG icon convention
- * (`IconHeartEKG`, `IconLock`).
+ * (`IconLock`).
  *
  * Sized by the parent's CSS (className). Inherits stroke colour from
  * `currentColor`.

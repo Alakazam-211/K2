@@ -287,8 +287,7 @@ export function PinnedChatRetainer(): React.JSX.Element | null {
   return (
     <>
       {/* Off-screen host for hidden retained panes — real dimensions so
-          the grid keeps a valid layout while hidden (same trick as
-          BackgroundTerminalSpawner). display:none is NOT used: the pane
+          the grid keeps a valid layout while hidden. display:none is NOT used: the pane
           is deliberately kept rendering (viewport-windowed + memoized
           rows ⇒ cheap), which keeps activity detection live for
           background Active workspaces. The inline 800×600 is only the

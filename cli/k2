@@ -21258,7 +21258,8 @@ cmd_msg() {
     # the workspace's running agent, spawning the agent if needed.
     # Returns success only when the message has landed in the agent's
     # session. Never silently writes to inbox. For queued tasks the
-    # recipient reads on their own schedule, use `k2 work send`.
+    # recipient reads on their own schedule, use `k2 msg <workspace>
+    # --inbox-wake|--inbox-silent <file>`.
     #
     # <workspace>   workspace name (preferred), absolute path, or UUID
     # --from <name> sender identity (default: auto-derived from CWD/
@@ -45130,8 +45131,9 @@ RESPONSE (JSON)
 
   Failures include `reason` + `hint` fields:
     workspace_not_found  — token didn't match a registered workspace
-    no_agent_mode        — workspace has no agent (set one up: `k2 mode
-                           custom`; or queue with `work send`)
+    no_agent_mode        — workspace has no agent (set one up: `k2 settings
+                           --mode custom`; or queue with `msg <ws>
+                           --inbox-silent <file>`)
     dormant_no_wake      — canonical session is asleep + you didn't pass
                            --wake (re-run with --wake, or use `k2 talk`)
     spawn_failed         — couldn't start the recipient's agent

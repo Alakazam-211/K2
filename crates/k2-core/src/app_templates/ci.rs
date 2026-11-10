@@ -261,6 +261,21 @@ fi
 # Bundles on, updater archives off (the signer signs the AppImage itself).
 "${{tauri[@]}}" build --ci --bundles deb,appimage --config '{{"bundle":{{"active":true,"createUpdaterArtifacts":false}}}}' -- --locked
 
+# Tauri's .deb keeps each file's build-time mtime and the folder's read
+# order, so two builds of one commit differ only there: repack it with the
+# commit's time, names sorted, root as owner, and no gzip name or time.
+repack_deb() {{
+    local deb="$1" w
+    w="$(mktemp -d)"
+    (cd "$w" && ar x "$deb" && mkdir c d && tar -xpzf control.tar.gz -C c && tar -xpzf data.tar.gz -C d)
+    local t=(--sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner --format=gnu)
+    (cd "$w/c" && tar "${{t[@]}}" -cf - . | gzip -9n > ../control.tar.gz)
+    (cd "$w/d" && tar "${{t[@]}}" -cf - . | gzip -9n > ../data.tar.gz)
+    rm -f "$deb"
+    (cd "$w" && ar -rcD "$deb" debian-binary control.tar.gz data.tar.gz)
+    rm -rf "$w"
+}}
+
 out="$root/{OUT_DIR}"
 rm -rf "$out"
 mkdir -p "$out"
@@ -270,6 +285,7 @@ imgs=("$target"/release/bundle/appimage/*.AppImage)
 [ "${{#debs[@]}}" = 1 ] && [ -f "${{debs[0]}}" ] || {{ echo "build-linux.sh: want one .deb, found: ${{debs[*]}}" >&2; exit 1; }}
 [ "${{#imgs[@]}}" = 1 ] && [ -f "${{imgs[0]}}" ] || {{ echo "build-linux.sh: want one .AppImage, found: ${{imgs[*]}}" >&2; exit 1; }}
 cp "${{debs[0]}}" "$out/$bin.deb"
+repack_deb "$out/$bin.deb"
 cp "${{imgs[0]}}" "$out/$bin.AppImage"
 echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
 (cd "$out" && sha256sum -- *)

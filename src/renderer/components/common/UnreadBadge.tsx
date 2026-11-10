@@ -22,13 +22,13 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 
 const PILL =
-  'min-w-[14px] h-[14px] inline-flex items-center justify-center text-[8px] font-bold text-[var(--color-on-accent)] rounded-[var(--radius-pill)] px-0.5'
-const DOT = 'inline-block w-1.5 h-1.5 rounded-[var(--radius-pill)]'
+  'min-w-[14px] h-[14px] inline-flex items-center justify-center text-[8px] font-bold text-[var(--color-on-accent)] rounded-[var(--radius-badge)] px-0.5'
+const DOT = 'inline-block w-1.5 h-1.5 rounded-[var(--radius-badge)]'
 const UNREAD_BG = 'bg-[var(--color-accent)]'
 const MUTED_BG = 'bg-[var(--color-text-muted)]'
 const WAITING_BG = 'bg-[var(--color-status-needs-you)]'
 const TICKET_PILL =
-  'min-w-[14px] h-[14px] inline-flex flex-shrink-0 items-center justify-center text-[8px] font-bold rounded-[var(--radius-pill)] px-0.5 border border-[var(--color-status-needs-you)] text-[var(--color-status-needs-you)]'
+  'min-w-[14px] h-[14px] inline-flex flex-shrink-0 items-center justify-center text-[8px] font-bold rounded-[var(--radius-badge)] px-0.5 border border-[var(--color-status-needs-you)] text-[var(--color-status-needs-you)]'
 
 export function UnreadBadge({
   unread,

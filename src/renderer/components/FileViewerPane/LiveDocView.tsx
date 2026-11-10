@@ -256,7 +256,7 @@ export function LiveDocView({ scope, filePath, markdown, extensions, onCoreOff, 
         aria-live="polite"
       >
         <span
-          className={`inline-block h-2 w-2 rounded-[var(--radius-pill)] ${
+          className={`inline-block h-2 w-2 rounded-[var(--radius-badge)] ${
             closed ? 'bg-[var(--color-text-muted)]' : state === 'live' ? 'bg-green-500' : 'bg-yellow-500'
           }`}
           aria-hidden

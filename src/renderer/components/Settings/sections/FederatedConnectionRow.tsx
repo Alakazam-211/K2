@@ -30,7 +30,7 @@ export function FederatedConnectionRow({
       className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
     >
       <span
-        className={`w-2 h-2 flex-shrink-0 rounded-[var(--radius-pill)] ${gone ? 'bg-[var(--color-neutral)]' : 'bg-[var(--color-accent)]'}`}
+        className={`w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)] ${gone ? 'bg-[var(--color-neutral)]' : 'bg-[var(--color-accent)]'}`}
       />
       <span className={`flex-1 min-w-0 ${gone ? 'opacity-60' : ''}`}>
         <span

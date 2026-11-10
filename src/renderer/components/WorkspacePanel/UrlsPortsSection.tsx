@@ -341,7 +341,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                   <div key={`svc:${svc.name}`} className="min-w-0" data-published-service={svc.name}>
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span
-                        className={`w-1.5 h-1.5 rounded-[var(--radius-pill)] flex-shrink-0 ${statusDotClass(svc.status)}`}
+                        className={`w-1.5 h-1.5 rounded-[var(--radius-badge)] flex-shrink-0 ${statusDotClass(svc.status)}`}
                         title={svc.status || 'unknown'}
                       />
                       <span className="text-[11px] text-[var(--color-text-primary)] truncate flex-1">

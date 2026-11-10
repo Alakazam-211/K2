@@ -387,7 +387,7 @@ export function TicketRailItem({
       <span
         data-testid="ticket-rail-dot"
         data-status={row.status}
-        className="absolute rounded-[var(--radius-pill)] border border-[var(--color-bg)]"
+        className="absolute rounded-[var(--radius-badge)] border border-[var(--color-bg)]"
         style={{ right: 4, bottom: 4, width: 8, height: 8, background: statusDotColor(row.status) }}
       />
     </button>

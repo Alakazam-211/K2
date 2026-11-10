@@ -438,7 +438,7 @@ function ServerPanel({
         <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
           <div className="flex items-center gap-2 px-3 py-2">
             <span
-              className="w-2 h-2 rounded-[var(--radius-pill)] flex-shrink-0"
+              className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0"
               style={{ backgroundColor: stateColor(status.state) }}
             />
             <span className="text-xs text-[var(--color-text-primary)]">{status.state}</span>
@@ -819,7 +819,7 @@ export function DataSection(): React.JSX.Element {
           >
             <div className="flex items-center gap-2">
               <span
-                className="w-2 h-2 rounded-[var(--radius-pill)] flex-shrink-0"
+                className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0"
                 style={{ backgroundColor: stateColor(displayStatus.state) }}
               />
               <span className="text-xs font-medium text-[var(--color-text-primary)]">

@@ -141,7 +141,7 @@ export function DataSourceRow({
     <div className="relative" data-testid="sources-row" data-source={row.name}>
       <div className="flex items-center gap-2 py-1 text-[12px]">
         <span
-          className="inline-block w-2 h-2 rounded-[var(--radius-pill)] shrink-0"
+          className="inline-block w-2 h-2 rounded-[var(--radius-badge)] shrink-0"
           style={{ background: dotColor(proposed ? 'proposed' : v.display), opacity: v.phase === 'stale' ? 0.5 : 1 }}
           aria-hidden
         />

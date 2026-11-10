@@ -169,7 +169,7 @@ export default function AgentsPanel(): React.JSX.Element {
     >
       <div className="flex items-center gap-2">
         <span
-          className="w-1.5 h-1.5 rounded-[var(--radius-pill)] flex-shrink-0"
+          className="w-1.5 h-1.5 rounded-[var(--radius-badge)] flex-shrink-0"
           style={{ backgroundColor: statusColor(agent) }}
           title={
             agent.activeCount > 0 ? 'Working' :
@@ -297,7 +297,7 @@ export default function AgentsPanel(): React.JSX.Element {
           >
             <div className="flex items-center gap-2">
               <span
-                className="w-1.5 h-1.5 rounded-[var(--radius-pill)] flex-shrink-0"
+                className="w-1.5 h-1.5 rounded-[var(--radius-badge)] flex-shrink-0"
                 style={{ backgroundColor: statusColor(manager) }}
               />
               <div className="flex-1 min-w-0">

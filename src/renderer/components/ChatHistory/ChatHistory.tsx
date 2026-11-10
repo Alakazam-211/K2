@@ -1339,7 +1339,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
                             className="no-drag w-full flex items-center gap-2 px-3 h-8 hover:bg-white/[0.04] active:bg-white/[0.06] text-left group transition-colors"
                           >
                             <span
-                              className={`w-1.5 h-1.5 rounded-[var(--radius-pill)] flex-shrink-0 ${
+                              className={`w-1.5 h-1.5 rounded-[var(--radius-badge)] flex-shrink-0 ${
                                 s.live
                                   ? 'bg-[var(--color-status-ok)]'
                                   : 'bg-[var(--color-text-muted)]'
@@ -1402,7 +1402,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
                 title="Re-launch this chat inside its sandbox"
                 className="no-drag w-full flex items-center gap-2 px-3 h-8 hover:bg-white/[0.04] active:bg-white/[0.06] text-left group disabled:opacity-50 transition-colors"
               >
-                <span className="w-1.5 h-1.5 rounded-[var(--radius-pill)] bg-[#e8843c] flex-shrink-0" />
+                <span className="w-1.5 h-1.5 rounded-[var(--radius-badge)] bg-[#e8843c] flex-shrink-0" />
                 <div className="flex-1 min-w-0 flex flex-col justify-center">
                   <span className="text-[11px] text-[var(--color-text-secondary)] font-mono truncate leading-tight">{s.title}</span>
                   <span className="text-[10px] text-[var(--color-text-muted)] font-mono leading-tight truncate">

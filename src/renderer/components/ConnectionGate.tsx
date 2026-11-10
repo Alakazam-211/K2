@@ -1770,7 +1770,7 @@ function RecoveryBanner({
           style={{
             width: '8px',
             height: '8px',
-            borderRadius: 'var(--radius-pill, 0px)',
+            borderRadius: 'var(--radius-badge, 9999px)',
             background: needsUser ? '#f85149' : '#f5a623',
             flexShrink: 0,
           }}

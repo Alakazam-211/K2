@@ -528,8 +528,8 @@ export function StylesSection(): React.JSX.Element {
                 </div>
               ))}
               <div className="ml-auto flex items-center gap-1.5 px-3">
-                <span className="w-1.5 h-1.5 rounded-[var(--radius-pill)]" style={{ backgroundColor: 'var(--color-status-working)' }} />
-                <span className="w-1.5 h-1.5 rounded-[var(--radius-pill)]" style={{ backgroundColor: 'var(--color-status-ok)' }} />
+                <span className="w-1.5 h-1.5 rounded-[var(--radius-badge)]" style={{ backgroundColor: 'var(--color-status-working)' }} />
+                <span className="w-1.5 h-1.5 rounded-[var(--radius-badge)]" style={{ backgroundColor: 'var(--color-status-ok)' }} />
               </div>
             </div>
             {/* Mini mosaic — two terminal tiles; the seam between them is

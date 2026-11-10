@@ -1796,7 +1796,7 @@ export function EmailLinkSection(): React.JSX.Element {
                         {i.address}
                       </span>
                       <span
-                        className="w-2 h-2 rounded-[var(--radius-pill)] flex-shrink-0"
+                        className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0"
                         style={{ backgroundColor: statusColor(i.status) }}
                         title={i.status}
                       />

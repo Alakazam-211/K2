@@ -75,7 +75,6 @@ K2SO/
 │       │   ├── terminal.rs    # PTY create/write/resize/kill
 │       │   ├── git.rs         # Branch, worktree, changes info
 │       │   ├── filesystem.rs  # File read/write/browse
-│       │   ├── workspace_ops.rs  # Layout manipulation (split, close, arrange)
 │       │   ├── settings.rs    # Key-value settings
 │       │   └── project_config.rs  # Per-project config (run commands, etc.)
 │       ├── db/                # SQLite database
@@ -124,27 +123,13 @@ Existing viewers:
 - **PDF** -- `pdfjs-dist`
 - **DOCX** -- `mammoth`
 
-## How to Add Workspace Primitives
-
-Workspace primitives are Tauri commands that manipulate the pane layout. They live on both sides:
-
-**Backend** (`src-tauri/src/commands/workspace_ops.rs`):
-1. Add a new `#[tauri::command]` function that emits an event via `app.emit()`.
-2. Register it in `lib.rs` in the `invoke_handler` macro.
-
-**Frontend** (`src/renderer/stores/tabs.ts` or `panels.ts`):
-1. Listen for the emitted event with `listen()` from `@tauri-apps/api/event`.
-2. Update the Zustand store to reflect the layout change.
-
-Example existing primitives: `workspace_split_pane`, `workspace_close_pane`, `workspace_open_document`, `workspace_open_terminal`, `workspace_arrange`.
-
 ## Code Style
 
 ### Rust
 - Run `cargo fmt` before committing.
 - Run `cargo clippy` and address warnings.
 - Use `Result<T, String>` for Tauri command return types.
-- Follow the existing pattern of `#[tauri::command]` functions in `src-tauri/src/commands/`.
+- Follow the existing pattern of `#[tauri::command]` functions in `src-tauri/src/commands/` (connection and OS work only; logic lives in the daemon).
 
 ### TypeScript
 - Use TypeScript strict mode (see `tsconfig.web.json`).

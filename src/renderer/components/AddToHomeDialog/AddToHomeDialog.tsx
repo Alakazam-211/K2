@@ -2,14 +2,14 @@
 // than one Home. Lists the Homes with a checkbox each; Homes that already
 // have the agent show checked and can't be picked. Add puts the agent on
 // every ticked Home through the same add Home's own picker uses
-// (lib/add-to-home.ts). Esc cancels, Enter adds.
+// (lib/add-to-home.ts). Esc, the × and a press outside cancel; Enter adds.
 //
 // One Home never reaches this dialog — `addAgentToHomeFromMenu` adds
 // straight away there.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
-import { DialogScrim, Checkbox } from '@/components/ui'
+import { DialogScrim, Checkbox, DialogCloseButton, useDialogCancel } from '@/components/ui'
 import { useAddToHomeDialogStore } from '@/stores/add-to-home-dialog'
 import { useHomesStore } from '@/stores/homes'
 import { useToastStore } from '@/stores/toast'
@@ -57,15 +57,13 @@ export default function AddToHomeDialog(): React.JSX.Element | null {
   const confirmRef = useRef(confirm)
   confirmRef.current = confirm
 
-  // Esc cancels, Enter adds — from anywhere in the dialog (a focused button
-  // keeps its own Enter).
+  // Enter adds — from anywhere in the dialog (a focused button keeps its own
+  // Enter). Esc, the × and a press outside cancel (useDialogCancel).
+  const cancel = useDialogCancel(isOpen ? close : undefined)
   useEffect(() => {
     if (!isOpen) return
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        close()
-      } else if (e.key === 'Enter') {
+      if (e.key === 'Enter') {
         if (e.target instanceof HTMLButtonElement) return
         e.preventDefault()
         confirmRef.current()
@@ -94,14 +92,14 @@ export default function AddToHomeDialog(): React.JSX.Element | null {
       zIndex={50}
       className="flex items-center justify-center no-drag"
       style={{ backdropFilter: 'blur(4px)' }}
-      onClick={close}
     >
       <div
         role="dialog"
         aria-label="Add to Home"
-        {...floatMaterial('dialog')} className="w-[360px] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        {...floatMaterial('dialog')} className="relative w-[360px] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        {...cancel}
       >
+        <DialogCloseButton className="absolute top-2 right-2" onClick={close} />
         <div className="px-5 pt-5 pb-3">
           <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Add {workspace.name} to Home</h2>
           <p className="text-[10px] text-[var(--color-text-muted)] mt-1">

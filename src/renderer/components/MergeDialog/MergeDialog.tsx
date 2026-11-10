@@ -8,7 +8,7 @@ import { floatMaterial } from '@/components/ui/float-material'
 // `fetchProjects()` after cleanup is the full contract.
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { asArray } from '@/lib/as-array'
-import { DialogScrim } from '@/components/ui'
+import { DialogCloseButton, DialogScrim, useDialogCancel } from '@/components/ui'
 import { useProjectsStore } from '@/stores/projects'
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -153,22 +153,29 @@ export default function MergeDialog(): React.JSX.Element | null {
     close()
   }, [fetchProjects, close])
 
+  // Esc, the × and a press outside: Cancel on the preview, Done after a
+  // merge. Held while merging and on conflicts: the repo is mid-merge, so
+  // only Abort Merge or Resolve Later answer it.
+  const cancelHeld = step === 'merging' || step === 'conflicts'
+  const cancel = useDialogCancel(open ? (step === 'success' ? handleDone : close) : undefined, open && cancelHeld)
+
   if (!open) return null
 
   const totalAdditions = diffs.reduce((sum, d) => sum + d.additions, 0)
   const totalDeletions = diffs.reduce((sum, d) => sum + d.deletions, 0)
 
   return (
-    <DialogScrim zIndex={50} className="flex items-center justify-center" onClick={close}>
+    <DialogScrim zIndex={50} className="flex items-center justify-center">
       <div
         {...floatMaterial('dialog')} className="bg-[var(--color-bg-surface)] border border-[var(--color-border)] w-[520px] max-h-[80vh] flex flex-col shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        {...cancel}
       >
         {/* Header */}
-        <div className="px-4 py-3 border-b border-[var(--color-border)]">
+        <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
             Merge &ldquo;{branch}&rdquo; into current branch
           </h2>
+          {!cancelHeld && <DialogCloseButton className="-mr-1" onClick={step === 'success' ? handleDone : close} />}
         </div>
 
         {/* Body */}

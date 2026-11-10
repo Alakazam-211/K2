@@ -304,7 +304,7 @@ describe('S3: opening a picture', () => {
     await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledTimes(2))
     expect(box.querySelector('img')?.getAttribute('src')).toBe('blob:thumb-1')
     expect(box.hasAttribute('data-full')).toBe(false)
-    fireEvent.click(box)
+    fireEvent.pointerDown(box)
     expect(document.querySelector('[data-thread-image-lightbox]')).toBeNull()
   })
 })

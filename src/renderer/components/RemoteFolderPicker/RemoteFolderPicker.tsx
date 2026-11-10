@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
+import { DialogCloseButton, useDialogCancel } from '@/components/ui'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { normalizeFsReadDir } from '@/lib/fs-read-dir'
 import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
@@ -139,17 +140,15 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
     }
   }, [isOpen, browse])
 
-  // Close on Escape (or dismiss the new-folder input if it's open).
-  useEffect(() => {
-    if (!isOpen) return
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      if (newFolderName !== null) setNewFolderName(null)
-      else cancel()
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [isOpen, cancel, newFolderName])
+  // Esc dismisses the new-folder input first, then cancels (nothing is
+  // picked); the × and a press outside cancel.
+  const dialogCancel = useDialogCancel(isOpen ? cancel : undefined, false, {
+    escape: () => {
+      if (newFolderName === null) return false
+      setNewFolderName(null)
+      return true
+    },
+  })
 
   // Create `<cwd>/<name>` on the HOST via the daemon's fs/create route,
   // then navigate into it so "Select this folder" picks it directly.
@@ -189,18 +188,20 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
       // opened hidden behind Settings (z-200).
       data-scrim=""
       style={{ zIndex: HOST_PICKER_Z, backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
-      onClick={cancel}
     >
       <BrowserOverlayClaim />
       <div
         {...floatMaterial('dialog')} className="w-[560px] max-h-[80vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        {...dialogCancel}
       >
         {/* Header */}
         <div className="px-5 pt-5 pb-3 border-b border-[var(--color-border)]">
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
-            {titleOverride ?? (mode === 'file' ? 'Choose File on Host' : 'Open Folder on Host')}
-          </h2>
+          <div className="flex items-start justify-between gap-2">
+            <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
+              {titleOverride ?? (mode === 'file' ? 'Choose File on Host' : 'Open Folder on Host')}
+            </h2>
+            <DialogCloseButton className="-mt-2 -mr-2" onClick={cancel} />
+          </div>
           <div className="flex items-center gap-2 mt-2">
             <button
               className="px-2 py-1 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border)] disabled:opacity-30 disabled:cursor-default"

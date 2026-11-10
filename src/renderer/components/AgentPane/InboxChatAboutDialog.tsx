@@ -1,8 +1,8 @@
 // Chat about this — inject a kind-prefixed inbox stamp into pinned Chat.
 // Dialog lives outside `data-testid="inbox-browser"` so I16 `\bSend\b` holds.
 
-import { useEffect, useState } from 'react'
-import { DialogFrame, DialogScrim } from '@/components/ui'
+import { useState } from 'react'
+import { DialogCloseButton, DialogFrame, DialogScrim } from '@/components/ui'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { activateProject } from '@/stores/projects'
 import {
@@ -108,17 +108,6 @@ export function InboxChatAboutDialog({
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      e.preventDefault()
-      e.stopPropagation()
-      if (!sending) onClose()
-    }
-    window.addEventListener('keydown', handleKeyDown, true)
-    return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [onClose, sending])
-
   const submit = async (): Promise<void> => {
     const trimmed = note.trim()
     if (!trimmed || sending) return
@@ -182,18 +171,15 @@ export function InboxChatAboutDialog({
 
   return (
     <>
-      <DialogScrim
-        data-testid="inbox-chat-about-scrim"
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          dismiss()
-        }}
-      />
+      <DialogScrim data-testid="inbox-chat-about-scrim" />
+      {/* Esc, the × and a press outside dismiss (held while sending). */}
       <DialogFrame
         data-testid="inbox-chat-about-dialog"
         role="dialog"
         aria-label="Chat about this"
-        onMouseDown={(e) => e.stopPropagation()}
+        onCancel={onClose}
+        cancelHeld={sending}
+        closeButton="inline"
         style={{
           width: 420,
           maxWidth: 'calc(100vw - 48px)',
@@ -206,17 +192,7 @@ export function InboxChatAboutDialog({
           <div className="text-sm font-semibold text-[var(--color-text-primary)] truncate pr-2">
             Chat about this
           </div>
-          <button
-            type="button"
-            onClick={dismiss}
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors flex-shrink-0"
-            title="Close (Esc)"
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <line x1="2" y1="2" x2="10" y2="10" />
-              <line x1="10" y1="2" x2="2" y2="10" />
-            </svg>
-          </button>
+          <DialogCloseButton onClick={dismiss} disabled={sending} />
         </div>
 
         <div className="px-4 py-3 flex flex-col gap-2 min-h-0">

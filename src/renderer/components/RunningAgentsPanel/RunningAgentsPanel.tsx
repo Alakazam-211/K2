@@ -12,7 +12,7 @@ import { sessionsStatus, type AgentStatusView } from '@/lib/agent-status'
 import { StatusSlot, WorkingSlot } from '@/components/AgentStatus/AgentStatusCluster'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { agentNameFromId } from '@/lib/terminal-id'
-import { Surface } from '@/components/ui'
+import { DialogCloseButton, Surface, useDialogCancel } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { BrowserOverlayClaim } from '@/lib/browser-overlay'
 
@@ -173,18 +173,21 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
     return sessionsStatus({ rows: row ? [row] : [], unseen, daemonRows, liveFallback: true, skewMs })
   }
 
+  // Esc backs out of a message being written first, then closes; the × and
+  // a press outside close (nothing is sent).
+  const cancel = useDialogCancel(isOpen ? close : undefined, false, {
+    escape: () => {
+      if (!sendingTo) return false
+      setSendingTo(null)
+      setMessage('')
+      requestAnimationFrame(() => inputRef.current?.focus())
+      return true
+    },
+  })
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (sendingTo) {
-          setSendingTo(null)
-          setMessage('')
-          requestAnimationFrame(() => inputRef.current?.focus())
-        } else {
-          close()
-        }
-        e.preventDefault()
-      } else if (e.key === 'ArrowDown' && !sendingTo) {
+      if (e.key === 'ArrowDown' && !sendingTo) {
         e.preventDefault()
         setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1))
       } else if (e.key === 'ArrowUp' && !sendingTo) {
@@ -342,13 +345,11 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
       className="fixed inset-0 z-[9999] flex items-start justify-center pt-[15vh] no-drag"
       data-scrim=""
       style={{ background: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(8px)' }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) close()
-      }}
       onKeyDown={handleKeyDown}
     >
       <BrowserOverlayClaim />
       <Surface
+        {...cancel}
         role2="surface" material="tile"
         className="w-[600px] max-h-[60vh] flex flex-col overflow-hidden"
         style={{ boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)' }}
@@ -379,6 +380,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
           <span className="text-[10px] text-[var(--color-text-muted)] ml-2 flex-shrink-0">
             {filtered.length} active
           </span>
+          <DialogCloseButton className="ml-1 -mr-2" onClick={close} />
         </div>
 
         {/* Results */}
@@ -501,11 +503,6 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
                             if (e.key === 'Enter' && message.trim()) {
                               e.stopPropagation()
                               handleSendMessage(agent.terminalId)
-                            } else if (e.key === 'Escape') {
-                              e.stopPropagation()
-                              setSendingTo(null)
-                              setMessage('')
-                              requestAnimationFrame(() => inputRef.current?.focus())
                             }
                           }}
                           placeholder="Type a message to send to this agent..."

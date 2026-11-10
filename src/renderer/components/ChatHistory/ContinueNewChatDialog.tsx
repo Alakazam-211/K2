@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { usePresetsStore } from '@/stores/presets'
 import { Button, DialogFrame, DialogScrim, Checkbox, Radio } from '@/components/ui'
@@ -154,16 +154,6 @@ export function ContinueNewChatDialog({
     onClose()
   }, [onClose])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      e.preventDefault()
-      e.stopPropagation()
-      requestClose()
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [requestClose])
 
   const start = useCallback(async () => {
     if (inFlight) return
@@ -209,14 +199,12 @@ export function ContinueNewChatDialog({
 
   return (
     <>
-      <DialogScrim
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          requestClose()
-        }}
-      />
+      <DialogScrim />
+      {/* Esc, the × and a press outside close it (a start in flight is
+          dropped: stillOpen() turns false). */}
       <DialogFrame
         data-testid="continue-new-chat"
+        onCancel={requestClose}
         style={{
           minWidth: 340,
           maxWidth: 440,
@@ -224,7 +212,7 @@ export function ContinueNewChatDialog({
           fontFamily: 'var(--font-mono, monospace)',
         }}
       >
-        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 8 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 8, paddingRight: 16 }}>
           Continue in a new chat
         </div>
         <div style={{ fontSize: 12, color: 'var(--color-text-primary)', marginBottom: 2 }}>

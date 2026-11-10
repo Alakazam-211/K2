@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
 import { invoke } from '@tauri-apps/api/core'
-import { Callout, DialogScrim, Radio } from '@/components/ui'
+import { Callout, DialogCloseButton, DialogScrim, Radio, useDialogCancel } from '@/components/ui'
 import {
   useRemoveWorkspaceDialogStore,
   type RemoveWorkspaceMode,
@@ -66,15 +66,9 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
     }
   }, [isOpen])
 
-  // Close on Escape (unless pending or showing results)
-  useEffect(() => {
-    if (!isOpen) return
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && !isPending) close()
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [isOpen, isPending, close])
+  // Esc, the × and a press outside close it (nothing is removed); held
+  // while removing.
+  const cancel = useDialogCancel(isOpen ? close : undefined, isOpen && isPending)
 
   const handleConfirm = async (uninstallApps = false, dropAccess = false): Promise<void> => {
     if (!projectId || !projectPath) return
@@ -126,17 +120,19 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
       zIndex={REMOVE_WORKSPACE_Z}
       className="flex items-center justify-center no-drag"
       style={{ backdropFilter: 'blur(4px)' }}
-      onClick={isPending ? undefined : close}
     >
       <div
         {...floatMaterial('dialog')} className="w-[560px] max-h-[85vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        {...cancel}
       >
         {/* Header */}
         <div className="px-5 pt-5 pb-2">
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
-            {showingResults ? 'Workspace disconnected' : 'Remove Workspace'}
-          </h2>
+          <div className="flex items-start justify-between gap-2">
+            <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
+              {showingResults ? 'Workspace disconnected' : 'Remove Workspace'}
+            </h2>
+            <DialogCloseButton className="-mt-2 -mr-2" onClick={close} disabled={isPending} />
+          </div>
           <p className="text-[11px] text-[var(--color-text-secondary)] mt-1">
             <span className="text-[var(--color-text-primary)] font-medium">{projectName}</span>
           </p>

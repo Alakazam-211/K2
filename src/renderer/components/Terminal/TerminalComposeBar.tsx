@@ -23,6 +23,7 @@
 
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useDialogCancel } from '@/components/ui/dialog-cancel'
 import { leaveComposeHandoff, takeComposeHandoff } from './composeHandoff'
 import { createPortal } from 'react-dom'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -1853,17 +1854,9 @@ function ComposeImageThumb({
     }
   }, [path])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      e.preventDefault()
-      e.stopPropagation()
-      setOpen(false)
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [open])
+  // The preview: Esc, the × and a press beside the image close it.
+  const closePreview = useCallback(() => setOpen(false), [])
+  const previewCancel = useDialogCancel(open && url ? closePreview : undefined)
 
   const name = path.split('/').pop()?.split('\\').pop() || path
   const preview = open && url ? createPortal(
@@ -1873,19 +1866,19 @@ function ComposeImageThumb({
         role="dialog"
         aria-modal="true"
         aria-label={name}
-        onClick={() => setOpen(false)}
       >
         <img
           src={url}
           alt={name}
           className="max-h-full max-w-full object-contain"
           style={{ borderRadius: 0 }}
-          onClick={(e) => e.stopPropagation()}
+          {...previewCancel}
         />
         <button
           type="button"
-          aria-label="Close"
-          onClick={() => setOpen(false)}
+          aria-label="Close (Esc)"
+          title="Close (Esc)"
+          onClick={closePreview}
           className="absolute top-3 right-3 h-7 w-7 flex items-center justify-center bg-black/70 text-white text-lg leading-none hover:bg-black/90"
           style={{ borderRadius: 0 }}
         >

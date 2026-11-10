@@ -44,7 +44,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { floatMaterial } from '@/components/ui/float-material'
-import { Button, DialogScrim, Surface } from '@/components/ui'
+import { Button, DialogCloseButton, DialogScrim, Surface, useDialogCancel } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
 import { windowTopBarTarget } from './top-bar-scope'
 import type { AuthAuditEvent } from '@/components/Settings/sections/access-audit-api'
@@ -57,7 +57,6 @@ import { OWNER_ACCOUNT_TAG, useOwnerAccounts } from '@/components/Settings/secti
 import { PersonNameInput, usePersonName } from '@/components/Presence/PersonNameFields'
 import { realName } from '@/lib/person-name'
 import { SettingRow } from '@/components/Settings/controls/SettingControls'
-import { settingMenuOpen } from '@/components/Settings/settings-esc'
 import { COLOR_NEEDS_NEWER_SERVER, PersonColorPicker } from '@/components/Presence/PersonColorPicker'
 import type { PersonColorView } from '@/components/Presence/person-color-api'
 import { PresenceChip, type PresenceRole } from '@/components/Presence/PresenceChip'
@@ -610,16 +609,12 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
     closeRef.current?.focus()
   }, [state.kind])
 
+  // Esc, the × and a press outside close it (an open K2 menu inside, Your
+  // account or Pairs as, takes Esc first: dialog-cancel leaves it the menu).
+  const cancel = useDialogCancel(onClose)
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        // An open K2 menu (Your account, Pairs as) closes first; the dialog stays.
-        if (settingMenuOpen()) return
-        e.preventDefault()
-        e.stopPropagation()
-        onClose()
-        return
-      }
       if (e.key !== 'Tab') return
       const dialog = dialogRef.current
       if (!dialog) return
@@ -641,19 +636,7 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
-  const closeButton = (
-    <button
-      ref={closeRef}
-      type="button"
-      onClick={onClose}
-      aria-label="Close"
-      title="Close (Esc)"
-      data-testid="admin-profile-close"
-      className="flex h-6 w-6 flex-shrink-0 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] cursor-pointer"
-    >
-      ×
-    </button>
-  )
+  const closeButton = <DialogCloseButton ref={closeRef} onClick={onClose} data-testid="admin-profile-close" />
 
   // A modal covers the window, so it renders at the top of <body>: inside
   // the top bar's frosted capsule (Glass), whose backdrop-filter makes it a
@@ -661,13 +644,7 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
   // capsule and painted under the tiles.
   return createPortal(
     <>
-      <DialogScrim
-        data-testid="admin-profile-scrim"
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-      />
+      <DialogScrim data-testid="admin-profile-scrim" />
       <Surface
         ref={dialogRef}
         role2="surface"
@@ -691,7 +668,7 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
           flexDirection: 'column',
           overflow: 'hidden',
         }}
-        onMouseDown={(e) => e.stopPropagation()}
+        {...cancel}
       >
         {state.kind === 'ok' ? (
           <LoadedProfile profile={state.profile} scope={scope} closeButton={closeButton} />

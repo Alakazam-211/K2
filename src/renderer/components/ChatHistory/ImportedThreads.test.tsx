@@ -124,7 +124,7 @@ describe('Imported Threads group', () => {
     const viewer = await screen.findByTestId('imported-thread-viewer')
     expect(viewer.textContent).toContain('Imported messages are read-only')
     expect(h.viewer.at(-1)).toEqual({ addr: 'import:b', conversationId: 'import:b', composeBar: null })
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close (Esc)' }))
     expect(screen.queryByTestId('imported-thread-viewer')).toBeNull()
   })
 

@@ -210,6 +210,20 @@ describe('owner account prompt: pick and Not now', () => {
     expect(h.posts).toEqual([{ route: 'owner/account-prompt/dismiss', body: {} }])
   })
 
+  it('the ×, Esc and a click outside close it without storing anything (it asks again next run)', async () => {
+    for (const close of [
+      () => fireEvent.click(screen.getByRole('button', { name: 'Close (Esc)' })),
+      () => fireEvent.keyDown(document.body, { key: 'Escape' }),
+      () => fireEvent.pointerDown(screen.getByTestId('owner-account-prompt-scrim')),
+    ]) {
+      await shown()
+      act(() => void close())
+      expect(prompt()).toBeNull()
+      cleanup()
+    }
+    expect(h.posts).toEqual([])
+  })
+
   it('a refused link stays open with the error', async () => {
     h.postRoutes['owner/accounts'] = () => {
       throw new Error('owner token required')
@@ -278,8 +292,10 @@ describe('owner account prompt: no admins (create is required)', () => {
     act(() => void fireEvent.keyDown(window, { key: 'Escape' }))
     act(() => void fireEvent.keyDown(document.body, { key: 'Escape' }))
     act(() => void fireEvent.mouseDown(screen.getByTestId('owner-account-prompt-scrim')))
+    act(() => void fireEvent.pointerDown(screen.getByTestId('owner-account-prompt-scrim')))
     act(() => void fireEvent.click(screen.getByTestId('owner-account-prompt-scrim')))
     expect(prompt()).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Close (Esc)' })).toBeNull()
   })
 
   it('the create button waits for a username and matching passwords', async () => {

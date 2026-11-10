@@ -14,6 +14,7 @@
 
 import { useLayoutEffect, useRef, useState } from 'react'
 import { NavSectionLabel } from '@/components/Sidebar/NavSection'
+import { DialogCloseButton, useDialogCancel } from '@/components/ui'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { placePopover, type PopoverPlacement } from './placement'
@@ -93,6 +94,8 @@ export function NotePopover({
   const [size, setSize] = useState(DEFAULT_SIZE)
 
   useBrowserOverlay({ active: open, ref, kind: 'popover' })
+  // Esc (wherever focus is), the × and a press outside cancel: nothing is kept.
+  const cancel = useDialogCancel(open ? onCancel : undefined)
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -129,12 +132,9 @@ export function NotePopover({
       data-side={place.side}
       className="fixed z-50 w-80 shadow-lg text-xs no-drag"
       style={{ left: place.x, top: place.y }}
+      {...cancel}
       onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.preventDefault()
-          e.stopPropagation()
-          onCancel()
-        } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
           e.preventDefault()
           sendNow()
         }
@@ -149,6 +149,7 @@ export function NotePopover({
           <span className="min-w-0 flex-1 truncate text-right font-mono text-[10px] text-[var(--color-text-muted)]" data-testid="design-element-chip">
             {elementChipLabel(element)}
           </span>
+          <DialogCloseButton className="-mr-2" onClick={onCancel} />
         </div>
         <div role="tablist" aria-label="Kind of note" className="flex items-center gap-1 px-3 border-b border-[var(--color-border)]">
           {KINDS.map((k, i) => (

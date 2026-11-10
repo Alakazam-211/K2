@@ -75,17 +75,17 @@ export default function CloneToDialog(): React.JSX.Element | null {
   // the in-progress daemon work, so we don't pretend it does).
   const isClosable = isOptions || isTerminal
 
-  // Esc closes on the options panel or once terminal. Enter on the options
+  // Esc, the × and a press outside close on the options panel or once
+  // terminal (DialogFrame onCancel; held mid-run). Enter on the options
   // panel proceeds (convenience — matches the primary Clone button).
   useEffect(() => {
     if (!isOpen) return
     const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && isClosable) close()
-      else if (e.key === 'Enter' && isOptions) void confirm()
+      if (e.key === 'Enter' && isOptions) void confirm()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [isOpen, isClosable, isOptions, close, confirm])
+  }, [isOpen, isOptions, confirm])
 
   if (!isOpen) return null
 
@@ -101,11 +101,12 @@ export default function CloneToDialog(): React.JSX.Element | null {
         zIndex={50}
         className="no-drag"
         style={{ backdropFilter: 'blur(4px)' }}
-        onClick={isClosable ? close : undefined}
         data-testid="clone-dialog-scrim"
       />
       <DialogFrame
         zIndex={51}
+        onCancel={close}
+        cancelHeld={!isClosable}
         className="w-[560px] max-w-[calc(100vw-32px)] max-h-[85vh] flex flex-col"
         data-testid="clone-dialog"
         role="dialog"
@@ -113,7 +114,7 @@ export default function CloneToDialog(): React.JSX.Element | null {
         aria-label="Clone workspace"
       >
         {/* Header */}
-        <div className="px-5 pt-5 pb-2">
+        <div className="px-5 pt-5 pb-2 pr-10">
           <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
             {isOptions
               ? 'Clone workspace'

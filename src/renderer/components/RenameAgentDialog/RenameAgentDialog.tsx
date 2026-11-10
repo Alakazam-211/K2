@@ -3,7 +3,7 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
-import { Callout, DialogScrim } from '@/components/ui'
+import { Callout, DialogCloseButton, DialogScrim, useDialogCancel } from '@/components/ui'
 import { useRenameAgentDialogStore, validateAgentDisplayName } from '@/stores/rename-agent-dialog'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
@@ -44,15 +44,9 @@ export default function RenameAgentDialog(): React.JSX.Element | null {
     return () => { cancelled = true }
   }, [isOpen, storedHandle, projectPath])
 
-  // Esc cancels from anywhere in the dialog (not while a save is in flight).
-  useEffect(() => {
-    if (!isOpen) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && !busy) { e.preventDefault(); close() }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [isOpen, busy, close])
+  // Esc (from anywhere), the × and a press outside cancel; held while a
+  // save is in flight.
+  const dialogCancel = useDialogCancel(isOpen ? close : undefined, isOpen && busy)
 
   if (!isOpen || !projectId) return null
 
@@ -88,16 +82,18 @@ export default function RenameAgentDialog(): React.JSX.Element | null {
       zIndex={50}
       className="flex items-center justify-center no-drag"
       style={{ backdropFilter: 'blur(4px)' }}
-      onClick={cancel}
     >
       <div
         role="dialog"
         aria-label="Rename agent"
         {...floatMaterial('dialog')} className="w-[420px] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        {...dialogCancel}
       >
         <div className="px-5 pt-5 pb-3">
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Rename agent</h2>
+          <div className="flex items-start justify-between gap-2">
+            <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Rename agent</h2>
+            <DialogCloseButton className="-mt-2 -mr-2" onClick={cancel} disabled={busy} />
+          </div>
           <label
             htmlFor="rename-agent-name"
             className="block text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mt-3 mb-1"

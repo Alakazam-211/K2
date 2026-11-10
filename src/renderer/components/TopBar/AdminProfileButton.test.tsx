@@ -370,9 +370,9 @@ describe('the Admin profile modal: open and close', () => {
 
     await openLoaded()
     // A click inside does not close it.
-    act(() => void fireEvent.mouseDown(dialog()))
+    act(() => void fireEvent.pointerDown(dialog()))
     dialog()
-    act(() => void fireEvent.mouseDown(screen.getByTestId('admin-profile-scrim')))
+    act(() => void fireEvent.pointerDown(screen.getByTestId('admin-profile-scrim')))
     expect(document.querySelector('[data-testid="admin-profile-dialog"]')).toBeNull()
   })
 

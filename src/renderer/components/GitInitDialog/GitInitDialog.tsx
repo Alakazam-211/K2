@@ -7,7 +7,7 @@ import { runWorkspaceIngestBestEffort } from '@/lib/add-workspace'
 // route through the `/cli/*` HTTP layer; `revealAddedProject` re-emits the
 // cross-window `sync:projects` / `sync:focus-groups` events.
 import { daemonCliPost } from '@/lib/daemon-cli'
-import { Callout, DialogScrim } from '@/components/ui'
+import { Callout, DialogCloseButton, DialogScrim, useDialogCancel } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { GitToolsBanner } from '@/components/GitTools/GitToolsNotice'
 import { ADD_WORKSPACE_Z } from '@/lib/overlay-layers'
@@ -73,15 +73,8 @@ export default function GitInitDialog(): React.JSX.Element | null {
     }
   }, [path, seedWiki, seedAgentsMd, fanout, close, showAdded, setIsPending, setError])
 
-  // Close on Escape
-  useEffect(() => {
-    if (!isOpen) return
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && !isPending) close()
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [isOpen, isPending, close])
+  // Esc, the × and a press outside cancel (nothing is added); held while adding.
+  const cancel = useDialogCancel(isOpen ? close : undefined, isOpen && isPending)
 
   if (!isOpen || !path || !name) return null
 
@@ -90,17 +83,17 @@ export default function GitInitDialog(): React.JSX.Element | null {
       zIndex={ADD_WORKSPACE_Z}
       className="flex items-center justify-center no-drag"
       style={{ backdropFilter: 'blur(4px)' }}
-      onClick={isPending ? undefined : close}
     >
       <div
         {...floatMaterial('dialog')} className="w-[440px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        {...cancel}
       >
         {/* Header */}
-        <div className="px-5 pt-5 pb-2">
+        <div className="px-5 pt-5 pb-2 flex items-start justify-between gap-2">
           <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
             New Workspace
           </h2>
+          <DialogCloseButton className="-mt-2 -mr-2" onClick={close} disabled={isPending} />
         </div>
 
         {/* Body */}

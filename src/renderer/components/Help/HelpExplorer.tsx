@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { floatMaterial } from '@/components/ui/float-material'
-import { BetaTag, DialogScrim, Input, Surface } from '@/components/ui'
+import { BetaTag, DialogCloseButton, DialogScrim, Input, Surface, useDialogCancel } from '@/components/ui'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
 import catalogJson from '@shared/cli-catalog.generated.json'
@@ -317,22 +317,27 @@ export default function HelpExplorer({
         inputRef.current?.select()
         return
       }
-      if (e.key !== 'Escape') return
-      e.preventDefault()
-      e.stopPropagation()
-      if (inputRef.current && inputRef.current.value) {
-        setQuery('')
-        return
-      }
-      onClose()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [])
+
+  // Esc clears a search first, then closes; the × and a press outside close.
+  const cancel = useDialogCancel(onClose, false, {
+    escape: () => {
+      if (!inputRef.current?.value) return false
+      setQuery('')
+      return true
+    },
+  })
 
   const onSearchKey = (e: React.KeyboardEvent<HTMLInputElement>): void => {
     if (!showResults) return
-    if (e.key === 'ArrowDown') {
+    // The open result list owns Esc (dialog-cancel leaves it to a combobox).
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      setQuery('')
+    } else if (e.key === 'ArrowDown') {
       e.preventDefault()
       setActive((i) => Math.min(i + 1, Math.max(0, results.length - 1)))
     } else if (e.key === 'ArrowUp') {
@@ -489,12 +494,7 @@ export default function HelpExplorer({
   // capsule and painted under the tiles.
   return createPortal(
     <>
-      <DialogScrim
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-      />
+      <DialogScrim />
       <Surface
         role2="surface"
         {...floatMaterial('dialog')}
@@ -517,7 +517,7 @@ export default function HelpExplorer({
           overflow: 'hidden',
           fontFamily: SANS,
         }}
-        onMouseDown={(e) => e.stopPropagation()}
+        {...cancel}
       >
         <div
           className="grid items-center gap-2 flex-shrink-0"
@@ -605,15 +605,7 @@ export default function HelpExplorer({
               </Surface>
             ) : null}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="justify-self-end flex h-6 w-6 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]"
-            style={{ borderRadius: 0 }}
-          >
-            ×
-          </button>
+          <DialogCloseButton className="justify-self-end" onClick={onClose} />
         </div>
         <div className="flex flex-1 min-h-0">
           <nav

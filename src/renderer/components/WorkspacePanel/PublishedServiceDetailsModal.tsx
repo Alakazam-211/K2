@@ -1,10 +1,9 @@
 // View-only published-service details. Overlay/escape/close conventions
-// mirror PresenceModal (DialogScrim + DialogFrame, backdrop mousedown
-// closes, Escape via capture-phase window listener). No Start/Stop here
+// mirror PresenceModal (DialogScrim + DialogFrame onCancel: Esc, the × and
+// a press outside close it). No Start/Stop here
 // — those stay on the list row.
 
-import { useEffect } from 'react'
-import { DialogFrame, DialogScrim } from '@/components/ui'
+import { DialogCloseButton, DialogFrame, DialogScrim } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
 import { AppDeploys, APP_CMD_SENTINEL } from './AppDeploys'
 import { AppUpdateSetting } from './AppUpdateSetting'
@@ -66,17 +65,6 @@ export function PublishedServiceDetailsModal({
   onClose,
   scope,
 }: PublishedServiceDetailsModalProps): React.JSX.Element {
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown, true)
-    return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [onClose])
 
   const launch = serviceLaunchLabel(service)
   const skinUi = serviceSkinUiLabel(service)
@@ -85,13 +73,10 @@ export function PublishedServiceDetailsModal({
 
   return (
     <>
-      <DialogScrim
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-      />
+      <DialogScrim />
       <DialogFrame
+        onCancel={onClose}
+        closeButton="inline"
         data-published-service-details=""
         role="dialog"
         aria-label={service.name}
@@ -107,17 +92,7 @@ export function PublishedServiceDetailsModal({
           <div className="text-sm font-semibold text-[var(--color-text-primary)] truncate pr-2">
             {service.name}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors flex-shrink-0"
-            title="Close (Esc)"
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <line x1="2" y1="2" x2="10" y2="10" />
-              <line x1="10" y1="2" x2="2" y2="10" />
-            </svg>
-          </button>
+          <DialogCloseButton onClick={onClose} />
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
@@ -185,27 +160,13 @@ export function PublishedByoDetailsModal({
   hostLabel: string
   onClose: () => void
 }): React.JSX.Element {
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown, true)
-    return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [onClose])
 
   return (
     <>
-      <DialogScrim
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-      />
+      <DialogScrim />
       <DialogFrame
+        onCancel={onClose}
+        closeButton="inline"
         data-published-byo-details=""
         role="dialog"
         aria-label={leftover.label}
@@ -221,17 +182,7 @@ export function PublishedByoDetailsModal({
           <div className="text-sm font-semibold text-[var(--color-text-primary)] truncate pr-2">
             {leftover.label}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors flex-shrink-0"
-            title="Close (Esc)"
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <line x1="2" y1="2" x2="10" y2="10" />
-              <line x1="10" y1="2" x2="2" y2="10" />
-            </svg>
-          </button>
+          <DialogCloseButton onClick={onClose} />
         </div>
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
           <Field label="Kind">Nested URL</Field>

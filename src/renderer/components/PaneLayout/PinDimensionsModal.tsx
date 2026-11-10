@@ -7,15 +7,15 @@
 // daemon rejections surface inline and keep the modal open.
 //
 // Overlay/escape/close conventions mirror PresenceModal (backdrop
-// mousedown closes, Escape closes via a capture-phase window
-// listener, fixed-centered surface on the same z-band).
+// Esc, the × and a press outside close it via DialogFrame onCancel,
+// fixed-centered surface on the same z-band).
 //
 // All non-trivial logic (preset rows, populate/diverge form state,
 // bounds validation, POST payload) lives in pinSizeMenu.ts as pure
 // helpers — unit-tested there without rendering.
 
-import { useEffect, useMemo, useState } from 'react'
-import { DialogFrame, DialogScrim } from '@/components/ui'
+import { useMemo, useState } from 'react'
+import { DialogCloseButton, DialogFrame, DialogScrim } from '@/components/ui'
 import { dimsOf, pinOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import { useRoom } from '@/components/Room/RoomContext'
 import {
@@ -57,17 +57,6 @@ export default function PinDimensionsModal({
   // the user has typed (or preset-populated) something invalid.
   const showHint = !validation.ok && (form.cols.trim() !== '' || form.rows.trim() !== '')
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown, true)
-    return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [onClose])
 
   const handleApply = (): void => {
     if (!validation.ok || submitting) return
@@ -103,16 +92,13 @@ export default function PinDimensionsModal({
   return (
     <>
       {/* Semi-transparent backdrop */}
-      <DialogScrim
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-      />
+      <DialogScrim />
 
       {/* Dialog */}
       <DialogFrame
         data-pin-dimensions-modal=""
+        onCancel={onClose}
+        closeButton="inline"
         style={{
           width: 420,
           maxWidth: 'calc(100vw - 48px)',
@@ -126,16 +112,7 @@ export default function PinDimensionsModal({
           <div className="text-sm font-semibold text-[var(--color-text-primary)]">
             Pin Dimensions
           </div>
-          <button
-            onClick={onClose}
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-            title="Close (Esc)"
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <line x1="2" y1="2" x2="10" y2="10" />
-              <line x1="10" y1="2" x2="2" y2="10" />
-            </svg>
-          </button>
+          <DialogCloseButton onClick={onClose} />
         </div>
 
         {/* Body: preset list (left) + fields (right) */}

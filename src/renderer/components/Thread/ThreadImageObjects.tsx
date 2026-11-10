@@ -20,6 +20,7 @@ import {
 import { createPortal } from 'react-dom'
 import type { ServerScope } from '@/kessel/server-scope'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { useDialogCancel } from '@/components/ui/dialog-cancel'
 import {
   fetchThreadImage,
   ticketAttachmentReader,
@@ -151,16 +152,9 @@ export function ThreadImageLightbox({
     }
   }, [imageRef])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      e.preventDefault()
-      e.stopPropagation()
-      onClose()
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  // Esc, the × and a press anywhere close it (the whole lightbox is
+  // "outside": a click on the picture closes it too, as before).
+  useDialogCancel(onClose)
 
   const src = full ?? thumbUrl
   return createPortal(
@@ -173,7 +167,6 @@ export function ThreadImageLightbox({
       role="dialog"
       aria-modal="true"
       aria-label={name}
-      onClick={onClose}
     >
       {src ? (
         <img src={src} alt={name} className="max-h-full max-w-full object-contain" draggable={false} />
@@ -182,11 +175,9 @@ export function ThreadImageLightbox({
       )}
       <button
         type="button"
-        aria-label="Close"
-        onClick={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
+        aria-label="Close (Esc)"
+        title="Close (Esc)"
+        onClick={onClose}
         className="absolute top-3 right-3 h-7 w-7 flex items-center justify-center bg-black/70 text-white text-lg leading-none hover:bg-black/90"
         style={{ borderRadius: 999 }}
       >

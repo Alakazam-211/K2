@@ -10,7 +10,9 @@
 //     obvious pre-selection (the only admin, or the one whose first/last
 //     name matches the old "Your name").
 //   - `mode: "create"` (no Owner/Admin login at all): the create form is
-//     required; no Not now, and Esc or a click outside don't close it.
+//     required; no Not now, and Esc, a × or a click outside don't close it.
+//   - In `pick` mode the ×, Esc and a click outside close it for this run of
+//     the app without storing anything (Not now stores the dismissal).
 // Both cases share one form (`CreateAdminForm`): `users/add`, `users/set-role`
 // admin, then the link. No localStorage gating: every window and client
 // reads the same answer.
@@ -260,6 +262,9 @@ export default function OwnerAccountPrompt(): React.JSX.Element | null {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  // The ×, Esc or a click outside (pick mode): closed until the app starts
+  // again; nothing is stored, so it asks again then.
+  const [closedForNow, setClosedForNow] = useState(false)
   const eligible = useRef(promptEligible())
   // Reopened from the setup checklist after "Not now": shown while the
   // daemon still says nothing is linked.
@@ -285,6 +290,8 @@ export default function OwnerAccountPrompt(): React.JSX.Element | null {
 
   useEffect(() => {
     if (!forced) return
+    // A reopen (the setup checklist's row) brings back a prompt the × closed.
+    setClosedForNow(false)
     if (!eligible.current) {
       useOwnerAccountPromptReopenStore.getState().clear()
       return
@@ -305,14 +312,14 @@ export default function OwnerAccountPrompt(): React.JSX.Element | null {
     }
   }, [refresh])
 
-  if (!view || !(view.show || (forced && view.reopenable))) return null
+  if (!view || closedForNow || !(view.show || (forced && view.reopenable))) return null
 
   const hide = (): void => {
     useOwnerAccountPromptReopenStore.getState().clear()
     setView((v) => (v ? { ...v, show: false } : v))
   }
-  // No Owner/Admin login yet: the create form is required (no Not now;
-  // the scrim and Esc don't close it, since nothing here listens for them).
+  // No Owner/Admin login yet: the create form is required (no Not now, no
+  // ×; the scrim and Esc don't close it).
   const required = view.mode === 'create'
   const showForm = required || creating
 
@@ -360,8 +367,10 @@ export default function OwnerAccountPrompt(): React.JSX.Element | null {
         data-testid="owner-account-prompt"
         data-mode={view.mode}
         style={{ width: 'min(440px, calc(100vw - 32px))', padding: '16px 18px' }}
+        onCancel={required ? undefined : () => setClosedForNow(true)}
+        cancelHeld={busy}
       >
-        <h2 id="owner-account-prompt-title" className="m-0 text-[14px] font-semibold text-[var(--color-text-primary)]">
+        <h2 id="owner-account-prompt-title" className="m-0 pr-6 text-[14px] font-semibold text-[var(--color-text-primary)]">
           {showForm ? CREATE_TITLE : PROMPT_TITLE}
         </h2>
         <p className="m-0 mt-1 text-xs text-[var(--color-text-secondary)]">{PROMPT_WHY}</p>

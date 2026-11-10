@@ -7,13 +7,12 @@
 // button. (The S4 edit-grant toggle went with the Viewer role —
 // prd-remove-viewer-role-v1.md.)
 //
-// Overlay/escape/close conventions mirror ConfirmDialog (backdrop
-// mousedown closes, Escape closes via a capture-phase window listener,
-// fixed-centered surface on the same z-band).
+// Overlay/escape/close conventions mirror ConfirmDialog (Esc, the × and a
+// press outside close it via DialogFrame onCancel, fixed-centered surface
+// on the same z-band).
 
-import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { DialogFrame, DialogScrim } from '@/components/ui'
+import { DialogCloseButton, DialogFrame, DialogScrim } from '@/components/ui'
 import { usePresenceStore, type RosterUser } from '@/stores/presence'
 import PresenceAvatar, { presenceDisplayName, useSelfPresenceUser } from './PresenceAvatar'
 import PresenceKickButton from './PresenceKickButton'
@@ -49,17 +48,6 @@ export default function PresenceModal({ onClose, roster: otherRoster, serverLabe
   const readOnly = otherRoster !== undefined
   const roster = otherRoster ?? windowRoster
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown, true)
-    return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [onClose])
 
   // A modal covers the window, so it renders at the top of <body>: inside
   // the top bar's frosted capsule (Glass), whose backdrop-filter makes it a
@@ -68,15 +56,12 @@ export default function PresenceModal({ onClose, roster: otherRoster, serverLabe
   return createPortal(
     <>
       {/* Semi-transparent backdrop */}
-      <DialogScrim
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-      />
+      <DialogScrim />
 
       {/* Dialog */}
       <DialogFrame
+        onCancel={onClose}
+        closeButton="inline"
         style={{
           width: 480,
           maxWidth: 'calc(100vw - 48px)',
@@ -93,16 +78,7 @@ export default function PresenceModal({ onClose, roster: otherRoster, serverLabe
               {roster.length}
             </span>
           </div>
-          <button
-            onClick={onClose}
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-            title="Close (Esc)"
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <line x1="2" y1="2" x2="10" y2="10" />
-              <line x1="10" y1="2" x2="2" y2="10" />
-            </svg>
-          </button>
+          <DialogCloseButton onClick={onClose} />
         </div>
 
         {/* Rows */}

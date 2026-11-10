@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
-import { Callout, DialogScrim, Checkbox } from '@/components/ui'
+import { Callout, DialogScrim, Checkbox, DialogCloseButton, useDialogCancel } from '@/components/ui'
 import { useAddWorkspaceDialogStore } from '../../stores/add-workspace-dialog'
 import { GitToolsBanner } from '@/components/GitTools/GitToolsNotice'
 import { ADD_WORKSPACE_Z } from '@/lib/overlay-layers'
@@ -33,15 +33,8 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
     }
   }, [isOpen])
 
-  // Close on Escape
-  useEffect(() => {
-    if (!isOpen) return
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && !isPending) close()
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [isOpen, isPending, close])
+  // Esc, the × and a press outside cancel; held open while adding.
+  const cancel = useDialogCancel(isOpen ? close : undefined, isOpen && isPending)
 
   const handleAdd = async (): Promise<void> => {
     if (!onConfirm) return
@@ -62,17 +55,19 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
       zIndex={ADD_WORKSPACE_Z}
       className="flex items-center justify-center no-drag"
       style={{ backdropFilter: 'blur(4px)' }}
-      onClick={isPending ? undefined : close}
     >
       <div
         {...floatMaterial('dialog')} className="w-[520px] max-h-[85vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        {...cancel}
       >
         {/* Header */}
         <div className="px-5 pt-5 pb-2">
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
-            Add Workspace to K2
-          </h2>
+          <div className="flex items-start justify-between gap-2">
+            <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
+              Add Workspace to K2
+            </h2>
+            <DialogCloseButton className="-mt-2 -mr-2" onClick={close} disabled={isPending} />
+          </div>
           <p className="text-[10px] text-[var(--color-text-muted)] mt-1 break-all font-mono">
             {path}
           </p>

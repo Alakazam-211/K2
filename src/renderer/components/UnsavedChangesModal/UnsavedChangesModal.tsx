@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
-import { DialogScrim } from '@/components/ui'
+import { DialogCloseButton, DialogScrim, useDialogCancel } from '@/components/ui'
 import { registerLeaveGuard, type LeaveChoice } from '@/stores/tabs'
 
 // Unsaved-changes leave guard UI.
@@ -24,37 +24,29 @@ interface UnsavedChangesModalProps {
 }
 
 function UnsavedChangesModal({ onChoose }: UnsavedChangesModalProps): React.JSX.Element {
-  // Esc == Cancel.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        onChoose('cancel')
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [onChoose])
+  // Esc, the × and a press outside == Cancel (stay; nothing saved or dropped).
+  const cancel = useDialogCancel(() => onChoose('cancel'))
 
   return (
     <DialogScrim
       zIndex={60}
       className="flex items-center justify-center no-drag"
       style={{ backdropFilter: 'blur(4px)' }}
-      onClick={() => onChoose('cancel')}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Unsaved changes"
         {...floatMaterial('dialog')} className="w-[440px] max-w-[92vw] border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        {...cancel}
       >
         <div className="px-5 pt-5 pb-2">
-          <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
-            Unsaved changes
-          </h2>
+          <div className="flex items-start justify-between gap-2">
+            <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
+              Unsaved changes
+            </h2>
+            <DialogCloseButton className="-mt-2 -mr-2" onClick={() => onChoose('cancel')} />
+          </div>
           <p className="text-xs text-[var(--color-text-muted)] mt-2 leading-relaxed">
             You have unsaved edits in this workspace. Save them before leaving?
           </p>

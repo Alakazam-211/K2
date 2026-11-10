@@ -1,5 +1,4 @@
-import { useEffect, useCallback } from 'react'
-import { DialogScrim } from '@/components/ui'
+import { DialogCloseButton, DialogScrim, useDialogCancel } from '@/components/ui'
 import type { ActiveAgent } from '@/stores/active-agents'
 
 interface AgentCloseDialogProps {
@@ -15,24 +14,8 @@ export default function AgentCloseDialog({
   onConfirm,
   onCancel
 }: AgentCloseDialogProps): React.JSX.Element {
-  // Escape to cancel
-  useEffect(() => {
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onCancel()
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [onCancel])
-
-  const handleBackdropClick = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) onCancel()
-    },
-    [onCancel]
-  )
+  // Esc, the × and a press outside cancel (nothing closes).
+  const cancel = useDialogCancel(onCancel)
 
   const isSingle = agents.length === 1
   const title = mode === 'app'
@@ -45,9 +28,9 @@ export default function AgentCloseDialog({
     <DialogScrim
       zIndex={1000}
       className="flex items-center justify-center"
-      onClick={handleBackdropClick}
     >
       <div
+        {...cancel}
         className="max-w-md w-full mx-4"
         style={{
           backgroundColor: 'var(--color-bg-stripe)',
@@ -55,10 +38,11 @@ export default function AgentCloseDialog({
         }}
       >
         {/* Header */}
-        <div className="px-5 pt-5 pb-3">
+        <div className="px-5 pt-5 pb-3 flex items-start justify-between gap-2">
           <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
             {title}
           </h3>
+          <DialogCloseButton className="-mt-2 -mr-2" onClick={onCancel} />
         </div>
 
         {/* Body */}

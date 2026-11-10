@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { daemonCliGet, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { isAirgap } from '@/lib/airgap'
-import { DialogScrim, Surface } from '@/components/ui'
+import { DialogCloseButton, DialogScrim, Surface, useDialogCancel } from '@/components/ui'
 import Markdown from '../Markdown/Markdown'
 import k2Logo from '../../assets/k2-logo.png'
 import { primaryScope } from '@/kessel/server-scope'
@@ -202,15 +202,16 @@ export default function WhatsNewModal({
     setPageIdx((idx) => Math.min(totalPages - 1, idx + 1))
   }, [totalPages])
 
-  // Keyboard: Esc dismisses; ←/→ paginate.
+  // Esc, the × and a press outside dismiss it (marks it seen, as before:
+  // otherwise it would come back on every launch).
+  const dismissDialog = useCallback(() => void handleDismiss(), [handleDismiss])
+  const cancel = useDialogCancel(visible ? dismissDialog : undefined)
+
+  // Keyboard: ←/→ paginate.
   useEffect(() => {
     if (!visible) return
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        void handleDismiss()
-      } else if (e.key === 'ArrowLeft') {
+      if (e.key === 'ArrowLeft') {
         e.preventDefault()
         goPrev()
       } else if (e.key === 'ArrowRight') {
@@ -220,7 +221,7 @@ export default function WhatsNewModal({
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [visible, handleDismiss, goPrev, goNext])
+  }, [visible, goPrev, goNext])
 
   if (!visible || !payload || !currentPage) return null
 
@@ -316,12 +317,7 @@ export default function WhatsNewModal({
       `}</style>
 
       {/* Backdrop. */}
-      <DialogScrim
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          void handleDismiss()
-        }}
-      />
+      <DialogScrim />
 
       {/* Dialog stays viewport-centered. Star drawer is absolute on the
           right, lower z-index so it reads as tucked behind. */}
@@ -336,7 +332,7 @@ export default function WhatsNewModal({
           width: 'min(620px, 90vw)',
           maxHeight: '78vh',
         }}
-        onMouseDown={(e) => e.stopPropagation()}
+        {...cancel}
       >
       <Surface
         role2="surface" material="tile"
@@ -414,6 +410,7 @@ export default function WhatsNewModal({
                 {pageIdx + 1} / {totalPages}
               </span>
             )}
+            <DialogCloseButton className="-mr-3" onClick={dismissDialog} />
           </div>
         </div>
 

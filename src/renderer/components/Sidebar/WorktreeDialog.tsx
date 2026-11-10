@@ -8,7 +8,7 @@ import { floatMaterial } from '@/components/ui/float-material'
 // Tauri git command emitted NO cross-window sync (optimistic local update
 // is the contract).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { DialogScrim } from '@/components/ui'
+import { DialogCloseButton, DialogScrim, useDialogCancel } from '@/components/ui'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
@@ -83,16 +83,8 @@ export default function WorktreeDialog({
       .catch(() => setBranches([]))
   }, [open, projectPath, scope])
 
-  // Close on Escape
-  useEffect(() => {
-    if (!open) return
-
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [open, onClose])
+  // Esc, the × and a press outside close it (nothing is created).
+  const cancel = useDialogCancel(open ? onClose : undefined)
 
   const sanitizedName = useMemo(() => sanitizeBranchName(name), [name])
   const namesDiffer = name.trim().length > 0 && sanitizedName !== name.trim()
@@ -158,30 +150,18 @@ export default function WorktreeDialog({
     : selectedBranch.length > 0 && !creating
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose()
-      }}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <DialogScrim zIndex={0} className="backdrop-blur-sm" />
 
       {/* Dialog */}
-      <div {...floatMaterial('dialog')} className="relative w-[350px] flex flex-col bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl overflow-hidden">
+      <div {...floatMaterial('dialog')} {...cancel} className="relative w-[350px] flex flex-col bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
             New Worktree
           </h2>
-          <button
-            className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
-            onClick={onClose}
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <DialogCloseButton className="-mr-1" onClick={onClose} />
         </div>
 
         {/* Mode toggle */}

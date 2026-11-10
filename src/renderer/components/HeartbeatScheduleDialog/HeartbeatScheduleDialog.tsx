@@ -6,7 +6,7 @@ import { emit } from '@tauri-apps/api/event'
 // `/cli/projects/update` HTTP layer and re-emit `sync:projects`. The
 // `k2so_agents_*` calls are agent-control (out of scope), stay on invoke.
 import { daemonCliPost } from '@/lib/daemon-cli'
-import { DialogScrim } from '@/components/ui'
+import { DialogCloseButton, DialogScrim, useDialogCancel } from '@/components/ui'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { useHeartbeatScheduleStore } from '@/stores/heartbeat-schedule'
 import { useProjectsStore } from '@/stores/projects'
@@ -159,13 +159,8 @@ export default function HeartbeatScheduleDialog(): React.JSX.Element | null {
       .catch(() => setPreview([]))
   }, [tab, scheduleJson])
 
-  // Close on Escape
-  useEffect(() => {
-    if (!isOpen) return
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [isOpen, close])
+  // Esc, the × and a press outside close it unsaved (useDialogCancel).
+  const cancel = useDialogCancel(isOpen ? close : undefined)
 
   const handleSave = useCallback(async () => {
     if (!projectId) return
@@ -209,21 +204,14 @@ export default function HeartbeatScheduleDialog(): React.JSX.Element | null {
   const frequencyLabel = { daily: 'day', weekly: 'week', monthly: 'month', yearly: 'year' }[scheduled.frequency] || 'day'
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      onClick={(e) => { if (e.target === e.currentTarget) close() }}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
       <DialogScrim zIndex={0} className="backdrop-blur-sm" />
 
-      <div {...floatMaterial('dialog')} className="relative w-[380px] flex flex-col bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl overflow-hidden">
+      <div {...floatMaterial('dialog')} {...cancel} className="relative w-[380px] flex flex-col bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Heartbeat Schedule</h2>
-          <button onClick={close} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <DialogCloseButton className="-mr-1" onClick={close} />
         </div>
 
         {/* Tab bar */}

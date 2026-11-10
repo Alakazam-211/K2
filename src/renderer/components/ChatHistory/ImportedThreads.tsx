@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-import { Button, DialogFrame, DialogScrim } from '@/components/ui'
+import { DialogCloseButton, DialogFrame, DialogScrim } from '@/components/ui'
 import { useRoom } from '@/components/Room/RoomContext'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { onChatHistoryChanged } from '@/stores/session-events'
@@ -167,18 +167,13 @@ export function ImportedThreadViewer({
   addr: string
   onClose: () => void
 }): React.JSX.Element {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
   return (
     <>
-      <DialogScrim zIndex={50} onClick={onClose} />
+      <DialogScrim zIndex={50} />
       <DialogFrame
         zIndex={51}
+        onCancel={onClose}
+        closeButton="inline"
         role="dialog"
         aria-label={importedTitle(row)}
         data-testid="imported-thread-viewer"
@@ -191,9 +186,7 @@ export function ImportedThreadViewer({
               Imported with a clone{row.sourceHost ? ` from ${row.sourceHost}` : ''}. Imported messages are read-only.
             </div>
           </div>
-          <Button variant="ghost" onClick={onClose}>
-            Close
-          </Button>
+          <DialogCloseButton onClick={onClose} />
         </div>
         <div className="relative flex-1 min-h-0 flex">
           <ThreadOverlayColumn addr={addr} conversationId={row.localConversationId} active composeBar={null} />

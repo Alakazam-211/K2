@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
-import { DialogScrim, Surface } from '@/components/ui'
+import { DialogCloseButton, DialogScrim, Surface, useDialogCancel } from '@/components/ui'
 import { useCommandPaletteStore } from '../../stores/command-palette'
 import { useProjectsStore } from '../../stores/projects'
 import { useFocusGroupsStore } from '../../stores/focus-groups'
@@ -205,15 +205,12 @@ export default function CommandPalette(): React.JSX.Element | null {
     [projects, focusGroupsEnabled, setActiveFocusGroup, setActiveProject, setActiveWorkspace, expand, close]
   )
 
+  // Esc, the × and a press outside close it (useDialogCancel).
+  const cancel = useDialogCancel(isOpen ? close : undefined)
+
   // Keyboard handler
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        close()
-        return
-      }
-
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         setSelectedIndex((prev) => Math.min(prev + 1, results.length - 1))
@@ -263,12 +260,10 @@ export default function CommandPalette(): React.JSX.Element | null {
       zIndex={9999}
       className="flex items-start justify-center pt-[15vh] no-drag"
       style={{ backdropFilter: 'blur(8px)' }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) close()
-      }}
       onKeyDown={handleKeyDown}
     >
       <Surface
+        {...cancel}
         role2="surface"
         {...floatMaterial('palette')}
         className="w-[560px] max-h-[60vh] flex flex-col overflow-hidden [box-shadow:0_24px_48px_rgba(0,0,0,0.5)]"
@@ -313,6 +308,7 @@ export default function CommandPalette(): React.JSX.Element | null {
           >
             ESC
           </kbd>
+          <DialogCloseButton className="ml-1 -mr-2" onClick={close} />
         </div>
 
         {/* Results */}

@@ -14,7 +14,7 @@
 // preview by its draft id, so the daemon never collects again.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Callout, Checkbox, DialogFrame, DialogScrim, Input, Segmented } from '@/components/ui'
+import { Button, Callout, Checkbox, DialogCloseButton, DialogFrame, DialogScrim, Input, Segmented } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { isWebClient } from '@/lib/is-web'
 import {
@@ -160,17 +160,6 @@ export default function SendFeedbackDialog(): React.JSX.Element {
       .finally(() => setCollecting(false))
   }, [diagOn, draft, collecting, diagError, supported, scope, web, openedFrom, version])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      e.preventDefault()
-      e.stopPropagation()
-      if (!sendingRef.current) close()
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [close])
-
   const bytes = utf8Bytes(text)
   const tooLong = bytes > MAX_TEXT_BYTES
   const canSend = supported && settings?.canSend === true
@@ -256,18 +245,14 @@ export default function SendFeedbackDialog(): React.JSX.Element {
 
   return (
     <>
-      <DialogScrim
-        data-testid="send-feedback-scrim"
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          dismiss()
-        }}
-      />
+      <DialogScrim data-testid="send-feedback-scrim" />
+      {/* Esc, the × and a press outside dismiss it (not while sending). */}
       <DialogFrame
         data-testid="send-feedback-dialog"
         role="dialog"
         aria-label={SEND_FEEDBACK_LABEL}
-        onMouseDown={(e) => e.stopPropagation()}
+        onCancel={dismiss}
+        closeButton="inline"
         style={{
           width: 560,
           maxWidth: 'calc(100vw - 48px)',
@@ -288,18 +273,7 @@ export default function SendFeedbackDialog(): React.JSX.Element {
               { value: 'sent', label: 'Sent' },
             ]}
           />
-          <button
-            type="button"
-            onClick={dismiss}
-            className="ml-auto flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors flex-shrink-0"
-            title="Close (Esc)"
-            aria-label="Close"
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <line x1="2" y1="2" x2="10" y2="10" />
-              <line x1="10" y1="2" x2="2" y2="10" />
-            </svg>
-          </button>
+          <DialogCloseButton className="ml-auto" onClick={dismiss} />
         </div>
 
         {tab === 'send' ? (

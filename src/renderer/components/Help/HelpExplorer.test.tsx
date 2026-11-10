@@ -67,7 +67,7 @@ describe('Help button', () => {
     expect(button.getAttribute('aria-pressed')).toBe('true')
     const dialog = await screen.findByRole('dialog', { name: 'Help' })
     expect(within(dialog).getByTestId('help-rail')).toBeTruthy()
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close (Esc)' }))
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(button.getAttribute('aria-pressed')).toBe('false')
   })

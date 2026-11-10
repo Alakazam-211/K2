@@ -21,10 +21,11 @@
 // The frame document is memoized on the brief's sha256 + the app theme, so
 // the thread's event-driven refetches never reload the frame.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
+import { DialogCloseButton, useDialogCancel } from '@/components/ui'
 import {
   getDesktopChrome,
   TRAFFIC_LIGHT_CLUSTER_GAP_PX,
@@ -261,16 +262,8 @@ function BriefOverlay({
   links: BriefLink[]
   onClose: () => void
 }): React.JSX.Element {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  // Esc and the × close it (useDialogCancel; it covers the window).
+  const cancel = useDialogCancel(onClose)
 
   const stoplightInset = briefOverlayStoplightInset(getDesktopChrome())
   // Opened from Zen's Tickets view, the overlay covers the Zen page while
@@ -287,6 +280,7 @@ function BriefOverlay({
       aria-modal="true"
       aria-label={`Brief: ${title}`}
       className="fixed inset-[var(--inset-window)] z-[400] flex flex-col bg-[var(--color-bg)]"
+      {...cancel}
     >
       <div
         data-testid="brief-overlay-header"
@@ -311,14 +305,7 @@ function BriefOverlay({
         >
           {title}
         </span>
-        <button
-          type="button"
-          data-testid="brief-overlay-close"
-          onClick={onClose}
-          className="ml-auto flex-shrink-0 px-3 py-1 text-[11px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-        >
-          Close
-        </button>
+        <DialogCloseButton data-testid="brief-overlay-close" className="ml-auto" onClick={onClose} />
       </div>
       <div className="flex-1 min-h-0">
         <HtmlFrame

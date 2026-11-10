@@ -509,7 +509,7 @@ describe('AgentInboxPane Chat about this', () => {
 
     fireEvent.click(screen.getByTestId('inbox-chat-about'))
     await screen.findByTestId('inbox-chat-about-scrim')
-    fireEvent.mouseDown(screen.getByTestId('inbox-chat-about-scrim'))
+    fireEvent.pointerDown(screen.getByTestId('inbox-chat-about-scrim'))
     await waitFor(() => expect(screen.queryByTestId('inbox-chat-about-send')).toBeNull())
 
     expect(h.activateProject).not.toHaveBeenCalled()

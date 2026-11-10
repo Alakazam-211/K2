@@ -160,6 +160,7 @@ fn words_raw(spec: &ActionSpec, ctx: &Ctx) -> Words {
         .or_else(|| super::actions::vault::with_computed(spec.id, ctx))
         .or_else(|| super::actions::app_login::with_computed(spec.id, ctx))
         .or_else(|| super::actions::chat_cards::with_computed(spec.id, ctx))
+        .or_else(|| super::actions::recording::with_computed(spec.id, ctx))
         .or_else(|| super::actions::chat_account::with_computed(spec.id, ctx))
         .or_else(|| super::actions::mail_stop::with_computed(spec.id, ctx))
         .or_else(|| super::actions::box_login_grant::with_computed(spec.id, ctx))

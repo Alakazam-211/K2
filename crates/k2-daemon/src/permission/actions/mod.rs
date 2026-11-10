@@ -28,6 +28,7 @@
 //! | `box_login_grant.rs` | 0.46.8 | `apps.user-grant-box` (a box login's access to the agent's own App) |
 //! | `chat_refresh.rs` | 0.46.8 | `chat.refresh` (a new pinned chat on the same harness, once or from now on) |
 //! | `vault_incoming.rs` | 0.46.10 | `vault.incoming.accept` (accept or decline a secret another agent sent; K2 presents it) |
+//! | `recording.rs` | 0.46.11 | `apps.recording` (its App requires recording, or its server reads transcripts; the owner only) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -52,6 +53,7 @@ pub(crate) mod held;
 pub(crate) mod mail_stop;
 pub(crate) mod password_reset;
 pub(crate) mod publish;
+pub(crate) mod recording;
 pub(crate) mod sew;
 pub(crate) mod switches;
 pub(crate) mod vault;
@@ -147,6 +149,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(box_login_grant::actions());
     out.extend(chat_refresh::actions());
     out.extend(vault_incoming::actions());
+    out.extend(recording::actions());
     out
 }
 
@@ -173,6 +176,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(box_login_grant::not_cardable());
     out.extend(chat_refresh::not_cardable());
     out.extend(vault_incoming::not_cardable());
+    out.extend(recording::not_cardable());
     out
 }
 

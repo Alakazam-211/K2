@@ -122,11 +122,11 @@ pub fn accept_binary_secret_id(sha: &str) -> String {
 }
 
 pub fn is_route(p: &str) -> bool {
-    ROUTES.contains(&p) || super::s32::is_route(p) || super::home::is_route(p) || super::recording::is_route(p)
+    ROUTES.contains(&p) || super::s32::is_route(p) || super::home::is_route(p) || super::recording::is_route(p) || super::recording_settings::is_route(p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
-    POST_ROUTES.contains(&p) || super::s32::is_post_route(p) || super::home::is_post_route(p) || super::recording::is_post_route(p)
+    POST_ROUTES.contains(&p) || super::s32::is_post_route(p) || super::home::is_post_route(p) || super::recording::is_post_route(p) || super::recording_settings::is_post_route(p)
 }
 
 // ── responses ────────────────────────────────────────────────────────────
@@ -788,6 +788,10 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         // S32 (K27 routes, K31): app URL, off-box copies, App Spaces.
         // Decision 13: the owner's home-client settings.
         p if super::home::is_route(p) => super::home::route(p, who, body, params).unwrap_or_else(|| Err(no("not_found", 404, "no such Sew route"))),
+        // Sew 0.9.0: Space recording overrides, the CUI/FCI lock, org policies.
+        p if super::recording_settings::is_route(p) => {
+            super::recording_settings::route(p, who, body, params).unwrap_or_else(|| Err(no("not_found", 404, "no such Sew route")))
+        }
         _ => super::s32::route(&env, path, who, body, params).unwrap_or_else(|| Err(no("not_found", 404, "no such Sew route"))),
     }
 }

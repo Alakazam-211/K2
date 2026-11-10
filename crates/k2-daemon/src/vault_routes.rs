@@ -2228,6 +2228,18 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // confirm (`chat-key`, `chat-governance`) for the same person.
     crate::permission::actions::chat_cards::KEY_CONFIRM,
     crate::permission::actions::chat_cards::GOV_CONFIRM,
+    // Sew 0.9.0 recording in Apps: the `apps.recording` card (bound to the
+    // request; Allow turns it into `app-recording-owner` for the same
+    // person), an App's widening (`app-recording`, bound to the App), a
+    // Space's override (`recording-space`, `<app>:<space>`), the CUI/FCI
+    // lock (`recording-lock`, the Space) and org policies
+    // (`recording-policy`, this install).
+    crate::permission::actions::recording::CONFIRM,
+    crate::apps::recording_routes::CONFIRM_WIDEN,
+    crate::apps::recording_routes::CONFIRM_OWNER,
+    crate::sew::recording_settings::CONFIRM_SPACE,
+    crate::sew::recording_settings::CONFIRM_LOCK,
+    crate::sew::recording_settings::CONFIRM_POLICY,
     "kek-rotate",
     "rekey",
     "rollback",
@@ -2435,6 +2447,15 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
         (b.secret_id.clone(), reason)
     } else if let Some(reason) = crate::app_pairing::confirm_reason(action, b.secret_id.as_deref()) {
         // App phone pairing: the same rule (V22).
+        let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
+        (b.secret_id.clone(), reason)
+    } else if let Some(reason) = crate::permission::actions::recording::confirm_reason(action, b.secret_id.as_deref()) {
+        // The apps.recording card: the sheet says what changes from the
+        // request's stored values.
+        let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
+        (b.secret_id.clone(), reason)
+    } else if let Some(reason) = crate::apps::recording_routes::confirm_reason(action, b.secret_id.as_deref()) {
+        // Recording in Apps: the sheet names the App from its record.
         let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
         (b.secret_id.clone(), reason)
     } else if let Some(reason) = crate::apps::chat_key_routes::confirm_reason(action, b.secret_id.as_deref()) {

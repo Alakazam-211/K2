@@ -137,6 +137,73 @@ async fn sew_0_8_2_refuses_every_recording_name() {
     assert_eq!(bad.lines().count(), 4, "every refusal is recorded: {bad}");
 }
 
+/// Two Spaces in Sew, bound to two Apps in K2 (the bind reaches Sew in the
+/// sweep), and the App's settings row.
+fn bind_both(e: &Env) {
+    // Sew's side is bound by the route before K2 records it (as
+    // `k2 hostchat app-space bind` does).
+    e.sew.add_app_space(SPACE, APP);
+    e.sew.add_app_space("5102", OTHER_APP);
+    hook::app_space_bind(APP, SPACE, "owner").expect("bind");
+    hook::app_space_bind(OTHER_APP, "5102", "owner").expect("bind");
+    hook::set_app_home(APP, false, "Jobs", "owner").expect("app row");
+}
+
+pub const OTHER_APP: &str = "8e5f3b21-2222-4333-8444-555566667777";
+
+/// K2's recording wishes: an App's settings (with `cap_required`), a
+/// Space override, a lock on another Space, and an org policy.
+fn want_everything() {
+    let mut f = serde_json::Map::new();
+    f.insert("start_level".into(), json!("moderator"));
+    f.insert("server_read".into(), json!(true));
+    f.insert("cap_required".into(), json!(true));
+    hook::recording_set_app(APP, &f, "owner").expect("app recording");
+    hook::recording_set_space(SPACE, Some(json!("member")), Some(json!(true)), "owner").expect("space override");
+    hook::recording_set_lock("5102", true, "owner").expect("lock");
+    hook::recording_set_policy("recording.required", &json!("multi_person"), "owner").expect("policy");
+}
+
+/// PRD §7 + §8 K-h prep ("recording_contract_fake_sew"): K2's sweep against
+/// Sew 0.8.2 sends no recording field, no recording route and no recording
+/// policy, whatever K2 wants; every body is one 0.8.2 takes.
+#[tokio::test]
+async fn k2_sends_nothing_about_recording_to_sew_0_8_2() {
+    let e = setup(&SEW_082).await;
+    bind_both(&e);
+    e.sweep().await;
+    want_everything();
+    e.sweep().await;
+    let settings = e.sew.app_settings(APP).expect("the App's settings went");
+    assert!(settings.get("recording").is_none(), "{settings}");
+    assert_eq!(e.sew.space_recording(SPACE), (None, None));
+    assert_eq!(e.sew.space_recording("5102"), (None, None));
+    assert!(e.sew.policy("recording.required").is_none());
+    let log = e.sew.log();
+    assert!(!log.contains("recording"), "no recording name crossed: {log}");
+    e.sew.assert_clean();
+}
+
+/// The same wishes against Sew 0.9.0: every one arrives, the lock wins over
+/// what the Space asked, and `cap_required` rides along.
+#[tokio::test]
+async fn k2_sends_its_recording_settings_to_sew_0_9_0() {
+    let e = setup(&sew_090()).await;
+    bind_both(&e);
+    e.sweep().await;
+    want_everything();
+    hook::recording_set_space("5102", Some(json!("member")), None, "agent").expect("asks above the lock");
+    e.sweep().await;
+    let settings = e.sew.app_settings(APP).expect("the App's settings went");
+    assert_eq!(settings["recording"], json!({"start_level": "moderator", "server_read": true, "cap_required": true}), "{settings}");
+    assert_eq!(e.sew.space_recording(SPACE), (Some("member".to_string()), Some(true)));
+    assert_eq!(e.sew.space_recording("5102"), (Some("none".to_string()), Some(false)), "the lock wins");
+    assert_eq!(e.sew.policy("recording.required"), Some(json!("multi_person")));
+    let view = hook::recording_app_view(APP).expect("view");
+    assert_eq!(view["delivered"], json!(true), "{view}");
+    e.sew.assert_clean();
+}
+
 /// K-h prep: Sew 0.9.0's names, word for word: App and Space recording
 /// settings, the policies, the four reads (governing App, `server_read`),
 /// and the feed, which never carries content.

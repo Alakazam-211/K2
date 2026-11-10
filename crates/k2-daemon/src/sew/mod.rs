@@ -60,6 +60,7 @@ pub mod ops;
 pub mod pro_gate;
 pub mod recording;
 pub mod recording_rollout;
+pub mod recording_settings;
 pub mod routes;
 pub mod s32;
 pub mod secrets;

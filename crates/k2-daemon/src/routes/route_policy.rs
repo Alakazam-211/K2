@@ -484,6 +484,11 @@ pub const ROUTES: &[Route] = &[
     // owner's, anyone else's is a held `quota` request (handler).
     get("/cli/app/quota", Member),
     post("/cli/app/quota/set", Admin),
+    // Sew 0.9.0 recording in Apps: the read is Admin's and the App's agent's;
+    // a set narrows for them too, widening is a person's with a confirm,
+    // `required` / `server_read` on the owner's only (handler).
+    get("/cli/app/recording", Admin),
+    post("/cli/app/recording/set", Admin),
     // 0.46.4 (update continuity R8/R16): the re-host wave's status, a Member
     // read. `/boot-status` and the update job point here from S1; the
     // handler is S2's (`apps::rehost`).
@@ -1775,6 +1780,11 @@ pub const ROUTES: &[Route] = &[
     get("/cli/sew/app-spaces", Member),
     post("/cli/sew/app-spaces/bind", Admin),
     post("/cli/sew/app-spaces/governance", Admin),
+    // Sew 0.9.0: a Space's recording override (narrowing for the App's own
+    // agent too, widening a person's), and the CUI/FCI lock (the owner only,
+    // in person: handler).
+    post("/cli/sew/app-spaces/recording", Admin),
+    post("/cli/sew/app-spaces/recording-lock", Owner),
     post("/cli/sew/app-spaces/unbind", Admin),
     // Sew for Apps A6 (0.46.6): chat.member / chat.whois, an App's own
     // pass with chat:read (the handler refuses the rest).
@@ -1860,6 +1870,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/recording/enable", Admin),
     get("/cli/sew/recording/preflight", Member),
     post("/cli/sew/recording/uninstall", Admin),
+    // Sew 0.9.0: the org recording policies (read; set by the owner or an
+    // Admin in person, recording.required by the owner: handler).
+    get("/cli/sew/recording/policies", Admin),
+    post("/cli/sew/recording/policy", Admin),
     // S32 (K27): the app URL behind Open Sew as owner (Manage Sew).
     post("/cli/sew/server/app-url", Admin),
     post("/cli/sew/server/backup", Admin),
@@ -2326,6 +2340,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/voice/join", VoiceChat),
     post("/cli/voice/moderate", Admin),
     post("/cli/voice/recording/consent", VoiceChat),
+    // Sew 0.9.0: the K5 rooms' recording (the owner; start level an Admin
+    // too; `required` waits for K2's desktop consent sheet: handler).
+    post("/cli/voice/recording/settings", Admin),
     post("/cli/voice/repair", Admin),
     get("/cli/voice/rooms", VoiceChat),
     post("/cli/voice/rooms/close", Admin),

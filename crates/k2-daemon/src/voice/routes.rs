@@ -78,6 +78,9 @@ pub const SESSION_KEY_PACKAGES: &str = "/cli/voice/session/keys/key_packages";
 pub const SESSION_KEYS_JOIN: &str = "/cli/voice/session/keys/join";
 pub const MODERATE: &str = "/cli/voice/moderate";
 pub const RECORDING_CONSENT: &str = "/cli/voice/recording/consent";
+/// Sew 0.9.0: the K5 rooms' recording (`required`, `startLevel`); read
+/// through `GET /cli/voice/status` (`recording`).
+pub const RECORDING_SETTINGS: &str = "/cli/voice/recording/settings";
 pub const REPAIR: &str = "/cli/voice/repair";
 
 pub const GET_ROUTES: &[&str] = &[ROOMS, STATUS];
@@ -93,6 +96,7 @@ pub const POST_ROUTES: &[&str] = &[
     SESSION_KEYS_JOIN,
     MODERATE,
     RECORDING_CONSENT,
+    RECORDING_SETTINGS,
     REPAIR,
 ];
 
@@ -515,7 +519,101 @@ fn status_view() -> CliResponse {
         "feed": feed,
         "bff": { "sessions": sessions, "calls": calls },
         "closeNow": close_now_pending(),
+        "recording": recording_view(),
     }))
+}
+
+/// The K5 rooms' recording, as K2 wants it (`GET /cli/voice/status`).
+fn recording_view() -> Value {
+    let flags = k2_core::tool_hook::sew_recording_features().unwrap_or_default();
+    let space = k2_core::tool_hook::recording_k5_space().ok().flatten();
+    let (level, required, locked) = match &space {
+        Some(s) => k2_core::tool_hook::recording_space(s).unwrap_or((None, None, false)),
+        None => (None, None, false),
+    };
+    json!({
+        "spaceId": space,
+        "startLevel": level,
+        "required": required,
+        "locked": locked,
+        "flags": flags,
+        // K2's desktop answers consent prompts (K-g): until then the
+        // "require recording" switch stays hidden and refused.
+        "consentSheet": k2_core::recording::consent_sheet(),
+    })
+}
+
+/// `POST /cli/voice/recording/settings {required?, startLevel?}` (Sew
+/// 0.9.0, R2): the K5 rooms' recording. `required` (record every call
+/// with two or more people) is the owner's, and refused
+/// `client_consent_missing` until K2's desktop can answer a consent prompt
+/// (Rosson's answer 6); `startLevel` (`none | moderator | member`; the K5
+/// Space has no admin level) is the owner's or an Admin's. `null` inherits
+/// the org's rule.
+fn recording_settings(c: &Caller, b: &Value) -> CliResponse {
+    if let Err(r) = need_manager(c) {
+        return r;
+    }
+    let required = match b.get("required") {
+        None => None,
+        Some(Value::Null) => Some(Value::Null),
+        Some(Value::Bool(x)) => Some(json!(x)),
+        Some(_) => return no(400, "usage", "required is true, false, or null to inherit the org's rule"),
+    };
+    let level = match b.get("startLevel") {
+        None => None,
+        Some(Value::Null) => Some(Value::Null),
+        Some(Value::String(l)) if matches!(l.trim(), "none" | "moderator" | "member") => Some(json!(l.trim())),
+        Some(_) => return no(400, "usage", "startLevel is none, moderator, member, or null to inherit (the K5 Space has no admin level)"),
+    };
+    if required.is_none() && level.is_none() {
+        return no(400, "usage", "send {\"required\"?: true|false|null, \"startLevel\"?: \"none\"|\"moderator\"|\"member\"|null}");
+    }
+    let flags = k2_core::tool_hook::sew_recording_features().unwrap_or_default();
+    if required.is_some() {
+        if !k2_core::recording::consent_sheet() {
+            return no(
+                409,
+                "client_consent_missing",
+                "K2's desktop can't answer a recording consent prompt yet, so a room that requires recording would hold every desktop join: this switch comes with that update",
+            );
+        }
+        if !matches!(c, Caller::OwnerToken | Caller::Login { role: Role::Owner, .. }) {
+            return no(403, "owner_only", "only the server's owner requires recording in the K5 rooms");
+        }
+        if !flags.recording_required {
+            return no(409, "sew_feature_missing", "this server's chat can't require recording yet (it needs Sew 0.9.0: recording_required)");
+        }
+    }
+    if level.is_some() && !flags.app_recording {
+        return no(409, "sew_feature_missing", "this server's chat can't record in rooms yet (it needs Sew 0.9.0: app_recording)");
+    }
+    let space = match k2_core::tool_hook::recording_k5_space() {
+        Ok(Some(s)) => s,
+        Ok(None) => return no(409, "voice_space_not_ready", "the K5 rooms' Space isn't made yet (k2 voice status)"),
+        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the K5 Space: {e}")),
+    };
+    let widening = required == Some(json!(true)) || level.as_ref().and_then(Value::as_str).is_some_and(|l| l != "none");
+    match k2_core::tool_hook::recording_space(&space) {
+        Ok((_, _, true)) if widening => {
+            return no(409, "space_locked", "the K5 rooms are locked against recording (CUI/FCI): only the owner lifts it, in person");
+        }
+        Ok(_) => {}
+        Err(e) => return no(503, "voice_unavailable", &e),
+    }
+    let by = match c {
+        Caller::Login { username, .. } => format!("login:{username}"),
+        _ => "owner".to_string(),
+    };
+    match k2_core::tool_hook::recording_set_space(&space, level, required, &by) {
+        Ok(changed) => {
+            let mut v = recording_view();
+            v["ok"] = json!(true);
+            v["changed"] = json!(changed);
+            ok(v)
+        }
+        Err(e) => no(503, "voice_unavailable", &e),
+    }
 }
 
 /// What `k2 voice status` says about the K5 Space: `state` none | ready |
@@ -900,6 +998,7 @@ pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body
         SESSION_KEYS_JOIN => session(&caller, owner_token, Forward::KeysJoin, &b),
         MODERATE => moderate(&caller, owner_token, &b),
         RECORDING_CONSENT => consent(&caller, owner_token, &b),
+        RECORDING_SETTINGS => recording_settings(&caller, &b),
         REPAIR => repair(&caller),
         _ => CliResponse::not_found(),
     }
@@ -908,6 +1007,35 @@ pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body
 #[cfg(test)]
 mod role_name_tests {
     use super::*;
+
+    fn code_of(r: &CliResponse) -> (String, String) {
+        let v: Value = serde_json::from_str(&r.body).expect("json");
+        (r.status.to_string(), v["error"]["code"].as_str().unwrap_or("").to_string())
+    }
+
+    /// PRD §8 K-c (Rosson's answer 6): the K5 rooms' `required` is refused
+    /// `client_consent_missing` while K2's desktop can't answer consent (the
+    /// K-g const off), for the owner too; with it on, the owner gets past it
+    /// (here to Sew's flag), an Admin never.
+    #[test]
+    fn k5_required_waits_for_the_desktop_consent_sheet() {
+        let _home = k2_core::test_env::TempHome::new();
+        k2_core::recording::set_for_tests(false, false);
+        for v in [json!({"required": true}), json!({"required": false}), json!({"required": null})] {
+            let r = recording_settings(&Caller::OwnerToken, &v);
+            assert_eq!(code_of(&r), ("409 Conflict".to_string(), "client_consent_missing".to_string()), "{v}: {}", r.body);
+        }
+        let r = recording_settings(&Caller::Passport, &json!({"required": true}));
+        assert_eq!(code_of(&r).1, "owner_or_admin_only", "an agent never");
+        k2_core::recording::set_for_tests(false, true);
+        let admin = Caller::Login { username: "ada".into(), role: Role::Admin, token: "t".into() };
+        assert_eq!(code_of(&recording_settings(&admin, &json!({"required": true}))).1, "owner_only");
+        assert_eq!(code_of(&recording_settings(&Caller::OwnerToken, &json!({"required": true}))).1, "sew_feature_missing", "Sew 0.8.x");
+        assert_eq!(code_of(&recording_settings(&Caller::OwnerToken, &json!({"startLevel": "admin"}))).1, "usage", "the K5 Space has no admin level");
+        assert_eq!(code_of(&recording_settings(&Caller::OwnerToken, &json!({}))).1, "usage");
+        k2_core::recording::set_for_tests(false, false);
+        assert!(POST_ROUTES.contains(&RECORDING_SETTINGS) && !GET_ROUTES.contains(&RECORDING_SETTINGS));
+    }
 
     /// Security review L8: a room's occupants show only to someone in it.
     #[test]

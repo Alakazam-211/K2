@@ -1243,12 +1243,16 @@ pub fn apply_settings(kind: &str, sew_features: &[String], policy_read: &PolicyR
         if let PolicyRead::Seen(v) = policy_read {
             policy::note(&tx, v.as_ref(), now)?;
         }
+        // Sew 0.9.0: a locked Space always has its no-recording row.
+        recording::ensure_lock_rows(&tx, now)?;
         let busy = outbox::busy_subjects(&tx, kind)?;
         // The home client goes under the person who set it (`Sew-Actor`,
         // attribution only); the rest under the sweep.
         let (home_ops, mut ops): (Vec<NewOp>, Vec<NewOp>) =
             home::plan(&tx, &busy)?.into_iter().partition(|o| o.op == Op::HomeClient);
         ops.extend(policy::plan(&tx, &busy)?);
+        // Sew 0.9.0: the recording org policies a person asked for.
+        ops.extend(recording::plan_policies(&tx, &busy)?);
         let mut n = outbox::enqueue(&tx, &ops, ACTOR_RECONCILE, now)?.len();
         for o in home_ops {
             let actor = home::set_by(&tx, &o.subject_key)?.unwrap_or_else(|| ACTOR_RECONCILE.to_string());
@@ -1329,6 +1333,158 @@ pub fn recording_set_cap_required(app_id: &str) -> Result<bool, String> {
         kick_reconcile();
     }
     Ok(changed)
+}
+
+/// Sew 0.9.0's flags, the App's recording settings as K2 wants them and as
+/// Sew confirmed (`delivered`), its Spaces' overrides and locks, and the
+/// cap rollout's row: `GET /cli/app/recording`.
+pub fn recording_app_view(app_id: &str) -> Result<serde_json::Value, String> {
+    use serde_json::json;
+    if !skin_store_exists() {
+        return Ok(json!({"flags": features::RecordingFeatures::default(), "recording": {}, "sent": null, "delivered": true, "spaces": []}));
+    }
+    crate::skin::with_skin_conn(|conn| {
+        let flags = features::RecordingFeatures::read(conn, CHAT_KIND)?;
+        let wanted = recording::app_recording(conn, app_id)?;
+        let subject = format!("{}{app_id}", home::APP_PREFIX);
+        let row = home::list(conn)?.into_iter().find(|s| s.subject == subject);
+        let sent = row.as_ref().and_then(|s| s.sent.as_ref()).and_then(|v| v.get("recording")).cloned();
+        let delivered = row.as_ref().is_none_or(|s| s.delivered);
+        let mut spaces = Vec::new();
+        for b in app_space::bindings(conn)?.into_iter().filter(|b| b.app_id == app_id) {
+            let (level, required) = recording::space_recording(conn, &b.space_id)?;
+            spaces.push(json!({
+                "spaceId": b.space_id,
+                "governance": governed::governance_wish(conn, &b.space_id)?.unwrap_or_else(|| sew_wire::GOVERNANCE_SEW.to_string()),
+                "startLevel": level,
+                "required": required,
+                "locked": recording::is_locked(conn, &b.space_id)?,
+            }));
+        }
+        let rollout: Option<(Option<i64>, Option<i64>)> = conn
+            .query_row(
+                "SELECT grandfathered_at, cap_required_at FROM tool_recording_rollout WHERE app_id = ?1",
+                rusqlite::params![app_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("recording rollout read: {e}"))?;
+        Ok(json!({
+            "flags": flags,
+            "homeClient": home::is_home_client(conn, app_id)?,
+            "recording": wanted,
+            "sent": sent,
+            "delivered": delivered,
+            "orgAudioMaxDays": recording::org_audio_max_days(conn)?,
+            "spaces": spaces,
+            "rollout": rollout.map(|(g, c)| json!({"grandfatheredAt": g, "capRequiredAt": c})),
+        }))
+    })
+}
+
+/// Merge `fields` into an App's `recording` object and wake the sweep.
+pub fn recording_set_app(app_id: &str, fields: &serde_json::Map<String, serde_json::Value>, actor: &str) -> Result<bool, String> {
+    let now = outbox::now_secs();
+    let changed = crate::skin::with_skin_conn(|conn| recording::set_app_recording(conn, app_id, fields, actor, now))?;
+    if changed {
+        kick_reconcile();
+    }
+    Ok(changed)
+}
+
+/// A Space's recording overrides (`Some(null)` inherits, `None` keeps).
+pub fn recording_set_space(
+    space_id: &str,
+    start_level: Option<serde_json::Value>,
+    required: Option<serde_json::Value>,
+    actor: &str,
+) -> Result<bool, String> {
+    let now = outbox::now_secs();
+    let changed = crate::skin::with_skin_conn(|conn| recording::set_space_recording(conn, space_id, start_level, required, actor, now))?;
+    if changed {
+        kick_reconcile();
+    }
+    Ok(changed)
+}
+
+/// A Space's overrides as K2 wants them, and whether it is locked.
+pub fn recording_space(space_id: &str) -> Result<(Option<String>, Option<bool>, bool), String> {
+    if !skin_store_exists() {
+        return Ok((None, None, false));
+    }
+    crate::skin::with_skin_conn(|conn| {
+        let (l, r) = recording::space_recording(conn, space_id)?;
+        Ok((l, r, recording::is_locked(conn, space_id)?))
+    })
+}
+
+/// Set or lift a Space's CUI/FCI lock (the caller checked the owner).
+pub fn recording_set_lock(space_id: &str, on: bool, by: &str) -> Result<bool, String> {
+    let now = outbox::now_secs();
+    let changed = crate::skin::with_skin_conn(|conn| recording::set_lock(conn, space_id, on, by, now))?;
+    if changed {
+        kick_reconcile();
+    }
+    Ok(changed)
+}
+
+/// Every CUI/FCI lock.
+pub fn recording_locks() -> Result<Vec<recording::Lock>, String> {
+    if !skin_store_exists() {
+        return Ok(Vec::new());
+    }
+    crate::skin::with_skin_conn(recording::locks)
+}
+
+/// Ask for an org recording policy (checked; the caller checked the person).
+pub fn recording_set_policy(key: &str, value: &serde_json::Value, by: &str) -> Result<bool, String> {
+    let now = outbox::now_secs();
+    let changed = crate::skin::with_skin_conn(|conn| recording::set_policy(conn, key, value, by, now))?;
+    if changed {
+        kick_reconcile();
+    }
+    Ok(changed)
+}
+
+/// The org recording policies: wanted, seen, delivered.
+pub fn recording_policies() -> Result<Vec<recording::PolicyRow>, String> {
+    if !skin_store_exists() {
+        return Ok(Vec::new());
+    }
+    crate::skin::with_skin_conn(recording::policies)
+}
+
+/// The org's `recording.audio_max_days` K2 last saw (or asked for).
+pub fn recording_org_audio_max_days() -> Result<Option<u64>, String> {
+    if !skin_store_exists() {
+        return Ok(None);
+    }
+    crate::skin::with_skin_conn(recording::org_audio_max_days)
+}
+
+/// The K5 rooms' Space (the K2 Admin Space), once Sew made it.
+pub fn recording_k5_space() -> Result<Option<String>, String> {
+    if !skin_store_exists() {
+        return Ok(None);
+    }
+    crate::skin::with_skin_conn(admin_space::ready_space_id)
+}
+
+/// The App a Space is bound to (`None`: not bound).
+pub fn recording_bound_app(space_id: &str) -> Result<Option<String>, String> {
+    if !skin_store_exists() {
+        return Ok(None);
+    }
+    crate::skin::with_skin_conn(|conn| app_space::bound_app(conn, space_id))
+}
+
+/// Record the recording policies Sew showed (`GET /mgmt/v1/policies`).
+pub fn note_recording_policies(body: &serde_json::Value) -> Result<(), String> {
+    if !skin_store_exists() {
+        return Ok(());
+    }
+    let now = outbox::now_secs();
+    crate::skin::with_skin_conn(|conn| recording::note_seen_policies(conn, body, now))
 }
 
 /// Every flag the box's Sew last reported (empty before any sweep).
@@ -2072,6 +2228,7 @@ pub fn note_install_id(kind: &str, install_id: &str) -> Result<bool, String> {
             // Sew 0.5.0: its policy is unread, and none of the old Spaces
             // are there to unbind.
             policy::forget(&tx)?;
+            recording::forget_seen_policies(&tx)?;
             app_space::forget_unbinds(&tx)?;
             // Sew 0.6.0: no channel id, sync or leaving box user carries
             // over to a new install.
@@ -2109,6 +2266,8 @@ pub fn record_done(id: &str, status: u16, result: &str) -> Result<(), String> {
         home::after_done(conn, id)?;
         // Sew 0.5.0: the policy Sew answered with; an orphaned Space.
         policy::after_done(conn, id, result, now)?;
+        // Sew 0.9.0: the recording policies Sew answered with.
+        recording::after_policy_done(conn, id, result, now)?;
         app_space::after_done_unbind(conn, id, result, now)?;
         // K31: a delivered Space op moves the membership ledger on.
         app_space::after_done(conn, id, now)?;

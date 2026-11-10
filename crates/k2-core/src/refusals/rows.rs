@@ -96,6 +96,8 @@ pub(super) const ROWS: &[Refusal] = &[
         "List them: k2 app test-guests <app-id>"),
     r("owner_only", "access", 403, Who::Owner, "Only the server's owner can do this (in person, from Settings or a terminal outside K2).",
         "Ask the owner. The refusal names where they do it."),
+    r("person_only", "access", 403, Who::Person, "A person does this, in person with a confirm: never an agent or a K2 terminal (an App's start level or keep days raised, a Space's recording raised, the CUI/FCI lock, the org's recording policies).",
+        "Ask the owner or an admin in your Thread to run the command the refusal names, from a terminal outside K2."),
     r("parent_switch_off", "access", 409, Who::Owner, "\"…and manage them end to end\" sits under \"Build and run Apps\", which is off.",
         "The owner turns both on: k2 app access <workspace> --build on --manage on (the owner's own terminal, outside K2)."),
     r("role_not_this_apps", "access", 400, Who::Agent, "A test guest gets one of this App's own roles (or none), and that role isn't one.",
@@ -301,6 +303,8 @@ pub(super) const ROWS: &[Refusal] = &[
     r("reauth_required", "pairing", 401, Who::Person, "The sign-in is more than 15 minutes old.",
         "Ask the person for the password and send it with the call (pairing.start, profile.deleteAccount)."),
     // ── chat ──
+    r("above_org_audio_max_days", "chat", 400, Who::Agent, "An App's recording audio keep days can't be above the server's own recording.audio_max_days.",
+        "Ask for that many days or fewer (k2 app recording <app> shows orgAudioMaxDays), or the owner raises the server's: k2 hostchat recording policy set recording.audio_max_days N"),
     r("agent_subject", "chat", 403, Who::Agent, "That username is an agent's login. Agents chat as themselves (k2 chat); an App never signs one in or sets its channels.",
         "Leave the agent out of chat.setChannels. To put an agent in a channel, list it in the manifest's chat block (agents: [...])."),
     r("app_mismatch", "chat", 409, Who::Agent, "That Space belongs to another App. An App acts only in its own Spaces.",

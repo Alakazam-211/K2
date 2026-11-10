@@ -236,6 +236,9 @@ pub(crate) const V1_ACTIONS: [&str; 61] = [
     // chat key, and switch who governs one of that App's Spaces.
     "apps.chat-key",
     "sew.space-governance",
+    // 0.46.11 (Sew 0.9.0): its own App requires recording, or its server
+    // reads transcripts (the owner only).
+    "apps.recording",
     // Markdown multiplayer v1 (MI25): share a file or folder with another
     // workspace as live docs.
     "docs.share",
@@ -595,6 +598,20 @@ pub(crate) const ROWS: &[Row] = &[
         ],
         optional: &["level", "caps", "uploads"],
         ..row(ask("apps.chat-key", Floor::Admin), code(403, "owner_only"), "/cli/app/chat-key", POST)
+    },
+    // 0.46.11 (Sew 0.9.0): `k2 app recording <app> set --required on` /
+    // `--server-read on` by the App's own agent: the refusal names the App
+    // and what it asked for; without `app` (another workspace's App, cards
+    // off) it isn't this card's wall.
+    Row {
+        needs: Some("/error/app"),
+        params: &[
+            ("app", &[ParamFrom::Response("/error/app")]),
+            ("required", &[ParamFrom::Response("/error/required")]),
+            ("server-read", &[ParamFrom::Response("/error/serverRead")]),
+        ],
+        optional: &["required", "server-read"],
+        ..row(ask("apps.recording", Floor::Owner), code(403, "owner_only"), "/cli/app/recording/set", POST)
     },
     // 0.46.8: an agent's own `k2 app grant add --kind chat --subject-kind
     // workspace --subject <its own workspace>` (the owner's route). Another
@@ -1359,6 +1376,7 @@ mod tests {
             (403, "POST", "/cli/vault/fetch", vec![], None, json!({"error":{"code":"secret_out_of_reach","hint":"x","secret":"STRIPE","from":"server","as":"fetch"}}), "vault.use"),
             // 0.46.7: an agent turning its own App's chat key on (cards on), and switching a Space's governance.
             (403, "POST", "/cli/app/chat-key", vec![], Some(json!({"app":"jobs"})), json!({"error":{"code":"owner_only","hint":"x","app":"jobs"}}), "apps.chat-key"),
+            (403, "POST", "/cli/app/recording/set", vec![], Some(json!({"app":"jobs","serverRead":true})), json!({"error":{"code":"owner_only","hint":"x","app":"jobs","serverRead":"on"}}), "apps.recording"),
             (403, "POST", "/cli/sew/app-spaces/governance", vec![], Some(json!({"app":"jobs","spaceId":"5101","governance":"app"})), json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "sew.space-governance"),
             // 0.46.11 K-a: an agent's recorder install.
             (403, "POST", "/cli/sew/recording/enable", vec![], None, json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "sew.recording-enable"),

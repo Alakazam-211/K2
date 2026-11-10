@@ -974,6 +974,7 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/voice/session/keys/join",
         "/cli/voice/moderate",
         "/cli/voice/recording/consent",
+        "/cli/voice/recording/settings",
         "/cli/voice/repair",
         "/cli/sew/media/preflight",
         "/cli/sew/media/install",
@@ -1011,6 +1012,12 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // an agent person_only with the card it asks on (AG-7).
         "/cli/sew/app-chat",
         "/cli/sew/app-spaces/governance",
+        // Sew 0.9.0 recording: an agent narrows its own App's Space override;
+        // the lock and the org policies answer it person_only.
+        "/cli/sew/app-spaces/recording",
+        "/cli/sew/app-spaces/recording-lock",
+        "/cli/sew/recording/policies",
+        "/cli/sew/recording/policy",
         "/cli/app/box",
         // 0.46.7 (TC-15): k2 app status, its own workspace's Apps.
         "/cli/app/status",
@@ -1230,6 +1237,11 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // answers `owner_only`).
         "/cli/app/chat-key",
         "/cli/app/chat-key/revoke",
+        // Sew 0.9.0: an agent reads its own App's recording settings and
+        // narrows them; widening is a person's (the handler answers
+        // owner_only / person_only, and apps.recording is the card).
+        "/cli/app/recording",
+        "/cli/app/recording/set",
         // prd-app-caps-0464-v1 AC4 (0.46.4): its own App's ceiling, and its
         // guests under the grant (reads).
         "/cli/app/guest/ceiling",

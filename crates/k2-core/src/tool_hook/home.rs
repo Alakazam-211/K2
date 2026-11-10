@@ -317,13 +317,17 @@ pub struct Setting {
 }
 
 /// [`sendable`] as the sweep sends it: the home client's row carries no
-/// `recording` (B22).
+/// `recording` (B22), and a CUI/FCI-locked Space's row never asks for more
+/// than no recording ([`super::recording::locked_body`]).
 pub fn sendable_now(conn: &Connection, subject: &str, body: &Map<String, Value>, flags: &[String]) -> Result<Option<Value>, String> {
     let mut body = body.clone();
     if let Some(app) = subject.strip_prefix(APP_PREFIX) {
         if is_home_client(conn, app)? {
             body.remove("recording");
         }
+    }
+    if let Some(space) = super::governed::space_of_settings(subject) {
+        body = super::recording::locked_body(conn, space, body)?;
     }
     Ok(sendable(subject, &body, flags))
 }

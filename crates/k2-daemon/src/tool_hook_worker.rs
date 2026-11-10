@@ -1183,9 +1183,23 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
     // Sew 0.5.0 (`k2_managed_avatar`): read the managed-fields policy so
     // the settings step can make it K2's. A failed read is not the sweep's
     // failure: K2 keeps what it last saw and reads again next sweep.
-    let policy_read = if status.features.iter().any(|f| f == hook::features::K2_MANAGED_AVATAR) {
+    // Sew 0.9.0 (`app_recording`): the same read carries the recording
+    // policies K2 keeps in step with what a person asked for.
+    let managed = status.features.iter().any(|f| f == hook::features::K2_MANAGED_AVATAR);
+    let recording = status.features.iter().any(|f| f == hook::features::APP_RECORDING);
+    let mut recording_policies: Option<Value> = None;
+    let policy_read = if managed || recording {
         match policy_read(client).await {
-            Ok(v) => hook::PolicyRead::Seen(v),
+            Ok((v, body)) => {
+                if recording {
+                    recording_policies = Some(body);
+                }
+                if managed {
+                    hook::PolicyRead::Seen(v)
+                } else {
+                    hook::PolicyRead::NotRead
+                }
+            }
             Err(e) => {
                 log_debug!("[grant-hook] {kind}: policy read failed: {e}");
                 hook::PolicyRead::NotRead
@@ -1210,6 +1224,11 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
         // Decision 13: each chat App's signalling origin, then the settings
         // Sew's feature flags say it takes (never by version).
         crate::sew::home::refresh_origins();
+        if let Some(body) = &recording_policies {
+            if let Err(e) = hook::note_recording_policies(body) {
+                log_debug!("[recording] policies: {e}");
+            }
+        }
         // Sew 0.9.0: the voice:record cap rollout (inert before the pin
         // and on a Sew without voice_record_cap), before the settings step
         // sends what it set.
@@ -1234,13 +1253,16 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
 }
 
 /// `GET /mgmt/v1/policies` → the `identity.managed_fields` value (`None` =
-/// absent, Sew's default).
-async fn policy_read(client: &MgmtClient) -> Result<Option<Value>, String> {
+/// absent, Sew's default), and the whole body (Sew 0.9.0's recording
+/// policies are read from it).
+async fn policy_read(client: &MgmtClient) -> Result<(Option<Value>, Value), String> {
     let r = client.get(hook::policy::MGMT_POLICIES).await.map_err(|e| e.0)?;
     if !r.is_success() {
         return Err(r.error_line());
     }
-    hook::policy::managed_fields_in(&r.body)
+    let managed = hook::policy::managed_fields_in(&r.body)?;
+    let body: Value = serde_json::from_slice(&r.body).map_err(|e| format!("{}: {e}", hook::policy::MGMT_POLICIES))?;
+    Ok((managed, body))
 }
 
 static RUNNING: AtomicBool = AtomicBool::new(false);

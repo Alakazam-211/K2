@@ -100,6 +100,7 @@ pub mod guest_rooms;
 /// App-governed Spaces S1 (0.46.7): an App's chat key (`k2 app grant <app>
 /// --kind chat-key`), served through `guest_rooms`' dispatch.
 pub mod chat_key_routes;
+pub mod recording_routes;
 /// Switch-1 default limits (§4.3).
 pub mod limits;
 /// K2's own answers on an App's hosts, one answerer per App (0.46.7, TA-9).

@@ -444,21 +444,13 @@ pub fn set_governance(conn: &Connection, space_id: &str, value: &str, actor: &st
     if value != GOVERNANCE_APP && value != GOVERNANCE_SEW {
         return Err(format!("governance is app or sew, not '{value}'"));
     }
-    let subject = settings_subject(space_id);
-    let body = json!({ "governance": value }).to_string();
-    let before: Option<String> = conn
-        .query_row("SELECT body FROM tool_sew_settings WHERE subject = ?1", params![subject], |r| r.get(0))
-        .optional()
-        .map_err(|e| format!("governance read: {e}"))?;
-    if before.as_deref().and_then(|b| serde_json::from_str::<Value>(b).ok()) == Some(json!({ "governance": value })) {
+    // Sew 0.9.0: the row may hold the Space's recording overrides too, so
+    // the switch merges into it (it never drops them).
+    let mut f = serde_json::Map::new();
+    f.insert("governance".into(), json!(value));
+    if !merge_space_settings(conn, space_id, f, actor, now)? {
         return Ok(false);
     }
-    conn.execute(
-        "INSERT INTO tool_sew_settings (subject, body, sent_body, updated_at, updated_by) VALUES (?1, ?2, NULL, ?3, ?4)
-         ON CONFLICT(subject) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at, updated_by = excluded.updated_by",
-        params![subject, body, now, actor],
-    )
-    .map_err(|e| format!("governance write: {e}"))?;
     if value == GOVERNANCE_SEW {
         // Back to Sew's own rules: K2 stops managing private channels there.
         forget_members(conn, space_id)?;
@@ -466,14 +458,61 @@ pub fn set_governance(conn: &Connection, space_id: &str, value: &str, actor: &st
     Ok(true)
 }
 
-/// The part of a governance body Sew can take now (`None`: Sew lacks
-/// `app_governed_spaces`, or the body names none).
-pub fn sendable(body: &serde_json::Map<String, Value>, flags: &[String]) -> Option<Value> {
-    if !flags.iter().any(|f| f == features::APP_GOVERNED_SPACES) {
-        return None;
+/// A Space's wanted settings body (`None` = no row).
+pub fn space_body(conn: &Connection, space_id: &str) -> Result<Option<serde_json::Map<String, Value>>, String> {
+    Ok(settings_bodies(conn, space_id)?.and_then(|(b, _)| b.as_object().cloned()))
+}
+
+/// Merge `fields` into a Space's `space:<id>` row (a `null` stays: it is
+/// the "inherit" Sew is sent). Returns whether it changed.
+pub fn merge_space_settings(
+    conn: &Connection,
+    space_id: &str,
+    fields: serde_json::Map<String, Value>,
+    actor: &str,
+    now: i64,
+) -> Result<bool, String> {
+    let had = space_body(conn, space_id)?;
+    let mut body = had.clone().unwrap_or_default();
+    for (k, v) in fields {
+        body.insert(k, v);
     }
-    let g = body.get("governance").and_then(Value::as_str)?;
-    Some(json!({ "governance": g }))
+    if had.as_ref() == Some(&body) {
+        return Ok(false);
+    }
+    conn.execute(
+        "INSERT INTO tool_sew_settings (subject, body, sent_body, updated_at, updated_by) VALUES (?1, ?2, NULL, ?3, ?4)
+         ON CONFLICT(subject) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+        params![settings_subject(space_id), Value::Object(body).to_string(), now, actor],
+    )
+    .map_err(|e| format!("space settings write: {e}"))?;
+    Ok(true)
+}
+
+/// The part of a Space settings body Sew can take now (`None`: nothing).
+/// `governance` needs `app_governed_spaces`; Sew 0.9.0's overrides go
+/// without a governance change (B7): `recording_start_level` with
+/// `app_recording`, `recording_required` with `recording_required` (`null`
+/// = inherit, sent as `null`).
+pub fn sendable(body: &serde_json::Map<String, Value>, flags: &[String]) -> Option<Value> {
+    let has = |f: &str| flags.iter().any(|x| x == f);
+    let mut out = serde_json::Map::new();
+    if has(features::APP_GOVERNED_SPACES) {
+        if let Some(g) = body.get("governance").and_then(Value::as_str) {
+            out.insert("governance".into(), json!(g));
+        }
+    }
+    if has(features::APP_RECORDING) {
+        if let Some(v) = body.get("recording_start_level").filter(|v| v.is_string() || v.is_null()) {
+            out.insert("recording_start_level".into(), v.clone());
+        }
+    }
+    if has(features::RECORDING_REQUIRED) {
+        if let Some(v) = body.get("recording_required").filter(|v| v.is_boolean() || v.is_null()) {
+            out.insert("recording_required".into(), v.clone());
+        }
+    }
+    (!out.is_empty()).then_some(Value::Object(out))
 }
 
 /// What a queued `space_settings` row sends: its stored body plus the

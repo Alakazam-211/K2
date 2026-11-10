@@ -22,16 +22,36 @@
 //!    App's settings row gains `recording.cap_required: true`, which the
 //!    sweep sends with `voice_record_cap`.
 //!
+//! **Settings (K-c).** An App's `recording` object lives in its
+//! `tool_sew_settings` row ([`set_app_recording`]); a Space's overrides
+//! (`recording_start_level`, `recording_required`; `null` inherits) live in
+//! its `space:<id>` row beside `governance` ([`set_space_recording`]), and go
+//! with the flags `app_recording` / `recording_required` (B7), with no
+//! governance change. The K5 rooms' overrides use the K5 Space's row the same
+//! way (no `app_id`).
+//!
+//! **The CUI/FCI lock** (`app_recording_locks`, Q7: the owner only, in
+//! person). A locked Space's row always sends `recording_start_level: none`
+//! and `recording_required: false`, whatever the App or anyone asks
+//! ([`locked_body`]); the lock survives an unbind on purpose (B7).
+//!
+//! **Org policies** (`recording.enabled`, `.dm_enabled`,
+//! `.require_consent_to_join`, `.required`, `.audio_max_days`): K2 keeps what
+//! a person asked for (`tool_recording_policy`), reads what Sew shows each
+//! sweep, and queues one `policy_set` with the keys that differ, like
+//! `identity.managed_fields` ([`super::policy`]).
+//!
 //! Tables live in skin.db (idempotent DDL like `tool_outbox`), so this
 //! needs no main-DB migration.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
-use super::home;
+use super::sew_wire::recording as wire;
+use super::{features, governed, home, Cause, NewOp, Op, CHAT_KIND};
 use crate::skin::{RoomPolicy, CAP_VOICE_JOIN, CAP_VOICE_RECORD};
 
 /// The actor on every row the rollout writes (attribution only).
@@ -47,9 +67,287 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             grandfathered_at  INTEGER,
             grandfather_roles TEXT NOT NULL DEFAULT '[]',
             cap_required_at   INTEGER
+         );
+         CREATE TABLE IF NOT EXISTS app_recording_locks (
+            space_id  TEXT PRIMARY KEY NOT NULL,
+            locked_by TEXT NOT NULL,
+            locked_at INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS tool_recording_policy (
+            key     TEXT PRIMARY KEY NOT NULL,
+            want    TEXT,
+            set_by  TEXT,
+            set_at  INTEGER,
+            seen    TEXT,
+            seen_at INTEGER
          );",
     )
     .map_err(|e| format!("skin.db recording schema: {e}"))
+}
+
+// ── Space overrides and the CUI/FCI lock ─────────────────────────────
+
+/// Merge a Space's recording overrides into its `space:<id>` row (`Some(Value::Null)`
+/// inherits; `None` keeps). Returns whether it changed.
+pub fn set_space_recording(
+    conn: &Connection,
+    space_id: &str,
+    start_level: Option<Value>,
+    required: Option<Value>,
+    actor: &str,
+    now: i64,
+) -> Result<bool, String> {
+    let mut f = Map::new();
+    if let Some(v) = start_level {
+        f.insert("recording_start_level".into(), v);
+    }
+    if let Some(v) = required {
+        f.insert("recording_required".into(), v);
+    }
+    governed::merge_space_settings(conn, space_id, f, actor, now)
+}
+
+/// A Space's overrides as K2 wants them: `(start_level, required)`, each
+/// `None` when not set (or set to inherit).
+pub fn space_recording(conn: &Connection, space_id: &str) -> Result<(Option<String>, Option<bool>), String> {
+    let b = governed::space_body(conn, space_id)?.unwrap_or_default();
+    Ok((
+        b.get("recording_start_level").and_then(Value::as_str).map(str::to_string),
+        b.get("recording_required").and_then(Value::as_bool),
+    ))
+}
+
+/// One CUI/FCI lock.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Lock {
+    pub space_id: String,
+    pub locked_by: String,
+    pub locked_at: i64,
+}
+
+/// Is `space_id` CUI/FCI-locked (no recording, whatever anyone asks)?
+pub fn is_locked(conn: &Connection, space_id: &str) -> Result<bool, String> {
+    conn.query_row("SELECT 1 FROM app_recording_locks WHERE space_id = ?1", params![space_id], |_| Ok(()))
+        .optional()
+        .map(|o| o.is_some())
+        .map_err(|e| format!("recording lock read: {e}"))
+}
+
+/// Every lock, by Space.
+pub fn locks(conn: &Connection) -> Result<Vec<Lock>, String> {
+    let mut st = conn
+        .prepare("SELECT space_id, locked_by, locked_at FROM app_recording_locks ORDER BY space_id")
+        .map_err(|e| format!("recording locks: {e}"))?;
+    let rows = st
+        .query_map([], |r| Ok(Lock { space_id: r.get(0)?, locked_by: r.get(1)?, locked_at: r.get(2)? }))
+        .map_err(|e| format!("recording locks: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("recording lock row: {e}"))?;
+    Ok(rows)
+}
+
+/// Set or lift a Space's lock. Locking also writes the no-recording
+/// overrides into the Space's row (so a Space without a row gets one);
+/// lifting sets them back to inherit. The caller checked the owner in
+/// person. Returns whether it changed.
+pub fn set_lock(conn: &Connection, space_id: &str, on: bool, by: &str, now: i64) -> Result<bool, String> {
+    let was = is_locked(conn, space_id)?;
+    if on == was {
+        return Ok(false);
+    }
+    if on {
+        conn.execute(
+            "INSERT INTO app_recording_locks (space_id, locked_by, locked_at) VALUES (?1, ?2, ?3)",
+            params![space_id, by, now],
+        )
+        .map_err(|e| format!("recording lock write: {e}"))?;
+        set_space_recording(conn, space_id, Some(json!(wire::START_NONE)), Some(json!(false)), by, now)?;
+    } else {
+        conn.execute("DELETE FROM app_recording_locks WHERE space_id = ?1", params![space_id])
+            .map_err(|e| format!("recording lock write: {e}"))?;
+        set_space_recording(conn, space_id, Some(Value::Null), Some(Value::Null), by, now)?;
+    }
+    Ok(true)
+}
+
+/// Every locked Space has a row saying no recording (an unbind deletes a
+/// Space's row; the lock survives it, B7). Returns the rows written.
+pub fn ensure_lock_rows(conn: &Connection, now: i64) -> Result<usize, String> {
+    let mut n = 0;
+    for l in locks(conn)? {
+        if governed::space_body(conn, &l.space_id)?.is_none() {
+            set_space_recording(conn, &l.space_id, Some(json!(wire::START_NONE)), Some(json!(false)), &l.locked_by, now)?;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// A delivered recording `policy_set`: what Sew's answer shows.
+pub fn after_policy_done(conn: &Connection, row_id: &str, result: &str, now: i64) -> Result<(), String> {
+    let subject: Option<String> = conn
+        .query_row("SELECT subject_key FROM tool_outbox WHERE id = ?1", params![row_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| format!("recording policy row read: {e}"))?;
+    if subject.as_deref() != Some(POLICY_SUBJECT) {
+        return Ok(());
+    }
+    match serde_json::from_str::<Value>(result) {
+        Ok(v) => note_seen_policies(conn, &v, now),
+        Err(_) => Ok(()),
+    }
+}
+
+/// A Space row's body as the sweep sends it: locked, never more than no
+/// recording. Not locked: unchanged.
+pub fn locked_body(conn: &Connection, space_id: &str, mut body: Map<String, Value>) -> Result<Map<String, Value>, String> {
+    if is_locked(conn, space_id)? {
+        body.insert("recording_start_level".into(), json!(wire::START_NONE));
+        body.insert("recording_required".into(), json!(false));
+    }
+    Ok(body)
+}
+
+// ── org policies ─────────────────────────────────────────────────────
+
+/// Outbox subject of the recording `policy_set` row.
+pub const POLICY_SUBJECT: &str = "policy:recording";
+
+/// Is `key` = `value` a recording policy Sew takes?
+pub fn policy_value_ok(key: &str, value: &Value) -> Result<(), String> {
+    match key {
+        wire::POLICY_ENABLED | wire::POLICY_DM_ENABLED | wire::POLICY_REQUIRE_CONSENT_TO_JOIN => {
+            value.is_boolean().then_some(()).ok_or_else(|| format!("{key} is true or false"))
+        }
+        wire::POLICY_REQUIRED => matches!(value.as_str(), Some(wire::REQUIRED_OFF | wire::REQUIRED_MULTI_PERSON))
+            .then_some(())
+            .ok_or_else(|| format!("{key} is off or multi_person")),
+        wire::POLICY_AUDIO_MAX_DAYS => value
+            .as_u64()
+            .filter(|d| (1..=3650).contains(d))
+            .map(|_| ())
+            .ok_or_else(|| format!("{key} is a number of days, 1 to 3650")),
+        _ => Err(format!("{key} isn't a recording policy ({})", wire::POLICY_KEYS.join(", "))),
+    }
+}
+
+/// The flag a policy key needs.
+pub fn policy_flag(key: &str) -> &'static str {
+    if key == wire::POLICY_REQUIRED {
+        features::RECORDING_REQUIRED
+    } else {
+        features::APP_RECORDING
+    }
+}
+
+/// Ask for a recording policy (checked; the caller checked the person).
+pub fn set_policy(conn: &Connection, key: &str, value: &Value, by: &str, now: i64) -> Result<bool, String> {
+    policy_value_ok(key, value)?;
+    let raw = value.to_string();
+    let before: Option<Option<String>> = conn
+        .query_row("SELECT want FROM tool_recording_policy WHERE key = ?1", params![key], |r| r.get(0))
+        .optional()
+        .map_err(|e| format!("recording policy read: {e}"))?;
+    if before.flatten().as_deref() == Some(raw.as_str()) {
+        return Ok(false);
+    }
+    conn.execute(
+        "INSERT INTO tool_recording_policy (key, want, set_by, set_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(key) DO UPDATE SET want = excluded.want, set_by = excluded.set_by, set_at = excluded.set_at",
+        params![key, raw, by, now],
+    )
+    .map_err(|e| format!("recording policy write: {e}"))?;
+    Ok(true)
+}
+
+/// One recording policy: what K2 was asked for and what Sew last showed.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyRow {
+    pub key: String,
+    pub want: Option<Value>,
+    pub seen: Option<Value>,
+    pub set_by: Option<String>,
+    pub delivered: bool,
+}
+
+pub fn policies(conn: &Connection) -> Result<Vec<PolicyRow>, String> {
+    let mut out = Vec::new();
+    for key in wire::POLICY_KEYS {
+        let r: Option<(Option<String>, Option<String>, Option<String>)> = conn
+            .query_row("SELECT want, seen, set_by FROM tool_recording_policy WHERE key = ?1", params![key], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .optional()
+            .map_err(|e| format!("recording policy read: {e}"))?;
+        let (want, seen, set_by) = r.unwrap_or_default();
+        let want: Option<Value> = want.and_then(|w| serde_json::from_str(&w).ok());
+        let seen: Option<Value> = seen.and_then(|s| serde_json::from_str(&s).ok());
+        let delivered = want.as_ref().is_none_or(|w| seen.as_ref() == Some(w));
+        out.push(PolicyRow { key: key.to_string(), want, seen, set_by, delivered });
+    }
+    Ok(out)
+}
+
+/// Record what Sew showed (`{"policies": {...}}` or its inner object).
+pub fn note_seen_policies(conn: &Connection, body: &Value, now: i64) -> Result<(), String> {
+    let p = body.get("policies").unwrap_or(body);
+    let Some(p) = p.as_object() else { return Ok(()) };
+    for key in wire::POLICY_KEYS {
+        if let Some(v) = p.get(key) {
+            conn.execute(
+                "INSERT INTO tool_recording_policy (key, seen, seen_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET seen = excluded.seen, seen_at = excluded.seen_at",
+                params![key, v.to_string(), now],
+            )
+            .map_err(|e| format!("recording policy seen: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// The org recording policies' value, as the org's `audio_max_days` K2
+/// last saw (B23's ceiling for an App's keep days).
+pub fn org_audio_max_days(conn: &Connection) -> Result<Option<u64>, String> {
+    Ok(policies(conn)?.into_iter().find(|p| p.key == wire::POLICY_AUDIO_MAX_DAYS).and_then(|p| p.seen.or(p.want)).and_then(|v| v.as_u64()))
+}
+
+/// The sweep: one `policy_set` with every wanted key Sew can take (by its
+/// flags) and doesn't show yet. Nothing while a row is open.
+pub fn plan_policies(conn: &Connection, busy: &HashSet<String>) -> Result<Vec<NewOp>, String> {
+    if busy.contains(POLICY_SUBJECT) {
+        return Ok(Vec::new());
+    }
+    let flags = features::list(conn, CHAT_KIND)?;
+    let mut changes = Map::new();
+    for p in policies(conn)? {
+        let Some(want) = p.want else { continue };
+        if !flags.iter().any(|f| f == policy_flag(&p.key)) || p.seen.as_ref() == Some(&want) {
+            continue;
+        }
+        changes.insert(p.key, want);
+    }
+    if changes.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(vec![NewOp {
+        tool: CHAT_KIND,
+        op: Op::PolicySet,
+        subject_key: POLICY_SUBJECT.to_string(),
+        payload: json!({ "changes": changes }),
+        grant_id: None,
+        grant_rev: None,
+        cause: Cause::Reconcile,
+        after_subject: None,
+    }])
+}
+
+/// A new Sew install: K2 hasn't seen its policies yet (wishes stay).
+pub fn forget_seen_policies(conn: &Connection) -> Result<(), String> {
+    conn.execute("UPDATE tool_recording_policy SET seen = NULL, seen_at = NULL", [])
+        .map(|_| ())
+        .map_err(|e| format!("recording policy reset: {e}"))
 }
 
 // ── the App's recording object (`tool_sew_settings` `app:<id>`) ──────
@@ -250,5 +548,93 @@ mod tests {
         assert_eq!(g["b"], p["b"]);
         assert_eq!(g["c"], p["c"]);
         assert_eq!(grandfather_policy(&g), None, "once");
+    }
+
+    fn flags(f: &[&str]) -> Vec<String> {
+        f.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// PRD §8 K-c, B7: a Space's recording override goes with no governance
+    /// change, each field only with its flag, and the switch keeps the
+    /// override (it merges).
+    #[test]
+    fn a_space_override_goes_without_a_governance_change() {
+        let c = conn();
+        governed::ensure_schema(&c).unwrap();
+        set_space_recording(&c, "5101", Some(json!("member")), Some(json!(true)), "owner", 1).unwrap();
+        let body = governed::space_body(&c, "5101").unwrap().expect("a row");
+        assert_eq!(governed::sendable(&body, &flags(&["app_governed_spaces"])), None, "Sew 0.8.x: nothing to send");
+        assert_eq!(
+            governed::sendable(&body, &flags(&["app_recording"])),
+            Some(json!({"recording_start_level": "member"})),
+            "required waits for its own flag"
+        );
+        assert_eq!(
+            governed::sendable(&body, &flags(&["app_recording", "recording_required"])),
+            Some(json!({"recording_start_level": "member", "recording_required": true}))
+        );
+        governed::set_governance(&c, "5101", "app", "owner", 2).unwrap();
+        let body = governed::space_body(&c, "5101").unwrap().unwrap();
+        assert_eq!(
+            governed::sendable(&body, &flags(&["app_governed_spaces", "app_recording", "recording_required"])),
+            Some(json!({"governance": "app", "recording_start_level": "member", "recording_required": true})),
+            "the switch kept the override"
+        );
+        set_space_recording(&c, "5101", Some(Value::Null), None, "owner", 3).unwrap();
+        let body = governed::space_body(&c, "5101").unwrap().unwrap();
+        assert_eq!(governed::sendable(&body, &flags(&["app_recording"])), Some(json!({"recording_start_level": null})), "null inherits, sent as null");
+    }
+
+    /// PRD §8 K-c, Q7: a locked Space sends `start_level: none` and
+    /// `required: false` whatever its row asks; lifting sends inherit; the
+    /// lock survives an unbind (its row comes back).
+    #[test]
+    fn a_locked_space_never_records() {
+        let c = conn();
+        governed::ensure_schema(&c).unwrap();
+        let all = flags(&["app_recording", "recording_required"]);
+        set_space_recording(&c, "5101", Some(json!("member")), Some(json!(true)), "agent:jobs", 1).unwrap();
+        assert!(set_lock(&c, "5101", true, "owner", 2).unwrap());
+        assert!(!set_lock(&c, "5101", true, "owner", 3).unwrap(), "once");
+        // Someone asks again for recording: the lock wins at send time.
+        set_space_recording(&c, "5101", Some(json!("member")), Some(json!(true)), "agent:jobs", 4).unwrap();
+        let sent = home::sendable_now(&c, "space:5101", &governed::space_body(&c, "5101").unwrap().unwrap(), &all).unwrap();
+        assert_eq!(sent, Some(json!({"recording_start_level": "none", "recording_required": false})));
+        // An unbind forgets the row; the lock puts it back.
+        governed::forget_space(&c, "5101").unwrap();
+        assert_eq!(governed::space_body(&c, "5101").unwrap(), None);
+        assert_eq!(ensure_lock_rows(&c, 5).unwrap(), 1);
+        let sent = home::sendable_now(&c, "space:5101", &governed::space_body(&c, "5101").unwrap().unwrap(), &all).unwrap();
+        assert_eq!(sent, Some(json!({"recording_start_level": "none", "recording_required": false})));
+        assert!(set_lock(&c, "5101", false, "owner", 6).unwrap());
+        let sent = home::sendable_now(&c, "space:5101", &governed::space_body(&c, "5101").unwrap().unwrap(), &all).unwrap();
+        assert_eq!(sent, Some(json!({"recording_start_level": null, "recording_required": null})), "lifted: inherit");
+        assert!(locks(&c).unwrap().is_empty());
+    }
+
+    /// Org policies: checked values, one `policy_set` with what differs and
+    /// what Sew's flags allow, nothing once Sew shows it.
+    #[test]
+    fn org_policies_reconcile_like_managed_fields() {
+        let c = conn();
+        super::super::outbox::ensure_schema(&c).unwrap();
+        assert!(set_policy(&c, wire::POLICY_REQUIRED, &json!("always"), "owner", 1).is_err());
+        assert!(set_policy(&c, wire::POLICY_AUDIO_MAX_DAYS, &json!(0), "owner", 1).is_err());
+        assert!(set_policy(&c, "recording.bogus", &json!(true), "owner", 1).is_err());
+        set_policy(&c, wire::POLICY_REQUIRED, &json!("multi_person"), "owner", 1).unwrap();
+        set_policy(&c, wire::POLICY_ENABLED, &json!(true), "owner", 1).unwrap();
+        let busy = HashSet::new();
+        assert!(plan_policies(&c, &busy).unwrap().is_empty(), "Sew 0.8.x: nothing");
+        features::note(&c, CHAT_KIND, &flags(&["app_recording"]), 2).unwrap();
+        let ops = plan_policies(&c, &busy).unwrap();
+        assert_eq!(ops[0].payload, json!({"changes": {"recording.enabled": true}}), "recording.required waits for its flag");
+        features::note(&c, CHAT_KIND, &flags(&["app_recording", "recording_required"]), 3).unwrap();
+        let ops = plan_policies(&c, &busy).unwrap();
+        assert_eq!(ops[0].payload, json!({"changes": {"recording.enabled": true, "recording.required": "multi_person"}}));
+        assert_eq!(ops[0].subject_key, POLICY_SUBJECT);
+        note_seen_policies(&c, &json!({"policies": {"recording.enabled": true, "recording.required": "multi_person", "recording.audio_max_days": 30}}), 4).unwrap();
+        assert!(plan_policies(&c, &busy).unwrap().is_empty(), "Sew shows it: nothing more");
+        assert_eq!(org_audio_max_days(&c).unwrap(), Some(30));
+        assert!(policies(&c).unwrap().iter().all(|p| p.delivered));
     }
 }

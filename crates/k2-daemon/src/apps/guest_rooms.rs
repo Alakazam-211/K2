@@ -74,9 +74,16 @@ pub const ROUTES: &[&str] = &[
     super::agent_grants::COPY_HOST,
     super::chat_key_routes::KEY,
     super::chat_key_routes::REVOKE,
+    super::recording_routes::READ,
+    super::recording_routes::SET,
 ];
-pub const POST_ROUTES: &[&str] =
-    &["/cli/app/grant", "/cli/app/grant/revoke", super::agent_grants::COPY_HOST, super::chat_key_routes::REVOKE];
+pub const POST_ROUTES: &[&str] = &[
+    "/cli/app/grant",
+    "/cli/app/grant/revoke",
+    super::agent_grants::COPY_HOST,
+    super::chat_key_routes::REVOKE,
+    super::recording_routes::SET,
+];
 /// `/cli/app/guest/rooms` takes GET (read) and POST (set).
 pub const GUEST_ROOMS: &str = "/cli/app/guest/rooms";
 /// `k2 app guest ceiling <app>` (GET only).
@@ -102,7 +109,11 @@ pub fn handle(path: &str, who: &Who, is_post: bool, body: &[u8], params: &HashMa
         (super::chat_key_routes::KEY, false) => super::chat_key_routes::read(who, params),
         (super::chat_key_routes::KEY, true) => super::chat_key_routes::set(who, body),
         (super::chat_key_routes::REVOKE, _) => super::chat_key_routes::revoke(who, body),
-        (GUEST_CEILING | GUEST_LIST, true) => Err(no("method_not_allowed", 405, format!("{path} is a GET"))),
+        // Sew 0.9.0: an App's recording settings (a GET read, a POST set).
+        (super::recording_routes::READ, false) => super::recording_routes::read(who, params),
+        (super::recording_routes::SET, true) => super::recording_routes::set(who, body),
+        (super::recording_routes::SET, false) => Err(no("method_not_allowed", 405, format!("{path} is a POST"))),
+        (GUEST_CEILING | GUEST_LIST | super::recording_routes::READ, true) => Err(no("method_not_allowed", 405, format!("{path} is a GET"))),
         _ => Err(no("not_found", 404, "no such App route")),
     };
     // A held request (an agent's grant or copy-host for the owner) is

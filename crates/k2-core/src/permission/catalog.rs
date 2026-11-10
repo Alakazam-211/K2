@@ -325,6 +325,11 @@ pub enum ConfirmAction {
     /// K2 turns it into the route's own (bound to the Sew install).
     #[serde(rename = "sew-recording-enable")]
     SewRecordingEnable,
+    /// An App requiring recording, or its server reading transcripts (Sew
+    /// 0.9.0, the card `apps.recording`); bound to the request id, whose
+    /// stored values name the App and what it turns on.
+    #[serde(rename = "apps-recording")]
+    AppsRecording,
 }
 
 impl ConfirmAction {
@@ -338,6 +343,7 @@ impl ConfirmAction {
         ConfirmAction::AppsChatKey,
         ConfirmAction::SewSpaceGovernance,
         ConfirmAction::SewRecordingEnable,
+        ConfirmAction::AppsRecording,
     ];
 
     /// The `CONFIRM_ACTIONS` string (`vaultApi.confirmStart(<this>, …)`).
@@ -352,6 +358,7 @@ impl ConfirmAction {
             ConfirmAction::AppsChatKey => "apps-chat-key",
             ConfirmAction::SewSpaceGovernance => "sew-space-governance",
             ConfirmAction::SewRecordingEnable => "sew-recording-enable",
+            ConfirmAction::AppsRecording => "apps-recording",
         }
     }
 }
@@ -737,6 +744,7 @@ mod tests {
                 "apps-chat-key",
                 "sew-space-governance",
                 "sew-recording-enable"
+                "apps-recording"
             ]
         );
         for c in ConfirmAction::ALL {

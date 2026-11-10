@@ -489,6 +489,9 @@
 [data-style="glass"] .agent-working:not([data-zen-root] *) { shape-rendering: auto; }
 /* People and agents are round in Glass, like the phone. Gardens keep their own look. */
 [data-style="glass"] [data-k2-avatar]:not([data-zen-root] *) { border-radius: 9999px; overflow: hidden; }
+/* Project tags are pills here (`--radius-pill` on the chip); a little more
+   side room so the text clears the round ends. */
+[data-style="glass"] [data-nav-chip="tag"]:not([data-zen-root] *) { padding-inline: 6px; }
 [data-style="glass"] [data-nav-chip="machine"]:not([data-zen-root] *) {
   border-color: transparent;
   border-radius: 9999px;

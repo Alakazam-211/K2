@@ -8,8 +8,10 @@ import {
   type ProjectNavTag,
 } from '@/lib/nav-project-tags'
 
+// Corners read `--radius-pill`: a pill in Glass, square in Terminal (which
+// chamfers the chip in globals.css).
 const tagBox =
-  'box-border inline-flex h-3.5 max-w-[6.5rem] items-center truncate px-1 py-0 text-[9px] font-medium leading-none border border-[var(--color-accent)] text-[var(--color-text-primary)] bg-transparent'
+  'box-border inline-flex h-3.5 max-w-[6.5rem] items-center truncate px-1 py-0 text-[9px] font-medium leading-none border border-[var(--color-accent)] text-[var(--color-text-primary)] bg-transparent rounded-[var(--radius-pill)]'
 
 function TagChip({
   tag,

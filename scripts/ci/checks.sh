@@ -53,6 +53,7 @@ part_web() {
     step "CI gate scripts (stubbed)";              bash tests/packaging/ci-gate.sh
     step "k2-daemon test groups (no cargo)";       bash scripts/check-daemon-test-targets.sh
     step "Test-group check on broken layouts";     bash tests/packaging/daemon-test-targets.sh
+    step "Embedded Python compiles (cli/k2, tests, scripts)"; bash tests/check-embedded-python.sh
     step "Rust pin (rust-toolchain.toml)";         bash tests/packaging/rust-pin.sh
     step "release.sh compute mode (stubbed)";      bash tests/packaging/release-compute-mode.sh
     step "Linux build gate on K2 Compute (stubbed)"; bash tests/packaging/linux-gate.sh

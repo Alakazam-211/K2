@@ -90,6 +90,12 @@ jobs:
       - name: Test-group check fails on broken layouts
         run: bash tests/packaging/daemon-test-targets.sh
 
+      # The Python blocks embedded in cli/k2 and the shell tests/scripts
+      # compile under Python 3.12+ (a broken block fails only when its verb
+      # runs). No cargo, no daemon.
+      - name: Embedded Python compiles (cli/k2, tests, scripts)
+        run: bash tests/check-embedded-python.sh
+
       # One Rust everywhere: rust-toolchain.toml, these workflows' toolchain:
       # lines and every K2 Compute job's rust@ need agree; release.sh's
       # Step 0.4 check (stub rustup/rustc).

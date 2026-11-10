@@ -1419,12 +1419,17 @@ impl Executor {
             }
             if s.job_uid {
                 let (index, uid) = self.job_uid_lease(s.tenant, &ids, &unit, &plan.root)?;
+                uid_index = Some(index);
                 self.job_uid_take_tree(&plan.root, uid, ids.gid)?;
                 plan.job_uid = uid;
-                uid_index = Some(index);
             }
             self.spawn_unit(&plan, &unit, out, err, input)
         })();
+        // M8.1: the start is over (the unit exists and is live, or it
+        // failed): its pool index is no longer in flight.
+        if let Some(i) = uid_index {
+            super::jobpool::lease_started(s.tenant, i);
+        }
         let gpu = plan.gpu.as_ref().map(|g| g.pci.clone());
         if r.is_err() {
             if let Some(pci) = &gpu {

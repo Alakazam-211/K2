@@ -1565,17 +1565,23 @@ impl Node {
                 (vec![out_w.into(), err_w.into()], Some((out_r, err_r)))
             }
         };
+        // The secrets pipe: its read end goes with the start; the value is
+        // written only once the executor's answer shows the unit is what
+        // was asked (its own uid, its GPU). An executor that ignored the
+        // ask never gets a byte of it (11-07 review M8.2).
+        let mut stdin_body: Option<(Vec<u8>, std::io::PipeWriter)> = None;
         if let Some(p) = secrets {
-            let mut body = secret_pipe_body(p)?;
-            let (in_r, mut in_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
+            let body = secret_pipe_body(p)?;
+            let (in_r, in_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
             fds.push(in_r.into());
-            std::thread::spawn(move || {
-                use std::io::Write;
-                // EPIPE (the unit never started) just ends the write.
-                let _ = in_w.write_all(&body);
-                drop(in_w);
+            stdin_body = Some((body, in_w));
+        }
+        // Close the pipe empty and wipe the value (the unit reads EOF).
+        fn withhold(b: Option<(Vec<u8>, std::io::PipeWriter)>) {
+            if let Some((mut body, w)) = b {
+                drop(w);
                 k2_redact::wipe(&mut body);
-            });
+            }
         }
         let start = JobStart {
             key,
@@ -1602,8 +1608,10 @@ impl Node {
         let (unit, uid_index, gpu) = match ans {
             // C2: asked for its own uid, the answer must say which; an
             // executor that ignored the ask started it as the slot's user:
-            // stopped at once, never left running beside others.
+            // stopped at once, never left running beside others, and its
+            // stdin closes empty: no secret reaches it (M8.2).
             Ok(JobAnswer::Started { unit, uid_index: None, .. }) if job_uid => {
+                withhold(stdin_body.take());
                 let _ = self.job_op(JobOp::Release { unit: unit.clone() }, vec![], Duration::from_secs(60)).await;
                 return Err(format!("{}: the executor started {unit} without a uid of its own; stopped (update k2-node)", crate::admin::jobpool::JOB_UID_UNAVAILABLE));
             }
@@ -1611,14 +1619,35 @@ impl Node {
             // executor that ignored the ask started it without one: stopped
             // at once (never a GPU job quietly on the CPU).
             Ok(JobAnswer::Started { unit, gpu: None, .. }) if a.plan.gpu.is_some() => {
+                withhold(stdin_body.take());
                 let _ = self.job_op(JobOp::Release { unit: unit.clone() }, vec![], Duration::from_secs(60)).await;
                 return Err(format!("{}: the executor started {unit} without its GPU; stopped (update k2-node)", k2_node_proto::gpu::codes::GPU_UNAVAILABLE));
             }
             Ok(JobAnswer::Started { unit, uid_index, gpu }) => (unit, uid_index, gpu),
-            Ok(JobAnswer::Refused(r)) => return Err(format!("the job wall refused to start it: {}: {}", r.code, r.message)),
-            Ok(other) => return Err(format!("unexpected executor answer: {other:?}")),
-            Err(e) => return Err(format!("couldn't start the job unit: {e}")),
+            Ok(JobAnswer::Refused(r)) => {
+                withhold(stdin_body.take());
+                return Err(format!("the job wall refused to start it: {}: {}", r.code, r.message));
+            }
+            Ok(other) => {
+                withhold(stdin_body.take());
+                return Err(format!("unexpected executor answer: {other:?}"));
+            }
+            Err(e) => {
+                withhold(stdin_body.take());
+                return Err(format!("couldn't start the job unit: {e}"));
+            }
         };
+        // The unit is the one asked for: now the value goes to its stdin,
+        // from a blocking thread (a small pipe can't deadlock us).
+        if let Some((mut body, mut in_w)) = stdin_body.take() {
+            std::thread::spawn(move || {
+                use std::io::Write;
+                // EPIPE (the unit ended) just ends the write.
+                let _ = in_w.write_all(&body);
+                drop(in_w);
+                k2_redact::wipe(&mut body);
+            });
+        }
         let rx = |r: std::io::PipeReader| -> Option<OutPipe> {
             tokio::net::unix::pipe::Receiver::from_owned_fd(std::os::fd::OwnedFd::from(r)).ok().map(|p| Box::new(p) as OutPipe)
         };
@@ -2487,6 +2516,73 @@ pub(super) const WALK_MAX_DEPTH: u32 = 256;
 pub(super) mod tests {
     use super::*;
     use crate::cgroup::Cgroups;
+
+    /// M8.2 (11-07 review): a secret job asked to run as a uid of its own,
+    /// on an executor that starts the unit without one (an older or
+    /// tampered executor): the unit's stdin closes empty, so no secret
+    /// reaches a job running as the slot's shared user; the node stops the
+    /// unit and fails the start. A fake executor on a real socket holds the
+    /// stdin pipe's read end, as root's would.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn an_executor_that_ignores_the_uid_ask_gets_no_secret() {
+        use crate::admin::exec::LocalResponse;
+        use crate::admin::jobs::JobAnswer;
+        let d = crate::util::temp_dir("m8-stdin");
+        let sock = crate::admin::server::short_sock(&d);
+        let _ = std::fs::remove_file(&sock);
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
+        std::thread::spawn(move || {
+            let r = (|| -> Result<Vec<u8>, String> {
+                // The start: stdout, stderr and the stdin pipe's read end.
+                let (mut s, _) = l.accept().map_err(|e| e.to_string())?;
+                crate::admin::server::read_frame(&mut s, 1 << 20)?;
+                let fds = crate::admin::fdpass::recv_fds(&s).map_err(|e| e.to_string())?;
+                if fds.len() != 3 {
+                    return Err(format!("a secret start carries 3 fds, got {}", fds.len()));
+                }
+                let ans = serde_json::to_vec(&LocalResponse::Job(JobAnswer::Started { unit: "k2job-sj-g1.service".into(), uid_index: None, gpu: None })).unwrap();
+                crate::admin::server::write_frame(&mut s, &ans)?;
+                let stdin = fds.into_iter().nth(2).ok_or("no stdin fd")?;
+                // The node's release of the unit.
+                let (mut s2, _) = l.accept().map_err(|e| e.to_string())?;
+                crate::admin::server::read_frame(&mut s2, 1 << 20)?;
+                let done = serde_json::to_vec(&LocalResponse::Job(JobAnswer::Done { detail: serde_json::json!({}) })).unwrap();
+                crate::admin::server::write_frame(&mut s2, &done)?;
+                let mut got = Vec::new();
+                std::io::Read::read_to_end(&mut std::fs::File::from(stdin), &mut got).map_err(|e| e.to_string())?;
+                Ok(got)
+            })();
+            let _ = tx.send(r);
+        });
+        let layout = crate::paths::Layout::new(d.join("home"), d.join("cfg"));
+        layout.ensure().unwrap();
+        std::fs::create_dir_all(&layout.config).unwrap();
+        let mut o = super::super::NodeOptions::new(layout);
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        o.wall = Some(Wall::JobUser { user: "k2job".into() });
+        o.exec_stdin = Some(true);
+        o.exec_job_uid = Some(true);
+        o.admin_socket = sock.clone();
+        o.cancel_grace = Duration::from_millis(100);
+        o.facts = Some(crate::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: false });
+        let n = Node::open(o).await.unwrap();
+        let t = n.owner();
+        let mut a = crate::ledger::tests::assign("sj", 1);
+        a.plan.secret_env = vec!["K2T_SECRET".into()];
+        let dirs = JobDirs::new(d.join("job"));
+        dirs.create().unwrap();
+        let secrets = k2_node_proto::secret::Plain(vec![("K2T_SECRET".into(), "k2test-secret-M8-value".into())]);
+        let r = n.start_unit(&t, &a, &dirs, &dirs.root, &[], vec![], Network::On, 1 << 30, Some(&secrets), None, true).await;
+        let e = r.err().expect("the start fails");
+        assert!(e.contains(crate::admin::jobpool::JOB_UID_UNAVAILABLE), "{e}");
+        let got = rx.recv_timeout(Duration::from_secs(20)).expect("the fake executor answered").expect("the fake executor ran");
+        assert!(got.is_empty(), "the unit's stdin got {} bytes: a secret reached a job without its own uid", got.len());
+        let _ = std::fs::remove_file(&sock);
+    }
 
     /// The job whose ledger finish fails [`FINISH_FAILS`] more times.
     pub const FINISH_FAILS_JOB: &str = "finish-fails";

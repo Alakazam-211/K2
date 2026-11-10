@@ -233,7 +233,11 @@ impl Node {
         if let Some((c, d)) = self.lane_secret_refusal(t) {
             return Some((c, d.to_string()));
         }
-        let lane = self.lane_of(t)?;
+        // Read again here: no lane now (root's file changed since the check
+        // above) is a refusal, never a pass (11-07 review, Low).
+        let Some(lane) = self.lane_of(t) else {
+            return Some((codes::UNTRUSTED_SERVER, "this server has no lane on this node now, so its secret job gets no secret env".to_string()));
+        };
         let got = if plan.exclusive {
             Isolation::Exclusive
         } else if uid == UidShare::Own {
@@ -333,6 +337,12 @@ mod tests {
     /// `opt_in`: the machine owner's admin.toml opt-ins (`None`: read the
     /// file, which this test node doesn't have, so off).
     async fn node_in(lane2: Option<LaneRule>, job_uid: bool, ptrace: Option<u8>, protocol: u32, opt_in: Option<bool>) -> (Arc<Node>, Vec<Arc<Tenant>>) {
+        let src = lane2.map(|l| Arc::new(StaticLanes([(2u8, l)].into())) as Arc<dyn super::LaneSource>);
+        node_src(src, job_uid, ptrace, protocol, opt_in).await
+    }
+
+    /// [`node_in`] with any lane source.
+    async fn node_src(src: Option<Arc<dyn super::LaneSource>>, job_uid: bool, ptrace: Option<u8>, protocol: u32, opt_in: Option<bool>) -> (Arc<Node>, Vec<Arc<Tenant>>) {
         let d = crate::util::temp_dir("lane-secrets");
         let layout = crate::paths::Layout::new(d.join("home"), d.join("cfg"));
         layout.ensure().unwrap();
@@ -357,7 +367,7 @@ mod tests {
         o.exec_stdin = Some(true);
         o.exec_job_uid = Some(job_uid);
         o.ptrace_scope = Some(ptrace);
-        o.lanes = lane2.map(|l| Arc::new(StaticLanes([(2u8, l)].into())) as Arc<dyn super::LaneSource>);
+        o.lanes = src;
         // The machine owner's opt-ins (0.46.10, off by default).
         o.job_uid_pool = opt_in;
         o.lane_secrets = opt_in;
@@ -463,6 +473,29 @@ mod tests {
         let Some(Frame::State(s)) = rx.recv().await else { panic!("no answer") };
         assert_eq!((s.state, s.reason.as_deref()), (JobState::Failed, Some(codes::NEEDS_ISOLATION)));
         assert!(t.ledger.lock().unwrap().get("sj", 1).unwrap().is_none(), "no ledger row");
+    }
+
+    /// A lane source that names a lane for the first `n` lookups, then none
+    /// (root's file rewritten between two reads).
+    struct Vanishing(std::sync::atomic::AtomicIsize, LaneRule);
+
+    impl super::LaneSource for Vanishing {
+        fn lane_for(&self, _: &super::LaneServer<'_>) -> Option<LaneRule> {
+            (self.0.fetch_sub(1, Ordering::SeqCst) > 0).then(|| self.1.clone())
+        }
+    }
+
+    /// 11-07 review (Low): the plan check reads the lane twice; a lane gone
+    /// between the two reads is a refusal, never a pass.
+    #[tokio::test]
+    async fn a_lane_gone_between_two_reads_refuses() {
+        // Control: a lane both reads see.
+        let (n, ts) = node_src(Some(Arc::new(Vanishing(std::sync::atomic::AtomicIsize::new(2), lane(true, Isolation::JobUid)))), true, Some(1), 9, Some(true)).await;
+        assert_eq!(n.secret_plan_refusal(&ts[1], &secret_plan(&ts[1], false), UidShare::Own), None, "control: the lane is there both times");
+        // Gone by the second read.
+        let (n, ts) = node_src(Some(Arc::new(Vanishing(std::sync::atomic::AtomicIsize::new(1), lane(true, Isolation::JobUid)))), true, Some(1), 9, Some(true)).await;
+        let r = n.secret_plan_refusal(&ts[1], &secret_plan(&ts[1], false), UidShare::Own);
+        assert_eq!(r.map(|r| r.0), Some(codes::UNTRUSTED_SERVER), "the second read found no lane");
     }
 
     /// Mixed versions: a protocol-8 server on a lane that allows secrets

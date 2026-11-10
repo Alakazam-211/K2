@@ -151,13 +151,61 @@ pub enum Choice {
     Fresh(u32),
 }
 
+impl Choice {
+    pub fn index(self) -> u32 {
+        match self {
+            Choice::Reuse(i) | Choice::Fresh(i) => i,
+        }
+    }
+}
+
 /// Pick an index of `slot`: the lowest pool user proven empty, else the
 /// lowest index with no user yet. Every user looked at gets its `held`
 /// reason updated (or cleared). `Err` lists why each one is held.
 pub fn pick(f: &mut PoolFile, slot: Slot, probe: &dyn Probe) -> Result<Choice, String> {
+    pick_skipping(f, slot, probe, &std::collections::BTreeSet::new())
+}
+
+/// Indexes leased whose unit doesn't exist yet (11-07 review M8.1):
+/// between a lease and `systemd-run`, an index's last unit isn't live, no
+/// process runs as it and its root may be empty, so every proof passes and
+/// a second start would get the same uid. A lease stays here until its
+/// start is over (the unit then exists and is live, or the start failed).
+#[derive(Debug, Default)]
+pub struct InFlight(std::collections::BTreeSet<(Slot, u32)>);
+
+impl InFlight {
+    /// [`pick`], never an index still being started; the one picked is
+    /// held until [`Self::done`].
+    pub fn take(&mut self, f: &mut PoolFile, slot: Slot, probe: &dyn Probe) -> Result<Choice, String> {
+        let busy: std::collections::BTreeSet<u32> = self.0.iter().filter(|(s, _)| *s == slot).map(|(_, i)| *i).collect();
+        let c = pick_skipping(f, slot, probe, &busy)?;
+        self.0.insert((slot, c.index()));
+        Ok(c)
+    }
+
+    /// The start of `index` of `slot` is over.
+    pub fn done(&mut self, slot: Slot, index: u32) {
+        self.0.remove(&(slot, index));
+    }
+}
+
+/// The executor's (one process; its pool file is under the ops lock).
+static IN_FLIGHT: std::sync::Mutex<InFlight> = std::sync::Mutex::new(InFlight(std::collections::BTreeSet::new()));
+
+/// A per-job uid's start is over (`start_job`, whatever the outcome).
+pub(crate) fn lease_started(slot: Slot, index: u32) {
+    IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner()).done(slot, index);
+}
+
+fn pick_skipping(f: &mut PoolFile, slot: Slot, probe: &dyn Probe, busy: &std::collections::BTreeSet<u32>) -> Result<Choice, String> {
     let mut why = Vec::new();
     let mut fresh = None;
     for i in 0..JOB_UID_POOL {
+        if busy.contains(&i) {
+            why.push(format!("{}: its job is starting", pool_user_name(slot, i)));
+            continue;
+        }
         match f.users.get_mut(&pool_key(slot, i)) {
             None => {
                 if fresh.is_none() {
@@ -370,7 +418,9 @@ impl Executor {
         let path = self.pool_path();
         // An unreadable pool file holds every index (fail closed).
         let mut f = read_pool(&path).map_err(|e| refuse(JOB_UID_UNAVAILABLE, e))?;
-        let choice = pick(&mut f, slot, &SystemProbe);
+        // M8.1: never an index whose start is still under way.
+        let choice = IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner()).take(&mut f, slot, &SystemProbe);
+        let picked = choice.as_ref().ok().copied();
         let r = match choice {
             Ok(Choice::Reuse(i)) => {
                 let u = f.get(slot, i).cloned().expect("picked");
@@ -383,7 +433,14 @@ impl Executor {
             lease(&mut f, slot, *i, *uid, unit, root, self.now());
         }
         // The held reasons are written either way (`status` shows them).
-        write_pool(&path, &f).map_err(|e| refuse(JOB_UID_UNAVAILABLE, e))?;
+        let written = write_pool(&path, &f).map_err(|e| refuse(JOB_UID_UNAVAILABLE, e));
+        // Picked but not given (refused, or not recorded): not in flight.
+        if r.is_err() || written.is_err() {
+            if let Some(c) = picked {
+                lease_started(slot, c.index());
+            }
+        }
+        written?;
         r
     }
 
@@ -568,6 +625,23 @@ mod tests {
         assert_eq!(probe.cleared.borrow().as_slice(), &[61010], "its temp leftovers went first");
         // Other slots are their own pools.
         assert_eq!(pick(&mut f, 2, &probe), Ok(Choice::Fresh(0)));
+    }
+
+    /// M8.1 (11-07 review): between a lease and its unit, an index passes
+    /// every proof (no live unit, no process, an empty root); a second
+    /// start in that window never gets the same uid.
+    #[test]
+    fn an_index_being_started_is_never_handed_out_twice() {
+        let mut f = PoolFile::default();
+        let probe = Fake::default();
+        let mut fl = InFlight::default();
+        assert_eq!(fl.take(&mut f, 1, &probe), Ok(Choice::Fresh(0)));
+        used(&mut f, 1, 0, 61010);
+        assert_eq!(pick(&mut f, 1, &probe), Ok(Choice::Reuse(0)), "control: in the window every proof passes");
+        assert_eq!(fl.take(&mut f, 1, &probe), Ok(Choice::Fresh(1)), "the second start gets another uid");
+        assert_eq!(fl.take(&mut f, 2, &probe), Ok(Choice::Fresh(0)), "another slot is its own pool");
+        fl.done(1, 0);
+        assert_eq!(fl.take(&mut f, 1, &probe), Ok(Choice::Reuse(0)), "once its start is over, the proofs decide again");
     }
 
     #[test]

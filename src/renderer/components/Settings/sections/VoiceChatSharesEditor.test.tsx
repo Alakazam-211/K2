@@ -58,6 +58,6 @@ describe('VoiceChatSharesEditor', () => {
     )
     fireEvent.change(screen.getByLabelText('reviewer shared agents'), { target: { value: 'nope' } })
     fireEvent.click(screen.getByText('Save shares'))
-    await waitFor(() => expect(screen.getByText('unknown agent: nope')).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Couldn’t save what reviewer can use: unknown agent: nope. Nothing changed; try again.'))
   })
 })

@@ -70,6 +70,7 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   'components/Settings/shared/phone-pairing-api.ts': 'raw /cli fetch via getDaemonWs(scope) (its 401 password_invalid must not reach the shared re-auth path)',
   'components/Settings/sections/DomainsSection.tsx': 'raw /cli fetch via getDaemonWs(scope)',
   'components/Settings/sections/K2ConnectSection.tsx': 'raw /cli fetch via getDaemonWs(scope)',
+  'components/Settings/sections/admin-access-api.ts': 'Admin Access users/whoami via getDaemonWs(primaryScope()), moved out of K2ConnectSection',
   'hooks/useTunnelUrls.ts': 'raw /cli fetch via getDaemonWs(scope)',
   'lib/federation.ts': 'raw /cli fetch via getDaemonWs(scope)',
   'lib/daemon-settings.ts': 'settings fetch via getDaemonWs(scope)',
@@ -140,6 +141,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.11 vault send: the confirm for an agent's standing send grant is
   // about the window's own server's vault (Settings), like the vault rows.
   'components/Settings/sections/HandoffSendAllow.tsx',
+  'components/Settings/sections/AdminAccessDialogs.tsx',
+  'components/Settings/sections/AdminAccessPanel.tsx',
   'components/Settings/sections/ApiTokensSection.tsx',
   'components/Settings/sections/api-keys-api.ts',
   // 0.46.5 App phone pairing: an App's phone-app config is about the
@@ -184,6 +187,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.0: Settings → General → Your account reads this server's whoami/users.
   'components/Settings/sections/YourAccountRow.tsx',
   'components/Settings/sections/access-audit-api.ts',
+  // Admin Access: the people on the window's own server.
+  'components/Settings/sections/admin-access-api.ts',
   // 0.46.3: Settings → Apps → This server reads and prepares the window's
   // own server (the box doctor, prepare, engine install).
   'components/Settings/sections/apps-server-api.ts',

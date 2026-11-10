@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 // Admin Access (0.46.8, Rosson 2026-10-31): a password you set for someone
 // else is TEMPORARY by default — at their first sign-in K2 asks them to
-// choose their own (the shared PasswordRotationStep). The add form sends
-// mustChangePassword (on unless unticked) and shows the note; Reset
-// password shows the note and leaves the default to the daemon; a row with
-// a temporary password shows a "Temporary password" badge.
+// choose their own (the shared PasswordRotationStep). Add a person sends
+// mustChangePassword (on unless unticked) and its done step says what the
+// person does next; Reset password shows the note and leaves the default
+// to the daemon; a row with a temporary password shows a badge.
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 type Json = Record<string, unknown>
 
@@ -97,9 +97,26 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function fillAdd(username: string): void {
-  act(() => void fireEvent.change(screen.getByPlaceholderText('username'), { target: { value: username } }))
-  act(() => void fireEvent.change(screen.getByPlaceholderText('initial password'), { target: { value: 'pass-1234' } }))
+/** Open Add a person, type a username and (unless `make`) a password,
+ *  and add. Returns the dialog. */
+async function addPerson(username: string, opts: { make?: boolean; untick?: boolean } = {}): Promise<HTMLElement> {
+  await screen.findByTestId('temporary-password-gina')
+  act(() => void fireEvent.click(screen.getByRole('button', { name: 'Add person' })))
+  const dialog = screen.getByTestId('add-person-dialog')
+  const box = within(dialog).getByLabelText('Temporary password') as HTMLInputElement
+  expect(box.checked).toBe(true)
+  expect(within(dialog).getByTestId('new-user-temporary').textContent).toContain(MUST_CHANGE_NOTE)
+  if (opts.untick) {
+    act(() => void fireEvent.click(box))
+    expect(within(dialog).getByTestId('new-user-temporary').textContent).not.toContain(MUST_CHANGE_NOTE)
+  }
+  act(() => void fireEvent.change(within(dialog).getByLabelText('Username'), { target: { value: username } }))
+  if (!opts.make) {
+    act(() => void fireEvent.click(within(dialog).getByRole('radio', { name: 'Type one' })))
+    act(() => void fireEvent.change(within(dialog).getByLabelText('Password'), { target: { value: 'pass-1234' } }))
+  }
+  act(() => void fireEvent.click(within(dialog).getByRole('button', { name: 'Add person' })))
+  return screen.findByTestId('person-added-dialog')
 }
 
 function lastBody(path: string): Json {
@@ -108,6 +125,14 @@ function lastBody(path: string): Json {
   return hit.body
 }
 
+/** A row's "…" menu item. */
+function menuItem(user: string, name: RegExp): void {
+  act(() => void fireEvent.click(screen.getByRole('button', { name: `More actions for ${user}` })))
+  act(() => void fireEvent.click(screen.getByRole('menuitem', { name })))
+}
+
+const ASKS_TO_CHOOSE = 'K2 then asks them to choose their own password.'
+
 describe('Admin Access: temporary passwords', () => {
   it('a row with a temporary password shows the badge; others do not', async () => {
     render(<K2ConnectSection panel="people" />)
@@ -115,45 +140,47 @@ describe('Admin Access: temporary passwords', () => {
     expect(document.querySelector('[data-testid="temporary-password-z3thon"]')).toBeNull()
   })
 
-  it('the add form is temporary by default: sends mustChangePassword true and shows the note', async () => {
+  it('Add a person is temporary by default: sends mustChangePassword true and says what they do next', async () => {
     render(<K2ConnectSection panel="people" />)
-    await screen.findByTestId('temporary-password-gina')
-    const box = screen.getByLabelText('Temporary password') as HTMLInputElement
-    expect(box.checked).toBe(true)
-    expect(screen.getByTestId('new-user-temporary').textContent).toContain(MUST_CHANGE_NOTE)
-    fillAdd('anna')
-    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Add user' })))
-    expect((await screen.findByTestId('added-user-msg')).textContent).toBe(
-      `Added — share these credentials with anna. ${MUST_CHANGE_NOTE}`,
-    )
+    const done = await addPerson('anna')
+    expect(within(done).getByTestId('added-user-msg').textContent).toBe('Send anna these details yourself. Use the password you typed.')
+    expect(done.textContent).toContain(ASKS_TO_CHOOSE)
     expect(lastBody('/cli/users/add')).toEqual({ username: 'anna', password: 'pass-1234', mustChangePassword: true })
     expect((await screen.findByTestId('temporary-password-anna')).textContent).toBe('Temporary password')
   })
 
-  it('unticking Temporary password sends false and the note is not shown after adding', async () => {
+  it('unticking it sends false, and the done step does not promise a new password', async () => {
     render(<K2ConnectSection panel="people" />)
-    await screen.findByTestId('temporary-password-gina')
-    act(() => void fireEvent.click(screen.getByLabelText('Temporary password')))
-    expect(screen.getByTestId('new-user-temporary').textContent).not.toContain(MUST_CHANGE_NOTE)
-    fillAdd('bo')
-    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Add user' })))
-    expect((await screen.findByTestId('added-user-msg')).textContent).toBe('Added — share these credentials with bo.')
+    const done = await addPerson('bo', { untick: true })
+    expect(done.textContent).not.toContain(ASKS_TO_CHOOSE)
     expect(lastBody('/cli/users/add')).toEqual({ username: 'bo', password: 'pass-1234', mustChangePassword: false })
     await waitFor(() => expect(cli.fetches.filter((f) => f.path === '/cli/users' && f.method === 'GET').length).toBeGreaterThan(1))
     expect(document.querySelector('[data-testid="temporary-password-bo"]')).toBeNull()
+  })
+
+  it('Make one for me sends a password that passes the rules and shows that same password once', async () => {
+    render(<K2ConnectSection panel="people" />)
+    const done = await addPerson('cy', { make: true })
+    const sent = String(lastBody('/cli/users/add').password)
+    expect(sent.length).toBeGreaterThanOrEqual(16)
+    expect(sent).toMatch(/[a-z]/)
+    expect(sent).toMatch(/[A-Z]/)
+    expect(sent).toMatch(/[0-9]/)
+    expect(sent).toMatch(/[^A-Za-z0-9]/)
+    expect(within(done).getByTestId('one-time-secret').textContent).toBe(sent)
+    expect(within(done).getByTestId('added-user-msg').textContent).toContain('K2 won’t show this password again')
   })
 
   it('Reset password shows the note, sends no flag, and reports the temporary answer', async () => {
     render(<K2ConnectSection panel="people" />)
     await screen.findByTestId('temporary-password-gina')
     cli.users[1].mustChangePassword = false
-    const resets = screen.getAllByRole('button', { name: 'Reset password' })
-    // Rows are listed in the daemon's order: z3thon, gina.
-    act(() => void fireEvent.click(resets[1]))
-    const form = await screen.findByTestId('reset-form-gina')
+    menuItem('gina', /Reset password/)
+    const form = screen.getByTestId('reset-form-gina')
     expect(form.textContent).toContain(MUST_CHANGE_NOTE)
-    act(() => void fireEvent.change(screen.getByPlaceholderText('new password'), { target: { value: 'reset-123' } }))
-    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Set password' })))
+    act(() => void fireEvent.click(within(form).getByRole('radio', { name: 'Type one' })))
+    act(() => void fireEvent.change(within(form).getByLabelText('Password'), { target: { value: 'reset-123' } }))
+    act(() => void fireEvent.click(within(form).getByRole('button', { name: 'Reset password' })))
     expect((await screen.findByTestId('reset-password-msg')).textContent).toBe(`Password reset for gina. ${MUST_CHANGE_NOTE}`)
     expect(lastBody('/cli/users/set-password')).toEqual({ username: 'gina', password: 'reset-123' })
     expect((await screen.findByTestId('temporary-password-gina')).textContent).toBe('Temporary password')
@@ -163,12 +190,13 @@ describe('Admin Access: temporary passwords', () => {
     cli.linked = ['z3thon']
     render(<K2ConnectSection panel="people" />)
     await screen.findByTestId('temporary-password-gina')
-    const resets = screen.getAllByRole('button', { name: 'Reset password' })
-    act(() => void fireEvent.click(resets[0]))
-    const form = await screen.findByTestId('reset-form-z3thon')
-    await waitFor(() => expect(form.textContent).toContain('Your own login: you keep this password.'))
-    act(() => void fireEvent.change(screen.getByPlaceholderText('new password'), { target: { value: 'mine-1234' } }))
-    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Set password' })))
+    await waitFor(() => expect(screen.getByTestId('owner-account-tag-z3thon')).toBeTruthy())
+    menuItem('z3thon', /Reset password/)
+    const form = screen.getByTestId('reset-form-z3thon')
+    expect(form.textContent).toContain('Your own login: you keep this password.')
+    act(() => void fireEvent.click(within(form).getByRole('radio', { name: 'Type one' })))
+    act(() => void fireEvent.change(within(form).getByLabelText('Password'), { target: { value: 'mine-1234' } }))
+    act(() => void fireEvent.click(within(form).getByRole('button', { name: 'Reset password' })))
     expect((await screen.findByTestId('reset-password-msg')).textContent).toBe('Password reset for z3thon.')
     expect(document.querySelector('[data-testid="temporary-password-z3thon"]')).toBeNull()
   })

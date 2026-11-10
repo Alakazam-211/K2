@@ -1,7 +1,8 @@
 // Settings → Network → Tunnel / Connected Servers and Settings → Access →
-// Admin Access (sidebar; one K2 Server group before 0.45.7). Tunnel is one
-// column at the Settings content width, like General: status first, then
-// the account, addresses, policies and Advanced. Deep-link: `connections` →
+// Admin Access (sidebar; one K2 Server group before 0.45.7). Tunnel and
+// Admin Access are one column at the Settings content width, like General.
+// Tunnel: status first, then the account, addresses, policies and Advanced.
+// Admin Access: People, then Password rules. Deep-link: `connections` →
 // Connected Servers; `k2-connect` → Tunnel; `k2-access` → Admin Access.
 
 import React from 'react'
@@ -21,7 +22,7 @@ const PAGE: Record<ConnectTab, { title: string; blurb: string }> = {
   },
   people: {
     title: 'Admin Access',
-    blurb: 'Who can sign in to this server: people, roles and password rules.',
+    blurb: 'The people who can sign in to this server, what each one can do, and the rules for their passwords.',
   },
   servers: {
     title: 'Connected Servers',
@@ -44,7 +45,7 @@ export function K2ConnectSettingsShell(): React.JSX.Element {
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden p-6">
-      <div className={`flex-shrink-0 ${tab === 'tunnel' ? 'pb-5 max-w-[52rem]' : 'pb-3'}`}>
+      <div className={`flex-shrink-0 ${tab === 'servers' ? 'pb-3' : 'pb-5 max-w-[52rem]'}`}>
         <h2 className="type-title text-[var(--color-text-primary)]">
           {PAGE[tab].title}
         </h2>
@@ -86,12 +87,14 @@ export function K2ConnectSettingsShell(): React.JSX.Element {
             </div>
           </div>
         ) : (
-          /* Half-width column (same footprint as one side of Tunnel) — full
-             width made invite forms / user rows unwieldy. */
-          <div className="h-full min-h-0 overflow-y-auto pr-3 [scrollbar-gutter:stable] w-1/2 min-w-0">
-            <SectionErrorBoundary>
-              <K2ConnectSection panel="people" />
-            </SectionErrorBoundary>
+          /* Admin Access: one column at the Settings content width, like
+             Tunnel: People, then Password rules. */
+          <div className="h-full min-h-0 overflow-y-auto pr-3 pb-8 [scrollbar-gutter:stable]">
+            <div className="w-full max-w-[52rem]">
+              <SectionErrorBoundary>
+                <K2ConnectSection panel="people" />
+              </SectionErrorBoundary>
+            </div>
           </div>
         )}
       </div>

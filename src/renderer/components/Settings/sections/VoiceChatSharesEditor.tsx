@@ -8,10 +8,10 @@
 import { useEffect, useState } from 'react'
 import { SHARED_CONTEXT_NOTICE, splitShareList, type VoiceChatShares } from './connect-user-roles'
 
-const INPUT =
-  'flex-1 min-w-0 px-2 py-1 type-hint bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
-const BUTTON =
-  'flex-shrink-0 px-2 py-0.5 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-50'
+import { Button, Input } from '@/components/ui'
+import { SaveNote } from '../controls/SettingControls'
+
+const INPUT = 'flex-1 min-w-0 type-control'
 
 export interface VoiceChatSharesEditorProps {
   username: string
@@ -52,8 +52,8 @@ export function VoiceChatSharesEditor({ username, shares, onSave }: VoiceChatSha
     else setSaved(true)
   }
   return (
-    <div className="pl-7 space-y-1" data-testid={`voice-chat-shares-${username}`}>
-      <div className="type-hint text-[var(--color-text-muted)]">
+    <div className="mt-2 space-y-1.5" data-testid={`voice-chat-shares-${username}`}>
+      <div className="type-hint text-[var(--color-text-secondary)] leading-relaxed">
         Shared with {username}: they get their own conversation with each of these agents and can view these Gardens.
         Nothing else.
       </div>
@@ -63,8 +63,8 @@ export function VoiceChatSharesEditor({ username, shares, onSave }: VoiceChatSha
         </div>
       ) : null}
       <div className="flex items-center gap-2">
-        <span className="w-16 flex-shrink-0 type-hint text-[var(--color-text-muted)]">Agents</span>
-        <input
+        <span className="w-16 flex-shrink-0 type-hint text-[var(--color-text-secondary)]">Agents</span>
+        <Input
           className={INPUT}
           value={agents}
           placeholder="agent address, e.g. demo"
@@ -73,20 +73,24 @@ export function VoiceChatSharesEditor({ username, shares, onSave }: VoiceChatSha
         />
       </div>
       <div className="flex items-center gap-2">
-        <span className="w-16 flex-shrink-0 type-hint text-[var(--color-text-muted)]">Gardens</span>
-        <input
+        <span className="w-16 flex-shrink-0 type-hint text-[var(--color-text-secondary)]">Gardens</span>
+        <Input
           className={INPUT}
           value={gardens}
           placeholder="Garden id, e.g. g-1a2b3c4d"
           aria-label={`${username} shared Gardens`}
           onChange={(e) => setGardens(e.target.value)}
         />
-        <button type="button" className={BUTTON} disabled={busy || !dirty} onClick={() => void save()}>
+        <Button className="flex-shrink-0" disabled={busy || !dirty} onClick={() => void save()}>
           {busy ? 'Saving…' : 'Save shares'}
-        </button>
+        </Button>
       </div>
-      {error ? <div className="type-hint text-[var(--color-status-error-soft)]">{error}</div> : null}
-      {saved && !dirty ? <div className="type-hint text-[var(--color-text-muted)]">Saved</div> : null}
+      {error ? (
+        <div role="alert" className="type-hint text-[var(--color-status-error-soft)]">
+          Couldn’t save what {username} can use: {error.replace(/[.\s]+$/, '')}. Nothing changed; try again.
+        </div>
+      ) : null}
+      {saved && !dirty ? <SaveNote state="saved" /> : null}
     </div>
   )
 }

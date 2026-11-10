@@ -10,6 +10,7 @@
 // through `person_picture_changed`.
 
 import { useRef, useState } from 'react'
+import { Button } from '@/components/ui/Button'
 import type { ServerScope } from '@/kessel/server-scope'
 import {
   PICTURE_ACCEPT,
@@ -62,10 +63,12 @@ export function PersonPictureControl({ scope, login, person, look = 'buttons', t
     void run(async () => setPersonPicture(scope, await readPictureFile(file), person))
   }
 
+  // Type roles, not raw sizes (Settings type scale): a link reads as a
+  // hint, a button as a control on the shared button.
   const btn =
     look === 'links'
-      ? 'text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer disabled:opacity-60'
-      : 'px-2 py-0.5 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer disabled:opacity-60'
+      ? 'k2-focus type-hint text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:underline no-drag cursor-pointer disabled:opacity-60'
+      : undefined
 
   return (
     <span className="inline-flex flex-col gap-1 min-w-0" data-testid={testId}>
@@ -82,26 +85,31 @@ export function PersonPictureControl({ scope, login, person, look = 'buttons', t
             e.target.value = ''
           }}
         />
-        <button type="button" className={btn} disabled={busy} data-testid={`${testId}-choose`} onClick={() => input.current?.click()}>
-          {busy ? 'Saving…' : picture ? 'Change picture' : look === 'links' ? 'Add picture' : 'Upload picture'}
-        </button>
+        <Action className={btn} disabled={busy} data-testid={`${testId}-choose`} onClick={() => input.current?.click()}>
+          {busy ? 'Saving…' : picture ? 'Change picture' : look === 'links' || person ? 'Add picture' : 'Upload picture'}
+        </Action>
         {picture ? (
-          <button
-            type="button"
+          <Action
             className={btn}
             disabled={busy}
             data-testid={`${testId}-remove`}
             onClick={() => void run(() => clearPersonPicture(scope, person))}
           >
             Remove picture
-          </button>
+          </Action>
         ) : null}
       </span>
       {error ? (
-        <span role="alert" className="text-[11px] text-[var(--color-status-error-soft)]" data-testid={`${testId}-error`}>
+        <span role="alert" className="type-hint text-[var(--color-status-error-soft)]" data-testid={`${testId}-error`}>
           {error}
         </span>
       ) : null}
     </span>
   )
+}
+
+/** A link-look action (`className` given) or the shared button. */
+function Action({ className, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement>): React.JSX.Element {
+  if (className) return <button type="button" className={className} {...rest} />
+  return <Button {...rest} />
 }

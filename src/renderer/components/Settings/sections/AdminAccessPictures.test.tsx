@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // Admin Access: people's pictures (0.46.8, Rosson 2026-11-04). Each row
 // shows the person's picture on this server (initials until they have
-// one); "Add picture" / "Change picture" / "Remove picture" set or remove
+// one); in its "Name and picture…" dialog, "Add picture" / "Change
+// picture" / "Remove picture" set or remove
 // it through POST /cli/people/picture[/clear] with `person` (the daemon
 // applies Admin Access's rule and says why on a refusal); a change made
 // anywhere arrives as `person_picture_changed` and the row repaints.
@@ -115,6 +116,17 @@ function pick(login: string, file: File): void {
   act(() => void fireEvent.change(input, { target: { files: [file] } }))
 }
 
+/** Open someone's Name and picture dialog from their row's "…" menu. */
+function openPicture(login: string): void {
+  act(() => void fireEvent.click(screen.getByRole('button', { name: `More actions for ${login}` })))
+  act(() => void fireEvent.click(screen.getByRole('menuitem', { name: /Name and picture/ })))
+  screen.getByTestId(`name-form-${login}`)
+}
+
+function closeDialog(): void {
+  act(() => void fireEvent.click(screen.getByRole('button', { name: 'Cancel' })))
+}
+
 function fire(person: string, imageHash: string | null): void {
   act(() => {
     for (const fn of cli.pictureHandlers) fn({ kind: 'person_picture_changed', person, imageHash })
@@ -158,7 +170,10 @@ describe('Admin Access: people\'s pictures', () => {
     expect(pictureOf('z3thon')).toContain(jpeg('z3thon'))
     expect(hasPicture('gina')).toBe(false)
     expect(chip('gina').textContent).toBe('G')
+    openPicture('z3thon')
     expect(screen.getByTestId('user-picture-z3thon-choose').textContent).toBe('Change picture')
+    closeDialog()
+    openPicture('gina')
     expect(screen.getByTestId('user-picture-gina-choose').textContent).toBe('Add picture')
     expect(document.querySelector('[data-testid="user-picture-gina-remove"]')).toBeNull()
   })
@@ -166,6 +181,7 @@ describe('Admin Access: people\'s pictures', () => {
   it('Add picture sends the file for that person; the row shows the daemon\'s re-encode', async () => {
     render(<K2ConnectSection panel="people" />)
     await screen.findByTestId('user-chip-gina')
+    openPicture('gina')
     pick('gina', new File([Uint8Array.from(atob('iVBORw0KGgo='), (c) => c.charCodeAt(0))], 'me.png', { type: 'image/png' }))
     await waitFor(() => expect(cli.posts).toEqual([{ route: 'people/picture', body: { image: PNG, person: 'gina' } }]))
     await waitFor(() => expect(hasPicture('gina')).toBe(true))
@@ -176,6 +192,7 @@ describe('Admin Access: people\'s pictures', () => {
   it('Remove picture clears it for that person', async () => {
     render(<K2ConnectSection panel="people" />)
     await waitFor(() => expect(hasPicture('z3thon')).toBe(true))
+    openPicture('z3thon')
     act(() => void fireEvent.click(screen.getByTestId('user-picture-z3thon-remove')))
     await waitFor(() => expect(cli.posts).toEqual([{ route: 'people/picture/clear', body: { person: 'z3thon' } }]))
     await waitFor(() => expect(hasPicture('z3thon')).toBe(false))
@@ -186,6 +203,7 @@ describe('Admin Access: people\'s pictures', () => {
     cli.refuse = "you can change only your own picture (an Admin can change a Member's or an Admin's; only the owner can change an Owner's)"
     render(<K2ConnectSection panel="people" />)
     await waitFor(() => expect(hasPicture('z3thon')).toBe(true))
+    openPicture('z3thon')
     act(() => void fireEvent.click(screen.getByTestId('user-picture-z3thon-remove')))
     expect((await screen.findByTestId('user-picture-z3thon-error')).textContent).toBe(cli.refuse)
     expect(hasPicture('z3thon')).toBe(true)
@@ -194,6 +212,7 @@ describe('Admin Access: people\'s pictures', () => {
   it('a file of the wrong type or over 2 MB is refused before anything is sent', async () => {
     render(<K2ConnectSection panel="people" />)
     await screen.findByTestId('user-chip-gina')
+    openPicture('gina')
     pick('gina', new File(['<svg/>'], 'me.svg', { type: 'image/svg+xml' }))
     expect(screen.getByTestId('user-picture-gina-error').textContent).toBe('Pick a PNG, JPEG or WebP picture.')
     pick('gina', new File([new Uint8Array(2 * 1024 * 1024 + 1)], 'big.png', { type: 'image/png' }))

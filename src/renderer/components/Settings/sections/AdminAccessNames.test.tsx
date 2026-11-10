@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 // Admin Access: optional first and last names (0.46.0, Rosson 2026-10-17).
-// The add-user form sends them with POST /cli/users/add; a row shows the
-// real name beside the username; "Edit name" sets someone's names through
+// The Add a person dialog sends them with POST /cli/users/add; a row shows
+// the real name beside the username; "Name and picture…" sets someone's names through
 // POST /cli/people/name with `person` (the daemon applies the floors).
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 type Json = Record<string, unknown>
 
@@ -96,6 +96,27 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** The open Add a person dialog, after the list has loaded. */
+async function openAdd(): Promise<HTMLElement> {
+  await screen.findByTestId('user-real-name-z3thon')
+  act(() => void fireEvent.click(screen.getByRole('button', { name: 'Add person' })))
+  return screen.getByTestId('add-person-dialog')
+}
+
+function typeAdd(dialog: HTMLElement, fields: Record<string, string>): void {
+  act(() => void fireEvent.click(within(dialog).getByRole('radio', { name: 'Type one' })))
+  for (const [label, value] of Object.entries(fields)) {
+    act(() => void fireEvent.change(within(dialog).getByLabelText(label, { exact: true }), { target: { value } }))
+  }
+  act(() => void fireEvent.click(within(dialog).getByRole('button', { name: 'Add person' })))
+}
+
+/** A row's "…" menu item. */
+function menuItem(user: string, name: RegExp): void {
+  act(() => void fireEvent.click(screen.getByRole('button', { name: `More actions for ${user}` })))
+  act(() => void fireEvent.click(screen.getByRole('menuitem', { name })))
+}
+
 describe('Admin Access: first and last names', () => {
   it('a row shows the real name beside the username; no name shows the username alone', async () => {
     render(<K2ConnectSection panel="people" />)
@@ -104,14 +125,10 @@ describe('Admin Access: first and last names', () => {
     expect(document.querySelector('[data-testid="user-real-name-gina"]')).toBeNull()
   })
 
-  it('the add-user form sends the optional names with users/add', async () => {
+  it('the Add a person dialog sends the optional names with users/add', async () => {
     render(<K2ConnectSection panel="people" />)
-    await screen.findByTestId('user-real-name-z3thon')
-    act(() => void fireEvent.change(screen.getByPlaceholderText('username'), { target: { value: 'anna' } }))
-    act(() => void fireEvent.change(screen.getByPlaceholderText('initial password'), { target: { value: 'pass-1234' } }))
-    act(() => void fireEvent.change(screen.getByLabelText('New user first name'), { target: { value: ' Anna ' } }))
-    act(() => void fireEvent.change(screen.getByLabelText('New user last name'), { target: { value: 'Lee' } }))
-    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Add user' })))
+    const dialog = await openAdd()
+    typeAdd(dialog, { Username: 'anna', Password: 'pass-1234', 'First name': ' Anna ', 'Last name': 'Lee' })
     await waitFor(() => expect(cli.fetches.some((f) => f.path === '/cli/users/add')).toBe(true))
     const add = cli.fetches.find((f) => f.path === '/cli/users/add')
     if (!add) throw new Error('no users/add')
@@ -121,18 +138,16 @@ describe('Admin Access: first and last names', () => {
 
   it('names stay optional: no name fields → users/add without them', async () => {
     render(<K2ConnectSection panel="people" />)
-    await screen.findByTestId('user-real-name-z3thon')
-    act(() => void fireEvent.change(screen.getByPlaceholderText('username'), { target: { value: 'bo' } }))
-    act(() => void fireEvent.change(screen.getByPlaceholderText('initial password'), { target: { value: 'pass-1234' } }))
-    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Add user' })))
+    const dialog = await openAdd()
+    typeAdd(dialog, { Username: 'bo', Password: 'pass-1234' })
     await waitFor(() => expect(cli.fetches.some((f) => f.path === '/cli/users/add')).toBe(true))
     expect(cli.fetches.find((f) => f.path === '/cli/users/add')?.body).toEqual({ username: 'bo', password: 'pass-1234', mustChangePassword: true })
   })
 
-  it('Edit name sets someone else\'s names through people/name with person; empty clears', async () => {
+  it('Name and picture sets someone else\'s names through people/name with person; empty clears', async () => {
     render(<K2ConnectSection panel="people" />)
     await screen.findByTestId('user-real-name-z3thon')
-    act(() => void fireEvent.click(screen.getByTestId('edit-name-gina')))
+    menuItem('gina', /Name and picture/)
     screen.getByTestId('name-form-gina')
     act(() => void fireEvent.change(screen.getByLabelText('gina first name'), { target: { value: 'Gina' } }))
     act(() => void fireEvent.change(screen.getByLabelText('gina last name'), { target: { value: '  ' } }))
@@ -142,14 +157,16 @@ describe('Admin Access: first and last names', () => {
     expect(document.querySelector('[data-testid="name-form-gina"]')).toBeNull()
   })
 
-  it('a refused name keeps the form open and shows the error', async () => {
+  it('a refused name keeps the dialog open and says why', async () => {
     cli.nameError = 'only an Owner can change the owner\'s names'
     render(<K2ConnectSection panel="people" />)
     await screen.findByTestId('user-real-name-z3thon')
-    act(() => void fireEvent.click(screen.getByTestId('edit-name-z3thon')))
+    menuItem('z3thon', /Name and picture/)
     expect((screen.getByLabelText('z3thon first name') as HTMLInputElement).value).toBe('Rosson')
     act(() => void fireEvent.click(screen.getByRole('button', { name: 'Save name' })))
-    expect(await screen.findByText('only an Owner can change the owner\'s names')).toBeTruthy()
+    const err = await screen.findByTestId('dialog-error')
+    expect(err.textContent).toContain('Couldn’t save z3thon’s name.')
+    expect(err.textContent).toContain('The server said: only an Owner can change the owner\'s names.')
     expect(screen.getByTestId('name-form-z3thon')).toBeTruthy()
   })
 })

@@ -4,6 +4,7 @@
 
 import { WAS_VIEWER_NOTE } from './connect-user-roles'
 import { Tag } from '@/components/ui/Tag'
+import { Button } from '@/components/ui/Button'
 
 export function WasViewerNotice({
   username,
@@ -16,19 +17,19 @@ export function WasViewerNotice({
 }): React.JSX.Element {
   return (
     <div
-      className="flex items-center justify-between gap-3 px-2 py-1.5 border border-[var(--color-border)] bg-[var(--color-bg-elevated)]"
+      className="mt-2 flex items-center justify-between gap-4"
       data-testid={`was-viewer-${username}`}
     >
-      <span className="type-hint text-[var(--color-text-secondary)]">{WAS_VIEWER_NOTE}</span>
-      <button
-        type="button"
+      <span className="type-hint text-[var(--color-text-secondary)] leading-relaxed">{WAS_VIEWER_NOTE}</span>
+      <Button
+        variant="accent"
+        className="flex-shrink-0"
         disabled={busy}
         onClick={() => onEnableAsMember(username)}
         aria-label={`Enable ${username} as Member`}
-        className="flex-shrink-0 px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
       >
         {busy ? 'Enabling…' : 'Enable as Member'}
-      </button>
+      </Button>
     </div>
   )
 }

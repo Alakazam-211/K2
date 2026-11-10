@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { menuLayerForTrigger, SaveError, SaveNote, SETTING_ROW_HINT, SettingDropdown, SettingRow, SettingsGroup, useSaveStatus } from './SettingControls'
+import { menuLayerForTrigger, SaveError, SaveNote, SETTING_ROW_HINT, SettingDropdown, SettingRow, SettingsGroup, SettingsLoadState, useSaveStatus } from './SettingControls'
 
 function triggerUnder(...layers: Array<{ zIndex?: string; position?: string }>): HTMLElement {
   const root = document.createElement('div')
@@ -191,5 +191,21 @@ describe('Save confirmation', () => {
     render(<SaveHarness fail={{}} />)
     fireEvent.click(screen.getByRole('button', { name: 'Write' }))
     expect(screen.getByRole('alert').textContent).toContain('K2 couldn\u2019t reach this server')
+  })
+})
+
+describe('SettingsLoadState', () => {
+  afterEach(cleanup)
+  it('an error is an alert with the plain line first and the reason after', () => {
+    render(<SettingsLoadState kind="error" title={"Couldn\u2019t load your domains"} detail="database is locked." action={<button>Try again</button>}>Check this server is running.</SettingsLoadState>)
+    const el = screen.getByRole('alert')
+    expect(el.textContent).toBe('Couldn\u2019t load your domainsCheck this server is running.The server said: database is locked.Try again')
+  })
+  it('loading is a busy status; empty is a status with no reason line', () => {
+    const { unmount } = render(<SettingsLoadState kind="loading" title="Loading\u2026" />)
+    expect(screen.getByRole('status').getAttribute('aria-busy')).toBe('true')
+    unmount()
+    render(<SettingsLoadState kind="empty" title="No domains yet" detail="  " />)
+    expect(screen.getByRole('status').textContent).toBe('No domains yet')
   })
 })

@@ -20,6 +20,7 @@ import { floatMaterial } from '@/components/ui/float-material'
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Surface } from '@/components/ui/Surface'
+import { Spinner } from '@/components/ui/Spinner'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 /** Set inside a card group, so a row paints the card's padding and leaves its
@@ -169,6 +170,53 @@ export function SaveError({ state }: { state: SaveState }): React.JSX.Element | 
     <p role="alert" data-save-error="" className="type-hint text-[var(--color-status-error-soft)] mt-1 leading-relaxed max-w-[75ch]">
       Couldn&rsquo;t save: {state.error.replace(/[.\s]+$/, '')}. Nothing changed; try again.
     </p>
+  )
+}
+
+/** What a page or card says while its data is loading, after a read failed,
+ *  or when there is nothing yet. One card, the same on every page: a short
+ *  title saying what happened, a plain line under it, and the next step on
+ *  the right (Try again, Add …). Use it in place of the card the data would
+ *  fill, so the page keeps its shape. `detail` is the server's own reason,
+ *  shown quietly after the plain line, never instead of it. */
+export function SettingsLoadState({
+  kind,
+  title,
+  children,
+  detail,
+  action,
+  testId,
+}: {
+  kind: 'loading' | 'error' | 'empty'
+  title: string
+  children?: React.ReactNode
+  detail?: string | null
+  action?: React.ReactNode
+  testId?: string
+}): React.JSX.Element {
+  const reason = detail?.trim().replace(/[.\s]+$/, '')
+  return (
+    <Surface
+      chamfer
+      material="tile"
+      role={kind === 'error' ? 'alert' : 'status'}
+      aria-busy={kind === 'loading' || undefined}
+      data-load-state={kind}
+      data-testid={testId}
+      className="px-4 py-3"
+    >
+      <div className="flex items-center justify-between gap-6">
+        <div className="flex items-start gap-2 min-w-0">
+          {kind === 'loading' && <Spinner className="mt-0.5" />}
+          <div className="min-w-0">
+            <p className={kind === 'error' ? 'type-row text-[var(--color-status-error-soft)]' : SETTING_ROW_LABEL}>{title}</p>
+            {children && <p className={SETTING_ROW_HINT}>{children}</p>}
+            {reason && <p className={SETTING_ROW_HINT}>The server said: {reason}.</p>}
+          </div>
+        </div>
+        {action && <div className="flex items-center gap-2 flex-shrink-0">{action}</div>}
+      </div>
+    </Surface>
   )
 }
 

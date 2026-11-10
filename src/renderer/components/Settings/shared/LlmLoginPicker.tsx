@@ -22,7 +22,8 @@
 import React from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
 import { floatProps } from '@/components/SessionView/threadFloats'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useDismissOnOutside } from '@/hooks/useDismissOnOutside'
 import type { ServerScope } from '@/kessel/server-scope'
 import { SETTING_FIELD_WIDTH, SettingDropdown } from '../controls/SettingControls'
 import {
@@ -437,6 +438,8 @@ export function SessionTokenPicker({
 }): React.JSX.Element | null {
   const doc = useDoc(scope)
   const [open, setOpen] = useState(false)
+  const wrapper = useRef<HTMLDivElement>(null)
+  useDismissOnOutside(wrapper, open, useCallback(() => setOpen(false), []))
   const tool = chatTokenTool(doc, provider)
   const key = sessionKey || projectId || ''
   if (!doc || !tool || !key) return null
@@ -447,7 +450,7 @@ export function SessionTokenPicker({
   }
   const { value, workspaceDefaultId } = chatTokenState(doc, tool, target)
   return (
-    <div className="relative self-center flex items-center" data-testid="chat-login-picker">
+    <div ref={wrapper} className="relative self-center flex items-center" data-testid="chat-login-picker">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}

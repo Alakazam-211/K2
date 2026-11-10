@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useDismissOnOutside } from '@/hooks/useDismissOnOutside'
 import { floatMaterial } from '@/components/ui/float-material'
 import { ProgressiveHeaderBlur } from '@/components/ui'
 import { invoke } from '@tauri-apps/api/core'
@@ -255,8 +256,11 @@ function ChatHeader({
   const room = useRoom()
   const [historySessions, setHistorySessions] = useState<HistorySession[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
+  const closeHistory = useCallback(() => setHistoryOpen(false), [])
   // The history dropdown can hang over a Browser pane beside this one.
   const historyMenuRef = useRef<HTMLDivElement>(null)
+  const historyButtonRef = useRef<HTMLButtonElement>(null)
+  useDismissOnOutside([historyMenuRef, historyButtonRef], historyOpen, closeHistory)
   useBrowserOverlay({ active: historyOpen, ref: historyMenuRef, kind: 'menu' })
   const [historyEpoch, setHistoryEpoch] = useState(0)
 
@@ -405,7 +409,9 @@ function ChatHeader({
       {/* 0.37.12 — chat-history dropdown. Lets the user switch the
           pinned chat to a different past session (escape hatch for
           orphaned/deleted sessions or just to revisit). */}
+      <div className="relative self-center flex items-center">
       <button
+        ref={historyButtonRef}
         type="button"
         onClick={() => setHistoryOpen((v) => !v)}
         title="Switch pinned chat to a different past session (any agent)"
@@ -424,7 +430,7 @@ function ChatHeader({
         </svg>
       </button>
       {historyOpen && (
-        <div ref={historyMenuRef} {...floatMaterial('menu')} data-k2-float-menu="" className="absolute right-12 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl">
+        <div ref={historyMenuRef} {...floatMaterial('menu')} data-k2-float-menu="" className="absolute right-0 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl">
           <button
             type="button"
             data-testid="pinned-continue-new-chat"
@@ -516,6 +522,7 @@ function ChatHeader({
           </div>
         </div>
       )}
+      </div>
       <button
         type="button"
         {...floatProps(floating, 'round')}

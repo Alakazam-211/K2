@@ -14,12 +14,13 @@ use k2_daemon::test_harness;
 
 const OWNER_TOKEN: &str = "owner-token-ensure-cli-route";
 
-struct Resp {
-    status: u16,
-    body: String,
+pub(crate) struct Resp {
+    pub(crate) status: u16,
+    pub(crate) body: String,
 }
 
-fn http(port: u16, method: &str, path_and_query: &str) -> Resp {
+/// One HTTP/1.1 request to the test daemon (shared with `cli_status_route`).
+pub(crate) fn http(port: u16, method: &str, path_and_query: &str) -> Resp {
     let mut stream = StdTcpStream::connect(("127.0.0.1", port)).expect("connect to test daemon");
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))

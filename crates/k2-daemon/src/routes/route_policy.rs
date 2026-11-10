@@ -227,6 +227,8 @@ pub const ROUTES: &[Route] = &[
     // skills list, workspace session-get. (`/cli/inbox/count` mirrors
     // `/cli/inbox/list` and keeps its Member floor.)
     post("/cli/agents/build-launch", NoLogin),
+    // Which agent CLIs are installed (read only): ensure-cli's floor.
+    get("/cli/agents/cli-status", Member),
     post("/cli/agents/create", Member),
     post("/cli/agents/delegate", Member),
     post("/cli/agents/delete", Member),

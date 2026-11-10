@@ -41,6 +41,9 @@ pub use k2_client::login_path;
 // and the basename is missing from the spawn PATH. The HTTP handler
 // passes the fixed command table; tests pass a local script.
 pub mod ensure_cli;
+// Read-only twin of ensure_cli: which of those CLIs are installed, their
+// `--version` (short timeout, cached) and whether agents launch that file.
+pub mod cli_status;
 // Test-time agent spawn guard: `K2_TEST_AGENT_SHIM_DIR` shim-only
 // resolution + temp-HOME belt so `cargo test` can never exec the real
 // `claude` (which opened a browser OAuth login under a temp HOME).

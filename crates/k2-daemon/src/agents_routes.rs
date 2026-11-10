@@ -542,6 +542,37 @@ pub fn handle_agents_delegate(
     CliResponse::ok_json(serde_json::to_string(&out).unwrap_or_else(|_| "{}".into()))
 }
 
+/// GET /cli/agents/cli-status — which agent CLIs this server has. Read
+/// only: no install, no network. Body:
+///
+/// ```json
+/// {"ok": true, "cacheSecs": 60, "tools": [
+///   {"program": "claude", "installed": true, "version": "2.0.14",
+///    "path": "/home/me/.local/bin/claude", "launches": true, "error": null},
+///   {"program": "codex", "installed": true, "version": null,
+///    "path": "/usr/local/bin/codex", "launches": true,
+///    "error": "--version exited 1: …"},
+///   {"program": "gemini", "installed": false, "version": null,
+///    "path": null, "launches": false, "error": null}
+/// ]}
+/// ```
+///
+/// One row per [`k2_core::terminal::ensure_cli::HARNESSES`] entry, in
+/// that order. `installed` with an `error` is a broken binary (its
+/// `--version` failed or timed out); `launches` says whether an agent
+/// launch runs that same file. See [`k2_core::terminal::cli_status`].
+pub fn handle_cli_status() -> CliResponse {
+    let tools = k2_core::terminal::cli_status::cli_status();
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "cacheSecs": k2_core::terminal::cli_status::CACHE_TTL.as_secs(),
+            "tools": tools,
+        })
+        .to_string(),
+    )
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Task #578 extraction — agents-domain GET dispatch
 // ══════════════════════════════════════════════════════════════════════
@@ -786,6 +817,12 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // A GET that reaches this read chain must 405, not fall through
         // to the catch-all 404.
         "/cli/agents/ensure-cli" => CliResponse::method_not_allowed(),
+
+        // Read-only twin of ensure-cli: which agent CLIs are installed
+        // (`k2_core::terminal::cli_status`). Spawns `--version` probes
+        // (short timeout, cached), so the dispatcher's exact arm runs this
+        // on the blocking pool.
+        "/cli/agents/cli-status" => handle_cli_status(),
 
         // ── Agent launch + delegate (handlers above) ────────────────
         "/cli/agents/launch" => match need_project(params) {

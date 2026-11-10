@@ -20,6 +20,7 @@ fn runner_guard() {
 mod api_gate_integration;
 mod app_api_integration;
 mod contract_routes;
+mod cli_status_route;
 mod ensure_cli_route;
 mod refusal_registry;
 mod require_manage_refusal_integration;

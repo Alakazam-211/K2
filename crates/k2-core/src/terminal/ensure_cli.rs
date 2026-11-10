@@ -28,6 +28,12 @@ pub struct EnsureCliResult {
     pub installed: bool,
 }
 
+/// The agent CLIs K2 knows how to install: the list
+/// [`super::cli_status`] reports on. Every entry has a
+/// [`fixed_install_command`] (on Windows, all but `grok`); a test pins the
+/// two together.
+pub const HARNESSES: &[&str] = &["claude", "codex", "grok", "gemini"];
+
 /// Fixed installer for one basename. `None` for anything else — callers
 /// must not invent a command.
 #[cfg(not(windows))]
@@ -74,8 +80,30 @@ pub fn ensure_cli(program: &str) -> Result<EnsureCliResult, String> {
     ensure_cli_with_shell(program, shell, spawn_resolve_path)
 }
 
-fn spawn_resolve_path() -> String {
+/// The PATH agent spawns and installers run with (the enriched login-shell
+/// PATH, issue #15).
+pub(crate) fn spawn_resolve_path() -> String {
     login_path::augmented_path(&login_path::process_path())
+}
+
+/// Where `program` is on `path`, by the same rule [`ensure_cli`] uses to
+/// decide it is already installed: on Unix the first regular, executable
+/// file; on Windows cmd.exe's PATHEXT rule. A path (anything with a
+/// separator) is never looked up.
+pub fn find_installed(program: &str, path: &str) -> Option<std::path::PathBuf> {
+    #[cfg(unix)]
+    {
+        resolve_basename(program, path)
+    }
+    #[cfg(windows)]
+    {
+        super::win_cmd::which(program, path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (program, path);
+        None
+    }
 }
 
 /// Inner ensure. `shell_command` is what `/bin/sh -c` runs when the
@@ -419,6 +447,21 @@ mod tests {
         assert!(fixed_install_command("vim").is_none());
         assert!(fixed_install_command("claude --dangerously-skip-permissions").is_none());
         assert!(fixed_install_command("/usr/bin/claude").is_none());
+    }
+
+    #[test]
+    fn cli_install_harness_list_is_the_install_table() {
+        assert_eq!(HARNESSES, &["claude", "codex", "grok", "gemini"]);
+        for program in HARNESSES {
+            if cfg!(windows) && *program == "grok" {
+                assert!(fixed_install_command(program).is_none());
+                continue;
+            }
+            assert!(
+                fixed_install_command(program).is_some(),
+                "{program} is a harness without an installer"
+            );
+        }
     }
 
     #[test]

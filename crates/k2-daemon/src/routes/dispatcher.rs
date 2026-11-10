@@ -6529,6 +6529,33 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Read-only twin: which agent CLIs are installed. GET only (not on
+        // the POST allowlist, so a POST is 405 above). Same token gate as
+        // ensure-cli. The `--version` probes spawn processes (short
+        // timeout, cached), so the handler runs on the blocking pool, never
+        // an async worker; it is the `agents_routes` read-chain arm, so
+        // `cli::dispatch` serves the same body.
+        "/cli/agents/cli-status" if !is_post => {
+            let params =
+                super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query)
+                    .await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let r = tokio::task::spawn_blocking(move || {
+                crate::cli::dispatch("/cli/agents/cli-status", &params)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") })
+                    .to_string(),
+            });
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // K2 Connect host-awareness GAP — workspace skill / agent /
         // session / relations / heartbeat-flag / onboarding POST writes.
         // Each wraps the same k2_core fn the renderer's old LOCAL Tauri

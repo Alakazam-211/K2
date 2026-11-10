@@ -1557,13 +1557,6 @@ pub fn run() {
             // All routed daemon data; the renderer reaches it host-aware
             // via `/cli/git/*` on the active daemon.
             // Workspace Ops
-            commands::workspace_ops::workspace_split_pane,
-            commands::workspace_ops::workspace_close_pane,
-            commands::workspace_ops::workspace_open_document,
-            commands::workspace_ops::workspace_open_terminal,
-            commands::workspace_ops::workspace_new_tab,
-            commands::workspace_ops::workspace_close_tab,
-            commands::workspace_ops::workspace_arrange,
             // Phase 2 Unit 6 — `commands::chat_history::*` shims
             // deleted. Renderer hits `/cli/chat/*` on the daemon.
             // Plan B cleanup — `timer_*` command surface deleted. Routed

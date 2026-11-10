@@ -6,7 +6,6 @@ pub mod projects;
 // `/cli/*` on the active daemon. No host-only/lifecycle command remained
 // in any of these modules, so the whole files were removed.
 pub mod settings;
-pub mod workspace_ops;
 // Phase 2 Unit 2 — `assistant` command shims deleted. The renderer
 // hits `/cli/llm/*` on k2so-daemon directly; the daemon owns the
 // LLM worker subprocess + supervisor (timeout/RSS/queue/crash

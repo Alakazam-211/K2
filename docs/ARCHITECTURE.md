@@ -75,7 +75,6 @@ All `#[tauri::command]` functions grouped by domain:
 | `terminal.rs` | PTY lifecycle (create, write, resize, kill) |
 | `git.rs` | Repo info, branches, worktrees, changes |
 | `filesystem.rs` | Read dir, read/write files, open in Finder |
-| `workspace_ops.rs` | Split pane, close pane, open doc/terminal, arrange |
 | `settings.rs` | Get/update/reset key-value settings |
 | `project_config.rs` | Per-project config, run commands |
 
@@ -154,9 +153,6 @@ invoke("terminal_create")  →  terminal::terminal_create()
 Backend emits events via `app.emit()` for streaming data:
 
 - `terminal:data:{id}` -- PTY output bytes
-- `workspace:split-pane` -- Layout manipulation
-- `workspace:open-document` -- Open a file
-- `workspace:open-terminal` -- Open a terminal
 
 Frontend listens with `listen("event_name", callback)` from `@tauri-apps/api/event`.
 

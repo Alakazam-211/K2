@@ -190,7 +190,7 @@ export function NotePopover({
             placeholder={intent === 'question' ? 'Ask about this…' : 'What should change?'}
             rows={3}
             maxLength={2000}
-            className="w-full resize-none p-1 bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)]"
+            className="w-full resize-none p-1 rounded-[var(--radius-field-multiline)] bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)]"
           />
           {notice ? (
             <div role="status" className="text-[10px] text-[var(--color-text-secondary)]" data-testid="design-popover-notice">

@@ -402,7 +402,7 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
                 }}
                 rows={2}
                 placeholder={`Message ${name}`}
-                className="flex-1 resize-none rounded-[var(--radius-box)] border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-[13px] text-[var(--color-text-primary)] outline-none"
+                className="flex-1 resize-none rounded-[var(--radius-field-multiline)] border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-[13px] text-[var(--color-text-primary)] outline-none"
               />
               {draft.length === 0 ? (
                 // The stash, left of Send, only while the box is empty.

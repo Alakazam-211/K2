@@ -143,7 +143,7 @@ export function GitAccessSetupForm({
             spellCheck={false}
             rows={4}
             placeholder="-----BEGIN PRIVATE KEY----- (paste the .pem)"
-            className={`${fieldCls} font-mono`}
+            className={`${fieldCls} font-mono rounded-[var(--radius-field-multiline)]`}
           />
           <label className={`${mutedCls} flex items-center gap-1.5`}>
             Or choose the .pem file:

@@ -65,7 +65,7 @@ const TONE_CLASS: Record<'muted' | 'ok' | 'warn' | 'error', string> = {
 }
 
 const TEXTAREA_CLASS =
-  'w-full resize-y bg-[var(--color-bg)] text-xs text-[var(--color-text-primary)] px-2 py-1.5 border border-[var(--color-border)] rounded-[var(--radius-field)] outline-none focus:border-[var(--color-accent)]'
+  'w-full resize-y bg-[var(--color-bg)] text-xs text-[var(--color-text-primary)] px-2 py-1.5 border border-[var(--color-border)] rounded-[var(--radius-field-multiline)] outline-none focus:border-[var(--color-accent)]'
 
 export default function SendFeedbackDialog(): React.JSX.Element {
   const scope = useMemo(() => primaryScope(), [])

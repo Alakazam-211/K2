@@ -542,7 +542,7 @@ export function ChangesPane({ tabId, paneGroupId, itemId, data }: ChangesPanePro
           <div className="border-t border-[var(--color-border)] p-2">
             <textarea
               data-changes-commit-message=""
-              className="w-full resize-none border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-xs text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
+              className="w-full resize-none rounded-[var(--radius-field-multiline)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-xs text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
               placeholder={stagedCount > 0 ? 'Commit message (⌘/Ctrl+Enter)' : 'Stage files to commit'}
               rows={3}
               value={message}

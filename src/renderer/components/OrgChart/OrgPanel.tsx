@@ -40,7 +40,7 @@ function when(seconds: number): string {
 
 const muted = 'text-[var(--color-text-muted)]'
 const field =
-  'w-full resize-none border border-[var(--color-border)] bg-[var(--color-bg-inset)] px-2 py-1.5 type-row text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] rounded-[var(--radius-field)] disabled:opacity-70'
+  'w-full resize-none border border-[var(--color-border)] bg-[var(--color-bg-inset)] px-2 py-1.5 type-row text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] rounded-[var(--radius-field-multiline)] disabled:opacity-70'
 
 export function OrgPanel({
   org,

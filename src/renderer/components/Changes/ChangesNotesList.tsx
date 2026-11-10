@@ -69,7 +69,7 @@ function NoteRow(props: {
       ) : (
         <textarea
           aria-label="Edit note"
-          className="mt-1 w-full resize-none border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-1.5 py-1 text-xs text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+          className="mt-1 w-full resize-none rounded-[var(--radius-field-multiline)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-1.5 py-1 text-xs text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
           rows={3}
           value={editing}
           autoFocus

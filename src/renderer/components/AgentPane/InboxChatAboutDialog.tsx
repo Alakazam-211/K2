@@ -231,7 +231,7 @@ export function InboxChatAboutDialog({
             onChange={(e) => setNote(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder="Note for pinned Chat"
-            className="w-full min-h-[88px] resize-y bg-[var(--color-bg)] text-xs text-[var(--color-text-primary)] px-2 py-1.5 border border-[var(--color-border)] outline-none"
+            className="w-full min-h-[88px] resize-y rounded-[var(--radius-field-multiline)] bg-[var(--color-bg)] text-xs text-[var(--color-text-primary)] px-2 py-1.5 border border-[var(--color-border)] outline-none"
           />
           {error && (
             <div

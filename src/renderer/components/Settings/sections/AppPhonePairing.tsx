@@ -227,19 +227,19 @@ export function AppPhonePairing({ app }: { app: string }): React.JSX.Element {
               <div className="space-y-1" aria-label="Phone pairing setup">
                 <label className={secondary}>
                   iOS app ids (TEAMID.com.you.app), one per line
-                  <textarea aria-label="iOS app ids" className={field} rows={2} value={ios} onChange={(e) => setIos(e.target.value)} />
+                  <textarea aria-label="iOS app ids" className={`${field} rounded-[var(--radius-field-multiline)]`} rows={2} value={ios} onChange={(e) => setIos(e.target.value)} />
                 </label>
                 <label className={secondary}>
                   Android apps: package then SHA-256 fingerprints, one app per line
-                  <textarea aria-label="Android apps" className={field} rows={2} value={android} onChange={(e) => setAndroid(e.target.value)} />
+                  <textarea aria-label="Android apps" className={`${field} rounded-[var(--radius-field-multiline)]`} rows={2} value={android} onChange={(e) => setAndroid(e.target.value)} />
                 </label>
                 <label className={secondary}>
                   Webview origins (tauri://localhost, capacitor://localhost), if any
-                  <textarea aria-label="Webview origins" className={field} rows={1} value={origins} onChange={(e) => setOrigins(e.target.value)} />
+                  <textarea aria-label="Webview origins" className={`${field} rounded-[var(--radius-field-multiline)]`} rows={1} value={origins} onChange={(e) => setOrigins(e.target.value)} />
                 </label>
                 <label className={secondary}>
                   The App&apos;s other universal-link paths (/jobs/*), if any
-                  <textarea aria-label="Link paths" className={field} rows={1} value={paths} onChange={(e) => setPaths(e.target.value)} />
+                  <textarea aria-label="Link paths" className={`${field} rounded-[var(--radius-field-multiline)]`} rows={1} value={paths} onChange={(e) => setPaths(e.target.value)} />
                 </label>
                 <label className={secondary}>
                   App Store link

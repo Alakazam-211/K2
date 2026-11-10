@@ -252,7 +252,7 @@ function ValueField({
           placeholder="Paste the whole key, BEGIN and END lines included"
           rows={4}
           onChange={(e) => onPresence(e.currentTarget.value !== '')}
-          className={`${input} font-mono`}
+          className={`${input} font-mono rounded-[var(--radius-field-multiline)]`}
           style={{ WebkitTextSecurity: 'disc' } as React.CSSProperties}
           data-testid="vault-value-multiline"
         />

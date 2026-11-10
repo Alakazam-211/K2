@@ -6,6 +6,7 @@
 :root {
   --radius-box: 0px;
   --radius-field: 0px;
+  --radius-field-multiline: 0px;
   --radius-selector: 0px;
   --radius-pill: 0px;
   --radius-badge: 9999px;
@@ -151,6 +152,7 @@
 [data-style="bezel"] {
   --radius-box: 12px;
   --radius-field: 8px;
+  --radius-field-multiline: 8px;
   --radius-selector: 6px;
   --radius-pill: 9999px;
   --radius-badge: 9999px;
@@ -387,6 +389,7 @@
 [data-style="glass"] {
   --radius-box: 16px;
   --radius-field: 22px;
+  --radius-field-multiline: 12px;
   --radius-selector: 16px;
   --radius-pill: 999px;
   --radius-badge: 9999px;
@@ -985,9 +988,13 @@
 
 /* ── Controls still written by hand ─────────────────────────────────────
    Many buttons, inputs and dropdown triggers don't use the primitives yet.
-   They read the field radius here, so Glass has no square controls. */
-[data-style="glass"] :is(button[class~="border"], button[class~="bg-[var(--color-accent)]"], button[class~="bg-[var(--color-accent-fill)]"], select, textarea, input:not([type="checkbox"], [type="radio"], [type="range"])):not([data-zen-root] *, [data-k2-thread-zen] *) {
+   They read the field radius here, so Glass has no square controls. A
+   multi-line box reads the multi-line radius: a pill is for one line. */
+[data-style="glass"] :is(button[class~="border"], button[class~="bg-[var(--color-accent)]"], button[class~="bg-[var(--color-accent-fill)]"], select, input:not([type="checkbox"], [type="radio"], [type="range"])):not([data-zen-root] *, [data-k2-thread-zen] *) {
   border-radius: var(--radius-field);
+}
+[data-style="glass"] textarea:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  border-radius: var(--radius-field-multiline);
 }
 
 /* Filled controls, not outlines. A field or select inside a tile sits one step
@@ -1498,6 +1505,7 @@
 [data-style="glass-classic"] {
   --radius-box: 14px;
   --radius-field: 9px;
+  --radius-field-multiline: 9px;
   --radius-selector: 9999px;
   --radius-pill: 9999px;
   --radius-badge: 9999px;
@@ -1862,6 +1870,7 @@
 [data-style="terminal"] {
   --radius-box: 0px;
   --radius-field: 0px;
+  --radius-field-multiline: 0px;
   --radius-selector: 0px;
   --radius-pill: 0px;
   --radius-badge: 9999px;

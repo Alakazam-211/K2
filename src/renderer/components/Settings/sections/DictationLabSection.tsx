@@ -561,7 +561,7 @@ export function DictationLabSection(): React.JSX.Element {
           value={textareaValue}
           onChange={(e) => setTextareaValue(e.target.value)}
           rows={3}
-          className="w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-none"
+          className="w-full px-2 py-1 type-control rounded-[var(--radius-field-multiline)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-none"
         />
       </CaseRow>
 
@@ -682,7 +682,7 @@ export function DictationLabSection(): React.JSX.Element {
               readOnly
               rows={3}
               placeholder="Click 'Start listening' and speak. Final transcript accumulates here; the in-flight (italicized) interim is what WebKit's STT thinks you're saying right now."
-              className="w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-none"
+              className="w-full px-2 py-1 type-control rounded-[var(--radius-field-multiline)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-none"
             />
             <div className="type-hint text-[var(--color-text-muted)]">
               {speechListening

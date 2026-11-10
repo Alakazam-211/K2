@@ -249,7 +249,7 @@ export default function ChangesPanel(): React.JSX.Element {
       {staged.length > 0 && (
         <div className="border-t border-[var(--color-border)] p-2">
           <textarea
-            className="w-full bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-xs text-[var(--color-text-primary)] px-2 py-1.5 resize-none outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-text-muted)]"
+            className="w-full rounded-[var(--radius-field-multiline)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-xs text-[var(--color-text-primary)] px-2 py-1.5 resize-none outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-text-muted)]"
             placeholder="Commit message..."
             rows={3}
             value={commitMsg}

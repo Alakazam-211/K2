@@ -394,7 +394,7 @@ function RequestCard({
               placeholder="Why (optional; the requester reads this)"
               aria-label="Why deny"
               data-testid={`app-deny-note-${r.id}`}
-              className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control text-[var(--color-text-primary)]"
+              className="w-full rounded-[var(--radius-field-multiline)] border border-[var(--color-border)] bg-transparent px-2 py-1 type-control text-[var(--color-text-primary)]"
             />
             <div className="flex items-center gap-2">
               <Button disabled={busy} onClick={() => void deny()} data-testid={`app-deny-send-${r.id}`}>

@@ -501,7 +501,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
               onChange={(e) => setInstructions(e.target.value)}
               rows={5}
               placeholder="Check the inbox and summarise anything new."
-              className="w-full px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-y"
+              className="w-full px-2 py-1.5 type-control rounded-[var(--radius-field-multiline)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] resize-y"
             />
             <div className="type-hint text-[var(--color-text-muted)] mt-1">
               Required. What the agent does each time this fires. Saved as the heartbeat's <code>WAKEUP.md</code>.

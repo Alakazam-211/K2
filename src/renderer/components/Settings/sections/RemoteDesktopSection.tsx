@@ -174,7 +174,7 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
                 Their windows never show in the picture (macOS). One bundle id a line.
               </p>
               <textarea
-                className="w-full border border-[var(--color-border)] bg-[var(--color-bg)] p-2 font-mono text-xs text-[var(--color-text-primary)]"
+                className="w-full rounded-[var(--radius-field-multiline)] border border-[var(--color-border)] bg-[var(--color-bg)] p-2 font-mono text-xs text-[var(--color-text-primary)]"
                 rows={4}
                 aria-label="Hidden apps"
                 data-testid="remote-desktop-hide-apps"

@@ -742,13 +742,13 @@ export function DomainsSection(): React.JSX.Element {
           value={uploadCert}
           onChange={(e) => setUploadCert(e.target.value)}
           placeholder="-----BEGIN CERTIFICATE-----"
-          className="w-full mb-2 px-2 py-1 type-control font-mono h-16 bg-[var(--color-bg)] border border-[var(--color-border)]"
+          className="w-full mb-2 px-2 py-1 type-control font-mono h-16 rounded-[var(--radius-field-multiline)] bg-[var(--color-bg)] border border-[var(--color-border)]"
         />
         <textarea
           value={uploadKey}
           onChange={(e) => setUploadKey(e.target.value)}
           placeholder="-----BEGIN PRIVATE KEY-----"
-          className="w-full mb-2 px-2 py-1 type-control font-mono h-16 bg-[var(--color-bg)] border border-[var(--color-border)]"
+          className="w-full mb-2 px-2 py-1 type-control font-mono h-16 rounded-[var(--radius-field-multiline)] bg-[var(--color-bg)] border border-[var(--color-border)]"
         />
         <button
           type="button"

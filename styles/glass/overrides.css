@@ -255,9 +255,13 @@
 
 /* ── Controls still written by hand ─────────────────────────────────────
    Many buttons, inputs and dropdown triggers don't use the primitives yet.
-   They read the field radius here, so Glass has no square controls. */
-[data-style="glass"] :is(button[class~="border"], button[class~="bg-[var(--color-accent)]"], button[class~="bg-[var(--color-accent-fill)]"], select, textarea, input:not([type="checkbox"], [type="radio"], [type="range"])):not([data-zen-root] *, [data-k2-thread-zen] *) {
+   They read the field radius here, so Glass has no square controls. A
+   multi-line box reads the multi-line radius: a pill is for one line. */
+[data-style="glass"] :is(button[class~="border"], button[class~="bg-[var(--color-accent)]"], button[class~="bg-[var(--color-accent-fill)]"], select, input:not([type="checkbox"], [type="radio"], [type="range"])):not([data-zen-root] *, [data-k2-thread-zen] *) {
   border-radius: var(--radius-field);
+}
+[data-style="glass"] textarea:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  border-radius: var(--radius-field-multiline);
 }
 
 /* Filled controls, not outlines. A field or select inside a tile sits one step

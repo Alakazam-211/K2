@@ -127,6 +127,7 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--font-display': zen('font-family'),
   '--radius-box': 'calc(var(--zen-radius) / 2)',
   '--radius-field': 'calc(var(--zen-radius) / 2)',
+  '--radius-field-multiline': 'calc(var(--zen-radius) / 2)',
   '--radius-selector': 'calc(var(--zen-radius) / 2)',
   '--radius-pill': 'calc(var(--zen-radius) / 2)',
   '--radius-badge': 'calc(var(--zen-radius) / 2)',

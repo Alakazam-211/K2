@@ -184,6 +184,10 @@ final class Frames {
     private var scale = 1.0 / 3.0
     private var quality = 0.7
     private var lastEmit = 0.0
+    /// When the next frame is due. It moves on by one interval from when the
+    /// last frame was due, not from when that frame finished encoding, so
+    /// encode time and timer lateness don't stretch the frame interval.
+    private var nextDue = 0.0
     private var trailing = false
     private var seq: UInt64 = 0
 
@@ -234,6 +238,7 @@ final class Frames {
             self.fps = max(1, min(60, fps))
             self.scale = max(0.1, min(1, scale))
             self.quality = max(0.3, min(0.95, quality))
+            self.nextDue = 0   // the schedule restarts from this key frame
             if on { self.emit() }   // a key frame for the (re)joining viewer
         }
     }
@@ -245,9 +250,7 @@ final class Frames {
         guard streaming else { return }
         lastArrivalNs = nowNs()
         lastArrival = Double(lastArrivalNs) / 1e9
-        let interval = 1.0 / fps
-        let dt = lastArrival - lastEmit
-        if dt >= interval {
+        if lastArrival >= nextDue {
             emit()
         } else {
             scheduleTrailing()
@@ -255,20 +258,32 @@ final class Frames {
     }
 
     /// Coalesce: deliver the last state after a burst of motion, but never a
-    /// second frame inside one interval (a direct emit may have beaten the timer).
+    /// frame before it is due (a direct emit may have beaten the timer).
     private func scheduleTrailing() {
         guard !trailing else { return }
         trailing = true
-        let wait = max(0.001, 1.0 / fps - (now() - lastEmit))
+        let wait = max(0.001, nextDue - now())
         q.asyncAfter(deadline: .now() + wait) { [weak self] in
             guard let self else { return }
             self.trailing = false
             guard self.streaming, self.lastArrival > self.lastEmit else { return }
-            if now() - self.lastEmit >= 1.0 / self.fps - 0.001 { self.emit() } else { self.scheduleTrailing() }
+            if now() >= self.nextDue { self.emit() } else { self.scheduleTrailing() }
         }
     }
 
+    /// Moves the schedule on for a frame starting now. More than an interval
+    /// behind (a still screen, a stall), it restarts from now instead of
+    /// bursting to catch up. A frame ahead of schedule leaves it alone.
+    private func advanceSchedule() {
+        let t = now()
+        guard t >= nextDue else { return }
+        let interval = 1.0 / fps
+        nextDue += interval
+        if nextDue <= t { nextDue = t + interval }
+    }
+
     private func emit() {
+        advanceSchedule()
         // The screen this frame shows appeared at the last callback (a
         // (re)joining viewer's first frame may be older than that).
         let captured = lastArrivalNs != 0 ? lastArrivalNs : nowNs()

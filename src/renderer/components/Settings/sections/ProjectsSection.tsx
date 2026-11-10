@@ -1114,7 +1114,7 @@ export function ProjectsSection(): React.JSX.Element {
                     K2 couldn&rsquo;t read the workspace list from this server, so nothing is shown here. Try again in a moment. If it keeps failing, restart K2.
                   </div>
                 </div>
-                <Button variant="quiet" onClick={() => { void fetchProjects(); void checkList() }}>Try again</Button>
+                <Button variant="quiet" className="flex-shrink-0" onClick={() => { void fetchProjects(); void checkList() }}>Try again</Button>
               </div>
             ) : listState === 'loading' ? (
               <div className="px-4 py-5 type-row text-[var(--color-text-secondary)]" data-testid="workspaces-loading">
@@ -4551,7 +4551,7 @@ function ProjectSkillsPanel({ projectPath, onOpenEditor }: { projectPath: string
             <div className="type-row text-[var(--color-text-primary)]">Couldn&rsquo;t load this workspace&rsquo;s skills</div>
             <div className={SETTING_ROW_HINT}>K2 couldn&rsquo;t read the skills folder. Try again in a moment.</div>
           </div>
-          <Button variant="quiet" onClick={() => { setLoading(true); void fetchSkills() }}>Try again</Button>
+          <Button variant="quiet" className="flex-shrink-0" onClick={() => { setLoading(true); void fetchSkills() }}>Try again</Button>
         </div>
       ) : skillRows.length === 0 && !showCreate ? (
         <p className="px-4 py-3 type-row text-[var(--color-text-secondary)]">

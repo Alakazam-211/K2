@@ -17,6 +17,13 @@ describe('Slider', () => {
   })
 })
 
+describe('Button', () => {
+  it('never wraps its label', () => {
+    render(<Button>Try again</Button>)
+    expect(screen.getByRole('button', { name: 'Try again' }).className.split(' ')).toContain('whitespace-nowrap')
+  })
+})
+
 describe('Toggle', () => {
   it('reports its state and flips on click', () => {
     const onChange = vi.fn()

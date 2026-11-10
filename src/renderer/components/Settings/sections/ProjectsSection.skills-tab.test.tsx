@@ -79,8 +79,11 @@ describe('Skills tab', () => {
     const box = await screen.findByTestId('skills-load-error')
     expect(box.textContent).toContain('Couldn’t load')
     expect(screen.queryByText(/No skills yet/)).toBeNull()
+    // The button keeps its natural width beside the long hint: never wraps.
+    const retry = screen.getByRole('button', { name: 'Try again' })
+    expect(retry.className.split(' ')).toEqual(expect.arrayContaining(['flex-shrink-0', 'whitespace-nowrap']))
     fail = false
-    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    fireEvent.click(retry)
     await waitFor(() => expect(screen.getByText('backend-eng')).toBeTruthy())
     expect(screen.queryByTestId('skills-load-error')).toBeNull()
   })

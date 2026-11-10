@@ -1241,15 +1241,15 @@ html[data-style="terminal"] :where(button[data-k2-chamfer]:focus-visible:not([da
 /* Line-2 chips on agent rows (project tags, the Home machine chip) in K2's
    square Style: chamfered rectangles, like the presence chips and the
    Thread (Rosson 2026-10-16). The cut follows the Thread's rule for a 14px
-   control (`chamferCutFor(14)` = 3.5px). The element is clipped to the cut
+   control (`chamferCutFor(14)` = 3px). The element is clipped to the cut
    (so a hover fill is chamfered too) and `::before` draws the 1px edge as
-   an even-odd ring (outer cut 3.5px; inner contour 1px in, cut 3.5 − 0.414).
+   an even-odd ring (outer cut 3px; inner contour 1px in, cut 3 − 0.414).
    Rounded Styles (Glass) keep their look. */
 html[data-style="terminal"] [data-nav-chip] {
   position: relative;
   border-color: transparent !important;
   border-radius: 0 !important;
-  clip-path: polygon(3.5px 0, calc(100% - 3.5px) 0, 100% 3.5px, 100% calc(100% - 3.5px), calc(100% - 3.5px) 100%, 3.5px 100%, 0 calc(100% - 3.5px), 0 3.5px);
+  clip-path: polygon(3px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 3px 100%, 0 calc(100% - 3px), 0 3px);
 }
 html[data-style="terminal"] [data-nav-chip]::before {
   content: '';
@@ -1258,15 +1258,8 @@ html[data-style="terminal"] [data-nav-chip]::before {
   pointer-events: none;
   background: var(--nav-chip-edge, var(--color-accent));
   clip-path: polygon(evenodd,
-    3.5px 0, calc(100% - 3.5px) 0, 100% 3.5px, 100% calc(100% - 3.5px), calc(100% - 3.5px) 100%, 3.5px 100%, 0 calc(100% - 3.5px), 0 3.5px, 3.5px 0,
-    4.086px 1px, calc(100% - 4.086px) 1px, calc(100% - 1px) 4.086px, calc(100% - 1px) calc(100% - 4.086px), calc(100% - 4.086px) calc(100% - 1px), 4.086px calc(100% - 1px), 1px calc(100% - 4.086px), 1px 4.086px, 4.086px 1px);
-}
-
-/* Person chips under 24px in K2's square Style take the same cut as every
-   small control (`chamferCutFor`; PresenceChip sets `--k2-chip-cut` on each
-   clipped layer). 24px and up, Glass and Gardens keep the inline 20% corners. */
-html[data-style="terminal"] :is([data-presence-chip], [data-presence-more]):not([data-zen-root] *) > span {
-  clip-path: polygon(var(--k2-chip-cut, 20%) 0, calc(100% - var(--k2-chip-cut, 20%)) 0, 100% var(--k2-chip-cut, 20%), 100% calc(100% - var(--k2-chip-cut, 20%)), calc(100% - var(--k2-chip-cut, 20%)) 100%, var(--k2-chip-cut, 20%) 100%, 0 calc(100% - var(--k2-chip-cut, 20%)), 0 var(--k2-chip-cut, 20%)) !important;
+    3px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 3px 100%, 0 calc(100% - 3px), 0 3px, 3px 0,
+    3.586px 1px, calc(100% - 3.586px) 1px, calc(100% - 1px) 3.586px, calc(100% - 1px) calc(100% - 3.586px), calc(100% - 3.586px) calc(100% - 1px), 3.586px calc(100% - 1px), 1px calc(100% - 3.586px), 1px 3.586px, 3.586px 1px);
 }
 
 /* Design note tiles (NoteTray, Rosson 2026-10-16) in K2's square Style:
@@ -1466,7 +1459,7 @@ html:not([data-style="terminal"]) .k2-radio:checked {
   --k2-sw-w: var(--control-switch-width);
   --k2-sw-h: var(--control-switch-height);
   --k2-sw-k: var(--control-switch-knob);
-  --k2-sw-cut: 5px;
+  --k2-sw-cut: 4px;
   --k2-ch-cut: var(--k2-sw-cut);
   width: var(--k2-sw-w);
   height: var(--k2-sw-h);
@@ -1483,7 +1476,7 @@ html:not([data-style="terminal"]) .k2-radio:checked {
   --k2-sw-w: var(--control-switch-sm-width);
   --k2-sw-h: var(--control-switch-sm-height);
   --k2-sw-k: var(--control-switch-sm-knob);
-  --k2-sw-cut: 3.5px;
+  --k2-sw-cut: 3px;
 }
 .k2-switch[aria-checked="true"] {
   background-color: var(--color-accent);
@@ -1572,7 +1565,7 @@ html[data-style="terminal"] .k2-switch:not([data-zen-root] *, [data-k2-thread-ze
   cursor: pointer;
 }
 html[data-style="terminal"] .k2-slider::-webkit-slider-thumb {
-  clip-path: polygon(2.5px 0, calc(100% - 2.5px) 0, 100% 2.5px, 100% calc(100% - 2.5px), calc(100% - 2.5px) 100%, 2.5px 100%, 0 calc(100% - 2.5px), 0 2.5px);
+  clip-path: polygon(2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px);
 }
 .k2-slider:hover:not(:disabled)::-webkit-slider-thumb { filter: brightness(1.15); }
 .k2-slider:focus-visible::-webkit-slider-thumb {

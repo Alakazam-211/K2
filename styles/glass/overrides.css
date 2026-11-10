@@ -656,8 +656,8 @@
 
 /* Short dividers between unselected tabs, the top bar's colour and size (a
    size smaller in a split pane's strip). None beside the selected tab, a
-   hovered pill or a dragged tab, or at the end of the row. Drawn in the 2px
-   gap, so they take no width. */
+   hovered pill or a dragged tab, or after the last tab (+ draws that one,
+   below). Drawn in the 2px gap, so they take no width. */
 [data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id]):not([data-selected]):not([data-zen-root] *)::after {
   content: "";
   position: absolute;
@@ -671,6 +671,24 @@
 }
 [data-style="glass"] [data-pane-tab-bar] [data-pane-tab-id]:not([data-selected]):not([data-zen-root] *)::after { height: 14px; }
 [data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id]):is(:last-child, :hover, [data-dragging], :has(+ [data-selected]), :has(+ :hover), :has(+ [data-dragging])):not([data-selected]):not([data-zen-root] *)::after { content: none; }
+/* The same divider between the last tab and +, centred in the space between
+   them (the scroller's end padding and the strip's gap), so it takes no width.
+   None while the tabs overflow and + docks at the strip's right edge, beside a
+   selected, hovered or dragged last tab, while + is hovered, or with no tabs. */
+[data-style="glass"] [data-room-tab-bar] > [data-tab-add]:not([data-zen-root] *) { position: relative; }
+[data-style="glass"] [data-room-tab-bar] > [data-tab-add][data-tabs-overflow="false"]:not([data-zen-root] *)::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: calc(-0.5 * (var(--k2-wave-r, 8px) + 2px) - 0.5px);
+  width: 1px;
+  height: 16px;
+  background: var(--color-divider);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+[data-style="glass"] [data-room-tab-bar] > [data-tab-scroller]:is(:not(:has(> [data-tab-id])), :has(> [data-tab-id]:last-child:is([data-selected], :hover, [data-dragging]))) + [data-tab-add]:not([data-zen-root] *)::before,
+[data-style="glass"] [data-room-tab-bar] > [data-tab-add]:hover:not([data-zen-root] *)::before { content: none; }
 
 /* The status badge's mask sits on whatever is behind the tab's slot. */
 [data-style="glass"] :is([data-room-tab-bar] [data-tab-id], [data-pane-tab-id]) :is([data-tab-close-slot], [data-tab-status-slot], [data-pane-tab-close-slot]):not([data-zen-root] *) {

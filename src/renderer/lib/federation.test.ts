@@ -110,8 +110,16 @@ function installFetch(opts: {
   remoteTooOld?: boolean
   /** The code the REMOTE computes at `pair/v2/verify` (default matches). */
   remoteSas?: string
+  /** The REMOTE's confirm answers 200 but leaves its row as it was (a
+   *  half-finished re-pair). */
+  remoteConfirmNoop?: boolean
 }): Recorded[] {
   const recorded: Recorded[] = []
+  // The peer lists change on a confirm, like a real daemon's store.
+  const peers = {
+    local: [...((opts.localPeers ?? []) as Array<Record<string, unknown>>)],
+    remote: [...((opts.remotePeers ?? []) as Array<Record<string, unknown>>)],
+  }
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const u = new URL(url)
     const isLocal = u.host === '127.0.0.1:9000'
@@ -143,7 +151,7 @@ function installFetch(opts: {
       )
     }
     if (path === '/cli/federation/peers') {
-      return ok({ peers: isLocal ? opts.localPeers ?? [] : opts.remotePeers ?? [] })
+      return ok({ peers: isLocal ? peers.local : peers.remote })
     }
     if (path === '/cli/federation/pair/request') {
       const pair = (body ?? {}) as Record<string, unknown>
@@ -189,6 +197,13 @@ function installFetch(opts: {
       return ok({ sas: opts.remoteSas ?? '424242', peer_fingerprint: 'LOCALFP' })
     }
     if (path === '/cli/federation/pair/confirm') {
+      const fp = String((body as Record<string, unknown>)?.fingerprint ?? '')
+      if (!(opts.remoteConfirmNoop && !isLocal)) {
+        const list = isLocal ? peers.local : peers.remote
+        const row = list.find((p) => p.fingerprint === fp)
+        if (row) Object.assign(row, { trust: 'trusted', pairing_version: 2 })
+        else list.push({ fingerprint: fp, trust: 'trusted', pairing_version: 2 })
+      }
       return ok({ ok: true })
     }
     // Reverse-row resolution: roster comes from the LOCAL seam, paths from REMOTE.
@@ -355,6 +370,28 @@ describe('autoPairWithHost', () => {
     })
     await autoPairWithHost('rpm.k2.dev', { repair: true })
     expect(rec.filter((r) => r.url.includes('/cli/federation/pair/confirm'))).toHaveLength(2)
+  })
+
+  it('upgrades a v1 pairing on a plain Pair / Check pairing click (no repair flag)', async () => {
+    // "Check pairing" on a saved server used to return here with success
+    // while both rows stayed on the older code (0.46.11 bug).
+    const rec = installFetch({
+      localPeers: [{ fingerprint: 'REMOTEFP', trust: 'trusted', pairing_version: 1 }],
+      remotePeers: [{ fingerprint: 'LOCALFP', trust: 'trusted', pairing_version: 2 }],
+    })
+    await autoPairWithHost('rpm.k2.dev')
+    expect(rec.filter((r) => r.url.includes('/cli/federation/pair/confirm'))).toHaveLength(2)
+  })
+
+  it('fails loud when a side still shows the older code after the confirms', async () => {
+    installFetch({
+      localPeers: [{ fingerprint: 'REMOTEFP', trust: 'trusted', pairing_version: 1 }],
+      remotePeers: [{ fingerprint: 'LOCALFP', trust: 'trusted', pairing_version: 1 }],
+      remoteConfirmNoop: true,
+    })
+    await expect(autoPairWithHost('rpm.k2.dev', { repair: true })).rejects.toThrow(
+      /did not finish on "rpm\.k2\.dev"/,
+    )
   })
 
   it('is idempotent — no pairing when both directions are already trusted', async () => {
@@ -911,3 +948,4 @@ describe('the federated agent picker with nothing to show (0.46.1)', () => {
     expect(note).toContain('Let agents on other servers message this agent')
   })
 })
+

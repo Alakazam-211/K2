@@ -124,6 +124,7 @@ describe('Heartbeat S4: the drawer folder stays room-scoped', () => {
     expect(folder).toEqual([
       'components/HeartbeatsPanel/HeartbeatEntry.tsx',
       'components/HeartbeatsPanel/HeartbeatsPanel.tsx',
+      'components/HeartbeatsPanel/RemindersList.tsx',
     ])
     const offenders: string[] = []
     for (const f of folder) {

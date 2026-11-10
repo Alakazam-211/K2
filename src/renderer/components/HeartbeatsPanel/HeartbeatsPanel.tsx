@@ -5,6 +5,7 @@ import { useSettingsStore } from '@/stores/settings'
 import type { HeartbeatEntry } from '@/stores/heartbeat-sessions'
 import { IconAutonomous } from '@/components/icons/IconAutonomous'
 import { HeartbeatEntryRow } from './HeartbeatEntry'
+import { RemindersList } from './RemindersList'
 import { SectionManageCog } from '@/components/WorkspacePanel/SectionManageCog'
 import { scopedKey } from '@/kessel/server-scope'
 
@@ -198,6 +199,7 @@ export function HeartbeatsPanel(): React.JSX.Element {
         </div>
       ) : (
         <div className="space-y-1">
+          {projectPath && <RemindersList scope={room.scope} projectPath={projectPath} manage={false} refreshKey={active} />}
           {/* Active sections — render in display priority order so live work
               sits at the top of the panel where it's most visible. */}
           {live.length > 0 && (

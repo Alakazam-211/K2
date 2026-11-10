@@ -1,3 +1,4 @@
+import { OwnerTimezoneRow } from './OwnerTimezoneRow'
 import React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
@@ -390,6 +391,9 @@ export function GeneralSection(): React.JSX.Element {
             "Your name" is gone: the owner's name is the picked account's
             first and last name (profile modal, Admin Access). */}
         <div data-settings-group="you" data-testid="general-you-group">
+          <div className="pb-2">
+            <OwnerTimezoneRow />
+          </div>
           <h3 className="type-section uppercase tracking-wider text-[var(--color-text-muted)] m-0 mb-1">You</h3>
           <YourAccountRow />
         </div>

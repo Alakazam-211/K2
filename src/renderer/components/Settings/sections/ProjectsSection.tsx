@@ -44,6 +44,7 @@ import remarkGfm from 'remark-gfm'
 import { CodeEditor } from '@/components/FileViewerPane/CodeEditor'
 import { CustomThemeCreator } from '../CustomThemeCreator'
 import { AVATAR_ROUND, SETTING_FIELD_WIDTH, SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingDropdown, SettingRow, SettingSwitchRow, SettingsGroup } from '../controls/SettingControls'
+import { RemindersList } from '@/components/HeartbeatsPanel/RemindersList'
 import { showContextMenu } from '@/lib/context-menu'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import type { SettingEntry } from '../searchManifest'
@@ -1840,6 +1841,9 @@ function ProjectDetail({
             <div className="flex-1 min-h-0 flex flex-row border border-[var(--color-border)]">
               <div className="flex-1 min-w-0 min-h-0 flex flex-col border-r border-[var(--color-border)]">
                 <div className="flex-1 min-h-0 overflow-y-auto p-3 [scrollbar-gutter:stable]">
+                  <div className="pb-3">
+                    <RemindersList scope={primaryScope()} projectPath={project.path} manage />
+                  </div>
                   <PrimaryRoom>
                     <HeartbeatsPanel
                       key={`hb-${hbRefreshNonce}`}

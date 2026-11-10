@@ -155,6 +155,7 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/DomainsSection.tsx',
   'components/Settings/sections/FanoutConfirmModal.tsx',
   'components/Settings/sections/GeneralSection.tsx',
+  'components/Settings/sections/OwnerTimezoneRow.tsx',
   'components/Settings/sections/HeartbeatsSection.tsx',
   'components/Settings/sections/K2ConnectSection.tsx',
   'components/Settings/sections/LocalGrokBotsSection.tsx',

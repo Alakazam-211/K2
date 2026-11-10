@@ -46,6 +46,9 @@
 //! - [`box_backup`]: what the box's own backup client (`k2-backup`,
 //!   restic) is set to carry (protocol 13, `namespaces.sewboxbackup`): its
 //!   fixed config paths and the read-only facts the helper answers.
+//! - [`sew_recording`]: Sew's recorder and transcriber sidecars and the
+//!   speech model (protocol 15, `namespaces.sewrecording`): the staging
+//!   paths, the model pin, the install input and Sew's recording argv.
 
 pub mod apps;
 pub mod box_backup;
@@ -62,6 +65,7 @@ pub mod pg_named;
 /// Live dual-run of one database (protocol 10, `namespaces.pgdual`).
 pub mod pg_dual;
 pub mod sew;
+pub mod sew_recording;
 pub mod podman;
 pub mod sig;
 pub mod stalwart;

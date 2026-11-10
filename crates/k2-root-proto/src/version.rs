@@ -113,9 +113,16 @@
 //!   `walSpoolBytes`; and per-App database ports in the `k2app` table
 //!   (`apps nft apply … per-app` renders `k2app_v6`, `apps nft app … --db
 //!   <ports>|none`), whose band form becomes daemon-only. All under
-//!   `namespaces.pgnamed`, [`PGNAMED_MIN_PROTOCOL`]. Another 0.46.11 lane
-//!   that needs a helper change joins 15 here with its own namespace flag;
-//!   never 16 before 15 ships.
+//!   `namespaces.pgnamed`, [`PGNAMED_MIN_PROTOCOL`].
+//!   Also Sew's recorder install (K-a, `k2 hostchat recording`):
+//!   `engine sew recording stage|install|status|plan|upgrade|uninstall`
+//!   ([`crate::sew_recording`]: the pinned `sew-recorder` and
+//!   `sew-transcriber` tarballs and the pinned speech model staged by
+//!   sha256, the model name as JSON on stdin, Sew's own `sew recording …`
+//!   steps with `--i-am-k2`), under `namespaces.sewrecording`,
+//!   [`SEW_RECORDING_MIN_PROTOCOL`]; a 14 helper refuses that argv.
+//!   Another 0.46.11 lane that needs a helper change joins 15 here with its
+//!   own namespace flag; never 16 before 15 ships.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -168,6 +175,9 @@ pub const SEW_TUNNEL_CLEAR_MIN_PROTOCOL: u32 = 14;
 /// true`: a 14 helper refuses `<M>/<name>`, `per-app` and `--db` on argv,
 /// so the daemon asks for the update before it sends any of them.
 pub const PGNAMED_MIN_PROTOCOL: u32 = 15;
+/// Sew's recorder install (`engine sew recording …`, 0.46.11 K-a). Gated on
+/// this AND `namespaces.sewrecording == true`: a 14 helper refuses the argv.
+pub const SEW_RECORDING_MIN_PROTOCOL: u32 = 15;
 /// `engine sew mirror-dir` (0.46.8, SW-8 keyring mirror folder). Gated on
 /// this AND `namespaces.sewmirror == true`.
 pub const SEW_MIRROR_DIR_MIN_PROTOCOL: u32 = 12;
@@ -356,6 +366,13 @@ mod tests {
         assert_eq!(SEW_MIN_PROTOCOL, 7);
         assert_eq!(PROTOCOL, 15, "protocol 15 = 0.46.11's one bump (named clusters, per-App db ports); 14 = 0.46.10's (the tunnel move's clears)");
         assert_eq!(PGNAMED_MIN_PROTOCOL, 15, "named clusters join 0.46.11's one bump");
+        assert_eq!(SEW_RECORDING_MIN_PROTOCOL, 15, "the recorder install joins 0.46.11's one bump");
+        for tail in ["stage", "install", "status", "plan", "upgrade", "uninstall"] {
+            assert!(
+                crate::verbs::catalog().iter().any(|v| v.argv() == ["engine", "sew", "recording", tail]),
+                "protocol 15 carries engine sew recording {tail}"
+            );
+        }
         assert_eq!(SEW_TUNNEL_CLEAR_MIN_PROTOCOL, 14, "the tunnel move's clears join 0.46.10's one bump");
         assert_eq!(SEW_BOX_BACKUP_MIN_PROTOCOL, 13, "box-backup joins 0.46.9's one bump");
         assert!(

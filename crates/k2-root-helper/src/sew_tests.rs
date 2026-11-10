@@ -27,6 +27,15 @@ fn old_tarball() -> Vec<u8> {
 fn media_tarball() -> Vec<u8> {
     fixture("sew-media-0.0.2-x86_64-unknown-linux-gnu.tar.gz")
 }
+fn recorder_tarball() -> Vec<u8> {
+    fixture("sew-recorder-0.0.2-x86_64-unknown-linux-gnu.tar.gz")
+}
+fn transcriber_tarball() -> Vec<u8> {
+    fixture("sew-transcriber-0.0.2-x86_64-unknown-linux-gnu.tar.gz")
+}
+fn asr_model() -> Vec<u8> {
+    fixture("sew-asr-test-q8_0.gguf")
+}
 
 /// The `sew` member of a fixture tarball.
 fn member(tarball: &[u8], name: &str) -> Vec<u8> {
@@ -93,6 +102,7 @@ fn version_answers_the_current_protocol_with_the_sew_namespace_and_pin() {
     // 7 brought `engine sew`; 8 is 0.46.1's helper changes (protocols are
     // additive, so the Sew namespace is still here).
     assert_eq!(v["protocol"], 15, "14 was 0.46.10's one bump; 15 is 0.46.11's (additive)");
+    assert_eq!(v["namespaces"]["sewrecording"], true, "the recorder install (0.46.11)");
     assert_eq!(v["namespaces"]["sewtunnelclear"], true, "the tunnel move's clears (0.46.10)");
     assert_eq!(v["namespaces"]["sewboxbackup"], true, "box-backup (0.46.9)");
     assert_eq!(v["namespaces"]["sewreconf"], true, "install reconfigure (0.46.6)");
@@ -208,6 +218,9 @@ fn unreleased_pin_refuses_every_install_verb_before_any_effect() {
         (vec!["engine", "sew", "upgrade", "accept-binary", "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385"], vec![]),
         (vec!["engine", "sew", "media", "install"], br#"{"public_url":"wss://voice.box.k2.dev"}"#.to_vec()),
         (vec!["engine", "sew", "media", "upgrade"], vec![]),
+        (vec!["engine", "sew", "recording", "stage"], recorder_tarball()),
+        (vec!["engine", "sew", "recording", "install"], br#"{"model":"test-q8_0"}"#.to_vec()),
+        (vec!["engine", "sew", "recording", "upgrade"], vec![]),
     ];
     for (argv, stdin) in cases {
         let o = t.call_in(&argv, &stdin);
@@ -2256,4 +2269,248 @@ fn rollback_never_lands_on_a_test_build_or_an_accepted_binary() {
             }
         }
     }
+}
+
+// ── recording (protocol 15, 0.46.11 K-a) ─────────────────────────────────
+
+use k2_root_proto::sew_recording as rec;
+
+fn stage_all(t: &T) {
+    // The distro's /usr/share (the notices go under /usr/share/doc).
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
+    for blob in [recorder_tarball(), transcriber_tarball(), asr_model()] {
+        ok(&t.call_in(&["engine", "sew", "recording", "stage"], &blob));
+    }
+}
+
+/// PRD §8 K-a: a blob whose sha256 isn't this build's pin is refused
+/// before it is written (and before anything of Sew runs); the pinned
+/// sidecars and model stage 0600. A model one byte off is a hard failure
+/// (Kessel R28): nothing staged, no other model tried.
+#[test]
+fn recording_stage_refuses_an_unpinned_sha256_and_stages_only_the_pins() {
+    let t = box_root();
+    with_pin_installed(&t);
+    let mut doctored_model = asr_model();
+    doctored_model.push(b'\n');
+    let mut wrong_size = asr_model();
+    wrong_size.truncate(100);
+    for (what, bad) in [
+        ("garbage", b"not a tarball".to_vec()),
+        ("the core tarball", pin_tarball()),
+        ("the media tarball", media_tarball()),
+        ("a model one byte off", doctored_model),
+        ("a short model", wrong_size),
+    ] {
+        let o = t.call_in(&["engine", "sew", "recording", "stage"], &bad);
+        assert_eq!(o.code, exit::ARGV, "{what}: {}", o.stderr);
+        assert!(o.stderr.contains("sha256 mismatch") && o.stderr.contains("nothing staged"), "{what}: {}", o.stderr);
+    }
+    for abs in [rec::SEW_STAGE_RECORDER_TARBALL, rec::SEW_STAGE_TRANSCRIBER_TARBALL, rec::SEW_STAGE_ASR_MODEL] {
+        assert!(!t.p(abs).exists(), "{abs}: nothing staged");
+    }
+    assert!(sew_calls(&t).is_empty(), "staging never runs Sew");
+
+    // A tarball with the right outer sha can't carry another binary (the
+    // sha pins the bytes), so the member check is proven on the pinned one.
+    for (blob, kind, abs) in [
+        (recorder_tarball(), "recorder", rec::SEW_STAGE_RECORDER_TARBALL),
+        (transcriber_tarball(), "transcriber", rec::SEW_STAGE_TRANSCRIBER_TARBALL),
+        (asr_model(), "model", rec::SEW_STAGE_ASR_MODEL),
+    ] {
+        let o = t.call_in(&["engine", "sew", "recording", "stage"], &blob);
+        ok(&o);
+        assert_eq!(json(&o)["kind"], kind);
+        assert_eq!(std::fs::read(t.p(abs)).unwrap(), blob, "{kind}");
+        assert_eq!(std::fs::metadata(t.p(abs)).unwrap().permissions().mode() & 0o777, 0o600, "{kind}");
+    }
+    let st = json(&t.call(&["engine", "sew", "status"]));
+    assert_eq!(st["staged"]["recording"], serde_json::json!({"recorder": true, "transcriber": true, "model": true}));
+    ok(&t.call(&["engine", "sew", "unstage"]));
+    assert!(!t.p(rec::SEW_STAGE_ASR_MODEL).exists(), "unstage clears the recording blobs too");
+}
+
+/// PRD §8 K-a: the pinned files install through Sew's own steps, in order,
+/// with `--i-am-k2` (a K2-managed Sew refuses its guarded verbs without it)
+/// and the pinned model by name, never `auto`; each sidecar's notices follow
+/// it; the staged files go.
+#[test]
+fn recording_install_runs_sews_install_then_enable_with_the_pinned_files() {
+    let t = box_root();
+    with_pin_installed(&t);
+    stage_all(&t);
+    sew_answers(&t, 0, r#"{"ok":true,"changed":["sew-recorder.service"]}"#);
+    let o = t.call_in(&["engine", "sew", "recording", "install"], br#"{"model":"test-q8_0"}"#);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!((v["sewExit"].as_i64(), v["step"].as_str()), (Some(0), Some("enable")), "{v}");
+    let calls = sew_calls(&t);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    let p = |abs: &str| t.p(abs).display().to_string();
+    let (r, tr, m) = (p(rec::SEW_STAGE_RECORDER_TARBALL), p(rec::SEW_STAGE_TRANSCRIBER_TARBALL), p(rec::SEW_STAGE_ASR_MODEL));
+    assert_eq!(
+        calls[0].0,
+        vec![
+            "recording",
+            "install",
+            "--recorder-tarball",
+            r.as_str(),
+            "--transcriber-tarball",
+            tr.as_str(),
+            "--model-file",
+            m.as_str(),
+            "--model",
+            "test-q8_0",
+            "--no-start",
+            "--i-am-k2",
+            "--json"
+        ]
+    );
+    assert_eq!(calls[1].0, vec!["recording", "enable", "--i-am-k2", "--json"]);
+    assert!(calls.iter().all(|(_, stdin)| stdin.is_none()), "nothing on Sew's stdin");
+    assert_eq!(v["notices"]["recorder"]["dir"], rec::SEW_RECORDER_DOC_DIR, "{v}");
+    for dir in [rec::SEW_RECORDER_DOC_DIR, rec::SEW_TRANSCRIBER_DOC_DIR] {
+        assert_eq!(licence_in(&t, dir).as_deref(), Some("test\n"), "{dir}");
+    }
+    for abs in [rec::SEW_STAGE_RECORDER_TARBALL, rec::SEW_STAGE_TRANSCRIBER_TARBALL, rec::SEW_STAGE_ASR_MODEL] {
+        assert!(!t.p(abs).exists(), "{abs}: unstaged after the install");
+    }
+}
+
+/// Before any Sew run: a model that isn't the pin, an input with another
+/// key, a missing stage, or a staged file changed since it was staged.
+#[test]
+fn recording_install_refuses_before_sew_runs() {
+    let t = box_root();
+    with_pin_installed(&t);
+    for bad in [&br#"{"model":"auto"}"#[..], br#"{"model":"base-q8_0"}"#, br#"{"model":"test-q8_0","modelFile":"/etc/shadow"}"#, b"{}"] {
+        let o = t.call_in(&["engine", "sew", "recording", "install"], bad);
+        assert_eq!(o.code, exit::ARGV, "{}: {}", String::from_utf8_lossy(bad), o.stderr);
+    }
+    let o = t.call_in(&["engine", "sew", "recording", "install"], br#"{"model":"test-q8_0"}"#);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("no staged sew-recorder tarball"), "{}", o.stderr);
+    stage_all(&t);
+    // Swapped after staging: the model is checked again, and refused.
+    std::fs::write(t.p(rec::SEW_STAGE_ASR_MODEL), b"another model").unwrap();
+    let o = t.call_in(&["engine", "sew", "recording", "install"], br#"{"model":"test-q8_0"}"#);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("staged speech model is not this build's pin"), "{}", o.stderr);
+    assert!(sew_calls(&t).is_empty(), "Sew never ran: {:?}", sew_calls(&t));
+    // An unknown binary on disk never runs as root, recording or not.
+    let t2 = box_root();
+    install_binary(&t2, b"#!/bin/sh\necho not sew\n");
+    stage_all(&t2);
+    let o = t2.call_in(&["engine", "sew", "recording", "install"], br#"{"model":"test-q8_0"}"#);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(sew_calls(&t2).is_empty());
+}
+
+/// Sew's refusal is data with its words; enable never runs after a failed
+/// install, and the staged files stay for a retry.
+#[test]
+fn a_refused_recording_install_is_data_and_enable_never_runs() {
+    let t = box_root();
+    with_pin_installed(&t);
+    stage_all(&t);
+    sew_answers(&t, 3, r#"{"ok":false,"error":{"exit":3,"message":"recording needs at least 8 GiB of RAM; this box has 4096 MiB"}}"#);
+    let o = t.call_in(&["engine", "sew", "recording", "install"], br#"{"model":"test-q8_0"}"#);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!((v["sewExit"].as_i64(), v["step"].as_str()), (Some(3), Some("install")), "{v}");
+    assert!(v["reason"].as_str().unwrap().contains("8 GiB"), "{v}");
+    assert_eq!(sew_calls(&t).len(), 1, "enable never ran");
+    assert!(t.p(rec::SEW_STAGE_ASR_MODEL).exists(), "kept for a retry");
+    assert!(licence_in(&t, rec::SEW_RECORDER_DOC_DIR).is_none(), "no notices without the sidecar");
+}
+
+#[test]
+fn recording_status_reads_sews_status_and_each_sidecars_version() {
+    let t = box_root();
+    with_pin_installed(&t);
+    write(&t, rec::RECORDER_VERSION_JSON, r#"{"version":"0.0.2","line":"0.0","tarball_sha256":"aa","binary_sha256":"bb"}"#);
+    write(&t, rec::TRANSCRIBER_VERSION_JSON, "not json");
+    sew_answers(&t, 0, r#"{"installed":true,"enabled":true,"model":"test-q8_0","transcriber":{},"recorder":{}}"#);
+    let o = t.call(&["engine", "sew", "recording", "status"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["sew"]["installed"], true);
+    assert_eq!(v["versions"]["recorder"]["version"], "0.0.2");
+    assert!(v["versions"]["transcriber"].is_null(), "an unreadable version.json is null, never a guess");
+    assert_eq!(sew_calls(&t)[0].0, vec!["recording", "status", "--json"]);
+    let v = Verb::parse(&["engine", "sew", "recording", "status"]).unwrap();
+    assert_eq!(v.class(), Class::Open);
+    assert!(!v.takes_lock(), "read-only");
+}
+
+#[test]
+fn recording_uninstall_runs_sew_with_yes_and_i_am_k2_and_drops_the_notices() {
+    let t = box_root();
+    with_pin_installed(&t);
+    stage_all(&t);
+    sew_answers(&t, 0, r#"{"ok":true}"#);
+    ok(&t.call_in(&["engine", "sew", "recording", "install"], br#"{"model":"test-q8_0"}"#));
+    assert!(licence_in(&t, rec::SEW_RECORDER_DOC_DIR).is_some());
+    let o = t.call(&["engine", "sew", "recording", "uninstall"]);
+    ok(&o);
+    assert_eq!(sew_calls(&t).last().unwrap().0, vec!["recording", "uninstall", "-y", "--i-am-k2", "--json"]);
+    assert!(licence_in(&t, rec::SEW_RECORDER_DOC_DIR).is_none() && licence_in(&t, rec::SEW_TRANSCRIBER_DOC_DIR).is_none());
+    // Nothing of K2's touches Sew's data: recordings live under /var/lib/sew.
+    assert!(!sew_calls(&t).iter().any(|(a, _)| a.iter().any(|x| x.contains("purge") || x.contains("/var/lib/sew"))));
+    assert_eq!(Verb::parse(&["engine", "sew", "recording", "uninstall"]).unwrap().class(), Class::Daemon);
+}
+
+#[test]
+fn recording_plan_and_upgrade_use_the_pinned_model_and_staged_sidecars() {
+    let t = box_root();
+    with_pin_installed(&t);
+    sew_answers(&t, 0, r#"{"pick":"test-q8_0","fits":true}"#);
+    ok(&t.call(&["engine", "sew", "recording", "plan"]));
+    assert_eq!(sew_calls(&t)[0].0, vec!["recording", "plan", "--model", "test-q8_0", "--json"]);
+    let o = t.call(&["engine", "sew", "recording", "upgrade"]);
+    assert_eq!(o.code, exit::STATE, "nothing staged: {}", o.stderr);
+    ok(&t.call_in(&["engine", "sew", "recording", "stage"], &recorder_tarball()));
+    ok(&t.call_in(&["engine", "sew", "recording", "stage"], &transcriber_tarball()));
+    ok(&t.call(&["engine", "sew", "recording", "upgrade"]));
+    let last = sew_calls(&t).last().unwrap().0.clone();
+    assert_eq!(&last[..2], ["recording", "upgrade"]);
+    assert!(last.ends_with(&["--when-idle".to_string(), "--i-am-k2".to_string(), "--json".to_string()]), "{last:?}");
+}
+
+/// The argv is enum names only: no path, model, flag or extra token.
+#[test]
+fn recording_argv_is_enum_names_only() {
+    let t = box_root();
+    with_pin_installed(&t);
+    for argv in [
+        &["engine", "sew", "recording", "stage", "/tmp/x.tar.gz"][..],
+        &["engine", "sew", "recording", "install", "test-q8_0"],
+        &["engine", "sew", "recording", "install", "--model", "auto"],
+        &["engine", "sew", "recording", "enable"],
+        &["engine", "sew", "recording", "uninstall", "--purge"],
+    ] {
+        let o = t.call_in(argv, br#"{"model":"test-q8_0"}"#);
+        assert_eq!(o.code, exit::ARGV, "{argv:?}: {}", o.stderr);
+    }
+    assert!(sew_calls(&t).is_empty());
+}
+
+/// Protocol 15 is additive: what a protocol-14 daemon sends is served as
+/// before, and `helper version` keeps every older namespace beside the new
+/// one, so an older daemon keeps working against this helper.
+#[test]
+fn a_protocol_14_daemons_calls_are_served_unchanged() {
+    let t = box_root();
+    let v = json(&t.call(&["helper", "version"]));
+    assert_eq!(v["protocol"], 15);
+    // 0.46.11 shares protocol 15 between two lanes: both flags are on.
+    for ns in ["sew", "sewreconf", "sewtunnel", "sewmirror", "sewboxbackup", "sewtunnelclear", "pgnamed", "sewrecording"] {
+        assert_eq!(v["namespaces"][ns], true, "{ns}");
+    }
+    ok(&t.call(&["engine", "sew", "status"]));
+    ok(&t.call_in(&["engine", "sew", "stage-media"], &media_tarball()));
+    with_pin_installed(&t);
+    sew_answers(&t, 0, r#"{"state":"running"}"#);
+    ok(&t.call(&["engine", "sew", "media", "status"]));
+    assert_eq!(sew_calls(&t)[0].0, vec!["media", "status", "--json"], "no recording flag leaks into the old verbs");
 }

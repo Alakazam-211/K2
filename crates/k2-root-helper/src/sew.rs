@@ -65,6 +65,7 @@ use std::path::{Component, Path};
 
 use k2_root_proto::paths::{STATE_DIR, SYSTEMCTL};
 use k2_root_proto::sew::*;
+use k2_root_proto::sew_recording::{self as rec, Blob, RecordingRequest, SewStep, Sidecar};
 use k2_root_proto::verbs::{SewSystemctl, SewVerb};
 
 use crate::caller::Caller;
@@ -186,6 +187,12 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
                 None,
             )
         }
+        SewVerb::StageRecording => stage_recording(ctx, stdin),
+        SewVerb::RecordingInstall => recording_install(ctx, stdin),
+        SewVerb::RecordingStatus => recording_status(ctx),
+        SewVerb::RecordingPlan => recording_plan(ctx),
+        SewVerb::RecordingUpgrade => recording_upgrade(ctx),
+        SewVerb::RecordingUninstall => recording_uninstall(ctx),
     }
 }
 
@@ -205,6 +212,9 @@ fn installs(verb: &SewVerb) -> bool {
             | SewVerb::MediaInstall
             | SewVerb::MediaUpgrade
             | SewVerb::MediaRollback
+            | SewVerb::StageRecording
+            | SewVerb::RecordingInstall
+            | SewVerb::RecordingUpgrade
     )
 }
 
@@ -497,7 +507,9 @@ pub(crate) fn remove_all_notices(ctx: &Ctx) -> HResult<J> {
     remove_notices(ctx, SEW_DOC_PREV_DIR)?;
     let sew = remove_notices(ctx, SEW_DOC_DIR)?;
     let media = remove_notices(ctx, SEW_MEDIA_DOC_DIR)?;
-    Ok(json!({"sew": sew, "sewMedia": media}))
+    let recorder = remove_notices(ctx, rec::SEW_RECORDER_DOC_DIR)?;
+    let transcriber = remove_notices(ctx, rec::SEW_TRANSCRIBER_DOC_DIR)?;
+    Ok(json!({"sew": sew, "sewMedia": media, "sewRecorder": recorder, "sewTranscriber": transcriber}))
 }
 
 /// What is at `/usr/local/bin/sew`: `None` = absent; `Ok(Some((sha,
@@ -751,6 +763,12 @@ pub fn status(ctx: &Ctx) -> J {
             "core": staged_version(ctx, SEW_STAGE_TARBALL, false),
             "media": staged_version(ctx, SEW_STAGE_MEDIA_TARBALL, true),
             "keptMedia": kept_media_versions(ctx),
+            // protocol 15: the recording blobs staged now (pinned or not).
+            "recording": {
+                "recorder": exists(ctx, rec::SEW_STAGE_RECORDER_TARBALL),
+                "transcriber": exists(ctx, rec::SEW_STAGE_TRANSCRIBER_TARBALL),
+                "model": exists(ctx, rec::SEW_STAGE_ASR_MODEL),
+            },
         },
         "units": {
             "sewDb": unit_state(ctx, UNIT_DB),
@@ -807,7 +825,16 @@ fn stage(ctx: &Ctx, tarball: &[u8], media: bool) -> HResult<J> {
 
 pub(crate) fn unstage(ctx: &Ctx) -> HResult<J> {
     let mut removed = Vec::new();
-    for abs in [SEW_STAGE_TARBALL, SEW_STAGE_MEDIA_TARBALL, SEW_STAGE_INSTALL_JSON, SEW_STAGE_MEDIA_JSON, SEW_STAGE_UPGRADE_BIN] {
+    for abs in [
+        SEW_STAGE_TARBALL,
+        SEW_STAGE_MEDIA_TARBALL,
+        SEW_STAGE_INSTALL_JSON,
+        SEW_STAGE_MEDIA_JSON,
+        SEW_STAGE_UPGRADE_BIN,
+        rec::SEW_STAGE_RECORDER_TARBALL,
+        rec::SEW_STAGE_TRANSCRIBER_TARBALL,
+        rec::SEW_STAGE_ASR_MODEL,
+    ] {
         if remove_file(ctx, abs)? {
             removed.push(abs);
         }
@@ -1438,11 +1465,8 @@ fn media_install(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
     let mut out = media_run(ctx, &req, Some(&tarball), false, false)?;
     // `sew media install` put sew-media in place from the pinned tarball;
     // its licence files follow it (Sew SW1 B1).
-    // TODO(K-M11): when `k2 hostchat recording enable` installs
-    // sew-recorder and sew-transcriber (pinned since 0.2.0, not installed
-    // yet), put each one's notices from its own pinned tarball under
-    // /usr/share/doc/sew-recorder and /usr/share/doc/sew-transcriber, the
-    // same way, and remove them with the binaries.
+    // The recording sidecars' notices follow them the same way
+    // (`engine sew recording install|uninstall`, protocol 15).
     if out["sewExit"] == 0 {
         out["notices"] = notices_or_error(install_notices(ctx, &bytes, SEW_MEDIA_DOC_DIR));
         let v = pinned_media_artifact(ctx.arch).map_err(Fail::state)?.0;
@@ -1469,4 +1493,187 @@ fn media_turn_cert(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
     let res = run_sew(ctx, &["media", "turn-cert", "--cert", &c, "--key", &k, "--when-idle"], None);
     drop_turn_tls(ctx);
     res
+}
+
+// ── recording (protocol 15, 0.46.11 K-a, `namespaces.sewrecording`) ─────
+//
+// The pinned `sew-recorder` and `sew-transcriber` tarballs and the pinned
+// speech model are staged by sha256 (`k2_root_proto::sew_recording`),
+// re-checked at install, and handed to Sew's own `sew recording …` steps.
+// Sew's argv lives in one place (`sew_recording::sew_argv`).
+
+fn run_step(ctx: &Ctx, step: SewStep) -> HResult<J> {
+    let argv = rec::sew_argv(step);
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    run_sew(ctx, &refs, None)
+}
+
+/// `engine sew recording stage`: one pinned blob, by its sha256. Anything
+/// that isn't this build's recorder or transcriber tarball (binary member
+/// checked too) or its pinned model is refused before it is written: no
+/// other model, no fallback.
+fn stage_recording(ctx: &Ctx, blob: &[u8]) -> HResult<J> {
+    let sha = sha256_hex(blob);
+    let Some(kind) = rec::classify(&sha, ctx.arch) else {
+        return Err(Fail::argv(
+            "recording stage refused: sha256 mismatch (not this build's pinned sew-recorder, sew-transcriber or speech model); nothing staged",
+        ));
+    };
+    let (dest, mut out) = match kind {
+        Blob::Sidecar(s) => {
+            let (v, art) = rec::pinned_sidecar(s, ctx.arch).map_err(Fail::state)?;
+            let bin = extract_member(blob, s.member())?;
+            if !sha256_hex(&bin).eq_ignore_ascii_case(art.binary_sha256) {
+                return Err(Fail::argv(format!("recording stage refused: the {} binary's sha256 is not this build's pin", s.member())));
+            }
+            (s.staged(), json!({"kind": s.key(), "version": v}))
+        }
+        Blob::Model => {
+            let m = rec::pinned_asr_model().map_err(Fail::state)?;
+            if blob.len() as u64 != m.size {
+                return Err(Fail::argv("recording stage refused: the model's size is not the pin's"));
+            }
+            (rec::SEW_STAGE_ASR_MODEL, json!({"kind": "model", "model": m.name}))
+        }
+    };
+    let d = stage_dir(ctx)?;
+    let (_, name) = split(dest);
+    d.write_atomic(OsStr::new(name), blob, 0o600, ctx.root_owner()).map_err(|e| Fail::io_err("stage", e))?;
+    out["staged"] = json!(true);
+    out["sha256"] = json!(sha);
+    Ok(out)
+}
+
+/// The staged file at `abs`, re-checked against `want`: its real path and
+/// bytes. Missing or changed is a refusal (stage it again).
+fn staged_pinned(ctx: &Ctx, abs: &str, want: &str, cap: usize, what: &str) -> HResult<(String, Vec<u8>)> {
+    let bytes = match open_parent(ctx, abs)? {
+        Some((d, n)) => d.read_file(OsStr::new(&n), cap).map_err(|e| Fail::io_err("read staged file", e))?,
+        None => None,
+    }
+    .ok_or_else(|| Fail::state(format!("no staged {what} (engine sew recording stage first)")))?;
+    if !sha256_hex(&bytes).eq_ignore_ascii_case(want) {
+        return Err(Fail::state(format!("the staged {what} is not this build's pin; nothing ran")));
+    }
+    Ok((ctx.p(abs).display().to_string(), bytes))
+}
+
+/// The two staged sidecar tarballs, re-checked: (sidecar, real path, bytes).
+fn staged_sidecars(ctx: &Ctx) -> HResult<Vec<(Sidecar, String, Vec<u8>)>> {
+    let mut out = Vec::new();
+    for s in Sidecar::BOTH {
+        let (_, art) = rec::pinned_sidecar(s, ctx.arch).map_err(Fail::state)?;
+        let (p, b) = staged_pinned(ctx, s.staged(), art.tarball_sha256, MAX_TARBALL, &format!("{} tarball", s.member()))?;
+        out.push((s, p, b));
+    }
+    Ok(out)
+}
+
+fn unstage_recording(ctx: &Ctx) -> Vec<&'static str> {
+    [rec::SEW_STAGE_RECORDER_TARBALL, rec::SEW_STAGE_TRANSCRIBER_TARBALL, rec::SEW_STAGE_ASR_MODEL]
+        .into_iter()
+        .filter(|abs| remove_file(ctx, abs).unwrap_or(false))
+        .collect()
+}
+
+/// `engine sew recording install`: stdin names the pinned model; the three
+/// staged files are re-checked; then `sew recording install … --no-start`
+/// and, when it exits 0, `sew recording enable`. Each sidecar's notices
+/// follow it; the staged files go. Sew's exit codes are data (`step` says
+/// which ran last).
+fn recording_install(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
+    let req: RecordingRequest = parse_json(stdin, "recording install refused: input")?;
+    let model = req.validate().map_err(Fail::argv)?;
+    require_known(ctx)?;
+    let sides = staged_sidecars(ctx)?;
+    let (model_path, _) = staged_pinned(ctx, rec::SEW_STAGE_ASR_MODEL, model.sha256, rec::MAX_ASR_MODEL, "speech model")?;
+    let mut out = run_step(
+        ctx,
+        SewStep::Install { recorder: &sides[0].1, transcriber: &sides[1].1, model_file: &model_path, model: model.name },
+    )?;
+    out["step"] = json!("install");
+    if out["sewExit"] != 0 {
+        return Ok(out);
+    }
+    let en = run_step(ctx, SewStep::Enable)?;
+    out["step"] = json!("enable");
+    if en["sewExit"] != 0 {
+        out["sewExit"] = en["sewExit"].clone();
+        out["reason"] = en["reason"].clone();
+        out["enable"] = en;
+        return Ok(out);
+    }
+    out["enable"] = en;
+    let mut notices = json!({});
+    for (s, _, bytes) in &sides {
+        notices[s.key()] = notices_or_error(install_notices(ctx, bytes, s.doc_dir()));
+    }
+    out["notices"] = notices;
+    out["unstaged"] = json!(unstage_recording(ctx));
+    Ok(out)
+}
+
+/// A sidecar's `version.json`, as Sew wrote it (`null` when missing or
+/// unreadable).
+fn sidecar_version(ctx: &Ctx, s: Sidecar) -> J {
+    let Ok(Some((d, n))) = open_parent(ctx, s.version_json()) else { return J::Null };
+    match d.read_file(OsStr::new(&n), rec::MAX_VERSION_JSON + 1) {
+        Ok(Some(b)) => rec::parse_sidecar_version(&b).map(|v| json!(v)).unwrap_or(J::Null),
+        _ => J::Null,
+    }
+}
+
+/// `engine sew recording status` (read-only): Sew's status and the
+/// sidecars' versions.
+fn recording_status(ctx: &Ctx) -> HResult<J> {
+    require_known(ctx)?;
+    let mut out = run_step(ctx, SewStep::Status)?;
+    let mut versions = json!({});
+    for s in Sidecar::BOTH {
+        versions[s.key()] = sidecar_version(ctx, s);
+    }
+    out["versions"] = versions;
+    Ok(out)
+}
+
+/// `engine sew recording plan` (read-only): Sew's own preflight for the
+/// pinned model. A Sew without the verb answers its own (non-zero) exit.
+fn recording_plan(ctx: &Ctx) -> HResult<J> {
+    require_known(ctx)?;
+    let m = rec::pinned_asr_model().map_err(Fail::state)?;
+    run_step(ctx, SewStep::Plan { model: m.name })
+}
+
+/// `engine sew recording upgrade`: the staged pinned sidecars to `sew
+/// recording upgrade … --when-idle` (after a Sew upgrade); the notices
+/// follow on success.
+fn recording_upgrade(ctx: &Ctx) -> HResult<J> {
+    require_known(ctx)?;
+    let sides = staged_sidecars(ctx)?;
+    let mut out = run_step(ctx, SewStep::Upgrade { recorder: &sides[0].1, transcriber: &sides[1].1 })?;
+    if out["sewExit"] == 0 {
+        let mut notices = json!({});
+        for (s, _, bytes) in &sides {
+            notices[s.key()] = notices_or_error(replace_notices(ctx, bytes, s.doc_dir()));
+        }
+        out["notices"] = notices;
+        out["unstaged"] = json!(unstage_recording(ctx));
+    }
+    Ok(out)
+}
+
+/// `engine sew recording uninstall`: `sew recording uninstall -y` (the
+/// daemon asks the person first). Recordings stay; the notices go.
+fn recording_uninstall(ctx: &Ctx) -> HResult<J> {
+    require_known(ctx)?;
+    let mut out = run_step(ctx, SewStep::Uninstall)?;
+    if out["sewExit"] == 0 {
+        let mut removed = json!({});
+        for s in Sidecar::BOTH {
+            removed[s.key()] = notices_or_error(remove_notices(ctx, s.doc_dir()).map(|a| json!(a)));
+        }
+        out["noticesRemoved"] = removed;
+        out["unstaged"] = json!(unstage_recording(ctx));
+    }
+    Ok(out)
 }

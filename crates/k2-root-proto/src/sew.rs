@@ -260,8 +260,9 @@ pub struct SewRelease {
     /// Voice (`sew-media`, K13): staged and installed through the helper.
     pub media: Option<SewSidecar>,
     /// Recording (`sew-transcriber`, `sew-recorder`): pinned from 0.2.0 so
-    /// the bytes are vouched for; no helper verb installs them yet
-    /// (`k2 hostchat recording enable`, K-M11, is later work).
+    /// the bytes are vouched for; staged and installed through the helper
+    /// from protocol 15 (`k2 hostchat recording enable`,
+    /// [`crate::sew_recording`]).
     pub transcriber: Option<SewSidecar>,
     pub recorder: Option<SewSidecar>,
 }
@@ -1423,8 +1424,26 @@ pub const TEST_RELEASES: &[SewRelease] = &[
                 binary_sha256: "9d98f6f3e080b8a4974c3392a9d8e802357cc6848daaf5a334d65756def5573c",
             }],
         }),
-        transcriber: None,
-        recorder: None,
+        // The recording sidecars (0.46.11, K-a), from
+        // `testdata/sew/make-recording-fixtures.py`: shell stubs, never run.
+        transcriber: Some(SewSidecar {
+            version: "0.0.2",
+            artifacts: &[SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "f0232517bf84297b80153c1c5d7132f13574f7bba392a09bd37736e5e96c99bf",
+                binary_sha256: "36d0765e0a0162d4f6c8a24ced18f7109b041caf9e5eb79ddff1fdcc722fa2b3",
+            }],
+        }),
+        recorder: Some(SewSidecar {
+            version: "0.0.2",
+            artifacts: &[SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "85680e195243666f5e8573b2a9d2c0db9b74b086812b0b687de7d48f0b257390",
+                binary_sha256: "fa32f8860fcfb41d9cb64739e3efbfba8ecc72b9594a6d2da805a0fc61443ac0",
+            }],
+        }),
     },
 ];
 

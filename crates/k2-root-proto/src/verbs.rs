@@ -370,6 +370,30 @@ pub enum SewVerb {
     /// `sew media probe-record --udp <r> --tcp <r> --turn-tls <r> --from k2`
     /// (an outside probe's results, each `ok`|`fail`).
     MediaProbeRecord { udp: bool, tcp: bool, tls: bool },
+    // ── recording (protocol 15, 0.46.11 K-a, `namespaces.sewrecording`;
+    // `crate::sew_recording`) ─────────────────────────────────────────────
+    /// `engine sew recording stage`. Stdin: one blob, staged only when its
+    /// sha256 is this build's pinned `sew-recorder` or `sew-transcriber`
+    /// tarball (its binary member checked too) or the pinned speech model;
+    /// anything else is refused before it is written.
+    StageRecording,
+    /// `engine sew recording install`. Stdin:
+    /// [`crate::sew_recording::RecordingRequest`] (the pinned model's name).
+    /// Re-checks the three staged files, then runs `sew recording install
+    /// … --no-start` and `sew recording enable` (both `--i-am-k2`).
+    RecordingInstall,
+    /// `engine sew recording status` (read-only): `sew recording status`
+    /// plus each sidecar's `version.json`.
+    RecordingStatus,
+    /// `engine sew recording plan` (read-only): `sew recording plan` for the
+    /// pinned model (a Sew without the verb answers its own exit code).
+    RecordingPlan,
+    /// `engine sew recording upgrade`: the staged pinned sidecars to `sew
+    /// recording upgrade … --when-idle` (after a Sew upgrade).
+    RecordingUpgrade,
+    /// `engine sew recording uninstall`: `sew recording uninstall -y`
+    /// (sidecars and the model go; recordings stay).
+    RecordingUninstall,
 }
 
 impl SewVerb {
@@ -417,6 +441,12 @@ impl SewVerb {
             {
                 Self::MediaProbeRecord { udp: *u == "ok", tcp: *t == "ok", tls: *l == "ok" }
             }
+            ["recording", "stage"] => Self::StageRecording,
+            ["recording", "install"] => Self::RecordingInstall,
+            ["recording", "status"] => Self::RecordingStatus,
+            ["recording", "plan"] => Self::RecordingPlan,
+            ["recording", "upgrade"] => Self::RecordingUpgrade,
+            ["recording", "uninstall"] => Self::RecordingUninstall,
             _ => return None,
         })
     }
@@ -461,6 +491,12 @@ impl SewVerb {
                 let r = |b: &bool| if *b { "ok" } else { "fail" };
                 s(&["media", "probe-record", r(udp), r(tcp), r(tls)])
             }
+            Self::StageRecording => s(&["recording", "stage"]),
+            Self::RecordingInstall => s(&["recording", "install"]),
+            Self::RecordingStatus => s(&["recording", "status"]),
+            Self::RecordingPlan => s(&["recording", "plan"]),
+            Self::RecordingUpgrade => s(&["recording", "upgrade"]),
+            Self::RecordingUninstall => s(&["recording", "uninstall"]),
         }
     }
 
@@ -479,6 +515,9 @@ impl SewVerb {
             | Self::Doctor
             | Self::MediaStatus
             | Self::BoxBackup
+            | Self::StageRecording
+            | Self::RecordingStatus
+            | Self::RecordingPlan
             | Self::Systemctl(S::Enable | S::StartDb | S::Start | S::Restart | S::ResetFailed) => Class::Open,
             Self::Install
             | Self::InstallReconfigure
@@ -503,13 +542,19 @@ impl SewVerb {
             | Self::MediaTurnCert
             | Self::MediaEnable
             | Self::MediaDisable
-            | Self::MediaProbeRecord { .. } => Class::Daemon,
+            | Self::MediaProbeRecord { .. }
+            | Self::RecordingInstall
+            | Self::RecordingUpgrade
+            | Self::RecordingUninstall => Class::Daemon,
         }
     }
 
     fn stdin_cap(&self) -> Option<usize> {
         match self {
             Self::Stage | Self::StageMedia => Some(CAP_INSTALL_BIN),
+            // A sidecar tarball or the speech model, whichever is larger.
+            Self::StageRecording => Some(CAP_INSTALL_BIN.max(crate::sew_recording::MAX_ASR_MODEL)),
+            Self::RecordingInstall => Some(CAP_SEW_JSON),
             Self::Install
             | Self::InstallReconfigure
             | Self::Config
@@ -525,7 +570,7 @@ impl SewVerb {
     }
 
     fn reads_only(&self) -> bool {
-        matches!(self, Self::Status | Self::Doctor | Self::MediaStatus | Self::BoxBackup)
+        matches!(self, Self::Status | Self::Doctor | Self::MediaStatus | Self::BoxBackup | Self::RecordingStatus | Self::RecordingPlan)
     }
 
     /// One of each (tests, docs).
@@ -564,6 +609,12 @@ impl SewVerb {
             Self::MediaEnable,
             Self::MediaDisable,
             Self::MediaProbeRecord { udp: true, tcp: false, tls: true },
+            Self::StageRecording,
+            Self::RecordingInstall,
+            Self::RecordingStatus,
+            Self::RecordingPlan,
+            Self::RecordingUpgrade,
+            Self::RecordingUninstall,
         ];
         v.extend(SewSystemctl::ALL.into_iter().map(Self::Systemctl));
         v
@@ -2716,8 +2767,12 @@ mod tests {
                 Verb::PgMoveRestore { .. } => assert_eq!(cap, Some(CAP_MOVE_LOGIN)),
                 Verb::AppsInstallEngine => assert_eq!(cap, Some(CAP_ENGINE)),
                 Verb::Sew(SewVerb::Stage | SewVerb::StageMedia) => assert_eq!(cap, Some(CAP_INSTALL_BIN)),
+                Verb::Sew(SewVerb::StageRecording) => {
+                    assert_eq!(cap, Some(crate::sew_recording::MAX_ASR_MODEL.max(CAP_INSTALL_BIN)), "a tarball or the model")
+                }
                 Verb::Sew(
-                    SewVerb::Install
+                    SewVerb::RecordingInstall
+                    | SewVerb::Install
                     | SewVerb::InstallReconfigure
                     | SewVerb::Config
                     | SewVerb::MirrorDir
@@ -3011,6 +3066,10 @@ mod tests {
             &["engine", "sew", "systemctl", "reset-failed"],
             &["engine", "sew", "media", "status"],
             &["engine", "sew", "box-backup"],
+            // protocol 15: staging is pin-gated like stage-media; the reads are reads.
+            &["engine", "sew", "recording", "stage"],
+            &["engine", "sew", "recording", "status"],
+            &["engine", "sew", "recording", "plan"],
         ];
         let daemon: &[&[&str]] = &[
             &["engine", "sew", "install"],
@@ -3041,6 +3100,9 @@ mod tests {
             &["engine", "sew", "media", "enable"],
             &["engine", "sew", "media", "disable"],
             &["engine", "sew", "media", "probe-record", "ok", "fail", "ok"],
+            &["engine", "sew", "recording", "install"],
+            &["engine", "sew", "recording", "upgrade"],
+            &["engine", "sew", "recording", "uninstall"],
         ];
         for a in open {
             let v = Verb::parse(a).unwrap_or_else(|e| panic!("{a:?}: {e}"));
@@ -3058,9 +3120,12 @@ mod tests {
             &["engine", "sew", "doctor"],
             &["engine", "sew", "media", "status"],
             &["engine", "sew", "box-backup"],
+            &["engine", "sew", "recording", "status"],
+            &["engine", "sew", "recording", "plan"],
         ] {
             assert!(!Verb::parse(read).unwrap().takes_lock(), "{read:?}");
         }
+        assert!(Verb::parse(&["engine", "sew", "recording", "stage"]).unwrap().takes_lock());
         assert!(Verb::parse(&["engine", "sew", "stage"]).unwrap().takes_lock());
     }
 
@@ -3084,6 +3149,17 @@ mod tests {
             &["engine", "sew", "box-backup", "/etc/k2-backup/env"],
             &["engine", "sew", "box-backup", "env"],
             &["engine", "sew", "box-backup", "--paths", "/etc/shadow"],
+            // protocol 15: enum names only; the model and paths never ride argv.
+            &["engine", "sew", "recording"],
+            &["engine", "sew", "recording", "stage", "/tmp/sew-recorder.tar.gz"],
+            &["engine", "sew", "recording", "install", "base-q8_0"],
+            &["engine", "sew", "recording", "install", "--model", "auto"],
+            &["engine", "sew", "recording", "install", "--i-am-k2"],
+            &["engine", "sew", "recording", "enable"],
+            &["engine", "sew", "recording", "disable"],
+            &["engine", "sew", "recording", "set-model"],
+            &["engine", "sew", "recording", "uninstall", "-y"],
+            &["engine", "sew", "recording", "status", "--json"],
             &["engine", "sew", "systemctl", "start", "k2-daemon.service"],
             &["engine", "sew", "systemctl", "restart", "sew-db.service"],
             &["engine", "sew", "systemctl", "daemon-reexec"],

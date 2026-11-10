@@ -743,7 +743,7 @@ mod tests {
                 "vault-share-service",
                 "apps-chat-key",
                 "sew-space-governance",
-                "sew-recording-enable"
+                "sew-recording-enable",
                 "apps-recording"
             ]
         );

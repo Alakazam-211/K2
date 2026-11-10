@@ -116,6 +116,11 @@ describe('stream adapter (sim::stream)', () => {
       'ws://h/cli/sim/stream?workspace=w&fps=30&codecs=jpeg&win=3&stats=1&token=tok',
     )
     expect(simStreamUrl('ws://h', 'w', null, 30, undefined, { stats: false })).toBe('ws://h/cli/sim/stream?workspace=w&fps=30')
+    // Fix 10: the pane width in device pixels, rounded; none (points) when 0.
+    expect(simStreamUrl('ws://h', 'w', 'tok', 60, { codecs: ['h264', 'jpeg'], window: 3 }, { pw: 1205.6 })).toBe(
+      'ws://h/cli/sim/stream?workspace=w&fps=60&codecs=h264%2Cjpeg&win=3&pw=1206&token=tok',
+    )
+    expect(simStreamUrl('ws://h', 'w', null, 30, undefined, { stats: true, pw: 0 })).toBe('ws://h/cli/sim/stream?workspace=w&fps=30&stats=1')
     expect(
       parseServerMsg(
         '{"t":"stats","stats":{"frames":3,"stages":[{"stage":"total","n":3,"p50":9.5,"p95":12,"max":12}],"inputs":[{"id":4,"recvMs":120.5,"laneMs":1.5}],"hubCpuMs":7,"encoderCpuMs":0}}',

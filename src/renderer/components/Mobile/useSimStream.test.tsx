@@ -13,7 +13,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 import { encodeFrame, type DecodeSupport } from '@/components/Stream/stream-wire'
 import { fakePlayerWorker, fakeWebCodecs, H264_DELTA as DELTA, H264_KEY as KEY, webCodecsGlobals, type FakeVideoDecoder } from '@/components/Stream/testing'
 import type { SimFrame, SimServerMsg, SimStreamConnector, SimStreamHandlers, SimStreamOffer, SimViewerPath } from './sim-stream'
-import { useSimStream } from './useSimStream'
+import { paneWidthPx, useSimStream } from './useSimStream'
 
 /** One scope for every render (a new one would reconnect, as in the pane). */
 const SCOPE = {} as never
@@ -21,6 +21,7 @@ const SCOPE = {} as never
 interface Conn {
   handlers: SimStreamHandlers
   offer?: SimStreamOffer
+  pw?: number
   acks: number[]
   fps: number[]
   keyframes: number
@@ -30,7 +31,7 @@ interface Conn {
 function fakeConnector(): { connector: SimStreamConnector; conns: Conn[] } {
   const conns: Conn[] = []
   const connector: SimStreamConnector = (opts) => {
-    const c: Conn = { handlers: opts.handlers, offer: opts.offer, acks: [], fps: [], keyframes: 0, closed: false }
+    const c: Conn = { handlers: opts.handlers, offer: opts.offer, pw: opts.pw, acks: [], fps: [], keyframes: 0, closed: false }
     conns.push(c)
     return {
       send: () => {},
@@ -94,6 +95,32 @@ afterEach(() => {
 })
 
 describe('useSimStream', () => {
+  it('fix 10: dials with the canvas width in device pixels (pw), and none before layout', () => {
+    const dpr = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')
+    Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true })
+    try {
+      const { connector, conns } = fakeConnector()
+      const { canvasRef, canvas } = fakeCanvas()
+      Object.assign(canvas, { getBoundingClientRect: () => ({ width: 300.4 }) })
+      renderHook(() => useSimStream({ scope: SCOPE, workspace: 'p-docs', visible: true, fps: 60, connector, canvasRef, hold: false }))
+      expect(conns).toHaveLength(1)
+      expect(conns[0].pw).toBe(601)
+      // No layout yet (or a canvas without one): no pw, so the daemon sends points.
+      const bare = fakeConnector()
+      renderHook(() => useSimStream({ scope: SCOPE, workspace: 'p-docs', visible: true, fps: 60, connector: bare.connector, canvasRef: fakeCanvas().canvasRef, hold: false }))
+      expect(bare.conns[0].pw).toBeUndefined()
+    } finally {
+      if (dpr) Object.defineProperty(window, 'devicePixelRatio', dpr)
+      else delete (window as { devicePixelRatio?: number }).devicePixelRatio
+    }
+    const at = (width: number) => ({ getBoundingClientRect: () => ({ width }) }) as unknown as HTMLCanvasElement
+    expect(paneWidthPx(at(401), 1.5)).toBe(602)
+    expect(paneWidthPx(at(402), 3)).toBe(1206)
+    expect(paneWidthPx(at(0), 2)).toBe(0)
+    expect(paneWidthPx(at(400), Number.NaN)).toBe(400)
+    expect(paneWidthPx(null)).toBe(0)
+  })
+
   it('offers video and a window, draws only the newest JPEG and acks every seq', async () => {
     const { connector, conns } = fakeConnector()
     const { canvasRef, drawImage } = fakeCanvas()

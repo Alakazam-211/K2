@@ -2,7 +2,7 @@
 // Builder A's frozen wire, `k2-core::sim::stream`:
 //
 //   GET /cli/sim/stream?workspace=<id|handle|path>&token=…[&fps=<n>]
-//       [&codecs=h264,jpeg&win=<n>][&stats=1]  (WebSocket)
+//       [&codecs=h264,jpeg&win=<n>][&stats=1][&pw=<px>]  (WebSocket)
 //
 //  - daemon → viewer, BINARY: K2SF (a 16-byte header then a baseline
 //    JPEG) or, 0.46.7, when `hello.codec` is "h264", K2SV (a 24-byte header
@@ -22,6 +22,11 @@
 //  - `stats=1` (M0, measurement; only while the latency readout is on): a
 //    `stats` text message about once a second with the daemon's stage
 //    times, and the daemon-side time of each `touch` that carries an `id`.
+//  - `pw=` (fix 10): the pane's width in device pixels when the socket
+//    dials. The daemon sizes the layer up to it, clamped to the device's
+//    own width; without it, points. Dial time only: the hub takes no
+//    update on an open socket, so a resized pane keeps it until the next
+//    dial.
 //  - close codes: 4401 login revoked, 4403 forbidden, 4410 device stopped.
 //
 // The pane talks to a `SimStreamConnection`; `createStubSimStream` stands in
@@ -196,6 +201,8 @@ export interface SimStreamOptions {
   offer?: SimStreamOffer
   /** Ask for the daemon's `stats` (M0; the latency readout). */
   stats?: boolean
+  /** The pane's width in device pixels (`pw=`); absent or 0: points. */
+  pw?: number
 }
 
 export type SimStreamConnector = (opts: SimStreamOptions) => SimStreamConnection
@@ -208,7 +215,7 @@ export function simStreamUrl(
   token: string | null | undefined,
   fps: number,
   offer?: { codecs: readonly SimCodec[]; window: number },
-  extra?: { stats?: boolean },
+  extra?: { stats?: boolean; pw?: number },
 ): string {
   const q = new URLSearchParams({ workspace, fps: String(Math.round(fps)) })
   if (offer) {
@@ -216,6 +223,8 @@ export function simStreamUrl(
     q.set('win', String(Math.max(1, Math.round(offer.window))))
   }
   if (extra?.stats) q.set('stats', '1')
+  const pw = Math.round(extra?.pw ?? 0)
+  if (pw > 0) q.set('pw', String(pw))
   if (token) q.set('token', token)
   return `${wsBase}/cli/sim/stream?${q.toString()}`
 }
@@ -305,7 +314,7 @@ export function closeReason(code: number, reason: string): string {
 }
 
 /** The real socket. */
-export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handlers, offer, stats }) => {
+export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handlers, offer, stats, pw }) => {
   let ws: WebSocket | null = null
   let closed = false
   const pending: string[] = []
@@ -321,7 +330,7 @@ export const wsSimStream: SimStreamConnector = ({ scope, workspace, fps, handler
       const video = offer?.video ? (await decodeSupport()).h264 : false
       if (closed) return
       const codecs: SimCodec[] = video ? ['h264', 'jpeg'] : ['jpeg']
-      const url = simStreamUrl(daemonWsBase(creds), workspace, creds.token, fps, offer ? { codecs, window: offer.window } : undefined, { stats })
+      const url = simStreamUrl(daemonWsBase(creds), workspace, creds.token, fps, offer ? { codecs, window: offer.window } : undefined, { stats, pw })
       // MS70: every daemon socket dials through the per-server queue.
       const sock = await openQueuedWebSocket(scope, url)
       if (closed) {

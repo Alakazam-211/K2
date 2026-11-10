@@ -28,6 +28,10 @@
 //  - M0 (the latency readout only): `stats` asks the daemon for its stage
 //    times (`onStats`), and `onFrameStage` gets each frame's socket,
 //    decoded and drawn times on this side.
+//  - Fix 10 (`pw=`): the socket dials with the canvas's on-screen width in
+//    device pixels, so the daemon sizes the stream up to the pane (it
+//    clamps to the device's own width). Dial time only: a resized pane
+//    keeps its width until the next dial (the hub takes no update).
 //  - `hold` keeps the last drawn frame (M-A3: "freeze" is a client-side
 //    hold; the device keeps running and frames are still acked, and video
 //    keeps decoding so it can resume without a keyframe). The S5 pick
@@ -116,6 +120,15 @@ export interface SimStreamView {
   centrePixel(): PixelRgb | null
   send(input: SimInput): void
   setFps(fps: number): void
+}
+
+/** The canvas's on-screen width in device pixels (`pw=`), or 0 when it has
+ *  no layout yet (or in jsdom): CSS width × devicePixelRatio, rounded. */
+export function paneWidthPx(canvas: HTMLCanvasElement | null, dpr: number = typeof window !== 'undefined' ? window.devicePixelRatio : 1): number {
+  if (!canvas || typeof canvas.getBoundingClientRect !== 'function') return 0
+  const css = canvas.getBoundingClientRect().width
+  const px = Math.round(css * (Number.isFinite(dpr) && dpr > 0 ? dpr : 1))
+  return Number.isFinite(px) && px > 0 ? px : 0
 }
 
 export function useSimStream({
@@ -223,12 +236,14 @@ export function useSimStream({
     let c: SimStreamConnection | null = null
     // The sim daemon streams H.264 or JPEG (VP8 is the desktop's).
     const workerVideo = playback.workerDecode?.h264 ?? true
+    const pw = paneWidthPx(canvasRefRef.current.current)
     c = connector({
       scope,
       workspace,
       fps: fpsRef.current,
       offer: { video: !jpegOnly && workerVideo, window: STREAM_WINDOW },
       ...(stats ? { stats: true } : {}),
+      ...(pw > 0 ? { pw } : {}),
       handlers: {
         onConn(s, why) {
           if (!live) return

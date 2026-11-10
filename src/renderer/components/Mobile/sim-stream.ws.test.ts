@@ -94,6 +94,18 @@ describe('wsSimStream offer (0.46.7)', () => {
     const url = new URL(FakeWebSocket.instances[0].url)
     expect(url.searchParams.get('codecs')).toBe('jpeg')
     expect(url.searchParams.get('win')).toBe('3')
+    expect(url.searchParams.has('pw')).toBe(false)
+    conn.close()
+  })
+
+  it('fix 10: dials with the pane width in device pixels as pw=', async () => {
+    stubWebCodecs(true)
+    const handlers: SimStreamHandlers = { onFrame: () => {}, onServer: () => {}, onConn: () => {} }
+    const conn = wsSimStream({ scope: scopeFor(), workspace: 'p-docs', fps: 60, handlers, offer: { video: true, window: 3 }, pw: 1206 })
+    await untilDialed()
+    const url = new URL(FakeWebSocket.instances[0].url)
+    expect(url.searchParams.get('pw')).toBe('1206')
+    expect(url.searchParams.get('codecs')).toBe('h264,jpeg')
     conn.close()
   })
 })

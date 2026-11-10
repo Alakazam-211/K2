@@ -59,6 +59,10 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // 0.46.11: the zone a person's "13:00" means on this server, for
     // reminders and mail check windows. Admin floor (vs-live W12).
     "ownerTimezone",
+    // 0.46.11: the Org Chart (prd-org-chart-v1 §4): the switch and its
+    // night times. Owner or Admin; a Member login sees them read-only.
+    "orgChart",
+    "orgChartNight",
     // MCS3: calendars on linked inboxes, the same switch as
     // `k2 mail link calendars on|off` (Admin floor there too).
     "linkedCalendars",
@@ -92,6 +96,39 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // Admin; read-only for Members.
     "voiceRoomsCount",
 ];
+
+/// The Admin-floor keys (tests).
+#[cfg(test)]
+pub(crate) fn remote_access_keys_for_test() -> &'static [&'static str] {
+    REMOTE_ACCESS_KEYS
+}
+
+/// The Org Chart's mirrors after a settings write: the switch, the owner's
+/// zone and the night times. A flip of the switch recomposes every
+/// workspace's AGENTS.md (its block follows the switch) in the background
+/// and is audited.
+fn sync_org_chart(s: &k2_core::app_settings::AppSettings, was_on: bool, actor: &str) {
+    k2_core::org_chart::sync_from_settings(s);
+    if s.org_chart != was_on {
+        k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+            "org_chart.switch",
+            &actor,
+            if s.org_chart { "on" } else { "off" },
+            "-",
+            "-",
+            "cli",
+        ));
+        let rev = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::org_chart::store::revision(&conn).unwrap_or(0)
+        };
+        crate::org_chart::changed(rev);
+        let _ = std::thread::Builder::new().name("org-chart-agents-md".into()).spawn(|| {
+            k2_core::workspace::skill_regen::sync_org_chart_teaching_everywhere();
+        });
+    }
+}
 
 /// LM5 (prd-lan-mode-toggle-tls-docs-v1 §11) — keys only the Owner may
 /// write: what the daemon listens on and advertises (`listenLan`, and the
@@ -510,6 +547,27 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
             ));
         }
     }
+    // The Org Chart's night: three HH:MM in order within 22:00–07:00.
+    if let Some(n) = partial.get("orgChartNight") {
+        let cur = k2_core::app_settings::load().org_chart_night;
+        let pick = |k: &str, d: &str| n.get(k).and_then(|v| v.as_str()).map(str::to_string).unwrap_or_else(|| d.to_string());
+        if !n.is_object() {
+            return CliResponse::bad_request("orgChartNight is {runAt, lastCallAt, dayStartsAt} (HH:MM)");
+        }
+        if let Err(e) = k2_core::org_chart::day::NightTimes::parse(
+            &pick("runAt", &cur.run_at),
+            &pick("lastCallAt", &cur.last_call_at),
+            &n.get("dayStartsAt").or_else(|| n.get("editionAt")).and_then(|v| v.as_str()).map(str::to_string).unwrap_or_else(|| cur.day_starts_at.clone()),
+        ) {
+            return CliResponse::bad_request(e);
+        }
+    }
+    if let Some(v) = partial.get("orgChart") {
+        if !v.is_boolean() {
+            return CliResponse::bad_request("orgChart is true or false");
+        }
+    }
+    let org_chart_was = k2_core::org_chart::enabled();
     let agent_hooks_touched = partial.get("agentHooks").is_some();
     let cores_touched = partial.get(k2_core::docs_cores::SETTING_KEY).is_some();
     let voice_touched = ["voiceRoomsPreview", "voiceRoomsCount"].iter().any(|k| partial.get(*k).is_some());
@@ -527,6 +585,7 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
             // is planned by the next sweep (now, debounced).
             k2_core::voice_preview::set_enabled(merged.voice_rooms_preview);
             k2_core::board_preview::set_enabled(merged.board_file_preview);
+            sync_org_chart(&merged, org_chart_was, actor.audit_user());
             k2_core::voice_rooms::set_tunnel_enabled(merged.voice_tunnel_preview);
             if voice_touched {
                 k2_core::tool_hook::kick_reconcile();
@@ -609,6 +668,7 @@ pub fn handle_settings_reset_as(actor: SettingsActor, by: &str) -> CliResponse {
             k2_core::compute::set_placement_policy(placement_policy_of(&defaults.compute_placement));
             k2_core::voice_preview::set_enabled(defaults.voice_rooms_preview);
             k2_core::board_preview::set_enabled(defaults.board_file_preview);
+            sync_org_chart(&defaults, k2_core::org_chart::enabled(), actor.audit_user());
             k2_core::voice_rooms::set_tunnel_enabled(defaults.voice_tunnel_preview);
             sync_permission_cards(defaults.permission_cards, actor.audit_user());
             sync_garden_access(defaults.garden_access, actor.audit_user());

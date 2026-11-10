@@ -104,7 +104,7 @@ pub(crate) fn request_pass() -> Option<String> {
 // path and effective auth query, right before [`set_fenced`]; `fences`
 // notes them (pending) and `set_fenced` makes them current. No dispatcher
 // edit, no second wrapper. Nothing is noted while the global "Permission
-// cards" switch is off, or for a request with no token.
+// cards" switch and the Org Chart are both off, or for a request with no token.
 
 /// One request as the refusal wrapper sees it.
 #[derive(Debug, Clone, Default)]
@@ -132,7 +132,10 @@ fn note_request(method: &str, path: &str, query: &str) {
     if let Some(tok) = super::http::extract_token(query).filter(|t| k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t)) {
         let _ = REQUEST.try_with(|r| r.borrow_mut().pending_pass = Some(tok.to_string()));
     }
-    if !k2_core::permission::gate::server_on() {
+    // The refusal wrapper reads it while permission cards are on; the Org
+    // Chart's feed field (`org_chart::feed::stamp_tcp`) while it is on.
+    // Each checks its own switch again.
+    if !k2_core::permission::gate::server_on() && !k2_core::org_chart::enabled() {
         return;
     }
     if super::http::extract_token(query).is_none_or(str::is_empty) {

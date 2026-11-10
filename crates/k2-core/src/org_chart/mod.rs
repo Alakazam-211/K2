@@ -110,6 +110,16 @@ thread_local! {
     // test never flips the switch for tests running beside it.
     static TEST_ENABLED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
     static TEST_CONFIG: std::cell::RefCell<Option<Config>> = const { std::cell::RefCell::new(None) };
+    static TEST_NOW: std::cell::Cell<Option<chrono::DateTime<chrono::Utc>>> = const { std::cell::Cell::new(None) };
+}
+
+/// Test-only: run `f` with [`now`] fixed at `t` for this thread.
+#[cfg(any(test, feature = "test-util"))]
+pub fn with_now<R>(t: chrono::DateTime<chrono::Utc>, f: impl FnOnce() -> R) -> R {
+    let prev = TEST_NOW.with(|c| c.replace(Some(t)));
+    let out = f();
+    TEST_NOW.with(|c| c.set(prev));
+    out
 }
 
 /// Is the Org Chart on? (`orgChart`, synced at boot and on every settings
@@ -173,6 +183,9 @@ pub fn sync_from_settings(s: &crate::app_settings::AppSettings) {
 /// `K2_ORG_CHART_NOW_FILE` names a file holding unix seconds or an RFC 3339
 /// time (read on every call, so a headless check can walk through a night).
 pub fn now() -> chrono::DateTime<chrono::Utc> {
+    if let Some(t) = TEST_NOW.with(|c| c.get()) {
+        return t;
+    }
     if std::env::var("K2_TEST_CLOCK").map(|v| v == "1").unwrap_or(false) {
         if let Ok(path) = std::env::var("K2_ORG_CHART_NOW_FILE") {
             if let Ok(raw) = std::fs::read_to_string(path) {

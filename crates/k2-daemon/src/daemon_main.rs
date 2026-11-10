@@ -470,6 +470,8 @@ async fn async_main() {
     // Voice rooms previews (dark by default; K2_VOICE_ROOMS / K2_VOICE_TUNNEL
     // force them on).
     k2_core::board_preview::set_enabled(k2_core::app_settings::load().board_file_preview);
+    // The Org Chart: the switch, the owner's zone and the night times.
+    k2_core::org_chart::sync_from_settings(&k2_core::app_settings::load());
     crate::board_file::held::sweep_if_due();
     k2_core::voice_preview::set_enabled(k2_core::app_settings::load().voice_rooms_preview);
     k2_core::voice_rooms::set_tunnel_enabled(k2_core::app_settings::load().voice_tunnel_preview);

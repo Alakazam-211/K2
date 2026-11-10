@@ -2,7 +2,8 @@
 //! `compute.operate`, `compute.manage`, `agents.manage`, `projects.manage`,
 //! `apps.build`, `apps.manage-full`, `apps.core`, `chat.manage`,
 //! `vault.manage`, `gardens.manage`, `dns.manage`, `mail.manage`,
-//! `mail.send-mode` and `db.agent-access` (the two connection switches are in
+//! `mail.send-mode`, `db.agent-access` and `organization.manage` (the two
+//! connection switches are in
 //! `connections.rs`), and each one's `to=off` twin, `<id>-off`.
 //!
 //! **Table-driven.** One [`SWITCHES`] row per Agent-tab switch: the loosen
@@ -303,7 +304,7 @@ const LEVEL: &[ParamSpec] =
 
 /// The Agent tab's switches, in Settings order. Index = the const generic
 /// of [`check_on`] / [`apply_on`] and their twins.
-pub(crate) static SWITCHES: [Switch; 17] = [
+pub(crate) static SWITCHES: [Switch; 18] = [
     Switch {
         on: on_spec(
             "compute.use",
@@ -687,6 +688,32 @@ pub(crate) static SWITCHES: [Switch; 17] = [
         ),
         writer: Writer::Access("sim"),
     },
+    // The Org Chart (prd-org-chart-v1 §7, Rosson 2026-11-10): "Manage the
+    // org chart". The Owner turns it on (it lets an agent make itself a
+    // head, and so write to every agent once a day); the Owner or an Admin
+    // turns it off.
+    Switch {
+        on: on_spec(
+            "organization.manage",
+            "organization.manage-off",
+            Floor::Owner,
+            &[],
+            "Manage the org chart",
+            "Let {ws} make and change orgs, members, heads and lines on the Org Chart",
+            "It can't move cards, turn the Org Chart on or off, or write another org's bulletin. It can make itself an org's head, and a head's bulletin reaches every agent.",
+            &[code_wall("org_manage_off", "/cli/organization/")],
+            WallCoverage::Code,
+        ),
+        off: off_spec(
+            "organization.manage-off",
+            Floor::Admin,
+            &[],
+            "Manage the org chart",
+            "Stop {ws} changing the Org Chart",
+            "Orgs it made stay. It can still read the bulletin, and write its own org's bulletin if it is a head.",
+        ),
+        writer: Writer::Access("org_chart_manage"),
+    },
 ];
 
 // ── state and apply, per writer ─────────────────────────────────────
@@ -720,6 +747,12 @@ fn is_on(sw: &Switch, ctx: &Ctx, want_on: bool) -> Result<bool, String> {
             Ok(crate::apps::access::level(ws) >= crate::apps::access::Level::Build)
         }
         Writer::Access("app_users") => path().map(|_| k2_core::workspace::settings::agents_can_manage_app_users(ws)),
+        Writer::Access("org_chart_manage") => {
+            path()?;
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            Ok(k2_core::org_chart::store::agents_can_manage(&conn, ws))
+        }
         Writer::Access("sim") => {
             path()?;
             let db = k2_core::db::shared();
@@ -840,7 +873,7 @@ macro_rules! register {
 }
 
 pub(crate) fn actions() -> Vec<Registered> {
-    register!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
+    register!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
 }
 
 // ── not card-able (§5.4, §9) ────────────────────────────────────────

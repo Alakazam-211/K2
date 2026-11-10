@@ -1515,6 +1515,35 @@ pub const ROUTES: &[Route] = &[
     get("/cli/ops/activity", Member),
     get("/cli/ops/overview", Member),
     get("/cli/ops/stream", Member),
+    // The Org Chart (prd-org-chart-v1 §6.2). People look at Member; they
+    // change it at Admin. NoLogin rows are an agent's own verbs (its read
+    // marker, its org, update/ask/reach): a passport only, never a login.
+    // Agents pass these floors (passports aren't logins); the handler
+    // checks head / member / "Manage the org chart". No Voice & Chat rows.
+    post("/cli/organization/ask", NoLogin),
+    get("/cli/organization/bulletin", Member),
+    post("/cli/organization/bulletin/read", NoLogin),
+    post("/cli/organization/bulletin/set", Admin),
+    get("/cli/organization/bulletin/status", NoLogin),
+    get("/cli/organization/chart", Member),
+    post("/cli/organization/create", Admin),
+    post("/cli/organization/delete", Admin),
+    post("/cli/organization/head", Admin),
+    post("/cli/organization/layout/move", Admin),
+    post("/cli/organization/layout/tidy", Admin),
+    post("/cli/organization/line/add", Admin),
+    post("/cli/organization/line/remove", Admin),
+    get("/cli/organization/list", Member),
+    post("/cli/organization/member/add", Admin),
+    post("/cli/organization/member/move", Admin),
+    post("/cli/organization/member/remove", Admin),
+    get("/cli/organization/mine", NoLogin),
+    post("/cli/organization/purpose", Admin),
+    post("/cli/organization/reach", NoLogin),
+    post("/cli/organization/rename", Admin),
+    get("/cli/organization/show", Member),
+    post("/cli/organization/update", NoLogin),
+    get("/cli/organization/updates", Admin),
     get("/cli/overlay/events", Member),
     // "Your account" setup prompt (0.46.0): about who the owner is, so the
     // owner daemon token only. Dismiss is POST-only (a GET is 405).

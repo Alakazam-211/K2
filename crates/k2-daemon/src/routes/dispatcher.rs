@@ -2517,6 +2517,49 @@ async fn handle_one_request(
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // The Org Chart (prd-org-chart-v1 §6.2): `/cli/organization/*`.
+        // The owner token or a Connect login is a person (its role already
+        // cleared the route floor); an agent passport is the agent, on
+        // Loopback only; anything else 403. One handler for TCP and the
+        // cell socket (`org_chart::routes::handle`), which answers 409
+        // `org_chart_off` while the Org Chart is off. Refusals go out
+        // through `send_response`, so the permission wrapper teaches them.
+        p if p.starts_with(crate::org_chart::routes::PREFIX) => {
+            let caller = crate::org_chart::caller::from_tcp(
+                p,
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+                ingress == Ingress::Loopback,
+            );
+            let body = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::org_chart::routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::org_chart::routes::too_large();
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let r = match caller {
+                Err(r) => r,
+                Ok(caller) => {
+                    let params = super::http::parse_params(&path, &query);
+                    let p_owned = path.to_string();
+                    let method_owned = method.clone();
+                    tokio::task::spawn_blocking(move || {
+                        crate::org_chart::routes::handle(&method_owned, &p_owned, &params, &body, &caller)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         "/cli/agent/identity" | "/cli/agent/handle" => {
             let presented = super::http::extract_token(&query);
             let passport = presented

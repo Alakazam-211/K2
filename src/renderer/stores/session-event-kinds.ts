@@ -114,6 +114,12 @@ export const SESSION_EVENT_ROUTES = {
   // Sew on K2 (S29 K14, S32 K27): Settings → Cores → Chat Hosting refetches
   // GET /cli/sew/status on it (`onSewChanged`).
   sew_changed: { class: 'app', app: true },
+  // The Org Chart (prd-org-chart-v1 §6.2): the Org Chart tab reloads
+  // GET /cli/organization/chart when `revision` is newer.
+  org_chart_changed: {
+    class: 'app',
+    ignored: 'The Org Chart tab subscribes to it itself (O6); nothing else refetches on it.',
+  },
   // Voice rooms S3/S5: the rooms view moved; the headset's list refetches
   // GET /cli/voice/rooms (`onVoiceRoomsChanged`). Carried: the list covers
   // every signed-in server, so a Home room's socket delivers its server's.

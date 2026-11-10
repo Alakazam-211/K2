@@ -161,7 +161,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 61] = [
+pub(crate) const V1_ACTIONS: [&str; 63] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -271,6 +271,8 @@ pub(crate) const V1_ACTIONS: [&str; 61] = [
     // 0.46.11 (K-a): install Sew's recorder and turn recording on (an
     // Owner or Admin, in person; the agent never installs it).
     "sew.recording-enable",
+    // 0.46.11 (prd-org-chart-v1 §7): "Manage the org chart" (Owner).
+    "organization.manage",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -788,6 +790,9 @@ pub(crate) const ROWS: &[Row] = &[
     // ── remote desktop (0.46.11) ───────────────────────────────────────
     // People only, reads included: never requestable.
     row(Target::Cannot { r#where: DESKTOP_WHERE }, code(403, "desktop_people_only"), "/cli/desktop/", ANY),
+    // ── the Org Chart (0.46.11) ─────────────────────────────────────────
+    // An agent without "Manage the org chart" on a manage verb.
+    row(ask("organization.manage", Floor::Owner), code(403, "org_manage_off"), "/cli/organization/", ANY),
     // ── connections ────────────────────────────────────────────────────
     row(ask("connections.create", Floor::Admin), code(403, "agents_create_connections_disabled"), "/cli/", ANY),
     Row {
@@ -1310,6 +1315,9 @@ mod tests {
             (403, "POST", "/cli/sidecar/new", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
             (403, "POST", "/cli/sessions/open", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
             (403, "POST", "/cli/project-group/create", vec![], None, json!({"error":{"code":"agent_permission_off"},"ok":false}), "projects.manage"),
+            // 0.46.11: the Org Chart's manage verbs without the switch.
+            (403, "POST", "/cli/organization/create", vec![], None, json!({"error":{"code":"org_manage_off","hint":"x"},"ok":false}), "organization.manage"),
+            (403, "POST", "/cli/organization/line/add", vec![], None, json!({"error":{"code":"org_manage_off","hint":"x"},"ok":false}), "organization.manage"),
             (403, "POST", "/cli/app/exception", vec![], None, json!({"error":{"code":"apps_manage_off"}}), "apps.build"),
             // Rosson 2026-11-01: custom domains (Path B too) fall under the
             // broad App switch; there is no per-domain or web-server card.
@@ -1927,7 +1935,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 61);
+        assert_eq!(V1_ACTIONS.len(), 63);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

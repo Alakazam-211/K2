@@ -149,6 +149,9 @@ async fn newly_due_reminder(watermark: &mut Option<String>) -> bool {
 /// HB17 — one due scan in its own task, then a wake re-plan. A panic
 /// inside surfaces as the handle's `JoinError` and is logged by the loop.
 fn spawn_pass(reason: &'static str) -> tokio::task::JoinHandle<()> {
+    // The Org Chart's night pass (prd-org-chart-v1 §5, vs-live A1): its own
+    // task on the same tick, never overlapping itself; nothing while off.
+    crate::org_chart::night::spawn_pass(reason);
     tokio::spawn(async move {
         run_due_scan(reason).await;
         crate::power::replan_wake(reason).await;

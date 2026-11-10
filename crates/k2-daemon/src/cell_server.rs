@@ -630,6 +630,8 @@ mod unix_impl {
         let teach_input = k2_core::permission::gate::server_on().then(|| {
             (params.clone(), body.clone(), principal.workspace_uuid.clone())
         });
+        // The Org Chart's feed field reads the passport after dispatch.
+        let feed_principal = principal.clone();
         let path_owned = path.to_string();
         let method_owned = method.to_string();
         // F2: the `/cli/respond` arm pins the response to THIS session — the body
@@ -670,6 +672,8 @@ mod unix_impl {
                 .unwrap_or(out),
             None => out,
         };
+        // The Org Chart's feed field, for this cell's agent (none while off).
+        let out = crate::org_chart::feed::stamp_cell(&status, &out, &this_session_id[..], &feed_principal).unwrap_or(out);
         write_response(&mut stream, &status, ctype, &out).await;
     }
 
@@ -784,6 +788,14 @@ mod unix_impl {
             // bound session's passport, gated by the workspace's "Manage
             // K2 projects" switch (0162) like the TCP arm. Reads fall to
             // the `is_agent_verb && !is_post` arm below.
+            // The Org Chart (`k2 organization`): this cell's passport, the
+            // same handler as TCP (the agent, or the owner from a shell tab).
+            p if p.starts_with(crate::org_chart::routes::PREFIX) => {
+                match crate::org_chart::caller::from_passport(this_session_id, principal) {
+                    Ok(caller) => from_cli(crate::org_chart::routes::handle(method, p, params, body, &caller)),
+                    Err(r) => from_cli(r),
+                }
+            }
             p if is_post && p.starts_with("/cli/project-group/") => {
                 let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
                 from_cli(crate::project_group_routes::dispatch_post_as(p, body, &caller, "cell"))

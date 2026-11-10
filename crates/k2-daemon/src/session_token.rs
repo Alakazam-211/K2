@@ -1444,6 +1444,13 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // its workspace's "Manage K2 projects" switch is off. The switch
         // itself (`/cli/agent-access/set`) is NOT an agent verb.
         "/cli/project-group/",
+        // The Org Chart (`k2 organization`, prd-org-chart-v1 §6.2): reads,
+        // the bulletin, update/ask/reach and the manage verbs. The handler
+        // classifies the passport (identity from the session, never the
+        // body), refuses an agent's manage verbs while its "Manage the org
+        // chart" switch is off (`org_manage_off`) and refuses `layout/*`
+        // to every agent (people arrange the canvas).
+        "/cli/organization/",
         // Live docs (`k2 doc`, Markdown multiplayer v1; vs-live MI2). Not
         // `/cli/fs/` (still DENY): the docs handler resolves the passport
         // to its own workspace, jails every path, refuses the deny list

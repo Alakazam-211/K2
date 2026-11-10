@@ -1409,6 +1409,10 @@ pub(crate) async fn send_response_with_cookie_and_location(
     let body: &str = &explained;
     let taught = crate::permission::walls::teach_tcp(status, body);
     let body: &str = &taught;
+    // The Org Chart's feed field (an agent that hasn't read today's
+    // bulletin); the same bytes while the Org Chart is off.
+    let fed = crate::org_chart::feed::stamp_tcp(status, body);
+    let body: &str = &fed;
     // CORS headers on every response so the Tauri WebView (cross-
     // origin from tauri://localhost or http://localhost:5173 to
     // http://127.0.0.1:<port>) can read the body. Token auth
@@ -1454,6 +1458,10 @@ pub(crate) async fn send_response_with_headers(
     let body: &str = &explained;
     let taught = crate::permission::walls::teach_tcp(status, body);
     let body: &str = &taught;
+    // The Org Chart's feed field (an agent that hasn't read today's
+    // bulletin); the same bytes while the Org Chart is off.
+    let fed = crate::org_chart::feed::stamp_tcp(status, body);
+    let body: &str = &fed;
     let resp = format!(
         "HTTP/1.1 {status}\r\n\
          Content-Type: {ct}\r\n\

@@ -286,6 +286,14 @@ export interface SewChangedEvent {
   reason: string
 }
 
+/** APP-LEVEL — the Org Chart changed (prd-org-chart-v1 §6.2): an org,
+ *  member, head, line, bulletin or position. Reload GET
+ *  /cli/organization/chart when `revision` is newer than yours. */
+export interface OrgChartChangedEvent {
+  kind: 'org_chart_changed'
+  revision: number
+}
+
 /** APP-LEVEL — the voice rooms view on this box moved (prd-k2-voice-rooms
  *  S3, lane C): occupancy, a room added or closed. Refetch signal for GET
  *  /cli/voice/rooms (its hosting state rides it too); `rev` is that list's
@@ -1023,6 +1031,7 @@ export type SessionEventMessage =
   | PairCodeChangedEvent
   | RemoteSessionAccessDeniedEvent
   | SewChangedEvent
+  | OrgChartChangedEvent
   | VoiceRoomsChangedEvent
   | RoomMembersChangedEvent
   | AppDeployedEvent

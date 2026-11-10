@@ -1524,8 +1524,9 @@ pub struct OrgChartNight {
     /// One more line to a head that hasn't written yet.
     #[serde(default = "default_org_last_call_at")]
     pub last_call_at: String,
-    /// The read marker's new day starts (the bulletin pops up again).
-    #[serde(default = "default_org_day_starts_at")]
+    /// The read marker's new day starts (the bulletin pops up again). The
+    /// PRD's `editionAt` is read as this (Rosson, answer 7: no editions).
+    #[serde(default = "default_org_day_starts_at", alias = "editionAt")]
     pub day_starts_at: String,
 }
 

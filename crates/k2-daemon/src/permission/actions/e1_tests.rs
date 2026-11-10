@@ -178,6 +178,11 @@ fn state(w: Writer, ws: &Ws) -> bool {
             let conn = db.lock();
             k2_core::sim::store::agents_can_use_sim(&conn, &ws.id)
         }
+        Writer::Access("org_chart_manage") => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::org_chart::store::agents_can_manage(&conn, &ws.id)
+        }
         Writer::Access(other) => panic!("no state reader for {other}"),
         Writer::AppCore => crate::apps::cores::ticked(&ws.id).iter().any(|c| c == "db"),
         Writer::Dns => k2_core::workspace::settings::get_dns_manage_enabled(&ws.path),
@@ -196,7 +201,7 @@ fn prerequisite(w: Writer, ws: &Ws) {
 
 // ── the registry ────────────────────────────────────────────────────
 
-const SWITCH_IDS: [&str; 16] = [
+const SWITCH_IDS: [&str; 17] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -213,6 +218,8 @@ const SWITCH_IDS: [&str; 16] = [
     "mail.manage",
     "mail.send-mode",
     "db.agent-access",
+    // 0.46.11: "Manage the org chart" (the Owner raises, an Admin lowers).
+    "organization.manage",
 ];
 
 #[test]
@@ -233,7 +240,8 @@ fn e1_registers_17_switch_actions_their_off_twins_and_keep_as_mine() {
     // 0.46.4's apps.manage-users) + the
     // to=off twins (one per standing switch) + garden.keep-mine.
     let e1: Vec<&str> = ids.iter().copied().filter(|i| want.iter().any(|w| w == i)).collect();
-    assert_eq!(e1.len(), 18 + 17 + 1, "{e1:?}");
+    // 0.46.11: + organization.manage and its twin.
+    assert_eq!(e1.len(), 19 + 18 + 1, "{e1:?}");
     for r in &all {
         k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     }
@@ -277,6 +285,9 @@ fn the_floors_are_the_codes() {
         assert_eq!((floor(id), floor(&format!("{id}-off"))), (Floor::Admin, Floor::Admin), "{id}");
     }
     assert_eq!(floor("garden.keep-mine"), Floor::GardenOwner);
+    // 0.46.11 (Rosson): only the Owner turns "Manage the org chart" on; an
+    // Admin may turn it off.
+    assert_eq!((floor("organization.manage"), floor("organization.manage-off")), (Floor::Owner, Floor::Admin));
 }
 
 /// Each catalog wall is one lane C's walls map teaches (same action, same
@@ -298,6 +309,7 @@ fn the_walls_match_the_refusals() {
     };
     // 0.46.9: and the agent's own `k2 compute access on` (the switch's route).
     assert_eq!(code("compute.use"), ["compute_off", "forbidden"]);
+    assert_eq!(code("organization.manage"), ["org_manage_off"]);
     assert_eq!(code("compute.operate"), ["operate_off"]);
     assert_eq!(code("compute.manage"), ["owner_only"]);
     // `/cli/sidecar/` and `k2 sessions open` (prd-workspace-sessions-cli-v1 WS-X4).
@@ -423,7 +435,7 @@ fn the_entries_rerun_the_routes_own_checks() {
     let admin = as_login(&login("e1adm2", Role::Admin));
     let member = as_login(&login("e1mem2", Role::Member));
     let ws = seed("e1en");
-    for id in ["apps.build", "compute.manage", "compute.manage-off", "apps.manage-users", "apps.manage-users-off"] {
+    for id in ["apps.build", "compute.manage", "compute.manage-off", "apps.manage-users", "apps.manage-users-off", "organization.manage"] {
         match apply(id, &ws, json!({}), &admin) {
             Applied::Refused { code, .. } => assert_eq!(code, "owner_only", "{id}"),
             other => panic!("{id}: an Admin must be refused by the writer: {other:?}"),

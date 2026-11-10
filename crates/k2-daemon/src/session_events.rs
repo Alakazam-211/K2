@@ -814,6 +814,12 @@ pub enum SessionEvent {
     /// `voice-probe`, `voice-removed`). Refetch signal only.
     SewChanged { reason: String },
 
+    /// The Org Chart changed (prd-org-chart-v1 §6.2): an org, member, head,
+    /// line, bulletin or position. Wire: `{ "kind": "org_chart_changed",
+    /// "revision": number }`. APP-LEVEL refetch signal: the Org Chart tab
+    /// reloads `GET /cli/organization/chart` when `revision` is newer.
+    OrgChartChanged { revision: i64 },
+
     /// prd-dns-pending-and-cutover-safety-v1 P1 (DN12e) — the host's
     /// custom-domain inventory (`domain_bindings`) changed: an apex was
     /// attached or removed, a manual check ran, the box's own pending-zone
@@ -1208,6 +1214,7 @@ impl SessionEvent {
             SessionEvent::TicketChanged { .. } => "ticket_changed",
             SessionEvent::MailChanged { .. } => "mail_changed",
             SessionEvent::SewChanged { .. } => "sew_changed",
+            SessionEvent::OrgChartChanged { .. } => "org_chart_changed",
             SessionEvent::DomainsChanged { .. } => "domains_changed",
             SessionEvent::FederationPeersChanged { .. } => "federation_peers_changed",
             SessionEvent::RemoteSessionAccessDenied { .. } => "remote_session_access_denied",
@@ -2463,6 +2470,14 @@ mod tests {
         assert_eq!(json["kind"], "sew_changed");
         assert_eq!(json["reason"], "voice-installed");
         assert_keys(&json, &["kind", "reason"]);
+    }
+
+    #[test]
+    fn org_chart_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::OrgChartChanged { revision: 7 });
+        assert_eq!(json["kind"], "org_chart_changed");
+        assert_eq!(json["revision"], 7);
+        assert_keys(&json, &["kind", "revision"]);
     }
 
     #[test]

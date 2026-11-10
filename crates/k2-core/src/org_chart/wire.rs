@@ -95,14 +95,21 @@ pub struct ChartOrg {
     pub placed_by: &'static str,
 }
 
-/// An agent card (every agent on this server).
+/// An agent card: every agent on this server, then the agents on other
+/// servers an agent here is connected to (`server` set, id `remote:<agent>@<host>`).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartAgent {
     pub id: String,
+    /// What the card shows (the handle; `agent (host)` for another server's).
+    pub name: String,
     pub handle: String,
+    /// The first line of its Role in AGENTS.md; "" when none (or remote).
     pub role: String,
     pub color: String,
+    pub icon_url: Option<String>,
+    /// `None`: this server. Else the server it lives on.
+    pub server: Option<String>,
     pub org_id: Option<String>,
     pub is_head: bool,
     /// Its "Manage the org chart" switch.
@@ -112,18 +119,21 @@ pub struct ChartAgent {
     pub placed_by: &'static str,
 }
 
-/// An agent on another server that an agent here is connected to.
+/// One laid-out card or bucket. The daemon's layout is the truth: every
+/// org and agent has a row (`auto` = computed, `person` = a person placed
+/// it). A member's `x, y` is relative to its bucket (as `layout/move` takes
+/// it); an org's and a loose agent's are canvas coordinates. `w, h`: an
+/// org's size; `None` for a card (`card` gives its size).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct ChartRemote {
-    /// `remote:<agent>@<host>`.
+pub struct ChartNode {
+    pub kind: &'static str,
     pub id: String,
-    pub agent: String,
-    pub host: String,
-    /// `agent (host)`.
-    pub name: String,
     pub x: f64,
     pub y: f64,
+    pub w: Option<f64>,
+    pub h: Option<f64>,
+    pub placed_by: &'static str,
 }
 
 /// A dotted line: the two can message each other (`a`/`b` are agent ids
@@ -141,15 +151,18 @@ pub struct ChartConnection {
 pub struct Chart {
     pub ok: bool,
     pub revision: i64,
-    /// The caller may change orgs, members, heads and lines.
+    /// An Owner or Admin person: may arrange and manage everything.
+    pub can_edit: bool,
+    /// The caller may change orgs, members, heads and lines (people at
+    /// Owner/Admin, an agent with "Manage the org chart").
     pub can_manage: bool,
     /// The caller may move cards and tidy (Owner/Admin people only).
     pub can_arrange: bool,
     pub orgs: Vec<ChartOrg>,
     pub agents: Vec<ChartAgent>,
-    pub remote_agents: Vec<ChartRemote>,
     pub lines: Vec<LineWire>,
     pub connections: Vec<ChartConnection>,
+    pub nodes: Vec<ChartNode>,
     pub card: CardSize,
 }
 
@@ -228,13 +241,14 @@ struct AgentRow {
     handle: String,
     path: String,
     color: String,
+    icon_url: Option<String>,
 }
 
 fn agents(conn: &Connection) -> Result<Vec<AgentRow>> {
     let projects = crate::projects_ops::projects_list_on(conn).map_err(|e| super::OrgError::new(500, "internal", e))?;
     let mut out: Vec<AgentRow> = projects
         .into_iter()
-        .map(|p| AgentRow { handle: store::agent_name(conn, &p.id), id: p.id, path: p.path, color: p.color })
+        .map(|p| AgentRow { handle: store::agent_name(conn, &p.id), id: p.id, path: p.path, color: p.color, icon_url: p.icon_url })
         .collect();
     out.sort_by(|a, b| a.handle.to_lowercase().cmp(&b.handle.to_lowercase()).then_with(|| a.id.cmp(&b.id)));
     Ok(out)
@@ -374,15 +388,27 @@ pub fn chart(conn: &Connection, can_manage: bool, can_arrange: bool) -> Result<C
         })
         .collect::<Result<Vec<_>>>()?;
     let heads: BTreeSet<&str> = orgs.iter().filter_map(|o| o.head.as_deref()).collect();
-    let chart_agents = all_agents
+    let mut nodes: Vec<ChartNode> = Vec::new();
+    for o in &chart_orgs {
+        nodes.push(ChartNode { kind: "org", id: o.id.clone(), x: o.x, y: o.y, w: Some(o.w), h: Some(o.h), placed_by: o.placed_by });
+    }
+    let mut chart_agents: Vec<ChartAgent> = all_agents
         .iter()
         .map(|a| {
             let (x, y, person) = out.agents.get(&a.id).copied().unwrap_or((0.0, 0.0, false));
+            let (nx, ny) = match org_of.get(&a.id).and_then(|o| out.orgs.get(o)) {
+                Some((r, _)) => (x - r.x, y - r.y),
+                None => (x, y),
+            };
+            nodes.push(ChartNode { kind: "agent", id: a.id.clone(), x: nx, y: ny, w: None, h: None, placed_by: by(person) });
             ChartAgent {
                 id: a.id.clone(),
+                name: a.handle.clone(),
                 handle: a.handle.clone(),
                 role: role_line(&a.path),
                 color: a.color.clone(),
+                icon_url: a.icon_url.clone().filter(|u| !u.is_empty()),
+                server: None,
                 org_id: org_of.get(&a.id).cloned(),
                 is_head: heads.contains(a.id.as_str()),
                 can_manage: store::agents_can_manage(conn, &a.id),
@@ -392,23 +418,36 @@ pub fn chart(conn: &Connection, can_manage: bool, can_arrange: bool) -> Result<C
             }
         })
         .collect();
-    let remote_agents = remote
-        .iter()
-        .map(|(id, agent, host)| {
-            let (x, y) = out.remote.get(id).copied().unwrap_or((0.0, 0.0));
-            ChartRemote { id: id.clone(), agent: agent.clone(), host: host.clone(), name: format!("{agent} ({host})"), x, y }
-        })
-        .collect();
+    for (id, agent, host) in &remote {
+        let (x, y) = out.remote.get(id).copied().unwrap_or((0.0, 0.0));
+        nodes.push(ChartNode { kind: "agent", id: id.clone(), x, y, w: None, h: None, placed_by: "auto" });
+        chart_agents.push(ChartAgent {
+            id: id.clone(),
+            name: format!("{agent} ({host})"),
+            handle: agent.clone(),
+            role: String::new(),
+            color: String::new(),
+            icon_url: None,
+            server: Some(host.clone()),
+            org_id: None,
+            is_head: false,
+            can_manage: false,
+            x,
+            y,
+            placed_by: "auto",
+        });
+    }
     Ok(Chart {
         ok: true,
         revision: store::revision(conn)?,
+        can_edit: can_arrange,
         can_manage,
         can_arrange,
         orgs: chart_orgs,
         agents: chart_agents,
-        remote_agents,
         lines: lines.iter().map(|l| line_wire(conn, l)).collect(),
         connections: connections(conn)?,
+        nodes,
         card: CardSize { w: layout::CARD_W, h: layout::CARD_H },
     })
 }

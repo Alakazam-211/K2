@@ -1762,11 +1762,12 @@ fn handle_access(
         && toggle != "chat_refresh"
         && toggle != "app_users"
         && toggle != "sim"
+        && toggle != "org_chart_manage"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'chat_refresh', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'app_users', 'gardens_manage', 'permission_cards', 'projects_manage', 'sim' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'chat_refresh', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'app_users', 'gardens_manage', 'org_chart_manage', 'permission_cards', 'projects_manage', 'sim' or 'vault_manage'",
         ));
     }
     if toggle == "app_core" || toggle == "app_review" {
@@ -1800,6 +1801,37 @@ fn handle_access(
         _ => return Err(err("bad_request", 400, "value must be true or false")),
     };
     let ws = target_workspace(caller, str_field(&v, "workspace"))?;
+    if toggle == "org_chart_manage" {
+        // "Manage the org chart" (0283, prd-org-chart-v1 §7; Rosson
+        // 2026-11-10: off by default, the Owner turns it on). The owner
+        // raises; the owner or an Admin lowers. A passport never reaches
+        // here (`/cli/agent-access/set` is not an agent verb).
+        if value && !caller_is_owner(caller) {
+            return Err(err(
+                "owner_only",
+                403,
+                "only the server's owner turns on \"Manage the org chart\" (Settings → Workspaces → <agent> → Agent); an Admin may turn it off",
+            ));
+        }
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::org_chart::store::set_agents_can_manage(&conn, &ws.id, value).map_err(|e| err("workspace_not_found", 404, e))?;
+        }
+        k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+            "org_chart.manage_switch",
+            &caller.audit_user(),
+            format!("agent {} {}", ws.handle, if value { "on" } else { "off" }),
+            "-",
+            "-",
+            "cli",
+        ));
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "org_chart_manage", "agentsCanManageOrgChart": value }),
+            format!("ok {} org_chart_manage={value}", ws.handle),
+        ));
+    }
     if toggle == "sim" {
         // Mobile dev (prd-mobile-dev-v1 §8, M-A11, 0233): "Allow mobile
         // devices". Off by default (Rosson 2026-10-27); Owner/Admin flip

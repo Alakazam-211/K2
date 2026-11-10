@@ -763,16 +763,19 @@ pub fn count_updates_since(conn: &Connection, org_id: &str, since: i64) -> Resul
 /// Asks (one per question, however many members it went to) a head sent
 /// since `since`.
 pub fn asks_since(conn: &Connection, from: &str, since: i64) -> Result<usize> {
+    // One ask = one group (`<group>:<member>` ids), however many members.
     let n: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT created_at || ':' || body) FROM org_chart_asks WHERE from_project_id = ?1 AND created_at >= ?2",
+        "SELECT COUNT(DISTINCT substr(id, 1, instr(id, ':') - 1)) FROM org_chart_asks WHERE from_project_id = ?1 AND created_at >= ?2",
         params![from, since],
         |r| r.get(0),
     )?;
     Ok(n as usize)
 }
 
-pub fn add_ask(conn: &Connection, org_id: &str, from: &str, to: &str, body: &str, now: i64) -> Result<String> {
-    let id = new_id("ask");
+/// Store one member's copy of an ask. `group` is the same for every member
+/// one question went to (`new_id("ask")`).
+pub fn add_ask(conn: &Connection, group: &str, org_id: &str, from: &str, to: &str, body: &str, now: i64) -> Result<String> {
+    let id = format!("{group}:{to}");
     conn.execute(
         "INSERT INTO org_chart_asks (id, org_id, from_project_id, to_project_id, body, woke, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
         params![id, org_id, from, to, body, now],

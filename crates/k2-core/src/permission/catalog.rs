@@ -333,7 +333,7 @@ pub enum ConfirmAction {
 }
 
 impl ConfirmAction {
-    pub const ALL: [ConfirmAction; 9] = [
+    pub const ALL: [ConfirmAction; 10] = [
         ConfirmAction::AppApprove,
         ConfirmAction::NodeAdmin,
         ConfirmAction::VaultMove,

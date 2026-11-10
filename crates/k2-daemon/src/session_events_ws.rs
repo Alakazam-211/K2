@@ -768,6 +768,9 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // Sew on K2 (S29 K14) — APP-LEVEL: one Sew server per box.
         SessionEvent::SewChanged { .. } => None,
 
+        // The Org Chart — APP-LEVEL: one chart per server.
+        SessionEvent::OrgChartChanged { .. } => None,
+
         // prd-dns-pending-and-cutover-safety-v1 DN12e — APP-LEVEL: custom
         // domains are host-wide (Settings → Network → Custom Domains), not tied
         // to one workspace.
@@ -1185,6 +1188,7 @@ mod tests {
             },
             SessionEvent::MailChanged { reason: "send-decided".into() },
             SessionEvent::SewChanged { reason: "voice-installed".into() },
+            SessionEvent::OrgChartChanged { revision: 3 },
             SessionEvent::DomainsChanged { reason: "status_changed".into(), apex: Some("example.com".into()) },
             SessionEvent::FederationPeersChanged {
                 fingerprint: "ab".into(),

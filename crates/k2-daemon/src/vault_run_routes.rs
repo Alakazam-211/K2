@@ -13,12 +13,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::Engine as _;
-use k2_vault::{Delivery, LocalVault, Selector, VaultError};
+use k2_vault::{Delivery, LocalVault, SecretStore, Selector, VaultError};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
+use crate::mail::oauth::{EgressHttp, HttpClient};
 use crate::vault::actor::VaultCaller;
+use crate::vault::oauth_refresh;
+use crate::vault::proxy::{self, ReconnectCard};
 use crate::vault_routes::{not_found_elsewhere, refuse, Sel};
 use crate::vault_use_routes::{jailed_path, use_refusal, use_selector};
 
@@ -47,6 +50,10 @@ struct RunCtx {
     sandboxed: bool,
     workspace_root: Option<PathBuf>,
     secrets_root: Option<PathBuf>,
+    /// A refreshing sign-in's token POST and reconnect card.
+    oauth_http: Arc<dyn HttpClient>,
+    reconnect_card: Arc<ReconnectCard>,
+    session_live: Box<dyn Fn(&str) -> bool>,
 }
 
 impl RunCtx {
@@ -55,6 +62,9 @@ impl RunCtx {
             sandboxed: c.session_id.as_deref().is_some_and(session_is_sandboxed),
             workspace_root: c.workspace_id().and_then(crate::vault::workspace_path).map(PathBuf::from),
             secrets_root: crate::vault::spawn::secrets_root(),
+            oauth_http: Arc::new(EgressHttp::default()),
+            reconnect_card: Arc::new(oauth_refresh::post_live_card),
+            session_live: Box::new(proxy::session_counts_as_live),
         }
     }
 }
@@ -197,6 +207,22 @@ fn b64(v: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(v)
 }
 
+/// Is this a refreshing sign-in (`Sign::OauthRefresh`) the caller can see?
+fn is_sign_in(vault: &LocalVault, c: &VaultCaller, sel: &Selector) -> bool {
+    vault.meta(sel, &c.actor).is_ok_and(|m| m.inject.as_ref().is_some_and(oauth_refresh::is_oauth))
+}
+
+/// A refreshing sign-in reaches a command as a placeholder and a base URL,
+/// as `k2 vault proxy-url` gives them: its ceiling is fetch, and neither its
+/// refresh token nor its access token ever leaves K2. The one
+/// [`oauth_refresh::access_token`] call means an expired sign-in refuses
+/// before the command starts, and leaves no placeholder behind.
+fn sign_in_placeholder(vault: &LocalVault, c: &VaultCaller, sel: &Selector, ctx: &RunCtx) -> Result<Value, VaultError> {
+    let workspace = c.workspace_id().unwrap_or_default().to_string();
+    let oauth = oauth_refresh::Deps { http: &*ctx.oauth_http, asker_workspace: &workspace, post_card: &*ctx.reconnect_card };
+    proxy::mint_checked(vault, c, sel, None, &*ctx.session_live, &|id| oauth_refresh::access_token(vault, id, &oauth).map(|_| ()))
+}
+
 /// A one-time secret isn't for `run`: reading it destroys it, so a run that
 /// fails halfway, or the next one, would find nothing. The agent reads it
 /// itself, once, when its command is ready for it.
@@ -267,7 +293,22 @@ fn run(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], ctx: &RunCtx) -> R
     let outcome = format!("ok:run {}{}", audit_cmd(b.cmd.as_deref()), if b.no_mask { " no-mask" } else { "" });
     let mut got: Vec<Got> = Vec::with_capacity(wants.len());
     let mut names_taken: HashSet<String> = HashSet::new();
+    // (secret name, env name, value): placeholders and base URLs, not secrets.
+    let mut sign_in_env: Vec<(String, String, String)> = Vec::new();
     for w in wants {
+        if is_sign_in(vault, c, &w.sel) {
+            let minted = sign_in_placeholder(vault, c, &w.sel, ctx).map_err(|e| not_found_elsewhere(vault, c, &w.asked, e))?;
+            let field = |k: &str| minted[k].as_str().map(str::to_string).ok_or_else(|| VaultError::internal(format!("proxy answer has no {k}")));
+            let (key, base) = (w.env.clone().map_or_else(|| field("envName"), Ok)?, field("baseUrlEnv")?);
+            for env in [&key, &base] {
+                if !names_taken.insert(env.clone()) {
+                    return Err(VaultError::bad_request("duplicate_env_name", format!("two secrets would both set {env}; rename one with --secret NAME=ENV_NAME")));
+                }
+            }
+            sign_in_env.push((w.name.clone(), key, field("placeholder")?));
+            sign_in_env.push((w.name.clone(), base, field("baseUrl")?));
+            continue;
+        }
         let r = vault
             .resolve_for_run(&w.sel, &who, &consumer, &outcome)
             .map_err(|e| once_refusal(&w.name, e))
@@ -312,6 +353,9 @@ fn run(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], ctx: &RunCtx) -> R
         }
         // `maskB64` is only for the output mask; `valueB64` would be env.
         items.push(json!({ "name": g.name, "env": g.env, "how": "file", "path": dir.join(&file).display().to_string(), "maskB64": b64(g.value.expose()) }));
+    }
+    for (name, env, value) in sign_in_env {
+        items.push(json!({ "name": name, "env": env, "how": "plain", "valueB64": b64(value.as_bytes()) }));
     }
     // A secret beats a plain line of the same name.
     for (k, v) in plain {

@@ -1,5 +1,5 @@
 //! Keeping a refreshing sign-in (`Sign::OauthRefresh`) fresh
-//! (prd-vault-for-agents-v1 §6.2). `fetch` and `proxy` call
+//! (prd-vault-for-agents-v1 §6.2). `fetch`, `proxy` and `run` call
 //! [`access_token`] instead of pasting the stored value.
 //!
 //! - **Fast path:** the token has at least 5 more minutes (or half its
@@ -336,4 +336,4 @@ pub fn refresh_after_401(vault: &LocalVault, secret_id: &str, rejected: &SecretB
 
 #[cfg(test)]
 #[path = "oauth_refresh_tests.rs"]
-mod tests;
+pub(crate) mod tests;

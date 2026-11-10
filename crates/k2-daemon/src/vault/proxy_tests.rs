@@ -13,6 +13,8 @@ use k2_vault::keystore::fake::FakeKeyStore;
 use k2_vault::{Actor, AgentActor, Consumer, Delivery, GrantRequest, KeyStore, Kind, Namespace, OpenOptions, PolicyPatch, PutRequest, Scope};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::vault::oauth_refresh::tests as oauth_tests;
+
 pub(super) static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 const VALUE: &str = "k2test_PROXYKEY_9f8e7d6c5b4a39281706";
@@ -212,10 +214,19 @@ impl Fx {
     }
 
     async fn with_rate(rate: RateLimiter) -> Fx {
+        Fx::with_deps(rate, |d| d).await
+    }
+
+    /// A token endpoint stub for refreshing sign-ins.
+    async fn with_oauth(http: Arc<dyn HttpClient>) -> Fx {
+        Fx::with_deps(RateLimiter::new(1000, 100_000), move |d| d.with_oauth(http, Arc::new(|_: &str, _: &str, _: &k2_vault::SecretMeta| Ok(())))).await
+    }
+
+    async fn with_deps(rate: RateLimiter, adjust: impl FnOnce(Deps) -> Deps) -> Fx {
         let t = TestDir::new("vault-proxy");
         let v = open_vault(&t);
         let live = Arc::new(Mutex::new([S1.to_string(), S2.to_string()].into_iter().collect::<HashSet<_>>()));
-        let deps = deps_for(&v, &live, rate);
+        let deps = adjust(deps_for(&v, &live, rate));
         let running = serve(&t.path().join("vault"), deps.clone()).await.expect("serve");
         let port = running.listening.port;
         Fx { _t: t, v, live, deps, running, port }
@@ -357,6 +368,50 @@ async fn a_query_secret_replaces_its_own_parameter_only() {
     let bad = raw(fx.port, get(fx.port, &format!("{}?other={ph}", fx.url(&ph, "q")))).await;
     assert_eq!((bad.status, bad.code().as_str()), (400, "placeholder_misplaced"), "{}", bad.body);
     assert_eq!(up.conns(), 1, "the misplaced one never went out");
+}
+
+fn sign_in_on(fx: &Fx, up: &Upstream, name: &str) -> String {
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace(WS), name, Kind::OauthToken);
+    r.hosts = vec![up.site()];
+    r.inject = Some(Inject {
+        sign: Some(Sign::OauthRefresh { token_url: "https://login.example.com/token".into(), client_auth: k2_vault::inject::ClientAuth::Post }),
+        ..Inject::bearer()
+    });
+    let m = fx.v.put(r, oauth_tests::bundle(chrono::Utc::now().timestamp() + 60), &Actor::Owner).expect("put").meta;
+    fx.v.placeholder_mint(&m.id, WS, S1, GENERIC, None).expect("mint")
+}
+
+/// §6.2 through the proxy: the upstream gets the current access token, after
+/// one refresh; the next call costs no POST.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sign_in_goes_out_as_its_current_access_token_after_one_refresh() {
+    let stub = Arc::new(oauth_tests::StubToken::rotating());
+    let fx = Fx::with_oauth(stub.clone()).await;
+    let up = Upstream::ok();
+    let ph = sign_in_on(&fx, &up, "SIGN_IN");
+
+    let r = raw(fx.port, get(fx.port, &fx.url(&ph, "me"))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(up.seen()[0].header("authorization"), [format!("Bearer {}", oauth_tests::NEW_ACCESS)]);
+    assert_eq!(stub.count(), 1, "one refresh for a token close to expiry");
+
+    let r = raw(fx.port, get(fx.port, &fx.url(&ph, "me"))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(stub.count(), 1, "the refreshed token is reused");
+    assert_eq!(up.seen()[1].header("authorization"), [format!("Bearer {}", oauth_tests::NEW_ACCESS)]);
+}
+
+/// A sign-in the provider has refused is 403 `oauth_expired`, and nothing
+/// reaches the upstream.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_expired_sign_in_stops_at_the_proxy() {
+    let stub = Arc::new(oauth_tests::StubToken::new(|_| (400, json!({ "error": "invalid_grant" }).to_string())));
+    let fx = Fx::with_oauth(stub).await;
+    let up = Upstream::ok();
+    let ph = sign_in_on(&fx, &up, "DEAD_SIGN_IN");
+    let r = raw(fx.port, get(fx.port, &fx.url(&ph, "me"))).await;
+    assert_eq!((r.status, r.code().as_str()), (403, "oauth_expired"), "{}", r.body);
+    assert_eq!(up.conns(), 0);
 }
 
 /// A signer gets the exact body, and its header is K2's.

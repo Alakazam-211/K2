@@ -11,6 +11,8 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::vault::actor::{Channel, VaultCaller};
+use crate::vault::oauth_refresh::tests::{bundle, StubToken, CLIENT_SECRET, NEW_ACCESS, NEW_REFRESH, OLD_ACCESS, OLD_REFRESH};
+use crate::vault::proxy::{set_listening_for_test, Listening};
 use crate::vault_routes::{handle_on, GRANT, SET};
 
 const SENTINEL: &str = "k2test_RUN_SENTINEL_77c1f0a2b3";
@@ -27,7 +29,15 @@ fn vault() -> T {
     let v = Arc::new(LocalVault::open(dir.path().join("vault"), ks, OpenOptions { kdf: KdfCost::Floor }).expect("open"));
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace folder");
-    let ctx = RunCtx { sandboxed: false, workspace_root: Some(workspace), secrets_root: Some(dir.path().join("secrets")) };
+    let ctx = RunCtx {
+        sandboxed: false,
+        workspace_root: Some(workspace),
+        secrets_root: Some(dir.path().join("secrets")),
+        // A sign-in test swaps in a stub; nothing here reaches a real provider.
+        oauth_http: Arc::new(StubToken::rotating()),
+        reconnect_card: Arc::new(|_: &str, _: &str, _: &k2_vault::SecretMeta| Ok(())),
+        session_live: Box::new(|_: &str| true),
+    };
     T { _dir: dir, v, ctx }
 }
 
@@ -164,6 +174,66 @@ fn a_fetch_only_secret_is_refused_with_the_fetch_hint() {
     let e = run_it(&t, &agent(), json!({ "secrets": [{ "name": "STRIPE" }], "cmd": "x" })).expect_err("refused");
     assert_eq!((e.code, e.status), ("delivery_not_granted", 403), "{}", e.hint);
     assert!(e.hint.contains("k2 vault fetch --secret STRIPE"), "{}", e.hint);
+}
+
+/// A refreshing sign-in, close to expiry, on one host.
+fn put_sign_in(t: &T, name: &str) -> String {
+    use k2_vault::inject::{ClientAuth, Inject, Sign};
+    let mut r = k2_vault::PutRequest::new(k2_vault::Namespace::User, k2_vault::Scope::workspace("ws1"), name, k2_vault::Kind::OauthToken);
+    r.hosts = vec!["api.example.com".into()];
+    r.inject = Some(Inject { sign: Some(Sign::OauthRefresh { token_url: "https://login.example.com/token".into(), client_auth: ClientAuth::Post }), ..Inject::bearer() });
+    t.v.put(r, bundle(chrono::Utc::now().timestamp() + 60), &Actor::Owner).expect("put").meta.id
+}
+
+/// §6.2 through `run`: a sign-in reaches the command as a placeholder and a
+/// base URL, with one refresh and no token anywhere in the answer.
+#[test]
+fn a_sign_in_reaches_the_command_as_a_placeholder_after_one_refresh() {
+    let _env = k2_core::test_env::lock();
+    let mut t = vault();
+    let stub = Arc::new(StubToken::rotating());
+    t.ctx.oauth_http = stub.clone();
+    set_listening_for_test(Some(Listening { port: 4242, moved: false }));
+    put_sign_in(&t, "SIGN_IN");
+
+    let out = run_it(&t, &agent(), json!({ "secrets": [{ "name": "SIGN_IN" }], "cmd": "tool" })).expect("run");
+    assert_eq!(stub.count(), 1, "one refresh for a token close to expiry");
+    let raw = out.to_string();
+    for token in [OLD_ACCESS, OLD_REFRESH, NEW_ACCESS, NEW_REFRESH, CLIENT_SECRET] {
+        assert!(!raw.contains(&b64_s(token)) && !raw.contains(token), "no token in the answer: {raw}");
+    }
+    let of = |env: &str| -> String {
+        let items = out["items"].as_array().expect("items");
+        let it = items.iter().find(|i| i["env"] == env).unwrap_or_else(|| panic!("{env}: {out}"));
+        assert_eq!(it["how"], "plain", "{it}");
+        let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, it["valueB64"].as_str().expect("value")).expect("b64");
+        String::from_utf8(bytes).expect("text")
+    };
+    let ph = of("SIGN_IN");
+    assert!(ph.starts_with(k2_vault::refs::PLACEHOLDER_PREFIX), "{ph}");
+    assert_eq!(of("SIGN_IN_BASE_URL"), format!("http://127.0.0.1:4242/p/{ph}/generic"));
+    assert_eq!(t.v.placeholder_lookup(&ph).expect("lookup").session_id, "sess-9");
+
+    // Fresh now, so the next run costs no POST.
+    run_it(&t, &agent(), json!({ "secrets": [{ "name": "SIGN_IN" }], "cmd": "tool" })).expect("second run");
+    assert_eq!(stub.count(), 1, "the refreshed token is reused");
+    set_listening_for_test(None);
+}
+
+/// An expired sign-in refuses before the command starts, with what to do,
+/// and leaves no placeholder behind.
+#[test]
+fn an_expired_sign_in_refuses_the_run_and_mints_nothing() {
+    let _env = k2_core::test_env::lock();
+    let mut t = vault();
+    t.ctx.oauth_http = Arc::new(StubToken::new(|_| (400, json!({ "error": "invalid_grant" }).to_string())));
+    set_listening_for_test(Some(Listening { port: 4242, moved: false }));
+    put_sign_in(&t, "DEAD_SIGN_IN");
+
+    let e = run_it(&t, &agent(), json!({ "secrets": [{ "name": "DEAD_SIGN_IN" }], "cmd": "tool" })).expect_err("expired");
+    assert_eq!((e.code, e.status), ("oauth_expired", 403), "{e:?}");
+    assert_eq!(t.v.placeholders_live_count("sess-9").expect("count"), 0, "nothing to clean up");
+    set_listening_for_test(None);
 }
 
 /// A one-time code isn't `run`'s to spend: a clear refusal that says what to

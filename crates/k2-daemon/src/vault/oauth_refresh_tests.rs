@@ -17,16 +17,16 @@ use super::*;
 use crate::mail::oauth::{EgressHttp, HttpResponse};
 use crate::vault::actor::{Channel, VaultCaller};
 
-const OLD_ACCESS: &str = "k2test_oldaccess_0123456789abcdef";
-const OLD_REFRESH: &str = "k2test_oldrefresh_0123456789abcdef";
-const NEW_ACCESS: &str = "k2test_newaccess_fedcba9876543210";
-const NEW_REFRESH: &str = "k2test_newrefresh_fedcba9876543210";
-const CLIENT_SECRET: &str = "k2test_clientsecret_55aa55aa55aa";
+pub(crate) const OLD_ACCESS: &str = "k2test_oldaccess_0123456789abcdef";
+pub(crate) const OLD_REFRESH: &str = "k2test_oldrefresh_0123456789abcdef";
+pub(crate) const NEW_ACCESS: &str = "k2test_newaccess_fedcba9876543210";
+pub(crate) const NEW_REFRESH: &str = "k2test_newrefresh_fedcba9876543210";
+pub(crate) const CLIENT_SECRET: &str = "k2test_clientsecret_55aa55aa55aa";
 const ALL_TOKENS: &[&str] = &[OLD_ACCESS, OLD_REFRESH, NEW_ACCESS, NEW_REFRESH, CLIENT_SECRET];
 const WS: &str = "ws-oauth";
 
 /// A token endpoint: counts POSTs, remembers the forms, answers from a fn.
-struct StubToken {
+pub(crate) struct StubToken {
     calls: AtomicUsize,
     delay_ms: u64,
     forms: Mutex<Vec<Vec<(String, String)>>>,
@@ -35,12 +35,12 @@ struct StubToken {
 }
 
 impl StubToken {
-    fn new(answer: impl Fn(usize) -> (u16, String) + Send + Sync + 'static) -> StubToken {
+    pub(crate) fn new(answer: impl Fn(usize) -> (u16, String) + Send + Sync + 'static) -> StubToken {
         StubToken { calls: AtomicUsize::new(0), delay_ms: 0, forms: Mutex::new(vec![]), basic: Mutex::new(vec![]), answer: Box::new(answer) }
     }
 
     /// Answers one new access token per POST.
-    fn rotating() -> StubToken {
+    pub(crate) fn rotating() -> StubToken {
         StubToken::new(|_| (200, json!({ "access_token": NEW_ACCESS, "refresh_token": NEW_REFRESH, "expires_in": 3600 }).to_string()))
     }
 
@@ -49,7 +49,7 @@ impl StubToken {
         self
     }
 
-    fn count(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
 
@@ -88,7 +88,7 @@ fn fixture(tag: &str) -> Fixture {
     Fixture { _t: t, v, cards: AtomicUsize::new(0) }
 }
 
-fn bundle(expires_at: i64) -> SecretBytes {
+pub(crate) fn bundle(expires_at: i64) -> SecretBytes {
     SecretBytes::from_string(
         json!({ "access_token": OLD_ACCESS, "refresh_token": OLD_REFRESH, "expires_at": expires_at, "client_id": "client-1", "client_secret": CLIENT_SECRET }).to_string(),
     )

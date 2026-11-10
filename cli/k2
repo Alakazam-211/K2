@@ -33932,6 +33932,8 @@ restart. What the child gets is what you already have, never more:
   ssh keys        refused; ssh and git already sign with $SSH_AUTH_SOCK
   one-time codes  refused; reading one deletes it, so read it yourself:
                   tool --code-file "$(k2 vault file NAME)"
+  OAuth sign-ins  a placeholder key and base URL, as k2 vault proxy-url
+                  prints; the tokens stay in K2 and K2 keeps them fresh
 --secret repeats; NAME alone works too. --env-file resolves each KEY=k2v://…
 line through the vault and passes other lines through as they are; the file
 must be inside your workspace.

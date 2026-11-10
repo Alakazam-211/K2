@@ -61,7 +61,9 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Semaphore};
 
 use crate::egress::{self, Destination, Purpose};
+use crate::mail::oauth::{EgressHttp, HttpClient};
 use crate::vault::actor::VaultCaller;
+use crate::vault::oauth_refresh;
 use crate::vault_fetch::{follow_target, ovh_time, send_kind, set_query_param, Allowlist, Injection, RateLimiter};
 
 /// Holds the listener's port, next to `vault.db`.
@@ -191,7 +193,13 @@ pub struct Deps {
     pub live: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     pub rate: &'static RateLimiter,
     streams: Streams,
+    /// Where a refreshing sign-in's token POST goes (a stub in tests).
+    oauth_http: Arc<dyn HttpClient>,
+    reconnect_card: Arc<ReconnectCard>,
 }
+
+/// Post a reconnect card: (workspace, scope word, secret).
+pub(crate) type ReconnectCard = dyn Fn(&str, &str, &k2_vault::SecretMeta) -> Result<(), String> + Send + Sync;
 
 impl Deps {
     pub fn new(
@@ -199,7 +207,22 @@ impl Deps {
         live: Arc<dyn Fn(&str) -> bool + Send + Sync>,
         rate: &'static RateLimiter,
     ) -> Deps {
-        Deps { vault, live, rate, streams: Streams::default() }
+        Deps {
+            vault,
+            live,
+            rate,
+            streams: Streams::default(),
+            oauth_http: Arc::new(EgressHttp::default()),
+            reconnect_card: Arc::new(oauth_refresh::post_live_card),
+        }
+    }
+
+    /// Tests: a stub token endpoint and reconnect card.
+    #[cfg(test)]
+    pub(crate) fn with_oauth(mut self, http: Arc<dyn HttpClient>, card: Arc<ReconnectCard>) -> Deps {
+        self.oauth_http = http;
+        self.reconnect_card = card;
+        self
     }
 }
 
@@ -420,14 +443,14 @@ fn authorize(deps: &Deps, token: &str, provider: &str) -> Result<Authorized, Vau
     }
     let r = vault.resolve(&sel, Use::Proxy(&origin), &who)?;
     let (dst, fmt) = r.inject.choose(None, None)?;
-    let injection = Injection {
-        name: r.meta.name.clone(),
-        value: r.value,
-        dst,
-        fmt,
-        allowed: parse_stored(&target.hosts),
-        sign: r.inject.sign.clone(),
+    // A refreshing sign-in is sent as its current access token, as fetch does.
+    let (value, sign) = if oauth_refresh::is_oauth(&r.inject) {
+        let oauth = oauth_refresh::Deps { http: &*deps.oauth_http, asker_workspace: &p.workspace_id, post_card: &*deps.reconnect_card };
+        (oauth_refresh::access_token(&vault, &r.meta.id, &oauth)?, None)
+    } else {
+        (r.value, r.inject.sign.clone())
     };
+    let injection = Injection { name: r.meta.name.clone(), value, dst, fmt, allowed: parse_stored(&target.hosts), sign };
     let allow = Allowlist::from_injections(std::slice::from_ref(&injection));
     Ok(Authorized { session_id: p.session_id, origin, injection, allow })
 }
@@ -773,6 +796,21 @@ pub fn mint_for_caller(
     ttl_secs: Option<i64>,
     live: &dyn Fn(&str) -> bool,
 ) -> Result<Value, VaultError> {
+    mint_checked(vault, c, sel, ttl_secs, live, &|_| Ok(()))
+}
+
+/// [`mint_for_caller`], with one more step once the use is allowed and
+/// before a placeholder exists: `before_mint` gets the secret's id. `k2 vault
+/// run` refreshes a sign-in there, so an expired one refuses before the
+/// command starts.
+pub(crate) fn mint_checked(
+    vault: &LocalVault,
+    c: &VaultCaller,
+    sel: &Selector,
+    ttl_secs: Option<i64>,
+    live: &dyn Fn(&str) -> bool,
+    before_mint: &dyn Fn(&str) -> Result<(), VaultError>,
+) -> Result<Value, VaultError> {
     let a = c.actor.agent().ok_or_else(|| VaultError::forbidden("use_as_agent", "k2 vault proxy-url runs for an agent session; people call the site themselves"))?;
     let who = c.requester()?;
     let session_id = match &who {
@@ -790,6 +828,7 @@ pub fn mint_for_caller(
     // Refuses what this caller may not use, with the usual audit.
     let r = vault.resolve(sel, Use::Proxy(&origin), &who)?;
     r.inject.choose(None, None)?;
+    before_mint(&target.secret_id)?;
     let pair = env_pair(&origin, target.env_name.as_deref(), &target.name)?;
     if vault.placeholders_live_count(&session_id)? >= MAX_PLACEHOLDERS {
         return Err(VaultError::new("too_many_placeholders", 429, "this session holds too many placeholders; reuse the ones you have"));

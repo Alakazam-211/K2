@@ -4,6 +4,8 @@
 /* CodeMirror's unlayered runtime style-mod styles (syntax highlighting etc) */
 @layer k2-chamfer-base, tw, cm-overrides;
 @import "tailwindcss" layer(tw);
+/* OA4: the mail reader views live outside the renderer (sdk/mail-reader). */
+@source "../../sdk/mail-reader/src";
 
 /*
  * Tailwind v4 default: `hover:` only applies inside `@media (hover: hover)`.

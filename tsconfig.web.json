@@ -19,11 +19,16 @@
       "@/*": ["./src/renderer/*"],
       "@shared/*": ["./src/shared/*"],
       "@k2/activity": ["./sdk/activity/src/core.ts"],
+      "@k2/mail-reader": ["./sdk/mail-reader/src/index.ts"],
       "@k2/mpc-client": ["./vendor/k2-mpc-base/client/src/index.ts"]
     }
   },
   "include": [
     "sdk/activity/src/**/*.ts",
+    "sdk/mail-reader/src/**/*.ts",
+    "sdk/mail-reader/src/**/*.tsx",
+    "sdk/mail-reader/test/**/*.ts",
+    "sdk/mail-reader/test/**/*.tsx",
     "vendor/k2-mpc-base/client/src/**/*.ts",
     "vendor/k2-mpc-base/client/test/jsdom-shims.ts",
     "vendor/k2-mpc-base/client/test/fake-live.ts",

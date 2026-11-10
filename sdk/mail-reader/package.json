@@ -1,0 +1,16 @@
+{
+  "name": "@k2/mail-reader",
+  "version": "0.1.0",
+  "description": "K2's mail reader views (folders, messages, threads, the message viewer, a small composer) behind one data seam, MailReaderSource. Ported from OCmail (jmap-webmail fork); see NOTICE and UPSTREAM.md.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "NOTICE",
+    "UPSTREAM.md"
+  ]
+}

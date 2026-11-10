@@ -18,6 +18,8 @@ export default defineConfig({
       '@shared': resolve(__dirname, 'src/shared'),
       // 0.46.5 activity SDK: @k2/activity's core (one copy of the turn words).
       '@k2/activity': resolve(__dirname, 'sdk/activity/src/core.ts'),
+      // OA4 (prd-ocmail-admin-in-k2-v1): the mail reader views (MIT, NOTICE in the package).
+      '@k2/mail-reader': resolve(__dirname, 'sdk/mail-reader/src/index.ts'),
       // Live docs: the vendored k2-mpc-base client library (as vite.config.ts).
       '@k2/mpc-client': resolve(__dirname, 'vendor/k2-mpc-base/client/src/index.ts'),
     },
@@ -26,7 +28,8 @@ export default defineConfig({
   test: {
     // sdk/server: the App server SDK's unit tests (runtime S23).
     // sdk/activity: @k2/activity, the activity SDK's core (0.46.5).
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'sdk/server/test/**/*.test.ts', 'sdk/activity/test/**/*.test.ts'],
+    // sdk/mail-reader: @k2/mail-reader, the mail reader views (OA4).
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'sdk/server/test/**/*.test.ts', 'sdk/activity/test/**/*.test.ts', 'sdk/mail-reader/test/**/*.test.ts', 'sdk/mail-reader/test/**/*.test.tsx'],
     environment: 'node',
   },
 })

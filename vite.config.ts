@@ -60,6 +60,8 @@ export default defineConfig({
       '@shared': resolve(__dirname, 'src/shared'),
       // 0.46.5 activity SDK: @k2/activity's core (one copy of the turn words).
       '@k2/activity': resolve(__dirname, 'sdk/activity/src/core.ts'),
+      // OA4 (prd-ocmail-admin-in-k2-v1): the mail reader views (MIT, NOTICE in the package).
+      '@k2/mail-reader': resolve(__dirname, 'sdk/mail-reader/src/index.ts'),
       // Live docs: the vendored k2-mpc-base client library (LiveText, hunks,
       // the wire). K2's own Live editor (components/LiveEditor) calls it, on
       // the app's own CodeMirror (one copy of each, below).

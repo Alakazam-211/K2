@@ -28,6 +28,8 @@ export default defineConfig({
       '@shared': resolve(__dirname, 'src/shared'),
       // 0.46.5 activity SDK: @k2/activity's core (one copy of the turn words).
       '@k2/activity': resolve(__dirname, 'sdk/activity/src/core.ts'),
+      // OA4 (prd-ocmail-admin-in-k2-v1): the mail reader views (MIT, NOTICE in the package).
+      '@k2/mail-reader': resolve(__dirname, 'sdk/mail-reader/src/index.ts'),
       // Tauri API → browser shims (exact import paths used by the renderer)
       '@tauri-apps/api/core': shim('tauri-core.ts'),
       '@tauri-apps/api/event': shim('tauri-event.ts'),

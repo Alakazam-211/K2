@@ -22,6 +22,13 @@ The encoder report now matches what VideoToolbox actually used.
   a required-hardware session that isn't confirmed is dropped and the next
   ask (hardware without low-latency rate control) is tried. No API changes.
 
+### The encoder's name says which encoder and profile (macOS and iOS)
+
+- `info().name` of a VideoToolbox H.264 encoder now also carries the
+  session's `EncoderID` and the profile VideoToolbox took, for example
+  `VideoToolbox H.264 (hardware, encoder com.apple.videotoolbox.videoencoder.ave.avc, Constrained High)`.
+  It is still free text for logs; no API changes.
+
 ## 0.1.5
 
 A camera that goes away now ends its source on macOS and iOS, the camera

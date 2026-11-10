@@ -162,6 +162,13 @@ extern "C" {
     pub fn CFNumberGetTypeID() -> usize;
     pub fn CFDictionaryGetTypeID() -> usize;
     pub fn CFArrayGetTypeID() -> usize;
+    pub fn CFStringGetTypeID() -> usize;
+    pub fn CFStringGetCString(
+        s: CFStringRef,
+        buf: *mut c_char,
+        size: isize,
+        encoding: u32,
+    ) -> u8;
     pub fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
     pub fn CFRelease(cf: CFTypeRef);
     pub fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> u8;
@@ -490,6 +497,29 @@ pub fn num_f64(v: f64) -> Cf {
 pub unsafe fn cf_is(cf: CFTypeRef, type_id: unsafe extern "C" fn() -> usize) -> bool {
     // SAFETY: the caller's contract; the type ID functions take nothing.
     !cf.is_null() && unsafe { CFGetTypeID(cf) == type_id() }
+}
+
+/// `kCFStringEncodingUTF8`.
+const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+/// A CFString's text (up to 255 bytes of UTF-8, enough for an encoder ID);
+/// `None` for null, any other type, or a longer string.
+///
+/// # Safety
+/// `v` is null or a live CF object.
+pub unsafe fn string_value(v: CFTypeRef) -> Option<String> {
+    // SAFETY: the caller's contract; read only once the type is checked,
+    // into a buffer of the size we pass.
+    unsafe {
+        if !cf_is(v, CFStringGetTypeID) {
+            return None;
+        }
+        let mut buf = [0 as c_char; 256];
+        if CFStringGetCString(v, buf.as_mut_ptr(), buf.len() as isize, CF_STRING_ENCODING_UTF8) == 0 {
+            return None;
+        }
+        Some(CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned())
+    }
 }
 
 /// A CFBoolean's value; `None` for null or any other type.

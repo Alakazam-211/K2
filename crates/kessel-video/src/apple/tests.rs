@@ -1270,6 +1270,13 @@ fn opened_encoders_report_the_session_videotoolbox_made() {
             assert!(hw, "a hardware-only open where the probe found none");
             assert_eq!(enc.implementation(), Implementation::Hardware);
             assert!(enc.info().name.contains("(hardware"), "{}", enc.info().name);
+            // The name carries the encoder ID and profile (for logs), and a
+            // confirmed hardware session is never the low-latency software
+            // encoder.
+            let name = enc.info().name;
+            eprintln!("[apple] hardware-only H.264: {name}");
+            assert!(name.contains("Constrained High") || name.contains("Constrained Baseline") || name.contains("High") || name.contains("Baseline"), "{name}");
+            assert!(!name.contains("h264.rtvc"), "{name}");
         }
         Err(e) => {
             assert!(!hw, "hardware-only refused where the probe found one: {e}");

@@ -142,12 +142,28 @@ pub(crate) struct VtEncoder {
     cfg: EncoderConfig,
     implementation: Implementation,
     low_latency: bool,
+    /// The session's encoder (`kVTCompressionPropertyKey_EncoderID`), when
+    /// it names one (`info().name` carries it, for logs).
+    encoder_id: Option<String>,
+    /// The profile VideoToolbox took (the asked one or its fallback).
+    profile_name: &'static str,
     last_pts: i64,
 }
 
 // SAFETY: the session is driven from one thread at a time (&mut self);
 // VideoToolbox sessions may be used from any thread.
 unsafe impl Send for VtEncoder {}
+
+/// A profile key's name for logs ("Constrained High", …).
+fn profile_name(key: &std::ffi::CStr) -> &'static str {
+    match key.to_bytes() {
+        b"kVTProfileLevel_H264_ConstrainedHigh_AutoLevel" => "Constrained High",
+        b"kVTProfileLevel_H264_High_AutoLevel" => "High",
+        b"kVTProfileLevel_H264_ConstrainedBaseline_AutoLevel" => "Constrained Baseline",
+        b"kVTProfileLevel_H264_Baseline_AutoLevel" => "Baseline",
+        _ => "?",
+    }
+}
 
 fn profile_keys(p: H264Profile) -> [&'static std::ffi::CStr; 2] {
     match p {
@@ -261,6 +277,8 @@ impl VtEncoder {
                 cfg: *cfg,
                 implementation: Implementation::Unknown,
                 low_latency,
+                encoder_id: None,
+                profile_name: "",
                 last_pts: -1,
             };
             let reported =
@@ -302,11 +320,16 @@ impl VtEncoder {
         let set_profile = |enc: &mut VtEncoder, key| {
             cf_const(key).is_some_and(|p| enc.prop(c"kVTCompressionPropertyKey_ProfileLevel", p))
         };
-        if !set_profile(&mut enc, want) && !set_profile(&mut enc, fallback) {
+        if set_profile(&mut enc, want) {
+            enc.profile_name = profile_name(want);
+        } else if set_profile(&mut enc, fallback) {
+            enc.profile_name = profile_name(fallback);
+        } else {
             return Err(unsupported(format!(
                 "VideoToolbox refused the {profile:?} profile"
             )));
         }
+        enc.encoder_id = enc.copy_encoder_id();
         match cfg.keyframe_interval {
             Some(n) => {
                 enc.prop(
@@ -363,6 +386,22 @@ impl VtEncoder {
             }
             let owned = Cf(v);
             bool_value(owned.0)
+        }
+    }
+
+    /// The session's encoder ID (`com.apple.videotoolbox.videoencoder.…`),
+    /// when the session names one.
+    fn copy_encoder_id(&self) -> Option<String> {
+        let key = cf_const(c"kVTCompressionPropertyKey_EncoderID")?;
+        let mut v: CFTypeRef = ptr::null();
+        // SAFETY: a live session and a framework key, an out pointer; we
+        // own the copy (released by `Cf`) and read it while it lives.
+        unsafe {
+            if VTSessionCopyProperty(self.session, key, ptr::null(), &mut v) != 0 || v.is_null() {
+                return None;
+            }
+            let owned = Cf(v);
+            string_value(owned.0)
         }
     }
 
@@ -553,12 +592,14 @@ impl EncoderCore for VtEncoder {
 
     fn name(&self) -> String {
         format!(
-            "VideoToolbox H.264 ({}{})",
+            "VideoToolbox H.264 ({}, encoder {}, {}{})",
             match self.implementation {
                 Implementation::Hardware => "hardware",
                 Implementation::Software => "software",
                 _ => "hardware or software: the OS doesn't say",
             },
+            self.encoder_id.as_deref().unwrap_or("not named"),
+            self.profile_name,
             if self.low_latency {
                 ", low-latency rate control"
             } else {

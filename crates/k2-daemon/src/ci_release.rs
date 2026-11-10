@@ -506,10 +506,96 @@ pub(crate) fn evidence(who: &Who, body: &[u8]) -> R<Value> {
     }))
 }
 
+// ── `k2 app updates push --evidence <run>` (C8) ──────────────────────
+
+/// The release run a push names, with every file its jobs' signed receipts
+/// list (`sha256 → (label, name)`).
+pub(crate) struct PushEvidence {
+    pub run_id: String,
+    pub short: String,
+    pub project: Option<String>,
+    pub sha: String,
+    files: BTreeMap<String, (String, String)>,
+}
+
+impl PushEvidence {
+    /// Each pushed file (`(platform, sha256)`) must be one the run's
+    /// receipts list: what the summary records (`platform → label/name`).
+    pub fn match_files(&self, pushed: &[(String, String)]) -> Result<Value, (&'static str, String)> {
+        let mut matched = serde_json::Map::new();
+        for (platform, sha) in pushed {
+            let (label, name) = self.files.get(sha).ok_or_else(|| {
+                (
+                    EVIDENCE_MISMATCH,
+                    format!("the {platform} file is not one release run {} built (its sha256 {} is in none of the run's receipts): push the file k2 ci evidence fetched", self.short, &sha[..sha.len().min(12)]),
+                )
+            })?;
+            matched.insert(platform.clone(), json!({"label": label, "name": name, "sha256": sha}));
+        }
+        Ok(json!({"run": self.run_id, "files": matched}))
+    }
+}
+
+/// `--evidence`'s refusal when a pushed file isn't the run's.
+pub const EVIDENCE_MISMATCH: &str = "evidence_mismatch";
+
+/// Find the run (`ws_id`'s, by id, commit or branch) for a push of
+/// `version`: a release run that passed, for that version.
+pub(crate) fn evidence_for_push(ws_id: &str, token: &str, version: &str) -> Result<PushEvidence, (&'static str, u16, String)> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let run = ci::find_run(&conn, ws_id, token).ok_or((ci::codes::NO_RUN, 404, format!("--evidence {token}: no CI run of the App's workspace by that name (k2 ci status lists them)")))?;
+    let (kind, facts) = rel::release_facts(&conn, &run.id).ok_or((ci::codes::NO_RUN, 404, "the run is gone".to_string()))?;
+    if kind != rel::kind::RELEASE {
+        return Err((rcodes::NOT_A_RELEASE, 409, format!("--evidence {}: a check run, not a release (k2 ci release)", run.short())));
+    }
+    if run.state != run_state::PASSED {
+        return Err((rcodes::NOT_DONE, 409, format!("--evidence {}: the release run is {}, not passed", run.short(), run.state)));
+    }
+    if facts.version.as_deref() != Some(version) {
+        return Err((rcodes::BAD_VERSION, 409, format!("--evidence {} built version {}, not {version}", run.short(), facts.version.as_deref().unwrap_or("?"))));
+    }
+    let mut files = BTreeMap::new();
+    for c in ci::checks_of(&conn, &run.id) {
+        let Some(j) = c.job_id.as_deref().and_then(|id| store::job_by_id(&conn, id)) else { continue };
+        if j.receipt_ok != Some(true) {
+            continue;
+        }
+        let Some(rc) = j
+            .receipt_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<SignedReceipt>(raw).ok())
+            .and_then(|s| serde_json::from_str::<Receipt>(&s.body).ok())
+        else {
+            continue;
+        };
+        for a in rc.artifacts {
+            files.entry(a.sha256.clone()).or_insert((c.name.clone(), a.name.clone()));
+        }
+    }
+    Ok(PushEvidence { run_id: run.id.clone(), short: run.short().to_string(), project: facts.project, sha: run.sha.clone(), files })
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_push_matches_files_by_sha_or_refuses() {
+        let ev = PushEvidence {
+            run_id: "r".repeat(32),
+            short: "rrrrrrrr".into(),
+            project: Some("acme".into()),
+            sha: "a".repeat(40),
+            files: BTreeMap::from([("1".repeat(64), ("L1".to_string(), "k2/out/acme.AppImage".to_string()))]),
+        };
+        let ok = ev.match_files(&[("linux-x86_64".into(), "1".repeat(64))]).unwrap();
+        assert_eq!(ok["files"]["linux-x86_64"]["label"], "L1");
+        assert_eq!(ok["files"]["linux-x86_64"]["name"], "k2/out/acme.AppImage");
+        let (code, why) = ev.match_files(&[("linux-x86_64".into(), "1".repeat(64)), ("darwin-aarch64".into(), "2".repeat(64))]).unwrap_err();
+        assert_eq!(code, EVIDENCE_MISMATCH);
+        assert!(why.contains("darwin-aarch64") && why.contains("rrrrrrrr"), "{why}");
+    }
 
     #[test]
     fn a_build_body_sets_only_the_build_facts() {

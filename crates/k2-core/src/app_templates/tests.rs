@@ -56,6 +56,10 @@ fn tauri_writes_the_k2_side_once_and_never_overwrites() {
             ("src-tauri/Info.ios.plist".to_string(), Action::Write),
             (ANDROID.to_string(), Action::Snippet),
             (".k2/compute.toml".to_string(), Action::Edit),
+            ("k2/ci/build-linux.sh".to_string(), Action::Write),
+            ("k2/ci/build-macos.sh".to_string(), Action::Write),
+            (".k2/ci.toml".to_string(), Action::Write),
+            (".k2/signer.toml".to_string(), Action::Write),
         ]
     );
     assert!(p.notes.iter().any(|n| n.contains("no src-tauri/Cargo.toml")), "no Cargo.toml: said so: {:?}", p.notes);
@@ -68,7 +72,19 @@ fn tauri_writes_the_k2_side_once_and_never_overwrites() {
     assert!(shown["files"][0]["content"].as_str().unwrap().contains("\"mode\": \"static\""));
     assert!(plan_json(&p, false)["files"][0].get("content").is_none(), "content only on a dry run");
     let a = apply(&d.0, &p).expect("apply");
-    assert_eq!(a.written, ["k2/web.manifest.json", "src-tauri/src/k2_http.rs", "src-tauri/PrivacyInfo.xcprivacy", "src-tauri/Info.ios.plist"]);
+    assert_eq!(
+        a.written,
+        [
+            "k2/web.manifest.json",
+            "src-tauri/src/k2_http.rs",
+            "src-tauri/PrivacyInfo.xcprivacy",
+            "src-tauri/Info.ios.plist",
+            "k2/ci/build-linux.sh",
+            "k2/ci/build-macos.sh",
+            ".k2/ci.toml",
+            ".k2/signer.toml"
+        ]
+    );
     assert_eq!(a.edited, ["src-tauri/tauri.conf.json", ".k2/compute.toml"]);
     assert_eq!(d.read("k2/README.md"), "my own notes\n", "never overwritten");
     let conf: J = serde_json::from_str(&d.read("src-tauri/tauri.conf.json")).unwrap();
@@ -286,6 +302,72 @@ fn voice_writes_the_keys_and_prints_what_it_wont_edit() {
 
     // Only for the Tauri template.
     assert_eq!(plan_with(&d.0, "static", &o).unwrap_err().code, codes::TAURI_ONLY);
+}
+
+/// C8: the CI files carry this server's facts when the daemon has them, a
+/// placeholder (and a note) when it doesn't; an existing `.k2/ci.toml`
+/// without `[release]` gets the section printed, never edited.
+#[test]
+fn tauri_writes_the_release_build_files() {
+    let d = Dir::new("tpl-ci");
+    d.write("src-tauri/tauri.conf.json", CONF);
+    d.write("src-tauri/Cargo.toml", "[package]\nname = \"acme-shell\"\nversion = \"0.1.0\"\n\n[lib]\nname = \"acme_lib\"\n");
+    let facts = ci::CiFacts {
+        controller_fp: Some("a".repeat(64)),
+        workspace_id: Some("ws-1".into()),
+        owner: Some("owner.k2.dev".into()),
+        lane: Some("ci-standard".into()),
+        owner_key_fp: Some("b".repeat(64)),
+        github_repo: Some("acme/shell".into()),
+    };
+    let o = Options { name: Some("acme"), sub: Some("box"), ci: Some(&facts), ..Options::default() };
+    let p = plan_with(&d.0, "tauri", &o).unwrap();
+    let file = |path: &str| p.files.iter().find(|f| f.path == path).unwrap_or_else(|| panic!("{path}: {:?}", actions(&p))).clone();
+    let ci_toml = file(".k2/ci.toml");
+    assert!(ci_toml.content.contains("owner = \"owner.k2.dev\"  # this server's seat") && ci_toml.content.contains("project = \"acme\""), "{}", ci_toml.content);
+    let signer = file(".k2/signer.toml");
+    assert!(signer.content.contains(&"a".repeat(64)) && signer.content.contains(&"b".repeat(64)) && signer.content.contains("repo = \"acme/shell\""), "{}", signer.content);
+    // The binary is the package's, not the lib's.
+    assert!(signer.content.contains("[assets.\"acme-shell.AppImage\"]") && signer.content.contains("\"k2/out/acme-shell\""), "{}", signer.content);
+    assert!(!p.notes.iter().any(|n| n.contains("names no seat")), "{:?}", p.notes);
+    assert!(file("k2/README.md").content.contains("## Release builds on K2 Compute"));
+    // Unknown here: placeholders, and notes that say so.
+    let p = plan_with(&d.0, "tauri", &Options { name: Some("acme"), ..Options::default() }).unwrap();
+    assert!(p.notes.iter().any(|n| n.contains("names no seat")) && p.notes.iter().any(|n| n.contains("all-zero fingerprints")), "{:?}", p.notes);
+    // An existing ci.toml without [release]: a snippet, the file untouched.
+    d.write(".k2/ci.toml", "version = 1\n[checks.unit]\nargv = [\"true\"]\n");
+    let p = plan_with(&d.0, "tauri", &o).unwrap();
+    let c = p.files.iter().find(|f| f.path == ".k2/ci.toml").unwrap();
+    assert_eq!(c.action, Action::Snippet);
+    assert!(c.content.starts_with("[release]\n") && c.content.contains("[release.builds.linux-x86_64]"), "{}", c.content);
+    let both = format!("version = 1\n[checks.unit]\nargv = [\"true\"]\n{}", c.content);
+    crate::compute::proto::ci_config::CiConfig::parse(&both).expect("the printed section completes the file");
+}
+
+/// The release-build check app (`tests/app-template/tauri-ci-check`, built
+/// on compute nodes by its run.sh) holds exactly the CI files the template
+/// writes (with no seat known: the placeholders). `K2_WRITE_CI_CHECK=1`
+/// rewrites them instead (after a template change).
+#[test]
+fn ci_files_match_the_checked_app() {
+    const CHECK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/app-template/tauri-ci-check");
+    let d = Dir::new("tpl-ci-check");
+    let read = |rel: &str| std::fs::read_to_string(format!("{CHECK}/{rel}")).unwrap_or_else(|e| panic!("{rel}: {e}"));
+    d.write("src-tauri/tauri.conf.json", &read("src-tauri/tauri.conf.json"));
+    d.write("src-tauri/Cargo.toml", &read("src-tauri/Cargo.toml"));
+    let p = plan_with(&d.0, "tauri", &Options { name: Some("k2-ci-check"), ..Options::default() }).unwrap();
+    let write = std::env::var("K2_WRITE_CI_CHECK").as_deref() == Ok("1");
+    for f in ["k2/ci/build-linux.sh", "k2/ci/build-macos.sh", ".k2/ci.toml", ".k2/signer.toml"] {
+        let planned = p.files.iter().find(|x| x.path == f).unwrap_or_else(|| panic!("{f} not planned"));
+        assert_eq!(planned.action, Action::Write, "{f}");
+        if write {
+            let path = format!("{CHECK}/{f}");
+            std::fs::create_dir_all(std::path::Path::new(&path).parent().unwrap()).unwrap();
+            std::fs::write(&path, &planned.content).unwrap();
+        } else {
+            assert_eq!(planned.content, read(f), "{f}: the template and the checked app differ (K2_WRITE_CI_CHECK=1 rewrites them)");
+        }
+    }
 }
 
 /// The check app (`tests/app-template/tauri-voice-check`, built and run on a

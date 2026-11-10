@@ -1,0 +1,29 @@
+# K2 CI and release builds for this Tauri app (k2 app init --template
+# tauri; k2 study ci). Commit this file: K2 reads it at each commit.
+version = 1
+
+# Each push you check (k2 ci run; k2 ci watch on): the Linux bundle builds.
+[checks.tauri-linux]
+argv = ["bash", "k2/ci/build-linux.sh"]
+needs = ["rust@1.99.1", "node@22", "profile:tauri-linux", "sys:patchelf", "sys:libfuse2t64", "sys:file", "sys:xdg-utils"]
+os = "linux"
+mem_gb = 16
+timeout_secs = 5400
+
+# k2 ci release <version>: built twice, on two nodes of your seat on
+# different hosts (L1, V1); the signer signs only when both match.
+[release]
+project = "k2-ci-check"
+owner = "your-node-owner.example"  # PUT YOUR SEAT'S OWNER HERE (k2 compute seats)
+lane = "ci-standard"
+
+[release.builds.linux-x86_64]
+argv = ["bash", "k2/ci/build-linux.sh"]
+needs = ["rust@1.99.1", "node@22", "profile:tauri-linux", "sys:patchelf", "sys:libfuse2t64", "sys:file", "sys:xdg-utils"]
+artifacts = ["k2/out/*"]
+env = ["BUILD_COMMIT", "BUILD_TREE"]
+label = "L1"
+verify_label = "V1"
+independent = ["host"]
+mem_gb = 16
+timeout_secs = 5400

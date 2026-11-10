@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "k2-ci-check",
+  "version": "0.1.0",
+  "identifier": "dev.k2.ci-check",
+  "build": {
+    "frontendDist": "../page"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "k2-ci-check",
+        "width": 480,
+        "height": 360
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://<your-app-host>/_k2/updates/stable/{{target}}/{{arch}}/{{current_version}}"
+      ],
+      "pubkey": ""
+    }
+  }
+}

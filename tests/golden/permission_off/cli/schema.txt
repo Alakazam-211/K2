@@ -2813,7 +2813,7 @@ exit: 0
     },
     {
       "name": "app updates push",
-      "usage": "k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--no-wait] [--json]",
+      "usage": "k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--evidence <ci release run>] [--no-wait] [--json]",
       "description": "Ship a signed desktop update (Tauri's updater). Each file (inside the App's workspace) is checked against the App's updater public key, uploaded once to K2's download host (dl.k2.dev), and the channel moves only when every upload is confirmed. Strict SemVer 2.0.0, newer than the channel's current; a platform the channel serves can't silently disappear (--drop-platform). Waits for the uploads unless --no-wait (exit 2). POST /cli/app/updates/push. The owner, an Admin, or the App's agent with Build and run Apps.",
       "args": [{"name": "app", "required": true}],
       "flags": [

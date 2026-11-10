@@ -1,0 +1,19 @@
+[package]
+name = "k2-ci-check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "TEST ONLY: a thin Tauri shell with K2's Tauri template CI files, built by them on compute nodes"
+license = "MIT"
+
+# Its own workspace, as an App team builds it: Tauri from crates.io. K2's
+# own [patch] rows (its root Cargo.toml) never apply here.
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.5", features = [] }
+# tauri::generate_context! emits serde_json for the plugins config.
+serde_json = "1"

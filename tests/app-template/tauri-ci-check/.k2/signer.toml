@@ -1,0 +1,53 @@
+# The signer policy for k2-ci-check (docs/ci-formats-v1.md §8): a STARTING
+# POINT. The signer never reads this file from the repo. A person at the
+# signing machine approves it after reading every line:
+#   sudo /usr/local/libexec/k2-signer/k2-signer-admin policy-approve k2-ci-check < .k2/signer.toml
+# then again with the sha256 it prints. Check the three fingerprints below
+# against what YOUR screens say: controllers = this K2 server
+# (k2 ci signers prints controllerFp), owners = your seat owner's roster
+# key (k2 compute owners, and the owner's own screen). All zeros = not
+# filled in: such a policy refuses every bundle.
+version = 1
+project = "k2-ci-check"
+controllers = ["0000000000000000000000000000000000000000000000000000000000000000"]
+owners = ["0000000000000000000000000000000000000000000000000000000000000000"]
+workspaces = ["your-workspace-id"]
+receipt_max_hours = 24
+roster_max_age_hours = 168
+roster_changes = "ask"
+seat_moves = "ask"
+taint_basis = ["owner_attested", "rekeyed", "self_clean"]
+
+# No GitHub remote: the approval names the commit.
+[source]
+kind = "approval_commit"
+
+# The same command, needs and files as .k2/ci.toml [release.builds.linux-x86_64].
+[build.linux-x86_64]
+argv = ["bash", "k2/ci/build-linux.sh"]
+needs = ["rust@1.99.1", "node@22", "profile:tauri-linux", "sys:patchelf", "sys:libfuse2t64", "sys:file", "sys:xdg-utils"]
+artifacts = ["k2/out/*"]
+env = ["BUILD_COMMIT", "BUILD_TREE"]
+isolation = ["job_uid", "exclusive", "tenant_uid"]
+walls = ["job_user"]
+# Both nodes must make these byte for byte. The .AppImage is a squashfs
+# with build times inside: add it here once two builds match (k2 ci
+# evidence prints what matched).
+dual = ["k2/out/k2-ci-check", "k2/out/k2-ci-check.deb"]
+independent = ["host"]
+
+# What gets an updater signature: the AppImage is what Tauri's Linux
+# updater installs.
+[assets."k2-ci-check.AppImage"]
+key = "updater"
+build = "linux-x86_64"
+artifact = "k2/out/k2-ci-check.AppImage"
+check = "artifact"
+
+# The updater key: k2-signer-admin generate-key k2-ci-check updater prints
+# its public line (RW…); put it here, in src-tauri/tauri.conf.json
+# plugins.updater.pubkey (the base64 of the .pub file), and in
+# k2 app updates key <app> --set.
+[keys.updater]
+kind = "minisign"
+public = "RW-PUT-THE-UPDATER-PUBLIC-KEY-HERE"

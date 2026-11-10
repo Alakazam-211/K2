@@ -45,6 +45,7 @@
 //! init`. `tests/app-template/tauri-voice-check` builds these files into a
 //! real Tauri app and checks the webview.
 
+pub mod ci;
 pub mod doctor;
 mod json_insert;
 pub mod store;
@@ -178,6 +179,9 @@ pub struct Options<'a> {
     pub existing: Option<&'a ExistingApp>,
     /// `--voice`: the mic and camera permission keys.
     pub voice: bool,
+    /// The CI and release files' facts (C8): this server's controller, seat
+    /// and workspace, as the daemon knows them (`None`: placeholders).
+    pub ci: Option<&'a ci::CiFacts>,
 }
 
 /// Plan `template` in `folder` with no options past the name and box.
@@ -205,7 +209,7 @@ pub fn plan_with(folder: &Path, template: &str, o: &Options) -> Result<Plan, Tem
             ));
         }
         let host = e.host.clone().unwrap_or_else(|| "<your-app-host>".into());
-        let t = Tauri { base: &e.app_id, app_id: &e.app_id, host: &host, existing: Some(e), voice: o.voice };
+        let t = Tauri { base: &e.app_id, app_id: &e.app_id, host: &host, existing: Some(e), voice: o.voice, ci: o.ci };
         plan_tauri(folder, &t, &mut p)?;
         return Ok(p);
     }
@@ -228,7 +232,7 @@ pub fn plan_with(folder: &Path, template: &str, o: &Options) -> Result<Plan, Tem
     }
     let host_s = host.clone().unwrap_or_else(|| "<your-app-host>".into());
     match template {
-        "tauri" => plan_tauri(folder, &Tauri { base: &base, app_id: &app_id, host: &host_s, existing: None, voice: o.voice }, &mut p)?,
+        "tauri" => plan_tauri(folder, &Tauri { base: &base, app_id: &app_id, host: &host_s, existing: None, voice: o.voice, ci: o.ci }, &mut p)?,
         "static" => {
             new_file(folder, "k2/web.manifest.json", &text::web_manifest(&app_id, &base), &mut p);
             p.next = vec![
@@ -278,6 +282,7 @@ struct Tauri<'a> {
     /// `--app`: a thin shell over this App; no web manifest.
     existing: Option<&'a ExistingApp>,
     voice: bool,
+    ci: Option<&'a ci::CiFacts>,
 }
 
 /// The file `bundle.macOS.entitlements` names by default, from `src-tauri/`.
@@ -391,6 +396,8 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
         readme.push_str(&text::voice_readme(host));
     }
     readme.push_str(&store::store_readme(t.voice));
+    let project = base.to_string();
+    readme.push_str(&ci::readme_section(app_id, &project));
     new_file(folder, "k2/README.md", &readme, p);
     let cargo_lines = plan_runtime(folder, p);
     plan_store(folder, base, t.voice, p);
@@ -415,6 +422,9 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
             });
         }
     }
+    // C8: release builds on K2 Compute (last, so earlier files keep their
+    // places in the plan).
+    plan_ci(folder, &project, t.ci, p);
     let token_step = |dl: Option<&str>| {
         format!(
             "ask K2 Web (the team that runs k2.dev, through your K2 contact) for this App's download-host token ({}), then k2 app updates token {app_id} --file <file>   (never on the command line)",
@@ -452,6 +462,48 @@ fn plan_tauri(folder: &Path, t: &Tauri, p: &mut Plan) -> Result<(), TemplateErro
     }
     p.next.push(DOCTOR_STEP.into());
     Ok(())
+}
+
+/// C8: the release build on K2 Compute: the two build scripts, `.k2/ci.toml`
+/// (a check and `[release]`) and the signer policy's starting point. An
+/// existing `.k2/ci.toml` without `[release]` gets the section printed.
+fn plan_ci(folder: &Path, project: &str, facts: Option<&ci::CiFacts>, p: &mut Plan) {
+    let none = ci::CiFacts::default();
+    let f = facts.unwrap_or(&none);
+    let bin = std::fs::read_to_string(folder.join("src-tauri/Cargo.toml")).ok().and_then(|t| package_name(&t)).unwrap_or_else(|| project.to_string());
+    new_file(folder, "k2/ci/build-linux.sh", &ci::build_linux_sh(), p);
+    new_file(folder, "k2/ci/build-macos.sh", &ci::build_macos_sh(), p);
+    let toml = ci::ci_toml(project, f);
+    let ci_path = folder.join(".k2/ci.toml");
+    match std::fs::read_to_string(&ci_path) {
+        Ok(t) if !t.contains("[release]") => {
+            let section = toml.split_once("\n[release]\n").map(|(_, rest)| format!("[release]\n{rest}")).unwrap_or_default();
+            p.files.push(FilePlan {
+                path: ".k2/ci.toml".into(),
+                action: Action::Snippet,
+                note: "already there without [release]: K2 doesn't edit it; add this section (k2 study ci-release)".into(),
+                content: section,
+                before: None,
+            });
+        }
+        _ => new_file(folder, ".k2/ci.toml", &toml, p),
+    }
+    new_file(folder, ".k2/signer.toml", &ci::signer_toml(project, &bin, f), p);
+    if f.owner.is_none() {
+        p.notes.push(format!(
+            ".k2/ci.toml names no seat yet (owner = \"{}\"): put your node owner's host there once this server holds a seat (k2 compute seats), or k2 ci release refuses ci_no_seat",
+            ci::PLACEHOLDER_OWNER
+        ));
+    }
+    if f.controller_fp.is_none() || f.owner_key_fp.is_none() {
+        p.notes.push(".k2/signer.toml has all-zero fingerprints where this server's or the owner's aren't known here: fill them in before a person approves it at the signer".into());
+    }
+}
+
+/// `[package] name` of a `Cargo.toml` (the binary the bundle carries).
+fn package_name(cargo_toml: &str) -> Option<String> {
+    let v: toml::Value = cargo_toml.parse().ok()?;
+    v.get("package")?.get("name")?.as_str().map(str::to_string)
 }
 
 /// The Cargo lines K2 printed (it never edits a Cargo.toml).

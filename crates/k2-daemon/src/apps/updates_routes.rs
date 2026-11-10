@@ -197,6 +197,8 @@ fn release_json(conn: &rusqlite::Connection, r: &store::ReleaseRow, channels: &[
         "pubDate": r.pub_date,
         "createdBy": r.created_by,
         "createdAt": r.created_at,
+        // `--evidence` (C8): the release run that built these files.
+        "evidence": k2_core::ci_release::app_evidence(conn, &r.id),
         "size": arts.iter().map(|a| a.size).sum::<i64>(),
         "files": arts.iter().map(|a| json!({
             "platform": a.platform,
@@ -546,6 +548,13 @@ fn push(who: &Who, body: &[u8]) -> R<J> {
     let key = the_key(&app)?;
     need_front(&app)?;
     let root = workspace_root(&app)?;
+    // `--evidence <run>` (C8): the release run that built the files, on this
+    // server, in the App's own workspace, passed, for this version. Each
+    // file's sha256 is matched against the run's signed receipts below.
+    let evidence = match s(&v, "evidence") {
+        None => None,
+        Some(t) => Some(crate::ci_release::evidence_for_push(&app.owner_workspace, t, &version).map_err(|(c, st, h)| no(c, st, h))?),
+    };
     // Every check that needs no reading first.
     let mut plan: Vec<(au::Platform, PathBuf, PathBuf, &'static str, String)> = Vec::new();
     for a in &arts {
@@ -661,6 +670,13 @@ fn push(who: &Who, body: &[u8]) -> R<J> {
             .map_err(|(code, hint)| cleanup(no(code, if code == uc::ARTIFACT_TOO_LARGE { 413 } else { 400 }, format!("{}: {hint}", platform.key()))))?;
         staged.push(Staged { platform: platform.key(), host_name: host_name.clone(), content_type: *ct, path: dest, sha256: checked.sha256, size: checked.size, sig_b64: b64 });
     }
+    let evidence_summary = match &evidence {
+        None => None,
+        Some(ev) => {
+            let files: Vec<(String, String)> = staged.iter().map(|st| (st.platform.clone(), st.sha256.clone())).collect();
+            Some(ev.match_files(&files).map_err(|(c, h)| cleanup(no(c, 409, h)))?)
+        }
+    };
     let by = actor(who);
     let now = deploy::now();
     let rel = db(|c| {
@@ -689,6 +705,12 @@ fn push(who: &Who, body: &[u8]) -> R<J> {
         Ok(r)
     })
     .map_err(cleanup)?;
+    if let (Some(ev), Some(summary)) = (&evidence, &evidence_summary) {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::ci_release::record_app_evidence(&conn, &rel.id, &ev.run_id, ev.project.as_deref(), &ev.sha, summary, &by, now)
+            .map_err(|e| no("internal", 500, e))?;
+    }
     // The staging folder takes the release id (clean finds it by name).
     let final_dir = staging_root(&app.app_id).join(&rel.id);
     let stage_dir = match std::fs::rename(&stage_dir, &final_dir) {

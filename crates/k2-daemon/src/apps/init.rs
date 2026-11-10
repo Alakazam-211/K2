@@ -59,7 +59,8 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
         Some(raw) => Some(super::updates_routes::shell_target(who, raw)?),
         None => None,
     };
-    let options = app_templates::Options { name: s(&v, "name"), sub: Some(sub.as_str()).filter(|x| !x.is_empty()), existing: existing.as_ref(), voice };
+    let facts = (template == "tauri").then(|| ci_facts(&folder));
+    let options = app_templates::Options { name: s(&v, "name"), sub: Some(sub.as_str()).filter(|x| !x.is_empty()), existing: existing.as_ref(), voice, ci: facts.as_ref() };
     let plan = app_templates::plan_with(&folder, template, &options).map_err(refusal)?;
     let mut out = app_templates::plan_json(&plan, dry);
     out["ok"] = json!(true);
@@ -77,6 +78,40 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
         out["applied"] = json!(applied);
     }
     Ok(out)
+}
+
+/// What this server knows for the Tauri template's CI files (C8): its
+/// controller fingerprint (compute on), the workspace the folder is in, its
+/// one active client seat (CI on compute on; several or none: the files
+/// get a placeholder), and the repo's GitHub `owner/repo`. Read only.
+fn ci_facts(folder: &std::path::Path) -> app_templates::ci::CiFacts {
+    let mut f = app_templates::ci::CiFacts::default();
+    if k2_core::compute::enabled() {
+        f.controller_fp = crate::compute_admin::trust_controller_key().ok().map(|k| k.fingerprint());
+    }
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let rows: Vec<(String, String)> = conn
+            .prepare("SELECT id, path FROM projects")
+            .and_then(|mut st| st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map(|rows| rows.filter_map(Result::ok).collect()))
+            .unwrap_or_default();
+        f.workspace_id = rows.into_iter().filter(|(_, p)| !p.is_empty() && folder.starts_with(p)).max_by_key(|(_, p)| p.len()).map(|(id, _)| id);
+        if k2_core::compute::ci_enabled() {
+            let active: Vec<k2_core::compute::trust::SeatRow> =
+                k2_core::compute::trust::seats(&conn, Some("client")).into_iter().filter(|s| s.state == "active").collect();
+            if let [one] = active.as_slice() {
+                f.owner = Some(one.owner_id.clone());
+                f.lane = Some(one.lane.clone());
+                f.owner_key_fp = one.owner_key_fp.clone();
+            }
+        }
+    }
+    let o = crate::ci_engine::ops();
+    if let Ok(root) = o.repo_root(folder) {
+        f.github_repo = o.remote_slug(&root, "origin");
+    }
+    f
 }
 
 /// POST `/cli/app/doctor/store` `{folder, voice?}` (0.46.9): what App Store

@@ -13747,7 +13747,12 @@ First, once per App:
 Releases:
   k2 app updates push <app> --channel <name> --version <semver>
         --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>]
-        [--notes-file <file>] [--drop-platform <platform>] [--no-wait] [--json]
+        [--notes-file <file>] [--drop-platform <platform>]
+        [--evidence <ci release run>] [--no-wait] [--json]
+        --evidence: the k2 ci release run that built the files (k2 study
+        ci-release): it must have passed, for this --version, and each
+        file must be one of its jobs' files by sha256 (else
+        evidence_mismatch, exit 3). ls then shows which run built it.
         <platform> is Tauri's key: <os>-<arch> or <os>-<arch>-<installer>
         (os darwin|linux|windows; arch x86_64|aarch64|i686|armv7; installer
         app|appimage|deb|rpm|msi|nsis), e.g. darwin-aarch64, linux-x86_64,
@@ -14007,11 +14012,11 @@ _app_updates_abs() {
     esac
 }
 
-# k2 app updates push <app> --channel c --version v --artifact p=f … [--sig p=f] [--notes-file f] [--drop-platform p] [--no-wait] [--json]
+# k2 app updates push <app> --channel c --version v --artifact p=f … [--sig p=f] [--notes-file f] [--drop-platform p] [--evidence <run>] [--no-wait] [--json]
 _app_updates_push() {
-    local app="" ch="" ver="" notes_file="" no_wait=0 json_out=0
+    local app="" ch="" ver="" notes_file="" no_wait=0 json_out=0 evidence=""
     local -a arts=() sigs=() drops=()
-    local usage="usage: k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--no-wait] [--json]"
+    local usage="usage: k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--evidence <ci release run>] [--no-wait] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --channel) ch="${2:-}"; shift 2 ;;
@@ -14020,6 +14025,7 @@ _app_updates_push() {
             --sig) sigs+=("${2:-}"); shift 2 ;;
             --notes-file) notes_file="${2:-}"; shift 2 ;;
             --drop-platform) drops+=("${2:-}"); shift 2 ;;
+            --evidence) evidence="${2:-}"; [ -n "$evidence" ] || { echo "$usage" >&2; exit 2; }; shift 2 ;;
             --no-wait) no_wait=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_updates_usage; return 0 ;;
@@ -14065,8 +14071,10 @@ body = {"app": sys.argv[1], "channel": sys.argv[2], "version": sys.argv[3], "art
         "dropPlatforms": [d for d in os.environ["K2_UP_DROPS"].splitlines() if d]}
 if os.environ.get("K2_UP_NOTES"):
     body["notes"] = os.environ["K2_UP_NOTES"]
+if sys.argv[4]:
+    body["evidence"] = sys.argv[4]
 print(json.dumps(body))
-' "$app" "$ch" "$ver")" || exit 2
+' "$app" "$ch" "$ver" "$evidence")" || exit 2
     K2_CP_MAX_TIME=900 _app_rt_post /cli/app/updates/push "$body"
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
     local rid
@@ -15216,6 +15224,20 @@ file: one that is already there is listed as skipped and left as it is.
                                 one shared HTTP client for your Rust code
         .k2/compute.toml        a tauri-linux preset, if the file already
                                 has presets
+        k2/ci/build-linux.sh    the release build K2 Compute runs (deb and
+                                AppImage in k2/out/), made so two nodes
+                                build the same bytes; it signs nothing
+        k2/ci/build-macos.sh    an unsigned macOS compile check (Mac
+                                releases are signed on your own Mac)
+        .k2/ci.toml             a check, and [release]: k2 ci release
+                                <version> builds it twice on your seat
+                                (two hosts), k2 ci evidence hands it to
+                                your signer (k2 study ci-release). An
+                                existing .k2/ci.toml gets [release] printed
+        .k2/signer.toml         the signer policy's starting point: this
+                                server's and your seat owner's fingerprints
+                                when K2 knows them (all zeros otherwise);
+                                a person approves it AT the signer
       Printed for you to add (K2 never edits these files): the Cargo lines
       it lacks (Tauri 2.12.5 or newer, K2's patched wry, reqwest), and the
       AndroidManifest lines (POST_NOTIFICATIONS). Then check it all with
@@ -35719,7 +35741,7 @@ ev = os.path.basename(os.environ["K2_CI_EV_PATH"])
 print("next, at the signing machine (a person; k2 study ci-release):")
 print("  1. sudo -n -u _k2sign /usr/local/libexec/k2-signer/k2-signer rehearse %s < %s" % (v.get("project"), ev))
 print("  2. the same with: evidence %s %s < %s, then challenge, approve and sign each file" % (v.get("project"), v.get("version"), ev))
-print("  3. here: k2 app updates push <app> --channel beta --version %s --artifact <platform>=<file> --sig <platform>=<file>.sig" % v.get("version"))'
+print("  3. here: k2 app updates push <app> --channel beta --version %s --artifact <platform>=<file> --sig <platform>=<file>.sig --evidence %s" % (v.get("version"), v["short"]))'
             fi
             ;;
         logs|log)
@@ -48955,7 +48977,7 @@ cmd_schema() {
     },
     {
       "name": "app updates push",
-      "usage": "k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--no-wait] [--json]",
+      "usage": "k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--evidence <ci release run>] [--no-wait] [--json]",
       "description": "Ship a signed desktop update (Tauri's updater). Each file (inside the App's workspace) is checked against the App's updater public key, uploaded once to K2's download host (dl.k2.dev), and the channel moves only when every upload is confirmed. Strict SemVer 2.0.0, newer than the channel's current; a platform the channel serves can't silently disappear (--drop-platform). Waits for the uploads unless --no-wait (exit 2). POST /cli/app/updates/push. The owner, an Admin, or the App's agent with Build and run Apps.",
       "args": [{"name": "app", "required": true}],
       "flags": [
@@ -51438,7 +51460,7 @@ k2 study ci-release — signed release builds on K2 Compute (k2 ci release)
      b64 is the form Tauri's updater and k2 app updates push read
   6. k2 app updates push <app> --channel beta --version 1.2.0
        --artifact linux-x86_64=rel/L1/k2/out/<bin>.AppImage
-       --sig linux-x86_64=<bin>.AppImage.sig
+       --sig linux-x86_64=<bin>.AppImage.sig --evidence <run>
      then k2 app updates promote <app> --from beta --to stable (the
      template's updater follows stable). <app> is the App's id
      (k2 app list)
@@ -51454,7 +51476,8 @@ k2 study ci-release — signed release builds on K2 Compute (k2 ci release)
   it now: each one's reason is named), no_independent_nodes (no two seat
   nodes differ in what independent asks; the owner's roster decides),
   ci_release_not_done (evidence before every job passed),
-  ci_receipt_not_usable (a receipt failed this server's check: don't sign).
+  ci_receipt_not_usable (a receipt failed this server's check: don't sign),
+  evidence_mismatch (push: a file the run didn't build).
 EOF
 }
 

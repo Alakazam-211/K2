@@ -17,23 +17,17 @@
 
 import React, { useEffect, useId, useState } from 'react'
 import { daemonErrorText } from '@/lib/daemon-error'
-import { DialogFrame, DialogScrim, Radio } from '@/components/ui'
+import { Button, DialogFrame, DialogScrim, Input, Radio } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
 import { settingMenuOpen } from '../settings-esc'
-import type { PersonRow } from './PeopleSection'
+import type { PersonRow } from './user-access-api'
 
 /** POST one `/cli/*` route on the window's server (PeopleSection passes it). */
 export type DaemonPost = (route: string, body: Record<string, unknown>) => Promise<unknown>
 
-const FIELD_CLS =
-  'w-full px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
-const BTN_PRIMARY =
-  'px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
-const BTN_PLAIN =
-  'px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50'
-const LINK_BTN = 'type-hint text-[var(--color-accent)] hover:underline no-drag cursor-pointer disabled:opacity-40'
+const FIELD_CLS = 'w-full type-control'
 const NOTE = 'type-hint leading-relaxed text-[var(--color-text-secondary)]'
-const MUTED = 'type-hint leading-relaxed text-[var(--color-text-muted)]'
+const MUTED = 'type-hint leading-relaxed text-[var(--color-text-secondary)]'
 
 function rec(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
@@ -133,15 +127,15 @@ export function OneTimeSecret({
     )
   }
   return (
-    <div className="space-y-1.5 border border-[var(--color-border)] p-2">
+    <div data-k2-chamfer="surface" className="space-y-1.5 border border-[var(--color-border)] rounded-[var(--radius-box)] p-3">
       <p className={NOTE}>{label}</p>
       <p data-testid="one-time-secret" className="type-row font-mono break-all select-all text-[var(--color-text-primary)]">
         {value}
       </p>
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" className={BTN_PLAIN} aria-label={copyLabel} onClick={doCopy}>
+        <Button aria-label={copyLabel} onClick={doCopy}>
           {copy === 'done' ? 'Copied' : 'Copy'}
-        </button>
+        </Button>
         {copy === 'failed' ? <span className={MUTED}>Couldn’t copy. Select the text and copy it yourself.</span> : null}
       </div>
       {expiry ? <p className={MUTED}>{expiry}</p> : null}
@@ -153,7 +147,7 @@ export function OneTimeSecret({
 function ErrorLine({ text }: { text: string | null }): React.JSX.Element | null {
   if (!text) return null
   return (
-    <p role="alert" className="type-hint text-[var(--color-status-error)]">
+    <p role="alert" className="type-hint leading-relaxed text-[var(--color-status-error-soft)]">
       {text}
     </p>
   )
@@ -162,8 +156,8 @@ function ErrorLine({ text }: { text: string | null }): React.JSX.Element | null 
 function tieLine(person: PersonRow): string | null {
   if (!person.tiedTo) return null
   return person.pendingReset
-    ? `${person.tiedTo}’s agent set ${person.username} up, so the extra access you gave them starts once they choose their own password, here or through the App.`
-    : `${person.tiedTo}’s agent set ${person.username} up, so they use ${person.tiedTo}’s room only until they choose their own password, here or through the App.`
+    ? `The ${person.tiedTo} agent set ${person.username} up, so the extra access you gave starts once they choose their own password, here or in the App.`
+    : `The ${person.tiedTo} agent set ${person.username} up, so they reach only ${person.tiedTo} until they choose their own password, here or in the App.`
 }
 
 type ResetResult =
@@ -244,9 +238,9 @@ export function ResetPasswordDialog({
             <p className={NOTE}>{result.hint}</p>
           )}
           <div className="flex justify-end">
-            <button type="button" className={BTN_PRIMARY} onClick={onClose}>
+            <Button variant="accent" onClick={onClose}>
               Done
-            </button>
+            </Button>
           </div>
         </>
       ) : (
@@ -260,8 +254,8 @@ export function ResetPasswordDialog({
             <label className="flex items-start gap-2 type-control text-[var(--color-text-primary)] cursor-pointer">
               <Radio name="reset-mode" checked={mode === 'link'} onChange={() => setMode('link')} />
               <span>
-                Get a one-time link (recommended: no email involved)
-                <span className={`block ${MUTED}`}>You give it to them yourself. K2 shows it once.</span>
+                Get a one-time link
+                <span className={`block ${MUTED}`}>You pass it on yourself, so no email is involved. K2 shows it once.</span>
               </span>
             </label>
             <label className="flex items-start gap-2 type-control text-[var(--color-text-primary)] cursor-pointer">
@@ -282,7 +276,7 @@ export function ResetPasswordDialog({
               ) : null}
               <label className="block space-y-1">
                 <span className={MUTED}>Their email</span>
-                <input
+                <Input
                   type="email"
                   className={FIELD_CLS}
                   aria-label={`Email for ${person.username}`}
@@ -298,7 +292,7 @@ export function ResetPasswordDialog({
                   Send from (optional): the address the email comes from. Pick one no agent can read, so no agent
                   sees the link. Leave it blank to use K2’s own sender, if this server has one.
                 </span>
-                <input
+                <Input
                   type="email"
                   className={FIELD_CLS}
                   aria-label="Send the reset from"
@@ -313,22 +307,21 @@ export function ResetPasswordDialog({
           ) : null}
           <ErrorLine text={error} />
           <div className="flex justify-end gap-2">
-            <button type="button" className={BTN_PLAIN} onClick={onClose}>
+            <Button variant="quiet" onClick={onClose}>
               Cancel
-            </button>
+            </Button>
             {mode === 'link' ? (
-              <button type="button" className={BTN_PRIMARY} disabled={busy} onClick={() => void run({ code: true })}>
+              <Button variant="accent" disabled={busy} onClick={() => void run({ code: true })}>
                 Get link
-              </button>
+              </Button>
             ) : (
-              <button
-                type="button"
-                className={BTN_PRIMARY}
+              <Button
+                variant="accent"
                 disabled={busy || !to.trim()}
                 onClick={() => void run({ to: to.trim(), ...(from.trim() ? { from: from.trim() } : {}) })}
               >
                 Send link
-              </button>
+              </Button>
             )}
           </div>
         </>
@@ -388,9 +381,9 @@ export function SetPasswordDialog({
             </p>
           )}
           <div className="flex justify-end">
-            <button type="button" className={BTN_PRIMARY} onClick={onClose}>
+            <Button variant="accent" onClick={onClose}>
               Done
-            </button>
+            </Button>
           </div>
         </>
       ) : (
@@ -401,12 +394,14 @@ export function SetPasswordDialog({
           </p>
           {person.tiedTo ? (
             <p className={NOTE}>
-              {person.tiedTo}’s agent set {person.username} up, so they use {person.tiedTo}’s room only.{' '}
-              Setting a password here doesn’t lift that limit; only a reset link they use does.{' '}
-              <button type="button" className={LINK_BTN} onClick={onReset}>
-                Reset password instead…
-              </button>
+              The {person.tiedTo} agent set {person.username} up, so they reach only {person.tiedTo}. Setting a password
+              here doesn’t lift that limit; only a reset link they use does.
             </p>
+          ) : null}
+          {person.tiedTo ? (
+            <div>
+              <Button onClick={onReset}>Reset password instead…</Button>
+            </div>
           ) : null}
           <form
             className="space-y-2"
@@ -416,7 +411,7 @@ export function SetPasswordDialog({
             }}
           >
             <div className="flex items-center gap-2">
-              <input
+              <Input
                 type={shown ? 'text' : 'password'}
                 className={FIELD_CLS}
                 aria-label={`New password for ${person.username}`}
@@ -424,21 +419,21 @@ export function SetPasswordDialog({
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
-              <button type="button" className={LINK_BTN} onClick={() => setShown((s) => !s)}>
+              <Button variant="quiet" className="flex-shrink-0" onClick={() => setShown((s) => !s)}>
                 {shown ? 'Hide' : 'Show'}
-              </button>
+              </Button>
             </div>
             <ErrorLine text={error} />
             <div className="flex flex-wrap justify-end gap-2">
-              <button type="button" className={BTN_PLAIN} onClick={onClose}>
+              <Button variant="quiet" onClick={onClose}>
                 Cancel
-              </button>
-              <button type="button" className={BTN_PLAIN} disabled={busy} onClick={() => void submit(true)}>
+              </Button>
+              <Button disabled={busy} onClick={() => void submit(true)}>
                 Generate a password and set it
-              </button>
-              <button type="submit" className={BTN_PRIMARY} disabled={busy || !password.trim()}>
+              </Button>
+              <Button type="submit" variant="accent" disabled={busy || !password.trim()}>
                 Set password and sign them out
-              </button>
+              </Button>
             </div>
           </form>
         </>
@@ -555,7 +550,7 @@ export function AddUserDialog({
   }
 
   return (
-    <Sheet title="Add user" onClose={onClose} testId="add-user-dialog">
+    <Sheet title="Add person" onClose={onClose} testId="add-user-dialog">
       <form
         className="space-y-2.5"
         onSubmit={(e) => {
@@ -564,8 +559,8 @@ export function AddUserDialog({
         }}
       >
         <label className="block space-y-1">
-          <span className={MUTED}>Username (required). Lowercase; it can’t be changed later.</span>
-          <input
+          <span className={MUTED}>Username. Lowercase; it can’t be changed later.</span>
+          <Input
             className={FIELD_CLS}
             aria-label="New user’s username"
             autoCapitalize="none"
@@ -576,12 +571,12 @@ export function AddUserDialog({
           />
         </label>
         <label className="block space-y-1">
-          <span className={MUTED}>Full name (optional)</span>
-          <input className={FIELD_CLS} aria-label="New user’s full name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
+          <span className={MUTED}>Full name, if you like</span>
+          <Input className={FIELD_CLS} aria-label="New user’s full name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
         </label>
         <label className="block space-y-1">
-          <span className={MUTED}>Email (optional)</span>
-          <input
+          <span className={MUTED}>Email, for invite and reset links</span>
+          <Input
             type="email"
             className={FIELD_CLS}
             aria-label="New user’s email"
@@ -598,9 +593,12 @@ export function AddUserDialog({
             <Radio name="add-mode" checked={mode === 'type'} onChange={() => setMode('type')} />
             Type one
           </label>
-          <label className="flex items-center gap-2 type-control text-[var(--color-text-primary)] cursor-pointer">
+          <label className="flex items-start gap-2 type-control text-[var(--color-text-primary)] cursor-pointer">
             <Radio name="add-mode" checked={mode === 'generate'} onChange={() => setMode('generate')} />
-            Let K2 generate one (shown once, after you add them)
+            <span>
+              Let K2 generate one
+              <span className={`block ${MUTED}`}>Shown once, after you add them.</span>
+            </span>
           </label>
           <label
             className={`flex items-start gap-2 type-control cursor-pointer ${hasEmail ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-muted)]'}`}
@@ -619,7 +617,7 @@ export function AddUserDialog({
         </div>
         {mode === 'type' ? (
           <div className="flex items-center gap-2">
-            <input
+            <Input
               type={shown ? 'text' : 'password'}
               className={FIELD_CLS}
               aria-label="New user’s password"
@@ -627,9 +625,9 @@ export function AddUserDialog({
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <button type="button" className={LINK_BTN} onClick={() => setShown((s) => !s)}>
+            <Button variant="quiet" className="flex-shrink-0" onClick={() => setShown((s) => !s)}>
               {shown ? 'Hide' : 'Show'}
-            </button>
+            </Button>
           </div>
         ) : null}
         {mode === 'invite' ? (
@@ -667,7 +665,7 @@ export function AddUserDialog({
               <span className={MUTED}>
                 Send from (optional): a sender address set up for this App. Leave it blank to use the App’s default.
               </span>
-              <input
+              <Input
                 type="email"
                 className={FIELD_CLS}
                 aria-label="Send the invite from"
@@ -682,12 +680,12 @@ export function AddUserDialog({
         ) : null}
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2">
-          <button type="button" className={BTN_PLAIN} onClick={onClose}>
+          <Button variant="quiet" onClick={onClose}>
             Cancel
-          </button>
-          <button type="submit" className={BTN_PRIMARY} disabled={!ready || busy}>
-            {mode === 'invite' ? 'Add and send link' : 'Add user'}
-          </button>
+          </Button>
+          <Button type="submit" variant="accent" disabled={!ready || busy}>
+            {mode === 'invite' ? 'Add and send link' : 'Add person'}
+          </Button>
         </div>
       </form>
     </Sheet>
@@ -712,9 +710,9 @@ export function AddedUserDialog({ added, onClose }: { added: AddedUser; onClose:
       ) : null}
       {added.note ? <p className={NOTE}>{added.note}</p> : null}
       <div className="flex justify-end">
-        <button type="button" className={BTN_PRIMARY} onClick={onClose}>
+        <Button variant="accent" onClick={onClose}>
           Done
-        </button>
+        </Button>
       </div>
     </Sheet>
   )

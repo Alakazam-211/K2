@@ -14,12 +14,12 @@
 // fails (the page works as before). Never `fetchProjects()`.
 
 import React, { useEffect, useState } from 'react'
-import { Button } from '@/components/ui'
+import { Button, Tag } from '@/components/ui'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore } from '@/stores/window-mode'
-import { SettingDropdown, SettingsGroup } from '../controls/SettingControls'
+import { SETTING_FIELD_WIDTH, SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import {
   blockedHookRow,
   fetchChatGrants,
@@ -36,7 +36,7 @@ import {
 const muted = 'text-[var(--color-text-muted)]'
 const PENDING_REFRESH_MS = 5000
 
-export const SEW_ACCESS_TOOLTIP = "Chat and voice access creates the person's chat account. What they can see is set inside Sew."
+export const SEW_ACCESS_TOOLTIP = "Giving chat access makes the person a chat account on this server. Which channels they see is set in the chat itself."
 
 type Level = 'none' | 'member' | 'guest'
 
@@ -71,16 +71,16 @@ export function HookStatePill({
   switch (grant.hookState) {
     case 'pending':
       return (
-        <span data-testid="sew-hook-pill" title={grant.hookError ?? 'K2 keeps telling Sew'} className="type-hint text-[var(--color-status-working)]">
+        <Tag tone="warn" data-testid="sew-hook-pill" title={grant.hookError ?? 'K2 keeps telling Sew'}>
           Pending
-        </span>
+        </Tag>
       )
     case 'blocked':
       return (
         <span className="flex items-center gap-1.5">
-          <span data-testid="sew-hook-pill" title={grant.hookError ?? ''} className="type-hint text-[var(--color-status-error-soft)]">
+          <Tag tone="danger" data-testid="sew-hook-pill" title={grant.hookError ?? ''}>
             Failed
-          </span>
+          </Tag>
           {onRetry ? (
             <Button onClick={onRetry} aria-label="Retry Sew sync">
               Retry
@@ -90,15 +90,15 @@ export function HookStatePill({
       )
     case 'held':
       return (
-        <span data-testid="sew-hook-pill" title={grant.hookError ?? 'Sew holds this member (banned in a Space)'} className={`type-hint ${muted}`}>
+        <Tag tone="muted" data-testid="sew-hook-pill" title={grant.hookError ?? 'Sew holds this member (banned in a Space)'}>
           Held
-        </span>
+        </Tag>
       )
     case 'synced':
       return (
-        <span data-testid="sew-hook-pill" className={`type-hint ${muted}`}>
+        <Tag tone="ok" data-testid="sew-hook-pill">
           Active
-        </span>
+        </Tag>
       )
     default:
       return null
@@ -194,52 +194,53 @@ export function SewPersonAccess({
     }
   }
 
+  const hint = !principalId
+    ? 'K2 on the server needs an update before this person can use chat.'
+    : !installed
+      ? 'Chat / Voice Hosting isn’t set up on this server yet.'
+      : !targetOn && grant
+        ? 'Chat / Voice Hosting is turned off, so this can’t change now. You can still remove it.'
+        : 'Members join the chat on this server. Guests see only the channels they’re added to.'
   return (
-    <SettingsGroup title="Chat / Voice Hosting">
-    <div className="space-y-1" data-testid="sew-person-access" title={SEW_ACCESS_TOOLTIP}>
-      <div className="flex items-center gap-2">
-        <span className="type-row text-[var(--color-text-primary)] w-28">Chat and voice</span>
+    <SettingsGroup title="Chat and voice" hint={SEW_ACCESS_TOOLTIP} card testId="sew-person-access">
+      <SettingRow
+        label="Chat access"
+        hint={hint}
+        below={
+          error ? (
+            <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">
+              {error}
+            </p>
+          ) : undefined
+        }
+      >
+        {grant ? <HookStatePill grant={grant} onRetry={() => void retry()} /> : null}
         {installed && (targetOn || !grant) ? (
-          <SettingDropdown
-            ariaLabel={`Chat and voice access for ${username}`}
-            value={value}
-            disabled={disabled || (!targetOn && !grant)}
-            options={[
-              { value: 'none', label: 'No access' },
-              { value: 'member', label: 'Member', disabled: !targetOn },
-              { value: 'guest', label: 'Guest', disabled: !targetOn },
-            ]}
-            onChange={(v) => void change(v as Level)}
-          />
+          <div className={SETTING_FIELD_WIDTH}>
+            <SettingDropdown
+              ariaLabel={`Chat and voice access for ${username}`}
+              value={value}
+              fullWidth
+              disabled={disabled || (!targetOn && !grant)}
+              options={[
+                { value: 'none', label: 'No access' },
+                { value: 'member', label: 'Member', disabled: !targetOn },
+                { value: 'guest', label: 'Guest', disabled: !targetOn },
+              ]}
+              onChange={(v) => void change(v as Level)}
+            />
+          </div>
         ) : installed ? (
-          <span className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)]">
-            {value === 'guest' ? 'Guest' : 'Member'} (Chat / Voice Hosting is off; read only)
+          <>
+            <span className="type-row text-[var(--color-text-secondary)]">{value === 'guest' ? 'Guest' : 'Member'}</span>
             <Button disabled={disabled} onClick={() => void change('none')}>
               Remove
             </Button>
-          </span>
+          </>
         ) : (
-          <span className={`type-hint ${muted}`}>—</span>
+          <Button onClick={() => useSettingsStore.setState({ activeSection: 'sew' })}>Set up chat</Button>
         )}
-        {grant ? <HookStatePill grant={grant} onRetry={() => void retry()} /> : null}
-      </div>
-      {!installed ? (
-        <button
-          type="button"
-          className={`type-hint underline ${muted}`}
-          onClick={() => useSettingsStore.setState({ activeSection: 'sew' })}
-        >
-          Enable Chat / Voice Hosting in Cores to give people access.
-        </button>
-      ) : null}
-      {!principalId ? <p className={`type-hint ${muted}`}>This person has no id yet; update K2 on the server.</p> : null}
-      <p className={`type-hint ${muted}`}>{SEW_ACCESS_TOOLTIP}</p>
-      {error ? (
-        <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
-          {error}
-        </p>
-      ) : null}
-    </div>
+      </SettingRow>
     </SettingsGroup>
   )
 }

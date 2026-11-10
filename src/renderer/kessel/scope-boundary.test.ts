@@ -214,6 +214,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // S32 K27 Settings → Chat Hosting: the window's server's Sew install, and
   // its `sew_changed` refetch event.
   'components/Settings/sections/sew-api.ts',
+  // Settings → User Access and User Templates: every App on the window's
+  // own server, for naming what people can use.
+  'components/Settings/sections/user-access-api.ts',
   'components/Settings/sections/SewSection.tsx',
   // Voice rooms §4.5: Settings → Voice Rooms is the window's own server (its
   // count, names and refetch event), like Chat Hosting above. App remounts

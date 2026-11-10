@@ -75,9 +75,14 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-async function openAda(): Promise<void> {
+async function openAda(show = true): Promise<void> {
   render(<PeopleSection />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Open ada' }))
+  await screen.findByRole('button', { name: 'Open ada' })
+  if (show) showAda()
+}
+
+function showAda(): void {
+  fireEvent.click(screen.getByRole('button', { name: 'Open ada' }))
 }
 
 function pick(option: string): void {
@@ -99,8 +104,8 @@ describe('User Access: Sew column', () => {
       await new Promise((r) => setTimeout(r, 10))
     })
     expect(screen.queryByTestId('sew-person-access')).toBeNull()
-    expect(screen.queryByRole('button', { name: /^Show chat/ })).toBeNull()
-    expect(screen.getByText('No grants for this person.')).toBeTruthy()
+    expect(screen.getByTestId('person-sign-in').textContent).not.toMatch(/chat/i)
+    expect(screen.getByText('No Apps yet')).toBeTruthy()
   })
 
   it('hidden when the status read fails (the page works as before)', async () => {
@@ -110,13 +115,14 @@ describe('User Access: Sew column', () => {
       await new Promise((r) => setTimeout(r, 10))
     })
     expect(screen.queryByTestId('sew-person-access')).toBeNull()
-    expect(screen.getByLabelText('ada full name')).toBeTruthy()
+    expect(screen.getByTestId('person-sign-in')).toBeTruthy()
   })
 
-  it('not installed: no dropdown, a link to Chat Hosting', async () => {
+  it('not installed: no dropdown, says so, and a button to set up chat', async () => {
     state.sew = { supported: true, state: 'not-installed' }
     await openAda()
-    const link = await screen.findByRole('button', { name: 'Enable Chat / Voice Hosting in Cores to give people access.' })
+    const link = await screen.findByRole('button', { name: 'Set up chat' })
+    expect(screen.getByTestId('sew-person-access').textContent).toContain('Chat / Voice Hosting isn’t set up on this server yet.')
     expect(screen.queryByRole('button', { name: 'Chat and voice access for ada' })).toBeNull()
     fireEvent.click(link)
     expect(useSettingsStore.getState().activeSection).toBe('sew')
@@ -136,8 +142,9 @@ describe('User Access: Sew column', () => {
   it('member → guest confirms and updates; a refusal reverts and shows the hint', async () => {
     state.grants = [chat()]
     h.daemonCliPost.mockRejectedValueOnce(new DaemonHttpError("remove the assistant grants for 'ada' first", 400, null))
-    await openAda()
-    expect(await screen.findByTestId('sew-tag-ada')).toBeTruthy()
+    await openAda(false)
+    expect((await screen.findByTestId('summary-ada')).textContent).toBe('Chat')
+    showAda()
     await screen.findByRole('button', { name: 'Chat and voice access for ada' })
     pick('Guest')
     expect(await screen.findByText("remove the assistant grants for 'ada' first")).toBeTruthy()
@@ -204,7 +211,8 @@ describe('User Access: Sew column', () => {
     state.grants = [chat()]
     h.daemonCliPost.mockResolvedValue({ success: true, cascaded: [] })
     await openAda()
-    expect(await screen.findByText('Member (Chat / Voice Hosting is off; read only)')).toBeTruthy()
+    expect((await screen.findByTestId('sew-person-access')).textContent).toContain('Chat / Voice Hosting is turned off, so this can’t change now.')
+    expect(screen.getByTestId('sew-person-access').textContent).toContain('Member')
     expect(screen.queryByRole('button', { name: 'Chat and voice access for ada' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     await waitFor(() => expect(posts('skin/grants/delete')).toEqual([{ id: 'g-ada' }]))

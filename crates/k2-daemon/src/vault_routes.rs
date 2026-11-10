@@ -2442,6 +2442,13 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
         // address, the App's real name), never the client's label.
         let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
         (b.secret_id.clone(), reason)
+    } else if let Some(reason) = crate::compute_trust::confirm_reason(action, b.secret_id.as_deref()) {
+        // Node rosters, lanes, seats, secrets consent and signer pairing
+        // (11-07 review H1): the sheet says the stored request, the pinned
+        // owner or the waiting pairing, never the client's label; nothing
+        // waiting under that id gets no token.
+        let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
+        (b.secret_id.clone(), reason)
     } else {
         let label = b.label.as_deref().map(|l| format!(" {}", l.chars().take(64).collect::<String>())).unwrap_or_default();
         (b.secret_id.clone(), format!("{}{label}", action.replace('-', " ")))

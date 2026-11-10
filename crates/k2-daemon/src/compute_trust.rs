@@ -225,6 +225,64 @@ fn take_confirm(who: &Who, v: &Value, action: &str, bound: &str) -> R<String> {
     }
 }
 
+/// The vault confirm sheet's words for a `compute-trust` or `ci-signer`
+/// confirm (11-07 review H1): written here from what this server stored
+/// under `bound`, never from the caller's label (anything holding the owner
+/// token could otherwise show "reveal README" on the sheet and get a token
+/// that approves a roster change). `None`: not one of these actions.
+/// `Err`: nothing waits under `bound`, so no token is minted.
+pub fn confirm_reason(action: &str, bound: Option<&str>) -> Option<Result<String, &'static str>> {
+    let b = bound.unwrap_or("");
+    match action {
+        trust::CONFIRM_TRUST => Some(trust_reason(b)),
+        trust::CONFIRM_SIGNER => Some(signer_reason(b)),
+        _ => None,
+    }
+}
+
+fn trust_reason(b: &str) -> Result<String, &'static str> {
+    let db = k2_core::db::try_shared().ok_or("the store isn't open")?;
+    let conn = db.lock();
+    if let Some(fp) = b.strip_prefix("consent:") {
+        let t = trust::owner_trust(&conn, fp).ok_or("no pinned node owner has that roster key")?;
+        return Ok(format!(
+            "send this server's vault secrets to nodes owned by {} (their root can read them; roster key {}…)",
+            t.owner_id,
+            &t.key_fp[..16.min(t.key_fp.len())]
+        ));
+    }
+    if let Some((op, seat)) = seat_action_of(b) {
+        let s = trust::seat(&conn, "owner", seat).ok_or("no seat by that id")?;
+        return Ok(format!("{op} the CI seat {} of {} (lane {}, nodes {})", s.id, s.client_label, s.lane, s.nodes.join(", ")));
+    }
+    let r = trust::request_by_id(&conn, b).filter(|r| r.state == "pending" && r.expires_at > now()).ok_or("that trust request isn't waiting for a person")?;
+    Ok(format!("approve: {}", r.summary))
+}
+
+/// `seat-end:<id>`, `seat-suspend:<id>`, `seat-resume:<id>`: the verb and the seat.
+fn seat_action_of(b: &str) -> Option<(&'static str, &str)> {
+    for (p, op) in [("seat-end:", "end"), ("seat-suspend:", "suspend"), ("seat-resume:", "resume")] {
+        if let Some(id) = b.strip_prefix(p) {
+            return Some((op, id));
+        }
+    }
+    None
+}
+
+fn signer_reason(b: &str) -> Result<String, &'static str> {
+    if let Some(prefix) = b.strip_prefix("add:") {
+        if prefix.len() != 16 || !prefix.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+            return Err("a signer pairing names the signer's 16-hex key prefix");
+        }
+        return Ok(format!("pair a release signer (key {prefix}…) with this server: it then signs this server's CI releases"));
+    }
+    #[cfg(unix)]
+    if let Some(r) = signer::pairing_reason(b) {
+        return Ok(r);
+    }
+    Err("no signer pairing waits under that id")
+}
+
 fn now() -> i64 {
     compute::now()
 }
@@ -1738,6 +1796,15 @@ mod signer {
 
     fn sweep(m: &mut HashMap<String, Pairing>, t: i64) {
         m.retain(|_, p| t < p.created + sp::CODE_TTL_SECS);
+    }
+
+    /// The sheet's words for revealing a waiting pairing's SAS (H1).
+    pub(super) fn pairing_reason(id: &str) -> Option<String> {
+        let mut m = book().lock().unwrap_or_else(|p| p.into_inner());
+        sweep(&mut m, now());
+        let p = m.get(id)?;
+        let h = &p.pending.hello;
+        Some(format!("show the pairing code for release signer {} (key {}…)", h.signer_label, &h.signer_fp[..16.min(h.signer_fp.len())]))
     }
 
     fn signed_of(v: &Value, k: &str) -> R<Signed> {

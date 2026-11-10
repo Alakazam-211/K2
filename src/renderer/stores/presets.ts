@@ -175,6 +175,11 @@ export interface AgentPreset {
 
 interface PresetsState {
   presets: AgentPreset[]
+  /** True once a `presets/list` read has come back (ok or not), so a page
+   *  can tell "still loading" from "there are none". */
+  presetsLoaded: boolean
+  /** The last read's failure, or null after a good read. */
+  presetsError: string | null
   showPresetsBar: boolean
   fetchPresets: () => Promise<void>
   togglePresetsBar: () => void
@@ -220,6 +225,8 @@ export { parseCommand }
 
 export const usePresetsStore = create<PresetsState>((set, get) => ({
   presets: [],
+  presetsLoaded: false,
+  presetsError: null,
   showPresetsBar: readShowLaunchBar(currentHostKey()),
 
   fetchPresets: async () => {
@@ -227,9 +234,11 @@ export const usePresetsStore = create<PresetsState>((set, get) => ({
       // asArray: an object body would land in `presets` and break every
       // `.map`/spread over it.
       const result = asArray<AgentPreset>(await daemonCliGet<unknown>(primaryScope(), 'presets/list'))
-      set({ presets: result })
+      set({ presets: result, presetsLoaded: true, presetsError: null })
     } catch (err) {
       console.error('Failed to fetch presets:', err)
+      // The list on screen stays; the page says the read failed.
+      set({ presetsLoaded: true, presetsError: err instanceof Error && err.message ? err.message : String(err) })
     }
   },
 

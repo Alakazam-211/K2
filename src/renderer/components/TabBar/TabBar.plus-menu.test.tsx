@@ -836,12 +836,12 @@ describe('Settings → LLMs show launch bar', () => {
     })
   })
 
-  it('sits under Defaults, above Agent Presets, and search can find it', () => {
+  it('sits under Default agent, above Launch presets, and search can find it', () => {
     render(<AgentsSection />)
-    const box = screen.getByRole('checkbox', { name: 'Show launch bar' }) as HTMLInputElement
-    expect(box.checked).toBe(true)
-    const defaults = screen.getByRole('heading', { name: 'Defaults' })
-    const presets = screen.getByRole('heading', { name: 'Agent Presets' })
+    const box = screen.getByRole('switch', { name: 'Show launch bar' })
+    expect(box.getAttribute('aria-checked')).toBe('true')
+    const defaults = screen.getByRole('heading', { name: 'Default agent' })
+    const presets = screen.getByRole('heading', { name: 'Launch presets' })
     expect(defaults.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     expect(box.compareDocumentPosition(presets) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
 
@@ -854,7 +854,7 @@ describe('Settings → LLMs show launch bar', () => {
 
   it('unchecking writes the host bit', () => {
     render(<AgentsSection />)
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Show launch bar' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Show launch bar' }))
     expect(usePresetsStore.getState().showPresetsBar).toBe(false)
     expect(localStorage.getItem(showLaunchBarStorageKey('local'))).toBe('0')
   })

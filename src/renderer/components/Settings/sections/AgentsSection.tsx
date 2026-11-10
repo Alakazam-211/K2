@@ -1,6 +1,9 @@
 import React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '@/stores/settings'
+import { useConnectHostStore } from '@/stores/connect-host'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import {
   usePresetsStore,
   cloneDefaultInjectFlow,
@@ -8,10 +11,12 @@ import {
   isDefaultInjectFlowForCommand,
   parseInjectFlowOrDefault,
   readPresetInjectFlowJson,
+  type AgentPreset,
   type InjectFlowKey,
   type InjectFlowStep,
 } from '@/stores/presets'
 import { matchAgentPreset } from '@/lib/agent-resolve'
+import { daemonCliGet } from '@/lib/daemon-cli'
 import {
   CLI_INSTALL_COMMANDS,
   ensureOneCli,
@@ -22,172 +27,224 @@ import {
 } from '@/lib/ensure-cli'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { primaryScope } from '@/kessel/server-scope'
-import { KeyCombo } from '@/components/KeySymbol'
-import { SettingDropdown } from '../controls/SettingControls'
+import { SettingDropdown, SettingRow, SettingsGroup, SETTING_ROW_HINT } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import type { DesktopOs } from '@/lib/desktop-chrome'
-import { Checkbox, Toggle } from '@/components/ui'
+import { Button, Callout, Input, OverflowMenu, Surface, Tag, Toggle } from '@/components/ui'
 
-/** "Launched with ⇧⌘T …" with the chord this platform really uses. */
+/** "Opens with ⇧⌘T …" with the chord this platform really uses. */
 export function defaultAgentLaunchCopy(os?: DesktopOs): string {
   const chord = metaChordLabel('Shift+Meta+T', os)
-  return chord ? `Launched with ${chord} or from the assistant` : 'Launched from the tab + menu or the assistant'
+  return chord
+    ? `Opens with ${chord} and when the assistant starts an agent.`
+    : 'Opens from the tab + menu and when the assistant starts an agent.'
+}
+
+// ── Agent tools ─────────────────────────────────────────────────────
+// Order matches the built-in presets (db seed / Restore built-ins).
+interface AgentTool {
+  name: string
+  /** The program K2 runs, and the search id's suffix. */
+  command: string
+  installCommand: string
+  docs: string
+  /** What to do after installing, in one or two plain sentences. */
+  notes: string
+  keywords: string[]
+}
+
+const SUBS_NOTE = 'After installing, add your subscription in Language Models → Subs / Tokens.'
+
+const AGENT_TOOLS: AgentTool[] = [
+  { name: 'Claude Code', command: 'claude', installCommand: CLI_INSTALL_COMMANDS.claude, docs: 'https://docs.anthropic.com/en/docs/claude-code', notes: SUBS_NOTE, keywords: ['claude', 'anthropic'] },
+  { name: 'OpenAI Codex', command: 'codex', installCommand: CLI_INSTALL_COMMANDS.codex, docs: 'https://github.com/openai/codex', notes: SUBS_NOTE, keywords: ['codex', 'openai'] },
+  {
+    name: 'Grok',
+    command: 'grok',
+    installCommand: CLI_INSTALL_COMMANDS.grok,
+    docs: 'https://docs.x.ai/build',
+    notes: `${SUBS_NOTE} Without a subscription, set the XAI_API_KEY environment variable instead.`,
+    keywords: ['grok', 'xai'],
+  },
+  { name: 'Gemini CLI', command: 'gemini', installCommand: CLI_INSTALL_COMMANDS.gemini, docs: 'https://geminicli.com', notes: 'Needs Node.js 18 or later. Sign in with your Google account the first time it runs.', keywords: ['gemini', 'google'] },
+  {
+    name: 'Cursor Agent',
+    command: 'cursor-agent',
+    // Cursor's official installer (cursor.com/docs/cli/installation). The
+    // npm package named `cursor-agent` is a third party's, not Cursor's.
+    installCommand: 'curl https://cursor.com/install -fsS | bash',
+    docs: 'https://cursor.com/docs/cli/installation',
+    notes: 'Cursor’s agent for the terminal. Needs a Cursor subscription.',
+    keywords: ['cursor'],
+  },
+  { name: 'Pi', command: 'pi', installCommand: 'npm install -g @mariozechner/pi-coding-agent', docs: 'https://github.com/badlogic/pi-mono', notes: 'A small coding agent that works with many model providers. Sign in with /login, or use an API key.', keywords: ['pi'] },
+  { name: 'Hermes', command: 'hermes', installCommand: 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash', docs: 'https://hermes-agent.nousresearch.com/docs/getting-started/quickstart', notes: 'Nous Research’s agent. After installing, run hermes once to choose a model provider.', keywords: ['hermes', 'nous'] },
+  { name: 'OpenCode', command: 'opencode', installCommand: 'curl -fsSL https://opencode.ai/install | bash', docs: 'https://opencode.ai', notes: 'A coding agent for the terminal that works with many model providers.', keywords: ['opencode'] },
+  { name: 'Goose', command: 'goose', installCommand: 'curl -fsSL https://github.com/block/goose/releases/latest/download/install.sh | bash', docs: 'https://github.com/block/goose', notes: 'An open-source coding agent from Block that works with many model providers.', keywords: ['goose', 'block'] },
+  { name: 'Aider', command: 'aider', installCommand: 'pip install aider-chat', docs: 'https://aider.chat/docs/install.html', notes: 'Needs Python 3.9 or later. Add an API key for the model provider you use.', keywords: ['aider', 'pip'] },
+  { name: 'Ollama', command: 'ollama', installCommand: 'curl -fsSL https://ollama.com/install.sh | sh', docs: 'https://ollama.com', notes: 'Runs models on this computer. After installing, download a model with ollama pull llama3.2.', keywords: ['ollama', 'local llm', 'local models'] },
+  { name: 'GitHub Copilot CLI', command: 'copilot', installCommand: 'npm install -g @github/copilot', docs: 'https://docs.github.com/en/copilot/how-tos/copilot-cli', notes: 'Needs a GitHub Copilot subscription. Sign in with /login the first time it runs.', keywords: ['copilot', 'github'] },
+  { name: 'Open Interpreter', command: 'interpreter', installCommand: 'pip install open-interpreter', docs: 'https://docs.openinterpreter.com', notes: 'Lets a model run code on this computer. Choose a model provider after installing.', keywords: ['interpreter', 'open interpreter'] },
+]
+
+/** The four K2 can install itself, shown first when nothing is installed. */
+const FEATURED = new Set(['claude', 'codex', 'grok', 'gemini'])
+
+function cliManifest(): SettingEntry[] {
+  return AGENT_TOOLS.map((t) => ({
+    id: `agents.cli-${t.command}`,
+    section: 'agents',
+    group: 'Agent tools',
+    label: t.name,
+    description: `Whether ${t.name} is installed, and how to install it`,
+    keywords: [...t.keywords, 'install', 'cli', 'tool'],
+  }))
 }
 
 export const AGENTS_MANIFEST: SettingEntry[] = [
   {
     id: 'agents.default-agent',
     section: 'agents',
-    group: 'Defaults',
-    label: 'Default AI Agent',
+    group: 'Default agent',
+    label: 'Default agent',
     description: defaultAgentLaunchCopy(),
     keywords: ['agent', 'default', 'claude', 'codex', 'gemini', 'llm', 'llms', 'models', 'language models'],
   },
   {
     id: 'agents.show-launch-bar',
     section: 'agents',
-    group: 'Defaults',
+    group: 'Default agent',
     label: 'Show launch bar',
-    description: 'Show or hide the LLM launch strip',
+    description: 'The row of agent buttons under the tabs',
     keywords: ['launch', 'bar', 'strip', 'presets', 'hide', 'llm'],
   },
   {
     id: 'agents.agent-presets',
     section: 'agents',
-    label: 'Agent Presets',
-    description: 'AI coding agent command palette',
-    keywords: ['presets', 'commands', 'agents'],
+    label: 'Launch presets',
+    description: 'The agents on the launch bar and in the tab + menu',
+    keywords: ['presets', 'commands', 'agents', 'agent presets'],
   },
   {
     id: 'agents.reset-built-ins',
     section: 'agents',
-    label: 'Reset Built-ins',
-    description: 'Restore the default agent presets',
-    keywords: ['reset', 'defaults', 'built-in'],
+    label: 'Restore built-in presets',
+    description: 'Put the presets K2 ships with back as they were',
+    keywords: ['reset', 'restore', 'defaults', 'built-in', 'built-ins'],
   },
   {
     id: 'agents.add-preset',
     section: 'agents',
-    label: 'Add Custom Preset',
-    description: 'Register your own AI agent command',
-    keywords: ['preset', 'custom', 'add', 'cli'],
+    label: 'Add preset',
+    description: 'Add your own agent command to the launch bar',
+    keywords: ['preset', 'custom', 'add', 'cli', 'command'],
   },
   {
     id: 'agents.submit-keys',
     section: 'agents',
-    label: 'Submit keys',
-    description: 'How K2 delivers a message into this LLM’s terminal',
-    keywords: ['inject', 'paste', 'keystroke', 'submit', 'esc', 'return'],
+    label: 'Message keys',
+    description: 'How K2 types a message into an agent’s terminal',
+    keywords: ['inject', 'paste', 'keystroke', 'submit', 'esc', 'return', 'keys'],
   },
-  {
-    id: 'agents.cli-claude',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'Claude Code',
-    description: 'Install instructions for the Claude Code CLI',
-    keywords: ['claude', 'install', 'cli'],
-  },
-  {
-    id: 'agents.cli-codex',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'OpenAI Codex',
-    description: 'Install instructions for the Codex CLI',
-    keywords: ['codex', 'openai', 'install', 'cli'],
-  },
-  {
-    id: 'agents.cli-grok',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'Grok',
-    description: 'Install instructions for the xAI Grok CLI',
-    keywords: ['grok', 'xai', 'install', 'cli'],
-  },
-  {
-    id: 'agents.cli-gemini',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'Gemini CLI',
-    description: 'Install instructions for the Gemini CLI',
-    keywords: ['gemini', 'google', 'install', 'cli'],
-  },
-  {
-    id: 'agents.cli-cursor-agent',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'Cursor Agent',
-    description: 'Install instructions for Cursor Agent',
-    keywords: ['cursor', 'install', 'cli'],
-  },
-  {
-    id: 'agents.cli-pi',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'Pi',
-    description: 'Install instructions for Pi',
-    keywords: ['pi', 'install', 'cli'],
-  },
-  {
-    id: 'agents.cli-hermes',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'Hermes',
-    description: 'Install instructions for the Nous Research Hermes Agent CLI',
-    keywords: ['hermes', 'nous', 'install', 'cli'],
-  },
-  {
-    id: 'agents.cli-opencode',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'OpenCode',
-    description: 'Install instructions for OpenCode',
-    keywords: ['opencode', 'install', 'cli'],
-  },
-  {
-    id: 'agents.cli-goose',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'Goose',
-    description: 'Install instructions for Goose',
-    keywords: ['goose', 'block', 'install', 'cli'],
-  },
-  {
-    id: 'agents.cli-aider',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'Aider',
-    description: 'Install instructions for Aider',
-    keywords: ['aider', 'install', 'cli', 'pip'],
-  },
-  {
-    id: 'agents.cli-ollama',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'Ollama',
-    description: 'Install instructions for Ollama (local models)',
-    keywords: ['ollama', 'install', 'cli', 'local llm'],
-  },
-  {
-    id: 'agents.cli-copilot',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'GitHub Copilot CLI',
-    description: 'Install instructions for the Copilot CLI',
-    keywords: ['copilot', 'github', 'install', 'cli'],
-  },
-  {
-    id: 'agents.cli-interpreter',
-    section: 'agents',
-    group: 'CLI Tools',
-    label: 'Interpreter',
-    description: 'Install instructions for Open Interpreter',
-    keywords: ['interpreter', 'open interpreter', 'install', 'cli'],
-  },
+  ...cliManifest(),
 ]
 
+// The page follows Settings → Workspaces / Agents: a title with one line
+// under it, then card groups of rows at one content width.
+const CONTENT_WIDTH = 'max-w-[52rem]'
+
+export function AgentsSection(): React.JSX.Element {
+  const isRemote = useConnectHostStore((s) => s.activeHost !== 'local')
+  const where = isRemote ? 'this server' : 'this computer'
+  return (
+    <div className="h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]" data-testid="agents-page">
+      <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`}>
+        <header className="min-w-0">
+          <h2 className="type-title text-[var(--color-text-primary)]">Providers / Models</h2>
+          <p className="type-hint text-[var(--color-text-secondary)] mt-1">
+            Choose the agent K2 opens, the agents on the launch bar, and the agent tools on {where}.
+          </p>
+        </header>
+        <DefaultAgentGroup />
+        <PresetsGroup />
+        <AgentToolsGroup where={where} />
+      </div>
+    </div>
+  )
+}
+
+// ── Default agent ───────────────────────────────────────────────────
+
+function DefaultAgentGroup(): React.JSX.Element {
+  const presets = usePresetsStore((s) => s.presets)
+  const loaded = usePresetsStore((s) => s.presetsLoaded)
+  const loadError = usePresetsStore((s) => s.presetsError)
+  const showPresetsBar = usePresetsStore((s) => s.showPresetsBar)
+  const setShowLaunchBar = usePresetsStore((s) => s.setShowLaunchBar)
+  const defaultAgent = useSettingsStore((s) => s.defaultAgent)
+  const setDefaultAgent = useSettingsStore((s) => s.setDefaultAgent)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const selected = matchAgentPreset(presets, defaultAgent)
+  const options = presets.map((p) => ({
+    value: p.id,
+    label: p.label,
+    leading: <PresetIcon preset={p} size={14} />,
+    badge: p.enabled ? undefined : 'Off',
+  }))
+
+  const choose = async (id: string): Promise<void> => {
+    setSaveError(null)
+    await setDefaultAgent(id)
+    // The store puts the old value back when the save fails.
+    if (useSettingsStore.getState().defaultAgent !== id) {
+      setSaveError('K2 couldn’t save the default agent, so it’s unchanged. Try again.')
+    }
+  }
+
+  return (
+    <SettingsGroup title="Default agent" card>
+      <SettingRow
+        label="Default agent"
+        hint={defaultAgentLaunchCopy()}
+        settingId="agents.default-agent"
+        field
+        below={saveError ? <p role="alert" className="type-hint text-[var(--color-status-error-text)]">{saveError}</p> : undefined}
+      >
+        <SettingDropdown
+          fullWidth
+          ariaLabel="Default agent"
+          value={selected?.id ?? ''}
+          options={options}
+          placeholder={presets.length > 0 ? 'Choose an agent' : !loaded ? 'Loading…' : loadError ? 'Presets didn’t load' : 'No presets yet'}
+          disabled={presets.length === 0}
+          onChange={(id) => void choose(id)}
+        />
+      </SettingRow>
+      <SettingRow
+        label="Show launch bar"
+        hint="The row of agent buttons under the tabs, one for each preset that’s on. Applies on this computer."
+        settingId="agents.show-launch-bar"
+      >
+        <Toggle checked={showPresetsBar} onChange={setShowLaunchBar} aria-label="Show launch bar" />
+      </SettingRow>
+    </SettingsGroup>
+  )
+}
+
+function PresetIcon({ preset, size = 16 }: { preset: Pick<AgentPreset, 'icon' | 'label'>; size?: number }): React.JSX.Element {
+  return (
+    <span className="w-5 flex items-center justify-center flex-shrink-0" aria-hidden="true">
+      {preset.icon ? <span className="type-row leading-none">{preset.icon}</span> : <AgentIcon agent={preset.label} size={size} />}
+    </span>
+  )
+}
+
+// ── Launch presets ──────────────────────────────────────────────────
+
 interface PresetFormState {
-  visible: boolean
+  /** null: a new preset. */
   editingId: string | null
   label: string
   command: string
@@ -196,6 +253,15 @@ interface PresetFormState {
   injectFlowTouched: boolean
 }
 
+const NEW_PRESET_FORM = (): PresetFormState => ({
+  editingId: null,
+  label: '',
+  command: '',
+  icon: '',
+  injectFlow: cloneDefaultInjectFlow(),
+  injectFlowTouched: false,
+})
+
 const INJECT_KEY_OPTIONS: { value: InjectFlowKey; label: string }[] = [
   { value: 'paste', label: 'Paste message' },
   { value: 'return', label: 'Return' },
@@ -203,14 +269,526 @@ const INJECT_KEY_OPTIONS: { value: InjectFlowKey; label: string }[] = [
   { value: 'space', label: 'Space' },
 ]
 
-const EMPTY_PRESET_FORM: PresetFormState = {
-  visible: false,
-  editingId: null,
-  label: '',
-  command: '',
-  icon: '',
-  injectFlow: cloneDefaultInjectFlow(),
-  injectFlowTouched: false,
+const keyLabel = (key: InjectFlowKey): string => INJECT_KEY_OPTIONS.find((o) => o.value === key)?.label ?? key
+
+/** "Paste message, then Return, then Return" — the steps in one line. */
+export function injectFlowSummary(steps: InjectFlowStep[]): string {
+  return steps.map((s) => keyLabel(s.key)).join(', then ')
+}
+
+const errorText = (err: unknown): string => (err instanceof Error && err.message ? err.message : String(err))
+
+function PresetsGroup(): React.JSX.Element {
+  const presets = usePresetsStore((s) => s.presets)
+  const loaded = usePresetsStore((s) => s.presetsLoaded)
+  const loadError = usePresetsStore((s) => s.presetsError)
+  const fetchPresets = usePresetsStore((s) => s.fetchPresets)
+  const updatePreset = usePresetsStore((s) => s.updatePreset)
+  const deletePreset = usePresetsStore((s) => s.deletePreset)
+  const reorderPresets = usePresetsStore((s) => s.reorderPresets)
+  const [form, setForm] = useState<PresetFormState | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [savedId, setSavedId] = useState<string | null>(null)
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
+  const dragFromRef = useRef<number | null>(null)
+  const dropRef = useRef<number | null>(null)
+  const addButtonRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    void fetchPresets()
+  }, [fetchPresets])
+
+  useEffect(() => {
+    if (!savedId) return
+    const t = window.setTimeout(() => setSavedId(null), 2500)
+    return () => window.clearTimeout(t)
+  }, [savedId])
+
+  const run = useCallback(async (what: string, fn: () => Promise<void>): Promise<boolean> => {
+    setActionError(null)
+    try {
+      await fn()
+      return true
+    } catch (err) {
+      setActionError(`${what} ${errorText(err)}`)
+      return false
+    }
+  }, [])
+
+  const toggle = (p: AgentPreset): void => {
+    void run(`K2 couldn’t turn ${p.label} ${p.enabled ? 'off' : 'on'}.`, () => updatePreset({ id: p.id, enabled: p.enabled ? 0 : 1 }))
+  }
+
+  const move = (from: number, to: number): void => {
+    if (to < 0 || to >= presets.length || from === to) return
+    const ids = presets.map((p) => p.id)
+    const [moved] = ids.splice(from, 1)
+    ids.splice(to, 0, moved)
+    void run('K2 couldn’t change the order.', () => reorderPresets(ids))
+  }
+
+  const remove = async (p: AgentPreset): Promise<void> => {
+    const ok = await useConfirmDialogStore.getState().confirm({
+      title: `Delete ${p.label}?`,
+      message: `${p.label} leaves the launch bar and the tab + menu. This can’t be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (!ok) return
+    await run(`K2 couldn’t delete ${p.label}.`, () => deletePreset(p.id))
+  }
+
+  const edit = (p: AgentPreset): void => {
+    setActionError(null)
+    setForm({
+      editingId: p.id,
+      label: p.label,
+      command: p.command,
+      icon: p.icon ?? '',
+      injectFlow: parseInjectFlowOrDefault(readPresetInjectFlowJson(p), p.command),
+      injectFlowTouched: false,
+    })
+  }
+
+  const closeForm = (savedPresetId?: string): void => {
+    const wasNew = form?.editingId === null
+    setForm(null)
+    if (savedPresetId) setSavedId(savedPresetId)
+    if (wasNew && !savedPresetId) requestAnimationFrame(() => addButtonRef.current?.focus())
+  }
+
+  const onGripMouseDown = (e: React.MouseEvent, idx: number): void => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    const startY = e.clientY
+    let started = false
+    const onMove = (ev: MouseEvent): void => {
+      if (!started && Math.abs(ev.clientY - startY) > 4) {
+        started = true
+        dragFromRef.current = idx
+        setDragIdx(idx)
+        document.body.style.cursor = 'grabbing'
+        document.body.style.userSelect = 'none'
+      }
+      if (!started) return
+      const items = document.querySelectorAll('[data-preset-reorder-index]')
+      let drop = 0
+      for (let i = 0; i < items.length; i++) {
+        const r = items[i].getBoundingClientRect()
+        if (ev.clientY > r.top + r.height / 2) drop = i + 1
+      }
+      dropRef.current = drop
+      setDragOverIdx(drop)
+    }
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      const from = dragFromRef.current
+      const drop = dropRef.current
+      if (started && from !== null && drop !== null && from !== drop && from !== drop - 1) {
+        move(from, drop > from ? drop - 1 : drop)
+      }
+      setDragIdx(null)
+      setDragOverIdx(null)
+      dragFromRef.current = null
+      dropRef.current = null
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  const nothingYet = presets.length === 0
+  const adding = form?.editingId === null
+
+  let body: React.ReactNode
+  if (nothingYet && !loaded) {
+    body = (
+      <p role="status" className="px-4 py-3 type-row text-[var(--color-text-secondary)]" data-testid="presets-loading">
+        Loading your presets…
+      </p>
+    )
+  } else if (nothingYet && loadError) {
+    body = (
+      <div className="px-4 py-3 flex items-center justify-between gap-4" data-testid="presets-load-error" role="alert">
+        <div className="min-w-0">
+          <div className="type-row text-[var(--color-text-primary)]">Couldn’t load your presets</div>
+          <div className={SETTING_ROW_HINT} title={loadError}>
+            K2 couldn’t read your presets, so the launch bar may be empty too. Try again in a moment.
+          </div>
+        </div>
+        <Button variant="quiet" className="flex-shrink-0" onClick={() => void fetchPresets()}>
+          Try again
+        </Button>
+      </div>
+    )
+  } else if (nothingYet && !adding) {
+    body = (
+      <div className="px-4 py-3 flex items-center justify-between gap-4" data-testid="presets-empty">
+        <div className="min-w-0">
+          <div className="type-row text-[var(--color-text-primary)]">No presets yet</div>
+          <div className={SETTING_ROW_HINT}>Restore the built-in presets for Claude, Codex, Grok, Gemini and more, or add your own.</div>
+        </div>
+        <RestoreBuiltInsButton onError={setActionError} />
+      </div>
+    )
+  } else {
+    body = (
+      <>
+        {adding && form && <PresetForm form={form} setForm={setForm} onDone={closeForm} />}
+        <div data-preset-reorder-container className="divide-y divide-[var(--color-border)]">
+          {presets.map((p, i) =>
+            form?.editingId === p.id ? (
+              <PresetForm key={p.id} form={form} setForm={setForm} onDone={closeForm} />
+            ) : (
+              <PresetRow
+                key={p.id}
+                preset={p}
+                index={i}
+                count={presets.length}
+                dragging={dragIdx === i}
+                dropBefore={dragOverIdx === i}
+                dropAfter={dragOverIdx === presets.length && i === presets.length - 1}
+                saved={savedId === p.id}
+                onGripMouseDown={(e) => onGripMouseDown(e, i)}
+                onToggle={() => toggle(p)}
+                onEdit={() => edit(p)}
+                onDelete={() => void remove(p)}
+                onMove={(dir) => move(i, i + dir)}
+              />
+            ),
+          )}
+        </div>
+        {!nothingYet && (
+          <SettingRow
+            label="Built-in presets"
+            hint="Put the presets K2 ships with back as they were: their commands, icons and keys, all on. Presets you added stay."
+            settingId="agents.reset-built-ins"
+          >
+            <RestoreBuiltInsButton onError={setActionError} />
+          </SettingRow>
+        )}
+      </>
+    )
+  }
+
+  return (
+    <SettingsGroup
+      title="Launch presets"
+      hint="Each preset that’s on is a button on the launch bar and a choice in the tab + menu. Drag to change the order."
+      settingId="agents.agent-presets"
+      card
+      action={
+        loaded && !(nothingYet && loadError) && !adding ? (
+          <Button
+            ref={addButtonRef}
+            variant="accent"
+            data-settings-id="agents.add-preset"
+            onClick={() => {
+              setActionError(null)
+              setForm(NEW_PRESET_FORM())
+            }}
+          >
+            Add preset
+          </Button>
+        ) : undefined
+      }
+    >
+      {actionError && (
+        <div className="px-4 py-3">
+          <Callout tone="error" role="alert" className="flex items-start justify-between gap-4">
+            <p className="type-hint min-w-0 break-words">{actionError}</p>
+            <Button variant="quiet" className="flex-shrink-0" onClick={() => setActionError(null)}>
+              Dismiss
+            </Button>
+          </Callout>
+        </div>
+      )}
+      {loadError && !nothingYet && (
+        <div className="px-4 py-3 flex items-center justify-between gap-4" role="alert" data-testid="presets-refresh-error">
+          <div className={SETTING_ROW_HINT}>K2 couldn’t refresh this list, so it may be out of date.</div>
+          <Button variant="quiet" className="flex-shrink-0" onClick={() => void fetchPresets()}>
+            Try again
+          </Button>
+        </div>
+      )}
+      {body}
+    </SettingsGroup>
+  )
+}
+
+function RestoreBuiltInsButton({ onError }: { onError: (msg: string | null) => void }): React.JSX.Element {
+  const resetPresetsToBuiltIns = usePresetsStore((s) => s.resetPresetsToBuiltIns)
+  const [state, setState] = useState<'idle' | 'working' | 'done'>('idle')
+
+  useEffect(() => {
+    if (state !== 'done') return
+    const t = window.setTimeout(() => setState('idle'), 2500)
+    return () => window.clearTimeout(t)
+  }, [state])
+
+  const restore = async (): Promise<void> => {
+    const ok = await useConfirmDialogStore.getState().confirm({
+      title: 'Restore the built-in presets?',
+      message:
+        'Claude, Codex, Grok, Gemini and the other built-in presets go back to how K2 ships them, all on. Changes you made to them are lost. Presets you added stay as they are.',
+      confirmLabel: 'Restore',
+    })
+    if (!ok) return
+    onError(null)
+    setState('working')
+    try {
+      await resetPresetsToBuiltIns()
+      setState('done')
+    } catch (err) {
+      setState('idle')
+      onError(`K2 couldn’t restore the built-in presets. ${errorText(err)}`)
+    }
+  }
+
+  return (
+    <>
+      {state === 'done' && (
+        <span role="status" className="type-hint text-[var(--color-status-ok-soft)]">
+          Restored
+        </span>
+      )}
+      <Button variant="quiet" className="flex-shrink-0" disabled={state === 'working'} onClick={() => void restore()}>
+        {state === 'working' ? 'Restoring…' : 'Restore…'}
+      </Button>
+    </>
+  )
+}
+
+function GripIcon(): React.JSX.Element {
+  return (
+    <svg width="8" height="12" viewBox="0 0 8 12" fill="currentColor" aria-hidden="true" className="block">
+      {[2, 6, 10].map((y) => (
+        <React.Fragment key={y}>
+          <circle cx="2" cy={y} r="1" />
+          <circle cx="6" cy={y} r="1" />
+        </React.Fragment>
+      ))}
+    </svg>
+  )
+}
+
+function PresetRow({
+  preset,
+  index,
+  count,
+  dragging,
+  dropBefore,
+  dropAfter,
+  saved,
+  onGripMouseDown,
+  onToggle,
+  onEdit,
+  onDelete,
+  onMove,
+}: {
+  preset: AgentPreset
+  index: number
+  count: number
+  dragging: boolean
+  dropBefore: boolean
+  dropAfter: boolean
+  saved: boolean
+  onGripMouseDown: (e: React.MouseEvent) => void
+  onToggle: () => void
+  onEdit: () => void
+  onDelete: () => void
+  onMove: (dir: -1 | 1) => void
+}): React.JSX.Element {
+  const on = Boolean(preset.enabled)
+  return (
+    <div
+      data-preset-reorder-index={index}
+      data-testid={`preset-row-${preset.id}`}
+      className={`relative flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-wash-1)] transition-colors ${dragging ? 'opacity-40' : ''}`}
+    >
+      {dropBefore && <div className="absolute left-0 right-0 top-0 h-0.5 bg-[var(--color-accent)] z-10" />}
+      {dropAfter && <div className="absolute left-0 right-0 bottom-0 h-0.5 bg-[var(--color-accent)] z-10" />}
+      {/* The grip sits in the row's left padding, so the icon lines up with
+          every other row's start. */}
+      <span
+        className="absolute left-0 top-0 bottom-0 w-4 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] cursor-grab active:cursor-grabbing"
+        title="Drag to change the order"
+        onMouseDown={onGripMouseDown}
+      >
+        <GripIcon />
+      </span>
+      <PresetIcon preset={preset} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`type-name truncate ${on ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}>
+            {preset.label}
+          </span>
+          {!preset.isBuiltIn && <Tag tone="muted">Custom</Tag>}
+          {saved && (
+            <span role="status" className="type-hint text-[var(--color-status-ok-soft)]">
+              Saved
+            </span>
+          )}
+        </div>
+        <code className="block type-hint font-mono text-[var(--color-text-secondary)] truncate mt-0.5" title={preset.command}>
+          {preset.command}
+        </code>
+      </div>
+      <Toggle
+        checked={on}
+        onChange={onToggle}
+        aria-label={`Show ${preset.label} on the launch bar`}
+        title={on ? `${preset.label} is on the launch bar` : `${preset.label} is hidden`}
+      />
+      <OverflowMenu
+        label={`More actions for ${preset.label}`}
+        items={[
+          { id: 'edit', label: 'Edit…', onSelect: onEdit },
+          { id: 'up', label: 'Move up', onSelect: () => onMove(-1), disabled: index === 0, group: true },
+          { id: 'down', label: 'Move down', onSelect: () => onMove(1), disabled: index === count - 1 },
+          ...(preset.isBuiltIn
+            ? []
+            : [{ id: 'delete', label: 'Delete…', onSelect: onDelete, danger: true, group: true }]),
+        ]}
+      />
+    </div>
+  )
+}
+
+function PresetForm({
+  form,
+  setForm,
+  onDone,
+}: {
+  form: PresetFormState
+  setForm: React.Dispatch<React.SetStateAction<PresetFormState | null>>
+  onDone: (savedId?: string) => void
+}): React.JSX.Element {
+  const createPreset = usePresetsStore((s) => s.createPreset)
+  const updatePreset = usePresetsStore((s) => s.updatePreset)
+  const nameRef = useRef<HTMLInputElement>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [keysOpen, setKeysOpen] = useState(form.injectFlowTouched)
+  const editing = form.editingId !== null
+  const valid = form.label.trim() !== '' && form.command.trim() !== ''
+
+  useEffect(() => {
+    requestAnimationFrame(() => nameRef.current?.focus())
+  }, [])
+
+  const patch = (p: Partial<PresetFormState>): void => setForm((s) => (s ? { ...s, ...p } : s))
+
+  const save = async (): Promise<void> => {
+    if (!valid || saving) return
+    setSaving(true)
+    setError(null)
+    try {
+      const injectPayload = form.injectFlowTouched
+        ? isDefaultInjectFlowForCommand(form.injectFlow, form.command)
+          ? ''
+          : JSON.stringify(form.injectFlow)
+        : undefined
+      let id: string
+      if (form.editingId) {
+        id = form.editingId
+        await updatePreset({
+          id,
+          label: form.label.trim(),
+          command: form.command.trim(),
+          icon: form.icon.trim() || '',
+          ...(injectPayload !== undefined ? { injectFlow: injectPayload } : {}),
+        })
+      } else {
+        const created = await createPreset({
+          label: form.label.trim(),
+          command: form.command.trim(),
+          icon: form.icon.trim() || undefined,
+        })
+        id = created.id
+        if (injectPayload) await updatePreset({ id, injectFlow: injectPayload })
+      }
+      onDone(id)
+    } catch (err) {
+      setError(`K2 couldn’t save this preset. ${errorText(err)}`)
+      setSaving(false)
+    }
+  }
+
+  const onKeyDown = (e: React.KeyboardEvent): void => {
+    if (e.key === 'Escape') {
+      // Claimed, so Settings doesn't also close.
+      e.preventDefault()
+      e.stopPropagation()
+      onDone()
+      return
+    }
+    if (e.key !== 'Enter') return
+    const t = e.target as HTMLElement
+    if (t.tagName !== 'INPUT' || t.dataset.injectWait !== undefined) return
+    e.preventDefault()
+    void save()
+  }
+
+  return (
+    <div
+      className="bg-[var(--color-wash-1)] divide-y divide-[var(--color-border)]"
+      onKeyDown={onKeyDown}
+      data-testid="preset-form"
+      role="group"
+      aria-label={editing ? `Edit ${form.label || 'preset'}` : 'New preset'}
+    >
+      <div className="px-4 pt-3 pb-2">
+        <div className="type-name text-[var(--color-text-primary)]">{editing ? 'Edit preset' : 'New preset'}</div>
+      </div>
+      <SettingRow label="Name" hint="Shown on the launch bar and in the tab + menu." field>
+        <Input ref={nameRef} aria-label="Name" value={form.label} placeholder="e.g. Aider with GPT" onChange={(e) => patch({ label: e.target.value })} className="w-full type-control" />
+      </SettingRow>
+      <SettingRow label="Command" hint="What K2 runs in a new terminal, with any options." field>
+        <Input aria-label="Command" value={form.command} placeholder="e.g. aider --model gpt-4o" onChange={(e) => patch({ command: e.target.value })} className="w-full type-control font-mono" spellCheck={false} />
+      </SettingRow>
+      <SettingRow label="Icon" hint="An emoji. Leave it empty to use the agent’s logo." field>
+        <Input aria-label="Icon" value={form.icon} placeholder="Agent’s logo" onChange={(e) => patch({ icon: e.target.value })} className="w-full type-control" />
+      </SettingRow>
+      <SettingRow
+        label="Message keys"
+        hint={`How K2 types a message into this agent: ${injectFlowSummary(form.injectFlow)}.`}
+        settingId="agents.submit-keys"
+        below={
+          keysOpen ? (
+            <SubmitKeysEditor
+              steps={form.injectFlow}
+              command={form.command}
+              onChange={(injectFlow) => patch({ injectFlow, injectFlowTouched: true })}
+            />
+          ) : undefined
+        }
+      >
+        <Button variant="quiet" aria-expanded={keysOpen} onClick={() => setKeysOpen((v) => !v)}>
+          {keysOpen ? 'Done' : 'Change'}
+        </Button>
+      </SettingRow>
+      <div className="px-4 py-3 space-y-2">
+        {error && (
+          <Callout tone="error" role="alert">
+            <p className="type-hint break-words">{error}</p>
+          </Callout>
+        )}
+        <div className="flex items-center justify-end gap-2">
+          {!valid && <span className="type-hint text-[var(--color-text-secondary)] mr-auto">Enter a name and a command to save.</span>}
+          <Button variant="quiet" onClick={() => onDone()}>
+            Cancel
+          </Button>
+          <Button variant="accent" disabled={!valid || saving} onClick={() => void save()}>
+            {saving ? 'Saving…' : editing ? 'Save' : 'Add preset'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function SubmitKeysEditor({
@@ -222,22 +800,15 @@ function SubmitKeysEditor({
   command: string
   onChange: (next: InjectFlowStep[]) => void
 }): React.JSX.Element {
-  const setStep = (i: number, patch: Partial<InjectFlowStep>): void => {
-    onChange(steps.map((s, j) => (j === i ? { ...s, ...patch } : s)))
-  }
+  const setStep = (i: number, p: Partial<InjectFlowStep>): void => onChange(steps.map((s, j) => (j === i ? { ...s, ...p } : s)))
   const remove = (i: number): void => {
-    if (steps.length <= 1) return
-    onChange(steps.filter((_, j) => j !== i))
+    if (steps.length > 1) onChange(steps.filter((_, j) => j !== i))
   }
   const move = (i: number, dir: -1 | 1): void => {
     const j = i + dir
     if (j < 0 || j >= steps.length) return
     const next = [...steps]
-    const a = next[i]
-    const b = next[j]
-    if (a === undefined || b === undefined) return
-    next[i] = b
-    next[j] = a
+    ;[next[i], next[j]] = [next[j], next[i]]
     onChange(next)
   }
   const add = (): void => {
@@ -247,736 +818,346 @@ function SubmitKeysEditor({
   }
 
   return (
-    <div className="space-y-2" data-settings-id="agents.submit-keys">
-      <div className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-        Submit keys
-      </div>
-      <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
-        How K2 delivers a message into this LLM’s terminal.{' '}
-        <span className="text-[var(--color-text-secondary)] font-medium">Paste message</span> writes
-        the text (not Cmd+V). Return submits. Esc / Space are extra TUI keys (e.g. Grok). Wait is
-        milliseconds <span className="font-medium">after</span> that step.
+    <Surface chamfer material="tile" className="p-3 space-y-3">
+      <p className={SETTING_ROW_HINT}>
+        Paste message writes the text without the clipboard. Return sends it. Esc and Space are extra keys some agents need. The wait is how long K2 pauses after that step.
       </p>
-      <div className="space-y-1">
+      <ol className="space-y-2">
         {steps.map((step, i) => (
-          <div key={i} className="flex items-center gap-1.5">
-            <span
-              className="w-4 shrink-0 type-hint text-[var(--color-text-muted)] font-mono text-right tabular-nums"
-              aria-hidden="true"
-            >
-              {i + 1}
+          <li key={i} className="flex items-center gap-2">
+            <span className="w-5 flex-shrink-0 type-hint text-[var(--color-text-secondary)] text-right tabular-nums" aria-hidden="true">
+              {i + 1}.
             </span>
-            <SettingDropdown
-              value={step.key}
-              options={INJECT_KEY_OPTIONS}
-              onChange={(key) => setStep(i, { key: key as InjectFlowKey })}
-              menuAlign="left"
-              className="min-w-[10rem]"
-            />
-            <input
+            <div className="w-40 flex-shrink-0">
+              <SettingDropdown
+                value={step.key}
+                options={INJECT_KEY_OPTIONS}
+                onChange={(key) => setStep(i, { key: key as InjectFlowKey })}
+                menuAlign="left"
+                ariaLabel={`Step ${i + 1} key`}
+                fullWidth
+              />
+            </div>
+            <span className="type-hint text-[var(--color-text-secondary)] whitespace-nowrap">then wait</span>
+            <Input
               type="number"
               min={0}
               max={10000}
               data-inject-wait=""
+              aria-label={`Step ${i + 1} wait in milliseconds`}
               value={step.waitMs}
               onChange={(e) => {
                 const n = Number.parseInt(e.target.value, 10)
                 setStep(i, { waitMs: Number.isFinite(n) ? Math.max(0, Math.min(10000, n)) : 0 })
               }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.stopPropagation()
-              }}
-              className="w-16 px-1.5 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
+              className="w-20 type-control font-mono tabular-nums"
             />
-            <span className="type-hint text-[var(--color-text-muted)] font-mono">ms</span>
-            <button
-              type="button"
-              onClick={() => move(i, -1)}
-              disabled={i === 0}
-              className="px-1 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] disabled:opacity-30 no-drag cursor-pointer font-mono"
-              aria-label="Move step up"
-            >
-              ↑
-            </button>
-            <button
-              type="button"
-              onClick={() => move(i, 1)}
-              disabled={i === steps.length - 1}
-              className="px-1 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] disabled:opacity-30 no-drag cursor-pointer font-mono"
-              aria-label="Move step down"
-            >
-              ↓
-            </button>
-            <button
-              type="button"
-              onClick={() => remove(i)}
-              disabled={steps.length <= 1}
-              className="px-1 py-0.5 type-control text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] border border-[var(--color-border)] disabled:opacity-30 no-drag cursor-pointer font-mono"
-              aria-label="Remove step"
-            >
-              ×
-            </button>
-          </div>
+            <span className="type-hint text-[var(--color-text-secondary)]">ms</span>
+            <span className="flex items-center gap-1 ml-auto">
+              <Button variant="quiet" className="!px-2" onClick={() => move(i, -1)} disabled={i === 0} aria-label={`Move step ${i + 1} up`}>
+                ↑
+              </Button>
+              <Button variant="quiet" className="!px-2" onClick={() => move(i, 1)} disabled={i === steps.length - 1} aria-label={`Move step ${i + 1} down`}>
+                ↓
+              </Button>
+              <Button variant="quiet" className="!px-2" onClick={() => remove(i)} disabled={steps.length <= 1} aria-label={`Remove step ${i + 1}`}>
+                ×
+              </Button>
+            </span>
+          </li>
         ))}
-      </div>
+      </ol>
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={add}
-          disabled={steps.length >= 16}
-          className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] disabled:opacity-30 no-drag cursor-pointer font-mono"
-        >
+        <Button variant="quiet" onClick={add} disabled={steps.length >= 16}>
           Add step
-        </button>
-        <button
-          type="button"
-          onClick={() => onChange(cloneDefaultInjectFlowForCommand(command))}
-          className="px-2 py-0.5 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer font-mono"
-        >
-          Reset to default
-        </button>
+        </Button>
+        <Button variant="quiet" onClick={() => onChange(cloneDefaultInjectFlowForCommand(command))}>
+          Use the default
+        </Button>
       </div>
-    </div>
+    </Surface>
   )
 }
 
-function DefaultAgentPickerInline({
-  presets,
-}: {
-  presets: { id: string; label: string; command: string }[]
-}): React.JSX.Element {
-  const defaultAgent = useSettingsStore((s) => s.defaultAgent)
-  const setDefaultAgent = useSettingsStore((s) => s.setDefaultAgent)
+// ── Agent tools on this computer ────────────────────────────────────
+// Which tools are on the server's PATH comes from the daemon
+// (GET agents/cli-status). A server without that route says so instead of
+// guessing; install help works either way.
 
-  const agentOptions = presets.map((p) => ({
-    value: p.id,
-    label: p.label,
-  }))
-  const selectedId = matchAgentPreset(presets, defaultAgent)?.id ?? defaultAgent
-
-  return (
-    <div className="flex items-center justify-between px-3 py-2.5" data-settings-id="agents.default-agent">
-      <div>
-        <div className="type-row text-[var(--color-text-secondary)]">Default AI Agent</div>
-        <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
-          <KeyCombo combo={defaultAgentLaunchCopy()} />
-        </div>
-      </div>
-      <SettingDropdown value={selectedId} options={agentOptions} onChange={setDefaultAgent} />
-    </div>
-  )
+interface CliStatus {
+  program: string
+  installed: boolean
+  version?: string | null
 }
 
-export function AgentsSection(): React.JSX.Element {
-  const {
-    presets,
-    showPresetsBar,
-    setShowLaunchBar,
-    fetchPresets,
-    createPreset,
-    updatePreset,
-    deletePreset,
-    reorderPresets,
-    resetPresetsToBuiltIns,
-  } = usePresetsStore()
-  const [presetForm, setPresetForm] = useState<PresetFormState>({ ...EMPTY_PRESET_FORM })
-  const [dragIdx, setDragIdx] = useState<number | null>(null)
-  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
-  const presetDragFromRef = useRef<number | null>(null)
-  const presetDropRef = useRef<number | null>(null)
-  const formLabelRef = useRef<HTMLInputElement>(null)
+type ToolsState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; byProgram: Map<string, CliStatus> }
+  | { kind: 'unsupported' }
+  | { kind: 'error'; message: string }
 
+function isMissingRoute(message: string): boolean {
+  return /route_unclassified|not found|\b404\b/i.test(message)
+}
+
+function useCliStatus(): [ToolsState, () => void] {
+  const [state, setState] = useState<ToolsState>({ kind: 'loading' })
+  const [nonce, setNonce] = useState(0)
   useEffect(() => {
-    void fetchPresets()
-  }, [fetchPresets])
-
-  useEffect(() => {
-    if (presetForm.visible) {
-      requestAnimationFrame(() => formLabelRef.current?.focus())
-    }
-  }, [presetForm.visible])
-
-  const handleTogglePreset = useCallback(
-    async (id: string, currentEnabled: number) => {
-      await updatePreset({ id, enabled: currentEnabled ? 0 : 1 })
-    },
-    [updatePreset],
-  )
-
-  const handleEditPreset = useCallback((preset: (typeof presets)[number]) => {
-    setPresetForm({
-      visible: true,
-      editingId: preset.id,
-      label: preset.label,
-      command: preset.command,
-      icon: preset.icon ?? '',
-      injectFlow: parseInjectFlowOrDefault(readPresetInjectFlowJson(preset), preset.command),
-      injectFlowTouched: false,
-    })
-  }, [])
-
-  const handleDeletePreset = useCallback(
-    async (id: string) => {
-      try {
-        await deletePreset(id)
-      } catch (err) {
-        console.error('Failed to delete preset:', err)
-      }
-    },
-    [deletePreset],
-  )
-
-  const openAddForm = useCallback(() => {
-    setPresetForm({ ...EMPTY_PRESET_FORM })
-    requestAnimationFrame(() => {
-      setPresetForm({ ...EMPTY_PRESET_FORM, visible: true, injectFlow: cloneDefaultInjectFlow() })
-    })
-  }, [])
-
-  const cancelForm = useCallback(() => {
-    setPresetForm({ ...EMPTY_PRESET_FORM })
-  }, [])
-
-  const submitForm = useCallback(async () => {
-    if (!presetForm.label.trim() || !presetForm.command.trim()) return
-    try {
-      const injectPayload = presetForm.injectFlowTouched
-        ? isDefaultInjectFlowForCommand(presetForm.injectFlow, presetForm.command)
-          ? ''
-          : JSON.stringify(presetForm.injectFlow)
-        : undefined
-      if (presetForm.editingId) {
-        await updatePreset({
-          id: presetForm.editingId,
-          label: presetForm.label.trim(),
-          command: presetForm.command.trim(),
-          icon: presetForm.icon.trim() || '',
-          ...(injectPayload !== undefined ? { injectFlow: injectPayload } : {}),
-        })
-      } else {
-        const created = await createPreset({
-          label: presetForm.label.trim(),
-          command: presetForm.command.trim(),
-          icon: presetForm.icon.trim() || undefined,
-        })
-        if (injectPayload) {
-          await updatePreset({ id: created.id, injectFlow: injectPayload })
+    let live = true
+    setState({ kind: 'loading' })
+    daemonCliGet<{ tools?: CliStatus[] }>(primaryScope(), 'agents/cli-status')
+      .then((r) => {
+        if (!live) return
+        const tools = Array.isArray(r?.tools) ? r.tools : null
+        if (!tools) {
+          setState({ kind: 'unsupported' })
+          return
         }
-      }
-      cancelForm()
-    } catch (err) {
-      console.error('Failed to save preset:', err)
-    }
-  }, [presetForm, cancelForm, createPreset, updatePreset])
-
-  const handleFormKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter') {
-        if ((e.target as HTMLElement).dataset.injectWait !== undefined) return
-        e.preventDefault()
-        void submitForm()
-      } else if (e.key === 'Escape') {
-        e.preventDefault()
-        cancelForm()
-      }
-    },
-    [submitForm, cancelForm],
-  )
-
-  const handleResetBuiltIns = useCallback(async () => {
-    await resetPresetsToBuiltIns()
-  }, [resetPresetsToBuiltIns])
-
-  const handlePresetReorderMouseDown = useCallback(
-    (e: React.MouseEvent, idx: number) => {
-      if (e.button !== 0) return
-      const startY = e.clientY
-      let started = false
-
-      const handleMouseMove = (ev: MouseEvent): void => {
-        if (!started && Math.abs(ev.clientY - startY) > 5) {
-          started = true
-          presetDragFromRef.current = idx
-          setDragIdx(idx)
-          document.body.style.cursor = 'grabbing'
-          document.body.style.userSelect = 'none'
-        }
-        if (!started) return
-
-        const container = document.querySelector('[data-preset-reorder-container]')
-        if (!container) return
-        const items = container.querySelectorAll('[data-preset-reorder-index]')
-        let dropIdx = 0
-        for (let i = 0; i < items.length; i++) {
-          const rect = items[i].getBoundingClientRect()
-          if (ev.clientY > rect.top + rect.height / 2) dropIdx = i + 1
-        }
-        presetDropRef.current = dropIdx
-        setDragOverIdx(dropIdx)
-      }
-
-      const handleMouseUp = async (): Promise<void> => {
-        document.removeEventListener('mousemove', handleMouseMove)
-        document.removeEventListener('mouseup', handleMouseUp)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-
-        if (started) {
-          const fromIdx = presetDragFromRef.current
-          const dropIdx = presetDropRef.current
-          if (fromIdx !== null && dropIdx !== null && fromIdx !== dropIdx && fromIdx !== dropIdx - 1) {
-            const currentPresets = usePresetsStore.getState().presets
-            const sorted = [...currentPresets]
-            const [moved] = sorted.splice(fromIdx, 1)
-            const insertAt = dropIdx > fromIdx ? dropIdx - 1 : dropIdx
-            sorted.splice(insertAt, 0, moved)
-            await reorderPresets(sorted.map((p) => p.id))
-          }
-        }
-
-        setDragIdx(null)
-        setDragOverIdx(null)
-        presetDragFromRef.current = null
-        presetDropRef.current = null
-      }
-
-      document.addEventListener('mousemove', handleMouseMove)
-      document.addEventListener('mouseup', handleMouseUp)
-    },
-    [reorderPresets],
-  )
-
-  return (
-    <div className="flex h-full min-h-0">
-      {/* Left: defaults, launch bar, presets */}
-      <div className="flex-1 min-w-0 overflow-y-auto p-6 pr-3 [scrollbar-gutter:stable] space-y-8">
-        <div>
-          <h2 className="type-title text-[var(--color-text-primary)] mb-3">Defaults</h2>
-          <div className="border border-[var(--color-border)]">
-            <DefaultAgentPickerInline presets={presets} />
-          </div>
-        </div>
-
-        <label
-          className="flex items-center gap-2 border border-[var(--color-border)] px-3 py-2.5 type-control text-[var(--color-text-secondary)] cursor-pointer select-none"
-          data-settings-id="agents.show-launch-bar"
-        >
-          <Checkbox
-            checked={showPresetsBar}
-            onChange={(e) => setShowLaunchBar(e.target.checked)}
-          />
-          Show launch bar
-        </label>
-
-        <div data-settings-id="agents.agent-presets">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="type-title text-[var(--color-text-primary)]">Agent Presets</h2>
-            <button
-              type="button"
-              onClick={() => void handleResetBuiltIns()}
-              className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer font-mono"
-              data-settings-id="agents.reset-built-ins"
-            >
-              Reset Built-ins
-            </button>
-          </div>
-
-          <div className="border border-[var(--color-border)]" data-preset-reorder-container>
-            {presets.map((preset, i) => (
-              <div
-                key={preset.id}
-                data-preset-reorder-index={i}
-                onMouseDown={(e) => handlePresetReorderMouseDown(e, i)}
-                className={`relative flex items-center gap-2 px-3 py-1.5 group transition-colors select-none ${
-                  i < presets.length - 1 ? 'border-b border-[var(--color-border)]' : ''
-                } ${dragIdx === i ? 'opacity-30' : ''} cursor-grab active:cursor-grabbing`}
-              >
-                {dragOverIdx === i && (
-                  <div className="absolute left-0 right-0 top-0 h-[2px] bg-[var(--color-accent)] z-10" />
-                )}
-                {dragOverIdx === presets.length && i === presets.length - 1 && (
-                  <div className="absolute left-0 right-0 bottom-0 h-[2px] bg-[var(--color-accent)] z-10" />
-                )}
-
-                <span className="w-5 flex items-center justify-center flex-shrink-0">
-                  {preset.icon ? (
-                    <span className="type-row leading-none">{preset.icon}</span>
-                  ) : (
-                    <AgentIcon agent={preset.label} size={16} />
-                  )}
-                </span>
-
-                <span className="type-row text-[var(--color-text-primary)] font-mono w-28 truncate flex-shrink-0">
-                  {preset.label}
-                </span>
-
-                <span className="type-hint text-[var(--color-text-muted)] font-mono flex-1 truncate">
-                  {preset.command}
-                </span>
-
-                {preset.isBuiltIn ? (
-                  <span className="type-hint text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-0.5 flex-shrink-0 font-mono">
-                    built-in
-                  </span>
-                ) : null}
-
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleEditPreset(preset)
-                  }}
-                  className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] opacity-0 group-hover:opacity-100 transition-opacity no-drag cursor-pointer font-mono flex-shrink-0"
-                >
-                  edit
-                </button>
-
-                {!preset.isBuiltIn && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void handleDeletePreset(preset.id)
-                    }}
-                    className="type-hint text-[color-mix(in_srgb,var(--color-status-error-soft)_60%,transparent)] hover:text-[var(--color-status-error-soft)] opacity-0 group-hover:opacity-100 transition-opacity no-drag cursor-pointer font-mono flex-shrink-0"
-                  >
-                    del
-                  </button>
-                )}
-
-                <Toggle
-                  size="sm"
-                  checked={Boolean(preset.enabled)}
-                  aria-label={`Enable ${preset.label}`}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={() => void handleTogglePreset(preset.id, preset.enabled)}
-                />
-              </div>
-            ))}
-          </div>
-
-          {presetForm.visible && (
-            <div
-              className="mt-2 border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 space-y-2"
-              onKeyDown={handleFormKeyDown}
-            >
-              <div className="type-section text-[var(--color-text-muted)] uppercase tracking-wider mb-1">
-                {presetForm.editingId ? 'Edit Preset' : 'New Preset'}
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={presetForm.icon}
-                  onChange={(e) => setPresetForm((s) => ({ ...s, icon: e.target.value }))}
-                  placeholder="Icon"
-                  className="w-10 px-1 py-1 text-center type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
-                />
-                <input
-                  ref={formLabelRef}
-                  type="text"
-                  value={presetForm.label}
-                  onChange={(e) => setPresetForm((s) => ({ ...s, label: e.target.value }))}
-                  placeholder="Label"
-                  className="w-28 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
-                />
-                <input
-                  type="text"
-                  value={presetForm.command}
-                  onChange={(e) => setPresetForm((s) => ({ ...s, command: e.target.value }))}
-                  placeholder="Command (e.g. aider --model gpt-4)"
-                  className="flex-1 px-2 py-1 type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)] no-drag font-mono"
-                />
-              </div>
-              <SubmitKeysEditor
-                steps={presetForm.injectFlow}
-                command={presetForm.command}
-                onChange={(injectFlow) =>
-                  setPresetForm((s) => ({ ...s, injectFlow, injectFlowTouched: true }))
-                }
-              />
-              <div className="flex items-center gap-2 justify-end">
-                <button
-                  type="button"
-                  onClick={cancelForm}
-                  className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer font-mono"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void submitForm()}
-                  className="px-3 py-1 type-control bg-[var(--color-accent-fill)] text-[var(--color-on-accent)] hover:bg-[color-mix(in_srgb,var(--color-accent-fill)_90%,black)] no-drag cursor-pointer font-mono"
-                >
-                  {presetForm.editingId ? 'Save' : 'Add'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="mt-2">
-            <button
-              type="button"
-              onClick={openAddForm}
-              className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer font-mono"
-              data-settings-id="agents.add-preset"
-            >
-              + Add Custom Preset
-            </button>
-          </div>
-        </div>
-
-      </div>
-
-      {/* Right: CLI Tools Setup. Tokens (the right column before 0.45.7) is
-          its own page now: Settings → Language Models → Subs / Tokens (LlmTokensSection). */}
-      <div className="flex-1 min-w-0 overflow-y-auto border-l border-[var(--color-border)] p-6 pl-6 pr-3 [scrollbar-gutter:stable]">
-        <CLIInstallGuide />
-      </div>
-    </div>
-  )
-}
-
-// ── CLI Install Guide ───────────────────────────────────────────────
-// Order matches built-in Agent Presets (db seed / Reset Built-ins).
-const CLI_INSTALL_ENTRIES: {
-  name: string
-  command: string
-  installCommand: string
-  docs: string
-  notes?: string
-}[] = [
-  {
-    name: 'Claude Code',
-    command: 'claude',
-    installCommand: CLI_INSTALL_COMMANDS.claude,
-    docs: 'https://docs.anthropic.com/en/docs/claude-code',
-    notes: 'Then add the subscription under Language Models → Subs / Tokens.',
-  },
-  {
-    name: 'OpenAI Codex',
-    command: 'codex',
-    installCommand: CLI_INSTALL_COMMANDS.codex,
-    docs: 'https://github.com/openai/codex',
-    notes: 'Then add the subscription under Language Models → Subs / Tokens.',
-  },
-  {
-    name: 'Grok',
-    command: 'grok',
-    installCommand: CLI_INSTALL_COMMANDS.grok,
-    docs: 'https://docs.x.ai/build',
-    notes:
-      "xAI's terminal coding agent. Then add the subscription under Language Models → Subs / Tokens. For headless use without a subscription, set the XAI_API_KEY environment variable. Skip approval prompts (\"yolo\" mode) with \"grok --always-approve\".",
-  },
-  {
-    name: 'Gemini CLI',
-    command: 'gemini',
-    installCommand: CLI_INSTALL_COMMANDS.gemini,
-    docs: 'https://geminicli.com',
-    notes: 'Requires Node.js 18+. Authenticate with your Google account on first run.',
-  },
-  {
-    name: 'Cursor Agent',
-    command: 'cursor-agent',
-    // Cursor's official installer (cursor.com/docs/cli/installation). The
-    // npm package named `cursor-agent` is a third party's, not Cursor's.
-    installCommand: 'curl https://cursor.com/install -fsS | bash',
-    docs: 'https://cursor.com/docs/cli/installation',
-    notes: 'The standalone CLI agent from Cursor. Requires a Cursor subscription.',
-  },
-  {
-    name: 'Pi',
-    command: 'pi',
-    installCommand: 'npm install -g @mariozechner/pi-coding-agent',
-    docs: 'https://github.com/badlogic/pi-mono',
-    notes:
-      'Minimal coding agent with 15+ LLM providers. Supports OAuth login (/login) for Claude, Copilot, Gemini subscriptions, or use API keys directly.',
-  },
-  {
-    name: 'Hermes',
-    command: 'hermes',
-    installCommand: 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash',
-    docs: 'https://hermes-agent.nousresearch.com/docs/getting-started/quickstart',
-    notes:
-      'Nous Research Hermes Agent. After install, run "hermes" and complete provider setup. Desktop installers are also available from the Hermes site.',
-  },
-  {
-    name: 'OpenCode',
-    command: 'opencode',
-    installCommand: 'curl -fsSL https://opencode.ai/install | bash',
-    docs: 'https://opencode.ai',
-    notes: 'A terminal-based AI coding assistant. Supports multiple model providers.',
-  },
-  {
-    name: 'Goose',
-    command: 'goose',
-    installCommand:
-      'curl -fsSL https://github.com/block/goose/releases/latest/download/install.sh | bash',
-    docs: 'https://github.com/block/goose',
-    notes: 'An open-source AI developer agent from Block. Supports multiple model providers.',
-  },
-  {
-    name: 'Aider',
-    command: 'aider',
-    installCommand: 'pip install aider-chat',
-    docs: 'https://aider.chat/docs/install.html',
-    notes:
-      'Requires Python 3.9+. Configure your API key for the model provider you want to use.',
-  },
-  {
-    name: 'Ollama',
-    command: 'ollama',
-    installCommand: 'curl -fsSL https://ollama.ai/install.sh | sh',
-    docs: 'https://ollama.ai',
-    notes: 'Run large language models locally. After install, pull a model with "ollama pull llama3".',
-  },
-  {
-    name: 'GitHub Copilot CLI',
-    command: 'copilot',
-    installCommand: 'npm install -g @anthropic-ai/copilot-cli',
-    docs: 'https://docs.github.com/en/copilot/how-tos/copilot-cli',
-    notes:
-      'Requires an active GitHub Copilot subscription. Authenticate with "gh auth login" first.',
-  },
-  {
-    name: 'Interpreter',
-    command: 'interpreter',
-    installCommand: 'pip install open-interpreter',
-    docs: 'https://docs.openinterpreter.com',
-    notes: 'Open Interpreter — natural language interface to your computer. Configure an LLM provider after install.',
-  },
-]
-
-function CLIInstallGuide(): React.JSX.Element {
-  const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
-  const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
-  const [installError, setInstallError] = useState<Partial<Record<InstallableCli, string>>>({})
-  const installing = useCliInstallStore((s) => s.installing)
-
-  const handleCopy = useCallback((installCommand: string, idx: number) => {
-    void navigator.clipboard.writeText(installCommand)
-    setCopiedIdx(idx)
-    setTimeout(() => setCopiedIdx(null), 2000)
-  }, [])
-
-  const handleInstall = useCallback((program: InstallableCli) => {
-    setInstallError((prev) => {
-      if (!(program in prev)) return prev
-      const next = { ...prev }
-      delete next[program]
-      return next
-    })
-    void ensureOneCli(primaryScope(), program)
-      .then(() => {
-        setInstallError((prev) => {
-          if (!(program in prev)) return prev
-          const next = { ...prev }
-          delete next[program]
-          return next
-        })
+        setState({ kind: 'ready', byProgram: new Map(tools.map((t) => [t.program, t])) })
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err)
-        setInstallError((prev) => ({ ...prev, [program]: message }))
+        if (!live) return
+        const message = errorText(err)
+        setState(isMissingRoute(message) ? { kind: 'unsupported' } : { kind: 'error', message })
       })
-  }, [])
+    return () => {
+      live = false
+    }
+  }, [nonce])
+  return [state, useCallback(() => setNonce((n) => n + 1), [])]
+}
+
+function openExternal(url: string): void {
+  invoke('plugin:opener|open_url', { url }).catch(() => {
+    window.open(url, '_blank', 'noopener')
+  })
+}
+
+function AgentToolsGroup({ where }: { where: string }): React.JSX.Element {
+  const [state, recheck] = useCliStatus()
+  const [openTool, setOpenTool] = useState<string | null>(null)
+  const [showMore, setShowMore] = useState(false)
+
+  const ready = state.kind === 'ready' ? state.byProgram : null
+  const installed = ready ? AGENT_TOOLS.filter((t) => ready.get(t.command)?.installed) : []
+  const first = ready && installed.length > 0 ? installed : AGENT_TOOLS.filter((t) => FEATURED.has(t.command))
+  const firstSet = new Set(first.map((t) => t.command))
+  const more = AGENT_TOOLS.filter((t) => !firstSet.has(t.command))
+  const moreLabel = ready && installed.length > 0 ? 'More agents you can install' : 'More agents'
+
+  const row = (t: AgentTool): React.JSX.Element => (
+    <ToolRow
+      key={t.command}
+      tool={t}
+      status={ready ? (ready.get(t.command) ?? { program: t.command, installed: false }) : null}
+      where={where}
+      open={openTool === t.command}
+      onToggle={() => setOpenTool((cur) => (cur === t.command ? null : t.command))}
+      onInstalled={recheck}
+    />
+  )
+
+  let notice: React.ReactNode = null
+  if (state.kind === 'loading') {
+    notice = (
+      <p role="status" className="px-4 py-3 type-row text-[var(--color-text-secondary)]" data-testid="tools-loading">
+        Checking which agent tools are on {where}…
+      </p>
+    )
+  } else if (state.kind === 'error') {
+    notice = (
+      <div className="px-4 py-3 flex items-center justify-between gap-4" role="alert" data-testid="tools-error">
+        <div className="min-w-0">
+          <div className="type-row text-[var(--color-text-primary)]">Couldn’t check which tools are installed</div>
+          <div className={SETTING_ROW_HINT} title={state.message}>
+            The install steps below still work. Try again in a moment.
+          </div>
+        </div>
+        <Button variant="quiet" className="flex-shrink-0" onClick={recheck}>
+          Try again
+        </Button>
+      </div>
+    )
+  } else if (state.kind === 'unsupported') {
+    notice = (
+      <p className={`px-4 py-3 ${SETTING_ROW_HINT}`} data-testid="tools-unsupported">
+        This version of K2 can’t check which tools are installed on {where}. Open a tool to see how to install it.
+      </p>
+    )
+  } else if (installed.length === 0) {
+    notice = (
+      <div className="px-4 py-3" data-testid="tools-none">
+        <div className="type-row text-[var(--color-text-primary)]">No agent tools on {where} yet</div>
+        <div className={SETTING_ROW_HINT}>Install one to start an agent. K2 can install the first four for you.</div>
+      </div>
+    )
+  }
 
   return (
-    <div>
-      <h2 className="type-title text-[var(--color-text-primary)] mb-1">CLI Tools Setup</h2>
-      <p className="type-hint text-[var(--color-text-muted)] mb-3">
-        Install instructions for each AI coding agent. Click to expand.
-      </p>
+    <SettingsGroup
+      title={`Agent tools on ${where}`}
+      hint="The programs your presets run. Install one here, then turn its preset on."
+      card
+      action={
+        state.kind === 'ready' ? (
+          <Button variant="quiet" onClick={recheck}>
+            Check again
+          </Button>
+        ) : undefined
+      }
+    >
+      {notice}
+      {state.kind !== 'loading' && first.map(row)}
+      {state.kind !== 'loading' && (
+        <div className="relative">
+          {/* Search lands here for a tool that's folded away. */}
+          {!showMore && more.map((t) => <span key={t.command} data-settings-id={`agents.cli-${t.command}`} className="absolute inset-0 pointer-events-none" />)}
+          <button
+            type="button"
+            data-k2-focus=""
+            aria-expanded={showMore}
+            onClick={() => setShowMore((v) => !v)}
+            className="relative w-full flex items-center justify-between gap-4 px-4 py-3 text-left hover:bg-[var(--color-wash-1)] transition-colors no-drag cursor-pointer"
+          >
+            <span className="min-w-0">
+              <span className="block type-row text-[var(--color-text-primary)]">{moreLabel}</span>
+              <span className={`block ${SETTING_ROW_HINT}`}>
+                {more.length > 3 ? `${more.slice(0, 3).map((t) => t.name).join(', ')} and ${more.length - 3} more` : more.map((t) => t.name).join(', ')}
+              </span>
+            </span>
+            <span className="flex items-center gap-2 flex-shrink-0 type-hint text-[var(--color-text-secondary)]">
+              {showMore ? 'Hide' : `Show ${more.length}`}
+              <svg className={`w-3 h-3 transition-transform ${showMore ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </span>
+          </button>
+        </div>
+      )}
+      {state.kind !== 'loading' && showMore && more.map(row)}
+    </SettingsGroup>
+  )
+}
 
-      <div className="border border-[var(--color-border)]">
-        {CLI_INSTALL_ENTRIES.map((entry, i) => {
-          const isExpanded = expandedIdx === i
-          const isCopied = copiedIdx === i
-          const settingsId = `agents.cli-${entry.command === 'cursor-agent' ? 'cursor-agent' : entry.command}`
+function ToolRow({
+  tool,
+  status,
+  where,
+  open,
+  onToggle,
+  onInstalled,
+}: {
+  tool: AgentTool
+  /** null: K2 doesn't know (still checking, or the server can't say). */
+  status: CliStatus | null
+  where: string
+  open: boolean
+  onToggle: () => void
+  onInstalled: () => void
+}): React.JSX.Element {
+  const installing = useCliInstallStore((s) => s.installing)
+  const [copied, setCopied] = useState(false)
+  const [installError, setInstallError] = useState<string | null>(null)
+  const [justInstalled, setJustInstalled] = useState(false)
+  const program = isInstallableCli(tool.command) ? tool.command : null
+  const isInstalling = program !== null && installing === program
+  const isInstalled = status?.installed === true
 
-          return (
-            <div
-              key={entry.command}
-              className={i < CLI_INSTALL_ENTRIES.length - 1 ? 'border-b border-[var(--color-border)]' : ''}
-              data-settings-id={settingsId}
-            >
-              <button
-                type="button"
-                className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer"
-                onClick={() => setExpandedIdx(isExpanded ? null : i)}
-              >
-                <svg
-                  width="8"
-                  height="8"
-                  viewBox="0 0 8 8"
-                  fill="currentColor"
-                  className={`flex-shrink-0 text-[var(--color-text-muted)] transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-                >
-                  <polygon points="1,0 7,4 1,8" />
-                </svg>
-                <span className="type-row text-[var(--color-text-primary)] font-mono flex-1">
-                  {entry.name}
-                </span>
-                <span className="type-hint text-[var(--color-text-muted)] font-mono">
-                  {entry.command}
-                </span>
-              </button>
+  const copy = (): void => {
+    navigator.clipboard?.writeText(tool.installCommand).then(
+      () => {
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 2000)
+      },
+      () => setInstallError('K2 couldn’t copy the command. Select it and copy it by hand.'),
+    )
+  }
 
-              {isExpanded && (
-                <div className="px-3 pb-3 pt-0 ml-5 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 type-hint font-mono bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1.5 text-[var(--color-text-primary)] select-all">
-                      {entry.installCommand}
-                    </code>
-                    {isInstallableCli(entry.command) && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const command = entry.command
-                          if (isInstallableCli(command)) handleInstall(command)
-                        }}
-                        disabled={installing === entry.command}
-                        className="flex-shrink-0 px-2 py-1.5 type-control font-mono border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer disabled:cursor-wait"
-                      >
-                        {installing === entry.command ? installingCliLabel(entry.command) : 'Install'}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleCopy(entry.installCommand, i)}
-                      className="flex-shrink-0 px-2 py-1.5 type-control font-mono border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
-                      style={{
-                        color: isCopied ? 'var(--color-status-ok)' : 'var(--color-text-muted)',
-                      }}
-                    >
-                      {isCopied ? 'Copied!' : 'Copy'}
-                    </button>
-                  </div>
-                  {isInstallableCli(entry.command) && installError[entry.command] && (
-                    <p className="type-hint text-[var(--color-status-error)] leading-relaxed">
-                      {installError[entry.command]}
-                    </p>
-                  )}
+  const install = (p: InstallableCli): void => {
+    setInstallError(null)
+    setJustInstalled(false)
+    ensureOneCli(primaryScope(), p)
+      .then(() => {
+        setJustInstalled(true)
+        onInstalled()
+      })
+      .catch((err: unknown) => setInstallError(errorText(err)))
+  }
 
-                  {entry.notes && (
-                    <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
-                      {entry.notes}
-                    </p>
-                  )}
+  const statusLine = status === null
+    ? 'Open to see how to install it.'
+    : isInstalled
+      ? status.version
+        ? `Version ${status.version}`
+        : 'Version unknown'
+      : program
+        ? 'Not installed. K2 installs it the first time you start it.'
+        : 'Not installed'
 
-                  <a
-                    href={entry.docs}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-block type-hint text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 font-mono transition-colors"
-                  >
-                    Documentation →
-                  </a>
-                </div>
-              )}
+  return (
+    <SettingRow
+      label={
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="w-5 flex items-center justify-center flex-shrink-0" aria-hidden="true">
+            <AgentIcon agent={tool.command} size={16} />
+          </span>
+          <span className="truncate">{tool.name}</span>
+          {isInstalled && <Tag tone="ok">Installed</Tag>}
+        </span>
+      }
+      hint={<span className="block pl-7">{statusLine}</span>}
+      settingId={`agents.cli-${tool.command}`}
+      testId={`tool-row-${tool.command}`}
+      below={
+        open ? (
+          <div className="pl-7 space-y-3" data-testid={`tool-help-${tool.command}`}>
+            <div className="flex items-start gap-2">
+              <code className="flex-1 min-w-0 break-all select-text type-hint font-mono px-2 py-1.5 rounded-[var(--radius-field)] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)]">
+                {tool.installCommand}
+              </code>
+              <Button variant="quiet" className="flex-shrink-0" onClick={copy}>
+                {copied ? 'Copied' : 'Copy'}
+              </Button>
             </div>
-          )
-        })}
-      </div>
-    </div>
+            <p className={SETTING_ROW_HINT}>
+              {program && !isInstalled
+                ? `Install runs this command on ${where}. Or copy it into a terminal. `
+                : `Run this in a terminal on ${where}${isInstalled ? ' to update it' : ''}. `}
+              {tool.notes}
+            </p>
+            {isInstalling && program && (
+              <p role="status" className="type-hint text-[var(--color-text-secondary)]">
+                {installingCliLabel(program)} This can take a minute or two.
+              </p>
+            )}
+            {justInstalled && !isInstalling && (
+              <p role="status" className="type-hint text-[var(--color-status-ok-soft)]">
+                {tool.name} is installed. Turn its preset on to put it on the launch bar.
+              </p>
+            )}
+            {installError && (
+              <Callout tone="error" role="alert">
+                <p className="type-hint break-words">K2 couldn’t install {tool.name}. {installError}</p>
+              </Callout>
+            )}
+            <div className="flex items-center gap-2">
+              {program && !isInstalled && (
+                <Button variant="accent" disabled={isInstalling} onClick={() => install(program)}>
+                  {isInstalling ? installingCliLabel(program) : installError ? 'Try again' : `Install ${tool.name}`}
+                </Button>
+              )}
+              <Button variant="quiet" onClick={() => openExternal(tool.docs)}>
+                Open the {tool.name} docs
+              </Button>
+            </div>
+          </div>
+        ) : undefined
+      }
+    >
+      <Button variant="quiet" aria-expanded={open} aria-label={`${open ? 'Hide' : 'Show'} how to install ${tool.name}`} onClick={onToggle}>
+        {open ? 'Hide' : isInstalled ? 'Details' : 'How to install'}
+      </Button>
+    </SettingRow>
   )
 }

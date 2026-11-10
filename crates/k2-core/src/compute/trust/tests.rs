@@ -355,6 +355,20 @@ fn rotation_moves_the_row_in_place() {
     let st3 = NodeStatement { key_born_at: 1_700_000_200, issued_at: 1_700_000_201, ..statement(&k4, Taint::Clean, 1, Some(k3.fingerprint())) };
     let p3 = KeyRotation { rotation: rot3.sign(&k3).unwrap(), statement: st3.sign(&k4).unwrap() };
     assert_eq!(apply_rotation(&c, &n3, &p3, 12).unwrap_err().0, codes::KEY_REVOKED);
+    // H2: any revocation stops a hand-over (a lost key too), and a key
+    // re-keyed from one later revoked as compromised counts as revoked.
+    let k5 = SigningKey::generate().unwrap();
+    let n5 = add_node(&c, "node-t", "nt", &k5);
+    record_revocation(&c, &k5.fingerprint(), &"k".repeat(64), RevokeReason::KeyLost, 1, 5);
+    let rot5 = RotationStatement { old_fp: k5.fingerprint(), new_fp: k4.fingerprint(), new_spki: b64(k4.spki_der()), ..rot3 };
+    let st5 = NodeStatement { key_born_at: 1_700_000_200, issued_at: 1_700_000_201, ..statement(&k4, Taint::Clean, 1, Some(k5.fingerprint())) };
+    let p5 = KeyRotation { rotation: rot5.sign(&k5).unwrap(), statement: st5.sign(&k4).unwrap() };
+    assert_eq!(check_rotation(&c, &n5, &p5).unwrap_err().0, codes::KEY_REVOKED, "a lost key hands over to nothing");
+    assert_eq!(rotation_descendants(&c, &old.fingerprint()), vec![new.fingerprint()], "the applied re-key is recorded");
+    assert_eq!(key_revoked(&c, &new.fingerprint()), None);
+    record_revocation(&c, &old.fingerprint(), &"k".repeat(64), RevokeReason::Compromised, 2, 20);
+    assert_eq!(key_revoked(&c, &new.fingerprint()), Some(RevokeReason::Compromised), "the chain follows the compromise");
+    assert!(receipt_void(&c, &new.fingerprint(), Some(1)).unwrap().contains("compromised"));
 }
 
 #[test]

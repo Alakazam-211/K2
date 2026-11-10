@@ -503,11 +503,19 @@ fn roster_propose(who: &Who, body: &[u8]) -> R<Value> {
                 if !matches!(reason, "compromised" | "key_lost" | "other") {
                     return Err(no(tcodes::BAD_ARGS, 400, "--reason is compromised, key_lost or other"));
                 }
+                let chain: Vec<String> = if reason == "compromised" {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    trust::rotation_descendants(&conn, &e.entry.node_fp).into_iter().map(|f| format!("{}…", &f[..12.min(f.len())])).collect()
+                } else {
+                    Vec::new()
+                };
                 let summary = format!(
-                    "revoke {}'s key {}… ({reason}){}",
+                    "revoke {}'s key {}… ({reason}){}{}",
                     e.entry.name,
                     &e.entry.node_fp[..12],
-                    if reason == "compromised" { ": every receipt it ever signed becomes void, past and future" } else { "" }
+                    if reason == "compromised" { ": every receipt it ever signed becomes void, past and future" } else { "" },
+                    if chain.is_empty() { String::new() } else { format!("; and the keys it re-keyed to: {}", chain.join(", ")) }
                 );
                 (e.entry.name.clone(), json!({"op": "revoke", "nodeFp": e.entry.node_fp, "reason": reason}), summary)
             }
@@ -828,6 +836,9 @@ fn approve_roster(req: &TrustRequest, by: &str, via: &str) -> R<Value> {
     let b = &req.body;
     let t = now();
     let op = s(b, "op").unwrap_or("");
+    if op == "rotate" {
+        return approve_rotation(req, by, via);
+    }
     let key = roster_key()?;
     let owner = owner_id()?;
     // Work out the new entries first; nothing is written until it checks.
@@ -897,32 +908,32 @@ fn approve_roster(req: &TrustRequest, by: &str, via: &str) -> R<Value> {
             if op == "retire" {
                 e.entry.status = KeyStatus::Retired;
                 e.entry.valid_to = Some(t.max(e.entry.valid_from));
+                e.updated_at = t;
+                vec![e]
             } else {
+                let reason: Option<RevokeReason> = serde_json::from_value(json!(s(b, "reason").unwrap_or("compromised"))).ok();
                 e.entry.status = KeyStatus::Revoked;
-                e.entry.revoked_reason = serde_json::from_value(json!(s(b, "reason").unwrap_or("compromised"))).ok();
+                e.entry.revoked_reason = reason;
                 e.entry.valid_to = Some(t.max(e.entry.valid_from));
+                e.updated_at = t;
+                // H2: a compromised key revokes every key it handed over to
+                // (a thief who re-keyed before the revoke doesn't survive it).
+                let mut rows = vec![e];
+                if reason == Some(RevokeReason::Compromised) {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    for fp in trust::rotation_descendants(&conn, fp) {
+                        if let Some(mut d) = trust::entry_by_fp(&conn, &fp).filter(|d| d.entry.status != KeyStatus::Revoked) {
+                            d.entry.status = KeyStatus::Revoked;
+                            d.entry.revoked_reason = Some(RevokeReason::Compromised);
+                            d.entry.valid_to = Some(t.max(d.entry.valid_from));
+                            d.updated_at = t;
+                            rows.push(d);
+                        }
+                    }
+                }
+                rows
             }
-            e.updated_at = t;
-            vec![e]
-        }
-        "rotate" => {
-            let old: EntryRow = {
-                let db = k2_core::db::shared();
-                let conn = db.lock();
-                trust::entry_by_fp(&conn, s(b, "oldFp").unwrap_or(""))
-            }
-            .ok_or_else(|| no(tcodes::NODE_NOT_ON_ROSTER, 404, "the old key isn't in the working roster"))?;
-            let (st_signed, st) = {
-                let db = k2_core::db::shared();
-                let conn = db.lock();
-                trust::statement_of(&conn, s(b, "nodeId").unwrap_or(""))
-            }
-            .ok_or_else(|| no(tcodes::NO_STATEMENT, 409, "the node's new statement is gone"))?;
-            if st.node_fp != s(b, "newFp").unwrap_or("") {
-                return Err(no(tcodes::NO_STATEMENT, 409, "the node changed key again: file it again"));
-            }
-            let (retired, new) = trust::rotated_entries(&old, &st, &st_signed.digest(), t).map_err(|(c, h)| no(c, 409, h))?;
-            vec![retired, new]
         }
         _ => return Err(no(tcodes::BAD_ARGS, 400, "unknown roster change")),
     };
@@ -940,6 +951,66 @@ fn approve_roster(req: &TrustRequest, by: &str, via: &str) -> R<Value> {
     let r = issue_roster(by)?;
     let delivered = deliver_roster(&r);
     Ok(json!({"roster": roster_summary(&r), "delivered": delivered}))
+}
+
+/// A person approved a node's re-key (H2): the proof is checked again, the
+/// pin moves, and on a node this server owns the roster retires the old
+/// key and lists the new one.
+fn approve_rotation(req: &TrustRequest, by: &str, via: &str) -> R<Value> {
+    let b = &req.body;
+    let t = now();
+    let proof: KeyRotation = serde_json::from_value(b.get("proof").cloned().unwrap_or_default())
+        .map_err(|e| no(tcodes::BAD_ARGS, 400, format!("the request's re-key proof is unreadable: {e}")))?;
+    let (old_fp, new_fp) = (s(b, "oldFp").unwrap_or(""), s(b, "newFp").unwrap_or(""));
+    let (node, old_entry) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let node = store::node_by_id(&conn, s(b, "nodeId").unwrap_or(""))
+            .filter(|n| n.fingerprint == old_fp && n.state == "active")
+            .ok_or_else(|| no(tcodes::ROTATION_REFUSED, 409, "the node changed key or was removed since this was filed: let it knock again"))?;
+        let (r, _) = trust::check_rotation(&conn, &node, &proof).map_err(|(c, h)| no(c, 409, h))?;
+        if r.new_fp != new_fp {
+            return Err(no(tcodes::ROTATION_REFUSED, 409, "the stored proof names another new key"));
+        }
+        let e = (!node.is_tenant()).then(|| trust::entry_by_fp(&conn, old_fp)).flatten();
+        if e.as_ref().is_some_and(|e| e.entry.status != KeyStatus::Active) {
+            return Err(no(tcodes::ROTATION_REFUSED, 409, "the old key is no longer active in the node roster: only an active key re-keys"));
+        }
+        (node, e)
+    };
+    decide_now(req, by, via)?;
+    let (moved, rows) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let moved = match trust::apply_rotation(&conn, &node, &proof, t) {
+            Ok(m) => m,
+            Err((c, h)) => {
+                let _ = trust::set_result(&conn, &req.id, true, &json!({"error": h}));
+                return Err(no(c, 409, h));
+            }
+        };
+        store::record_event(&conn, by, "node_rekeyed", Some(&moved.id), None, None, json!({"old": old_fp, "new": new_fp, "request": req.id, "via": via}));
+        let rows = match (&old_entry, trust::statement_of(&conn, &moved.id)) {
+            (Some(old), Some((st_signed, st))) => {
+                let (retired, new) = trust::rotated_entries(old, &st, &st_signed.digest(), t).map_err(|(c, h)| no(c, 409, h))?;
+                vec![retired, new]
+            }
+            _ => Vec::new(),
+        };
+        for row in &rows {
+            if let Err(e) = trust::put_entry(&conn, row, t) {
+                let _ = trust::set_result(&conn, &req.id, true, &json!({"error": e}));
+                return Err(no(tcodes::BAD_ARGS, 409, e));
+            }
+        }
+        (moved, rows)
+    };
+    if rows.is_empty() {
+        return Ok(json!({"node": moved.name, "fingerprint": moved.fingerprint}));
+    }
+    let r = issue_roster(by)?;
+    let delivered = deliver_roster(&r);
+    Ok(json!({"node": moved.name, "fingerprint": moved.fingerprint, "roster": roster_summary(&r), "delivered": delivered}))
 }
 
 // ── lanes ────────────────────────────────────────────────────────────
@@ -1684,35 +1755,87 @@ pub fn on_node_roster(node_id: &str, doc: NodeRosterDoc) {
     }
 }
 
+/// Refusal code: a node's re-key waits for a person (11-07 review H2).
+pub const REKEY_PENDING: &str = "rekey_pending";
+
 /// A node attaches with a key this server doesn't pin, carrying a rotation
-/// signed by one it does (V3): move the row in place. On a node this server
-/// owns, file the roster change for a person (the new key is listed only
-/// after approval).
+/// signed by one it does (V3). The proof is checked, but the pinned key
+/// moves only once a **person** approves it (11-07 review H2): until then
+/// the node with the new key isn't let in (`rekey_pending`, it retries).
+/// One held request per new key, however often the node knocks. The old key
+/// must be active: revoked (any reason) or, on a node this server owns, not
+/// active in the roster, it can't hand over. A seat node on a client moves
+/// at once when its owner's newest roster lists the new key under the seat
+/// (the owner's person approved that; V20's trust anchor).
 pub fn on_rotation(rot: &KeyRotation) -> Result<store::NodeRow, (&'static str, String)> {
     let r: k2_core::compute::proto::statement::RotationStatement = rot.rotation.peek(ci::DOMAIN_NODE_ROTATION).map_err(|e| (tcodes::ROTATION_REFUSED, e))?;
-    let (moved, owned_entry) = {
+    let (node, entry) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let node = store::live_node_by_fp(&conn, &r.old_fp).ok_or((tcodes::ROTATION_REFUSED, "no node pins the rotation's old key".to_string()))?;
-        let moved = trust::apply_rotation(&conn, &node, rot, now())?;
-        store::record_event(&conn, "node", "node_rekeyed", Some(&moved.id), None, None, json!({"old": r.old_fp, "new": r.new_fp, "epoch": r.new_epoch, "reason": r.reason}));
-        let e = (!moved.is_tenant()).then(|| trust::entry_by_fp(&conn, &r.old_fp)).flatten();
-        (moved, e)
+        trust::check_rotation(&conn, &node, rot)?;
+        if node.state != "active" {
+            return Err((tcodes::ROTATION_REFUSED, format!("{} isn't an active node here: it can't re-key", node.name)));
+        }
+        let entry = (!node.is_tenant()).then(|| trust::entry_by_fp(&conn, &r.old_fp)).flatten();
+        if let Some(e) = &entry {
+            if e.entry.status != KeyStatus::Active {
+                return Err((tcodes::ROTATION_REFUSED, format!("{}'s key {}… is {} in the node roster: only an active key re-keys", node.name, &r.old_fp[..12], key_status_text(e.entry.status))));
+            }
+        }
+        // A seat node on a client: the owner's roster is the anchor.
+        if node.is_tenant() {
+            let (_, _, seat_id) = trust::node_key_facts(&conn, &node.id);
+            let listed = seat_id.and_then(|s| trust::seat(&conn, "client", &s)).and_then(|s| trust::seat_node_name(&conn, &s, &r.new_fp));
+            if listed.is_some() {
+                let moved = trust::apply_rotation(&conn, &node, rot, now())?;
+                store::record_event(&conn, "node", "node_rekeyed", Some(&moved.id), None, None, json!({"old": r.old_fp, "new": r.new_fp, "epoch": r.new_epoch, "reason": r.reason, "by": "owner_roster"}));
+                return Ok(moved);
+            }
+        }
+        (node, entry)
     };
-    if let Some(e) = owned_entry {
-        let summary = format!("{} re-keyed ({}… → {}…, epoch {}): retire the old key and list the new one", moved.name, &r.old_fp[..12], &r.new_fp[..12], r.new_epoch);
-        let _ = file_request(
-            "roster",
-            &e.entry.name,
-            &json!({"op": "rotate", "nodeId": moved.id, "oldFp": r.old_fp, "newFp": r.new_fp}),
-            &summary,
-            None,
-            "controller",
-            None,
-            trust::REQUEST_TTL_SECS,
-        );
+    // Already held for this new key: the same request.
+    let open = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        trust::list_requests(&conn, Some("open"), None, 500).into_iter().find(|q| q.kind == "roster" && s(&q.body, "op") == Some("rotate") && s(&q.body, "newFp") == Some(r.new_fp.as_str()))
+    };
+    let id = match open {
+        Some(q) => q.id,
+        None => {
+            let summary = format!(
+                "{} re-keyed ({}… → {}…, epoch {}): move this server's pin to the new key{}",
+                node.name,
+                &r.old_fp[..12],
+                &r.new_fp[..12],
+                r.new_epoch,
+                if entry.is_some() { ", retire the old key and list the new one in the node roster" } else { "" }
+            );
+            let proof = serde_json::to_value(rot).map_err(|e| (tcodes::ROTATION_REFUSED, e.to_string()))?;
+            let out = file_request(
+                "roster",
+                entry.as_ref().map(|e| e.entry.name.as_str()).unwrap_or(&node.name),
+                &json!({"op": "rotate", "nodeId": node.id, "oldFp": r.old_fp, "newFp": r.new_fp, "epoch": r.new_epoch, "proof": proof}),
+                &summary,
+                None,
+                "controller",
+                None,
+                trust::REQUEST_TTL_SECS,
+            )
+            .map_err(|e| (e.code, e.hint))?;
+            out["request"]["id"].as_str().unwrap_or("").to_string()
+        }
+    };
+    Err((REKEY_PENDING, format!("{}'s new key waits for a person here: k2 compute trust approve {id} (from a terminal outside K2)", node.name)))
+}
+
+fn key_status_text(s: KeyStatus) -> &'static str {
+    match s {
+        KeyStatus::Active => "active",
+        KeyStatus::Retired => "retired",
+        KeyStatus::Revoked => "revoked",
     }
-    Ok(moved)
 }
 
 /// A node enrolling with a seat code (client, V20): the seat and the node's

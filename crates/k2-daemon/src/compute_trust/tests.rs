@@ -561,8 +561,8 @@ fn client_refuses_unpinned_owners_and_unasked_seats() {
     assert!(trust::seat(&h.lock(), "client", "surprise").is_none(), "a seat exists only when a person asked");
 }
 
-/// V3: a re-keyed node proves its new key with the old one; the row moves in
-/// place and the owner files the roster change for a person.
+/// V3: a re-keyed node proves its new key with the old one; the owner files
+/// the change for a person, and once approved the row moves in place.
 #[test]
 fn rotation_repins_in_place_and_files_the_roster_change() {
     let _ci = ci_on();
@@ -582,11 +582,12 @@ fn rotation_repins_in_place_and_files_the_roster_change() {
     };
     let st = NodeStatement { key_born_at: 1_700_000_300, issued_at: 1_700_000_301, ..statement(&new, Taint::Clean, 1, Some(old.fingerprint())) };
     let proof = KeyRotation { rotation: rot.sign(&old).unwrap(), statement: st.sign(&new).unwrap() };
-    let moved = on_rotation(&proof).unwrap();
-    assert_eq!((moved.id.as_str(), moved.fingerprint.as_str()), (n1.id.as_str(), new.fingerprint().as_str()));
+    assert_eq!(on_rotation(&proof).unwrap_err().0, REKEY_PENDING);
     let rq = get(TRUST_REQUESTS, &Who::Owner);
     let id = rq["requests"].as_array().unwrap().iter().find(|r| r["body"]["op"] == "rotate").unwrap()["id"].as_str().unwrap().to_string();
     approve(&id);
+    let moved = store::node_by_id(&k2_core::db::shared().lock(), &n1.id).unwrap();
+    assert_eq!((moved.id.as_str(), moved.fingerprint.as_str()), (n1.id.as_str(), new.fingerprint().as_str()));
     let h = k2_core::db::shared();
     let r = trust::latest_own_roster(&h.lock()).unwrap();
     assert_eq!(r.roster.entry(&old.fingerprint()).unwrap().status, KeyStatus::Retired);

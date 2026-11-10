@@ -898,26 +898,89 @@ pub fn record_revocation(conn: &Connection, node_fp: &str, key_fp: &str, reason:
     );
 }
 
-/// Was this node key revoked by its owner's roster (and why)?
+/// The revocation row of exactly this key: `(reason, at)`. A store error
+/// counts as revoked (`other`, at 0): never a silent "not revoked".
+fn revocation_row(conn: &Connection, node_fp: &str) -> Option<(String, i64)> {
+    match conn.query_row("SELECT reason, at FROM compute_key_revocations WHERE node_fp = ?1", params![node_fp], |r| Ok((r.get(0)?, r.get(1)?))).optional() {
+        Ok(r) => r,
+        Err(_) => Some(("other".into(), 0)),
+    }
+}
+
+/// Was this node key revoked by its owner's roster (and why)? A key one of
+/// whose ancestors (the keys that handed over to it by re-keys, 0284) was
+/// revoked as compromised counts as revoked as compromised too (11-07
+/// review H2): a thief who re-keyed before the revoke doesn't survive it.
 pub fn key_revoked(conn: &Connection, node_fp: &str) -> Option<RevokeReason> {
-    let r: String = conn.query_row("SELECT reason FROM compute_key_revocations WHERE node_fp = ?1", params![node_fp], |r| r.get(0)).optional().ok().flatten()?;
-    enum_from(Some(r))
+    if let Some((r, _)) = revocation_row(conn, node_fp) {
+        return Some(enum_from(Some(r)).unwrap_or(RevokeReason::Other));
+    }
+    compromised_ancestor(conn, node_fp).map(|_| RevokeReason::Compromised)
+}
+
+/// The nearest ancestor of `node_fp` (through recorded re-keys) revoked as
+/// compromised.
+pub fn compromised_ancestor(conn: &Connection, node_fp: &str) -> Option<String> {
+    let mut fp = node_fp.to_string();
+    for _ in 0..64 {
+        let old: String = match conn.query_row("SELECT old_fp FROM compute_key_rotations WHERE new_fp = ?1", params![fp], |r| r.get(0)).optional() {
+            Ok(Some(o)) => o,
+            Ok(None) => return None,
+            // A store error: the chain can't be shown clean.
+            Err(_) => return Some(fp),
+        };
+        if revocation_row(conn, &old).is_some_and(|(r, _)| r == "compromised") {
+            return Some(old);
+        }
+        fp = old;
+    }
+    Some(fp)
 }
 
 /// A receipt from this key is void (PRD §4.1): revoked as compromised voids
-/// every receipt, past and future; any other revocation voids receipts
-/// that started after it was recorded.
+/// every receipt, past and future (also when an ancestor key was, H2); any
+/// other revocation voids receipts that started after it was recorded.
 pub fn receipt_void(conn: &Connection, node_fp: &str, started_at: Option<i64>) -> Option<String> {
-    let (reason, at): (String, i64) = conn
-        .query_row("SELECT reason, at FROM compute_key_revocations WHERE node_fp = ?1", params![node_fp], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()
-        .ok()
-        .flatten()?;
+    let Some((reason, at)) = revocation_row(conn, node_fp) else {
+        return compromised_ancestor(conn, node_fp)
+            .map(|a| format!("the node's owner revoked the key this one was re-keyed from ({}…) as compromised: every receipt it signed is void", &a[..12.min(a.len())]));
+    };
     match reason.as_str() {
         "compromised" => Some("the node's owner revoked this key as compromised: every receipt it signed is void".into()),
         _ if started_at.is_none_or(|s| s >= at) => Some(format!("the node's owner revoked this key ({reason}) before this job started")),
         _ => None,
     }
+}
+
+/// Record a re-key this server applied (0284).
+pub fn record_rotation(conn: &Connection, old_fp: &str, new_fp: &str, node_id: Option<&str>, new_epoch: u32, at: i64) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO compute_key_rotations (new_fp, old_fp, node_id, new_epoch, at) VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(new_fp) DO UPDATE SET old_fp = ?2, node_id = ?3, new_epoch = ?4, at = ?5",
+        params![new_fp, old_fp, node_id, new_epoch as i64, at],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Every key `node_fp` handed over to, directly or through later re-keys
+/// (breadth first, bounded).
+pub fn rotation_descendants(conn: &Connection, node_fp: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut todo = vec![node_fp.to_string()];
+    while let Some(fp) = todo.pop() {
+        let next: Vec<String> = conn
+            .prepare("SELECT new_fp FROM compute_key_rotations WHERE old_fp = ?1 ORDER BY new_fp")
+            .and_then(|mut s| s.query_map(params![fp], |r| r.get(0)).map(|rows| rows.filter_map(Result::ok).collect()))
+            .unwrap_or_default();
+        for n in next {
+            if n != node_fp && !out.contains(&n) && out.len() < 256 {
+                out.push(n.clone());
+                todo.push(n);
+            }
+        }
+    }
+    out
 }
 
 // ── the seat enrol code (client) ─────────────────────────────────────
@@ -968,18 +1031,20 @@ pub fn set_node_seat(conn: &Connection, node_id: &str, seat_id: Option<&str>) ->
 // ── re-key: a pinned key hands over to a new one (V3) ────────────────
 
 /// A node proves a new key with its old one (`Hello.rotation`): check the
-/// rotation with the key pinned on `node`, the new key's statement, the
-/// epoch, then move the row to the new key **in place** (same id, so grants
-/// and jobs keep working). Refuses a key revoked as compromised.
-pub fn apply_rotation(conn: &Connection, node: &NodeRow, rot: &KeyRotation, at: i64) -> Result<NodeRow, (&'static str, String)> {
+/// rotation with the key pinned on `node`, the new key's statement and the
+/// epoch, **without moving anything** (the caller holds it for a person,
+/// 11-07 review H2). Refuses an old key that was revoked for any reason, or
+/// one re-keyed from a key revoked as compromised: only an active key hands
+/// over to a new one.
+pub fn check_rotation(conn: &Connection, node: &NodeRow, rot: &KeyRotation) -> Result<(RotationStatement, NodeStatement), (&'static str, String)> {
     let refuse = |m: String| (codes::ROTATION_REFUSED, m);
     let old_spki = crypto::pem_decode("PUBLIC KEY", &node.public_key_pem).map_err(|e| refuse(format!("pinned key unreadable: {e}")))?;
     let r = RotationStatement::open(&rot.rotation, &old_spki).map_err(refuse)?;
     if r.old_fp != node.fingerprint {
         return Err(refuse("the rotation is for another key".into()));
     }
-    if key_revoked(conn, &node.fingerprint) == Some(RevokeReason::Compromised) {
-        return Err((codes::KEY_REVOKED, "the old key was revoked as compromised: it can't vouch for a new one; enrol the node again".into()));
+    if let Some(why) = key_revoked(conn, &node.fingerprint) {
+        return Err((codes::KEY_REVOKED, format!("the old key was revoked ({}): it can't vouch for a new one; enrol the node again", enum_text(&why))));
     }
     let new_spki = crypto::unb64(&r.new_spki).map_err(refuse)?;
     let st = NodeStatement::open(&rot.statement).map_err(refuse)?;
@@ -991,12 +1056,28 @@ pub fn apply_rotation(conn: &Connection, node: &NodeRow, rot: &KeyRotation, at: 
     if r.new_epoch != epoch + 1 {
         return Err(refuse(format!("rotation to epoch {} but this server pins epoch {epoch}", r.new_epoch)));
     }
+    Ok((r, st))
+}
+
+/// [`check_rotation`], then move the row to the new key **in place** (same
+/// id, so grants and jobs keep working) and record the hand-over (0284).
+/// Called only once a person approved it (or, for a seat node on a client,
+/// once the owner's roster lists the new key).
+pub fn apply_rotation(conn: &Connection, node: &NodeRow, rot: &KeyRotation, at: i64) -> Result<NodeRow, (&'static str, String)> {
+    let refuse = |m: String| (codes::ROTATION_REFUSED, m);
+    let (r, st) = check_rotation(conn, node, rot)?;
+    let new_spki = crypto::unb64(&r.new_spki).map_err(refuse)?;
     let pem = crypto::pem_encode("PUBLIC KEY", &new_spki);
-    conn.execute(
-        "UPDATE compute_nodes SET fingerprint = ?2, public_key_pem = ?3, key_epoch = ?4, prev_fingerprint = ?5, rekeyed_at = ?6 WHERE id = ?1 AND fingerprint = ?5",
-        params![node.id, st.node_fp, pem, r.new_epoch as i64, node.fingerprint, at],
-    )
-    .map_err(|e| refuse(e.to_string()))?;
+    let n = conn
+        .execute(
+            "UPDATE compute_nodes SET fingerprint = ?2, public_key_pem = ?3, key_epoch = ?4, prev_fingerprint = ?5, rekeyed_at = ?6 WHERE id = ?1 AND fingerprint = ?5",
+            params![node.id, st.node_fp, pem, r.new_epoch as i64, node.fingerprint, at],
+        )
+        .map_err(|e| refuse(e.to_string()))?;
+    if n != 1 {
+        return Err(refuse("the node's key changed meanwhile".into()));
+    }
+    record_rotation(conn, &node.fingerprint, &st.node_fp, Some(&node.id), r.new_epoch, at).map_err(refuse)?;
     save_statement(conn, &node.id, &rot.statement, at).map_err(refuse)?;
     super::store::node_by_id(conn, &node.id).ok_or_else(|| refuse("the node vanished".into()))
 }

@@ -727,7 +727,7 @@ describe('Deleted Gardens (G25)', () => {
     expect(modal.querySelector('[data-garden-sign]')).toBeNull()
     expect(modal.querySelector('[data-garden-history-restore]')).toBeNull()
     expect(modal.querySelector('[data-garden-history-view]')).not.toBeNull()
-    fireEvent.click(within(modal).getByRole('button', { name: 'Close' }))
+    fireEvent.click(within(modal).getByRole('button', { name: 'Close (Esc)' }))
     await act(async () => fireEvent.click(q('[data-garden-restore]', pane)))
     expect(posts('zen/garden/restore')).toEqual([{ garden: 'g-old' }])
   })

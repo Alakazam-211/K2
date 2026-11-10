@@ -443,7 +443,9 @@
   --k2-wave-fill: var(--color-bg);
   --k2-strip-fill: var(--tile-fill);
   --k2-wave-r: 8px;
-  --k2-body-r: 8px;
+  /* The body's top corners follow the tile's bottom ones (its inner curve,
+     inside the 1px rim). */
+  --k2-body-r: calc(var(--radius-box) - 1px);
   /* A header band in a pane fades into the pane, the selected tab's colour,
      instead of darkening under the strip. */
   --k2-header-tint: var(--k2-wave-fill);
@@ -570,10 +572,15 @@
 [data-style="glass"] [data-room-tab-bar] > button:not([data-zen-root] *) {
   width: 28px;
   height: 28px;
+  /* Centred on the tabs' row: the drawer toggles otherwise stretch to the top. */
+  align-self: center;
   border-width: 0;
   border-radius: var(--radius-pill);
 }
 [data-style="glass"] [data-room-tab-bar] > button:first-child:not([data-zen-root] *) { margin-left: 6px; }
+/* With a drawer toggle in the corner, the first tab is nowhere near the body's
+   corner, so it only needs room for its flare. */
+[data-style="glass"] [data-room-tab-bar] > button + [data-tab-scroller]:not([data-zen-root] *) { padding-left: var(--k2-wave-r); }
 [data-style="glass"] [data-room-tab-bar] > button:hover:not([data-zen-root] *) { background: var(--color-wash-2); }
 
 /* A split pane's strip: the same tabs, a size smaller. */
@@ -583,7 +590,6 @@
   --k2-pane-tab-lit: var(--k2-wave-fill);
   --k2-pane-tab-rule: 0;
   --k2-wave-r: 6px;
-  --k2-body-r: 6px;
   background: var(--k2-strip-fill);
   border-radius: 0;
   border-bottom-width: 0;
@@ -593,11 +599,15 @@
   align-self: stretch;
   padding: 4px var(--k2-wave-r) 4px calc(var(--k2-body-r) + var(--k2-wave-r));
 }
-/* A split pane is strip colour, and its body below the strip rounds down. */
-[data-style="glass"] [data-pane-group-id][data-material="tile"]:not([data-pane-solo]):not([data-zen-root] *) { background: var(--k2-strip-fill); }
+/* A split pane is strip colour, and its body below the strip rounds down with
+   the pane's own inner corner. */
+[data-style="glass"] [data-pane-group-id][data-material="tile"]:not([data-pane-solo]):not([data-zen-root] *) {
+  --k2-body-r: calc(var(--radius-box) - 9px);
+  background: var(--k2-strip-fill);
+}
 [data-style="glass"] [data-pane-group-id]:not([data-pane-solo]) > [data-toast-host="pane"]:not([data-zen-root] *) {
   background: var(--k2-wave-fill);
-  border-radius: 6px 6px 0 0;
+  border-radius: var(--k2-body-r) var(--k2-body-r) 0 0;
 }
 [data-style="glass"] [data-pane-tab-bar] [data-pane-tab-id]:not([data-zen-root] *) {
   position: relative;

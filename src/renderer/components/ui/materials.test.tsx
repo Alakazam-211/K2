@@ -94,6 +94,9 @@ describe('Floating chrome is Frost', () => {
     // Not the `bg-` class the "field in a tile" rule turns solid.
     expect(search.className).not.toContain('bg-[var(--color-bg)]')
     expect(getByRole('textbox', { name: 'Name' }).hasAttribute('data-material')).toBe(false)
+    // A search heads a list: a full-height field (density-scaled), not a row field.
+    expect(search.className).toContain('h-8')
+    expect(getByRole('textbox', { name: 'Name' }).className).not.toContain('h-8')
   })
 
   it('a frosted search field keeps the control edge in Glass', () => {

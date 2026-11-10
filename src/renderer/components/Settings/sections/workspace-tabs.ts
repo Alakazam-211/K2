@@ -44,7 +44,7 @@ export function advancedSectionFor(value: string | null): string | null {
 }
 
 /** Settings shown on the list page, not inside one workspace. */
-const LIST_SETTINGS = new Set(['projects.list', 'projects.add', 'projects.focus-groups'])
+const LIST_SETTINGS = new Set(['projects.list', 'projects.add'])
 
 const PERMISSION_SETTINGS = new Set([
   'projects.agents-can-manage-agents',

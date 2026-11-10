@@ -19,6 +19,7 @@ vi.mock('@/lib/daemon-settings', () => ({ settingsGet: vi.fn(async () => ({})), 
 vi.mock('@/components/Presence/PresenceKickButton', () => ({ fetchViewerRole: vi.fn(async () => 'owner') }))
 
 import { ProjectsSection, WORKSPACES_TWO_COLUMN_MIN_PX } from './ProjectsSection'
+import { WORKSPACE_SETTINGS_MANIFEST } from './WorkspaceSettingsPage'
 import { lastOpenedProject } from './workspace-tabs'
 import { searchPickPage } from '../searchManifest'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -227,12 +228,17 @@ describe('side by side', () => {
     expect(screen.queryByTestId('workspaces-none-selected')).toBeNull()
   })
 
-  it('the New workspace footer is solid, so the list scrolls under it', () => {
+  it('the footer is solid, so the list scrolls under it, and holds + Workspace and + Group alike', () => {
     render(<ProjectsSection />)
     const footer = document.querySelector<HTMLElement>('[data-workspaces-footer]')
     expect(footer?.className).toContain('bg-[var(--color-bg)]')
     expect(footer?.className).toContain('border-t')
-    expect(within(footer!).getByRole('button', { name: 'New workspace' })).toBeTruthy()
+    const add = within(footer!).getByRole('button', { name: 'New workspace' })
+    const group = within(footer!).getByRole('button', { name: 'New group' })
+    expect(add.textContent).toBe('+ Workspace')
+    expect(group.textContent).toBe('+ Group')
+    // One variant and size, side by side.
+    expect(group.className).toBe(add.className)
   })
 
   it('Workspace settings is selectable in the list and shows on the right', () => {
@@ -249,17 +255,21 @@ describe('side by side', () => {
     expect(entry.getAttribute('aria-current')).toBeNull()
   })
 
-  it('the list keeps its controls: Focus Groups, sort, New workspace, the group menu and its Delete confirmation', async () => {
+  it('the list keeps its controls: sort, + Workspace, + Group, the group menu and its Delete confirmation', async () => {
     const confirm = vi.fn(async () => false)
     const realConfirm = useConfirmDialogStore.getState().confirm
     useConfirmDialogStore.setState({ confirm } as never)
     try {
       render(<ProjectsSection />)
       const list = screen.getByRole('complementary', { name: 'Workspaces' })
-      expect(within(list).getByRole('switch', { name: 'Focus Groups' })).toBeTruthy()
+      // The Focus Groups switch lives in Workspace settings now.
+      expect(within(list).queryByRole('switch', { name: 'Focus Groups' })).toBeNull()
       expect(within(list).getByRole('button', { name: 'Sort workspaces' })).toBeTruthy()
-      expect(list.querySelector('[data-settings-id="projects.add"]')?.textContent).toBe('New workspace')
-      expect(within(list).getByRole('textbox', { name: 'New focus group name' })).toBeTruthy()
+      expect(list.querySelector('[data-settings-id="projects.add"]')?.textContent).toBe('+ Workspace')
+      expect(within(list).getByRole('button', { name: 'New group' })).toBeTruthy()
+      // + Group replaced the inline name field and Add group button.
+      expect(within(list).queryByRole('textbox', { name: 'New focus group name' })).toBeNull()
+      expect(within(list).queryByRole('button', { name: 'Add group' })).toBeNull()
       fireEvent.click(within(list).getByRole('button', { name: 'More actions for Labs' }))
       await act(async () => {
         fireEvent.click(await screen.findByRole('menuitem', { name: /Delete group/ }))
@@ -268,6 +278,107 @@ describe('side by side', () => {
     } finally {
       useConfirmDialogStore.setState({ confirm: realConfirm } as never)
     }
+  })
+})
+
+describe('Focus Groups and + Group', () => {
+  /** createFocusGroup that adds the group to the store, as the daemon read-back does. */
+  function fakeCreate(): ReturnType<typeof vi.fn> {
+    return vi.fn(async (name: string) => {
+      const groups = useFocusGroupsStore.getState().focusGroups
+      useFocusGroupsStore.setState({ focusGroups: [...groups, { id: `g${groups.length + 1}`, name, color: null, tabOrder: groups.length, createdAt: 0 }] })
+    })
+  }
+
+  it('the menu sits on the Workspace settings line, before the search, in keyboard order', () => {
+    render(<ProjectsSection />)
+    const entry = screen.getByTestId('workspace-settings-entry')
+    const menu = screen.getByRole('button', { name: 'Sort workspaces' })
+    const search = screen.getByRole('searchbox', { name: 'Search workspaces' })
+    expect(entry.parentElement).toBe(menu.parentElement?.closest('div.flex') ?? menu.parentElement)
+    expect(entry.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(menu.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const footer = document.querySelector<HTMLElement>('[data-workspaces-footer]')!
+    expect(search.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('the switch is a row in Workspace settings; + Group shows only while it is on', async () => {
+    render(<ProjectsSection />)
+    const list = screen.getByRole('complementary', { name: 'Workspaces' })
+    expect(within(list).getByRole('button', { name: 'New group' })).toBeTruthy()
+    fireEvent.click(screen.getByTestId('workspace-settings-entry'))
+    const page = screen.getByTestId('workspace-settings-page')
+    const toggle = within(page).getByRole('switch', { name: 'Focus Groups' })
+    expect(toggle.closest('[data-settings-id="projects.focus-groups"]')).toBeTruthy()
+    await act(async () => { fireEvent.click(toggle) })
+    expect(useFocusGroupsStore.getState().focusGroupsEnabled).toBe(false)
+    expect(within(list).queryByRole('button', { name: 'New group' })).toBeNull()
+    expect(within(list).getByRole('button', { name: 'New workspace' })).toBeTruthy()
+    await act(async () => { fireEvent.click(within(page).getByRole('switch', { name: 'Focus Groups' })) })
+    expect(useFocusGroupsStore.getState().focusGroupsEnabled).toBe(true)
+    expect(within(list).getByRole('button', { name: 'New group' })).toBeTruthy()
+  })
+
+  it('+ Group makes a group with a free default name and puts focus in its name field, text selected', async () => {
+    const create = fakeCreate()
+    const realCreate = useFocusGroupsStore.getState().createFocusGroup
+    useFocusGroupsStore.setState({
+      createFocusGroup: create,
+      focusGroups: [{ id: 'g1', name: 'Labs', color: null, tabOrder: 0, createdAt: 0 }, { id: 'g9', name: 'New group', color: null, tabOrder: 1, createdAt: 0 }],
+    } as never)
+    try {
+      render(<ProjectsSection />)
+      // Let the page's own focus-the-search-on-open frame pass first.
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'New group' })) })
+      expect(create).toHaveBeenCalledWith('New group 2')
+      const field = await screen.findByRole('textbox', { name: 'Group name' }) as HTMLInputElement
+      await waitFor(() => expect(document.activeElement).toBe(field))
+      expect(field.value).toBe('New group 2')
+      expect(field.selectionStart).toBe(0)
+      expect(field.selectionEnd).toBe('New group 2'.length)
+      // Escape keeps the default name.
+      fireEvent.keyDown(field, { key: 'Escape' })
+      expect(screen.queryByRole('textbox', { name: 'Group name' })).toBeNull()
+      expect(screen.getByText('New group 2')).toBeTruthy()
+    } finally {
+      useFocusGroupsStore.setState({ createFocusGroup: realCreate } as never)
+    }
+  })
+
+  it('a failed + Group says so', async () => {
+    const realCreate = useFocusGroupsStore.getState().createFocusGroup
+    useFocusGroupsStore.setState({ createFocusGroup: vi.fn(async () => {}) } as never)
+    const { useToastStore } = await import('@/stores/toast')
+    useToastStore.setState({ toasts: [] } as never)
+    try {
+      render(<ProjectsSection />)
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'New group' })) })
+      const toasts = (useToastStore.getState() as unknown as { toasts: { message: string; type: string }[] }).toasts
+      expect(toasts.some((t) => t.type === 'error' && /Couldn.t add the group/.test(t.message))).toBe(true)
+      expect(screen.queryByRole('textbox', { name: 'Group name' })).toBeNull()
+    } finally {
+      useFocusGroupsStore.setState({ createFocusGroup: realCreate } as never)
+    }
+  })
+
+  it('narrow: the menu is beside Workspace settings, + Group beside + Workspace, and neither shows without a list', () => {
+    paneWidth = 600
+    render(<ProjectsSection />)
+    const header = screen.getByRole('heading', { name: 'Workspaces / Agents' }).closest('header')!
+    const buttons = within(header).getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent)
+    expect(buttons).toEqual(['Workspace settings', 'Sort workspaces', 'New group', 'New workspace'])
+    expect(screen.queryByRole('switch', { name: 'Focus Groups' })).toBeNull()
+    cleanup()
+    useFocusGroupsStore.setState({ focusGroupsEnabled: false } as never)
+    render(<ProjectsSection />)
+    expect(screen.queryByRole('button', { name: 'New group' })).toBeNull()
+    cleanup()
+    useProjectsStore.setState({ projects: [] } as never)
+    useFocusGroupsStore.setState({ focusGroupsEnabled: true } as never)
+    render(<ProjectsSection />)
+    expect(screen.queryByRole('button', { name: 'New group' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Sort workspaces' })).toBeNull()
   })
 })
 
@@ -308,13 +419,25 @@ describe('deep links and search land on the right workspace and tab', () => {
     render(<ProjectsSection />)
     fireEvent.click(row('b'))
     fireEvent.click(screen.getByTestId('workspace-settings-entry'))
-    expect(searchPickPage({ section: 'projects', id: 'projects.focus-groups' })).toEqual({ projectsPage: 'list' })
+    expect(searchPickPage({ section: 'projects', id: 'projects.add' })).toEqual({ projectsPage: 'list' })
     act(() => useSettingsStore.setState({ projectsPage: 'list' }))
     expect(screen.queryByTestId('workspace-settings-page')).toBeNull()
     expect(shownName()).toBe('beacon')
     const list = screen.getByRole('complementary', { name: 'Workspaces' })
-    expect(list.querySelector('[data-settings-id="projects.focus-groups"]')).toBeTruthy()
+    expect(list.querySelector('[data-settings-id="projects.add"]')).toBeTruthy()
     expect(list.getAttribute('data-settings-id')).toBe('projects.list')
+  })
+
+  it('a search pick for Focus Groups opens Workspace settings at its row', () => {
+    const entry = WORKSPACE_SETTINGS_MANIFEST.find((e) => e.id === 'projects.focus-groups')
+    if (!entry) throw new Error('Focus Groups is not in the Workspace settings search entries')
+    expect(searchPickPage(entry)).toEqual({ projectsPage: 'workspace-settings' })
+    render(<ProjectsSection />)
+    act(() => useSettingsStore.setState({ projectsPage: 'workspace-settings' }))
+    const page = screen.getByTestId('workspace-settings-page')
+    expect(page.querySelector('[data-settings-id="projects.focus-groups"]')).toBeTruthy()
+    const list = screen.getByRole('complementary', { name: 'Workspaces' })
+    expect(list.querySelector('[data-settings-id="projects.focus-groups"]')).toBeNull()
   })
 
   it('the Workspace settings deep link shows that page beside the list', () => {

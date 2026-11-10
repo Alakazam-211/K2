@@ -85,15 +85,16 @@ async function pick(scope: HTMLElement, trigger: string, option: string): Promis
 }
 
 describe('Workspaces / Agents: the Workspace settings entry', () => {
-  it('is in the list header, ahead of Focus Groups and the workspaces', () => {
+  it('is in the list header, ahead of the search and the workspaces', () => {
     useProjectsStore.setState({
       projects: [{ id: 'p1', name: 'ops', path: '/w/ops', workspaces: [], pinned: 0 }],
     } as never)
     render(<ProjectsSection />)
     const e = entry()
     expect(e.textContent).toContain('Workspace settings')
-    const focusLabel = screen.getByText('Focus Groups')
-    expect(before(e, focusLabel)).toBe(true)
+    expect(before(e, screen.getByRole('searchbox', { name: 'Search workspaces' }))).toBe(true)
+    // Focus Groups is a row on the page, not in the list.
+    expect(screen.queryByText('Focus Groups')).toBeNull()
     // Not open until picked.
     expect(screen.queryByTestId('workspace-settings-page')).toBeNull()
   })

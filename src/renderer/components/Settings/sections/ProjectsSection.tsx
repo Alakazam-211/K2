@@ -44,6 +44,7 @@ import Markdown from '@/components/Markdown/Markdown'
 import remarkGfm from 'remark-gfm'
 import { CodeEditor } from '@/components/FileViewerPane/CodeEditor'
 import { CustomThemeCreator } from '../CustomThemeCreator'
+import { useToastStore } from '@/stores/toast'
 import { AVATAR_ROUND, SETTING_FIELD_WIDTH, SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveError, SaveNote, SettingDropdown, SettingRow, SettingSwitchRow, SettingsGroup, useSaveStatus } from '../controls/SettingControls'
 import { RemindersList } from '@/components/HeartbeatsPanel/RemindersList'
 import { MailWatchPanel } from './MailWatchPanel'
@@ -107,7 +108,6 @@ function emitProjectsChanged(): void {
 export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.list', section: 'projects', label: 'Workspaces', description: 'Every workspace on this server, its focus group and its settings', keywords: ['workspaces', 'projects', 'focus groups'] },
   { id: 'projects.add', section: 'projects', label: 'New workspace', description: 'Add a folder as a workspace with its own agent', keywords: ['add', 'new', 'workspace', 'project', 'folder'] },
-  { id: 'projects.focus-groups', section: 'projects', label: 'Focus Groups', description: 'Sort workspaces into named groups in the sidebar', keywords: ['focus', 'groups', 'tabs'] },
   { id: 'projects.context-stack', section: 'projects', label: 'Always-on context', description: 'What this agent always reads: its role, the project notes and any layers you add', keywords: ['context', 'stack', 'agents.md', 'project.md', 'persona', 'wiki', 'role.md'] },
   { id: 'projects.context-stack', section: 'projects', label: 'Always-on context (AGENTS.md)', description: 'The files K2 joins into the one set of instructions every AI tool reads', keywords: ['context', 'stack', 'stack', 'agents.md', 'layers', 'wiki', 'always-on'] },
   { id: 'projects.heartbeat', section: 'projects', label: 'Heartbeats', description: 'When this agent wakes up on its own, and what it did', keywords: ['heartbeat', 'schedule', 'cron', 'hourly', 'scheduled'] },
@@ -153,7 +153,6 @@ export function ProjectsSection(): React.JSX.Element {
 
   const focusGroups = useFocusGroupsStore((s) => s.focusGroups)
   const focusGroupsEnabled = useFocusGroupsStore((s) => s.focusGroupsEnabled)
-  const setFocusGroupsEnabled = useFocusGroupsStore((s) => s.setFocusGroupsEnabled)
   const createFocusGroup = useFocusGroupsStore((s) => s.createFocusGroup)
   const deleteFocusGroup = useFocusGroupsStore((s) => s.deleteFocusGroup)
   const renameFocusGroup = useFocusGroupsStore((s) => s.renameFocusGroup)
@@ -221,7 +220,6 @@ export function ProjectsSection(): React.JSX.Element {
     else setListState('ready')
   }, [projects.length, checkList])
 
-  const [newGroupName, setNewGroupName] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [keyboardIndex, setKeyboardIndex] = useState(-1)
@@ -238,6 +236,9 @@ export function ProjectsSection(): React.JSX.Element {
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null)
   const [renamingGroupName, setRenamingGroupName] = useState('')
   const renameGroupInputRef = useRef<HTMLInputElement>(null)
+  // "+ Group" opens the new group's name field with its default selected.
+  const selectRenameRef = useRef(false)
+  const [addingGroup, setAddingGroup] = useState(false)
 
   // Both ways to delete a group (its menu, right-click) ask first. Workspaces
   // aren't touched: the column is ON DELETE SET NULL, so they become ungrouped.
@@ -359,11 +360,50 @@ export function ProjectsSection(): React.JSX.Element {
     })
   }, [])
 
-  const handleCreateGroup = useCallback(async () => {
-    if (!newGroupName.trim()) return
-    await createFocusGroup(newGroupName.trim())
-    setNewGroupName('')
-  }, [newGroupName, createFocusGroup])
+  // "+ Group": a new group with a free default name ("New group", "New group
+  // 2", …), then its name field, text selected: type a name and press Enter,
+  // or Escape to keep the default.
+  const addGroup = useCallback(async () => {
+    const before = useFocusGroupsStore.getState().focusGroups
+    const taken = new Set(before.map((g) => g.name.trim().toLowerCase()))
+    let name = 'New group'
+    for (let n = 2; taken.has(name.toLowerCase()); n++) name = `New group ${n}`
+    setAddingGroup(true)
+    try {
+      await createFocusGroup(name)
+    } finally {
+      setAddingGroup(false)
+    }
+    const known = new Set(before.map((g) => g.id))
+    const added = useFocusGroupsStore.getState().focusGroups.find((g) => !known.has(g.id) && g.name === name)
+    if (!added) {
+      useToastStore.getState().addToast('Couldn\u2019t add the group. Nothing changed; try again.', 'error')
+      return
+    }
+    // A search hides empty groups: clear it so the new one shows.
+    setSearchQuery('')
+    setCollapsedGroups((prev) => {
+      if (!prev.has(added.id)) return prev
+      const next = new Set(prev)
+      next.delete(added.id)
+      return next
+    })
+    selectRenameRef.current = true
+    setRenamingGroupName(added.name)
+    setRenamingGroupId(added.id)
+  }, [createFocusGroup])
+
+  useEffect(() => {
+    if (!renamingGroupId || !selectRenameRef.current) return
+    const el = renameGroupInputRef.current
+    if (!el) return
+    selectRenameRef.current = false
+    el.focus()
+    el.select()
+    // The whole group, its empty drop card too.
+    const group: HTMLElement = el.closest('section') ?? el
+    group.scrollIntoView?.({ block: 'nearest' })
+  }, [renamingGroupId, focusGroups])
 
   const handleDrop = useCallback(async (groupId: string | null) => {
     if (!dragProjectId) return
@@ -776,20 +816,11 @@ export function ProjectsSection(): React.JSX.Element {
     />
   )
 
-  const focusGroupsSwitch = (
-    <div className="flex items-center gap-2 flex-shrink-0" data-settings-id="projects.focus-groups">
-      <span className="type-row text-[var(--color-text-secondary)]">Focus Groups</span>
-      <Toggle
-        checked={focusGroupsEnabled}
-        aria-label="Focus Groups"
-        onChange={() => setFocusGroupsEnabled(!focusGroupsEnabled)}
-      />
-    </div>
-  )
-
-  const sortMenu = (
+  /** The list's ⋯ menu. `className` sizes its button to the row it sits in. */
+  const sortMenu = (className?: string): React.JSX.Element => (
     <OverflowMenu
       label="Sort workspaces"
+      className={className}
       items={[
         {
           id: 'sort-groups',
@@ -813,7 +844,35 @@ export function ProjectsSection(): React.JSX.Element {
     />
   )
 
-  /** The groups: no-match note, Pinned, each focus group, Ungrouped, Add group. */
+  /** "+ Workspace" and, with Focus Groups on, "+ Group": one size, one variant,
+   *  a leading "+" as Connected Servers' "+ Add a server". */
+  const addButtons = (opts: { fill: boolean; workspaceVariant: 'quiet' | 'accent' | 'default' }): React.JSX.Element => (
+    <>
+      {focusGroupsEnabled && (
+        <Button
+          variant="quiet"
+          aria-label="New group"
+          data-testid="workspaces-add-group"
+          disabled={addingGroup}
+          className={`${opts.fill ? 'flex-1 min-w-0' : ''} text-center`}
+          onClick={() => void addGroup()}
+        >
+          + Group
+        </Button>
+      )}
+      <Button
+        variant={opts.workspaceVariant}
+        aria-label="New workspace"
+        data-settings-id="projects.add"
+        className={`${opts.fill ? 'flex-1 min-w-0' : ''} text-center`}
+        onClick={() => void addWorkspace()}
+      >
+        + Workspace
+      </Button>
+    </>
+  )
+
+  /** The groups: no-match note, Pinned, each focus group, Ungrouped. */
   const listGroups = (
     <>
       {noMatches && (
@@ -948,20 +1007,6 @@ export function ProjectsSection(): React.JSX.Element {
               {renderZone(ungroupedProjects, 'ungrouped', "[data-reorder-zone='ungrouped']")}
             </section>
           )}
-
-          <div className="flex items-center gap-2">
-            <Input
-              value={newGroupName}
-              onChange={(e) => setNewGroupName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleCreateGroup() }}
-              placeholder="New focus group name"
-              aria-label="New focus group name"
-              className={`${twoColumn ? 'flex-1 min-w-0' : SETTING_FIELD_WIDTH} type-control`}
-            />
-            <Button variant="quiet" className="flex-shrink-0" disabled={!newGroupName.trim()} onClick={() => void handleCreateGroup()}>
-              Add group
-            </Button>
-          </div>
         </>
       ) : (
         projects.some((p) => !p.pinned && matchesSearch(p)) && (
@@ -984,14 +1029,16 @@ export function ProjectsSection(): React.JSX.Element {
           className="w-72 flex-shrink-0 min-h-0 flex flex-col border-r border-[var(--color-border)]"
         >
           <div className="flex-shrink-0 px-4 pt-6 pb-4 space-y-3">
-            {/* Settings for every workspace: selectable like a workspace. */}
+            {/* Settings for every workspace (selectable like a workspace),
+                and the list's ⋯ menu on the same line. */}
+            <div className="flex items-center gap-2">
             <button
               type="button"
               data-testid="workspace-settings-entry"
               aria-current={showWorkspaceSettings ? 'true' : undefined}
               onClick={() => setShowWorkspaceSettings(true)}
               data-k2-chamfer="control"
-              className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-selector)] text-left type-control no-drag cursor-pointer transition-colors k2-focus ${
+              className={`relative flex-1 min-w-0 h-8 flex items-center gap-3 px-3 rounded-[var(--radius-selector)] text-left type-control no-drag cursor-pointer transition-colors k2-focus ${
                 showWorkspaceSettings
                   ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
                   : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-wash-1)]'
@@ -1003,20 +1050,16 @@ export function ProjectsSection(): React.JSX.Element {
               </svg>
               <span className="flex-1 truncate">Workspace settings</span>
             </button>
-            {searchField}
-            <div className="flex items-center justify-between gap-2">
-              {focusGroupsSwitch}
-              {sortMenu}
+            {sortMenu('h-8 w-8 inline-flex items-center justify-center')}
             </div>
+            {searchField}
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-5 [scrollbar-gutter:stable]">
             {listGroups}
           </div>
           {/* Solid, above the list, so rows and their "…" scroll under it. */}
-          <div className="relative z-[1] flex-shrink-0 px-4 py-3 border-t border-[var(--color-border)] bg-[var(--color-bg)]" data-workspaces-footer="">
-            <Button variant="quiet" className="w-full justify-center" data-settings-id="projects.add" onClick={() => void addWorkspace()}>
-              New workspace
-            </Button>
+          <div className="relative z-[1] flex-shrink-0 px-4 py-3 border-t border-[var(--color-border)] bg-[var(--color-bg)] flex items-center gap-2" data-workspaces-footer="">
+            {addButtons({ fill: true, workspaceVariant: 'quiet' })}
           </div>
         </aside>
 
@@ -1104,13 +1147,19 @@ export function ProjectsSection(): React.JSX.Element {
             >
               Workspace settings
             </Button>
+            {!nothingYet && sortMenu()}
             {/* The empty state has its own; one primary action per screen. */}
             {/* Accent only once the list is here: while it loads or fails,
-                the wait or Try again is the next step. */}
-            {!(nothingYet && listState === 'ready') && (
-              <Button variant={nothingYet ? 'default' : 'accent'} data-settings-id="projects.add" onClick={() => void addWorkspace()}>
-                New workspace
-              </Button>
+                the wait or Try again is the next step. "+ Group" only with
+                a list to put groups in. */}
+            {nothingYet ? (
+              listState !== 'ready' && (
+                <Button variant="default" aria-label="New workspace" data-settings-id="projects.add" onClick={() => void addWorkspace()}>
+                  + Workspace
+                </Button>
+              )
+            ) : (
+              <span className="ml-2 flex items-center gap-2">{addButtons({ fill: false, workspaceVariant: 'accent' })}</span>
             )}
           </div>
         </header>
@@ -1147,8 +1196,6 @@ export function ProjectsSection(): React.JSX.Element {
             {/* Find it first. */}
             <div className="flex items-center gap-3">
               {searchField}
-              {focusGroupsSwitch}
-              {sortMenu}
             </div>
             {listGroups}
           </>

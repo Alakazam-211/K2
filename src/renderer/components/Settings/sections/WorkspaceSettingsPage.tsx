@@ -2,6 +2,7 @@ import React from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Input, Toggle, Slider } from '@/components/ui'
 import { useSettingsStore, normalizeWorkspaceSwitchFocus } from '@/stores/settings'
+import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { SETTING_ROW_HINT, SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import { previewCompletionSound } from '@/lib/completion-sound'
 import { COMPLETION_SOUNDS, normalizeCompletionSound } from '@/lib/completion-sound-options'
@@ -40,8 +41,9 @@ const SLIDER_VALUE = 'w-12 text-right type-hint tabular-nums text-[var(--color-t
 export const WORKSPACE_SETTINGS_GROUP = 'Workspace settings'
 
 export const WORKSPACE_SETTINGS_MANIFEST: SettingEntry[] = [
-  { id: 'projects.workspace-settings', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Workspace settings', description: 'Settings for every workspace: the Active bar, the completion sound, auto-select, the view new agents open in, and how agents get their instructions', keywords: ['workspace', 'workspaces', 'settings', 'general', 'defaults', 'all workspaces', 'agents'] },
+  { id: 'projects.workspace-settings', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Workspace settings', description: 'Settings for every workspace: the Active bar, Focus Groups, the completion sound, auto-select, the view new agents open in, and how agents get their instructions', keywords: ['workspace', 'workspaces', 'settings', 'general', 'defaults', 'all workspaces', 'agents'] },
   { id: 'general.active-window-hours', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Active Bar window', description: 'How long workspaces stay Active after activity', keywords: ['active', 'bar', 'window', 'hours', 'tenure', 'workspace', 'recent', 'sidebar'] },
+  { id: 'projects.focus-groups', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Focus Groups', description: 'Sort workspaces into named groups, in the workspace list and the sidebar', keywords: ['focus', 'groups', 'group', 'tabs', 'sort', 'organize', 'sidebar'] },
   { id: 'general.completion-sound', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Completion sound', description: 'Play a sound when an agent finishes unwatched', keywords: ['sound', 'chime', 'audio', 'notification', 'agent', 'done', 'finished', 'complete', 'unseen', 'orange', 'amber', 'dot'] },
   { id: 'general.completion-sound-choice', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Completion sound choice', description: 'Which sound plays when an agent finishes, with a Preview button', keywords: ['sound', 'chime', 'ping', 'ding', 'pop', 'tick', 'audio', 'preview', 'choose', 'notification'] },
   { id: 'general.completion-sound-volume', section: 'projects', group: WORKSPACE_SETTINGS_GROUP, label: 'Completion sound volume', description: 'How loud the sound is when an agent finishes', keywords: ['sound', 'volume', 'loud', 'quiet', 'level', 'ping', 'chime', 'audio'] },
@@ -67,8 +69,8 @@ export function WorkspaceSettingsPage(): React.JSX.Element {
       <div>
         <h2 className="type-title text-[var(--color-text-primary)]">Workspace settings</h2>
         <p className={SETTING_ROW_HINT}>
-          How every workspace behaves: the Active bar in the sidebar, the
-          sound when an agent finishes, where the cursor goes when you switch,
+          How every workspace behaves: the Active bar and Focus Groups in the
+          sidebar, the sound when an agent finishes, where the cursor goes when you switch,
           and how new agents open.
         </p>
       </div>
@@ -85,6 +87,7 @@ export function WorkspaceBehaviorRows(): React.JSX.Element {
   return (
     <>
       <ActiveWindowHoursRow />
+      <FocusGroupsRow />
       <CompletionSoundRow />
       <WorkspaceSwitchFocusRow />
       <NewAgentViewRow />
@@ -142,6 +145,29 @@ function ActiveWindowHoursRow(): React.JSX.Element {
         className="w-16 text-center type-control"
       />
       <span className="type-hint text-[var(--color-text-secondary)]">hours</span>
+    </SettingRow>
+  )
+}
+
+// ── Focus Groups ───────────────────────────────────────────────────────
+// Named groups of workspaces, in the Workspaces / Agents list and the
+// sidebar. Lived in the list column until 0.46.11 (Rosson 2026-11-10: "move
+// the focus groups toggle into the workspace settings itself"); the list
+// keeps "+ Group" while it is on. Daemon setting (`focusGroupsEnabled`).
+function FocusGroupsRow(): React.JSX.Element {
+  const enabled = useFocusGroupsStore((s) => s.focusGroupsEnabled)
+  const setFocusGroupsEnabled = useFocusGroupsStore((s) => s.setFocusGroupsEnabled)
+  return (
+    <SettingRow
+      settingId="projects.focus-groups"
+      label="Focus Groups"
+      hint="Sort workspaces into named groups, in the workspace list and the sidebar. Add one with + Group, beside + Workspace."
+    >
+      <Toggle
+        checked={enabled}
+        aria-label="Focus Groups"
+        onChange={(next) => void setFocusGroupsEnabled(next)}
+      />
     </SettingRow>
   )
 }

@@ -5,7 +5,9 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
   /** `search`: a search field. In Glass it is Frost (floating chrome over the
    *  list it filters: a see-through fill over a live blur, the bright rim, the
    *  control edge at 3:1); in Terminal it is the plain cut field. A magnifier
-   *  leads the text. `className` then sizes the field's box. */
+   *  leads the text. It heads a list, so it is a full-height field (h-8,
+   *  scaled with density), the height of a list's nav entries; `className`
+   *  then sizes the field's box. */
   variant?: 'default' | 'search'
 }
 
@@ -48,7 +50,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           // The fill is a property, not the `bg-` class: Glass's frost rule
           // paints the field, and the "field inside a tile" rule (keyed to that
           // class) would turn it back into a solid raised well.
-          className={cx(FIELD, '[background-color:var(--color-bg)] type-control w-full min-w-0 pl-7 [&::-webkit-search-cancel-button]:hidden')}
+          className={cx(FIELD, '[background-color:var(--color-bg)] type-control h-8 w-full min-w-0 pl-7 [&::-webkit-search-cancel-button]:hidden')}
           {...rest}
         />
       </span>

@@ -1,6 +1,10 @@
 //! Live test of the helper's protocol 4 (fix 1, S3a): k2-simhelper encodes
 //! H.264 itself with VideoToolbox, straight from the framebuffer, and sends
-//! units on fd 3.
+//! units on fd 3. S3b: the stream hub's source, opened the way the hub opens
+//! it (`SimLane::stream_source`), relays those units with no daemon encode;
+//! with `K2_SIM_HELPER_ENCODE=0` it is protocol 3 through the daemon's own
+//! encoder again (the ignored rollback test, run on its own:
+//! `K2_SIM_HELPER_ENCODE=0 cargo test … --test sim_live_ios_p4 -- --ignored`).
 //!
 //! Same rules as `sim_live_ios.rs`: a Mac with Xcode and an iOS runtime,
 //! `--features sim-live-ios`, a missing Xcode is a failure, never a skip:
@@ -19,7 +23,9 @@ use k2_core::sim::ios::helper::{self, HelperIo, HelperProc, ReceivedUnit};
 use k2_core::sim::ios::simctl::ProcessRunner;
 use k2_core::sim::ios::{IosLane, IosLaneConfig};
 use k2_core::sim::lane::*;
+use k2_core::sim::stream::LOCAL_MAX_FPS;
 use k2_core::sim::tree::RawNode;
+use k2_core::stream::{EncodedSource, EncodedUnit};
 use k2_simvideo::annexb::{nal_type, nal_units};
 use k2_simvideo::link::{Codec, Encoder, LayerSpec};
 use serde_json::json;
@@ -130,13 +136,22 @@ fn nal_types(data: &[u8]) -> Vec<u8> {
     nal_units(data).iter().filter_map(|n| nal_type(n)).collect()
 }
 
-#[test]
-fn the_helper_encodes_h264_layers_with_videotoolbox() {
-    let home = std::env::temp_dir().join(format!("k2-sim-live-p4-{}", std::process::id()));
+/// A booted device in a throwaway home with the fixture app running,
+/// deleted when it drops.
+struct Booted {
+    lane: IosLane,
+    cfg: IosLaneConfig,
+    dev: DeviceRef,
+    xcode: String,
+    _cleanup: Cleanup,
+}
+
+fn boot_fixture(tag: &str) -> Booted {
+    let home = std::env::temp_dir().join(format!("k2-sim-live-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&home).unwrap();
     let cfg = IosLaneConfig::under(&home);
-    let _cleanup = Cleanup { home: home.clone(), set: cfg.set_path.clone() };
+    let cleanup = Cleanup { home: home.clone(), set: cfg.set_path.clone() };
     let lane = IosLane::new(cfg.clone());
 
     let probe = lane.probe();
@@ -161,6 +176,47 @@ fn the_helper_encodes_h264_layers_with_videotoolbox() {
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+    Booted { lane, cfg, dev, xcode, _cleanup: cleanup }
+}
+
+/// The next unit of `layer` off a hub source (up to `d`).
+fn next_of(src: &mut dyn EncodedSource, layer: u8, d: Duration) -> EncodedUnit {
+    let end = Instant::now() + d;
+    while Instant::now() < end {
+        if let Some(u) = src.next_unit(Duration::from_millis(20)).expect("the source is alive") {
+            if u.layer == layer {
+                return u;
+            }
+        }
+    }
+    panic!("no unit of layer {layer} within {d:?}");
+}
+
+/// Every unit of `layer` off a hub source for `d`.
+fn collect_src(src: &mut dyn EncodedSource, layer: u8, d: Duration) -> Vec<EncodedUnit> {
+    let end = Instant::now() + d;
+    let mut got = vec![];
+    while Instant::now() < end {
+        if let Some(u) = src.next_unit(Duration::from_millis(20)).expect("the source is alive") {
+            if u.layer == layer {
+                got.push(u);
+            }
+        }
+    }
+    got
+}
+
+fn ms(a: Instant, b: Instant) -> f64 {
+    b.saturating_duration_since(a).as_secs_f64() * 1000.0
+}
+
+fn tap(lane: &IosLane, dev: &DeviceRef, (x, y): (f64, f64)) {
+    lane.act(dev, &Action::Tap { at: Point { x: x as f32, y: y as f32 } }).expect("tap");
+}
+
+#[test]
+fn the_helper_encodes_h264_layers_with_videotoolbox() {
+    let Booted { _cleanup, lane, cfg, dev, xcode } = boot_fixture("p4"); // the cleanup drops last
 
     // The helper, straight through helper.rs: the gate picks 4.
     let bin = helper::ensure_built(&cfg.helper_dir, &ProcessRunner, &xcode).expect("the helper binary");
@@ -293,5 +349,105 @@ fn the_helper_encodes_h264_layers_with_videotoolbox() {
     eprintln!("helper log:\n  {}", h.stderr_tail().join("\n  "));
     h.call("tap", json!({"x": anim.0, "y": anim.1}), Duration::from_secs(20)).expect("tap Stop");
     drop(h);
+
+    // S3b: the hub's source, opened as the hub opens it, is the lane's
+    // helper's own units.
+    the_hub_source_relays_the_helpers_units(&lane, &dev, (wpt, hpt), native_w);
+    lane.stop(&dev).expect("stop");
+}
+
+/// One H.264 layer at native width, 60 fps, as the hub asks for a viewer's
+/// `pw` at the device's width: units come straight from the helper (no
+/// daemon encode), ≥ 50 a second while the fixture animates, the first a
+/// key + source start, and a keyframe ask brings a key.
+fn the_hub_source_relays_the_helpers_units(lane: &IosLane, dev: &DeviceRef, (wpt, hpt): (f64, f64), native_w: u32) {
+    let mut src = lane.stream_source(dev, FrameOpts::points(LOCAL_MAX_FPS), FrameSize::Points).expect("the hub's source");
+    let sizes = src.sizes().expect("a protocol 4 source knows its sizes from the hello");
+    eprintln!("hub source: sizes {sizes:?}");
+    assert_eq!((sizes.points, sizes.native_px), (wpt.round() as u32, Some(native_w)));
+    let t0 = Instant::now();
+    src.set_layers(&[h264(0, native_w, 60, 12_000_000)]);
+    let first = next_of(src.as_mut(), 0, Duration::from_secs(5));
+    eprintln!("hub source: first unit after {:?}: {}x{} ({}x{} pt) {} B, key {}, source start {}", t0.elapsed(), first.width, first.height, first.width_pt, first.height_pt, first.data.len(), first.key, first.source_start);
+    assert!(first.key && first.source_start, "the first unit is a key + source start");
+    assert_eq!(first.width, native_w);
+    assert_eq!((first.width_pt, first.height_pt), (wpt.round() as u32, hpt.round() as u32));
+    assert!(first.encode.is_none(), "the helper encoded it, not the daemon");
+    let anim = (wpt * 0.5, hpt * 0.60);
+    tap(lane, dev, anim); // Animate
+    std::thread::sleep(Duration::from_millis(500));
+    while src.next_unit(Duration::ZERO).expect("alive").is_some() {}
+    let units = collect_src(src.as_mut(), 0, Duration::from_secs(2));
+    let rate = units.len() as f64 / 2.0;
+    let gaps: Vec<f64> = units.windows(2).map(|w| ms(w[0].pulled_at, w[1].pulled_at)).collect();
+    let bytes: usize = units.iter().map(|u| u.data.len()).sum();
+    let cap_emit: Vec<f64> = units.iter().filter_map(|u| u.stamps.emitted_at.map(|e| ms(u.captured_at, e))).collect();
+    let emit_read: Vec<f64> = units.iter().filter_map(|u| Some(ms(u.stamps.emitted_at?, u.stamps.received_at?))).collect();
+    let read_pull: Vec<f64> = units.iter().filter_map(|u| u.stamps.received_at.map(|r| ms(r, u.pulled_at))).collect();
+    let cap_pull: Vec<f64> = units.iter().map(|u| ms(u.captured_at, u.pulled_at)).collect();
+    eprintln!(
+        "hub source, 60 fps layer at {native_w} px, moving: {rate:.1} units/s, interval p50 {:.2} ms p95 {:.2} ms, {:.2} Mb/s, capture→emit p50 {:.2} ms, emit→read p50 {:.2} ms, read→pull p50 {:.2} ms, capture→pull p50 {:.2} ms p95 {:.2} ms, keys {}",
+        p50(gaps.clone()),
+        p95(gaps),
+        bytes as f64 * 8.0 / 2.0 / 1e6,
+        p50(cap_emit),
+        p50(emit_read),
+        p50(read_pull),
+        p50(cap_pull.clone()),
+        p95(cap_pull),
+        units.iter().filter(|u| u.key).count()
+    );
+    assert!(rate >= 50.0, "≥ 50 units/s off the hub's source while the screen moves, got {rate}");
+    assert!(units.iter().all(|u| u.encode.is_none() && u.width == native_w), "every unit relayed at native width");
+    assert!(units.windows(2).all(|w| w[1].seq == w[0].seq + 1), "seq +1 per unit");
+    // The hub's keyframe ask (its clock) lands on the helper's clock.
+    let asked = Instant::now();
+    src.request_keyframe(0, Some(asked));
+    let mut n = 0;
+    let key = loop {
+        let u = next_of(src.as_mut(), 0, Duration::from_secs(2));
+        n += 1;
+        if u.key {
+            break u;
+        }
+        assert!(n < 4, "no key unit within 3 units of the ask");
+    };
+    eprintln!("hub source: keyframe ask answered on unit {n} ({} B), captured {:.2} ms after the ask", key.data.len(), key.captured_at.saturating_duration_since(asked).as_secs_f64() * 1000.0);
+    tap(lane, dev, anim); // Stop
+    drop(src); // every layer off
+}
+
+/// The rollback, live: with `K2_SIM_HELPER_ENCODE=0` the gate holds the
+/// helper at protocol 3 and the hub's source is S2's again: the helper's
+/// JPEG frames, encoded once per layer by the daemon.
+#[test]
+#[ignore = "run on its own with K2_SIM_HELPER_ENCODE=0 (the switch is read once per process)"]
+fn the_rollback_streams_protocol_3_through_the_daemon() {
+    assert_eq!(std::env::var("K2_SIM_HELPER_ENCODE").ok().as_deref(), Some("0"), "run this test with K2_SIM_HELPER_ENCODE=0");
+    let Booted { _cleanup, lane, cfg, dev, xcode } = boot_fixture("p4-rollback");
+    let bin = helper::ensure_built(&cfg.helper_dir, &ProcessRunner, &xcode).expect("the helper binary");
+    let h = HelperProc::spawn(&bin, &cfg.set_path, &dev.device_id).expect("spawn the helper");
+    assert_eq!(h.protocol(), 3, "the switch holds the gate at 3");
+    let hello = h.call("hello", json!({}), Duration::from_secs(20)).expect("hello");
+    let (wpt, hpt) = (hello["screen"]["width"].as_f64().unwrap(), hello["screen"]["height"].as_f64().unwrap());
+    drop(h);
+    let mut src = lane.stream_source(&dev, FrameOpts::points(LOCAL_MAX_FPS), FrameSize::Points).expect("the hub's source");
+    assert!(src.sizes().is_none(), "a pixel source knows its sizes at its first frame");
+    let pts = wpt.round() as u32;
+    src.set_layers(&[h264(0, pts, 30, 2_000_000)]);
+    let first = next_of(src.as_mut(), 0, Duration::from_secs(10));
+    assert!(first.key && first.source_start);
+    let anim = (wpt * 0.5, hpt * 0.60);
+    tap(&lane, &dev, anim);
+    std::thread::sleep(Duration::from_millis(500));
+    let units = collect_src(src.as_mut(), 0, Duration::from_secs(2));
+    eprintln!("rollback: {}x{} H.264, {:.1} units/s, sizes {:?}", first.width, first.height, units.len() as f64 / 2.0, src.sizes());
+    assert!(first.encode.is_some() && units.iter().all(|u| u.encode.is_some()), "every unit is a daemon encode");
+    assert!(units.len() >= 40, "≈ 30 units/s through the daemon: {} in 2 s", units.len());
+    let enc: Vec<f64> = units.iter().filter_map(|u| u.encode.map(|e| ms(e.start, e.end))).collect();
+    eprintln!("rollback: the daemon's encode p50 {:.2} ms p95 {:.2} ms", p50(enc.clone()), p95(enc));
+    assert_eq!(first.width, pts, "points, as S2 sends by default");
+    tap(&lane, &dev, anim);
+    drop(src);
     lane.stop(&dev).expect("stop");
 }

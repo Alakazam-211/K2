@@ -197,6 +197,21 @@ fn b64(v: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(v)
 }
 
+/// A one-time secret isn't for `run`: reading it destroys it, so a run that
+/// fails halfway, or the next one, would find nothing. The agent reads it
+/// itself, once, when its command is ready for it.
+fn once_refusal(name: &str, e: VaultError) -> VaultError {
+    if e.code != "once_only" {
+        return e;
+    }
+    VaultError::forbidden(
+        "once_only",
+        format!(
+            "{name} is a one-time code, so k2 vault run won't read it: it would be gone after this run. Hand the file to your command yourself, once: tool --code-file \"$(k2 vault file {name})\" (add --wait 10m if a person hasn't saved it yet). That read deletes it"
+        ),
+    )
+}
+
 fn run(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], ctx: &RunCtx) -> Result<Value, VaultError> {
     c.actor.agent().ok_or_else(|| VaultError::forbidden("use_run_as_agent", "k2 vault run runs for an agent session; people use k2 vault reveal"))?;
     if ctx.sandboxed {
@@ -255,6 +270,7 @@ fn run(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], ctx: &RunCtx) -> R
     for w in wants {
         let r = vault
             .resolve_for_run(&w.sel, &who, &consumer, &outcome)
+            .map_err(|e| once_refusal(&w.name, e))
             .map_err(|e| use_refusal(vault, c, &w.sel, &who, &w.name, e, Delivery::Env))
             .map_err(|e| not_found_elsewhere(vault, c, &w.asked, e))?;
         let is_env = r.delivery.level() >= Delivery::Env.level();

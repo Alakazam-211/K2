@@ -166,6 +166,48 @@ fn a_fetch_only_secret_is_refused_with_the_fetch_hint() {
     assert!(e.hint.contains("k2 vault fetch --secret STRIPE"), "{}", e.hint);
 }
 
+/// A one-time code isn't `run`'s to spend: a clear refusal that says what to
+/// do, and the code is still there for `k2 vault file`.
+#[test]
+fn a_one_time_secret_is_refused_with_what_to_do_and_stays() {
+    let t = vault();
+    let card = "card-run-once-0123456789";
+    t.v.request_create(k2_vault::vault::SecretRequest {
+        card_id: card.into(),
+        conversation: "c-run".into(),
+        session_id: Some("sess-9".into()),
+        workspace_id: "ws1".into(),
+        requested_by: "agent".into(),
+        name: "ONE_CODE".into(),
+        kind: k2_vault::Kind::Generic,
+        proposed_scope: "session".into(),
+        proposed_hosts: vec![],
+        proposed_delivery: Delivery::File,
+        prompt: String::new(),
+        ttl_secs: Some(3600),
+        status: String::new(),
+        answered_by: None,
+        secret_id: None,
+        created_at: String::new(),
+        answered_at: None,
+        inject: None,
+        once: true,
+    })
+    .expect("card");
+    let readable = k2_vault::vault::CardAnswer { readable_disclosed: true, session_id: Some("sess-9".into()), ..Default::default() };
+    t.v.request_answer(card, k2_vault::SecretBytes::from_string(SENTINEL.to_string()), &readable, &Actor::Owner).expect("saved");
+
+    let e = run_it(&t, &agent(), json!({ "secrets": [{ "name": "ONE_CODE" }], "scope": "session", "cmd": "tool" })).expect_err("refused");
+    assert_eq!((e.code, e.status), ("once_only", 403), "{e:?}");
+    assert!(e.hint.contains("k2 vault file ONE_CODE") && e.hint.contains("deletes it"), "says what to do: {}", e.hint);
+    assert!(!e.hint.contains(SENTINEL), "{}", e.hint);
+
+    let who = k2_vault::Requester::Session { workspace_id: "ws1".into(), session_id: Some("sess-9".into()) };
+    let sel = Selector::user(k2_vault::Scope::session("sess-9"), "ONE_CODE");
+    let got = t.v.take_once(&sel, &who, |r| Ok(r.value.expose().to_vec())).expect("the run didn't spend it");
+    assert_eq!(got, SENTINEL.as_bytes());
+}
+
 #[test]
 fn a_name_not_granted_is_refused_in_use_refusal_words() {
     let t = vault();

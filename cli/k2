@@ -33930,6 +33930,8 @@ restart. What the child gets is what you already have, never more:
   fetch only      refused; no person needed, K2 can make the call for you:
                   k2 vault fetch --secret NAME <url>
   ssh keys        refused; ssh and git already sign with $SSH_AUTH_SOCK
+  one-time codes  refused; reading one deletes it, so read it yourself:
+                  tool --code-file "$(k2 vault file NAME)"
 --secret repeats; NAME alone works too. --env-file resolves each KEY=k2v://…
 line through the vault and passes other lines through as they are; the file
 must be inside your workspace.

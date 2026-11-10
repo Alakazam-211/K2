@@ -2718,6 +2718,19 @@ exit: 0
       ]
     },
     {
+      "name": "send-feedback",
+      "usage": "k2 send-feedback \"<text>\" [--category bug|idea|praise|other] [--diagnostics | --diagnostics-preview] [--yes] [--json]",
+      "description": "Tell Alakazam Labs, K2's makers, about K2 itself (a bug, an idea, praise); not for asking your human (k2 tickets ask). Sent: the category, the text with vault values taken out, person or agent, the client and the K2/OS versions; never your name, workspace, files, chats or tokens. The server keeps it in an outbox and sends it when it can (queued with the reason while K2's feedback service isn't reachable yet). Agents: while the owner keeps agents on, 1 in any 60 s and 3 in any 24 h per workspace, 10 in any 24 h for the server; no contact email. Text from stdin with -. Subcommands: list [--state S], show <id>, retry <id>, cancel <id>, settings. POST /cli/product-feedback/send. Exit 3 when refused, nothing saved (disabled, agents_off, agent_limit, diagnostics_need_owner, needs_connect, airgap). Not k2 feedback (that asks your human). k2 study send-feedback.",
+      "args": [{"name": "text", "required": true, "description": "What to tell Alakazam Labs (1 to 20,000 bytes); - reads stdin."}],
+      "flags": [
+        {"name": "--category", "arg": "bug|idea|praise|other", "description": "Default other."},
+        {"name": "--diagnostics", "arg": null, "description": "Also send details about K2 on this computer (versions, settings on, counts, recent errors, the end of K2's log; secrets and names taken out), printed first and asked about. An agent needs the owner's agentDiagnostics (diagnostics_need_owner)."},
+        {"name": "--diagnostics-preview", "arg": null, "description": "Print those details; send nothing."},
+        {"name": "--yes", "arg": null, "description": "Answer yes to the --diagnostics question (scripts; needed with no terminal)."},
+        {"name": "--json", "arg": null, "description": "The outbox row: {id, state, category, text, senderKind, client, error, errorMessage, nextAttemptAt, sentAt, remoteId, hasDiagnostics}."}
+      ]
+    },
+    {
       "name": "app sdk add",
       "usage": "k2 app sdk add <app-folder> [--sew] [--json]",
       "description": "Copy @k2/server (this K2's version) into <app-folder>/vendor/ and add \"@k2/server\": \"file:vendor/k2-server-<version>.tgz\" to its package.json (made when missing); then npm install and import { fromEnv } from '@k2/server'. --sew also copies @sew/client, voice, channel, e2ee and bff (Sew 0.5.0+ on this box), pins their links in npm overrides and prints the npm i line for their registry deps and peers. Idempotent; never runs npm or uses the network; writes only vendor/ and package.json. POST /cli/app/sdk/add {folder, sew}. Owner, Admin, a K2 terminal, or the App's agent with Build and run Apps (its own workspace's folders).",

@@ -890,6 +890,27 @@ assert_contains "catalog: chat-voice-rooms row" "$("$K2" study)" "  chat-voice-r
 assert_contains "usage lists chat-voice" "$("$K2" study --help)" "app-chat  chat-voice  chat-voice-rooms"
 assert_contains "app-chat points at chat-voice" "$("$K2" study app-chat)" "k2 study chat-voice."
 
+echo "== k2 study send-feedback + k2 send-feedback --help (prd-k2-product-feedback-v1, 0.46.11) =="
+sf_out="$("$K2" study send-feedback)"
+for needle in "Alakazam Labs" "k2 tickets ask" "What is never sent" "1 in any 60 seconds and 3 in any 24 hours per workspace" \
+    "agentDiagnostics" "diagnostics_need_owner" "agents_off" "agent_limit" "needs_connect" "airgap" \
+    "service_unreachable" "Nothing is lost" "k2 send-feedback retry" "hello@alakazamlabs.com" "12 months" "90 days"; do
+    assert_contains "study send-feedback names $needle" "$sf_out" "$needle"
+done
+sf_json="$("$K2" study send-feedback --json)"
+assert_contains "study send-feedback --json id" "$sf_json" '"id":"send-feedback"'
+assert_contains "study catalog lists send-feedback" "$("$K2" study)" "send-feedback"
+sf_help="$("$K2" send-feedback --help)"
+for needle in "--diagnostics-preview" "Never sent:" "k2 tickets ask" "settings [--enabled on|off]" "Exit codes:" "diagnostics_need_owner" "nothing is lost"; do
+    assert_contains "send-feedback --help names $needle" "$sf_help" "$needle"
+done
+set +e
+"$K2" send-feedback >/dev/null 2>&1
+sf_noargs_rc=$?
+set -e
+assert_eq "send-feedback with no text is a usage error (exit 2, no daemon)" "$sf_noargs_rc" "2"
+assert_contains "schema lists send-feedback" "$("$K2" --schema)" '"name": "send-feedback"'
+
 echo "== --help exit 0; bad flag exit 2 =="
 set +e
 help_out="$("$K2" study --help 2>&1)"

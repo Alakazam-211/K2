@@ -64,6 +64,11 @@ ASK A HUMAN
   feedback show <id>                    One ask: status, answer, discussion thread
                                         (ask/list/show/comment/resolve — see `k2 feedback --help`)
 
+K2 ITSELF
+  send-feedback "<text>"                Tell Alakazam Labs (K2's makers) about K2: a bug, an
+                                        idea (not your human: that's feedback ask)
+                                        (list/show/retry — `k2 send-feedback --help`)
+
 EMAIL (K2 Mail — real addresses for agents; server runs on Linux daemons)
   mail create <local>[@<domain>]        Mint yourself an email address (--id = idempotent)
   mail addresses                        Your addresses + cap usage (alias: mail list)

@@ -871,6 +871,10 @@ unset _k2_cli_wants_help
 if [ "${1:-}" = "capabilities" ]; then
     for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
+# `k2 send-feedback` with no args, help or --help only prints help.
+if [ "${1:-}" = "send-feedback" ]; then
+    case "${2:-}" in ""|help|-h|--help) _skip_conn_gate=1 ;; esac
+fi
 # `k2 zen guide` is static pages, and `k2 zen` / `k2 zen help` / any
 # `k2 zen ... --help` only print help (prd-zen-freeform-chrome FC55):
 # none of them talks to the daemon. Neither do `k2 zen widget grant` and
@@ -48388,6 +48392,19 @@ cmd_schema() {
       ]
     },
     {
+      "name": "send-feedback",
+      "usage": "k2 send-feedback \"<text>\" [--category bug|idea|praise|other] [--diagnostics | --diagnostics-preview] [--yes] [--json]",
+      "description": "Tell Alakazam Labs, K2's makers, about K2 itself (a bug, an idea, praise); not for asking your human (k2 tickets ask). Sent: the category, the text with vault values taken out, person or agent, the client and the K2/OS versions; never your name, workspace, files, chats or tokens. The server keeps it in an outbox and sends it when it can (queued with the reason while K2's feedback service isn't reachable yet). Agents: while the owner keeps agents on, 1 in any 60 s and 3 in any 24 h per workspace, 10 in any 24 h for the server; no contact email. Text from stdin with -. Subcommands: list [--state S], show <id>, retry <id>, cancel <id>, settings. POST /cli/product-feedback/send. Exit 3 when refused, nothing saved (disabled, agents_off, agent_limit, diagnostics_need_owner, needs_connect, airgap). Not k2 feedback (that asks your human). k2 study send-feedback.",
+      "args": [{"name": "text", "required": true, "description": "What to tell Alakazam Labs (1 to 20,000 bytes); - reads stdin."}],
+      "flags": [
+        {"name": "--category", "arg": "bug|idea|praise|other", "description": "Default other."},
+        {"name": "--diagnostics", "arg": null, "description": "Also send details about K2 on this computer (versions, settings on, counts, recent errors, the end of K2's log; secrets and names taken out), printed first and asked about. An agent needs the owner's agentDiagnostics (diagnostics_need_owner)."},
+        {"name": "--diagnostics-preview", "arg": null, "description": "Print those details; send nothing."},
+        {"name": "--yes", "arg": null, "description": "Answer yes to the --diagnostics question (scripts; needed with no terminal)."},
+        {"name": "--json", "arg": null, "description": "The outbox row: {id, state, category, text, senderKind, client, error, errorMessage, nextAttemptAt, sentAt, remoteId, hasDiagnostics}."}
+      ]
+    },
+    {
       "name": "app sdk add",
       "usage": "k2 app sdk add <app-folder> [--sew] [--json]",
       "description": "Copy @k2/server (this K2's version) into <app-folder>/vendor/ and add \"@k2/server\": \"file:vendor/k2-server-<version>.tgz\" to its package.json (made when missing); then npm install and import { fromEnv } from '@k2/server'. --sew also copies @sew/client, voice, channel, e2ee and bff (Sew 0.5.0+ on this box), pins their links in npm overrides and prints the npm i line for their registry deps and peers. Idempotent; never runs npm or uses the network; writes only vendor/ and package.json. POST /cli/app/sdk/add {folder, sew}. Owner, Admin, a K2 terminal, or the App's agent with Build and run Apps (its own workspace's folders).",
@@ -49910,6 +49927,376 @@ if d:
 '
 }
 
+# ── k2 send-feedback (prd-k2-product-feedback-v1, 0.46.11) ──────────────
+# Feedback about K2 itself to Alakazam Labs, K2's makers: a bug, an idea,
+# praise. NOT `k2 feedback` / `k2 tickets` (asking your own human on this
+# server). The daemon keeps it in an outbox and sends it when it can;
+# `/cli/product-feedback/*`. Exit 0 saved or sent; 2 a usage or input
+# mistake; 3 refused (turned off, agents off, the agent limit, no K2
+# Connect pairing, air-gap).
+_send_feedback_usage() {
+    cat <<'EOF'
+k2 send-feedback "<text>" [--category bug|idea|praise|other] [--diagnostics | --diagnostics-preview] [--yes] [--json]
+k2 send-feedback - [flags]                 the text from stdin
+k2 send-feedback list [--state queued|sending|sent|failed|refused|cancelled] [--json]
+k2 send-feedback show <id> [--json]
+k2 send-feedback retry <id>                a failed one goes back in the queue
+k2 send-feedback cancel <id>               a queued one is not sent
+k2 send-feedback settings [--enabled on|off] [--agents on|off] [--agent-diagnostics on|off] [--json]
+
+Tell Alakazam Labs, the people who make K2, about K2 itself: a bug, an
+idea, praise. Not for your human: to ask the people on this server, use
+k2 tickets ask "<question>" (k2 feedback ask is the same command). Write
+what you did, what you expected and what happened; the versions are added
+for you. At most 20,000 bytes as typed.
+
+What is sent: the category (default other); your text, with values from
+the vault replaced by [k2v:NAME] (anything else you type is sent as
+written, so leave out paths, names and output you wouldn't hand to
+Alakazam); whether a person or an agent sent it; the client (cli); the K2,
+daemon and OS versions, install kind, architecture and locale; and a
+5-minute K2 Connect token naming this server's label (such as
+<name>.k2.dev, which can point to who runs it), the proof of which server
+it came from. Never sent: your name, login or workspace, files, terminal
+output, chats, mail, tickets, environment variables, your own tokens, IP
+addresses.
+
+  --category C           bug, idea, praise or other (default other)
+  --diagnostics          also include details about K2 on this computer:
+                         versions, settings that are on, counts, recent
+                         errors and the end of K2's log, with passwords,
+                         keys, names and paths taken out. They are printed
+                         first; a person at a terminal is asked "Send these
+                         details with your feedback? [y/N]" (N still sends
+                         the feedback, without them). The CLI never
+                         remembers the answer.
+  --diagnostics-preview  print those details, send nothing (exit 0)
+  --yes                  send the details without asking. Agents always
+                         pass it with --diagnostics (there is no one to
+                         ask); without a terminal and without --yes,
+                         --diagnostics is a usage error (exit 2)
+  --json                 the saved row as JSON
+
+The plain output prints the id (pf_…) that show, retry and cancel take.
+This server keeps what you send in its outbox and sends it to Alakazam
+when it can. Offline, or while K2's feedback service isn't reachable yet,
+it waits as queued with the reason, and nothing is lost: don't send it
+again, check it with show. After 7 days of trying it is failed and retry
+puts it back. A refused one (the service said no; the reason names why)
+is not retried: fix what it says and send a new one. Rows are deleted 90
+days after they are sent, refused, cancelled or failed.
+
+settings with no flags shows this server's switches (enabled, agents,
+agentDiagnostics in --json) and "can send now"; anyone may read it.
+Changing them is for a person, the owner or an admin.
+
+Agents: allowed while the owner keeps agents on, at most 1 in any 60
+seconds and 3 in any 24 hours per workspace, and 10 in any 24 hours for
+all agents on this server. Every saved send counts (cancelled ones don't;
+refusals and previews save nothing and don't count). There is no contact
+email from the CLI: only a person, in the desktop dialog, can ask
+Alakazam to write back. --diagnostics and --diagnostics-preview from an
+agent need the owner or an admin to have run
+k2 send-feedback settings --agent-diagnostics on (off by default);
+otherwise nothing is saved or sent (diagnostics_need_owner): send it again
+without --diagnostics. With it on, the details are printed for you too and
+the owner sees them in the Sent tab. When this server can't send at all,
+tell your human: they can email hello@alakazamlabs.com.
+
+Text that is exactly list, show, retry, cancel, settings or help, or
+starts with a dash: send it from stdin (echo "settings" | k2 send-feedback -).
+
+Exit codes: 0 saved, sent or previewed; 2 a usage or input mistake
+(bad_category, text_required, text_too_long); 3 refused, nothing saved or
+changed: disabled, agents_off, agent_limit (with retryAfterSecs),
+diagnostics_need_owner, needs_connect (this server isn't paired with K2
+Connect), airgap, settings_people_only, admin_only, not_found, wrong_state
+(retry on a row that isn't failed, cancel on one that isn't queued). A
+refusal prints one JSON line on stderr: {"error": <code>, "hint": <why>}.
+A later refusal by the service shows as refused in list. More:
+k2 study send-feedback.
+EOF
+}
+
+_sf_onoff() {
+    case "$1" in
+        on|true|yes|1) echo true ;;
+        off|false|no|0) echo false ;;
+        *) echo "usage: $2 takes on or off" >&2; exit 2 ;;
+    esac
+}
+
+# Print a preview / show item's sections.
+_sf_print_sections() {
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+secs = v.get("sections") or (v.get("item") or {}).get("diagnostics") or []
+for s in secs:
+    print("── %s (%s) ──" % (s.get("title", ""), s.get("id", "")))
+    print(s.get("text", ""))
+    print()
+'
+}
+
+_sf_send() {
+    local text="" have_text=0 category="" diag=0 preview=0 yes=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --category) [ $# -ge 2 ] || { echo "usage: --category bug|idea|praise|other" >&2; exit 2; }; category="$2"; shift 2 ;;
+            --category=*) category="${1#--category=}"; shift ;;
+            --diagnostics) diag=1; shift ;;
+            --diagnostics-preview) preview=1; shift ;;
+            --yes|-y) yes=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _send_feedback_usage; return 0 ;;
+            --) shift; [ $# -ge 1 ] || break; [ "$have_text" = 0 ] || { echo "usage: one text (quote it)" >&2; exit 2; }; text="$1"; have_text=1; shift ;;
+            -) [ "$have_text" = 0 ] || { echo "usage: one text (quote it)" >&2; exit 2; }; text="$(cat)"; have_text=1; shift ;;
+            -*) echo "Unknown flag: $1 (k2 send-feedback --help)" >&2; exit 2 ;;
+            *) [ "$have_text" = 0 ] || { echo "usage: one text (quote it): k2 send-feedback \"<text>\"" >&2; exit 2; }; text="$1"; have_text=1; shift ;;
+        esac
+    done
+    if [ "$diag" = 1 ] && [ "$preview" = 1 ]; then
+        echo "usage: --diagnostics or --diagnostics-preview, not both" >&2; exit 2
+    fi
+    if [ -n "$category" ]; then
+        case "$category" in bug|idea|praise|other) ;; *) echo "usage: --category is bug, idea, praise or other" >&2; exit 2 ;; esac
+    fi
+    if [ "$preview" = 0 ] && [ -z "${text//[[:space:]]/}" ]; then
+        echo "usage: k2 send-feedback \"<text>\" (or - for stdin). k2 send-feedback --help" >&2; exit 2
+    fi
+    local draft=""
+    if [ "$diag" = 1 ] || [ "$preview" = 1 ]; then
+        local dpayload
+        dpayload="$(_compute_json K2_CJ_client=cli K2_CJ_page=cli "K2_CJ_cliVersion=${K2_CLI_VERSION:-}")"
+        _compute_call POST /cli/product-feedback/diagnostics "$dpayload"
+        local preview_body="$_CP_BODY"
+        if [ "$preview" = 1 ] && [ "$json_out" = 1 ]; then
+            printf '%s\n' "$preview_body"; return 0
+        fi
+        echo "These details about K2 on this computer would be sent, exactly as below:" >&2
+        echo >&2
+        printf '%s' "$preview_body" | _sf_print_sections
+        if [ "$preview" = 1 ]; then
+            echo "Nothing was sent." >&2
+            return 0
+        fi
+        local answer=""
+        if [ "$yes" = 1 ]; then
+            answer=y
+        elif [ -t 0 ] && [ -t 2 ] && { : < /dev/tty; } 2>/dev/null; then
+            printf 'Send these details with your feedback? [y/N] ' > /dev/tty
+            IFS= read -r answer < /dev/tty || answer=""
+        else
+            echo "usage: --diagnostics asks before sending, and there is no terminal to ask on; add --yes to send the details" >&2
+            exit 2
+        fi
+        case "$answer" in
+            y|Y|yes|YES|Yes) draft="$(printf '%s' "$preview_body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("draftId",""))')" ;;
+            *) echo "Sending your feedback without the K2 details." >&2 ;;
+        esac
+    fi
+    local locale="${LC_ALL:-${LANG:-}}"
+    locale="${locale%%.*}"
+    local payload
+    payload="$(K2_SF_TEXT="$text" K2_SF_CAT="$category" K2_SF_DRAFT="$draft" K2_SF_LOCALE="$locale" python3 -c '
+import json, os
+b = {"text": os.environ["K2_SF_TEXT"], "client": "cli"}
+if os.environ.get("K2_SF_CAT"):
+    b["category"] = os.environ["K2_SF_CAT"]
+if os.environ.get("K2_SF_LOCALE"):
+    b["locale"] = os.environ["K2_SF_LOCALE"]
+if os.environ.get("K2_SF_DRAFT"):
+    b["diagnostics"] = {"draftId": os.environ["K2_SF_DRAFT"]}
+print(json.dumps(b))
+')"
+    _compute_call POST /cli/product-feedback/send "$payload"
+    local id
+    id="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
+    [ -n "$id" ] || { echo '{"error":"daemon_error","hint":"the daemon answered without an id"}' >&2; exit 3; }
+    # The daemon sends right away; wait a moment to say what happened.
+    local i=0 st="queued" show=""
+    while [ "$i" -lt 10 ]; do
+        _compute_call GET /cli/product-feedback/show "id=$(urlencode "$id")"
+        show="$_CP_BODY"
+        st="$(printf '%s' "$show" | python3 -c 'import json,sys; print(json.load(sys.stdin)["item"]["state"])')"
+        case "$st" in queued|sending) ;; *) break ;; esac
+        # Still queued with a reason: the attempt is over for now.
+        if [ "$st" = queued ] && printf '%s' "$show" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["item"].get("error") else 1)'; then
+            break
+        fi
+        sleep 0.5
+        i=$((i + 1))
+    done
+    if [ "$json_out" = 1 ]; then
+        printf '%s' "$show" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["item"]))'
+        return 0
+    fi
+    printf '%s' "$show" | python3 -c '
+import json, sys
+it = json.load(sys.stdin)["item"]
+st = it["state"]
+if st == "sent":
+    print("Sent to Alakazam Labs: %s (%s)." % (it["id"], it["category"]))
+elif st == "refused":
+    print("Refused by the feedback service: %s (%s). It will not be retried." % (it["id"], it.get("errorMessage") or it.get("error") or ""))
+else:
+    print("Saved on this server: %s (%s). It sends when it can." % (it["id"], it["category"]))
+    if it.get("errorMessage"):
+        print("  " + it["errorMessage"])
+    print("  Check it with: k2 send-feedback show %s" % it["id"])
+if it.get("hasDiagnostics"):
+    print("  The K2 details you approved are included.")
+'
+}
+
+_sf_list() {
+    local state="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --state) [ $# -ge 2 ] || { echo "usage: --state <state>" >&2; exit 2; }; state="$2"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _send_feedback_usage; return 0 ;;
+            *) echo "usage: k2 send-feedback list [--state S] [--json]" >&2; exit 2 ;;
+        esac
+    done
+    local q=""
+    [ -n "$state" ] && q="state=$(urlencode "$state")"
+    _compute_call GET /cli/product-feedback/list "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+items = v.get("items") or []
+if not items:
+    print("No feedback to K2 sent from here yet." if not v.get("all") else "No feedback to K2 on this server yet.")
+    sys.exit(0)
+for it in items:
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(it["createdAt"] / 1000))
+    text = " ".join(it.get("text", "").split())
+    if len(text) > 60:
+        text = text[:57] + "..."
+    who = "" if it.get("mine") else "  [" + it.get("sender", "") + "]"
+    print("%s  %-9s %-6s %s  %s%s" % (it["id"], it["state"], it["category"], when, text, who))
+    if it.get("errorMessage") and it["state"] in ("queued", "failed", "refused"):
+        print("    " + it["errorMessage"])
+'
+}
+
+_sf_show() {
+    local id="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _send_feedback_usage; return 0 ;;
+            -*) echo "usage: k2 send-feedback show <id> [--json]" >&2; exit 2 ;;
+            *) [ -z "$id" ] || { echo "usage: k2 send-feedback show <id> [--json]" >&2; exit 2; }; id="$1"; shift ;;
+        esac
+    done
+    [ -n "$id" ] || { echo "usage: k2 send-feedback show <id> [--json]" >&2; exit 2; }
+    _compute_call GET /cli/product-feedback/show "id=$(urlencode "$id")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+it = json.load(sys.stdin)["item"]
+def t(ms):
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ms / 1000)) if ms else "-"
+print("%s  %s  %s" % (it["id"], it["state"], it["category"]))
+print("  from:     %s (%s, %s)" % (it.get("sender", ""), it.get("senderKind", ""), it.get("client", "")))
+print("  created:  %s" % t(it.get("createdAt")))
+if it.get("sentAt"):
+    print("  sent:     %s (Alakazam id %s)" % (t(it["sentAt"]), it.get("remoteId") or "-"))
+elif it["state"] == "queued":
+    print("  next try: %s (attempts so far: %s)" % (t(it.get("nextAttemptAt")), it.get("attempts", 0)))
+if it.get("errorMessage"):
+    print("  reason:   %s" % it["errorMessage"])
+if it.get("contactEmail"):
+    print("  contact:  %s" % it["contactEmail"])
+print()
+print(it.get("text", ""))
+d = it.get("diagnostics")
+if d:
+    print()
+    print("K2 details included:")
+    for s in d:
+        print("── %s ──" % s.get("title", ""))
+        print(s.get("text", ""))
+'
+}
+
+_sf_transition() {
+    local verb="$1" id="${2:-}"
+    [ -n "$id" ] && [ $# -eq 2 ] || { echo "usage: k2 send-feedback $verb <id>" >&2; exit 2; }
+    case "$id" in -h|--help) _send_feedback_usage; return 0 ;; esac
+    _compute_call POST "/cli/product-feedback/$verb" "$(_compute_json "K2_CJ_id=$id")"
+    case "$verb" in
+        retry) echo "Queued again: $id. It sends when it can (k2 send-feedback show $id)." ;;
+        cancel) echo "Cancelled: $id. It will not be sent." ;;
+    esac
+}
+
+_sf_settings() {
+    local enabled="" agents="" agent_diag="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --enabled) [ $# -ge 2 ] || { echo "usage: --enabled on|off" >&2; exit 2; }; enabled="$(_sf_onoff "$2" --enabled)"; shift 2 ;;
+            --agents) [ $# -ge 2 ] || { echo "usage: --agents on|off" >&2; exit 2; }; agents="$(_sf_onoff "$2" --agents)"; shift 2 ;;
+            --agent-diagnostics) [ $# -ge 2 ] || { echo "usage: --agent-diagnostics on|off" >&2; exit 2; }; agent_diag="$(_sf_onoff "$2" --agent-diagnostics)"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _send_feedback_usage; return 0 ;;
+            *) echo "usage: k2 send-feedback settings [--enabled on|off] [--agents on|off] [--agent-diagnostics on|off] [--json]" >&2; exit 2 ;;
+        esac
+    done
+    if [ -n "$enabled$agents$agent_diag" ]; then
+        local payload
+        payload="$(K2_SF_E="$enabled" K2_SF_A="$agents" K2_SF_D="$agent_diag" python3 -c '
+import json, os
+b = {}
+for env, key in (("K2_SF_E", "enabled"), ("K2_SF_A", "agents"), ("K2_SF_D", "agentDiagnostics")):
+    v = os.environ.get(env)
+    if v:
+        b[key] = v == "true"
+print(json.dumps(b))
+')"
+        _compute_call POST /cli/product-feedback/settings "$payload"
+    else
+        _compute_call GET /cli/product-feedback/settings ""
+    fi
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+oo = lambda b: "on" if b else "off"
+print("Send feedback to K2 on this server")
+print("  enabled:            %s" % oo(v.get("enabled")))
+print("  agents:             %s" % oo(v.get("agents")))
+print("  agent diagnostics:  %s" % oo(v.get("agentDiagnostics")))
+print("  can send now:       %s" % ("yes" if v.get("canSend") else "no"))
+if v.get("message"):
+    print("    " + v["message"])
+svc = v.get("service") or {}
+if svc.get("message"):
+    print("  service:            " + svc["message"])
+if v.get("pending"):
+    print("  waiting to send:    %s" % v["pending"])
+print("  sends to:           %s" % v.get("endpoint", ""))
+'
+}
+
+cmd_send_feedback() {
+    _K2_REFUSAL_AREA=""
+    case "${1:-}" in
+        "") _send_feedback_usage >&2; exit 2 ;;
+        -h|--help|help) _send_feedback_usage; return 0 ;;
+        list) shift; _sf_list "$@" ;;
+        show) shift; _sf_show "$@" ;;
+        retry) shift; _sf_transition retry "$@" ;;
+        cancel) shift; _sf_transition cancel "$@" ;;
+        settings) shift; _sf_settings "$@" ;;
+        *) _sf_send "$@" ;;
+    esac
+}
+
 # `k2 app status <app-id> [--json] [--no-checks] [--public]` (TC-15).
 _app_status_usage() {
     cat <<'EOF'
@@ -50049,7 +50436,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs heartbeats mail-watch folder-trust email-notifications box-move board chat-refresh desktop"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs heartbeats mail-watch folder-trust email-notifications box-move board chat-refresh desktop send-feedback"
 
 _study_usage() {
     cat <<'EOF'
@@ -50073,7 +50460,7 @@ Topics:
   publish-visibility  publish-dev  compute  compute-shared  ci  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  jobs  heartbeats
-  folder-trust  email-notifications  box-move  board  chat-refresh  desktop
+  folder-trust  email-notifications  box-move  board  chat-refresh  desktop  send-feedback
 EOF
 }
 
@@ -50142,6 +50529,7 @@ _study_title() {
         board) echo "The Board Garden: k2 board, grants, the rules" ;;
         chat-refresh) echo "Refreshing your own chat: k2 agent refresh, the note, what carries on" ;;
         desktop) echo "Remote desktop: this computer's screen in a Desktop tab (people only)" ;;
+        send-feedback) echo "Telling K2's makers about K2: k2 send-feedback, what is sent, agents' limits" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
         projects) echo "K2 projects and who may change them" ;;
@@ -50279,6 +50667,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   board               The Board Garden's whiteboards: k2 board, grants, cascade, no cut values
   chat-refresh        Refresh your own chat: k2 agent refresh, the note, what carries on
   desktop             Remote desktop: this computer's screen in a Desktop tab, people only
+  send-feedback       Tell Alakazam Labs about K2 itself: what is sent, never sent, agents' limits
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -50370,6 +50759,7 @@ _study_page() {
         board) _study_page_board ;;
         chat-refresh) _study_page_chat_refresh ;;
         desktop) _study_page_desktop ;;
+        send-feedback) _study_page_send_feedback ;;
         *) return 1 ;;
     esac
 }
@@ -63262,6 +63652,11 @@ ASK A HUMAN
   feedback list                         This workspace's asks + their status
   feedback show <id>                    One ask: status, answer, discussion thread
                                         (ask/list/show/comment/resolve — see `k2 feedback --help`)
+
+K2 ITSELF
+  send-feedback "<text>"                Tell Alakazam Labs (K2's makers) about K2: a bug, an
+                                        idea (not your human: that's feedback ask)
+                                        (list/show/retry — `k2 send-feedback --help`)
 EOF
     # Permission cards (Beta): one line, only while both switches are on
     # for this agent (PRD rev 3.1 §11.4). Off = today's text.
@@ -86632,6 +87027,56 @@ else:
 '
 }
 
+_study_page_send_feedback() {
+    cat <<'EOF'
+k2 study send-feedback — telling K2's makers about K2
+
+k2 send-feedback sends a short note about K2 itself (a bug, an idea, praise) to Alakazam Labs, the people who make K2. People use the button next to Help in the top bar (or Send Feedback… in the menu); agents use the command. It is not for asking your human: that is `k2 tickets ask "<question>"` (`k2 feedback ask` is the same command), which stays on this server.
+
+    k2 send-feedback "k2 compute run hangs when the node reboots" --category bug
+    echo "longer text…" | k2 send-feedback - --category idea
+    k2 send-feedback settings        # can this server send now? are agents allowed?
+    k2 send-feedback list            # what you sent and where each one is
+    k2 send-feedback show <id>       # one, with its reason if it hasn't gone yet
+
+A good one says what you did, what you expected and what happened. The versions are added for you. At most 20,000 bytes as typed. The output prints the id (`pf_…`) that `show`, `retry` and `cancel` take.
+
+## What is sent
+
+- The category (bug, idea, praise, other; default other) and your text. Values from the vault are replaced first (`[k2v:NAME]`). Nothing else in your text is changed: leave out paths, names and output you wouldn't hand to Alakazam.
+- Whether a person or an agent sent it, and the client (desktop, web, cli).
+- The K2 app, daemon and OS versions, the install kind, the architecture and the locale.
+- Which server it came from: a 5-minute token from K2 Connect naming this server's label (such as `<name>.k2.dev`, which can point to who runs it). The server's own Connect token never leaves it.
+- Only when a person ticks "Include details about K2 on this computer" (or runs `--diagnostics` and says yes), or an agent whose owner allowed it: versions, the computer's size and free space, the names of settings that are on, counts (workspaces, sessions, Apps, compute nodes), which AI tools are installed, failure-looking lines from the last 24 hours, and the end of K2's log. Passwords, keys, tokens, emails, IP addresses, the home folder and every workspace, App, agent and peer name are taken out (`<workspace-1>`, `<email>`, `[token]` …). The person reads all of it first, can leave out any section or delete lines, and what is sent is exactly what was shown.
+
+## What is never sent
+
+Your name, login, workspace or agent name; files, screenshots, terminal output; Thread, chat, mail or ticket contents; environment variables; your own tokens; IP addresses.
+
+## Agents
+
+- You may send while the owner keeps agents on. Off: `agents_off` (exit 3). Check first with `k2 send-feedback settings`.
+- At most 1 in any 60 seconds and 3 in any 24 hours per workspace, and 10 in any 24 hours for all agents on this server: `agent_limit` (exit 3, with `retryAfterSecs`). Every saved send counts; cancelled ones don't, and refusals and previews save nothing.
+- There is no contact email from the CLI: only a person, in the desktop dialog, can ask Alakazam to write back.
+- `--diagnostics` (and `--diagnostics-preview`) need the owner or an admin to turn on agent diagnostics (`agentDiagnostics`, off by default): otherwise `diagnostics_need_owner` (exit 3) and nothing is saved or sent: send it again without `--diagnostics`. With it on, always pass `--yes` (there is no one to ask); the details are printed for you too, and the owner sees what you sent in the Sent tab. To leave a part out, send without `--diagnostics`. Never try to turn it on yourself; ask your human. Settings changes are a person's (`settings_people_only`).
+- Feedback is about K2. Your human's own work, secrets and customers' names don't belong in it.
+
+## When it isn't sent at once
+
+This server keeps every submission in its outbox and sends it to Alakazam when it can:
+
+- **queued** with a reason: offline, or K2's feedback service isn't reachable yet (`service_unreachable`, `relay_not_ready`). Nothing is lost and it retries by itself (30 s, doubling, up to every 2 hours): don't send it again. After 7 days of trying it is **failed**: `k2 send-feedback retry <id>` puts it back.
+- **refused**: the service understood and said no (it names the code). Not retried, and retry doesn't apply: fix what it says and send a new one.
+- `k2 send-feedback cancel <id>` stops a queued one.
+
+Nothing leaves while air-gap is on (`airgap`), while the owner turned sending off (`disabled`), or on a server not paired with K2 Connect (`needs_connect`): the refusal says so and nothing is saved. Tell your human; people can email hello@alakazamlabs.com instead.
+
+## Kept
+
+On this server: rows are deleted 90 days after they are sent, refused, cancelled or failed; the K2 details that were sent are cleared 7 days after sending. At Alakazam Labs: submissions 12 months, then the server's label, the contact email and the ids are removed; the K2 details 90 days; backups keep older copies until they expire. Only Alakazam staff read them.
+EOF
+}
+
 _study_page_chat_refresh() {
     cat <<'EOF'
 k2 study chat-refresh — refreshing your own chat
@@ -96471,6 +96916,11 @@ case "${1:-help}" in
     capabilities)
         # 0.46.7 (TC-17): what this server can do for Apps, before trying.
         shift; cmd_capabilities "$@"
+        ;;
+    send-feedback)
+        # 0.46.11 (prd-k2-product-feedback-v1): feedback about K2 itself to
+        # Alakazam Labs. Not `k2 feedback` (asking your own human).
+        shift; cmd_send_feedback "$@"
         ;;
     permission)
         # Permission cards (Beta): unknown, exactly as today, unless the

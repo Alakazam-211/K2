@@ -14949,7 +14949,11 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com)
   own origin. Your server proxies the name to the App's front port
   (k2 app inspect <app-id>: front). K2 sets no records, runs no DNS check
   and gets no certificate for such a name. Its domain must still be
-  attached (k2 domain list; the owner runs k2 domain add <apex>).
+  attached (the owner runs k2 domain add <apex>). Pending in k2 domain
+  list is fine: your nameservers can stay where they are. Point the name
+  (A/AAAA) at this box; your server gets its own certificate. If K2's
+  front holds :443, pass the name to your server: k2 front passthrough
+  add <name> --to 127.0.0.1:<port>.
 
   A dotted name outside k2.dev is a custom domain; anything else is a
   subdomain (below).

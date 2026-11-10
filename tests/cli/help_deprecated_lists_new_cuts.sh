@@ -28,15 +28,17 @@ REQUIRED_VERBS=(
     "agents create"
     "agents running"
     "whatsnew"
+    # No CLI stub any more, but /cli/agents/work and /cli/work/inbox still
+    # answer 410 "see help-deprecated", so the map keeps their entries.
+    "agents work"
+    "work inbox"
 )
 
 # Verbs whose pointer was removed: the map must not offer them.
 REMOVED_VERBS=(
-    "work inbox"
     "work done"
     "agents delete"
     "agents list"
-    "agents work"
     "agents lock"
     "agents unlock"
     "agents launch"

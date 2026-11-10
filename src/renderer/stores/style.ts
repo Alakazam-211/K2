@@ -18,10 +18,11 @@
 
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
-import { STYLES, type StyleMeta, type StyleScheme } from '@/styles.generated'
+import { STYLES, type StyleMeta, type StylePaletteMeta, type StyleScheme } from '@/styles.generated'
 import {
   DEFAULT_SELECTION,
   canonicalStyleSelection,
+  paletteSlots,
   parseSchemeMode,
   resolvePalette,
   resolveStyleSelection,
@@ -29,8 +30,16 @@ import {
   type StyleSelection,
 } from '@/lib/style-resolve'
 import { dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
+import {
+  ACCENT_VARS,
+  accentStorageKey,
+  accentVarsFor,
+  lsAccentStampFor,
+  parseAccentChoice,
+  type AccentChoice,
+} from '@/lib/style-accent'
 import { installFrostSupport } from '@/lib/frost-support'
-import { migrateRetiredStyleKeys } from '@/lib/style-id-migration'
+import { migrateRetiredStyleKeys, seedRetiredStyleAccent } from '@/lib/style-id-migration'
 import {
   clampTextGamma,
   clearStoredTextGamma,
@@ -64,6 +73,8 @@ export const STYLE_MIRROR_STORAGE_KEYS: readonly string[] = [
   LS_GAPS,
   lsPaletteFor('dark'),
   lsPaletteFor('light'),
+  lsAccentStampFor('dark'),
+  lsAccentStampFor('light'),
 ]
 
 interface StyleState extends StyleSelection {
@@ -78,6 +89,10 @@ interface StyleState extends StyleSelection {
    * WebGL panes re-read this live via PainterTheme.
    */
   textGamma: number
+  /** The active style's accent choice: `yellow`, a #rrggbb colour, or
+   *  null for the palette's own accent. Saved per style
+   *  (`k2.accent.<styleId>`); Settings → Styles owns it. */
+  accent: AccentChoice | null
   /** Resolve `sel` (merged over the current selection), stamp <html>,
    *  refresh the localStorage mirror. Idempotent. Does NOT talk to the
    *  daemon — SSOT is localStorage; callers that commit a user choice
@@ -88,9 +103,14 @@ interface StyleState extends StyleSelection {
   setTextGamma: (v: number) => void
   /** Drop the active style+scheme override; restore polarity preset. */
   resetTextGamma: () => void
+  /** Use `choice` as the active style's accent, live and saved. An invalid
+   *  value is ignored. */
+  setAccent: (choice: AccentChoice) => void
+  /** Back to the style's own accent, at once. */
+  resetAccent: () => void
 }
 
-function osPrefersLight(): boolean {
+export function osPrefersLight(): boolean {
   return (
     typeof window !== 'undefined' &&
     typeof window.matchMedia === 'function' &&
@@ -120,6 +140,25 @@ function stampDialProperties(style: StyleMeta): void {
   }
 }
 
+/** A style's saved accent, or null (none, invalid, or storage unavailable). */
+function readStoredAccent(styleId: string): AccentChoice | null {
+  try {
+    return parseAccentChoice(localStorage.getItem(accentStorageKey(styleId)))
+  } catch {
+    return null
+  }
+}
+
+/** Stamp the style's saved accent as inline custom properties on <html>, over
+ *  the palette's own values. Gardens are unaffected: the Zen root re-points
+ *  each of these at a Zen token (lib/zen/zen-style-shield). */
+function stampAccentProperties(style: StyleMeta, palette: StylePaletteMeta, scheme: StyleScheme): void {
+  const html = document.documentElement
+  for (const name of ACCENT_VARS) html.style.removeProperty(name)
+  const vars = accentVarsFor(readStoredAccent(style.id), palette, scheme)
+  for (const [name, value] of Object.entries(vars)) html.style.setProperty(name, value)
+}
+
 /** Stamp the resolved selection onto <html>. Exported for the Settings
  *  page's hover-preview, which is deliberately attribute-level only
  *  (no store/state/persistence writes) so a stray hover can never race
@@ -137,6 +176,7 @@ export function stampStyleAttributes(sel: StyleSelection): void {
   if (gapsPreset) html.setAttribute('data-gaps', gapsPreset)
   else html.removeAttribute('data-gaps')
   stampDialProperties(style)
+  stampAccentProperties(style, resolvedPalette, resolvedScheme)
   syncTrafficLights()
   syncWindowCorners()
 }
@@ -333,6 +373,23 @@ if (typeof window !== 'undefined') {
   }
 }
 
+/** The accent's pre-paint stamp, one per OS appearance so a flip while the
+ *  app was closed still paints the right values. */
+function writeAccentStamps(sel: StyleSelection): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    for (const side of ['dark', 'light'] as const) {
+      const key = lsAccentStampFor(side)
+      const { style, resolvedPalette, resolvedScheme } = resolveStyleSelection(sel, side === 'light')
+      const vars = accentVarsFor(readStoredAccent(style.id), resolvedPalette, resolvedScheme)
+      if (Object.keys(vars).length === 0) localStorage.removeItem(key)
+      else localStorage.setItem(key, JSON.stringify({ style: style.id, palette: resolvedPalette.id, vars }))
+    }
+  } catch {
+    // Only costs the pre-paint stamp; the live <html> values are right.
+  }
+}
+
 function writeMirror(sel: StyleSelection): void {
   if (typeof localStorage === 'undefined') return
   try {
@@ -341,27 +398,30 @@ function writeMirror(sel: StyleSelection): void {
     localStorage.setItem(LS_PALETTE, resolved.resolvedPalette.id)
     localStorage.setItem(LS_SCHEME, sel.schemeMode)
     localStorage.setItem(LS_GAPS, resolved.gapsPreset)
-    for (const scheme of ['dark', 'light'] as const) {
-      localStorage.setItem(
-        lsPaletteFor(scheme),
-        resolvePalette(resolved.style, sel.paletteId, scheme).id,
-      )
-    }
+    const slots = paletteSlots(resolved.style, sel)
+    localStorage.setItem(lsPaletteFor('dark'), slots.dark)
+    localStorage.setItem(lsPaletteFor('light'), slots.light)
   } catch {
     // Quota/privacy failures only cost the pre-paint mirror; the live
     // store + <html> attributes still reflect the selection.
   }
+  writeAccentStamps(sel)
 }
 
 /** Best-effort boot selection from the localStorage mirror. */
 export function readMirror(): StyleSelection {
   if (typeof localStorage === 'undefined') return { ...DEFAULT_SELECTION }
   try {
+    const dark = localStorage.getItem(lsPaletteFor('dark'))
+    const light = localStorage.getItem(lsPaletteFor('light'))
     return canonicalStyleSelection({
       styleId: localStorage.getItem(LS_STYLE) ?? DEFAULT_SELECTION.styleId,
       paletteId: localStorage.getItem(LS_PALETTE) ?? DEFAULT_SELECTION.paletteId,
       schemeMode: parseSchemeMode(localStorage.getItem(LS_SCHEME)),
       gapsPreset: localStorage.getItem(LS_GAPS) ?? DEFAULT_SELECTION.gapsPreset,
+      ...(dark !== null || light !== null
+        ? { autoPalettes: { ...(dark !== null ? { dark } : {}), ...(light !== null ? { light } : {}) } }
+        : {}),
     })
   } catch {
     return { ...DEFAULT_SELECTION }
@@ -449,6 +509,7 @@ export function migrateStyleFromDaemon(daemonStyle: DaemonStyleSeed | undefined 
   }
 
   if (daemonStyle && hasDaemonStylePayload(daemonStyle)) {
+    if (daemonStyle.id) seedRetiredStyleAccent(daemonStyle.id, parseSchemeMode(daemonStyle.scheme))
     const sel = canonicalStyleSelection({
       styleId: daemonStyle.id ?? DEFAULT_SELECTION.styleId,
       paletteId: daemonStyle.palette ?? DEFAULT_SELECTION.paletteId,
@@ -494,11 +555,32 @@ const bootTextGamma = resolveEffectiveTextGamma(
   bootResolved.resolvedScheme,
 )
 
+/** The current selection, for re-stamping the accent after a change. */
+function selectionOf(s: StyleSelection): StyleSelection {
+  return {
+    styleId: s.styleId,
+    paletteId: s.paletteId,
+    schemeMode: s.schemeMode,
+    gapsPreset: s.gapsPreset,
+    autoPalettes: s.autoPalettes,
+  }
+}
+
+/** Write the accent onto <html> and the pre-paint stamp, without the rest of
+ *  a style stamp (a colour drag shouldn't re-apply the window chrome). */
+function applyAccent(sel: StyleSelection): void {
+  if (typeof document === 'undefined') return
+  const { style, resolvedPalette, resolvedScheme } = resolveStyleSelection(sel, osPrefersLight())
+  stampAccentProperties(style, resolvedPalette, resolvedScheme)
+  writeAccentStamps(sel)
+}
+
 export const useStyleStore = create<StyleState>((set, get) => ({
   ...bootSelection,
   resolvedScheme: bootResolved.resolvedScheme,
   resolvedPaletteId: bootResolved.resolvedPalette.id,
   textGamma: bootTextGamma,
+  accent: readStoredAccent(bootSelection.styleId),
 
   applyStyle: (partial: Partial<StyleSelection>) => {
     const cur = get()
@@ -508,18 +590,21 @@ export const useStyleStore = create<StyleState>((set, get) => ({
     // change) leaves the live textGamma alone so a mid-session slider
     // value isn't clobbered before it's written — setTextGamma owns writes.
     const prevResolvedKey = `${cur.styleId}\0${cur.resolvedPaletteId}\0${cur.resolvedScheme}`
-    const sel = canonicalStyleSelection({
+    const canonical = canonicalStyleSelection({
       styleId: partial.styleId ?? cur.styleId,
       paletteId: partial.paletteId ?? cur.paletteId,
       schemeMode: partial.schemeMode ?? cur.schemeMode,
       gapsPreset: partial.gapsPreset ?? cur.gapsPreset,
+      autoPalettes: partial.autoPalettes ?? cur.autoPalettes,
     })
-    const resolved = resolveStyleSelection(sel, osPrefersLight())
+    const resolved = resolveStyleSelection(canonical, osPrefersLight())
+    const sel: StyleSelection = { ...canonical, autoPalettes: paletteSlots(resolved.style, canonical) }
     const nextResolvedKey = `${sel.styleId}\0${resolved.resolvedPalette.id}\0${resolved.resolvedScheme}`
     const next: Partial<StyleState> = {
       ...sel,
       resolvedScheme: resolved.resolvedScheme,
       resolvedPaletteId: resolved.resolvedPalette.id,
+      accent: readStoredAccent(sel.styleId),
     }
     if (prevResolvedKey !== nextResolvedKey) {
       next.textGamma = resolveEffectiveTextGamma(
@@ -555,6 +640,30 @@ export const useStyleStore = create<StyleState>((set, get) => ({
     set({
       textGamma: resolveTextGammaPreset(resolved.style, resolved.resolvedPalette),
     })
+  },
+
+  setAccent: (choice: AccentChoice) => {
+    const parsed = parseAccentChoice(choice)
+    if (parsed === null) return
+    const sel = selectionOf(get())
+    try {
+      localStorage.setItem(accentStorageKey(sel.styleId), parsed)
+    } catch {
+      // Still applies below for this session; it just won't survive a relaunch.
+    }
+    set({ accent: parsed })
+    applyAccent(sel)
+  },
+
+  resetAccent: () => {
+    const sel = selectionOf(get())
+    try {
+      localStorage.removeItem(accentStorageKey(sel.styleId))
+    } catch {
+      // Best-effort; the live values below are already the default.
+    }
+    set({ accent: null })
+    applyAccent(sel)
   },
 }))
 

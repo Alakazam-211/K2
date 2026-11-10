@@ -54,6 +54,8 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--color-accent': zen('accent'),
   '--color-accent-hover': zen('accent'),
   '--color-accent-soft': zen('accent'),
+  '--color-accent-active': zen('accent'),
+  '--color-accent-text': zen('accent'),
   '--color-on-accent': zen('accent-text'),
   // Status
   '--color-status-working': zen('working'),
@@ -183,6 +185,9 @@ export function zenBubbleShield(side: ZenBubbleSide): Record<string, string> {
     '--color-text-muted': `color-mix(in srgb, var(--zen-${text}) 72%, transparent)`,
     '--color-code-inline': zen(text),
     '--color-accent': side === 'me' ? zen(text) : zen('accent'),
+    // My bubble IS the accent. The agent's inherits: the Zen root's value in
+    // a Garden, the Style's readable text colour in the desktop Thread.
+    ...(side === 'me' ? { '--color-accent-text': zen(text) } : {}),
     '--color-bg': 'transparent',
     '--color-bg-elevated': mix(text, 10),
     '--color-bg-inset': mix(text, 8),

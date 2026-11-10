@@ -1607,7 +1607,7 @@ export function TerminalComposeBar({
         title="Send"
         disabled={!canSend}
         onClick={() => void send()}
-        className="inline-flex flex-shrink-0 items-center justify-center bg-[var(--color-accent)] text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+        className="inline-flex flex-shrink-0 items-center justify-center bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
         style={{
           borderRadius: 0,
           width: btnSize,

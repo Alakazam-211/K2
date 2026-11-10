@@ -44,7 +44,9 @@ describe('glass-next overrides', () => {
   })
 
   it('keeps every rule out of Gardens', () => {
-    for (const r of rules.filter((x) => x.selector !== '[data-style="glass-next"]')) {
+    // A block on the root element only sets variables; the Zen shield resets those.
+    const rootBlock = /^\[data-style="glass-next"\](\[data-palette="\w+"\])?$/
+    for (const r of rules.filter((x) => !rootBlock.test(x.selector))) {
       expect(r.selector, r.selector).toMatch(/:not\(\[data-zen-root\] \*(, \[data-k2-thread-zen\] \*)?\)/)
     }
   })

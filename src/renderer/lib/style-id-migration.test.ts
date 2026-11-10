@@ -40,7 +40,7 @@ describe('migrateRetiredStyleKeys', () => {
     })
   })
 
-  it('rewrites a saved bezel, clears its palettes and gaps, keeps the scheme mode', () => {
+  it('a Bezel user on Auto lands on Glass with both palettes moved and the gold accent', () => {
     mem.set('k2.style', 'bezel')
     mem.set('k2.palette', 'porcelain')
     mem.set('k2.palette.light', 'porcelain')
@@ -48,7 +48,49 @@ describe('migrateRetiredStyleKeys', () => {
     mem.set('k2.scheme', 'auto')
     mem.set('k2.gaps', 'spacious')
     migrateRetiredStyleKeys()
-    expect(snapshot()).toEqual({ 'k2.style': 'terminal', 'k2.scheme': 'auto' })
+    expect(snapshot()).toEqual({
+      'k2.style': 'glass',
+      'k2.scheme': 'auto',
+      'k2.palette': 'yellow',
+      'k2.palette.dark': 'yellow',
+      'k2.palette.light': 'veil',
+      'k2.accent.glass': 'yellow',
+    })
+  })
+
+  it('a Graphite user on Dark lands on Yellow, and needs no accent override', () => {
+    mem.set('k2.style', 'bezel')
+    mem.set('k2.palette', 'graphite')
+    mem.set('k2.scheme', 'dark')
+    migrateRetiredStyleKeys()
+    expect(mem.get('k2.palette')).toBe('yellow')
+    expect(mem.has('k2.accent.glass')).toBe(false)
+  })
+
+  it('a Porcelain user on Light lands on Veil with the gold accent', () => {
+    mem.set('k2.style', 'bezel')
+    mem.set('k2.palette', 'porcelain')
+    mem.set('k2.scheme', 'light')
+    migrateRetiredStyleKeys()
+    expect(mem.get('k2.palette')).toBe('veil')
+    expect(mem.get('k2.accent.glass')).toBe('yellow')
+  })
+
+  it('never overwrites an accent already chosen on Glass', () => {
+    mem.set('k2.style', 'bezel')
+    mem.set('k2.scheme', 'light')
+    mem.set('k2.accent.glass', '#123456')
+    migrateRetiredStyleKeys()
+    expect(mem.get('k2.accent.glass')).toBe('#123456')
+  })
+
+  it('sets the accent once: clearing it later is not undone by another boot', () => {
+    mem.set('k2.style', 'bezel')
+    mem.set('k2.scheme', 'light')
+    migrateRetiredStyleKeys()
+    mem.delete('k2.accent.glass')
+    migrateRetiredStyleKeys()
+    expect(mem.has('k2.accent.glass')).toBe(false)
   })
 
   it('moves Square gamma and dial keys to Terminal', () => {
@@ -85,7 +127,10 @@ describe('migrateRetiredStyleKeys', () => {
     mem.set('k2.dial.bezel.ring', '2')
     migrateRetiredStyleKeys()
     expect(snapshot()).toEqual({
-      'k2.style': 'terminal',
+      'k2.style': 'glass',
+      'k2.palette': 'yellow',
+      'k2.palette.dark': 'yellow',
+      'k2.palette.light': 'veil',
       'k2.textGamma.bezel.dark': '1.2',
       'k2.dial.bezel.ring': '2',
     })

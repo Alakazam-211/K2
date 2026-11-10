@@ -23,7 +23,7 @@ const STATUS_BADGE: Record<string, { label: string; color: string }> = {
   M: { label: 'Modified', color: 'var(--color-status-warn-text)' },
   A: { label: 'Added', color: 'var(--color-status-ok-soft)' },
   D: { label: 'Deleted', color: 'var(--color-status-error-soft)' },
-  R: { label: 'Renamed', color: 'var(--color-accent)' },
+  R: { label: 'Renamed', color: 'var(--color-accent-text)' },
   T: { label: 'Type changed', color: 'var(--color-status-warn-text)' },
   U: { label: 'Untracked', color: 'var(--color-text-muted)' },
   C: { label: 'Conflicted', color: 'var(--color-status-error-soft)' },

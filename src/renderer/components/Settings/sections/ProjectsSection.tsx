@@ -3144,7 +3144,7 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
               type="button"
               disabled={moving}
               onClick={() => { void handleMove(offerMove) }}
-              className="px-2 py-0.5 type-control rounded-[var(--radius-field)] bg-[var(--color-accent)] text-white disabled:opacity-50 cursor-pointer no-drag"
+              className="px-2 py-0.5 type-control rounded-[var(--radius-field)] bg-[var(--color-accent)] text-[var(--color-on-accent)] disabled:opacity-50 cursor-pointer no-drag"
             >
               {moving ? 'Moving…' : 'Move'}
             </button>

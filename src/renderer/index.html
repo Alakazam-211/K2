@@ -37,24 +37,48 @@
           try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
         }
         var savedStyle = read('k2.style', 'terminal');
-        var style = savedStyle === 'square' || savedStyle === 'bezel' ? 'terminal' : savedStyle;
+        var style = savedStyle === 'square' ? 'terminal' : savedStyle === 'bezel' ? 'glass' : savedStyle;
         html.setAttribute('data-style', style);
-        var scheme = read('k2.scheme', 'dark');
-        if (scheme === 'auto') {
-          scheme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        var mode = read('k2.scheme', 'dark');
+        // The side of the mode: under Auto, the OS appearance.
+        var side = mode;
+        if (mode === 'auto') {
+          side = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
         }
+        // Under Auto, the per-side key is the person's pick for this
+        // appearance, right even after an OS flip while the app was closed.
+        // Under a fixed mode k2.palette is the choice, and the other key may
+        // hold an Auto pick. stores/style.ts keeps them all in sync.
+        var palette = mode === 'auto'
+          ? read('k2.palette.' + side, '') || read('k2.palette', '')
+          : read('k2.palette', '') || read('k2.palette.' + side, '');
+        // Bezel's palettes moved: Graphite to Yellow, Porcelain to Veil.
+        if (savedStyle === 'bezel') palette = side === 'light' ? 'veil' : 'yellow';
+        // A palette from a retired style is not on its new style: use that
+        // style's default for this appearance.
+        var known = {
+          terminal: { charcoal: 1, paper: 1, yellow: 1, dark: 'charcoal', light: 'paper' },
+          glass: { obsidian: 1, veil: 1, yellow: 1, dark: 'obsidian', light: 'veil' }
+        }[style];
+        if (known && known[palette] !== 1) palette = known[side];
+        // A palette has one polarity; Auto can show a dark one on a light OS.
+        var polarity = { charcoal: 'dark', obsidian: 'dark', yellow: 'dark', paper: 'light', veil: 'light' }[palette];
+        var scheme = mode === 'auto' && polarity ? polarity : side;
         html.setAttribute('data-scheme', scheme);
-        // Per-scheme mirror wins: after an OS appearance flip while the
-        // app was closed, k2.palette (written under the OLD scheme) is
-        // stale but k2.palette.<scheme> is right. stores/style.ts keeps
-        // both in sync on every apply.
-        var palette = read('k2.palette.' + scheme, '') || read('k2.palette', '');
-        // A palette from a retired style (Bezel's graphite / porcelain) is
-        // not on Terminal: use Terminal's default for this scheme.
-        if (style === 'terminal' && palette !== 'charcoal' && palette !== 'paper') {
-          palette = scheme === 'light' ? 'paper' : 'charcoal';
-        }
         html.setAttribute('data-palette', palette || 'charcoal');
+        // The accent: ready-made values the style store saves per appearance.
+        // Used only if they are for this style and palette, and only as
+        // plain colours; anything else leaves the palette's own accent.
+        try {
+          var accent = JSON.parse(read('k2.accent.stamp.' + side, '') || 'null');
+          if (accent && accent.style === style && accent.palette === palette && accent.vars) {
+            Object.keys(accent.vars).forEach(function (name) {
+              if (/^--[a-z-]+$/.test(name) && /^#[0-9a-f]{6}$/i.test(accent.vars[name])) {
+                html.style.setProperty(name, accent.vars[name]);
+              }
+            });
+          }
+        } catch (e) { /* a damaged stamp only costs the pre-paint */ }
         // Bezel had no density control, so its saved gaps never carry over.
         var gaps = savedStyle === 'bezel' ? '' : read('k2.gaps', '');
         if (gaps) html.setAttribute('data-gaps', gaps);

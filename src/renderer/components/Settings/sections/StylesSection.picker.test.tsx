@@ -30,11 +30,11 @@ describe('the Styles picker', () => {
     expect(getStyle('bezel')).toBeDefined()
   })
 
-  it('a user arriving from Bezel sees Terminal as the active card', () => {
+  it('a user arriving from Bezel sees Glass as the active card', () => {
     useStyleStore.getState().applyStyle({ styleId: 'bezel', paletteId: 'graphite' })
     render(<StylesSection />)
     const active = cards().find((c) => within(c).queryByText('Active'))
-    expect(active?.querySelector('span')?.textContent).toBe('Terminal')
+    expect(active?.querySelector('span')?.textContent).toBe('Liquid Glass')
     expect(screen.queryByText('Bezel')).toBeNull()
   })
 
@@ -57,6 +57,60 @@ describe('the Styles picker', () => {
     expect(useStyleStore.getState().schemeMode).toBe('dark')
     fireEvent.click(within(group).getByRole('radio', { name: 'Auto' }))
     expect(useStyleStore.getState().schemeMode).toBe('auto')
+  })
+
+  const paletteCards = (): string[] =>
+    Array.from(document.querySelectorAll('[data-settings-id="styles.palette"] button')).map(
+      (b) => b.querySelector(':scope > span:last-child')?.textContent ?? '',
+    )
+
+  it('shows three palette cards for each style, with no scheme restriction label', () => {
+    useStyleStore.getState().applyStyle({ styleId: 'terminal', paletteId: 'charcoal', schemeMode: 'dark' })
+    render(<StylesSection />)
+    expect(paletteCards()).toEqual(['Charcoal', 'Paper', 'Yellow'])
+    expect(screen.queryByText('Light only')).toBeNull()
+    cleanup()
+    useStyleStore.getState().applyStyle({ styleId: 'glass', paletteId: 'obsidian', schemeMode: 'dark' })
+    render(<StylesSection />)
+    expect(paletteCards()).toEqual(['Obsidian', 'Veil', 'Yellow'])
+  })
+
+  it('Dark and Light show no Auto choosers; Auto shows one per appearance, each with all three', () => {
+    useStyleStore.getState().applyStyle({ styleId: 'terminal', paletteId: 'charcoal', schemeMode: 'dark' })
+    render(<StylesSection />)
+    expect(screen.queryByRole('radiogroup', { name: 'When my system is light' })).toBeNull()
+    cleanup()
+    useStyleStore.getState().applyStyle({ schemeMode: 'auto' })
+    render(<StylesSection />)
+    for (const name of ['When my system is light', 'When my system is dark']) {
+      const group = screen.getByRole('radiogroup', { name })
+      expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(['Charcoal', 'Paper', 'Yellow'])
+    }
+  })
+
+  it('an Auto chooser saves that side and keeps Auto, even a dark theme for a light system', () => {
+    useStyleStore.getState().applyStyle({ styleId: 'terminal', paletteId: 'charcoal', schemeMode: 'auto' })
+    render(<StylesSection />)
+    const group = screen.getByRole('radiogroup', { name: 'When my system is light' })
+    fireEvent.click(within(group).getByRole('radio', { name: 'Yellow' }))
+    expect(useStyleStore.getState().schemeMode).toBe('auto')
+    expect(useStyleStore.getState().autoPalettes?.light).toBe('yellow')
+    expect(localStorage.getItem('k2.palette.light')).toBe('yellow')
+  })
+
+  it('the accent well sets a colour; Reset to default returns to the theme, and starts disabled', () => {
+    useStyleStore.getState().applyStyle({ styleId: 'terminal', paletteId: 'charcoal', schemeMode: 'dark' })
+    useStyleStore.getState().resetAccent()
+    render(<StylesSection />)
+    const reset = screen.getByRole('button', { name: 'Reset to default' }) as HTMLButtonElement
+    expect(reset.disabled).toBe(true)
+    fireEvent.change(screen.getByTestId('accent-well'), { target: { value: '#ff00aa' } })
+    expect(useStyleStore.getState().accent).toBe('#ff00aa')
+    expect(document.documentElement.style.getPropertyValue('--color-accent')).toBe('#ff00aa')
+    expect(reset.disabled).toBe(false)
+    fireEvent.click(reset)
+    expect(useStyleStore.getState().accent).toBeNull()
+    expect(document.documentElement.style.getPropertyValue('--color-accent')).toBe('')
   })
 
   it('search finds Terminal, and finds it by its old name, but not Bezel', () => {

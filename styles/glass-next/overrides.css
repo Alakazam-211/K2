@@ -92,8 +92,8 @@
 }
 /* Small accent text: #0a84ff is under 4.5:1 here, so text darkens. Fills and
    icons drawn with --color-accent are untouched. */
-[data-style="glass-next"][data-palette="veil"] :is([class~="text-[var(--color-accent)]"], .markdown-content a, .markdown-content .k2-file-link, .docx-body a):not([data-zen-root] *) {
-  color: color-mix(in srgb, var(--color-accent) 80%, black);
+[data-style="glass-next"][data-palette="veil"] {
+  --color-accent-text: color-mix(in srgb, var(--color-accent) 80%, black);
 }
 
 /* ── Fallback (G5): Frost becomes a tile ────────────────────────────────

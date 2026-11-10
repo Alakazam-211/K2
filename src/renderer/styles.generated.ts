@@ -295,6 +295,51 @@ export const STYLES: readonly StyleMeta[] = [
             "background": 13161190
           }
         }
+      },
+      {
+        "id": "yellow",
+        "name": "Yellow",
+        "schemes": [
+          "dark"
+        ],
+        "swatch": {
+          "bg": "#100f0e",
+          "surface": "rgba(27, 26, 24, 0.58)",
+          "elevated": "rgba(37, 35, 32, 0.62)",
+          "accent": "#ffc700",
+          "textPrimary": "#eae6de",
+          "border": "rgba(255, 255, 255, 0.09)"
+        },
+        "terminal": {
+          "foreground": 15065560,
+          "background": 1052430,
+          "palette": [
+            1512980,
+            15619927,
+            5226351,
+            15054908,
+            7317464,
+            12618436,
+            6078648,
+            13222580,
+            7301471,
+            15959429,
+            8049812,
+            15649124,
+            9683176,
+            14002392,
+            8705485,
+            16052455
+          ],
+          "cursor": {
+            "text": null,
+            "cursor": 16762624
+          },
+          "selection": {
+            "text": null,
+            "background": 3815215
+          }
+        }
       }
     ]
   },
@@ -419,6 +464,51 @@ export const STYLES: readonly StyleMeta[] = [
             "background": 13624319
           }
         }
+      },
+      {
+        "id": "yellow",
+        "name": "Yellow",
+        "schemes": [
+          "dark"
+        ],
+        "swatch": {
+          "bg": "#100f0e",
+          "surface": "#1b1a18",
+          "elevated": "#252320",
+          "accent": "#ffc700",
+          "textPrimary": "#eae6de",
+          "border": "#33302b"
+        },
+        "terminal": {
+          "foreground": 15065560,
+          "background": 1052430,
+          "palette": [
+            1512980,
+            15619927,
+            5226351,
+            15054908,
+            7317464,
+            12618436,
+            6078648,
+            13222580,
+            7301471,
+            15959429,
+            8049812,
+            15649124,
+            9683176,
+            14002392,
+            8705485,
+            16052455
+          ],
+          "cursor": {
+            "text": null,
+            "cursor": 16762624
+          },
+          "selection": {
+            "text": null,
+            "background": 3815215
+          }
+        }
       }
     ],
     "hidden": true
@@ -534,6 +624,51 @@ export const STYLES: readonly StyleMeta[] = [
           "selection": {
             "text": null,
             "background": 14275264
+          }
+        }
+      },
+      {
+        "id": "yellow",
+        "name": "Yellow",
+        "schemes": [
+          "dark"
+        ],
+        "swatch": {
+          "bg": "#100f0e",
+          "surface": "#1b1a18",
+          "elevated": "#252320",
+          "accent": "#ffc700",
+          "textPrimary": "#eae6de",
+          "border": "#2e2b27"
+        },
+        "terminal": {
+          "foreground": 15065560,
+          "background": 1052430,
+          "palette": [
+            1512980,
+            15619927,
+            5226351,
+            15054908,
+            7317464,
+            12618436,
+            6078648,
+            13222580,
+            7301471,
+            15959429,
+            8049812,
+            15649124,
+            9683176,
+            14002392,
+            8705485,
+            16052455
+          ],
+          "cursor": {
+            "text": null,
+            "cursor": 16762624
+          },
+          "selection": {
+            "text": null,
+            "background": 3815215
           }
         }
       }

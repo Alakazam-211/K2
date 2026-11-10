@@ -72,11 +72,11 @@ describe('pre-paint bootstrap (index.html)', () => {
   it('a saved bezel never stamps bezel, its palette, or its gaps', () => {
     seed('bezel', 'graphite', 'dark', 'spacious')
     runBootstrap()
-    expect(stamped()).toEqual({ style: 'terminal', palette: 'charcoal', scheme: 'dark', gaps: null })
+    expect(stamped()).toEqual({ style: 'glass', palette: 'yellow', scheme: 'dark', gaps: null })
     for (const a of ATTRS) html.removeAttribute(a)
     seed('bezel', 'porcelain', 'light')
     runBootstrap()
-    expect(stamped()).toEqual({ style: 'terminal', palette: 'paper', scheme: 'light', gaps: null })
+    expect(stamped()).toEqual({ style: 'glass', palette: 'veil', scheme: 'light', gaps: null })
   })
 
   it('a half-migrated mirror (Terminal with a Bezel palette) still paints Terminal', () => {
@@ -95,30 +95,43 @@ describe('pre-paint bootstrap (index.html)', () => {
     expect(stamped()).toEqual({ style: 'glass', palette: 'obsidian', scheme: 'dark', gaps: 'spacious' })
   })
 
-  it("stays in step with the alias table and Terminal's palettes", () => {
+  it('stays in step with the alias table and every palette of Terminal and Glass', () => {
     for (const [id, alias] of STYLE_ID_ALIASES) {
       mem.clear()
       seed(id, 'nonsense', 'dark')
       runBootstrap()
       expect([id, stamped().style]).toEqual([id, alias.to])
     }
-    for (const p of getStyle('terminal')!.palettes) {
-      mem.clear()
-      seed('terminal', p.id, p.schemes[0])
-      runBootstrap()
-      expect(stamped().palette).toBe(p.id)
+    for (const styleId of ['terminal', 'glass']) {
+      for (const p of getStyle(styleId)!.palettes) {
+        mem.clear()
+        seed(styleId, p.id, p.schemes[0])
+        runBootstrap()
+        expect([styleId, stamped().palette, stamped().scheme]).toEqual([styleId, p.id, p.schemes[0]])
+      }
     }
   })
 })
 
 describe('store boot from a retired id', () => {
-  it('a saved bezel reaches <html> as Terminal, and the mirror is rewritten', async () => {
+  it('a saved Porcelain reaches <html> as Veil with the gold accent, and the mirror is rewritten', async () => {
     seed('bezel', 'porcelain', 'light', 'spacious')
     const { useStyleStore } = await import('./style')
-    expect(stamped()).toEqual({ style: 'terminal', palette: 'paper', scheme: 'light', gaps: null })
-    expect(useStyleStore.getState().styleId).toBe('terminal')
+    expect(stamped()).toEqual({ style: 'glass', palette: 'veil', scheme: 'light', gaps: null })
+    expect(useStyleStore.getState().styleId).toBe('glass')
     expect(useStyleStore.getState().schemeMode).toBe('light')
-    expect([mem.get('k2.style'), mem.get('k2.palette'), mem.get('k2.gaps')]).toEqual(['terminal', 'paper', ''])
+    expect([mem.get('k2.style'), mem.get('k2.palette'), mem.get('k2.gaps')]).toEqual(['glass', 'veil', ''])
+    expect(html.style.getPropertyValue('--color-accent')).toBe('#e6b400')
+    expect(html.style.getPropertyValue('--color-accent-hover')).toBe('#c79c00')
+    expect(html.style.getPropertyValue('--color-accent-soft')).toBe('#8a6d00')
+    expect(html.style.getPropertyValue('--color-on-accent')).toBe('#1a1400')
+  })
+
+  it('a saved Graphite reaches <html> as Glass Yellow, with no override', async () => {
+    seed('bezel', 'graphite', 'dark')
+    await import('./style')
+    expect(stamped()).toEqual({ style: 'glass', palette: 'yellow', scheme: 'dark', gaps: null })
+    expect(html.style.getPropertyValue('--color-accent')).toBe('')
   })
 
   it('a saved square keeps its density and palette on Terminal', async () => {
@@ -136,9 +149,9 @@ describe('store boot from a retired id', () => {
     expect(mem.has('k2.textGamma.square.dark')).toBe(false)
   })
 
-  it('a hover preview of a retired id stamps Terminal', async () => {
+  it('a hover preview of a retired id stamps Glass', async () => {
     const { stampStyleAttributes } = await import('./style')
     stampStyleAttributes({ styleId: 'bezel', paletteId: 'graphite', schemeMode: 'dark', gapsPreset: 'spacious' })
-    expect(stamped()).toEqual({ style: 'terminal', palette: 'charcoal', scheme: 'dark', gaps: null })
+    expect(stamped()).toEqual({ style: 'glass', palette: 'yellow', scheme: 'dark', gaps: null })
   })
 })

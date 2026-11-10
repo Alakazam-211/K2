@@ -552,7 +552,7 @@ html[data-os]:not([data-os="mac"]) select optgroup {
 }
 
 .markdown-content a {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   text-decoration: none;
 }
 
@@ -560,12 +560,27 @@ html[data-os]:not([data-os="mac"]) select optgroup {
   text-decoration: underline;
 }
 
+/* Accent used as small text. Fills and icons keep --color-accent; words read
+   --color-accent-text, a darker one on light palettes when the accent is too
+   pale to read (a chosen yellow, say). Follows every class spelling of the
+   accent text colour without touching the components. */
+:root { --color-accent-text: var(--color-accent); }
+[class~="text-[var(--color-accent)]"]:not([class*="hover:text-"]:hover):not([data-zen-root] *),
+[class~="hover:text-[var(--color-accent)]"]:hover:not([data-zen-root] *) {
+  color: var(--color-accent-text);
+}
+
+/* A colour well that fits the controls around it. */
+.k2-color-well::-webkit-color-swatch-wrapper { padding: 0; }
+.k2-color-well::-webkit-color-swatch { border: none; border-radius: 0; }
+.k2-color-well:focus-visible { outline: 2px solid var(--color-text-primary); outline-offset: 2px; }
+
 /* Thread file links (components/common/file-links.tsx): a path the daemon
    says is in this workspace. Link colour from the Style (inside a Thread
    bubble the shield points --color-accent at a readable colour per side);
    a dotted underline at rest says it is clickable, solid on hover. */
 .markdown-content .k2-file-link {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   cursor: pointer;
   text-decoration: underline dotted;
   text-decoration-thickness: 1px;
@@ -1030,7 +1045,7 @@ html[data-os]:not([data-os="mac"]) select optgroup {
 }
 
 .docx-body a {
-  color: var(--color-accent);
+  color: var(--color-accent-text);
   text-decoration: none;
 }
 
@@ -1670,10 +1685,10 @@ html[data-style="glass-next"] [data-material="frost"][class~="right-0"]:not([dat
 }
 
 /* Glass rims at 1x: the 0.5px edge rounds up to a whole pixel on top of the 1px
-   highlight, so it reads heavy. Lower the edge there. Obsidian only: Veil's rim
+   highlight, so it reads heavy. Lower the edge there. Dark palettes only: Veil's rim
    is the gradient ring. */
 @media (max-resolution: 1.5dppx) {
-  html[data-style="glass-next"][data-palette="obsidian"] [data-material="frost"]:not([data-zen-root] *) {
+  html[data-style="glass-next"]:is([data-palette="obsidian"], [data-palette="yellow"]) [data-material="frost"]:not([data-zen-root] *) {
     border-color: rgba(255, 255, 255, 0.14);
   }
 }
@@ -1929,7 +1944,7 @@ html[data-style="glass-next"] button[data-k2-float][data-k2-float][aria-expanded
 html[data-style="glass-next"][data-palette="veil"] button[data-k2-float="round"][aria-pressed="true"],
 html[data-style="glass-next"][data-palette="veil"] button[data-k2-float="round"][role="switch"][aria-checked="true"] {
   background: color-mix(in srgb, var(--color-accent) 12%, #ffffff);
-  color: var(--color-accent);
+  color: var(--color-accent-text);
 }
 /* The band over the Thread reaches a little past the objects. */
 html[data-style="glass-next"] [data-thread-floats-host] .k2-header-blur:not([data-zen-root] *) { height: calc(var(--thread-float-inset, 0px) + 18px); }

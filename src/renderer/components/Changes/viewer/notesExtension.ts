@@ -356,9 +356,9 @@ export function notesExtension(handlers: { current: NotesHandlers | null }): Ext
 
 const notesTheme = EditorView.theme({
   '.cm-k2-notes-gutter .cm-gutterElement': { cursor: 'pointer', padding: '0 3px', minWidth: '12px', textAlign: 'center' },
-  '.cm-k2-note-add': { opacity: '0', color: 'var(--color-accent)', fontWeight: '600' },
+  '.cm-k2-note-add': { opacity: '0', color: 'var(--color-accent-text)', fontWeight: '600' },
   '.cm-k2-notes-gutter .cm-gutterElement:hover .cm-k2-note-add': { opacity: '1' },
-  '.cm-k2-note-dot': { color: 'var(--color-accent)', fontSize: '9px' },
+  '.cm-k2-note-dot': { color: 'var(--color-accent-text)', fontSize: '9px' },
   '.cm-k2-note-dot-outdated': { color: 'var(--color-status-warn-text)' },
   '.cm-k2-note': {
     margin: '4px 8px 6px 8px',

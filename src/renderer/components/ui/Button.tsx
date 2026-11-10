@@ -16,7 +16,7 @@ const VARIANTS: Record<string, string> = {
     'bg-transparent border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]',
   /** Primary action. */
   accent:
-    'bg-[var(--color-accent)] border border-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 [--k2-ch-focus:var(--color-on-accent)]',
+    'bg-[var(--color-accent)] border border-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 active:bg-[var(--color-accent-active,var(--color-accent))] active:border-[var(--color-accent-active,var(--color-accent))] [--k2-ch-focus:var(--color-on-accent)]',
   /** Destructive action (red-600/700 idiom). */
   danger:
     'bg-[var(--color-danger)] border border-[var(--color-danger)] text-[var(--color-on-accent)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)] [--k2-ch-focus:var(--color-on-accent)]',

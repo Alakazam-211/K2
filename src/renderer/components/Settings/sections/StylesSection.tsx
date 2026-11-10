@@ -16,9 +16,10 @@
 
 import React, { useCallback, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
-import { stampStyleAttributes, useStyleStore } from '@/stores/style'
+import { osPrefersLight, stampStyleAttributes, useStyleStore } from '@/stores/style'
 import type { StyleSelection } from '@/lib/style-resolve'
 import { dialDefault, dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
+import { accentFillHex } from '@/lib/style-accent'
 import { TEXT_GAMMA_MAX, TEXT_GAMMA_MIN } from '@/lib/text-gamma'
 import {
   STYLES,
@@ -28,7 +29,7 @@ import {
   type StyleScheme,
 } from '@/styles.generated'
 import type { SettingEntry } from '../searchManifest'
-import { Segmented, Slider } from '@/components/ui'
+import { Button, Segmented, Slider } from '@/components/ui'
 
 /** Registry terminal colors are 0xRRGGBB ints (Kessel's format). */
 const intToHex = (n: number): string => `#${n.toString(16).padStart(6, '0')}`
@@ -37,6 +38,8 @@ export const STYLES_MANIFEST: SettingEntry[] = [
   { id: 'styles.style-picker', section: 'styles', label: 'Style', description: 'App-wide visual style (Terminal, Glass, community styles)', keywords: ['style', 'skin', 'theme', 'appearance', 'look', 'terminal', 'square', 'glass'] },
   { id: 'styles.palette', section: 'styles', label: 'Palette', description: 'Color palette within the selected style', keywords: ['palette', 'color', 'colors', 'theme', 'charcoal', 'paper', 'dark mode', 'light mode'] },
   { id: 'styles.scheme', section: 'styles', label: 'Scheme', description: 'Light / Dark / Auto — Auto follows the OS appearance', keywords: ['scheme', 'light', 'dark', 'auto', 'appearance', 'mode', 'night', 'day', 'os'] },
+  { id: 'styles.auto-palettes', section: 'styles', label: 'Auto colour themes', description: 'Under Auto, the colour theme for a light system and for a dark system', keywords: ['auto', 'system', 'light', 'dark', 'swap', 'palette', 'theme', 'yellow'] },
+  { id: 'styles.accent', section: 'styles', label: 'Accent', description: 'Your own accent colour for this style, with a reset to the theme default', keywords: ['accent', 'colour', 'color', 'tint', 'highlight', 'custom', 'reset', 'picker'] },
   { id: 'styles.density', section: 'styles', label: 'Density', description: 'Compact / Regular / Spacious gaps between panes and tiles', keywords: ['density', 'gaps', 'spacing', 'compact', 'regular', 'spacious', 'padding', 'tiles'] },
   { id: 'styles.dials', section: 'styles', label: 'Dials', description: 'Style-specific adjustments the active style advertises (e.g. Glass frost)', keywords: ['dials', 'dial', 'knobs', 'frost', 'blur', 'adjust', 'tweak', 'slider', 'glass'] },
   { id: 'styles.text-weight', section: 'styles', label: 'Terminal text weight (WebGL)', description: 'Per-style WebGL glyph weight. Lower = thicker. Saved per style and scheme.', keywords: ['gamma', 'weight', 'thickness', 'bold', 'thin', 'chonky', 'webgl', 'text', 'terminal'] },
@@ -44,6 +47,11 @@ export const STYLES_MANIFEST: SettingEntry[] = [
 
 /** Retired looks stay compiled but never reach the picker. */
 const PICKER_STYLES = STYLES.filter((s) => !s.hidden)
+
+const AUTO_SIDES: { side: StyleScheme; label: string }[] = [
+  { side: 'light', label: 'When my system is light' },
+  { side: 'dark', label: 'When my system is dark' },
+]
 
 const SCHEME_OPTIONS: { id: 'light' | 'dark' | 'auto'; label: string }[] = [
   { id: 'light', label: 'Light' },
@@ -108,15 +116,24 @@ export function StylesSection(): React.JSX.Element {
   const paletteId = useStyleStore((s) => s.paletteId)
   const schemeMode = useStyleStore((s) => s.schemeMode)
   const gapsPreset = useStyleStore((s) => s.gapsPreset)
+  const autoPalettes = useStyleStore((s) => s.autoPalettes)
   const resolvedScheme = useStyleStore((s) => s.resolvedScheme)
   const resolvedPaletteId = useStyleStore((s) => s.resolvedPaletteId)
   const applyStyle = useStyleStore((s) => s.applyStyle)
   const textGamma = useStyleStore((s) => s.textGamma)
   const setTextGamma = useStyleStore((s) => s.setTextGamma)
   const resetTextGamma = useStyleStore((s) => s.resetTextGamma)
+  const accent = useStyleStore((s) => s.accent)
+  const setAccent = useStyleStore((s) => s.setAccent)
+  const resetAccent = useStyleStore((s) => s.resetAccent)
   const updateStyleSettings = useSettingsStore((s) => s.updateStyleSettings)
 
-  const committed: StyleSelection = { styleId, paletteId, schemeMode, gapsPreset }
+  const committed: StyleSelection = { styleId, paletteId, schemeMode, gapsPreset, autoPalettes }
+
+  // The accent belongs to the style in use, whichever card's detail is showing.
+  const activeStyle = STYLES.find((s) => s.id === styleId) ?? PICKER_STYLES[0]
+  const activePalette = activeStyle.palettes.find((p) => p.id === resolvedPaletteId) ?? activeStyle.palettes[0]
+  const accentHex = accentFillHex(accent, activePalette, resolvedScheme)
 
   // Which style's DETAIL is showing. Defaults to the active style; kept
   // as local state so browsing a style's palettes doesn't commit it.
@@ -145,18 +162,33 @@ export function StylesSection(): React.JSX.Element {
     stampStyleAttributes(committed)
     // committed is rebuilt each render from store state — safe to close over.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [styleId, paletteId, schemeMode, gapsPreset])
+  }, [styleId, paletteId, schemeMode, gapsPreset, autoPalettes])
 
   // Base selection edits in the detail pane operate on: the committed
   // selection when the active style is showing, else a jump-in default.
   const baseSel = selectedIsActive ? committed : selectionForStyle(selectedStyle, committed)
 
-  const handlePaletteClick = (p: StylePaletteMeta): void => {
-    // Least-surprise: clicking a palette that can't render in the current
-    // scheme switches the scheme mode to one it supports.
-    const nextMode = p.schemes.includes(resolvedScheme) ? baseSel.schemeMode : p.schemes[0]
-    commit({ ...baseSel, paletteId: p.id, schemeMode: nextMode })
-  }
+  /** The OS appearance right now: which Auto pick is on screen. */
+  const osSide = (): StyleScheme => (osPrefersLight() ? 'light' : 'dark')
+
+  /** The selection with one Auto side pointed at a palette. */
+  const withAutoPick = (side: StyleScheme, id: string): StyleSelection => ({
+    ...baseSel,
+    autoPalettes: { ...baseSel.autoPalettes, [side]: id },
+  })
+
+  /** The selection a palette card means: under Auto it fills the side on
+   *  screen. Otherwise a palette the scheme can't show moves the scheme. */
+  const selectionForPalette = (p: StylePaletteMeta): StyleSelection =>
+    baseSel.schemeMode === 'auto'
+      ? withAutoPick(osSide(), p.id)
+      : {
+          ...baseSel,
+          paletteId: p.id,
+          schemeMode: p.schemes.includes(resolvedScheme) ? baseSel.schemeMode : p.schemes[0],
+        }
+
+  const handlePaletteClick = (p: StylePaletteMeta): void => commit(selectionForPalette(p))
 
   const handleSchemeClick = (mode: 'light' | 'dark' | 'auto'): void => {
     commit({ ...baseSel, schemeMode: mode })
@@ -293,29 +325,18 @@ export function StylesSection(): React.JSX.Element {
             {selectedStyle.palettes.map((p) => {
               const isCurrent = selectedIsActive && p.id === resolvedPaletteId
               const supportsScheme = p.schemes.includes(resolvedScheme)
-              const schemeCaption = !supportsScheme
-                ? p.schemes.length === 1
-                  ? `${capitalize(p.schemes[0])} only`
-                  : p.schemes.map(capitalize).join(' / ')
-                : null
               return (
                 <button
                   key={p.id}
                   onClick={() => handlePaletteClick(p)}
-                  onMouseEnter={() =>
-                    preview({
-                      ...baseSel,
-                      paletteId: p.id,
-                      schemeMode: supportsScheme ? baseSel.schemeMode : p.schemes[0],
-                    })
-                  }
+                  onMouseEnter={() => preview(selectionForPalette(p))}
                   onMouseLeave={endPreview}
-                  title={schemeCaption ? `Switches the scheme to ${p.schemes[0]}` : undefined}
+                  title={!supportsScheme && schemeMode !== 'auto' ? `Switches the scheme to ${p.schemes[0]}` : undefined}
                   className={`w-40 text-left p-2.5 border no-drag cursor-pointer transition-colors ${
                     isCurrent
                       ? 'border-[var(--color-accent)] bg-[var(--color-bg-elevated)]'
                       : 'border-[var(--color-border)] bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-elevated)]'
-                  } ${!supportsScheme ? 'opacity-50' : ''}`}
+                  }`}
                 >
                   <SwatchRow className="mb-1.5" colors={[p.swatch.bg, p.swatch.surface, p.swatch.elevated, p.swatch.accent]} />
                   {/* ANSI-16 strip — terminal colors are what this audience judges first */}
@@ -324,12 +345,7 @@ export function StylesSection(): React.JSX.Element {
                       <span key={i} className="h-1.5 flex-1" style={{ backgroundColor: intToHex(n) }} />
                     ))}
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-[var(--color-text-primary)]">{p.name}</span>
-                    {schemeCaption && (
-                      <span className="text-[9px] text-[var(--color-text-muted)]">{schemeCaption}</span>
-                    )}
-                  </div>
+                  <span className="text-[11px] text-[var(--color-text-primary)]">{p.name}</span>
                 </button>
               )
             })}
@@ -364,11 +380,56 @@ export function StylesSection(): React.JSX.Element {
               }
             })}
           />
+          {/* Auto swaps between any two of the style's colour themes. */}
           {schemeMode === 'auto' && selectedIsActive && (
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-              Following the OS appearance — currently {resolvedScheme}.
+            <div className="mt-3 flex flex-col gap-2" data-settings-id="styles.auto-palettes">
+              {AUTO_SIDES.map(({ side, label }) => (
+                <div key={side} className="flex items-center gap-3 flex-wrap">
+                  <span className="w-40 text-[11px] text-[var(--color-text-secondary)]">{label}</span>
+                  <Segmented
+                    aria-label={label}
+                    activation="manual"
+                    value={autoPalettes?.[side] ?? null}
+                    onChange={(id) => commit(withAutoPick(side, id))}
+                    options={selectedStyle.palettes.map((p) => ({
+                      value: p.id,
+                      label: p.name,
+                      buttonProps: {
+                        onMouseEnter: () => {
+                          if (side === osSide()) preview(withAutoPick(side, p.id))
+                        },
+                        onMouseLeave: endPreview,
+                      },
+                    }))}
+                  />
+                </div>
+              ))}
             </div>
           )}
+        </div>
+
+        {/* Accent: the theme's own, or the person's colour, for the style in use */}
+        <div className="mb-6" data-settings-id="styles.accent">
+          <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
+            Accent
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              type="color"
+              aria-label="Accent colour"
+              data-testid="accent-well"
+              value={accentHex}
+              onChange={(e) => setAccent(e.target.value)}
+              className="k2-color-well h-6 w-8 p-0 border border-[var(--color-border)] bg-transparent cursor-pointer no-drag"
+            />
+            <span className="text-[11px] font-mono text-[var(--color-text-muted)]">{accentHex}</span>
+            <Button variant="quiet" disabled={accent === null} onClick={resetAccent}>
+              Reset to default
+            </Button>
+          </div>
+          <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
+            Buttons, switches, focus rings and links use this colour. Saved for {activeStyle.name} on this machine.
+          </div>
         </div>
 
         {/* Density (gap presets) — only when the style declares gaps */}

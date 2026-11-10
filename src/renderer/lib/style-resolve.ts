@@ -28,6 +28,9 @@ export interface StyleSelection {
   paletteId: string
   schemeMode: SchemeMode
   gapsPreset: string
+  /** What each OS appearance shows under Auto, any of the style's palettes
+   *  (`k2.palette.dark` / `k2.palette.light`). */
+  autoPalettes?: Partial<Record<StyleScheme, string>>
 }
 
 /** Fully resolved selection — everything the DOM/bridge needs. */
@@ -56,10 +59,20 @@ export const DEFAULT_SELECTION: StyleSelection = {
  * Terminal is proven, together with lib/style-id-migration.ts and the copy
  * of this table in index.html's pre-paint bootstrap.
  */
-export const STYLE_ID_ALIASES: ReadonlyMap<string, { to: string; keepsTuning: boolean }> = new Map([
+export const STYLE_ID_ALIASES: ReadonlyMap<string, StyleAlias> = new Map<string, StyleAlias>([
   ['square', { to: 'terminal', keepsTuning: true }],
-  ['bezel', { to: 'terminal', keepsTuning: false }],
+  ['bezel', { to: 'glass', keepsTuning: false, palettes: { dark: 'yellow', light: 'veil' }, accentOnLight: 'yellow' }],
 ])
+
+export interface StyleAlias {
+  to: string
+  keepsTuning: boolean
+  /** Where a retired style's palettes went, by scheme. */
+  palettes?: Record<StyleScheme, string>
+  /** The accent that keeps a retired light palette's colour; set once, for
+   *  someone who used that palette (light or auto), by lib/style-id-migration. */
+  accentOnLight?: string
+}
 
 /** A selection with any retired style id replaced. A palette the new style
  *  doesn't have falls to that style's default for the scheme, the scheme
@@ -71,13 +84,17 @@ export function canonicalStyleSelection(sel: StyleSelection): StyleSelection {
   const target = getStyle(alias.to)
   const paletteExists = target?.palettes.some((p) => p.id === sel.paletteId) ?? false
   const schemeHint: StyleScheme = sel.schemeMode === 'light' ? 'light' : 'dark'
+  const autoPalettes = alias.palettes ?? sel.autoPalettes
   return {
     styleId: alias.to,
-    paletteId: paletteExists
-      ? sel.paletteId
-      : (target?.defaultPalettes[schemeHint] ?? target?.defaultPalette ?? sel.paletteId),
+    paletteId:
+      alias.palettes?.[schemeHint] ??
+      (paletteExists
+        ? sel.paletteId
+        : (target?.defaultPalettes[schemeHint] ?? target?.defaultPalette ?? sel.paletteId)),
     schemeMode: sel.schemeMode,
     gapsPreset: alias.keepsTuning ? sel.gapsPreset : '',
+    ...(autoPalettes ? { autoPalettes } : {}),
   }
 }
 
@@ -113,6 +130,23 @@ export function resolvePalette(
   return find(style.defaultPalette) ?? style.palettes[0]
 }
 
+/**
+ * What each OS appearance shows, for the per-scheme keys. Under Auto these are
+ * the person's two picks. Under a fixed mode, that mode's side is the chosen
+ * palette and the other side is left as it was, so Auto comes back unchanged;
+ * a dark palette picked for the light side (or the reverse) also survives.
+ */
+export function paletteSlots(style: StyleMeta, sel: StyleSelection): Record<StyleScheme, string> {
+  const slot = (scheme: StyleScheme): string => {
+    const saved = style.palettes.find((p) => p.id === sel.autoPalettes?.[scheme])
+    if (sel.schemeMode === scheme && !(saved && !saved.schemes.includes(scheme))) {
+      return resolvePalette(style, sel.paletteId, scheme).id
+    }
+    return (saved ?? resolvePalette(style, sel.paletteId, scheme)).id
+  }
+  return { dark: slot('dark'), light: slot('light') }
+}
+
 /** Resolve a full selection. Retired style ids map through the alias
  *  table; unknown style ids fall back to the default style;
  *  unknown/unsupported palettes and gap presets fall back per the chains
@@ -123,8 +157,12 @@ export function resolveStyleSelection(
 ): ResolvedStyle {
   const sel = canonicalStyleSelection(selection)
   const style = getStyle(sel.styleId) ?? getStyle(DEFAULT_STYLE_ID)!
-  const resolvedScheme = resolveScheme(sel.schemeMode, osPrefersLight)
-  const resolvedPalette = resolvePalette(style, sel.paletteId, resolvedScheme)
+  const wanted = resolveScheme(sel.schemeMode, osPrefersLight)
+  const autoPick =
+    sel.schemeMode === 'auto' ? style.palettes.find((p) => p.id === sel.autoPalettes?.[wanted]) : undefined
+  const resolvedPalette = autoPick ?? resolvePalette(style, sel.paletteId, wanted)
+  // Auto can show a dark palette on a light OS: the palette decides.
+  const resolvedScheme = resolvedPalette.schemes.includes(wanted) ? wanted : resolvedPalette.schemes[0]
   const gapsPreset =
     sel.gapsPreset && style.capabilities.gaps && style.gapPresets.includes(sel.gapsPreset)
       ? sel.gapsPreset

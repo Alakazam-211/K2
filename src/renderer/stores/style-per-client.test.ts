@@ -393,16 +393,18 @@ describe('retired style ids at every way in', () => {
       paletteId: 'paper',
       schemeMode: 'light',
       gapsPreset: 'spacious',
+      autoPalettes: { dark: 'charcoal', light: 'paper' },
     })
   })
 
-  it('readMirror maps a saved bezel to the scheme default, keeps auto, drops gaps', () => {
+  it('readMirror maps a saved bezel to Glass, keeps auto, drops gaps', () => {
     seedLocal('bezel', 'graphite', 'auto', 'spacious')
     expect(readMirror()).toEqual({
-      styleId: 'terminal',
-      paletteId: 'charcoal',
+      styleId: 'glass',
+      paletteId: 'yellow',
       schemeMode: 'auto',
       gapsPreset: '',
+      autoPalettes: { dark: 'yellow', light: 'veil' },
     })
   })
 
@@ -411,20 +413,30 @@ describe('retired style ids at every way in', () => {
     mem.set(LS_PALETTE, 'porcelain')
     mem.set(LS_SCHEME, 'light')
     restampFromLocalMirror()
-    expect(useStyleStore.getState().styleId).toBe('terminal')
-    expect(useStyleStore.getState().resolvedPaletteId).toBe('paper')
+    expect(useStyleStore.getState().styleId).toBe('glass')
+    expect(useStyleStore.getState().resolvedPaletteId).toBe('veil')
     expect(useStyleStore.getState().schemeMode).toBe('light')
-    expect(mem.get(LS_STYLE)).toBe('terminal')
+    expect(mem.get(LS_STYLE)).toBe('glass')
   })
 
-  it('a daemon that still echoes bezel seeds Terminal, without its gaps', () => {
+  it('a daemon that still echoes bezel seeds Glass Yellow, without its gaps', () => {
     clearStyleKeys()
     __setPreBootMirrorCompleteForTests(false)
     migrateStyleFromDaemon(DAEMON_BEZEL)
-    expect(useStyleStore.getState().styleId).toBe('terminal')
-    expect(useStyleStore.getState().resolvedPaletteId).toBe('charcoal')
+    expect(useStyleStore.getState().styleId).toBe('glass')
+    expect(useStyleStore.getState().resolvedPaletteId).toBe('yellow')
     expect(useStyleStore.getState().gapsPreset).toBe('')
-    expect(mem.get(LS_STYLE)).toBe('terminal')
+    expect(mem.get(LS_STYLE)).toBe('glass')
+    expect(useStyleStore.getState().accent).toBeNull()
+  })
+
+  it('a daemon echoing Bezel light seeds Veil with the gold accent', () => {
+    clearStyleKeys()
+    __setPreBootMirrorCompleteForTests(false)
+    migrateStyleFromDaemon({ id: 'bezel', palette: 'porcelain', scheme: 'light', gaps: '' })
+    expect(useStyleStore.getState().resolvedPaletteId).toBe('veil')
+    expect(mem.get('k2.accent.glass')).toBe('yellow')
+    expect(useStyleStore.getState().accent).toBe('yellow')
   })
 
   it('a daemon that still echoes square seeds Terminal', () => {

@@ -181,14 +181,19 @@ fn check_sew_live(app: &str, req: Option<&Requires>) -> Result<(), Refused> {
 /// (PA7).
 pub fn check_live(app: &str, req: Option<&Requires>) -> Result<(), Refused> {
     check_sew_live(app, req)?;
-    let Some(range) = req.and_then(|r| r.postgres.as_deref()) else { return Ok(()) };
+    let Some(pg) = req.and_then(|r| r.postgres.as_ref()) else { return Ok(()) };
     let row = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         k2_core::deploy::store::get_app(&conn, app).ok().flatten()
     };
     let Some(row) = row else { return Ok(()) };
-    super::pg_choice::check_live(&row, Some(range)).map_err(|u| Refused { code: u.code, status: u.status, msg: u.hint, extra: u.extra })
+    let checked = match pg {
+        k2_core::deploy::manifest::PgRequire::Range(range) => super::pg_choice::check_live(&row, Some(range)),
+        // 0.46.11: a named cluster (prd-named-pg-clusters-v1 §9).
+        k2_core::deploy::manifest::PgRequire::Cluster(c) => super::pg_choice::check_cluster_live(&row, c),
+    };
+    checked.map_err(|u| Refused { code: u.code, status: u.status, msg: u.hint, extra: u.extra })
 }
 
 fn to_refusal(r: Refused) -> super::routes::Refusal {

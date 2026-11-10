@@ -438,12 +438,43 @@ fn check_contract(m: &Manifest, errors: &mut Vec<Issue>, _warnings: &mut Vec<Iss
         }
         // requires.postgres (0.46.4, PA4): the form only; the App's
         // database is checked at install, deploy and re-host.
-        if let Some(range) = &req.postgres {
-            if let Err(e) = pg_range_form_ok(range) {
-                errors.push(issue("manifest_invalid", format!("requires.postgres: {e}"), Some("requires.postgres".into())));
+        match &req.postgres {
+            Some(crate::deploy::manifest::PgRequire::Range(range)) => {
+                if let Err(e) = pg_range_form_ok(range) {
+                    errors.push(issue("manifest_invalid", format!("requires.postgres: {e}"), Some("requires.postgres".into())));
+                }
             }
+            // 0.46.11: a named cluster. The form only; the box's cluster is
+            // checked at install, deploy and re-host.
+            Some(crate::deploy::manifest::PgRequire::Cluster(c)) => {
+                if !cluster_name_ok(&c.cluster) {
+                    errors.push(issue(
+                        "manifest_invalid",
+                        format!(
+                            "requires.postgres.cluster: {:?} is not a cluster name (2-24 of a-z, 0-9 and _, starting with a letter, never main)",
+                            c.cluster
+                        ),
+                        Some("requires.postgres.cluster".into()),
+                    ));
+                }
+                if c.major.is_some_and(|m| !(10..=99).contains(&m)) {
+                    errors.push(issue("manifest_invalid", "requires.postgres.major: a whole Postgres major, like 17".to_string(), Some("requires.postgres.major".into())));
+                }
+            }
+            None => {}
         }
     }
+}
+
+/// A named Postgres cluster's name (0.46.11): `^[a-z][a-z0-9_]{1,23}$`,
+/// never `main`. The same rule as `k2_root_proto::pg_named::ClusterName`
+/// (k2-core can't depend on it; the daemon's `pg_choice` tests pin both).
+pub fn cluster_name_ok(s: &str) -> bool {
+    let b = s.as_bytes();
+    (2..=24).contains(&b.len())
+        && b[0].is_ascii_lowercase()
+        && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'_')
+        && s != "main"
 }
 
 /// `requires.postgres` (PA4): `requires.k2`'s operators over whole
@@ -901,6 +932,27 @@ mod tests {
         }
         // A number, not a string: a parse error with a place.
         let (r, m) = validate_tree(&app(h.path(), &with(r#""requires":{"postgres":17}"#)), &Options::default());
+        assert!(!r.ok && m.is_none(), "{r:?}");
+        // 0.46.11 (prd-named-pg-clusters-v1 §9): a named cluster.
+        for ok in [r#""requires":{"postgres":{"cluster":"feedback","major":17}}"#, r#""requires":{"postgres":{"cluster":"feedback"}}"#] {
+            let (r, m) = validate_tree(&app(h.path(), &with(ok)), &Options::default());
+            assert!(r.ok, "{ok}: {r:?}");
+            let p = m.unwrap().requires.unwrap().postgres.unwrap();
+            assert_eq!(p.cluster().map(|c| c.cluster.as_str()), Some("feedback"), "{ok}");
+            assert!(p.range().is_none());
+        }
+        for (bad, at) in [
+            (r#""requires":{"postgres":{"cluster":"main"}}"#, "requires.postgres.cluster"),
+            (r#""requires":{"postgres":{"cluster":"Feed-back"}}"#, "requires.postgres.cluster"),
+            (r#""requires":{"postgres":{"cluster":"feedback","major":7}}"#, "requires.postgres.major"),
+        ] {
+            let (r, _) = validate_tree(&app(h.path(), &with(bad)), &Options::default());
+            assert!(!r.ok, "{bad}: {r:?}");
+            assert!(r.errors.iter().any(|e| e.at.as_deref() == Some(at) && e.code == "manifest_invalid"), "{bad}: {r:?}");
+        }
+        // Unknown keys in the object form never parse (an older daemon
+        // refuses the whole object form the same way).
+        let (r, m) = validate_tree(&app(h.path(), &with(r#""requires":{"postgres":{"cluster":"feedback","port":5434}}"#)), &Options::default());
         assert!(!r.ok && m.is_none(), "{r:?}");
         assert_eq!(pg_range_ok("17", 17), Ok(true));
         assert_eq!(pg_range_ok("17", 16), Ok(false));

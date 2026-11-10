@@ -839,6 +839,22 @@ fn apply_helper_status(
 
 // ── prepare ─────────────────────────────────────────────────────────────
 
+/// prd-named-pg-clusters-v1 §9a: with a root helper on protocol 15
+/// (`pgnamed`), the `k2app` table admits each App to its own database
+/// ports only (`per-app`, `k2app_v6`); below it, the whole band as before.
+pub fn per_app_db() -> bool {
+    crate::sql::sysops::pgnamed_ok(&root_helper::state())
+}
+
+/// The database token of `apps nft apply`.
+pub fn nft_db_token() -> String {
+    if per_app_db() {
+        k2_root_proto::verbs::NFT_DB_PER_APP.to_string()
+    } else {
+        DB_PORTS.token()
+    }
+}
+
 /// What the owner asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrepareOpts {
@@ -871,7 +887,7 @@ pub fn plan(o: &PrepareOpts) -> Vec<Vec<String>> {
             "apply",
             &GATEWAY_PORTS.token(),
             &PROXY_PORTS.token(),
-            &DB_PORTS.token(),
+            &nft_db_token(),
         ]),
         sv(&["apps", "process-unit", "on"]),
         // After the process template: its AppArmor drop-in sits next to it.
@@ -1151,14 +1167,19 @@ pub fn reapply_plan(status: Option<&J>) -> Vec<Vec<String>> {
     }
     let sv = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let mut p = Vec::new();
-    if s.pointer("/nft/current").and_then(J::as_bool) != Some(true) {
+    // 0.46.11: a protocol-15 helper's per-App table (`perApp`) replaces
+    // the band table on the next boot (prd-named-pg-clusters-v1 §9a).
+    let want_per_app = per_app_db();
+    if s.pointer("/nft/current").and_then(J::as_bool) != Some(true)
+        || (want_per_app && s.pointer("/nft/perApp").and_then(J::as_bool) != Some(true))
+    {
         p.push(sv(&[
             "apps",
             "nft",
             "apply",
             &GATEWAY_PORTS.token(),
             &PROXY_PORTS.token(),
-            &DB_PORTS.token(),
+            &nft_db_token(),
         ]));
     }
     if s.pointer("/reservedPorts/file").and_then(J::as_bool) == Some(true)
@@ -1655,7 +1676,9 @@ mod tests {
         assert_eq!(p, vec!["apps apparmor on"]);
         s["mac"] = json!({"lsm": "none", "applied": false});
         assert!(reapply_plan(Some(&s)).is_empty());
-        // Every re-apply verb is open (a tightening) on the helper's table.
+        // Every re-apply verb is open (a tightening) on the helper's table,
+        // except the band table: since 0.46.11 (protocol 15) it loosens a
+        // per-App table, so it is the daemon's own call (which this is).
         for argv in reapply_plan(Some(&{
             let mut s = good_status();
             s["nft"]["current"] = json!(false);
@@ -1664,10 +1687,12 @@ mod tests {
             s
         })) {
             let r: Vec<&str> = argv.iter().map(String::as_str).collect();
-            assert_eq!(
-                k2_root_proto::Verb::parse(&r).unwrap().class(),
+            let want = if argv.last().map(String::as_str) == Some("5432-5449") {
+                k2_root_proto::Class::Daemon
+            } else {
                 k2_root_proto::Class::Open
-            );
+            };
+            assert_eq!(k2_root_proto::Verb::parse(&r).unwrap().class(), want, "{argv:?}");
         }
     }
 
@@ -1710,4 +1735,52 @@ mod tests {
         f.disk_free = vec![];
         assert!(!doctor(&f)["checks"].as_array().unwrap().iter().any(|c| c["id"] == "disk"));
     }
+
+    /// prd-named-pg-clusters-v1 §9a: a protocol-15 helper (`pgnamed`) gets
+    /// the per-App table at prepare and on the boot re-apply (until it is
+    /// on); an older helper keeps the band, as before.
+    #[test]
+    fn per_app_db_table_follows_the_helper() {
+        use crate::root_helper::{test_seam, Kind, RootHelperState};
+        let base = PrepareOpts { runtime: OciRuntime::Crun, cores_mem_min_mib: None, budget: None };
+        let nft = |p: &[Vec<String>]| p.iter().map(|a| a.join(" ")).find(|a| a.starts_with("apps nft apply")).unwrap_or_default();
+        test_seam::set(None);
+        assert_eq!(nft(&plan(&base)), "apps nft apply 38600-38899 38900-38999 5432-5449");
+        let mut s = good_status();
+        s["nft"] = json!({"table": true, "current": true, "perApp": false});
+        assert!(nft(&reapply_plan(Some(&s))).is_empty(), "an older helper: the band table is current");
+        let mut st = RootHelperState::missing();
+        st.kind = Kind::Root;
+        st.protocol = 15;
+        st.version_json = Some(json!({"protocol": 15, "namespaces": {"pgnamed": true}}));
+        test_seam::set(Some(st.clone()));
+        assert_eq!(nft(&plan(&base)), "apps nft apply 38600-38899 38900-38999 per-app");
+        assert_eq!(nft(&reapply_plan(Some(&s))), "apps nft apply 38600-38899 38900-38999 per-app");
+        s["nft"]["perApp"] = json!(true);
+        assert!(nft(&reapply_plan(Some(&s))).is_empty(), "already on the per-App table");
+        // Protocol 15 without the flag (another lane's 15): the band.
+        st.version_json = Some(json!({"protocol": 15, "namespaces": {}}));
+        test_seam::set(Some(st));
+        assert_eq!(nft(&plan(&base)), "apps nft apply 38600-38899 38900-38999 5432-5449");
+        test_seam::set(None);
+        for argv in plan(&base) {
+            let r: Vec<&str> = argv.iter().map(String::as_str).collect();
+            assert!(k2_root_proto::Verb::parse(&r).is_ok(), "{argv:?}");
+        }
+        // The gateway rule carries --db only for a protocol-15 helper.
+        assert_eq!(
+            super::super::guarded::gateway_rule_argv("fb", 38_601, &[8470], Some(&[5434])).join(" "),
+            "apps nft app fb 38601 8470 --db 5434"
+        );
+        assert_eq!(super::super::guarded::gateway_rule_argv("fb", 38_601, &[], Some(&[])).join(" "), "apps nft app fb 38601 --db");
+        assert_eq!(super::super::guarded::gateway_rule_argv("fb", 38_601, &[], None).join(" "), "apps nft app fb 38601");
+        for a in [
+            super::super::guarded::gateway_rule_argv("fb", 38_601, &[8470], Some(&[5432, 5434])),
+            super::super::guarded::gateway_rule_argv("fb", 38_601, &[], Some(&[])),
+        ] {
+            let r: Vec<&str> = a.iter().map(String::as_str).collect();
+            assert!(k2_root_proto::Verb::parse(&r).is_ok(), "{a:?}");
+        }
+    }
 }
+

@@ -542,13 +542,20 @@ pub fn install_gateway_rule(app: &str, gw: u16) -> std::result::Result<(), Strin
     if !st.usable(k2_root_proto::version::APPS_MIN_PROTOCOL) {
         return Err("the root helper is older than protocol 6".into());
     }
-    crate::root_helper::call_text(&gateway_rule_argv(app, gw, &super::box_service_routes::allowed_ports(app)), None).map(|_| ())
+    // 0.46.11 (protocol 15, prd-named-pg-clusters-v1 §9a): the App's own
+    // database ports ride every install, for the per-App table.
+    let db = crate::sql::sysops::pgnamed_ok(&st).then(|| super::pg_choice::door_ports(app));
+    crate::root_helper::call_text(&gateway_rule_argv(app, gw, &super::box_service_routes::allowed_ports(app), db.as_deref()), None).map(|_| ())
 }
 
-/// `apps nft app <id> <gw> [<box port>…]`.
-pub fn gateway_rule_argv(app: &str, gw: u16, box_ports: &[u16]) -> Vec<String> {
+/// `apps nft app <id> <gw> [<box port>…] [--db <port>…]`.
+pub fn gateway_rule_argv(app: &str, gw: u16, box_ports: &[u16], db_ports: Option<&[u16]>) -> Vec<String> {
     let mut a: Vec<String> = vec!["apps".into(), "nft".into(), "app".into(), app.into(), gw.to_string()];
     a.extend(box_ports.iter().map(u16::to_string));
+    if let Some(d) = db_ports {
+        a.push("--db".into());
+        a.extend(d.iter().map(u16::to_string));
+    }
     a
 }
 

@@ -270,8 +270,48 @@ pub struct Requires {
     /// outside it. `k2 app validate` checks only the form. **Needs K2
     /// 0.46.4**: older daemons refuse a manifest carrying it (pair it with
     /// `requires.k2: ">=0.46.4"`).
+    ///
+    /// 0.46.11 (prd-named-pg-clusters-v1 §9): or `{"cluster": "feedback",
+    /// "major": 17}`, a named cluster the App's database must live in (its
+    /// major, if given, must be the cluster's). **Needs K2 0.46.11**: older
+    /// daemons refuse the object form (pair it with `requires.k2:
+    /// ">=0.46.11"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub postgres: Option<String>,
+    pub postgres: Option<PgRequire>,
+}
+
+/// `requires.postgres`: a major range (0.46.4) or a named cluster (0.46.11).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PgRequire {
+    Range(String),
+    Cluster(PgClusterRequire),
+}
+
+/// `requires.postgres: {"cluster": "<name>", "major": <M>?}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PgClusterRequire {
+    pub cluster: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub major: Option<u32>,
+}
+
+impl PgRequire {
+    /// The major range form, if that is the form.
+    pub fn range(&self) -> Option<&str> {
+        match self {
+            Self::Range(r) => Some(r),
+            Self::Cluster(_) => None,
+        }
+    }
+    /// The named-cluster form, if that is the form.
+    pub fn cluster(&self) -> Option<&PgClusterRequire> {
+        match self {
+            Self::Range(_) => None,
+            Self::Cluster(c) => Some(c),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

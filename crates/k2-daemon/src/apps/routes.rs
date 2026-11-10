@@ -843,8 +843,20 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
                 .ok_or_else(|| no(codes::BAD_REQUEST, 400, "pgMajor must be a Postgres major number, like 17"))?,
         ),
     };
-    let db_plan = super::pg_choice::install_plan_live(&app_id, &ws.id, requires.as_ref().and_then(|r| r.postgres.as_deref()), pg_pick)
-        .map_err(|u| {
+    let pg_req = requires.as_ref().and_then(|r| r.postgres.as_ref());
+    let db_plan = match pg_req.and_then(|p| p.cluster()) {
+        // 0.46.11: a named cluster (prd-named-pg-clusters-v1 §9); --pg-major
+        // doesn't apply (the cluster's major is fixed).
+        Some(c) if pg_pick.is_some() => Err(super::pg_choice::Unmet {
+            code: codes::BAD_REQUEST,
+            status: 400,
+            hint: format!("{app_id} requires the named cluster {}: leave out --pg-major", c.cluster),
+            extra: json!({}),
+        }),
+        Some(c) => super::pg_choice::install_plan_cluster_live(&app_id, &ws.id, c),
+        None => super::pg_choice::install_plan_live(&app_id, &ws.id, pg_req.and_then(|p| p.range()), pg_pick),
+    }
+    .map_err(|u| {
             let mut r = no(u.code, u.status, u.hint);
             r.extra = Some(u.extra);
             r

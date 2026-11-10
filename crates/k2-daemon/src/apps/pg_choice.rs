@@ -21,7 +21,7 @@
 //!   database on a major (then its `DATABASE_URL` reference), or refuse.
 //!   Install never moves a database.
 
-use k2_core::deploy::manifest::Manifest;
+use k2_core::deploy::manifest::{Manifest, PgClusterRequire, PgRequire};
 use k2_core::deploy::store::{self, AppRow};
 use k2_core::deploy::validate::pg_range_ok;
 use k2_root_proto::pg_major::SUPPORTED;
@@ -142,8 +142,8 @@ pub fn db_of(app: &AppRow) -> DbOf {
     resolve(&url, &|n| known_db_in(&conn, n), default_db_in(&conn, &app.owner_workspace))
 }
 
-/// The live Seed's `requires.postgres`.
-pub fn range_of(app: &AppRow) -> Option<String> {
+/// The live Seed's `requires.postgres`, either form.
+pub fn requires_of(app: &AppRow) -> Option<PgRequire> {
     let seed = app.live_seed.as_deref()?;
     let row = {
         let k2db = k2_core::db::shared();
@@ -151,6 +151,11 @@ pub fn range_of(app: &AppRow) -> Option<String> {
         store::get_seed(&conn, seed).ok().flatten()?
     };
     serde_json::from_value::<Manifest>(row.manifest).ok()?.requires?.postgres
+}
+
+/// The live Seed's `requires.postgres` major range (the 0.46.4 form).
+pub fn range_of(app: &AppRow) -> Option<String> {
+    requires_of(app)?.range().map(str::to_string)
 }
 
 fn grantee_projects_in(conn: &rusqlite::Connection, db: &str) -> Vec<String> {
@@ -298,6 +303,149 @@ pub fn check_live(app: &AppRow, range: Option<&str>) -> Result<(), Unmet> {
         });
     }
     check(&app.app_id, range, &db_of(app))
+}
+
+// ── named clusters (0.46.11, prd-named-pg-clusters-v1 §9) ──────────────
+
+fn unmet(hint: String, extra: J) -> Unmet {
+    Unmet { code: k2_core::deploy::codes::REQUIRES_UNMET, status: 409, hint, extra }
+}
+
+fn create_hint(cluster: &str) -> String {
+    format!("create it there: k2 db create --cluster {cluster} --name <db>, then point the App's DATABASE_URL at it (k2 db dsn --ref --db <db>)")
+}
+
+/// Pure: the App's database against `requires.postgres: {cluster, major?}`.
+/// `cluster_of(db)` = the named cluster (name, major) a K2 database lives
+/// in, `None` for `<M>/main`. A database K2 doesn't manage never passes
+/// (a hand-made cluster is never offered to an App).
+pub fn check_cluster(app: &str, req: &PgClusterRequire, db: &DbOf, cluster_of: &dyn Fn(&str) -> Option<(String, u32)>) -> Result<(), Unmet> {
+    let c = req.cluster.as_str();
+    let extra = json!({ "requires": { "cluster": c, "major": req.major } });
+    match db {
+        DbOf::Unknown(why) => Err(unmet(
+            format!("{app} needs its database in the named cluster {c}, and {why}: a K2 database in {c} is the only one it may use; {}", create_hint(c)),
+            extra,
+        )),
+        DbOf::None => Err(unmet(format!("{app} needs a database in the named cluster {c} and its workspace has none; {}", create_hint(c)), extra)),
+        DbOf::Known(r) => match cluster_of(&r.name) {
+            Some((n, m)) if n == c && req.major.is_none_or(|want| want == m) => Ok(()),
+            Some((n, m)) if n == c => Err(unmet(
+                format!("{app} needs the named cluster {c} on Postgres {}, and {c} is Postgres {m}", req.major.unwrap_or_default()),
+                extra,
+            )),
+            other => {
+                let where_ = other.map(|(n, m)| format!("{m}/{n}")).unwrap_or_else(|| format!("{}/main", r.major));
+                Err(unmet(
+                    format!(
+                        "{app} needs its database in the named cluster {c}, and its database {} lives in {where_}. K2 doesn't move databases between clusters: {}",
+                        r.name,
+                        create_hint(c)
+                    ),
+                    extra,
+                ))
+            }
+        },
+    }
+}
+
+/// The named cluster a K2 database lives in: (name, major); `None` for
+/// `<M>/main` or no record.
+pub fn named_cluster_of_db(name: &str) -> Option<(String, u32)> {
+    let k2db = k2_core::db::shared();
+    let conn = k2db.lock();
+    let n = crate::sql::cluster::db_cluster_name_in(&conn, name)?;
+    let m = crate::sql::cluster::db_major_in(&conn, name).unwrap_or(0);
+    Some((n, m))
+}
+
+/// Live: the App's database against its cluster requirement.
+pub fn check_cluster_live(app: &AppRow, req: &PgClusterRequire) -> Result<(), Unmet> {
+    if !crate::sql::sql_supported() && !cfg!(test) {
+        return Err(unmet(format!("{} needs a Postgres database; K2 runs Postgres on Linux boxes only", app.app_id), json!({})));
+    }
+    let db = db_of(app);
+    check_cluster(&app.app_id, req, &db, &named_cluster_of_db)
+}
+
+/// Install with a cluster requirement: the cluster must be K2's (never a
+/// hand-made one), and the workspace must have exactly one database in it
+/// (install never creates in a named cluster: the person picks the name
+/// and points the App's DATABASE_URL at it).
+pub fn install_plan_cluster_live(app: &str, workspace: &str, req: &PgClusterRequire) -> Result<InstallDb, Unmet> {
+    let c = req.cluster.as_str();
+    let extra = json!({ "requires": { "cluster": c, "major": req.major } });
+    if !crate::sql::sql_supported() && !cfg!(test) {
+        return Err(unmet(format!("{app} needs a Postgres database; K2 runs Postgres on Linux boxes only"), extra));
+    }
+    let k2db = k2_core::db::shared();
+    let conn = k2db.lock();
+    let Some(cl) = crate::sql::cluster::for_name_in(&conn, c) else {
+        return Err(unmet(
+            format!("{app} needs the named cluster {c}, and this box has none by that name: make it with k2 db cluster create <major> --name {c}"),
+            extra,
+        ));
+    };
+    if cl.role != "k2" || cl.origin != "created" {
+        return Err(unmet(format!("{app} needs the named cluster {c}, and {} isn't one K2 made: K2 never offers it to an App", cl.label()), extra));
+    }
+    if req.major.is_some_and(|m| m != cl.major) {
+        return Err(unmet(format!("{app} needs {c} on Postgres {}, and {} is Postgres {}", req.major.unwrap_or_default(), cl.label(), cl.major), extra));
+    }
+    let names: Vec<String> = conn
+        .prepare("SELECT name FROM sql_databases WHERE project_id = ?1 AND status = 'active' AND cluster_name = ?2 ORDER BY created_at")
+        .and_then(|mut st| st.query_map(rusqlite::params![workspace, cl.name], |r| r.get::<_, String>(0)).map(|it| it.flatten().collect()))
+        .unwrap_or_default();
+    match names.as_slice() {
+        [one] => Ok(InstallDb::Fits(one.clone(), cl.major)),
+        [] => Err(unmet(format!("{app} needs a database in {} and its workspace has none there; {}", cl.label(), create_hint(c)), extra)),
+        many => Err(unmet(
+            format!("{app} needs a database in {}, and the workspace has {} there ({}): install with one", cl.label(), many.len(), many.join(", ")),
+            extra,
+        )),
+    }
+}
+
+/// prd-named-pg-clusters-v1 §9a: the database ports the `k2app` per-App
+/// table admits this App to: the ports of the K2 clusters (never a foreign
+/// one) holding a database its workspace owns or is granted, plus its own
+/// database's. Band ports only, at most `MAX_DB_PORTS`.
+pub fn door_ports(app_id: &str) -> Vec<u16> {
+    if !crate::sql::sql_supported() && !cfg!(test) {
+        return Vec::new();
+    }
+    let row = {
+        let k2db = k2_core::db::shared();
+        let conn = k2db.lock();
+        store::get_app(&conn, app_id).ok().flatten()
+    };
+    let Some(row) = row else { return Vec::new() };
+    let own = match db_of(&row) {
+        DbOf::Known(r) => Some(r.name),
+        _ => None,
+    };
+    let k2db = k2_core::db::shared();
+    let conn = k2db.lock();
+    let mut names: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sql_databases WHERE project_id = ?1 AND status IN ('active', 'test') \
+             UNION SELECT d.name FROM sql_grants g JOIN sql_databases d ON d.id = g.database_id \
+             WHERE g.project_id = ?1 AND d.status = 'active'",
+        )
+        .and_then(|mut st| st.query_map(rusqlite::params![row.owner_workspace], |r| r.get::<_, String>(0)).map(|it| it.flatten().collect()))
+        .unwrap_or_default();
+    names.extend(own);
+    let mut ports: Vec<u16> = names
+        .iter()
+        .filter_map(|n| crate::sql::cluster::for_db_in(&conn, n).ok())
+        .filter(|c| c.holds_k2_databases() && c.major > 0)
+        .map(|c| c.port)
+        .filter(|p| k2_root_proto::pg_major::in_band(*p))
+        .collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports.truncate(k2_root_proto::apps::MAX_DB_PORTS);
+    ports
 }
 
 // ── install (PA7) ─────────────────────────────────────────────────────
@@ -451,14 +599,20 @@ pub fn database_json(app: &AppRow) -> J {
                 .copied()
                 .filter(|m| *m > r.major && range.as_deref().is_none_or(|rg| pg_range_ok(rg, *m) == Ok(true)))
                 .collect();
-            json!({
+            let named = named_cluster_of_db(&r.name);
+            let mut v = json!({
                 "name": r.name,
                 "major": r.major,
                 "source": r.source,
                 "sharedWith": shared,
                 "requires": range,
-                "available": available,
-            })
+                // A named cluster keeps its major (prd-named-pg-clusters-v1).
+                "available": if named.is_some() { vec![] } else { available },
+            });
+            if let Some((n, m)) = named {
+                v["cluster"] = json!(k2_root_proto::pg_named::label(m, &n));
+            }
+            v
         }
     }
 }
@@ -580,4 +734,44 @@ mod tests {
         assert_eq!((u.code, u.status), (MAJOR_UNSUPPORTED, 400));
         assert_eq!(install_plan("jobs", Some("18"), None, None).unwrap_err().code, MAJOR_UNSUPPORTED);
     }
+
+    /// prd-named-pg-clusters-v1 §9: a cluster requirement passes only for a
+    /// K2 database in that named cluster; a database K2 doesn't manage (a
+    /// DATABASE_URL into a hand-made cluster) never does.
+    #[test]
+    fn cluster_requirement() {
+        let req = PgClusterRequire { cluster: "feedback".into(), major: Some(17) };
+        let of = |n: &str| match n {
+            "feedback" => Some(("feedback".to_string(), 17)),
+            "audit" => Some(("audit".to_string(), 17)),
+            _ => None,
+        };
+        let db = |name: &str, major: u32| DbOf::Known(DbRef { name: name.into(), project_id: "w1".into(), major, source: Source::Ref });
+        assert!(check_cluster("fb", &req, &db("feedback", 17), &of).is_ok());
+        let e = check_cluster("fb", &req, &db("ws_jobs", 16), &of).unwrap_err();
+        assert_eq!(e.code, k2_core::deploy::codes::REQUIRES_UNMET);
+        assert!(e.hint.contains("lives in 16/main") && e.hint.contains("k2 db create --cluster feedback"), "{}", e.hint);
+        assert!(check_cluster("fb", &req, &db("audit", 17), &of).unwrap_err().hint.contains("lives in 17/audit"));
+        let e = check_cluster("fb", &req, &DbOf::Unknown("its DATABASE_URL names k2x_mirror, which isn't a K2 database on this server".into()), &of).unwrap_err();
+        assert!(e.hint.contains("k2x_mirror") && e.hint.contains("the only one it may use"), "{}", e.hint);
+        assert!(check_cluster("fb", &req, &DbOf::None, &of).is_err());
+        let wrong_major = PgClusterRequire { cluster: "feedback".into(), major: Some(16) };
+        assert!(check_cluster("fb", &wrong_major, &db("feedback", 17), &of).unwrap_err().hint.contains("is Postgres 17"));
+        let any_major = PgClusterRequire { cluster: "feedback".into(), major: None };
+        assert!(check_cluster("fb", &any_major, &db("feedback", 17), &of).is_ok());
+    }
+
+    /// k2-core's manifest check and the root helper's token agree on what
+    /// a cluster name is.
+    #[test]
+    fn cluster_name_rules_agree() {
+        for n in ["feedback", "fb", "k2db", "a_1", "main", "Main", "f", "fb-x", "1fb", "_x", "", "x".repeat(24).as_str(), "x".repeat(25).as_str(), "fé"] {
+            assert_eq!(
+                k2_core::deploy::validate::cluster_name_ok(n),
+                k2_root_proto::pg_named::ClusterName::parse(n).is_some(),
+                "{n:?}"
+            );
+        }
+    }
 }
+

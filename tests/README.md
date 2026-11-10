@@ -18,23 +18,20 @@ maps them so any future agent can answer "where do the tests live" and
 ## 1. Shell behavior tests — `tests/` (this folder)
 
 Exercise the full running system over HTTP/filesystem. Each tier has
-different prerequisites, listed below. All four scripts are
-self-contained and print colored PASS/FAIL summaries.
+different prerequisites, listed below. Both scripts are
+self-contained and print colored PASS/FAIL summaries. Headless checks
+against a sandbox daemon (temp HOME, no setup) live in `tests/cli/`;
+the hook pipeline's `k2 hooks status` check is `tests/cli/hooks_status.sh`.
 
 | File | What it covers | Needs daemon running? | Needs workspace registered? |
 |---|---|---|---|
-| `behavior-test-tier3.sh` | Migrations, template content, CLI script correctness, Rust invariants via grep | no | no |
 | `behavior-test-tier1.sh` | Filesystem state after CLI calls — lock files, CLAUDE.md scaffolds, event queue, triage summary | **yes** | no |
-| `behavior-test-tier2.sh` | DB-dependent flows — source gating, workspace state, hook pipeline, scheduler-tick | **yes** | **yes** |
 | `cli-integration-test.sh` | End-to-end CLI surface — every verb tested against a live daemon | **yes** | **yes** |
 
 ### Running
 
 ```bash
-# Tier 3 — no setup needed. Start here on a cold machine.
-bash tests/behavior-test-tier3.sh
-
-# Tiers 1 / 2 / cli-integration — need a running daemon and, for 2 + cli,
+# Tier 1 / cli-integration — need a running daemon and, for cli,
 # a registered test workspace.
 #
 # 1. Point TEST_WORKSPACE at a git-initialized dir. Default is
@@ -46,9 +43,8 @@ sqlite3 ~/.k2/k2.db "INSERT OR REPLACE INTO projects \
     (id, path, name, color, agent_mode, pinned, tab_order, heartbeat_mode) \
     VALUES ('cli-test', '$TEST_WORKSPACE', 'cli-test', \
     '#888', 'manager', 0, 99, 'heartbeat')"
-# 3. Run whichever tier(s) you want:
+# 3. Run whichever you want:
 bash tests/behavior-test-tier1.sh
-bash tests/behavior-test-tier2.sh
 bash tests/cli-integration-test.sh
 ```
 
@@ -56,12 +52,10 @@ bash tests/cli-integration-test.sh
 
 | File | Pass / Fail / Skip |
 |---|---|
-| tier3 | 385 / 0 / 4 |
 | tier1 | 19 / 0 / 4 |
-| tier2 | 16 / 0 / 0 |
 | cli-integration | 111 / 0 / 0 |
 
-The tier1/tier2 skips are all "project row not found in DB" branches
+The tier1 skips are all "project row not found in DB" branches
 guarded on the test workspace not being registered. If you register
 the workspace, the skips convert to real assertions.
 
@@ -233,13 +227,8 @@ cargo test --release --workspace
 bun run typecheck:web && bun run test
 
 # Shell suites that work without manual setup.
-bash tests/behavior-test-tier3.sh
 bash tests/behavior-test-tier1.sh
 bash tests/cli-integration-test.sh
-
-# Tier 2 needs the test workspace registered in K2SO UI first
-# (see "Running" under section 1).
-bash tests/behavior-test-tier2.sh
 ```
 
 Current totals (0.37.0):
@@ -249,7 +238,6 @@ Current totals (0.37.0):
 - Tauri lib: 76 passing
 - Vitest: 133 passing (2 known pre-existing failures, see section 6)
 - Shell tier 1: 19 passing
-- Shell tier 3: 385 passing
 - Shell CLI integration: 110 passing
 
 ---
@@ -257,7 +245,8 @@ Current totals (0.37.0):
 ## How to wire a new test
 
 **New behavior / user-visible flow** → add to the relevant tier. Most
-go to tier1 (filesystem) or tier2 (DB). Full-surface regressions go in
+go to tier1 (filesystem) or a headless `tests/cli/` script (sandbox
+daemon). Full-surface regressions go in
 `cli-integration-test.sh`.
 
 **New core module** → add an integration file in

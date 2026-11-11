@@ -78,8 +78,11 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   isCollapsed: bootChrome?.sidebarCollapsed ?? false,
   width: SIDEBAR_DEFAULT_WIDTH,
 
+  // While the setup checklist shows, the nav doesn't collapse (⌘B, the
+  // button, any caller); opening a collapsed one still works.
   toggle: () => {
     const next = !get().isCollapsed
+    if (next && isSetupChecklistShowing()) return
     set({ isCollapsed: next })
     persistCollapsed(next)
   },
@@ -88,6 +91,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     set({ width: nextSavedSidebarWidth(get().width, width, isSetupChecklistShowing()) }),
 
   collapse: () => {
+    if (isSetupChecklistShowing()) return
     set({ isCollapsed: true })
     persistCollapsed(true)
   },

@@ -3,7 +3,7 @@
 // While the setup checklist shows, the sidebar isn't drawn narrower than
 // SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH and its collapse button is hidden. A
 // narrower saved width is drawn at the floor and kept, so it comes back once
-// the checklist goes.
+// the checklist goes. ⌘B (the store's toggle) doesn't collapse the nav either.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -169,5 +169,37 @@ describe('sidebar collapse button', () => {
     render(<SidebarCollapseButton />)
     expect(screen.queryByRole('button', { name: 'Open workspaces sidebar' })).not.toBeNull()
     expect(useSidebarStore.getState().isCollapsed).toBe(true)
+  })
+})
+
+describe('sidebar toggle (⌘B)', () => {
+  const collapsed = (): boolean => useSidebarStore.getState().isCollapsed
+
+  it("doesn't collapse an open nav while the checklist shows", () => {
+    showChecklist()
+    useSidebarStore.getState().toggle()
+    expect(collapsed()).toBe(false)
+    useSidebarStore.getState().collapse()
+    expect(collapsed()).toBe(false)
+  })
+
+  it('still opens a collapsed nav while the checklist shows', () => {
+    useSidebarStore.setState({ isCollapsed: true })
+    showChecklist()
+    useSidebarStore.getState().toggle()
+    expect(collapsed()).toBe(false)
+    useSidebarStore.getState().toggle()
+    expect(collapsed()).toBe(false)
+  })
+
+  it('collapses as before once the checklist stops showing', () => {
+    showChecklist()
+    hideChecklist()
+    useSidebarStore.getState().toggle()
+    expect(collapsed()).toBe(true)
+    useSidebarStore.getState().toggle()
+    expect(collapsed()).toBe(false)
+    useSidebarStore.getState().collapse()
+    expect(collapsed()).toBe(true)
   })
 })

@@ -18,8 +18,7 @@ import { fetchHandoverPlan, requestHandover, type HandoverOptions, type Handover
 import { APP_APPROVE_CONFIRM_ACTION, approveAppRequest } from './app-approvals-api'
 import { vaultApi } from './vault-api'
 import { SettingDropdown } from '../controls/SettingControls'
-
-const muted = 'text-[var(--color-text-muted)]'
+import { AccessSheet, DIALOG_FIELD, DIALOG_LABEL, DIALOG_MUTED, Field } from './AccessDialogs'
 
 type Step =
   | { kind: 'pick' }
@@ -101,7 +100,7 @@ export function AppHandoverSheet({
         setStep({ kind: 'password', request, method: pw })
         return
       }
-      setError('No way to confirm on this server: set a vault password (k2 vault password set). The card waits in App Approvals.')
+      setError('there is no way to confirm it’s you on this server yet. Set a vault password on the Vault page; the request waits in App Approvals')
     } catch (e) {
       setError(daemonErrorText(e))
       if (to) await loadPlan(to, opts, true)
@@ -121,15 +120,42 @@ export function AppHandoverSheet({
   }
 
   const plan = step.kind === 'plan' ? step.plan : null
+  const verb = parked ? 'Unpark' : 'Hand over'
+  const working = step.kind === 'confirming'
   return (
-    <div className="pl-9 space-y-2" data-testid={`apps-handover-${appId}`}>
-      <div className="flex items-center gap-2 flex-wrap">
+    <AccessSheet
+      title={`${verb} ${appId}`}
+      intro={
+        parked
+          ? 'Pick the agent that keeps it up from now on. K2 shows what moves before anything does.'
+          : 'Pick the agent that takes it over. K2 shows what moves before anything does, and you can undo it for 72 hours.'
+      }
+      onClose={onClose}
+      busy={working}
+      testId={`apps-handover-${appId}`}
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={working}>
+            Cancel
+          </Button>
+          {step.kind === 'password' ? (
+            <Button variant="accent" size="md" onClick={() => void submitPassword(step.request, step.method)}>
+              Confirm
+            </Button>
+          ) : (
+            <Button variant="accent" size="md" disabled={!plan || !plan.ready || working} onClick={() => void handOver()}>
+              {working ? 'Confirming…' : verb}
+            </Button>
+          )}
+        </>
+      }
+    >
+      <Field label="Agent" htmlFor={`handover-to-${appId}`}>
         <SettingDropdown
-          compact
+          fullWidth
           menuAlign="left"
-          className="min-w-0 max-w-[240px]"
           ariaLabel={`Agent for ${appId}`}
-          placeholder="Hand it to…"
+          placeholder="Pick an agent"
           value={to}
           options={choices.map((p) => ({ value: p.id, label: p.name }))}
           onChange={(v) => {
@@ -139,31 +165,31 @@ export function AppHandoverSheet({
             void loadPlan(v, opts)
           }}
         />
-        <Button variant="ghost" onClick={onClose}>
-          Close
-        </Button>
-      </div>
-      {step.kind === 'planning' ? <p className={`type-hint ${muted}`}>Working out what moves…</p> : null}
+      </Field>
+      {step.kind === 'planning' ? <p className={DIALOG_MUTED}>Working out what moves…</p> : null}
       {plan ? (
-        <div className="space-y-2" data-testid={`apps-handover-${appId}-plan`}>
-          <ul className="space-y-1 type-hint text-[var(--color-text-secondary)] list-disc pl-4">
-            {plan.lines.map((l, i) => (
-              <li key={i}>{l}</li>
-            ))}
-          </ul>
+        <div className="space-y-3" data-testid={`apps-handover-${appId}-plan`}>
+          <div>
+            <p className={DIALOG_LABEL}>What moves</p>
+            <ul className="space-y-1 type-hint text-[var(--color-text-secondary)] list-disc pl-5 leading-relaxed">
+              {plan.lines.map((l, i) => (
+                <li key={i}>{l}</li>
+              ))}
+            </ul>
+          </div>
           {plan.blockers.map((b) => (
-            <Callout key={b.code} tone="error" data-testid={`apps-handover-${appId}-blocker`}>
+            <Callout key={b.code} tone="error" className="type-hint" data-testid={`apps-handover-${appId}-blocker`}>
               {b.hint}
             </Callout>
           ))}
           {plan.databaseCase === 'shared' ? (
-            <label className="flex items-center gap-2 type-hint">
+            <label className="flex items-start gap-2 type-hint text-[var(--color-text-primary)] cursor-pointer">
               <Checkbox checked={opts.db === 'share'} onChange={(e) => setOpt({ ...opts, db: e.target.checked ? 'share' : undefined })} />
               Share the database (the old agent keeps access to this App’s data)
             </label>
           ) : null}
           {plan.collisions ? (
-            <label className="flex items-center gap-2 type-hint">
+            <label className="flex items-start gap-2 type-hint text-[var(--color-text-primary)] cursor-pointer">
               <Checkbox
                 checked={opts.collisions === 'use_b'}
                 onChange={(e) => setOpt({ ...opts, collisions: e.target.checked ? 'use_b' : undefined })}
@@ -172,33 +198,24 @@ export function AppHandoverSheet({
             </label>
           ) : null}
           {plan.sharedGuests > 0 ? (
-            <label className="flex items-center gap-2 type-hint">
+            <label className="flex items-start gap-2 type-hint text-[var(--color-text-primary)] cursor-pointer">
               <Checkbox checked={opts.resetShared === true} onChange={(e) => setOpt({ ...opts, resetShared: e.target.checked || undefined })} />
               Take over the guests who also use the old agent’s other Apps (they keep this App and set a new password)
             </label>
           ) : null}
-          <Button disabled={!plan.ready} onClick={() => void handOver()}>
-            {parked ? 'Unpark' : 'Hand over'}
-          </Button>
         </div>
       ) : null}
-      {step.kind === 'confirming' ? <p className={`type-hint ${muted}`}>Confirm it’s you…</p> : null}
+      {step.kind === 'confirming' ? <p className={DIALOG_MUTED}>Confirm it’s you…</p> : null}
       {step.kind === 'password' ? (
-        <div className="flex items-center gap-2">
-          <Input
-            ref={pwRef}
-            type="password"
-            aria-label="Password to confirm"
-            className="type-control"
-          />
-          <Button onClick={() => void submitPassword(step.request, step.method)}>Confirm</Button>
-        </div>
+        <Field label="Your password" htmlFor={`handover-pw-${appId}`} hint="K2 asks for it to confirm it’s you.">
+          <Input id={`handover-pw-${appId}`} ref={pwRef} type="password" aria-label="Password to confirm" className={DIALOG_FIELD} />
+        </Field>
       ) : null}
       {error ? (
-        <Callout tone="error" data-testid={`apps-handover-${appId}-error`}>
-          {error}
+        <Callout tone="error" role="alert" className="type-hint" data-testid={`apps-handover-${appId}-error`}>
+          Couldn’t {verb.toLowerCase()} {appId}. Nothing moved. The server said: {error.trim().replace(/[.\s]+$/, '')}.
         </Callout>
       ) : null}
-    </div>
+    </AccessSheet>
   )
 }

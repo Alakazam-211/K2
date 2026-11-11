@@ -27,7 +27,7 @@
 // a change on the card shows at once). It never refetches the projects list.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Callout } from '@/components/ui'
+import { Button, Callout, OverflowMenu, type OverflowMenuItem } from '@/components/ui'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { accessLossOf, type AppLoss } from '@/lib/app-access-loss'
 import { useSettingsStore } from '@/stores/settings'
@@ -35,7 +35,16 @@ import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
-import { SettingsGroup } from '../controls/SettingControls'
+import {
+  AVATAR_ROUND,
+  SETTING_LIST_ROW_HOVER,
+  SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
+  SettingsGroup,
+  SettingsLoadState,
+} from '../controls/SettingControls'
+import { AccessSheet } from './AccessDialogs'
+import { AppMonogram, StatusDot, appStateWords } from './apps-ui'
 import {
   APP_CORES,
   dismissReview,
@@ -43,13 +52,11 @@ import {
   fetchHandovers,
   fetchReview,
   finishHandover,
-  memoryLabel,
   needsOwner,
   parkApp,
   parseAppCores,
   postgresChip,
   requestUndo,
-  stateLabel,
   uninstallApp,
   type BoxApp,
   type HandoverRow,
@@ -60,9 +67,6 @@ import { AppHandoverSheet, approveWithConfirm } from './AppHandoverSheet'
 import { APP_APPROVE_CONFIRM_ACTION } from './app-approvals-api'
 import { vaultApi } from './vault-api'
 import { isAppsOff } from './apps-server-api'
-
-const muted = 'text-[var(--color-text-muted)]'
-const secondary = 'text-[var(--color-text-secondary)]'
 
 type Load = { kind: 'loading' } | { kind: 'off' } | { kind: 'ready'; apps: BoxApp[] } | { kind: 'error'; text: string }
 
@@ -78,8 +82,8 @@ function accessLine(app: BoxApp, project: ProjectWithWorkspaces | undefined): st
   const full = build && (project ? (project.agentsCanManageAppsFull ?? 0) === 1 : app.manageEndToEnd === true)
   const cores = project ? parseAppCores(project.appCores ?? '[]') : app.cores
   const names = APP_CORES.filter((c) => cores.includes(c.id)).map((c) => c.label)
-  const sw = !build ? 'Build and run Apps off' : full ? 'Build and run, manage end to end' : 'Build and run Apps'
-  return `${sw} · uses ${names.length ? names.join(', ') : 'no cores'}`
+  const sw = !build ? 'Can’t build Apps' : full ? 'Builds, runs and fully manages its Apps' : 'Builds and runs its Apps'
+  return `${sw} · ${names.length ? `uses ${names.join(', ')}` : 'uses no shared services'}`
 }
 
 export function AppsBoxSection(): React.JSX.Element | null {
@@ -142,14 +146,14 @@ export function AppsBoxSection(): React.JSX.Element | null {
     }
   }, [refresh, activeHost])
 
-  const act = async (key: string, ok: string, f: () => Promise<void>): Promise<void> => {
+  const act = async (key: string, ok: string, f: () => Promise<void>, what = 'That didn’t work'): Promise<void> => {
     setBusy(key)
     setNotice(null)
     try {
       await f()
       setNotice({ tone: 'ok', text: ok })
     } catch (e) {
-      setNotice({ tone: 'error', text: daemonErrorText(e) })
+      setNotice({ tone: 'error', text: `${what}: ${daemonErrorText(e)}. Nothing changed; try again.` })
     } finally {
       setBusy(null)
       setConfirmUninstall(null)
@@ -163,14 +167,17 @@ export function AppsBoxSection(): React.JSX.Element | null {
     try {
       await uninstallApp(appId, dropAccess)
       setLoss(null)
+      setConfirmUninstall(null)
       setNotice({ tone: 'ok', text: `${appId} is uninstalled; its data stays.` })
     } catch (e) {
       const lost = accessLossOf(e, appId)
       if (lost) setLoss(lost[0])
-      else setNotice({ tone: 'error', text: daemonErrorText(e) })
+      else {
+        setConfirmUninstall(null)
+        setNotice({ tone: 'error', text: `Couldn’t uninstall ${appId}: ${daemonErrorText(e)}. It’s still installed; try again.` })
+      }
     } finally {
       setBusy(null)
-      setConfirmUninstall(null)
       await refresh()
     }
   }
@@ -186,40 +193,35 @@ export function AppsBoxSection(): React.JSX.Element | null {
     const { request } = await requestUndo(appId)
     const { methods } = await vaultApi.confirmStart(APP_APPROVE_CONFIRM_ACTION, request)
     if (!methods.includes('local-auth')) {
-      throw new Error(JSON.stringify({ error: { code: 'confirm_elsewhere', hint: 'The undo card waits in App Approvals: approve it there with your password.' } }))
+      throw new Error(JSON.stringify({ error: { code: 'confirm_elsewhere', hint: 'The undo request waits in App Approvals: approve it there with your password.' } }))
     }
     await approveWithConfirm(request, `undo the handover of ${appId}`, 'local-auth')
   }
 
+  const sheetApp = load.kind === 'ready' && sheet ? load.apps.find((a) => a.appId === sheet) ?? null : null
+  const removing = load.kind === 'ready' && confirmUninstall ? load.apps.find((a) => a.appId === confirmUninstall) ?? null : null
+  const lossFor = loss ? loss.app : null
+
   return (
-    <div className="max-w-2xl space-y-4 mt-6" data-testid="apps-box">
+    <div className="space-y-6" data-testid="apps-box">
       {isStaff && review.length > 0 ? (
-        <Callout tone="info" data-testid="apps-review-note">
-          <div className="space-y-1.5">
-            <p className="type-hint">
-              These agents could manage Apps before; they now have Build and run Apps on. Review what each one may do.
-            </p>
-            <ul className="space-y-1">
+        <Callout tone="info" className="type-hint" data-testid="apps-review-note">
+          <div className="space-y-2">
+            <p>These agents could manage Apps before; they now have Build and run Apps on. Review what each one may do.</p>
+            <ul className="space-y-1.5">
               {review.map((r) => (
-                <li key={r.workspaceId} className="flex items-center gap-2 type-hint" data-testid={`apps-review-${r.workspaceId}`}>
-                  <span className="font-mono text-[var(--color-text-primary)]">{byId.get(r.workspaceId)?.name ?? r.handle}</span>
-                  <button
-                    type="button"
-                    className={`${secondary} underline no-drag cursor-pointer`}
-                    onClick={() => openCard(r.workspaceId)}
-                  >
-                    Review
-                  </button>
-                  <button
-                    type="button"
-                    className={`${muted} underline no-drag cursor-pointer disabled:opacity-50`}
-                    disabled={busy !== null}
-                    onClick={() =>
-                      void act(`review:${r.workspaceId}`, `${r.handle} reviewed.`, () => dismissReview(r.workspaceId))
-                    }
-                  >
-                    Dismiss
-                  </button>
+                <li key={r.workspaceId} className="flex items-center justify-between gap-3" data-testid={`apps-review-${r.workspaceId}`}>
+                  <span className="text-[var(--color-text-primary)]">{byId.get(r.workspaceId)?.name ?? r.handle}</span>
+                  <span className="flex items-center gap-2">
+                    <Button onClick={() => openCard(r.workspaceId)}>Review</Button>
+                    <Button
+                      variant="ghost"
+                      disabled={busy !== null}
+                      onClick={() => void act(`review:${r.workspaceId}`, `${r.handle} reviewed.`, () => dismissReview(r.workspaceId), `Couldn’t dismiss ${r.handle}`)}
+                    >
+                      Dismiss
+                    </Button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -227,35 +229,83 @@ export function AppsBoxSection(): React.JSX.Element | null {
         </Callout>
       ) : null}
 
-      <SettingsGroup title="Apps on this server">
-        <div className="py-2 space-y-2">
-          <p className={`type-hint ${muted}`}>
-            Every App here and the agent that maintains it. What an agent may do is set on its card: Settings → Workspaces / Agents →
-            the agent → Agent → Apps.
-          </p>
-          {notice ? (
-            <Callout tone={notice.tone} data-testid="apps-box-notice">
-              {notice.text}
-            </Callout>
-          ) : null}
-          {load.kind === 'loading' ? <p className={`type-hint ${muted}`}>Loading Apps…</p> : null}
-          {load.kind === 'error' ? <Callout tone="error">{load.text}</Callout> : null}
-          {load.kind === 'ready' && load.apps.length === 0 ? (
-            <p className={`type-hint ${muted}`} data-testid="apps-box-empty">
-              No Apps on this server yet.
-            </p>
-          ) : null}
-          {load.kind === 'ready' ? (
-            <ul className="divide-y divide-[var(--color-border)] border border-[var(--color-border)]">
-              {load.apps.map((app) => {
-                const wsId = app.maintainer.workspaceId
-                const project = wsId ? byId.get(wsId) : undefined
-                const owner = needsOwner(app)
-                const recent = handovers.get(app.appId)
-                return (
-                  <li key={app.appId} className="p-3 space-y-1.5" data-testid={`apps-row-${app.appId}`} data-state={app.state}>
-                    <div className="flex items-start gap-3">
-                      {project ? (
+      {notice ? (
+        <Callout tone={notice.tone} className="type-hint" role={notice.tone === 'error' ? 'alert' : 'status'} data-testid="apps-box-notice">
+          {notice.text}
+        </Callout>
+      ) : null}
+
+      <SettingsGroup
+        card
+        title="Apps on this server"
+        hint="Each App and the agent that keeps it up. What an agent may do is set on its card."
+        testId="apps-box-group"
+        state={
+          load.kind === 'loading' ? (
+            <SettingsLoadState kind="loading" title="Loading Apps…" />
+          ) : load.kind === 'error' ? (
+            <SettingsLoadState
+              kind="error"
+              title="K2 couldn’t list the Apps on this server"
+              detail={load.text}
+              action={<Button onClick={() => void refresh()}>Try again</Button>}
+            >
+              Nothing changed. The list comes back when the server answers.
+            </SettingsLoadState>
+          ) : load.apps.length === 0 ? (
+            <SettingsLoadState kind="empty" title="No Apps on this server yet" testId="apps-box-empty">
+              An agent you allow builds one and installs it from its workspace.
+            </SettingsLoadState>
+          ) : undefined
+        }
+      >
+        {load.kind === 'ready'
+          ? load.apps.map((app) => {
+              const wsId = app.maintainer.workspaceId
+              const project = wsId ? byId.get(wsId) : undefined
+              const owner = needsOwner(app)
+              const recent = handovers.get(app.appId)
+              const st = app.parked ? { tone: 'idle' as const, words: 'Parked' } : appStateWords(app.state)
+              const chip = postgresChip(app.database)
+              const handLabel = app.parked ? 'Unpark…' : 'Hand over…'
+              const handOver = (): void => setSheet(app.appId)
+              const menu: OverflowMenuItem[] = []
+              if (!owner) {
+                menu.push({
+                  id: 'handover',
+                  label: 'Hand over…',
+                  disabled: !isOwner || busy !== null,
+                  hint: isOwner ? 'Give it to another agent' : 'Only the server’s owner hands an App over',
+                  onSelect: handOver,
+                })
+              }
+              if (owner && !app.parked) {
+                menu.push({
+                  id: 'park',
+                  label: 'Park',
+                  hint: 'Stop it and hold it until you hand it on',
+                  disabled: busy !== null,
+                  onSelect: () => void act(`park:${app.appId}`, `${app.appId} is parked.`, () => parkApp(app.appId), `Couldn’t park ${app.appId}`),
+                })
+              }
+              if (owner) {
+                menu.push({
+                  id: 'uninstall',
+                  label: 'Uninstall…',
+                  danger: true,
+                  group: menu.length > 0,
+                  disabled: busy !== null,
+                  onSelect: () => {
+                    setLoss(null)
+                    setConfirmUninstall(app.appId)
+                  },
+                })
+              }
+              return (
+                <div key={app.appId} className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`apps-row-${app.appId}`} data-state={app.state}>
+                  <div className="flex items-start gap-3">
+                    {project ? (
+                      <span className={AVATAR_ROUND}>
                         <ProjectAvatar
                           projectPath={project.path}
                           projectName={project.name}
@@ -264,166 +314,188 @@ export function AppsBoxSection(): React.JSX.Element | null {
                           iconUrl={project.iconUrl}
                           size={24}
                         />
-                      ) : (
-                        <span
-                          aria-hidden
-                          className="w-6 h-6 flex-shrink-0 flex items-center justify-center type-hint border border-[var(--color-border)] text-[var(--color-text-muted)]"
-                        >
-                          ?
+                      </span>
+                    ) : (
+                      <AppMonogram name={app.appId} />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-x-2 gap-y-0.5 flex-wrap">
+                        <span className="type-name text-[var(--color-text-primary)]">{app.appId}</span>
+                        <span className="inline-flex items-center gap-1.5 type-hint text-[var(--color-text-secondary)]" data-testid={`apps-row-${app.appId}-state`}>
+                          <StatusDot tone={st.tone} />
+                          {st.words}
                         </span>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-baseline gap-2 flex-wrap">
-                          <span className="type-row font-mono text-[var(--color-text-primary)]">{app.appId}</span>
-                          <span className={`type-hint ${owner ? 'text-[var(--color-status-warn-amber-soft)]' : muted}`}>
-                            {stateLabel(app)}
+                      </div>
+                      <p className={SETTING_ROW_HINT} data-testid={`apps-row-${app.appId}-agent`}>
+                        {app.maintainer.kind === 'agent'
+                          ? `Kept up by ${app.maintainer.agent ?? app.maintainer.handle ?? 'an agent'}${app.maintainer.address ? ` · ${app.maintainer.address}` : ''}`
+                          : app.parked
+                            ? 'No agent: you hold it until you hand it to one'
+                            : 'No agent: its workspace was removed'}
+                      </p>
+                      <p className={SETTING_ROW_HINT}>
+                        {memoryWords(app.memoryLimitBytes)}
+                        {app.hostnames.length ? ` · ${app.hostnames.join(', ')}` : ' · no public address'}
+                        {chip ? (
+                          <span data-testid={`apps-row-${app.appId}-postgres`} title={app.database?.name ? `Database ${app.database.name}` : undefined}>
+                            {' · '}
+                            {chip}
                           </span>
-                        </div>
-                        <div className={`type-hint ${secondary}`} data-testid={`apps-row-${app.appId}-agent`}>
-                          {app.maintainer.kind === 'agent'
-                            ? `${app.maintainer.agent ?? app.maintainer.handle ?? 'an agent'}${app.maintainer.address ? ` · ${app.maintainer.address}` : ''}`
-                            : 'No agent maintains it'}
-                        </div>
-                        <div className={`type-hint ${muted}`}>
-                          {memoryLabel(app.memoryLimitBytes)}
-                          {app.hostnames.length ? ` · ${app.hostnames.join(', ')}` : ' · no public hostname'}
-                          {postgresChip(app.database) ? (
-                            <span
-                              className="ml-2 px-1.5 py-px border border-[var(--color-border)] type-hint"
-                              data-testid={`apps-row-${app.appId}-postgres`}
-                              title={app.database?.name ? `database ${app.database.name}` : undefined}
-                            >
-                              {postgresChip(app.database)}
+                        ) : null}
+                      </p>
+                      {app.maintainer.kind === 'agent' ? (
+                        <p className={SETTING_ROW_HINT} data-testid={`apps-row-${app.appId}-access`}>
+                          {accessLine(app, project)}
+                        </p>
+                      ) : null}
+                      {recent && isStaff ? (
+                        <div className="mt-2 flex items-center justify-between gap-3 flex-wrap" data-testid={`apps-row-${app.appId}-handover`}>
+                          <span className={SETTING_ROW_HINT}>
+                            Handed over from {recent.fromHandle ?? 'the owner'} to {recent.toHandle}
+                            {recent.rekeyState === 'failed' ? ' · its keys didn’t change yet' : ''}. You can undo it for 72 hours.
+                          </span>
+                          {isOwner ? (
+                            <span className="flex items-center gap-2">
+                              <Button
+                                disabled={busy !== null}
+                                onClick={() => void act(`undo:${app.appId}`, `${app.appId} went back to ${recent.fromHandle ?? 'the owner'}.`, () => undo(app.appId), `Couldn’t undo the handover of ${app.appId}`)}
+                              >
+                                Undo
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                disabled={busy !== null}
+                                onClick={() => void act(`finish:${app.appId}`, `${app.appId}: the undo window is closed.`, () => finishHandover(app.appId), `Couldn’t finish the handover of ${app.appId}`)}
+                              >
+                                Finish
+                              </Button>
                             </span>
                           ) : null}
                         </div>
-                        {app.maintainer.kind === 'agent' ? (
-                          <div className={`type-hint ${muted}`} data-testid={`apps-row-${app.appId}-access`}>
-                            {accessLine(app, project)}
-                            {wsId ? (
-                              <>
-                                {' · '}
-                                <button
-                                  type="button"
-                                  className={`${secondary} underline no-drag cursor-pointer`}
-                                  onClick={() => openCard(wsId)}
-                                >
-                                  Agent settings
-                                </button>
-                              </>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {/* 0.46.4 (slice I): a Thread with this App's agent beside its settings. */}
-                      </div>
+                      ) : null}
                     </div>
-                    {recent && isStaff ? (
-                      <div className={`flex items-center gap-2 flex-wrap pl-9 type-hint ${muted}`} data-testid={`apps-row-${app.appId}-handover`}>
-                        <span>
-                          Handed over from {recent.fromHandle ?? 'the owner'} to {recent.toHandle}
-                          {recent.rekeyState === 'failed' ? ' · its keys didn’t change yet' : ''}
-                        </span>
-                        {isOwner ? (
-                          <>
-                            <Button
-                              variant="ghost"
-                              disabled={busy !== null}
-                              onClick={() => void act(`undo:${app.appId}`, `${app.appId} went back to ${recent.fromHandle ?? 'the owner'}.`, () => undo(app.appId))}
-                            >
-                              Undo
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              disabled={busy !== null}
-                              onClick={() => void act(`finish:${app.appId}`, `${app.appId}: the undo window is closed.`, () => finishHandover(app.appId))}
-                            >
-                              Finish
-                            </Button>
-                          </>
-                        ) : null}
-                      </div>
-                    ) : null}
                     {isStaff ? (
-                      <div className="flex items-center gap-2 flex-wrap pl-9" data-testid={`apps-row-${app.appId}-actions`}>
-                        <Button
-                          variant="ghost"
-                          disabled={!isOwner || busy !== null}
-                          title={isOwner ? undefined : 'Only the server’s owner hands an App over'}
-                          onClick={() => setSheet(sheet === app.appId ? null : app.appId)}
-                        >
-                          {app.parked ? 'Unpark…' : 'Hand over…'}
-                        </Button>
-                        {owner && !app.parked ? (
+                      <div className="flex items-center gap-2 flex-shrink-0" data-testid={`apps-row-${app.appId}-actions`}>
+                        {owner ? (
                           <Button
-                            variant="ghost"
-                            disabled={busy !== null}
-                            onClick={() => void act(`park:${app.appId}`, `${app.appId} is parked.`, () => parkApp(app.appId))}
+                            variant="accent"
+                            disabled={!isOwner || busy !== null}
+                            title={isOwner ? undefined : 'Only the server’s owner hands an App over'}
+                            onClick={handOver}
                           >
-                            Park
+                            {handLabel}
                           </Button>
+                        ) : wsId ? (
+                          <Button onClick={() => openCard(wsId)}>Agent settings</Button>
                         ) : null}
-                        {owner && confirmUninstall === app.appId ? (
-                          <>
-                            <Button
-                              variant="danger"
-                              disabled={busy !== null}
-                              onClick={() => void uninstall(app.appId, false)}
-                            >
-                              Uninstall {app.appId} (data stays)
-                            </Button>
-                            <Button variant="ghost" onClick={() => setConfirmUninstall(null)}>
-                              Cancel
-                            </Button>
-                          </>
-                        ) : owner ? (
-                          <Button variant="ghost" disabled={busy !== null} onClick={() => setConfirmUninstall(app.appId)}>
-                            Uninstall
-                          </Button>
-                        ) : null}
+                        {menu.length > 0 ? <OverflowMenu label={`More actions for ${app.appId}`} items={menu} /> : null}
+                      </div>
+                    ) : wsId ? (
+                      <div className="flex-shrink-0">
+                        <Button onClick={() => openCard(wsId)}>Agent settings</Button>
                       </div>
                     ) : null}
-                    {loss && loss.app === app.appId ? (
-                      <div className="pl-9" data-testid={`apps-row-${app.appId}-loss`}>
-                        <Callout tone="warn">
-                          <p>Uninstalling {app.appId} would take away:</p>
-                          <ul className="list-disc pl-4 my-1">
-                            {loss.parts.map((p) => (
-                              <li key={p}>{p}</li>
-                            ))}
-                          </ul>
-                          <p>Reinstalling makes a new App that gets none of this back. To add a public URL instead, use k2 app expose {app.appId} --tunnel.</p>
-                          <div className="flex gap-2 mt-2">
-                            <Button variant="danger" disabled={busy !== null} onClick={() => void uninstall(app.appId, true)}>
-                              Uninstall anyway
-                            </Button>
-                            <Button variant="ghost" disabled={busy !== null} onClick={() => setLoss(null)}>
-                              Keep it
-                            </Button>
-                          </div>
-                        </Callout>
-                      </div>
-                    ) : null}
-                    {sheet === app.appId && isOwner ? (
-                      <AppHandoverSheet
-                        appId={app.appId}
-                        parked={app.parked}
-                        currentWorkspace={wsId ?? null}
-                        agents={agents}
-                        onClose={() => setSheet(null)}
-                        onDone={async (text) => {
-                          setSheet(null)
-                          setNotice({ tone: 'ok', text })
-                          await refresh()
-                        }}
-                      />
-                    ) : null}
-                  </li>
-                )
-              })}
-            </ul>
-          ) : null}
-        </div>
+                  </div>
+                </div>
+              )
+            })
+          : null}
       </SettingsGroup>
+
+      {removing ? (
+        <AccessSheet
+          title={`Uninstall ${removing.appId}?`}
+          intro={
+            lossFor === removing.appId
+              ? undefined
+              : 'It stops and leaves this server. Its data stays, so nothing is deleted.'
+          }
+          onClose={() => {
+            setConfirmUninstall(null)
+            setLoss(null)
+          }}
+          busy={busy === `rm:${removing.appId}`}
+          testId={`apps-uninstall-${removing.appId}`}
+          footer={
+            lossFor === removing.appId && loss ? (
+              <>
+                <Button
+                  variant="ghost"
+                  size="md"
+                  autoFocus
+                  disabled={busy !== null}
+                  onClick={() => {
+                    setLoss(null)
+                    setConfirmUninstall(null)
+                  }}
+                >
+                  Keep it
+                </Button>
+                <Button variant="danger-muted" size="md" disabled={busy !== null} onClick={() => void uninstall(removing.appId, true)}>
+                  Uninstall anyway
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="ghost" size="md" autoFocus disabled={busy !== null} onClick={() => setConfirmUninstall(null)}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="danger-muted"
+                  size="md"
+                  disabled={busy !== null}
+                  data-testid="apps-uninstall-confirm"
+                  onClick={() => void uninstall(removing.appId, false)}
+                >
+                  {busy === `rm:${removing.appId}` ? 'Uninstalling…' : 'Uninstall'}
+                </Button>
+              </>
+            )
+          }
+        >
+          {lossFor === removing.appId && loss ? (
+            <div data-testid={`apps-row-${removing.appId}-loss`} className="space-y-2">
+              <p className={SETTING_ROW_LABEL}>People would lose access. Uninstalling {removing.appId} takes away:</p>
+              <ul className="list-disc pl-5 type-hint text-[var(--color-text-primary)] space-y-0.5">
+                {loss.parts.map((p) => (
+                  <li key={p}>{p}</li>
+                ))}
+              </ul>
+              <p className={SETTING_ROW_HINT}>Reinstalling makes a new App that gets none of this back.</p>
+            </div>
+          ) : (
+            <p className={SETTING_ROW_HINT}>
+              {removing.maintainer.kind === 'agent' ? `${removing.maintainer.agent ?? 'Its agent'} can install it again later.` : 'You can install it again later from a workspace.'}
+            </p>
+          )}
+        </AccessSheet>
+      ) : null}
+
+      {sheetApp && isOwner ? (
+        <AppHandoverSheet
+          appId={sheetApp.appId}
+          parked={sheetApp.parked}
+          currentWorkspace={sheetApp.maintainer.workspaceId ?? null}
+          agents={agents}
+          onClose={() => setSheet(null)}
+          onDone={async (text) => {
+            setSheet(null)
+            setNotice({ tone: 'ok', text })
+            await refresh()
+          }}
+        />
+      ) : null}
     </div>
   )
+}
+
+/** "Up to 512 MB of memory" / "No memory limit", in decimal units as the rest of the page. */
+export function memoryWords(bytes: number | null): string {
+  if (bytes === null || bytes <= 0) return 'No memory limit'
+  const mb = bytes / 1024 ** 2
+  if (mb >= 1024) {
+    const gb = mb / 1024
+    return `Up to ${Number.isInteger(gb) ? gb : gb.toFixed(1)} GB of memory`
+  }
+  return `Up to ${Math.round(mb)} MB of memory`
 }

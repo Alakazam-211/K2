@@ -6,7 +6,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react'
 import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
-import { Toggle } from '@/components/ui'
+import { Button, Toggle } from '@/components/ui'
 import {
   addRoleFromTemplate,
   cellSummary,
@@ -88,16 +88,20 @@ export function AppPeopleAccess({
   )
 
   return (
-    <SettingsGroup title="People">
-      <div data-settings-id="skin-access.people" className="space-y-3">
+    <SettingsGroup
+      card
+      title="People"
+      hint="Who has this App, and what each person may do with each agent."
+    >
+      <div data-settings-id="skin-access.people" className="divide-y divide-[var(--color-border)]">
         {error ? (
-          <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
-            {error}
+          <p role="alert" className="px-4 py-3 type-hint text-[var(--color-status-error-soft)]">
+            That didn&rsquo;t work. <span className="text-[var(--color-text-muted)]">The server said: {error.trim().replace(/[.\s]+$/, '')}.</span>
           </p>
         ) : null}
 
         {!hasRoles && templates.length > 0 ? (
-          <div className="space-y-1" aria-label="Suggested roles">
+          <div className="px-4 py-3 space-y-1" aria-label="Suggested roles">
             <p className="type-hint text-[var(--color-text-muted)]">
               Suggested roles: pick one to start from, then edit it. Nothing is made until you click.
             </p>
@@ -114,7 +118,8 @@ export function AppPeopleAccess({
                       onRolesChanged()
                     })
                   }
-                  className="px-2 py-0.5 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] no-drag cursor-pointer disabled:opacity-60"
+                  data-k2-chamfer="control"
+                  className="k2-focus px-3 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-control-edge)] text-[var(--color-text-secondary)] hover:bg-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-60"
                 >
                   + {t.label}
                 </button>
@@ -124,11 +129,11 @@ export function AppPeopleAccess({
         ) : null}
 
         {access == null ? (
-          <p className="type-hint text-[var(--color-text-muted)]">Loading people…</p>
+          <p className="px-4 py-3 type-hint text-[var(--color-text-secondary)]">Loading people…</p>
         ) : access.people.length === 0 ? (
-          <p className="type-hint text-[var(--color-text-muted)]">Nobody has this App yet.</p>
+          <p className="px-4 py-3 type-hint text-[var(--color-text-secondary)]">Nobody has this App yet. Add someone under Users.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="px-4 py-3 overflow-x-auto">
             <table className="type-hint border-collapse" aria-label="People and agents">
               <thead>
                 <tr>
@@ -179,10 +184,7 @@ export function AppPeopleAccess({
 
         {access ? (
           <>
-            <p className="type-hint text-[var(--color-text-muted)]">
-              Stay signed in: how long a phone that signs in stays signed in without being used.
-            </p>
-            <SettingRow label="Stay signed in">
+            <SettingRow label="Stay signed in" hint="How long a phone stays signed in without being used.">
               <SettingDropdown
                 ariaLabel="Stay signed in"
                 value={String(access.staySignedInDays)}
@@ -192,13 +194,10 @@ export function AppPeopleAccess({
               />
             </SettingRow>
             {app !== 'host' ? (
-              <p className="type-hint text-[var(--color-text-muted)]">
-                Listed: an app can find this App by its id and see only its name and how to sign in. Off,
-                the server answers as if nothing were here.
-              </p>
-            ) : null}
-            {app !== 'host' ? (
-              <SettingRow label="Listed for sign-in">
+              <SettingRow
+                label="Listed for sign-in"
+                hint="On: an app can find this App and see only its name and how to sign in. Off: the server answers as if nothing were here."
+              >
                 <Toggle
                   aria-label="Listed for sign-in"
                   checked={access.listed}
@@ -208,7 +207,7 @@ export function AppPeopleAccess({
               </SettingRow>
             ) : null}
             {access.devices.length > 0 ? (
-              <div className="space-y-1" aria-label="Signed-in devices">
+              <div className="px-4 py-3 space-y-1" aria-label="Signed-in devices">
                 {access.devices.map((d) => (
                   <div key={d.id} className="flex items-center justify-between gap-2 type-hint">
                     <span className="text-[var(--color-text-secondary)]">
@@ -222,15 +221,14 @@ export function AppPeopleAccess({
                         </span>
                       ) : null}
                     </span>
-                    <button
-                      type="button"
+                    <Button
+                      variant="danger-quiet"
                       aria-label={`Sign out ${d.name}`}
                       disabled={busy != null}
                       onClick={() => void run(`dev:${d.id}`, () => revokeDevice(d.id))}
-                      className="text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
                     >
                       Sign out
-                    </button>
+                    </Button>
                   </div>
                 ))}
               </div>

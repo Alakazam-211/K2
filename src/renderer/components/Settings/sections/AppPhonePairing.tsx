@@ -151,8 +151,12 @@ export function AppPhonePairing({ app }: { app: string }): React.JSX.Element {
   }
 
   return (
-    <SettingsGroup title="Phones">
-      <div data-settings-id="skin-access.phones" className="space-y-2" aria-label="Phone pairing">
+    <SettingsGroup
+      card
+      title="Phones"
+      hint="People signed in to this App on the web can sign its phone app in by QR code, with no password on the phone."
+    >
+      <div data-settings-id="skin-access.phones" className="px-4 py-3 space-y-2" aria-label="Phone pairing">
         {error ? (
           <p data-testid="phones-error" aria-live="polite" className="type-hint text-[var(--color-status-error-soft)]">
             {error}
@@ -163,14 +167,11 @@ export function AppPhonePairing({ app }: { app: string }): React.JSX.Element {
             {notice}
           </p>
         ) : null}
-        <p className={muted}>
-          People signed in to this App on the web can sign its own phone app in by QR, with no password on the phone.
-        </p>
         {status == null ? (
           <p className={muted}>Loading phone pairing…</p>
         ) : (
           <>
-            <p data-testid="phones-state" className="type-hint text-[var(--color-text-primary)]">
+            <p data-testid="phones-state" className="type-row text-[var(--color-text-primary)]">
               Phone pairing {status.on ? 'on' : `off: ${offWords(status)}`}
             </p>
             {status.ios.map((id) => (
@@ -185,7 +186,7 @@ export function AppPhonePairing({ app }: { app: string }): React.JSX.Element {
               </p>
             ))}
             {status.hosts.length === 0 ? (
-              <p className={muted}>No public host: the App needs K2 Connect and its own label.</p>
+              <p className={muted}>No public address yet: the App needs K2 Connect and its own address before phones can pair.</p>
             ) : (
               status.hosts.map((h) => {
                 const c = (checks ?? status.lastCheck ?? []).find((x) => x.host === h.host)
@@ -208,7 +209,7 @@ export function AppPhonePairing({ app }: { app: string }): React.JSX.Element {
             </p>
             {!editing ? (
               <div className="flex gap-2">
-                <Button disabled={busy} onClick={openSetup}>
+                <Button variant={status.ios.length || status.android.length ? 'default' : 'accent'} disabled={busy} onClick={openSetup}>
                   {status.ios.length || status.android.length ? 'Change phone apps…' : 'Set up…'}
                 </Button>
                 {status.on ? (

@@ -5,8 +5,19 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { Checkbox, Toggle, Tag, Input } from '@/components/ui'
-import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
+import { Button, Callout, Checkbox, Toggle, Input, OverflowMenu, Surface } from '@/components/ui'
+import {
+  SETTING_FIELD_WIDTH,
+  SETTING_LIST_ROW_HOVER,
+  SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
+  SETTING_SERVER_REASON,
+  SettingDropdown,
+  SettingRow,
+  SettingSwitchRow,
+  SettingsGroup,
+  SettingsLoadState,
+} from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { primaryScope } from '@/kessel/server-scope'
 import { useServerSupports } from '@/lib/server-capabilities'
@@ -17,6 +28,19 @@ import { AppsResourcesSection } from './AppsResourcesSection'
 import { AppPeopleAccess } from './AppPeopleAccess'
 import { AppPhonePairing } from './AppPhonePairing'
 import { AppReleases } from './AppReleases'
+import { ConfirmSheet } from './AccessDialogs'
+import {
+  APPS_CONTENT_WIDTH,
+  APPS_LIST_ROW,
+  APPS_ROW_OFF,
+  APPS_ROW_ON,
+  AppMonogram,
+  LinuxOnlyNote,
+  PaneHeader,
+  SelectedBar,
+  StatusDot,
+  appStateWords,
+} from './apps-ui'
 
 export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   {
@@ -401,6 +425,11 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+/** A write that failed: what, the next step, and the server's reason. */
+function failed(what: string, e: unknown): { what: string; next: string; detail: string } {
+  return { what, next: 'Nothing changed. Try again in a moment.', detail: errText(e) }
+}
+
 function parseMode(raw: unknown): FrontDoorMode {
   const rec = asRecord(raw)
   const m = asString(rec.mode) ?? asString(rec.frontDoor) ?? asString(rec.front_door)
@@ -665,7 +694,9 @@ export function SkinAccessSection(): React.JSX.Element {
   const [tokens, setTokens] = useState<SkinTokenRow[]>([])
   const [workspaces, setWorkspaces] = useState<SkinWorkspace[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  /** What failed (plain words), the next step and the server's reason. */
+  const [error, setError] = useState<{ what: string; next: string; detail: string } | null>(null)
+  const [ask, setAsk] = useState<{ title: string; message: string; confirmLabel: string; run: () => Promise<void> } | null>(null)
   const [mintName, setMintName] = useState('')
   const [mintCaps, setMintCaps] = useState<Set<string>>(() => new Set(DEFAULT_SKIN_CAPS))
   const [mintRooms, setMintRooms] = useState<Set<string>>(() => new Set())
@@ -686,7 +717,6 @@ export function SkinAccessSection(): React.JSX.Element {
   const [editRoleId, setEditRoleId] = useState<string | null>(null)
   const [editRoleRooms, setEditRoleRooms] = useState<Set<string>>(() => new Set())
   const [editRoleCapsByRoom, setEditRoleCapsByRoom] = useState<Record<string, Set<string>>>({})
-  const [removeRoleConfirm, setRemoveRoleConfirm] = useState<string | null>(null)
   const [publishedApps, setPublishedApps] = useState<PublishedApp[]>([])
   const [grants, setGrants] = useState<SkinGrantRow[]>([])
   const [selectedApp, setSelectedApp] = useState<string | null>(null)
@@ -754,7 +784,13 @@ export function SkinAccessSection(): React.JSX.Element {
       failures.push(`hydra: ${errText(e)}`)
       setHydra(DEFAULT_HYDRA)
     }
-    if (failures.length) setError(failures.join(' · '))
+    if (failures.length) {
+      setError({
+        what: 'K2 couldn’t read everything on this page',
+        next: 'What did load is shown. Try again in a moment.',
+        detail: failures.join(' · '),
+      })
+    }
     setLoading(false)
   }, [])
 
@@ -849,10 +885,9 @@ export function SkinAccessSection(): React.JSX.Element {
       setRoleError(null)
       try {
         await daemonCliPost(primaryScope(), 'skin/roles/remove', { id })
-        setRemoveRoleConfirm(null)
         await refresh()
       } catch (e) {
-        setRoleError(errText(e))
+        setError(failed('Couldn’t remove the role', e))
       }
     },
     [refresh],
@@ -869,7 +904,7 @@ export function SkinAccessSection(): React.JSX.Element {
         }
         await refresh()
       } catch (e) {
-        setError(errText(e))
+        setError(failed('Couldn’t change their role', e))
       }
     },
     [refresh],
@@ -884,7 +919,7 @@ export function SkinAccessSection(): React.JSX.Element {
         setEditKeyId(null)
         await refresh()
       } catch (e) {
-        setMintError(errText(e))
+        setError(failed('Couldn’t save the token’s agents', e))
       } finally {
         setBusyId(null)
       }
@@ -919,7 +954,7 @@ export function SkinAccessSection(): React.JSX.Element {
         await daemonCliPost(primaryScope(), `publish/${action}`, { name: app.name, project: app.projectId })
         await refresh()
       } catch (e) {
-        setError(errText(e))
+        setError(failed(action === 'start' ? `Couldn’t start ${app.name}` : `Couldn’t stop ${app.name}`, e))
       } finally {
         setPublishBusy(null)
       }
@@ -935,7 +970,7 @@ export function SkinAccessSection(): React.JSX.Element {
         await daemonCliPost(primaryScope(), 'skin/grants/enabled', { id: grant.id, enabled })
         await refresh()
       } catch (e) {
-        setError(errText(e))
+        setError(failed(enabled ? 'Couldn’t turn their access on' : 'Couldn’t turn their access off', e))
       } finally {
         setBusyId(null)
       }
@@ -951,7 +986,7 @@ export function SkinAccessSection(): React.JSX.Element {
         await daemonCliPost(primaryScope(), 'skin/grants/delete', { id })
         await refresh()
       } catch (e) {
-        setError(errText(e))
+        setError(failed('Couldn’t remove their access', e))
       } finally {
         setBusyId(null)
       }
@@ -961,10 +996,7 @@ export function SkinAccessSection(): React.JSX.Element {
 
   const persistHydra = useCallback(
     async (enabled: boolean) => {
-      if (!hydra.supported) {
-        setError(hydra.hint ?? HYDRA_LINUX_BANNER)
-        return
-      }
+      if (!hydra.supported) return
       setHydraBusy(true)
       setError(null)
       const prev = hydra
@@ -974,7 +1006,7 @@ export function SkinAccessSection(): React.JSX.Element {
         setHydra(parseHydra(posted))
       } catch (e) {
         setHydra(prev)
-        setError(`hydra: ${errText(e)}`)
+        setError(failed(enabled ? 'Couldn’t turn on sign-in for other sites' : 'Couldn’t turn off sign-in for other sites', e))
       } finally {
         setHydraBusy(false)
       }
@@ -984,17 +1016,13 @@ export function SkinAccessSection(): React.JSX.Element {
 
   const revokeKey = useCallback(
     async (id: string) => {
-      const ok = window.confirm(
-        'Permanently revoke this skin key? It cannot be re-enabled — mint a new secret.',
-      )
-      if (!ok) return
       setBusyId(id)
       setMintError(null)
       try {
         await daemonCliPost(primaryScope(), 'skin-tokens/revoke', { id })
         await refresh()
       } catch (e) {
-        setMintError(errText(e))
+        setError(failed('Couldn’t revoke the token', e))
       } finally {
         setBusyId(null)
       }
@@ -1011,17 +1039,14 @@ export function SkinAccessSection(): React.JSX.Element {
       await daemonCliPost(primaryScope(), 'skin/grants/copy-host', { app: selectedApp })
       await refresh()
     } catch (e) {
-      setError(errText(e))
+      setError(failed('Couldn’t add everyone with the server sign-in', e))
     } finally {
       setBusyId(null)
     }
   }, [selectedApp, refresh])
 
   const addAppUser = useCallback(async () => {
-    if (!selectedApp || !addPersonId || !addRoleId) {
-      setError('Pick a person and a role')
-      return
-    }
+    if (!selectedApp || !addPersonId || !addRoleId) return
     setBusyId('add-user')
     setError(null)
     try {
@@ -1036,7 +1061,7 @@ export function SkinAccessSection(): React.JSX.Element {
       setAddRoleId('')
       await refresh()
     } catch (e) {
-      setError(errText(e))
+      setError(failed('Couldn’t add them', e))
     } finally {
       setBusyId(null)
     }
@@ -1051,298 +1076,229 @@ export function SkinAccessSection(): React.JSX.Element {
   const workspaceLabel = selectedPublished
     ? (workspaces.find((w) => w.id === selectedPublished.projectId)?.name ?? selectedPublished.projectId)
     : ''
+  const handleName = (handle: string): string => workspaces.find((w) => w.handle === handle)?.name ?? handle
+
+  const select = (next: 'server' | string): void => {
+    setError(null)
+    if (next === 'server') {
+      setShowServer(true)
+      return
+    }
+    setShowServer(false)
+    setSelectedApp(next)
+  }
+
+  const railRow = (
+    key: string,
+    on: boolean,
+    ariaLabel: string,
+    lead: React.ReactNode,
+    name: React.ReactNode,
+    detail: React.ReactNode,
+    onClick: () => void,
+  ): React.JSX.Element => (
+    <button
+      key={key}
+      type="button"
+      data-k2-focus=""
+      data-apps-rail={key}
+      aria-label={ariaLabel}
+      aria-current={on ? 'page' : undefined}
+      className={`${APPS_LIST_ROW} ${on ? APPS_ROW_ON : APPS_ROW_OFF}`}
+      onClick={onClick}
+    >
+      {on ? <SelectedBar /> : null}
+      {lead}
+      <span className="min-w-0 flex-1">
+        <span className="block type-name text-[var(--color-text-primary)] truncate">{name}</span>
+        <span className="flex items-center gap-1.5 type-hint text-[var(--color-text-secondary)] min-w-0">{detail}</span>
+      </span>
+    </button>
+  )
+
+  const running = selectedPublished ? selectedPublished.status === 'running' || selectedPublished.status === 'starting' : false
+  const published = selectedPublished ? appStateWords(selectedPublished.status) : null
 
   return (
     <div className="flex h-full min-h-0">
-      <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0">
-        <div className="px-3 pt-3 pb-2 border-b border-[var(--color-border)]">
+      <aside aria-label="Apps" className="w-72 flex-shrink-0 min-h-0 flex flex-col border-r border-[var(--color-border)]" data-apps-rail-root="">
+        <div className="flex-shrink-0 px-4 pt-6 pb-4">
           <h2 className="type-title text-[var(--color-text-primary)]">Apps</h2>
-          <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            Host plus each published service. Not Admin Access.
-          </p>
+          <p className={SETTING_ROW_HINT}>Run your agents&rsquo; Apps on this server and choose who can sign in to each one.</p>
         </div>
-        <div className="flex-1 overflow-y-auto min-h-0">
-          {loading ? <p className="px-3 py-2 type-hint text-[var(--color-text-muted)]">Loading…</p> : null}
-          <button
-            type="button"
-            aria-label="This server"
-            className={`w-full text-left px-3 py-2 type-control no-drag cursor-pointer ${
-              showServer ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
-            }`}
-            onClick={() => setShowServer(true)}
-          >
-            This server
-          </button>
-          <button
-            type="button"
-            aria-label="Host"
-            className={`w-full text-left px-3 py-2 type-control no-drag cursor-pointer ${
-              !showServer && selectedApp === 'host' ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
-            }`}
-            onClick={() => {
-              setShowServer(false)
-              setSelectedApp('host')
-            }}
-          >
-            Host
-          </button>
-          {publishedApps.map((app) => (
-            <button
-              key={app.id}
-              type="button"
-              aria-label={`Open ${app.name}`}
-              className={`w-full text-left px-3 py-2 no-drag cursor-pointer ${
-                !showServer && selectedApp === app.id ? 'bg-[var(--color-accent)]/15' : 'hover:bg-white/[0.03]'
-              }`}
-              onClick={() => {
-                setShowServer(false)
-                setSelectedApp(app.id)
-              }}
-            >
-              <span className="block type-row font-mono text-[var(--color-text-primary)] truncate">
-                {app.name}
-              </span>
-              <span className="block type-hint text-[var(--color-text-muted)]">
-                {app.kind}
-                {PUBLISH_STATUS.has(app.status) ? ` · ${app.status}` : ''}
-                {app.expose === 'local' ? ' · local-only' : ''}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="flex-1 overflow-y-auto p-6 min-h-0">
-        {error && (
-          <p role="alert" className="type-hint text-[var(--color-status-error-soft)] max-w-2xl mb-3">
-            {error}
-          </p>
-        )}
-        {showServer ? (
-          <>
-            <AppsServerSection />
-            <AppsBoxSection />
-            <AppsResourcesSection />
-          </>
-        ) : selectedApp == null ? (
-          <p className="type-hint text-[var(--color-text-muted)]">Select This server, Host or an app.</p>
-        ) : (
-          <div className="max-w-2xl space-y-6">
-            {selectedPublished ? (
-              <div className="space-y-2">
-                <div className="type-row font-mono text-[var(--color-text-primary)]">
-                  {selectedPublished.name}
-                </div>
-                <p className="type-hint text-[var(--color-text-muted)]">
-                  {workspaceLabel}
-                  {` · ${selectedPublished.kind}`}
-                  {PUBLISH_STATUS.has(selectedPublished.status) ? ` · ${selectedPublished.status}` : ''}
-                  {selectedPublished.expose === 'local'
-                    ? ' · local-only'
-                    : selectedPublished.url
-                      ? ` · ${selectedPublished.url}`
-                      : ''}
-                </p>
-                <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
-                  Logins here need a grant for this App (enforced at login since 0.45.5). A new App
-                  starts with nobody.
-                </p>
-                {selectedPublished.helperNeedsRestart ? (
-                  <p role="status" className="type-hint text-[var(--color-status-warn-text)]">
-                    Waiting for a restart: this App&apos;s helper predates per-App logins and still
-                    signs guests in with the box login. Stop and start it to apply.
-                  </p>
-                ) : null}
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
-                    disabled={publishBusy === selectedPublished.id}
-                    onClick={() => void publishAction('start', selectedPublished)}
-                  >
-                    Start {selectedPublished.name}
-                  </button>
-                  <button
-                    type="button"
-                    className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] no-drag cursor-pointer disabled:opacity-60"
-                    disabled={publishBusy === selectedPublished.id}
-                    onClick={() => void publishAction('stop', selectedPublished)}
-                  >
-                    Stop {selectedPublished.name}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
-                Host is the box login: the direct login door and BFFs that name no App. Its login
-                role is this grant&apos;s role. Host roles keep app_id empty. Someone with the box
-                login can still sign in there, so per-App isolation only holds without it.
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-5 [scrollbar-gutter:stable]">
+          <Surface chamfer material="tile" className="overflow-hidden">
+            <div className="divide-y divide-[var(--color-border)]">
+              {railRow(
+                'server',
+                showServer,
+                'This server',
+                <RailGlyph kind="server" />,
+                'This server',
+                'Turn Apps on, checks and disk use',
+                () => select('server'),
+              )}
+              {railRow(
+                'host',
+                !showServer && selectedApp === 'host',
+                'Host',
+                <RailGlyph kind="host" />,
+                'Server sign-in',
+                'The server’s own sign-in',
+                () => select('host'),
+              )}
+            </div>
+          </Surface>
+          <section>
+            <h3 className="type-heading text-[var(--color-text-primary)] mb-2">Published Apps</h3>
+            {loading ? (
+              <p className={SETTING_ROW_HINT}>Loading…</p>
+            ) : publishedApps.length === 0 ? (
+              <p className={SETTING_ROW_HINT} data-testid="apps-rail-empty">
+                No Apps are published yet. An agent publishes one from its workspace.
               </p>
-            )}
-
-            <SettingsGroup title="Roles">
-          <div data-settings-id="skin-access.roles" className="space-y-3">
-            <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
-              Skin roles are not Connect owner/admin/member/viewer. They never include the
-              terminal. Access is per agent. Files on Documents does not grant files on Anna.
-              Adding a room starts Thread-only. Zero agents is Thread dark. Platform tokens
-              stay flat.
-            </p>
-            <form
-              className="space-y-2"
-              onSubmit={(e) => {
-                e.preventDefault()
-                void createRole()
-              }}
-            >
-              <Input
-                className={INPUT_CLS}
-                placeholder="name (dentist)"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                value={newRoleName}
-                onChange={(e) => setNewRoleName(e.target.value)}
-                aria-label="New skin role name"
-              />
-              {workspaces.length > 0 ? (
-                <div className="space-y-2">
-                  {workspaces.map((ws) => {
-                    const included = newRoleRooms.has(ws.handle) || newRoleRooms.has(ws.id)
-                    const caps = newRoleCapsByRoom[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS)
-                    return (
-                      <div key={`role-mint-${ws.id}`} className="space-y-1">
-                        <label className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
-                          <Checkbox
-                            aria-label={`Role agent ${ws.handle}`}
-                            checked={included}
-                            onChange={(e) => {
-                              setNewRoleRooms((prev) => {
-                                const next = new Set(prev)
-                                if (e.target.checked) next.add(ws.handle)
-                                else {
-                                  next.delete(ws.handle)
-                                  next.delete(ws.id)
-                                }
-                                return next
-                              })
-                              setNewRoleCapsByRoom((prev) => {
-                                const next = { ...prev }
-                                if (e.target.checked) {
-                                  next[ws.handle] = new Set(DEFAULT_SKIN_CAPS)
-                                } else {
-                                  delete next[ws.handle]
-                                }
-                                return next
-                              })
-                            }}
-                          />
-                          <span className="type-hint font-mono text-[var(--color-text-secondary)]">
-                            {ws.handle}
-                          </span>
-                        </label>
-                        {included ? (
-                          <div className="flex flex-wrap gap-x-3 gap-y-1 pl-5">
-                            {roleChoices.map((cap) => (
-                              <label
-                                key={`role-${ws.handle}-${cap}`}
-                                title={ROLE_CAP_LABELS[cap]}
-                                className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
-                              >
-                                <Checkbox
-                                  aria-label={`Role ${ws.handle} ${cap}`}
-                                  checked={caps.has(cap)}
-                                  onChange={(e) => {
-                                    setNewRoleCapsByRoom((prev) => ({
-                                      ...prev,
-                                      [ws.handle]: toggleSkinCap(
-                                        prev[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS),
-                                        cap,
-                                        e.target.checked,
-                                      ),
-                                    }))
-                                  }}
-                                />
-                                <span className="type-hint font-mono text-[var(--color-text-secondary)]">
-                                  {cap}
-                                </span>
-                              </label>
-                            ))}
-                            <AgentConfigOption
-                              caps={caps}
-                              enabled={agentConfigOptIn}
-                              ariaLabel={`Role ${ws.handle} agent .k2 folder`}
-                              onChange={(on) => {
-                                setNewRoleCapsByRoom((prev) => ({
-                                  ...prev,
-                                  [ws.handle]: toggleSkinCap(
-                                    prev[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS),
-                                    SKIN_AGENT_CONFIG_CAP,
-                                    on,
-                                  ),
-                                }))
-                              }}
-                            />
-                          </div>
-                        ) : null}
-                      </div>
+            ) : (
+              <Surface chamfer material="tile" className="overflow-hidden">
+                <div className="divide-y divide-[var(--color-border)]">
+                  {publishedApps.map((app) => {
+                    const st = appStateWords(app.status)
+                    return railRow(
+                      app.id,
+                      !showServer && selectedApp === app.id,
+                      `Open ${app.name}`,
+                      <AppMonogram name={app.name} />,
+                      app.name,
+                      <>
+                        <StatusDot tone={st.tone} />
+                        <span className="truncate">
+                          {PUBLISH_STATUS.has(app.status) ? st.words : 'Not started'}
+                          {app.expose === 'local' ? ' · only on this server' : ''}
+                        </span>
+                      </>,
+                      () => select(app.id),
                     )
                   })}
                 </div>
-              ) : (
-                <p className="type-hint text-[var(--color-text-muted)]">
-                  No workspaces yet — a role with zero agents is Thread dark.
-                </p>
-              )}
-              <button
-                type="submit"
-                disabled={roleBusy || !newRoleName.trim()}
-                className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
-              >
-                {roleBusy ? 'Saving…' : 'Create role'}
-              </button>
-            </form>
-            {roleError && (
-              <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
-                {roleError}
-              </p>
+              </Surface>
             )}
-            {loading ? (
-              <p className="type-hint text-[var(--color-text-muted)]">Loading roles…</p>
-            ) : visibleRoles.length === 0 ? (
-              <p className="type-hint text-[var(--color-text-muted)]">
-                No skin roles yet. Create one above — not owner/admin/member/viewer.
-              </p>
-            ) : (
-              <div className="divide-y divide-[var(--color-border)]">
+          </section>
+        </div>
+      </aside>
+      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]" data-apps-pane="">
+        <div className={`w-full ${APPS_CONTENT_WIDTH} space-y-6 pb-6`}>
+          {error ? (
+            <SettingsLoadState
+              kind="error"
+              title={error.what}
+              detail={error.detail}
+              testId="apps-page-error"
+              action={
+                <Button variant="default" onClick={() => void refresh()}>
+                  Try again
+                </Button>
+              }
+            >
+              {error.next}
+            </SettingsLoadState>
+          ) : null}
+          {showServer ? (
+            <>
+              <AppsServerSection />
+              <AppsBoxSection />
+              <AppsResourcesSection />
+            </>
+          ) : selectedApp == null ? null : (
+            <>
+              {selectedPublished && published ? (
+                <PaneHeader
+                  title={selectedPublished.name}
+                  testId="apps-detail-header"
+                  hint={
+                    <span className="inline-flex flex-wrap items-center gap-x-1.5">
+                      <StatusDot tone={published.tone} />
+                      <span>{PUBLISH_STATUS.has(selectedPublished.status) ? published.words : 'Not started'}</span>
+                      <span>· kept up by {workspaceLabel}</span>
+                      <span>
+                        ·{' '}
+                        {selectedPublished.expose === 'local'
+                          ? 'only on this server'
+                          : selectedPublished.url
+                            ? selectedPublished.url.replace(/^https?:\/\//, '').replace(/\/$/, '')
+                            : 'no public address'}
+                      </span>
+                    </span>
+                  }
+                  actions={
+                    running ? (
+                      <Button
+                        aria-label={`Stop ${selectedPublished.name}`}
+                        disabled={publishBusy === selectedPublished.id}
+                        onClick={() => void publishAction('stop', selectedPublished)}
+                      >
+                        {publishBusy === selectedPublished.id ? 'Stopping…' : 'Stop'}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="accent"
+                        aria-label={`Start ${selectedPublished.name}`}
+                        disabled={publishBusy === selectedPublished.id}
+                        onClick={() => void publishAction('start', selectedPublished)}
+                      >
+                        {publishBusy === selectedPublished.id ? 'Starting…' : 'Start'}
+                      </Button>
+                    )
+                  }
+                />
+              ) : (
+                <PaneHeader
+                  title="Server sign-in"
+                  testId="apps-host-header"
+                  hint="The sign-in for the whole server: its own sign-in page and any service that names no App. Anyone who has it can also open every App, so give it out sparingly."
+                />
+              )}
+              {selectedPublished?.helperNeedsRestart ? (
+                <Callout tone="warn" role="status" className="type-hint">
+                  Waiting for a restart: this App&rsquo;s sign-in helper is older than per-App sign-in, so guests still sign in
+                  with the server&rsquo;s own sign-in. Stop it and start it again to finish.
+                </Callout>
+              ) : null}
+
+              <SettingsGroup
+                card
+                title="Roles"
+                settingId="skin-access.roles"
+                hint="What a guest may do with each agent. These aren’t the server’s Owner, Admin or Member roles, and they never open a terminal."
+              >
+                {visibleRoles.length === 0 && !loading ? (
+                  <div className="px-4 py-3">
+                    <p className={SETTING_ROW_HINT} data-testid="apps-roles-empty">
+                      No roles yet. Make one below; it starts with Thread only for each agent you tick.
+                    </p>
+                  </div>
+                ) : null}
                 {visibleRoles.map((r) => {
                   const editing = editRoleId === r.id
                   return (
-                    <div key={r.id} className="py-2 space-y-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="type-row font-mono text-[var(--color-text-primary)]">
-                          {r.name}
-                        </span>
-                        {removeRoleConfirm === r.id ? (
-                          <span className="flex items-center gap-1.5 flex-shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => void removeRole(r.id)}
-                              className="type-hint text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
-                            >
-                              Confirm remove role
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setRemoveRoleConfirm(null)}
-                              className="type-hint text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
-                            >
-                              Cancel
-                            </button>
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-2 flex-shrink-0">
-                            <button
-                              type="button"
+                    <div key={r.id} className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`apps-role-${r.id}`}>
+                      <div className="flex items-start justify-between gap-6">
+                        <div className="min-w-0 flex-1">
+                          <div className="type-name text-[var(--color-text-primary)]">{r.name}</div>
+                          {r.roomAccess.length === 0 ? (
+                            <p className={SETTING_ROW_HINT}>No agents yet: guests with it see no Thread.</p>
+                          ) : (
+                            r.roomAccess.map((row) => (
+                              <p key={row.handle} className={SETTING_ROW_HINT}>
+                                <span className="text-[var(--color-text-primary)]">{handleName(row.handle)}</span>
+                                {': '}
+                                {row.caps.length ? row.caps.map((c) => shortCap(c)).join(', ') : 'nothing yet'}
+                              </p>
+                            ))
+                          )}
+                        </div>
+                        {editing ? null : (
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <Button
+                              aria-label={`Edit role ${r.name}`}
                               onClick={() => {
                                 setEditRoleId(r.id)
                                 setEditRoleRooms(new Set(r.roomHandles))
@@ -1352,36 +1308,326 @@ export function SkinAccessSection(): React.JSX.Element {
                                 }
                                 setEditRoleCapsByRoom(byRoom)
                               }}
-                              className="type-hint text-[var(--color-accent)] hover:underline no-drag cursor-pointer"
                             >
-                              Edit role
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setRemoveRoleConfirm(r.id)}
-                              className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
-                            >
-                              Remove role
-                            </button>
-                          </span>
+                              Edit
+                            </Button>
+                            <OverflowMenu
+                              label={`More actions for ${r.name}`}
+                              items={[
+                                {
+                                  id: 'remove',
+                                  label: 'Remove role…',
+                                  danger: true,
+                                  onSelect: () =>
+                                    setAsk({
+                                      title: `Remove the ${r.name} role?`,
+                                      message: 'Everyone who has it loses what it allows, at their next sign-in. You can make it again later.',
+                                      confirmLabel: 'Remove role',
+                                      run: () => removeRole(r.id),
+                                    }),
+                                },
+                              ]}
+                            />
+                          </div>
                         )}
                       </div>
                       {editing ? (
-                        <div className="space-y-2">
-                          <div className="space-y-2">
-                            {workspaces.map((ws) => {
-                              const included =
-                                editRoleRooms.has(ws.handle) || editRoleRooms.has(ws.id)
-                              const caps =
-                                editRoleCapsByRoom[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS)
-                              return (
-                                <div key={`edit-role-${r.id}-${ws.id}`} className="space-y-1">
-                                  <label className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
+                        <div className="mt-3 space-y-3">
+                          <AgentCapsPicker
+                            workspaces={workspaces}
+                            rooms={editRoleRooms}
+                            capsByRoom={editRoleCapsByRoom}
+                            choices={roleChoices}
+                            agentConfigOptIn={agentConfigOptIn}
+                            labelFor={(ws) => `Edit role ${r.name} agent ${ws}`}
+                            capLabelFor={(ws, cap) => `Edit role ${r.name} ${ws} ${cap}`}
+                            configLabelFor={(ws) => `Edit role ${r.name} ${ws} agent .k2 folder`}
+                            onRooms={setEditRoleRooms}
+                            onCaps={setEditRoleCapsByRoom}
+                          />
+                          <div className="flex gap-2">
+                            <Button
+                              variant="accent"
+                              disabled={roleBusy}
+                              onClick={() => void saveRole(r.id, [...editRoleRooms], editRoleCapsByRoom)}
+                            >
+                              {roleBusy ? 'Saving…' : 'Save role'}
+                            </Button>
+                            <Button variant="ghost" onClick={() => setEditRoleId(null)}>
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  )
+                })}
+                <form
+                  className="px-4 py-3 space-y-3"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    void createRole()
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-6">
+                    <div className="min-w-0 flex-1">
+                      <div className={SETTING_ROW_LABEL}>New role</div>
+                      <p className={SETTING_ROW_HINT}>Name it, then tick the agents it reaches. Each agent starts with Thread only.</p>
+                    </div>
+                    <Input
+                      className={`${SETTING_FIELD_WIDTH} type-control flex-shrink-0`}
+                      placeholder="Role name, like reception"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      value={newRoleName}
+                      onChange={(e) => setNewRoleName(e.target.value)}
+                      aria-label="New skin role name"
+                    />
+                  </div>
+                  {workspaces.length > 0 ? (
+                    <AgentCapsPicker
+                      workspaces={workspaces}
+                      rooms={newRoleRooms}
+                      capsByRoom={newRoleCapsByRoom}
+                      choices={roleChoices}
+                      agentConfigOptIn={agentConfigOptIn}
+                      labelFor={(ws) => `Role agent ${ws}`}
+                      capLabelFor={(ws, cap) => `Role ${ws} ${cap}`}
+                      configLabelFor={(ws) => `Role ${ws} agent .k2 folder`}
+                      onRooms={setNewRoleRooms}
+                      onCaps={setNewRoleCapsByRoom}
+                    />
+                  ) : (
+                    <p className={SETTING_ROW_HINT}>No agents on this server yet, so a new role reaches no Thread.</p>
+                  )}
+                  {roleError ? (
+                    <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
+                      Couldn&rsquo;t save the role. <span className="text-[var(--color-text-muted)]">The server said: {trimReason(roleError)}.</span>
+                    </p>
+                  ) : null}
+                  <div className="flex justify-end">
+                    <Button type="submit" variant="accent" disabled={roleBusy || !newRoleName.trim()}>
+                      {roleBusy && editRoleId === null ? 'Saving…' : 'Create role'}
+                    </Button>
+                  </div>
+                </form>
+              </SettingsGroup>
+
+              <SettingsGroup
+                card
+                title="Users"
+                hint={
+                  selectedApp === 'host'
+                    ? 'People who can use the server’s own sign-in, and the role each one gets.'
+                    : 'Only the people here can sign in to this App. A new App starts with nobody.'
+                }
+              >
+                {appGrants.length === 0 ? (
+                  <div className="px-4 py-3">
+                    <p className={SETTING_ROW_HINT} data-testid="apps-users-empty">
+                      Nobody can sign in yet. Add a person below.
+                    </p>
+                  </div>
+                ) : null}
+                {appGrants.map((grant) => {
+                  const person = users.find((u) => u.id != null && u.id === grant.subjectId)
+                  const rooms = person
+                    ? (person.defaultRoomHandles.length ? person.defaultRoomHandles : person.defaultRooms)
+                    : []
+                  const grantRole = grant.roleId ? roles.find((r) => r.id === grant.roleId) : null
+                  const who = `${grantSubjectLabel(grant, users, workspaces)}${grant.subjectKind === 'workspace' ? ' · workspace' : ''}`
+                  return (
+                    <div key={grant.id} className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`apps-grant-${grant.id}`}>
+                      <div className="flex items-start justify-between gap-6">
+                        <div className="min-w-0 flex-1">
+                          <div className="type-name text-[var(--color-text-primary)]">{who}</div>
+                          {selectedApp === 'host' && grant.subjectKind === 'principal' && person ? (
+                            person.roleId || person.roleName ? null : (
+                              <p className={SETTING_ROW_HINT}>default rooms: {rooms.length ? rooms.join(', ') : 'none'}</p>
+                            )
+                          ) : selectedApp !== 'host' && grantRole ? (
+                            <p className={SETTING_ROW_HINT}>{grantRole.name}</p>
+                          ) : selectedApp !== 'host' && grant.subjectKind === 'principal' ? (
+                            <p className={SETTING_ROW_HINT}>
+                              rooms:{' '}
+                              {(() => {
+                                const ids = grantScopeRooms(grant.scope)
+                                if (!ids.length) return 'none'
+                                return ids.map((id) => workspaces.find((w) => w.id === id)?.handle ?? id).join(', ')
+                              })()}
+                            </p>
+                          ) : null}
+                          {!grant.enabled ? <p className={SETTING_ROW_HINT}>Off: can&rsquo;t sign in until you turn it back on.</p> : null}
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {selectedApp === 'host' && grant.subjectKind === 'principal' && person ? (
+                            <SettingDropdown
+                              ariaLabel={`${person.username} login role`}
+                              value={person.roleName ?? ''}
+                              placeholder="None"
+                              options={loginRoleChoices}
+                              onChange={(next) => void setUserRole(person.username, next.trim() ? next : null)}
+                              menuAlign="right"
+                            />
+                          ) : null}
+                          <Toggle
+                            size="sm"
+                            checked={grant.enabled}
+                            onChange={() => void setGrantEnabled(grant, !grant.enabled)}
+                            aria-label={`Enable grant ${grant.id}`}
+                            disabled={busyId === grant.id}
+                          />
+                          <OverflowMenu
+                            label={`More actions for ${who}`}
+                            triggerProps={{ 'data-testid': `apps-grant-menu-${grant.id}` }}
+                            items={[
+                              {
+                                id: 'revoke',
+                                label: 'Remove access…',
+                                danger: true,
+                                onSelect: () =>
+                                  setAsk({
+                                    title: `Remove ${grantSubjectLabel(grant, users, workspaces)}?`,
+                                    message:
+                                      selectedApp === 'host'
+                                        ? 'They can’t use the server’s own sign-in any more. You can add them again later.'
+                                        : 'They can’t sign in to this App any more. You can add them again later.',
+                                    confirmLabel: 'Remove access',
+                                    run: () => revokeGrant(grant.id),
+                                  }),
+                              },
+                            ]}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+                <SettingRow label="Add a person" hint="Pick a person and the role they get here." stack>
+                  <div className={SETTING_FIELD_WIDTH}>
+                    <SettingDropdown
+                      ariaLabel="App user"
+                      value={addPersonId}
+                      placeholder="Person"
+                      options={peopleChoices}
+                      onChange={setAddPersonId}
+                      menuAlign="left"
+                      fullWidth
+                    />
+                  </div>
+                  <div className={SETTING_FIELD_WIDTH}>
+                    <SettingDropdown
+                      ariaLabel="App user role"
+                      value={addRoleId}
+                      placeholder={appRoleChoices.length ? 'Role' : 'Make a role first'}
+                      options={appRoleChoices}
+                      onChange={setAddRoleId}
+                      menuAlign="left"
+                      fullWidth
+                    />
+                  </div>
+                  <Button variant="accent" disabled={busyId === 'add-user' || !addPersonId || !addRoleId} onClick={() => void addAppUser()}>
+                    {busyId === 'add-user' ? 'Adding…' : 'Add user'}
+                  </Button>
+                </SettingRow>
+                {selectedApp && selectedApp !== 'host' ? (
+                  <SettingRow
+                    label="Everyone with the server sign-in"
+                    hint="Gives each of them the same access to this App that they have on the server."
+                  >
+                    <Button disabled={busyId === 'copy-host'} onClick={() => void copyHostLogins()}>
+                      {busyId === 'copy-host' ? 'Adding…' : 'Add them all'}
+                    </Button>
+                  </SettingRow>
+                ) : null}
+              </SettingsGroup>
+
+              {selectedApp ? (
+                <AppPeopleAccess
+                  key={selectedApp}
+                  app={selectedApp}
+                  hasRoles={visibleRoles.length > 0}
+                  onRolesChanged={() => void refresh()}
+                />
+              ) : null}
+
+              {selectedApp && selectedApp !== 'host' && phonePairing ? (
+                <AppPhonePairing key={`phones-${selectedApp}`} app={selectedApp} />
+              ) : null}
+
+              {selectedApp && selectedApp !== 'host' ? <AppReleases key={`releases-${selectedApp}`} app={selectedApp} /> : null}
+
+              {selectedApp === 'host' ? (
+                <>
+                  <SettingsGroup
+                    card
+                    title="Platform tokens"
+                    settingId="skin-access.keys"
+                    hint="Let another service, like your website, read or post in an agent’s Thread. Not for people: give a person a role instead. Each token is shown once, when you make it."
+                  >
+                    {!bannerDismissed && darkKeys.length > 0 ? (
+                      <div className="px-4 py-3">
+                        <Callout tone="warn" role="status" className="type-hint flex items-center justify-between gap-4">
+                          <span>Assign agents or these platform tokens go dark: a token with no agents can&rsquo;t reach any Thread.</span>
+                          <Button onClick={() => setBannerDismissed(true)}>Dismiss</Button>
+                        </Callout>
+                      </div>
+                    ) : null}
+                    {tokens.map((k) => {
+                      const busy = busyId === k.id
+                      return (
+                        <div key={k.id} className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`apps-token-${k.id}`}>
+                          <div className="flex items-start justify-between gap-6">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-baseline gap-2 flex-wrap">
+                                <span className="type-name text-[var(--color-text-primary)]">{k.name || 'Unnamed token'}</span>
+                                <span className="type-hint font-mono text-[var(--color-text-secondary)]">{prefixLabel(k.prefix)}</span>
+                              </div>
+                              <p className={SETTING_ROW_HINT}>
+                                {k.caps.length ? k.caps.map((c) => shortCap(c)).join(', ') : 'No permissions'}
+                                {' · '}
+                                {k.roomHandles.length ? k.roomHandles.map(handleName).join(', ') : 'no agents'}
+                              </p>
+                            </div>
+                            {editKeyId === k.id ? null : (
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                <Button
+                                  aria-label={`Edit agents for ${k.name || prefixLabel(k.prefix)}`}
+                                  onClick={() => {
+                                    setEditKeyId(k.id)
+                                    setEditKeyRooms(new Set(k.roomHandles))
+                                  }}
+                                >
+                                  Edit agents
+                                </Button>
+                                <Button
+                                  variant="danger-quiet"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    setAsk({
+                                      title: `Revoke ${k.name || prefixLabel(k.prefix)}?`,
+                                      message: 'The service using it stops working at once. A revoked token can’t come back: make a new one instead.',
+                                      confirmLabel: 'Revoke token',
+                                      run: () => revokeKey(k.id),
+                                    })
+                                  }
+                                >
+                                  Revoke
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                          {editKeyId === k.id ? (
+                            <div className="mt-3 space-y-3">
+                              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                                {workspaces.map((ws) => (
+                                  <label key={`edit-${k.id}-${ws.id}`} className="flex items-center gap-2 cursor-pointer select-none no-drag min-w-0">
                                     <Checkbox
-                                      aria-label={`Edit role ${r.name} agent ${ws.handle}`}
-                                      checked={included}
+                                      aria-label={`Key ${k.id} agent ${ws.handle}`}
+                                      checked={editKeyRooms.has(ws.handle) || editKeyRooms.has(ws.id)}
                                       onChange={(e) => {
-                                        setEditRoleRooms((prev) => {
+                                        setEditKeyRooms((prev) => {
                                           const next = new Set(prev)
                                           if (e.target.checked) next.add(ws.handle)
                                           else {
@@ -1390,559 +1636,314 @@ export function SkinAccessSection(): React.JSX.Element {
                                           }
                                           return next
                                         })
-                                        setEditRoleCapsByRoom((prev) => {
-                                          const next = { ...prev }
-                                          if (e.target.checked) {
-                                            next[ws.handle] = new Set(DEFAULT_SKIN_CAPS)
-                                          } else {
-                                            delete next[ws.handle]
-                                          }
-                                          return next
-                                        })
                                       }}
                                     />
-                                    <span className="type-hint font-mono text-[var(--color-text-secondary)]">
-                                      {ws.handle}
-                                    </span>
+                                    <span className="type-row text-[var(--color-text-primary)] truncate">{ws.name}</span>
                                   </label>
-                                  {included ? (
-                                    <div className="flex flex-wrap gap-x-3 gap-y-1 pl-5">
-                                      {roleChoices.map((cap) => (
-                                        <label
-                                          key={`edit-role-${r.name}-${ws.handle}-${cap}`}
-                                          title={ROLE_CAP_LABELS[cap]}
-                                          className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
-                                        >
-                                          <Checkbox
-                                            aria-label={`Edit role ${r.name} ${ws.handle} ${cap}`}
-                                            checked={caps.has(cap)}
-                                            onChange={(ev) => {
-                                              setEditRoleCapsByRoom((prev) => ({
-                                                ...prev,
-                                                [ws.handle]: toggleSkinCap(
-                                                  prev[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS),
-                                                  cap,
-                                                  ev.target.checked,
-                                                ),
-                                              }))
-                                            }}
-                                          />
-                                          <span className="type-hint font-mono text-[var(--color-text-secondary)]">
-                                            {cap}
-                                          </span>
-                                        </label>
-                                      ))}
-                                      <AgentConfigOption
-                                        caps={caps}
-                                        enabled={agentConfigOptIn}
-                                        ariaLabel={`Edit role ${r.name} ${ws.handle} agent .k2 folder`}
-                                        onChange={(on) => {
-                                          setEditRoleCapsByRoom((prev) => ({
-                                            ...prev,
-                                            [ws.handle]: toggleSkinCap(
-                                              prev[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS),
-                                              SKIN_AGENT_CONFIG_CAP,
-                                              on,
-                                            ),
-                                          }))
-                                        }}
-                                      />
-                                    </div>
-                                  ) : null}
-                                </div>
-                              )
-                            })}
-                          </div>
-                          <div className="flex gap-2">
-                            <button
-                              type="button"
-                              className="type-hint text-[var(--color-accent)] cursor-pointer"
-                              onClick={() =>
-                                void saveRole(r.id, [...editRoleRooms], editRoleCapsByRoom)
-                              }
-                            >
-                              Save role
-                            </button>
-                            <button
-                              type="button"
-                              className="type-hint text-[var(--color-text-muted)] cursor-pointer"
-                              onClick={() => setEditRoleId(null)}
-                            >
-                              Cancel
-                            </button>
+                                ))}
+                              </div>
+                              <div className="flex gap-2">
+                                <Button variant="accent" disabled={busy} onClick={() => void saveKeyRooms(k.id, [...editKeyRooms])}>
+                                  Save agents
+                                </Button>
+                                <Button variant="ghost" onClick={() => setEditKeyId(null)}>
+                                  Cancel
+                                </Button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      )
+                    })}
+                    <div className="px-4 py-3 space-y-3">
+                      <div className="flex items-start justify-between gap-6">
+                        <div className="min-w-0 flex-1">
+                          <div className={SETTING_ROW_LABEL}>New token</div>
+                          <p className={SETTING_ROW_HINT}>Name it after the service that uses it, pick what it may do and which agents it reaches.</p>
+                        </div>
+                        <Input
+                          className={`${SETTING_FIELD_WIDTH} type-control flex-shrink-0`}
+                          placeholder="Service name, like website"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          value={mintName}
+                          onChange={(e) => setMintName(e.target.value)}
+                          aria-label="Platform token name"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                        {capChoices.map((cap) => (
+                          <label key={cap} title={SKIN_CAP_LABELS[cap]} className="flex items-start gap-2 cursor-pointer select-none no-drag min-w-0">
+                            <Checkbox
+                              aria-label={`Mint cap ${cap}`}
+                              checked={mintCaps.has(cap)}
+                              onChange={(e) => {
+                                setMintCaps((prev) => toggleSkinCap(prev, cap, e.target.checked))
+                              }}
+                            />
+                            <span className="type-hint text-[var(--color-text-secondary)]">{shortCap(cap)}</span>
+                          </label>
+                        ))}
+                        <AgentConfigOption
+                          caps={mintCaps}
+                          enabled={agentConfigOptIn}
+                          ariaLabel="Mint cap agent .k2 folder"
+                          onChange={(on) => {
+                            setMintCaps((prev) => toggleSkinCap(prev, SKIN_AGENT_CONFIG_CAP, on))
+                          }}
+                        />
+                      </div>
+                      {workspaces.length > 0 ? (
+                        <div>
+                          <div className="type-hint text-[var(--color-text-secondary)] mb-1.5">Agents it reaches</div>
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                            {workspaces.map((ws) => (
+                              <label key={`mint-${ws.id}`} className="flex items-center gap-2 cursor-pointer select-none no-drag min-w-0">
+                                <Checkbox
+                                  aria-label={`Mint agent ${ws.handle}`}
+                                  checked={mintRooms.has(ws.handle) || mintRooms.has(ws.id)}
+                                  onChange={(e) => {
+                                    setMintRooms((prev) => {
+                                      const next = new Set(prev)
+                                      if (e.target.checked) next.add(ws.handle)
+                                      else {
+                                        next.delete(ws.handle)
+                                        next.delete(ws.id)
+                                      }
+                                      return next
+                                    })
+                                  }}
+                                />
+                                <span className="type-row text-[var(--color-text-primary)] truncate">{ws.name}</span>
+                              </label>
+                            ))}
                           </div>
                         </div>
                       ) : (
-                        <div className="space-y-1">
-                          {r.roomAccess.length === 0 ? (
-                            <span className="type-hint text-[var(--color-text-muted)]">
-                              no rooms
-                            </span>
-                          ) : (
-                            r.roomAccess.map((row) => (
-                              <div key={row.handle} className="flex flex-wrap items-center gap-1">
-                                <span className="type-hint font-mono px-1.5 py-0.5 bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
-                                  {row.handle}
-                                </span>
-                                {row.caps.map((cap) => (
-                                  <Tag
-                                    tone="neutral"
-                                    className="font-mono"
-                                    key={cap}
-                                  >
-                                    {cap}
-                                  </Tag>
-                                ))}
-                              </div>
-                            ))
-                          )}
-                        </div>
+                        <p className={SETTING_ROW_HINT}>No agents on this server yet: add a workspace before making a token.</p>
                       )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        </SettingsGroup>
-
-            <SettingsGroup title="Users">
-              {appGrants.length === 0 ? (
-                <p className="type-hint text-[var(--color-text-muted)]">No grants on this app.</p>
-              ) : (
-                <div className="divide-y divide-[var(--color-border)]">
-                  {appGrants.map((grant) => {
-                    const person = users.find((u) => u.id != null && u.id === grant.subjectId)
-                    const rooms = person
-                      ? (person.defaultRoomHandles.length ? person.defaultRoomHandles : person.defaultRooms)
-                      : []
-                    const grantRole = grant.roleId
-                      ? roles.find((r) => r.id === grant.roleId)
-                      : null
-                    return (
-                      <div key={grant.id} className="py-2 space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="type-row text-[var(--color-text-primary)]">
-                            {grantSubjectLabel(grant, users, workspaces)}
-                            {grant.subjectKind === 'workspace' ? ' · workspace' : ''}
-                          </span>
-                          <span className="flex items-center gap-2">
-                            <Toggle size="sm"
-                              checked={grant.enabled}
-                              onChange={() => void setGrantEnabled(grant, !grant.enabled)}
-                              aria-label={`Enable grant ${grant.id}`}
-                              disabled={busyId === grant.id}
-                            />
-                            <button
-                              type="button"
-                              aria-label={`Revoke grant ${grant.id}`}
-                              className="type-hint text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] hover:underline no-drag cursor-pointer"
-                              onClick={() => void revokeGrant(grant.id)}
-                            >
-                              Revoke
-                            </button>
-                          </span>
-                        </div>
-                        {selectedApp === 'host' && grant.subjectKind === 'principal' && person ? (
-                          <div className="space-y-1">
-                            {person.roleId || person.roleName ? null : (
-                              <p className="type-hint text-[var(--color-text-muted)]">
-                                default rooms: {rooms.length ? rooms.join(', ') : 'none'}
-                              </p>
-                            )}
-                            <SettingRow label="Login role">
-                              <SettingDropdown
-                                ariaLabel={`${person.username} login role`}
-                                value={person.roleName ?? ''}
-                                placeholder="None"
-                                options={loginRoleChoices}
-                                onChange={(next) => void setUserRole(person.username, next.trim() ? next : null)}
-                                menuAlign="right"
-                              />
-                            </SettingRow>
-                          </div>
-                        ) : selectedApp !== 'host' && grantRole ? (
-                          <p className="type-hint text-[var(--color-text-muted)]">{grantRole.name}</p>
-                        ) : selectedApp !== 'host' && grant.subjectKind === 'principal' ? (
-                          <p className="type-hint text-[var(--color-text-muted)]">
-                            rooms:{' '}
-                            {(() => {
-                              const ids = grantScopeRooms(grant.scope)
-                              if (!ids.length) return 'none'
-                              return ids
-                                .map((id) => workspaces.find((w) => w.id === id)?.handle ?? id)
-                                .join(', ')
-                            })()}
-                          </p>
-                        ) : null}
+                      {mintError ? (
+                        <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
+                          Couldn&rsquo;t make the token. <span className="text-[var(--color-text-muted)]">{trimReason(mintError)}.</span>
+                        </p>
+                      ) : null}
+                      {mintedSecret ? (
+                        <Callout tone="warn" className="type-hint space-y-2" data-testid="apps-token-secret">
+                          <p className="font-medium">Copy this token now. K2 can&rsquo;t show it again.</p>
+                          <code className="block break-all select-all text-[var(--color-text-primary)]">{mintedSecret}</code>
+                          <Button
+                            onClick={() => {
+                              void navigator.clipboard?.writeText(mintedSecret)
+                            }}
+                          >
+                            Copy token
+                          </Button>
+                        </Callout>
+                      ) : null}
+                      <div className="flex justify-end">
+                        <Button variant="accent" disabled={mintBusy || !mintName.trim() || mintRooms.size === 0} onClick={() => void mintKey()}>
+                          {mintBusy ? 'Making…' : 'Mint key'}
+                        </Button>
                       </div>
-                    )
-                  })}
-                </div>
-              )}
-              <SettingRow label="Person">
-                <SettingDropdown
-                  ariaLabel="App user"
-                  value={addPersonId}
-                  placeholder="person"
-                  options={peopleChoices}
-                  onChange={setAddPersonId}
-                  menuAlign="right"
-                />
-              </SettingRow>
-              <SettingRow label="Role">
-                <SettingDropdown
-                  ariaLabel="App user role"
-                  value={addRoleId}
-                  placeholder="role"
-                  options={appRoleChoices}
-                  onChange={setAddRoleId}
-                  menuAlign="right"
-                />
-              </SettingRow>
-              <button
-                type="button"
-                className="px-3 py-1 type-control text-[var(--color-on-accent)] bg-[var(--color-accent-fill)] hover:opacity-90 no-drag cursor-pointer disabled:opacity-60"
-                disabled={busyId === 'add-user' || !addPersonId || !addRoleId}
-                onClick={() => void addAppUser()}
-              >
-                Add user
-              </button>
-              {selectedApp && selectedApp !== 'host' ? (
-                <button
-                  type="button"
-                  className="ml-2 px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] no-drag cursor-pointer disabled:opacity-60"
-                  disabled={busyId === 'copy-host'}
-                  onClick={() => void copyHostLogins()}
-                >
-                  Add everyone who has the box login
-                </button>
-              ) : null}
-            </SettingsGroup>
+                    </div>
+                  </SettingsGroup>
 
-            {selectedApp ? (
-              <AppPeopleAccess
-                key={selectedApp}
-                app={selectedApp}
-                hasRoles={visibleRoles.length > 0}
-                onRolesChanged={() => void refresh()}
-              />
-            ) : null}
-
-            {selectedApp && selectedApp !== 'host' && phonePairing ? (
-              <AppPhonePairing key={`phones-${selectedApp}`} app={selectedApp} />
-            ) : null}
-
-            {selectedApp && selectedApp !== 'host' ? <AppReleases key={`releases-${selectedApp}`} app={selectedApp} /> : null}
-
-            {selectedApp === 'host' ? (
-              <>
-            {selectedApp === 'host' && !bannerDismissed && darkKeys.length > 0 ? (
-              <div role="status" className="border border-[var(--color-status-warn)]/40 bg-[var(--color-status-warn)]/10 p-3 space-y-2">
-                <p className="type-hint text-[var(--color-text-primary)]">
-                  Assign agents or these platform tokens go dark. Tokens with no rooms cannot Thread.
-                </p>
-                <button type="button" className="type-hint text-[var(--color-accent)] cursor-pointer" onClick={() => setBannerDismissed(true)}>
-                  Dismiss
-                </button>
-              </div>
-            ) : null}
-<SettingsGroup title="Platform tokens">
-          <div data-settings-id="skin-access.keys" className="space-y-3">
-            <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
-              Platform tokens are labels (vercel), not guests. The raw secret is shown only
-              once when minted. Prefix <code className="type-hint">k2skn_</code> — not{' '}
-              <code className="type-hint">k2sk_</code> API keys.{' '}
-              <code className="type-hint">thread:read</code> includes overlay WS.{' '}
-              <code className="type-hint">files:read</code> lists/reads that agent's folder
-              and <code className="type-hint">/cli/fs/events</code>. Write-only does not
-              grant list. Do not mint for this user.
-            </p>
-            <div className="space-y-2">
-              <Input
-                className={INPUT_CLS}
-                placeholder="name (vercel)"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                value={mintName}
-                onChange={(e) => setMintName(e.target.value)}
-                aria-label="Platform token name"
-              />
-              <div className="flex flex-wrap gap-x-4 gap-y-1">
-                {capChoices.map((cap) => (
-                  <label
-                    key={cap}
-                    title={SKIN_CAP_LABELS[cap]}
-                    className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
+                  <SettingsGroup
+                    card
+                    title="Sign-in for other sites"
+                    settingId="skin-access.hydra"
+                    hint="Let other sites sign people in with this server (OpenID Connect). Turning on Apps doesn’t turn this on."
                   >
+                    {!hydra.supported ? (
+                      <div className="px-4 py-3">
+                        <LinuxOnlyNote testId="apps-hydra-linux">
+                          This runs on Linux servers. On this Mac it can&rsquo;t be turned on.
+                        </LinuxOnlyNote>
+                      </div>
+                    ) : null}
+                    <SettingSwitchRow
+                      control={
+                        <Toggle
+                          checked={hydra.enabled}
+                          disabled={!hydra.supported || hydraBusy || loading}
+                          onChange={(on) => {
+                            void persistHydra(on)
+                          }}
+                          aria-label="Turn on Hydra OIDC issuer"
+                        />
+                      }
+                    >
+                      <div className={SETTING_ROW_LABEL}>Sign-in service</div>
+                      <p className={SETTING_ROW_HINT}>
+                        {hydra.enabled
+                          ? hydra.running
+                            ? 'On and answering.'
+                            : 'On, but not answering yet.'
+                          : 'Off. Each person signs in as their own guest account; nothing is copied to the service.'}
+                      </p>
+                      {hydra.supported && (hydra.publicUrl || hydra.adminUrl) ? (
+                        <p className={SETTING_SERVER_REASON}>
+                          {hydra.publicUrl ? `Public address ${hydra.publicUrl}` : null}
+                          {hydra.publicUrl && hydra.adminUrl ? ' · ' : null}
+                          {hydra.adminUrl ? `admin ${hydra.adminUrl}` : null}
+                        </p>
+                      ) : null}
+                    </SettingSwitchRow>
+                  </SettingsGroup>
+                </>
+              ) : null}
+            </>
+          )}
+        </div>
+      </div>
+      {ask ? (
+        <ConfirmSheet
+          title={ask.title}
+          message={ask.message}
+          confirmLabel={ask.confirmLabel}
+          destructive
+          testId="apps-confirm"
+          onCancel={() => setAsk(null)}
+          onConfirm={() => {
+            const run = ask.run
+            setAsk(null)
+            void run()
+          }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+/** A plain-words name for a cap: the shared label, cut at its aside. */
+function shortCap(cap: string): string {
+  const label = ROLE_CAP_LABELS[cap] ?? SKIN_CAP_LABELS[cap as SkinCap]
+  if (!label) return cap
+  return label.replace(/\s*\(.*\)\s*$/, '')
+}
+
+function trimReason(text: string): string {
+  return text.trim().replace(/[.\s]+$/, '')
+}
+
+function RailGlyph({ kind }: { kind: 'server' | 'host' }): React.JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex-shrink-0 w-6 h-6 inline-flex items-center justify-center rounded-[var(--radius-field)] border border-[var(--color-control-edge)] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)]"
+    >
+      {kind === 'server' ? (
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-3.5 h-3.5">
+          <rect x="2.5" y="3" width="11" height="4" />
+          <rect x="2.5" y="9" width="11" height="4" />
+          <path d="M5 5h.01M5 11h.01" strokeLinecap="round" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-3.5 h-3.5">
+          <circle cx="8" cy="6" r="2.5" />
+          <path d="M3.5 13c.6-2.3 2.4-3.5 4.5-3.5s3.9 1.2 4.5 3.5" strokeLinecap="round" />
+        </svg>
+      )}
+    </span>
+  )
+}
+
+/** Tick the agents a role reaches, and what it may do with each. */
+function AgentCapsPicker({
+  workspaces,
+  rooms,
+  capsByRoom,
+  choices,
+  agentConfigOptIn,
+  labelFor,
+  capLabelFor,
+  configLabelFor,
+  onRooms,
+  onCaps,
+}: {
+  workspaces: SkinWorkspace[]
+  rooms: ReadonlySet<string>
+  capsByRoom: Record<string, Set<string>>
+  choices: readonly string[]
+  agentConfigOptIn: boolean
+  labelFor: (handle: string) => string
+  capLabelFor: (handle: string, cap: string) => string
+  configLabelFor: (handle: string) => string
+  onRooms: React.Dispatch<React.SetStateAction<Set<string>>>
+  onCaps: React.Dispatch<React.SetStateAction<Record<string, Set<string>>>>
+}): React.JSX.Element {
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+        {workspaces.map((ws) => {
+          const included = rooms.has(ws.handle) || rooms.has(ws.id)
+          return (
+            <label key={`agent-${ws.id}`} className="flex items-center gap-2 cursor-pointer select-none no-drag min-w-0">
+              <Checkbox
+                aria-label={labelFor(ws.handle)}
+                checked={included}
+                onChange={(e) => {
+                  onRooms((prev) => {
+                    const next = new Set(prev)
+                    if (e.target.checked) next.add(ws.handle)
+                    else {
+                      next.delete(ws.handle)
+                      next.delete(ws.id)
+                    }
+                    return next
+                  })
+                  onCaps((prev) => {
+                    const next = { ...prev }
+                    if (e.target.checked) next[ws.handle] = new Set(DEFAULT_SKIN_CAPS)
+                    else delete next[ws.handle]
+                    return next
+                  })
+                }}
+              />
+              <span className="type-row text-[var(--color-text-primary)] truncate">{ws.name}</span>
+            </label>
+          )
+        })}
+      </div>
+      {workspaces
+        .filter((ws) => rooms.has(ws.handle) || rooms.has(ws.id))
+        .map((ws) => {
+          const caps = capsByRoom[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS)
+          return (
+            <Surface key={`caps-${ws.id}`} chamfer material="tile" className="px-3 py-2 space-y-1.5">
+              <div className="type-row text-[var(--color-text-primary)]">What it may do with {ws.name}</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                {choices.map((cap) => (
+                  <label key={`${ws.handle}-${cap}`} title={ROLE_CAP_LABELS[cap]} className="flex items-start gap-2 cursor-pointer select-none no-drag min-w-0">
                     <Checkbox
-                      aria-label={`Mint cap ${cap}`}
-                      checked={mintCaps.has(cap)}
+                      aria-label={capLabelFor(ws.handle, cap)}
+                      checked={caps.has(cap)}
                       onChange={(e) => {
-                        setMintCaps((prev) => toggleSkinCap(prev, cap, e.target.checked))
+                        onCaps((prev) => ({
+                          ...prev,
+                          [ws.handle]: toggleSkinCap(prev[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS), cap, e.target.checked),
+                        }))
                       }}
                     />
-                    <span className="type-hint font-mono text-[var(--color-text-secondary)]">
-                      {cap}
-                    </span>
+                    <span className="type-hint text-[var(--color-text-secondary)]">{shortCap(cap)}</span>
                   </label>
                 ))}
                 <AgentConfigOption
-                  caps={mintCaps}
+                  caps={caps}
                   enabled={agentConfigOptIn}
-                  ariaLabel="Mint cap agent .k2 folder"
+                  ariaLabel={configLabelFor(ws.handle)}
                   onChange={(on) => {
-                    setMintCaps((prev) => toggleSkinCap(prev, SKIN_AGENT_CONFIG_CAP, on))
+                    onCaps((prev) => ({
+                      ...prev,
+                      [ws.handle]: toggleSkinCap(prev[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS), SKIN_AGENT_CONFIG_CAP, on),
+                    }))
                   }}
                 />
               </div>
-              {workspaces.length > 0 ? (
-                <div className="flex flex-wrap gap-x-3 gap-y-1">
-                  {workspaces.map((ws) => (
-                    <label
-                      key={`mint-${ws.id}`}
-                      className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
-                    >
-                      <Checkbox
-                        aria-label={`Mint agent ${ws.handle}`}
-                        checked={mintRooms.has(ws.handle) || mintRooms.has(ws.id)}
-                        onChange={(e) => {
-                          setMintRooms((prev) => {
-                            const next = new Set(prev)
-                            if (e.target.checked) next.add(ws.handle)
-                            else {
-                              next.delete(ws.handle)
-                              next.delete(ws.id)
-                            }
-                            return next
-                          })
-                        }}
-                      />
-                      <span className="type-hint font-mono text-[var(--color-text-secondary)]">
-                        {ws.handle}
-                      </span>
-                      {ws.name && ws.name !== ws.handle ? (
-                        <span className="type-hint text-[var(--color-text-muted)]">{ws.name}</span>
-                      ) : null}
-                    </label>
-                  ))}
-                </div>
-              ) : (
-                <p className="type-hint text-[var(--color-text-muted)]">
-                  No workspaces on this box yet — add one before minting a key.
-                </p>
-              )}
-              <button
-                type="button"
-                disabled={mintBusy || !mintName.trim() || mintRooms.size === 0}
-                onClick={() => void mintKey()}
-                className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50"
-              >
-                {mintBusy ? 'Minting…' : 'Mint key'}
-              </button>
-            </div>
-            {mintError && (
-              <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
-                {mintError}
-              </p>
-            )}
-            {mintedSecret && (
-              <div className="border border-[var(--color-status-warn)]/40 bg-[var(--color-status-warn)]/10 p-3 space-y-2">
-                <p className="type-name text-[var(--color-text-primary)]">
-                  Store this key now — it cannot be retrieved again
-                </p>
-                <code className="block type-hint break-all select-all text-[var(--color-text-primary)]">
-                  {mintedSecret}
-                </code>
-                <button
-                  type="button"
-                  className="type-hint text-[var(--color-accent)] cursor-pointer"
-                  onClick={() => {
-                    void navigator.clipboard?.writeText(mintedSecret)
-                  }}
-                >
-                  Copy to clipboard
-                </button>
-              </div>
-            )}
-            {loading ? (
-              <p className="type-hint text-[var(--color-text-muted)]">Loading keys…</p>
-            ) : tokens.length === 0 ? (
-              <p className="type-hint text-[var(--color-text-muted)]">
-                No platform tokens yet. Mint one with a name — not for a user.
-              </p>
-            ) : (
-              <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-                {tokens.map((k) => {
-                  const busy = busyId === k.id
-                  return (
-                    <div
-                      key={k.id}
-                      className="p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"
-                    >
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="type-row font-mono text-[var(--color-text-primary)]">
-                            {prefixLabel(k.prefix)}
-                          </span>
-                          {k.name && (
-                            <span className="type-hint text-[var(--color-text-secondary)]">
-                              {k.name}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-1">
-                          {k.caps.length === 0 ? (
-                            <span className="type-hint text-[var(--color-text-muted)]">
-                              no scopes
-                            </span>
-                          ) : (
-                            k.caps.map((cap) => (
-                              <Tag
-                                tone="neutral"
-                                className="font-mono"
-                                key={cap}
-                              >
-                                {cap}
-                              </Tag>
-                            ))
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-1">
-                          {k.roomHandles.length === 0 ? (
-                            <span className="type-hint text-[var(--color-text-muted)]">
-                              no rooms
-                            </span>
-                          ) : (
-                            k.roomHandles.map((h) => (
-                              <span
-                                key={h}
-                                className="type-hint font-mono px-1.5 py-0.5 bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] border border-[var(--color-border)]"
-                              >
-                                {h}
-                              </span>
-                            ))
-                          )}
-                        </div>
-                        {editKeyId === k.id ? (
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap gap-x-3 gap-y-1">
-                              {workspaces.map((ws) => (
-                                <label
-                                  key={`edit-${k.id}-${ws.id}`}
-                                  className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
-                                >
-                                  <Checkbox
-                                    aria-label={`Key ${k.id} agent ${ws.handle}`}
-                                    checked={editKeyRooms.has(ws.handle) || editKeyRooms.has(ws.id)}
-                                    onChange={(e) => {
-                                      setEditKeyRooms((prev) => {
-                                        const next = new Set(prev)
-                                        if (e.target.checked) next.add(ws.handle)
-                                        else {
-                                          next.delete(ws.handle)
-                                          next.delete(ws.id)
-                                        }
-                                        return next
-                                      })
-                                    }}
-                                  />
-                                  <span className="type-hint font-mono text-[var(--color-text-secondary)]">
-                                    {ws.handle}
-                                  </span>
-                                </label>
-                              ))}
-                            </div>
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                className="type-hint text-[var(--color-accent)] cursor-pointer"
-                                onClick={() => void saveKeyRooms(k.id, [...editKeyRooms])}
-                              >
-                                Save rooms
-                              </button>
-                              <button
-                                type="button"
-                                className="type-hint text-[var(--color-text-muted)] cursor-pointer"
-                                onClick={() => setEditKeyId(null)}
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            className="type-hint text-[var(--color-accent)] cursor-pointer"
-                            onClick={() => {
-                              setEditKeyId(k.id)
-                              setEditKeyRooms(new Set(k.roomHandles))
-                            }}
-                          >
-                            Edit rooms
-                          </button>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void revokeKey(k.id)}
-                        className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-status-error-soft)] hover:border-[var(--color-status-error-soft)] cursor-pointer disabled:opacity-50 flex-shrink-0"
-                      >
-                        Revoke
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        </SettingsGroup>
-<SettingsGroup title="OIDC issuer (Hydra)">
-          <div data-settings-id="skin-access.hydra" className="space-y-2">
-            {!hydra.supported ? (
-              <p className="type-hint text-[var(--color-status-warn)] leading-relaxed">
-                {HYDRA_LINUX_BANNER}
-              </p>
-            ) : null}
-            <div className="flex items-center justify-between py-2">
-              <div className="flex-1 min-w-0 mr-3">
-                <span className="type-row text-[var(--color-text-secondary)]">
-                  Turn on — this box issues standard OIDC tickets
-                </span>
-                <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
-                  {hydra.supported
-                    ? hydra.hint ??
-                      'Off. Enabling skins does not start Hydra. Subject = skin principal id; no users in Hydra.'
-                    : 'Off. Enabling skins does not start Hydra. Subject = skin principal id; no users in Hydra.'}
-                </p>
-                {hydra.publicUrl || hydra.adminUrl ? (
-                  <p className="type-hint font-mono text-[var(--color-text-muted)] mt-1">
-                    {hydra.publicUrl ? `public ${hydra.publicUrl}` : null}
-                    {hydra.publicUrl && hydra.adminUrl ? ' · ' : null}
-                    {hydra.adminUrl ? `admin ${hydra.adminUrl}` : null}
-                    {hydra.running ? ' · running' : ' · not running'}
-                  </p>
-                ) : null}
-              </div>
-              <Toggle
-                checked={hydra.enabled}
-                disabled={!hydra.supported || hydraBusy || loading}
-                onChange={(on) => {
-                  void persistHydra(on)
-                }}
-                aria-label="Turn on Hydra OIDC issuer"
-              />
-            </div>
-          </div>
-        </SettingsGroup>
-              </>
-            ) : null}
-
-          </div>
-        )}
-      </div>
+            </Surface>
+          )
+        })}
     </div>
   )
 }

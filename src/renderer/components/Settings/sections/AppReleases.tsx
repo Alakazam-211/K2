@@ -8,10 +8,11 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui'
 import { daemonErrorText } from '@/lib/daemon-error'
-import { SettingsGroup } from '../controls/SettingControls'
+import { SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { ConfirmSheet } from './AccessDialogs'
 import { fetchDownloads, fetchUpdates, promote, pull, rollback, size, type Downloads, type Release, type Updates } from './app-updates-api'
 
-const muted = 'type-hint text-[var(--color-text-muted)]'
+const muted = 'type-hint text-[var(--color-text-secondary)] leading-relaxed'
 const secondary = 'type-hint text-[var(--color-text-secondary)]'
 
 function errCode(e: unknown): string | null {
@@ -78,11 +79,16 @@ export function AppReleases({ app }: { app: string }): React.JSX.Element | null 
   const from = (r: Release): string | null => r.channels[0] ?? null
 
   return (
-    <SettingsGroup title="Releases">
-      <div className="space-y-2" data-testid="app-releases">
+    <SettingsGroup
+      card
+      title="Desktop releases"
+      hint="Versions of this App’s desktop download, and which channel offers each one."
+      state={u == null && !error ? <SettingsLoadState kind="loading" title="Loading releases…" /> : undefined}
+    >
+      <div className="px-4 py-3 space-y-2" data-testid="app-releases">
         {error ? (
-          <p role="alert" className="type-hint text-[var(--color-status-error)]">
-            {error}
+          <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
+            That didn&rsquo;t work. <span className="text-[var(--color-text-muted)]">The server said: {error.trim().replace(/[.\s]+$/, '')}.</span>
           </p>
         ) : null}
         {notice ? (
@@ -93,10 +99,9 @@ export function AppReleases({ app }: { app: string }): React.JSX.Element | null 
         {u == null ? (
           <p className={muted}>Loading…</p>
         ) : u.releases.length === 0 ? (
-          <p className={muted}>
-            No desktop releases yet. An agent ships one with k2 app updates push {u.app} --channel stable --version 1.0.0 --artifact
-            &lt;platform&gt;=&lt;file&gt; (k2 app updates --help).
-            {u.keyId ? '' : ' First it sets the App’s updater public key: k2 app updates key.'}
+          <p className={muted} data-testid="releases-empty">
+            No desktop releases yet. This App&rsquo;s agent publishes one when it ships a desktop version
+            {u.keyId ? '' : ', after it sets up the App’s update signing key'}.
           </p>
         ) : (
           <>
@@ -157,15 +162,9 @@ export function AppReleases({ app }: { app: string }): React.JSX.Element | null 
                             ))
                           : null}
                         {r.state === 'live' ? (
-                          asking === r.id ? (
-                            <Button disabled={busy} onClick={() => void act(async () => pull(app, r.version))}>
-                              {`Pull ${r.version}: sure?`}
-                            </Button>
-                          ) : (
-                            <Button disabled={busy} onClick={() => setAsking(r.id)}>
-                              Pull
-                            </Button>
-                          )
+                          <Button variant="danger-quiet" disabled={busy} onClick={() => setAsking(r.id)}>
+                            Pull…
+                          </Button>
                         ) : null}
                       </td>
                     </tr>
@@ -204,6 +203,24 @@ export function AppReleases({ app }: { app: string }): React.JSX.Element | null 
           </>
         )}
       </div>
+      {asking ? (() => {
+        const r = u?.releases.find((x) => x.id === asking)
+        if (!r) return null
+        return (
+          <ConfirmSheet
+            title={`Pull ${r.version}?`}
+            message="No channel offers it any more. People who already have it keep it until a newer version ships."
+            confirmLabel={`Pull ${r.version}`}
+            destructive
+            testId="release-pull-confirm"
+            onCancel={() => setAsking(null)}
+            onConfirm={() => {
+              setAsking(null)
+              void act(async () => pull(app, r.version))
+            }}
+          />
+        )
+      })() : null}
     </SettingsGroup>
   )
 }

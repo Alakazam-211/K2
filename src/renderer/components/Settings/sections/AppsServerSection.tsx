@@ -29,7 +29,17 @@ import { daemonErrorText } from '@/lib/daemon-error'
 import { useSettingsStore } from '@/stores/settings'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
-import { SettingsGroup } from '../controls/SettingControls'
+import {
+  SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
+  SETTING_SERVER_REASON,
+  SettingRow,
+  SettingSwitchRow,
+  SettingsGroup,
+  SettingsLoadState,
+} from '../controls/SettingControls'
+import { AccessSheet } from './AccessDialogs'
+import { LinuxOnlyNote, PaneHeader, StatusDot, type DotTone } from './apps-ui'
 import type { SettingEntry } from '../searchManifest'
 import {
   changeLines,
@@ -65,19 +75,9 @@ export const APPS_SERVER_MANIFEST: SettingEntry[] = [
   },
 ]
 
-const muted = 'text-[var(--color-text-muted)]'
-const secondary = 'text-[var(--color-text-secondary)]'
-
 type BoxState = { kind: 'loading' } | { kind: 'off' } | { kind: 'ready'; doctor: BoxDoctor } | { kind: 'error'; text: string }
 
 type Notice = { tone: 'ok' | 'error' | 'info' | 'warn'; text: string }
-
-const STATUS_STYLE: Record<string, string> = {
-  ok: 'text-[var(--color-status-ok-soft)]',
-  warn: 'text-[var(--color-status-warn-amber-soft)]',
-  fail: 'text-[var(--color-status-error-soft)]',
-  unknown: 'text-[var(--color-text-muted)]',
-}
 
 export function AppsServerSection(): React.JSX.Element {
   const apps = useSettingsStore((s) => s.apps)
@@ -92,6 +92,7 @@ export function AppsServerSection(): React.JSX.Element {
   const [busy, setBusy] = useState<
     null | 'dry' | 'apply' | 'engine' | 'auto' | 'retry' | 'unprep-dry' | 'unprep'
   >(null)
+  const [checking, setChecking] = useState(false)
   const mounted = useRef(true)
 
   const isOwner = role === 'owner'
@@ -124,6 +125,13 @@ export function AppsServerSection(): React.JSX.Element {
     }
   }, [load, activeHost])
 
+  const recheck = async (): Promise<void> => {
+    setChecking(true)
+    if (box.kind !== 'ready') setBox({ kind: 'loading' })
+    await load()
+    if (mounted.current) setChecking(false)
+  }
+
   const flipApps = async (next: boolean): Promise<void> => {
     setSwitchBusy(true)
     setNotice(null)
@@ -132,7 +140,7 @@ export function AppsServerSection(): React.JSX.Element {
       setDry(null)
       await load()
     } catch (e) {
-      setNotice({ tone: 'error', text: daemonErrorText(e) })
+      setNotice({ tone: 'error', text: `Couldn’t turn Apps ${next ? 'on' : 'off'}: ${daemonErrorText(e)}. Try again.` })
     } finally {
       setSwitchBusy(false)
     }
@@ -144,7 +152,7 @@ export function AppsServerSection(): React.JSX.Element {
     try {
       setDry(await prepareDryRun())
     } catch (e) {
-      setNotice({ tone: 'error', text: daemonErrorText(e) })
+      setNotice({ tone: 'error', text: `Couldn’t work out what Prepare would change: ${daemonErrorText(e)}. Try again.` })
     } finally {
       setBusy(null)
     }
@@ -158,12 +166,12 @@ export function AppsServerSection(): React.JSX.Element {
       const r = await prepareApply(needsPodmanInstall(dry))
       setDry(null)
       if (r.box) setBox({ kind: 'ready', doctor: r.box })
-      setNotice({ tone: 'ok', text: 'The box is prepared.' })
+      setNotice({ tone: 'ok', text: 'The server is prepared.' })
       await load()
     } catch (e) {
       setNotice({
         tone: 'error',
-        text: `${daemonErrorText(e)} (the checks below show where the box is now)`,
+        text: `Couldn’t prepare the server: ${daemonErrorText(e)}. The checks below show where it is now.`,
       })
       await load()
     } finally {
@@ -178,7 +186,7 @@ export function AppsServerSection(): React.JSX.Element {
       await setAutoPrepare(next)
       await load()
     } catch (e) {
-      setNotice({ tone: 'error', text: daemonErrorText(e) })
+      setNotice({ tone: 'error', text: `Couldn’t change automatic setup: ${daemonErrorText(e)}. Try again.` })
     } finally {
       setBusy(null)
     }
@@ -189,10 +197,10 @@ export function AppsServerSection(): React.JSX.Element {
     setNotice(null)
     try {
       await retryAutoPrepare()
-      setNotice({ tone: 'info', text: 'Automatic prep will run again now.' })
+      setNotice({ tone: 'info', text: 'Automatic setup will run again now.' })
       await load()
     } catch (e) {
-      setNotice({ tone: 'error', text: daemonErrorText(e) })
+      setNotice({ tone: 'error', text: `Couldn’t restart automatic setup: ${daemonErrorText(e)}. Try again.` })
     } finally {
       setBusy(null)
     }
@@ -204,7 +212,7 @@ export function AppsServerSection(): React.JSX.Element {
     try {
       setUnprep(await unprepDryRun())
     } catch (e) {
-      setNotice({ tone: 'error', text: daemonErrorText(e) })
+      setNotice({ tone: 'error', text: `Couldn’t work out what Undo would remove: ${daemonErrorText(e)}. Try again.` })
     } finally {
       setBusy(null)
     }
@@ -219,11 +227,11 @@ export function AppsServerSection(): React.JSX.Element {
       setUnprep(null)
       setNotice({
         tone: 'ok',
-        text: `The box setup is undone.${r.note ? ` ${r.note}` : ''}`,
+        text: `The server setup is undone.${r.note ? ` ${r.note}` : ''}`,
       })
       await load()
     } catch (e) {
-      setNotice({ tone: 'error', text: `${daemonErrorText(e)} (the checks below show where the box is now)` })
+      setNotice({ tone: 'error', text: `Couldn’t prepare the server: ${daemonErrorText(e)}. The checks below show where it is now.` })
       await load()
     } finally {
       setBusy(null)
@@ -238,7 +246,7 @@ export function AppsServerSection(): React.JSX.Element {
       setNotice({ tone: 'ok', text: `The App engine ${r.version ?? ''} is installed and answering.`.replace('  ', ' ') })
       await load()
     } catch (e) {
-      setNotice({ tone: 'error', text: daemonErrorText(e) })
+      setNotice({ tone: 'error', text: `Couldn’t install the App engine: ${daemonErrorText(e)}. Try again.` })
       await load()
     } finally {
       setBusy(null)
@@ -247,277 +255,317 @@ export function AppsServerSection(): React.JSX.Element {
 
   const doctor = box.kind === 'ready' ? box.doctor : null
   const appsOn = box.kind === 'off' ? false : doctor ? doctor.apps : apps
+  const ownerOnly = !isOwner && role !== null
+  const attention = doctor ? doctor.checks.filter((c) => c.status !== 'ok').length : 0
+  const engineLine = doctor ? appEngineLine(doctor.appEngine) : null
 
   return (
-    <div className="max-w-2xl space-y-6" data-testid="apps-server" data-settings-id="skin-access.server">
-      <div>
-        <h2 className="type-title text-[var(--color-text-primary)]">This server</h2>
-        <p className={`type-hint ${muted} mt-1 leading-relaxed`}>
-          Apps your agents build run on this server, each in its own wall. Set the server up here: no terminal on the
-          box needed.
-        </p>
-      </div>
+    <div className="space-y-6" data-testid="apps-server" data-settings-id="skin-access.server">
+      <PaneHeader
+        title="This server"
+        hint="Apps your agents build run here, each walled off in its own container. Set the server up from here; no terminal needed."
+      />
 
-      <SettingsGroup title="Apps">
-        <div className="flex items-start gap-3 py-2">
-          <Toggle
-            checked={appsOn}
-            onChange={(v) => void flipApps(v)}
-            disabled={!isOwner || switchBusy}
-            aria-label="Apps (beta)"
-          />
-          <div className="flex-1 min-w-0">
-            <div className="type-row text-[var(--color-text-primary)] flex items-center gap-2">
-              Apps
-              <BetaTag />
-            </div>
-            <p className={`type-hint ${muted} mt-0.5`}>
-              On: agents you allow can build, install and deploy Apps here. Apps run walled, in a guarded container. Off:
-              every App route is closed.
-            </p>
-            {!isOwner && role !== null ? (
-              <p className={`type-hint ${secondary} mt-1`} data-testid="apps-switch-owner-only">
-                Only the server&apos;s owner can turn Apps on or off.
-              </p>
-            ) : null}
-          </div>
-        </div>
-      </SettingsGroup>
+      {doctor && !doctor.linux ? (
+        <LinuxOnlyNote testId="apps-linux-note">
+          Apps run on Linux servers. On this Mac, agents can build and check Apps but not run them.
+        </LinuxOnlyNote>
+      ) : null}
 
       {notice ? (
-        <Callout tone={notice.tone} data-testid="apps-server-notice">
+        <Callout tone={notice.tone} className="type-hint" role={notice.tone === 'error' ? 'alert' : 'status'} data-testid="apps-server-notice">
           {notice.text}
         </Callout>
       ) : null}
 
-      {box.kind === 'loading' ? <p className={`type-hint ${muted}`}>Checking the box…</p> : null}
-      {box.kind === 'error' ? <Callout tone="error">{box.text}</Callout> : null}
-      {box.kind === 'off' ? (
-        <p className={`type-hint ${muted}`} data-testid="apps-off">
-          Apps are off on this server. Turn them on to check and prepare the box.
-        </p>
-      ) : null}
+      <SettingsGroup card title="Apps">
+        <SettingSwitchRow
+          control={
+            <Toggle checked={appsOn} onChange={(v) => void flipApps(v)} disabled={!isOwner || switchBusy} aria-label="Apps (beta)" />
+          }
+        >
+          <div className={`${SETTING_ROW_LABEL} flex items-center gap-2`}>
+            Apps
+            <BetaTag />
+          </div>
+          <p className={SETTING_ROW_HINT}>
+            Let the agents you allow build, install and run Apps on this server. Off closes every App.
+          </p>
+          {ownerOnly ? (
+            <p className={SETTING_ROW_HINT} data-testid="apps-switch-owner-only">
+              Only the server&rsquo;s owner can turn Apps on or off.
+            </p>
+          ) : null}
+        </SettingSwitchRow>
+        <SettingRow label="Which agents may build Apps" hint="Set on each agent’s card, under Agent.">
+          <Button onClick={() => useSettingsStore.getState().openSettings('projects')} data-testid="apps-open-agents">
+            Open Workspaces / Agents
+          </Button>
+        </SettingRow>
+      </SettingsGroup>
 
-      {doctor ? (
-        <>
-          <SettingsGroup title="Box checks">
-            <div className="py-2 space-y-2" data-testid="apps-doctor">
-              <p className="type-hint">
-                <span className={doctor.ready ? STATUS_STYLE.ok : STATUS_STYLE.warn}>
-                  {doctor.ready ? 'Ready for walled Apps' : 'Not ready yet'}
-                </span>
-                {doctor.runtime ? <span className={muted}> · runtime {doctor.runtime}</span> : null}
-              </p>
-              {!doctor.linux ? (
-                <p className={`type-hint ${muted}`}>
-                  Apps run walled on Linux servers. This machine can build and check Apps, not run them.
+      <SettingsGroup
+        card
+        title="Box checks"
+        hint="What this server needs to run Apps safely."
+        action={
+          doctor ? (
+            <Button onClick={() => void recheck()} disabled={checking} data-testid="apps-check-again">
+              {checking ? 'Checking…' : 'Check again'}
+            </Button>
+          ) : undefined
+        }
+        state={
+          box.kind === 'loading' ? (
+            <SettingsLoadState kind="loading" title="Checking this server…" />
+          ) : box.kind === 'error' ? (
+            <SettingsLoadState
+              kind="error"
+              title="K2 couldn’t check this server"
+              detail={box.text}
+              action={<Button onClick={() => void recheck()}>Try again</Button>}
+            >
+              The checks didn&rsquo;t load. Nothing on the server changed.
+            </SettingsLoadState>
+          ) : box.kind === 'off' ? (
+            <SettingsLoadState kind="empty" title="Apps are off" testId="apps-off">
+              Turn on Apps above to check and set up this server.
+            </SettingsLoadState>
+          ) : undefined
+        }
+      >
+        {doctor ? (
+          <div data-testid="apps-doctor" className="divide-y divide-[var(--color-border)]">
+            <div className="px-4 py-3 flex items-start gap-3">
+              <StatusDot tone={doctor.ready ? 'ok' : 'warn'} className="mt-1.5" />
+              <div className="min-w-0 flex-1">
+                <div className="type-name text-[var(--color-text-primary)]">{doctor.ready ? 'Ready for Apps' : 'Not ready yet'}</div>
+                <p className={SETTING_ROW_HINT}>
+                  {!doctor.linux
+                    ? 'Apps run walled on Linux servers. This machine can build and check Apps, not run them.'
+                    : doctor.ready
+                      ? `Every check passes${attention ? `, with ${attention} to keep an eye on` : ''}.${doctor.runtime ? ` Containers run on ${doctor.runtime}.` : ''}`
+                      : 'Fix the checks marked below. Prepare this server, under Set up, fixes most of them.'}
                 </p>
-              ) : null}
-              <ul className="space-y-1.5">
-                {doctor.checks.map((c) => (
-                  <CheckRow key={c.id} check={c} />
-                ))}
-              </ul>
-              <button
-                type="button"
-                className={`type-hint ${secondary} underline no-drag cursor-pointer`}
-                onClick={() => void load()}
-              >
-                Check again
-              </button>
+              </div>
             </div>
-          </SettingsGroup>
+            {doctor.checks.map((c) => (
+              <CheckRow key={c.id} check={c} />
+            ))}
+          </div>
+        ) : null}
+      </SettingsGroup>
 
-          {doctor.linux ? (
-            <SettingsGroup title="Set up the box">
-              <div className="py-2 space-y-3" data-testid="apps-setup">
-                {!isOwner && role !== null ? (
-                  <p className={`type-hint ${secondary}`}>Only the server&apos;s owner can prepare the box or install the engine.</p>
+      {doctor && doctor.linux ? (
+        <SettingsGroup card title="Set up this server" hint="K2 makes these changes through its own root helper. You see each change first.">
+          <div data-testid="apps-setup" className="divide-y divide-[var(--color-border)]">
+            {ownerOnly ? (
+              <div className="px-4 py-3">
+                <p className={SETTING_ROW_HINT}>Only the server&rsquo;s owner can set up the server or install the App engine.</p>
+              </div>
+            ) : null}
+            {doctor.autoPrepare ? (
+              <SettingSwitchRow
+                testId="apps-auto-prepare"
+                control={
+                  <Toggle
+                    checked={doctor.autoPrepare.enabled}
+                    onChange={(v) => void flipAuto(v)}
+                    disabled={!isOwner || busy !== null}
+                    aria-label="Prepare this box automatically"
+                  />
+                }
+              >
+                <div className={SETTING_ROW_LABEL}>Keep this server set up</div>
+                <p className={SETTING_ROW_HINT}>
+                  After each K2 update, K2 sets the server up for Apps by itself, so agents you allow can deploy without
+                  anyone typing commands on it. It stops and tells you if the server already runs containers another way.
+                </p>
+                {doctor.autoPrepare.state ? (
+                  <p className={SETTING_SERVER_REASON} data-testid="apps-auto-prepare-last">
+                    Last run: {doctor.autoPrepare.state}
+                    {doctor.autoPrepare.detail ? ` — ${doctor.autoPrepare.detail}` : ''}
+                  </p>
                 ) : null}
-                {doctor.autoPrepare ? (
-                  <div className="flex items-start gap-3" data-testid="apps-auto-prepare">
-                    <Toggle
-                      checked={doctor.autoPrepare.enabled}
-                      onChange={(v) => void flipAuto(v)}
+                {doctor.autoPrepare.undoneAt !== null || doctor.autoPrepare.blocked ? (
+                  <div className="mt-2 flex items-start justify-between gap-4" data-testid="apps-auto-prepare-stopped">
+                    <p className="type-hint text-[var(--color-status-warn-text)] leading-relaxed">
+                      {doctor.autoPrepare.undoneAt !== null
+                        ? 'Paused because you undid the box setup.'
+                        : `Stopped: ${doctor.autoPrepare.detail ?? doctor.autoPrepare.code ?? 'this box can’t be prepared'}.`}{' '}
+                      K2 won&apos;t try again until you press Retry or K2 updates.
+                    </p>
+                    <Button
+                      onClick={() => void retryAuto()}
                       disabled={!isOwner || busy !== null}
-                      aria-label="Prepare this box automatically"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="type-row text-[var(--color-text-primary)]">Prepare this box automatically</div>
-                      <p className={`type-hint ${muted} mt-0.5`}>
-                        After each K2 update, K2 sets the box up for walled Apps by itself through its root helper (the
-                        steps below, plus K2&apos;s Podman where needed and the App engine), so agents you allow can
-                        deploy with nobody running sudo. It stops on a box whose sub-UIDs already overlap (rootless
-                        Docker) and tells you what it changed.
-                      </p>
-                      {doctor.autoPrepare.state ? (
-                        <p className={`type-hint ${secondary} mt-1`} data-testid="apps-auto-prepare-last">
-                          Last run: {doctor.autoPrepare.state}
-                          {doctor.autoPrepare.detail ? ` — ${doctor.autoPrepare.detail}` : ''}
-                        </p>
-                      ) : null}
-                      {doctor.autoPrepare.undoneAt !== null || doctor.autoPrepare.blocked ? (
-                        <div className="mt-1 space-y-1" data-testid="apps-auto-prepare-stopped">
-                          <p className={`type-hint ${STATUS_STYLE.warn}`}>
-                            {doctor.autoPrepare.undoneAt !== null
-                              ? 'Paused because you undid the box setup.'
-                              : `Stopped: ${doctor.autoPrepare.detail ?? doctor.autoPrepare.code ?? 'this box can’t be prepared'}.`}{' '}
-                            K2 won&apos;t try again until you press Retry or K2 updates.
-                          </p>
-                          <Button
-                            onClick={() => void retryAuto()}
-                            disabled={!isOwner || busy !== null}
-                            data-testid="apps-auto-prepare-retry"
-                          >
-                            {busy === 'retry' ? 'Retrying…' : 'Retry'}
-                          </Button>
-                        </div>
-                      ) : null}
-                    </div>
+                      data-testid="apps-auto-prepare-retry"
+                    >
+                      {busy === 'retry' ? 'Retrying…' : 'Retry'}
+                    </Button>
                   </div>
                 ) : null}
-                <div className="space-y-2">
-                  <div className="type-row text-[var(--color-text-primary)]">Prepare this box</div>
-                  <p className={`type-hint ${muted}`}>
-                    Sets up the k2app user, its limits, the firewall table and the container runtime through K2&apos;s root
-                    helper. See every change first; nothing changes until you apply.
-                    {prepareNeeded(doctor) ? '' : ' The checks say the box is prepared; running it again is safe.'}
+              </SettingSwitchRow>
+            ) : null}
+            <SettingRow
+              label="Prepare this server"
+              hint={`Sets up the Apps user, its limits, the firewall and the container runtime. You see every change before anything happens.${prepareNeeded(doctor) ? '' : ' The checks say it’s set up; running it again is safe.'}`}
+            >
+              <Button
+                variant={prepareNeeded(doctor) ? 'accent' : 'default'}
+                onClick={() => void runDry()}
+                disabled={busy !== null}
+                data-testid="apps-prepare-dry-run"
+              >
+                {busy === 'dry' ? 'Checking…' : 'Prepare…'}
+              </Button>
+            </SettingRow>
+            <SettingRow
+              label="App engine"
+              hint={`Runs each App in its own container. Signed by K2 and matched to this server’s K2.${engineNeeded(doctor) ? '' : ' It’s installed and answering.'}`}
+              below={
+                engineLine ? (
+                  <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed" data-testid="apps-engine-status">
+                    {engineLine}
                   </p>
-                  {dry ? (
-                    <div className="space-y-2" data-testid="apps-dry-run">
-                      <div className={`type-hint ${secondary}`}>Apply will make these changes, in order:</div>
-                      <ol className="list-decimal ml-5 space-y-0.5">
-                        {changeLines(dry).map((l, i) => (
-                          <li key={i} className="type-hint font-mono text-[var(--color-text-primary)] break-all">
-                            {l}
-                          </li>
-                        ))}
-                      </ol>
-                      {needsPodmanInstall(dry) && dry.podman.bundle ? (
-                        <p className={`type-hint ${muted} break-all`}>
-                          K2&apos;s Podman {dry.podman.bundle.version}, sha256 {dry.podman.bundle.sha256}, from{' '}
-                          {dry.podman.bundle.url}
-                        </p>
-                      ) : null}
-                      <div className="flex gap-2">
-                        <Button
-                          variant="accent"
-                          onClick={() => void apply()}
-                          disabled={!isOwner || busy !== null}
-                          data-testid="apps-prepare-apply"
-                        >
-                          {busy === 'apply' ? 'Applying… (this can take a few minutes)' : needsPodmanInstall(dry) ? 'Apply (installs Podman)' : 'Apply'}
-                        </Button>
-                        <Button variant="ghost" onClick={() => setDry(null)} disabled={busy !== null}>
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <Button
-                      onClick={() => void runDry()}
-                      disabled={busy !== null}
-                      data-testid="apps-prepare-dry-run"
-                    >
-                      {busy === 'dry' ? 'Checking…' : 'Prepare this box…'}
-                    </Button>
-                  )}
-                </div>
-                <div className="space-y-2 pt-2 border-t border-[var(--color-border)]">
-                  <div className="type-row text-[var(--color-text-primary)]">Install App engine</div>
-                  <p className={`type-hint ${muted}`}>
-                    The guarded engine runs each App in its own rootless container. It is signed with K2&apos;s release key
-                    and matches this server&apos;s K2 version.
-                    {engineNeeded(doctor) ? '' : ' It is installed and answering.'}
-                  </p>
-                  {appEngineLine(doctor.appEngine) ? (
-                    <p className="type-hint text-[var(--color-danger)]" data-testid="apps-engine-status">
-                      {appEngineLine(doctor.appEngine)}
-                    </p>
-                  ) : null}
-                  <Button
-                    onClick={() => void engine()}
-                    disabled={!isOwner || busy !== null}
-                    data-testid="apps-engine-install"
-                  >
-                    {busy === 'engine' ? 'Installing…' : engineNeeded(doctor) ? 'Install App engine' : 'Reinstall App engine'}
-                  </Button>
-                </div>
-                <div className="space-y-2 pt-2 border-t border-[var(--color-border)]" data-testid="apps-unprep">
-                  <div className="type-row text-[var(--color-text-primary)]">Undo box setup</div>
-                  <p className={`type-hint ${muted}`}>
-                    Removes what box prep set up (the firewall table, AppArmor profile, limits, linger and the engine
-                    unit). The k2app user, its data and the distro packages stay. K2&apos;s Podman stays too (k2 app box
-                    podman uninstall removes it). Automatic prep pauses until you press Retry. Refused while any App runs.
-                  </p>
-                  {unprep ? (
-                    <div className="space-y-2" data-testid="apps-unprep-plan">
-                      <div className={`type-hint ${secondary}`}>Undo will remove:</div>
-                      <ul className="list-disc ml-5 space-y-0.5">
-                        {unprep.undoes.map((l, i) => (
-                          <li key={i} className="type-hint font-mono text-[var(--color-text-primary)] break-all">
-                            {l}
-                          </li>
-                        ))}
-                      </ul>
-                      {unprep.kept.length ? (
-                        <p className={`type-hint ${muted}`}>Kept: {unprep.kept.join('; ')}</p>
-                      ) : null}
-                      {unprep.runningApps.length ? (
-                        <p className={`type-hint ${STATUS_STYLE.warn}`} data-testid="apps-unprep-running">
-                          Stop these Apps first: {unprep.runningApps.join(', ')}
-                        </p>
-                      ) : null}
-                      <div className="flex gap-2">
-                        <Button
-                          variant="danger"
-                          onClick={() => void unprepConfirm()}
-                          disabled={!isOwner || busy !== null || unprep.runningApps.length > 0}
-                          data-testid="apps-unprep-confirm"
-                        >
-                          {busy === 'unprep' ? 'Undoing…' : 'Undo box setup'}
-                        </Button>
-                        <Button variant="ghost" onClick={() => setUnprep(null)} disabled={busy !== null}>
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <Button
-                      onClick={() => void unprepPlan()}
-                      disabled={!isOwner || busy !== null}
-                      data-testid="apps-unprep-start"
-                    >
-                      {busy === 'unprep-dry' ? 'Checking…' : 'Undo box setup…'}
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </SettingsGroup>
-          ) : null}
-        </>
+                ) : undefined
+              }
+            >
+              <Button
+                variant={engineNeeded(doctor) ? 'accent' : 'default'}
+                onClick={() => void engine()}
+                disabled={!isOwner || busy !== null}
+                data-testid="apps-engine-install"
+              >
+                {busy === 'engine' ? 'Installing…' : engineNeeded(doctor) ? 'Install App engine' : 'Reinstall App engine'}
+              </Button>
+            </SettingRow>
+            <SettingRow
+              testId="apps-unprep"
+              label="Undo the setup"
+              hint="Removes what Prepare set up. The Apps user, its data and the server’s own packages stay. Not while an App runs."
+            >
+              <Button
+                variant="danger-quiet"
+                onClick={() => void unprepPlan()}
+                disabled={!isOwner || busy !== null}
+                data-testid="apps-unprep-start"
+              >
+                {busy === 'unprep-dry' ? 'Checking…' : 'Undo setup…'}
+              </Button>
+            </SettingRow>
+          </div>
+        </SettingsGroup>
       ) : null}
 
-      <p className={`type-hint ${muted}`}>
-        Which agents may build and deploy Apps is set per agent: Settings → Workspaces / Agents → the agent → Agent.
-      </p>
+      {dry ? (
+        <AccessSheet
+          title="Prepare this server?"
+          intro="Prepare makes these changes, in this order. Nothing has changed yet."
+          onClose={() => setDry(null)}
+          busy={busy === 'apply'}
+          testId="apps-dry-run"
+          footer={
+            <>
+              <Button variant="ghost" size="md" onClick={() => setDry(null)} disabled={busy !== null} autoFocus>
+                Cancel
+              </Button>
+              <Button
+                variant="accent"
+                size="md"
+                onClick={() => void apply()}
+                disabled={!isOwner || busy !== null}
+                data-testid="apps-prepare-apply"
+              >
+                {busy === 'apply' ? 'Preparing… (a few minutes)' : needsPodmanInstall(dry) ? 'Prepare (installs Podman)' : 'Prepare'}
+              </Button>
+            </>
+          }
+        >
+          <ol className="list-decimal ml-5 space-y-1">
+            {changeLines(dry).map((l, i) => (
+              <li key={i} className="type-hint text-[var(--color-text-primary)] break-words leading-relaxed">
+                {l}
+              </li>
+            ))}
+          </ol>
+          {needsPodmanInstall(dry) && dry.podman.bundle ? (
+            <p className={`${SETTING_SERVER_REASON} break-all`}>
+              K2&apos;s Podman {dry.podman.bundle.version}, sha256 {dry.podman.bundle.sha256}, from {dry.podman.bundle.url}
+            </p>
+          ) : null}
+          {!isOwner ? <p className={SETTING_ROW_HINT}>Only the server&rsquo;s owner can prepare it.</p> : null}
+        </AccessSheet>
+      ) : null}
+
+      {unprep ? (
+        <AccessSheet
+          title="Undo the server setup?"
+          intro="Apps stop working on this server until it’s prepared again. Automatic setup pauses until you press Retry."
+          onClose={() => setUnprep(null)}
+          busy={busy === 'unprep'}
+          testId="apps-unprep-plan"
+          footer={
+            <>
+              <Button variant="ghost" size="md" onClick={() => setUnprep(null)} disabled={busy !== null} autoFocus>
+                Cancel
+              </Button>
+              <Button
+                variant="danger-muted"
+                size="md"
+                onClick={() => void unprepConfirm()}
+                disabled={!isOwner || busy !== null || unprep.runningApps.length > 0}
+                data-testid="apps-unprep-confirm"
+              >
+                {busy === 'unprep' ? 'Undoing…' : 'Undo setup'}
+              </Button>
+            </>
+          }
+        >
+          <div>
+            <div className={SETTING_ROW_LABEL}>It removes</div>
+            <ul className="list-disc ml-5 mt-1 space-y-0.5">
+              {unprep.undoes.map((l, i) => (
+                <li key={i} className="type-hint text-[var(--color-text-primary)] break-words">
+                  {l}
+                </li>
+              ))}
+            </ul>
+          </div>
+          {unprep.kept.length ? <p className={SETTING_ROW_HINT}>It keeps: {unprep.kept.join('; ')}</p> : null}
+          {unprep.runningApps.length ? (
+            <Callout tone="warn" className="type-hint" data-testid="apps-unprep-running">
+              Stop these Apps first: {unprep.runningApps.join(', ')}
+            </Callout>
+          ) : null}
+        </AccessSheet>
+      ) : null}
     </div>
   )
 }
 
+const CHECK_WORDS: Record<string, string> = { ok: 'OK', warn: 'Check', fail: 'Failed', unknown: 'Unknown' }
+const CHECK_DOT: Record<string, DotTone> = { ok: 'ok', warn: 'warn', fail: 'error', unknown: 'idle' }
+
+/** Where a check's fix lives: the button on this page when there is one,
+ *  else the daemon's own words for the server. */
+export function fixWords(fix: string): string {
+  if (fix.startsWith('k2 app box prepare')) return 'Fix: Prepare this server, under Set up.'
+  if (fix.startsWith('k2 app engine')) return 'Fix: Install App engine, under Set up.'
+  return `Fix on the server: ${fix}`
+}
+
 function CheckRow({ check }: { check: BoxCheck }): React.JSX.Element {
   return (
-    <li className="type-hint" data-testid={`apps-check-${check.id}`} data-status={check.status}>
-      <span className={`inline-block w-12 uppercase tracking-wider type-section ${STATUS_STYLE[check.status]}`}>
-        {check.status}
+    <div className="px-4 py-2.5 flex items-start gap-3" data-testid={`apps-check-${check.id}`} data-status={check.status}>
+      <StatusDot tone={CHECK_DOT[check.status] ?? 'idle'} className="mt-1.5" />
+      <div className="min-w-0 flex-1">
+        <span className="type-row text-[var(--color-text-primary)]">{checkLabel(check.id)}</span>
+        {check.detail ? <span className="type-hint text-[var(--color-text-secondary)]"> · {check.detail}</span> : null}
+        {check.fix && check.status !== 'ok' ? <p className={SETTING_SERVER_REASON}>{fixWords(check.fix)}</p> : null}
+      </div>
+      <span className={`type-hint flex-shrink-0 ${check.status === 'ok' ? 'text-[var(--color-text-secondary)]' : check.status === 'fail' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-status-warn-text)]'}`}>
+        {CHECK_WORDS[check.status] ?? check.status}
       </span>
-      <span className="text-[var(--color-text-primary)]">{checkLabel(check.id)}</span>
-      {check.detail ? <span className={muted}> · {check.detail}</span> : null}
-      {check.fix && check.status !== 'ok' ? (
-        <div className={`ml-12 ${secondary}`}>
-          Fix: <span className="font-mono">{check.fix}</span>
-        </div>
-      ) : null}
-    </li>
+    </div>
   )
 }

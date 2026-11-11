@@ -744,6 +744,151 @@ const PLUS = (
   </svg>
 )
 
+/** "Add an agent": search the agents on this server that aren't in the
+ *  project yet and add one with a click (or the arrows and Enter). Settings
+ *  → Projects shows it in its Agents half; the Projects page shows the same
+ *  picker in a dialog from the project bar's Agents menu. */
+export function AddAgentPicker({
+  groupId,
+  groupName,
+  memberIds,
+  onAdded,
+  listClassName = 'max-h-80',
+  inset = 'px-4',
+  searchRef,
+}: {
+  groupId: string
+  groupName: string
+  memberIds: string[]
+  /** After the daemon took it (the page refetches the project). */
+  onAdded?: (workspaceId: string, displayName: string) => void
+  /** The list's height cap. */
+  listClassName?: string
+  /** The rows' side padding (a card's 16px, or a dialog's own edge). */
+  inset?: string
+  /** The search field (Settings' Agents heading jumps to it). */
+  searchRef?: React.Ref<HTMLInputElement>
+}): React.JSX.Element {
+  const registered = useProjectsStore((s) => s.projects)
+  const [query, setQuery] = useState('')
+  // -1 = no row picked yet: a row lights up once you type or use the arrows.
+  const [highlight, setHighlight] = useState(-1)
+  const [adding, setAdding] = useState<string | null>(null)
+  const [failure, setFailure] = useState<{ what: string; reason: string } | null>(null)
+  const candidates = useMemo(
+    () => addableWorkspaces(registered, memberIds, query),
+    [registered, memberIds, query],
+  )
+  useEffect(() => setHighlight(query.trim() ? 0 : -1), [query])
+
+  const addMember = useCallback(
+    async (workspaceId: string, displayName: string): Promise<void> => {
+      setAdding(workspaceId)
+      setFailure(null)
+      try {
+        await addProjectGroupMember(primaryScope(), groupId, workspaceId)
+        setQuery('')
+        useToastStore.getState().addToast(`Added ${displayName} to ${groupName}.`, 'success')
+        onAdded?.(workspaceId, displayName)
+      } catch (err) {
+        setFailure({ what: `Couldn’t add ${displayName}.`, reason: errorMessage(err) })
+      } finally {
+        setAdding(null)
+      }
+    },
+    [groupId, groupName, onAdded],
+  )
+
+  return (
+    <div data-testid="add-agent-picker">
+      <div className={cx('py-3', inset)}>
+        <SearchField
+          ref={searchRef}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onClear={() => setQuery('')}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown') {
+              e.preventDefault()
+              setHighlight((h) => Math.min(h + 1, candidates.length - 1))
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault()
+              setHighlight((h) => Math.max(h - 1, 0))
+            } else if (e.key === 'Enter' && candidates[highlight]) {
+              e.preventDefault()
+              void addMember(candidates[highlight].id, candidates[highlight].name)
+            }
+          }}
+          aria-label="Search agents to add"
+          placeholder="Search agents"
+          className="w-full"
+        />
+        {failure && (
+          <div className="mt-2">
+            <ActionError what={failure.what} reason={failure.reason} />
+          </div>
+        )}
+      </div>
+      <ul className={cx(listClassName, 'overflow-y-auto divide-y divide-[var(--color-border)]')} aria-label="Agents you can add">
+        {/* Each row is one quiet button: the agent first, "Add" in the
+            hint colour until the row is hovered, focused or picked by
+            the arrows, so the project's own agents above read first. */}
+        {candidates.map((w, i) => (
+          <li key={w.id} data-highlighted={i === highlight || undefined} onMouseEnter={() => setHighlight(i)}>
+            <button
+              type="button"
+              data-k2-focus=""
+              aria-label={`Add ${w.name}`}
+              title={w.path}
+              disabled={adding === w.id}
+              onClick={() => void addMember(w.id, w.name)}
+              className={cx(
+                'group relative w-full flex items-center gap-4 py-2.5 text-left no-drag cursor-pointer outline-none transition-colors disabled:cursor-wait',
+                inset,
+                i === highlight ? SETTING_LIST_ROW_BAND : SETTING_LIST_ROW_HOVER,
+              )}
+            >
+              <span className="flex-1 min-w-0">
+                <span className="block type-name text-[var(--color-text-primary)] truncate">{w.name}</span>
+                <span className="block type-hint text-[var(--color-text-secondary)] truncate">{shortFolder(w.path)}</span>
+              </span>
+              <span
+                className={cx(
+                  'flex-shrink-0 inline-flex items-center gap-1 type-control transition-colors',
+                  i === highlight
+                    ? 'text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)] group-focus-visible:text-[var(--color-text-primary)]',
+                )}
+              >
+                {adding === w.id ? (
+                  'Adding…'
+                ) : (
+                  <>
+                    {PLUS}
+                    Add
+                  </>
+                )}
+              </span>
+            </button>
+          </li>
+        ))}
+        {candidates.length === 0 && (
+          <li className={cx('py-3', inset)}>
+            <div className="type-row text-[var(--color-text-primary)]">
+              {registered.every((w) => memberIds.includes(w.id)) ? 'Every agent is already here' : 'No agents match'}
+            </div>
+            <div className={SETTING_ROW_HINT}>
+              {registered.every((w) => memberIds.includes(w.id))
+                ? 'Every agent on this server is already in this project.'
+                : 'Try another name, or clear the search to see them all.'}
+            </div>
+          </li>
+        )}
+      </ul>
+    </div>
+  )
+}
+
 function AgentsSection({
   detail,
   caps,
@@ -754,19 +899,9 @@ function AgentsSection({
   edit: GroupEdit
 }): React.JSX.Element {
   const readOnly = !caps.canEdit
-  const registered = useProjectsStore((s) => s.projects)
-  const [query, setQuery] = useState('')
-  // -1 = no row picked yet: a row lights up once you type or use the arrows.
-  const [highlight, setHighlight] = useState(-1)
   const [memberBusy, setMemberBusy] = useState<string | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<{ id: string; name: string } | null>(null)
   const [failure, setFailure] = useState<{ id: string; what: string; reason: string } | null>(null)
-  const memberIds = useMemo(() => detail.members.map((m) => m.workspaceId), [detail.members])
-  const candidates = useMemo(
-    () => addableWorkspaces(registered, memberIds, query),
-    [registered, memberIds, query],
-  )
-  useEffect(() => setHighlight(query.trim() ? 0 : -1), [query])
   const addSearchRef = useRef<HTMLInputElement>(null)
   /** The Agents heading's "Add an agent": to the picker below, ready to type. */
   const goToPicker = (): void => {
@@ -775,23 +910,6 @@ function AgentsSection({
     field.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
     field.focus({ preventScroll: true })
   }
-
-  const addMember = useCallback(
-    async (workspaceId: string, displayName: string): Promise<void> => {
-      setMemberBusy(workspaceId)
-      setFailure(null)
-      try {
-        await addProjectGroupMember(primaryScope(), detail.id, workspaceId)
-        setQuery('')
-        useToastStore.getState().addToast(`Added ${displayName} to ${detail.name}.`, 'success')
-      } catch (err) {
-        setFailure({ id: 'add', what: `Couldn’t add ${displayName}.`, reason: errorMessage(err) })
-      } finally {
-        setMemberBusy(null)
-      }
-    },
-    [detail.id, detail.name],
-  )
 
   const removeMember = useCallback(
     async (workspaceId: string, displayName: string): Promise<void> => {
@@ -934,89 +1052,7 @@ function AgentsSection({
           hint="Pick an agent on this server to join the project and its chat."
           settingId="project-groups.add-agent"
         >
-          <div className="px-4 py-3">
-            <SearchField
-              ref={addSearchRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onClear={() => setQuery('')}
-              onKeyDown={(e) => {
-                if (e.key === 'ArrowDown') {
-                  e.preventDefault()
-                  setHighlight((h) => Math.min(h + 1, candidates.length - 1))
-                } else if (e.key === 'ArrowUp') {
-                  e.preventDefault()
-                  setHighlight((h) => Math.max(h - 1, 0))
-                } else if (e.key === 'Enter' && candidates[highlight]) {
-                  e.preventDefault()
-                  void addMember(candidates[highlight].id, candidates[highlight].name)
-                }
-              }}
-              aria-label="Search agents to add"
-              placeholder="Search agents"
-              className="w-full"
-            />
-            {failure?.id === 'add' && (
-              <div className="mt-2">
-                <ActionError what={failure.what} reason={failure.reason} />
-              </div>
-            )}
-          </div>
-          <ul className="max-h-80 overflow-y-auto divide-y divide-[var(--color-border)]" aria-label="Agents you can add">
-            {/* Each row is one quiet button: the agent first, "Add" in the
-                hint colour until the row is hovered, focused or picked by
-                the arrows, so the project's own agents above read first. */}
-            {candidates.map((w, i) => (
-              <li key={w.id} data-highlighted={i === highlight || undefined} onMouseEnter={() => setHighlight(i)}>
-                <button
-                  type="button"
-                  data-k2-focus=""
-                  aria-label={`Add ${w.name}`}
-                  title={w.path}
-                  disabled={memberBusy === w.id}
-                  onClick={() => void addMember(w.id, w.name)}
-                  className={cx(
-                    'group relative w-full flex items-center gap-4 px-4 py-2.5 text-left no-drag cursor-pointer outline-none transition-colors disabled:cursor-wait',
-                    i === highlight ? SETTING_LIST_ROW_BAND : SETTING_LIST_ROW_HOVER,
-                  )}
-                >
-                  <span className="flex-1 min-w-0">
-                    <span className="block type-name text-[var(--color-text-primary)] truncate">{w.name}</span>
-                    <span className="block type-hint text-[var(--color-text-secondary)] truncate">{shortFolder(w.path)}</span>
-                  </span>
-                  <span
-                    className={cx(
-                      'flex-shrink-0 inline-flex items-center gap-1 type-control transition-colors',
-                      i === highlight
-                        ? 'text-[var(--color-text-primary)]'
-                        : 'text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)] group-focus-visible:text-[var(--color-text-primary)]',
-                    )}
-                  >
-                    {memberBusy === w.id ? (
-                      'Adding…'
-                    ) : (
-                      <>
-                        {PLUS}
-                        Add
-                      </>
-                    )}
-                  </span>
-                </button>
-              </li>
-            ))}
-            {candidates.length === 0 && (
-              <li className="px-4 py-3">
-                <div className="type-row text-[var(--color-text-primary)]">
-                  {registered.length === memberIds.length ? 'Every agent is already here' : 'No agents match'}
-                </div>
-                <div className={SETTING_ROW_HINT}>
-                  {registered.length === memberIds.length
-                    ? 'Every agent on this server is already in this project.'
-                    : 'Try another name, or clear the search to see them all.'}
-                </div>
-              </li>
-            )}
-          </ul>
+          <AddAgentPicker groupId={detail.id} groupName={detail.name} memberIds={detail.members.map((m) => m.workspaceId)} searchRef={addSearchRef} />
         </SettingsGroup>
       )}
     </section>

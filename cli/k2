@@ -22847,6 +22847,7 @@ cmd_thread() {
         ask) cmd_thread_ask "$@"; return $? ;;
         secret) cmd_thread_secret "$@"; return $? ;;
         void|withdraw|dismiss) cmd_thread_void "$@"; return $? ;;
+        delete) cmd_thread_delete "$@"; return $? ;;
         export|import|imports) cmd_thread_transfer "$@"; return $? ;;
         unread) cmd_thread_unread "$@"; return $? ;;
         read-all) cmd_thread_read_all "$@"; return $? ;;
@@ -23251,6 +23252,74 @@ print("%s  %s" % (d.get("id",""), d.get("closedAs") or d.get("status","")))
 '
 }
 
+# thread-message-delete-v1 (0.46.11): a PERSON deletes a message they sent
+# (the owner: anyone's). The daemon checks who sent it; an agent passport
+# gets person_only (exit 3).
+cmd_thread_delete() {
+    local target="" which="" json="false"
+    [[ "${1:-}" == "delete" ]] && shift
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) json="true"; shift ;;
+            -*)
+                echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
+                exit 2 ;;
+            *)
+                if [[ -z "$target" ]]; then target="$1"
+                elif [[ -z "$which" ]]; then which="$1"
+                else
+                    echo "Error: unexpected extra argument '$1'" >&2
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    [[ -n "$target" ]] || { echo "Error: address required" >&2; echo "Usage: k2 thread delete <addr> <seq|id> [--json]" >&2; exit 2; }
+    [[ -n "$which" ]] || { echo "Error: which message: its number (the [N] in k2 thread <addr>) or its id" >&2; echo "Usage: k2 thread delete <addr> <seq|id> [--json]" >&2; exit 2; }
+    local body
+    body=$(ADDR="$target" WHICH="$which" python3 -c 'import json,os
+w=os.environ["WHICH"].strip().lstrip("#")
+obj={"addr":os.environ["ADDR"]}
+if w.isdigit():
+    obj["seq"]=int(w)
+else:
+    obj["id"]=w
+print(json.dumps(obj))
+')
+    local response
+    response=$(cli_send cli_post_json "/cli/thread/message/delete" "$body")
+    local rc=$?
+    _k2_moved_from_note "$response"
+    echo "$response" | JSON_OUT="$json" python3 -c 'import json,os,sys
+raw=sys.stdin.read()
+as_json=os.environ.get("JSON_OUT")=="true"
+try:
+    d=json.loads(raw)
+except Exception:
+    sys.stdout.write(raw)
+    sys.exit(2)
+if as_json:
+    print(raw.strip())
+if d.get("ok") is not True:
+    err=d.get("error") or d
+    code=""
+    if isinstance(err, dict):
+        code=err.get("code") or "error"
+        if not as_json:
+            sys.stderr.write("%s: %s\n" % (code, err.get("hint") or err))
+    elif not as_json:
+        sys.stderr.write(str(err)+"\n")
+    if code in ("person_only", "not_your_message", "not_a_persons_message", "forbidden", "imported_read_only"):
+        sys.exit(3)
+    if code == "not_found":
+        sys.exit(4)
+    sys.exit(2)
+if not as_json:
+    note="already deleted" if d.get("already") else "deleted; the agent was told (never what it said)"
+    print("[%s] %s  %s" % (d.get("seq",""), d.get("id",""), note))
+'
+}
+
 cmd_thread_secret() {
     local target="" json="false" explicit_from="" name="" prompt="" dest=""
     local v_scope="" v_for="" v_delivery="" v_kind="" v_ttl="" v_once=""
@@ -23509,6 +23578,11 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread withdraw <addr> <card-id> [--why "…"] # take back your own card (no longer relevant)
       (void is the old name and still works)
   k2 thread dismiss <addr> <card-id> [--why "…"]  # for a PERSON: close a card without answering
+  k2 thread delete <addr> <seq|id> [--json]       # for a PERSON: delete a message you sent
+      (the owner: anyone's). Its text and files go; "Message deleted" stays in its
+      place. The agent gets one line: [thread:<addr>] <who> deleted a message they
+      sent at <time>. Don't repeat, store or act on what it said. Agents get exit 3
+      (person_only): only the person who sent it can delete it.
   k2 thread unread [--kind thread|project] [--json]  # a PERSON's unread + waiting counts
   k2 thread read-all <agent> [--json]             # mark all of an agent's Thread messages read
       (for you: every chat's Thread of that agent; waiting cards stay waiting)
@@ -23552,6 +23626,11 @@ withdraw/dismiss exit 0 (prints "<card-id>  withdrawn|dismissed"), 2 bad usage, 
 refused, 4 not found. On 3 the error line names why: card_not_yours (not your card),
 card_not_pending (already answered, dismissed, withdrawn or expired) or
 action_card_person_only (a settings card: only the person closes it).
+
+When a person deletes a message they sent, you get that one line. Treat what the
+message said as gone: don't repeat it, quote it, store it or act on it.
+delete exits 0 (prints "[N] <id>  deleted…"; again: "already deleted"), 2 bad usage,
+3 refused (person_only, not_your_message, not_a_persons_message), 4 not found.
 
 Text (and ask prompts) render markdown: **bold**, lists, `code`, fences, links.
 
@@ -46828,8 +46907,8 @@ cmd_schema() {
   "commands": [
     {
       "name": "thread",
-      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread <addr> --seq N | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread withdraw <addr> <card-id> [--why \"…\"] | k2 thread dismiss <addr> <card-id> [--why \"…\"]",
-      "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). A card stays open while people discuss it (their prose is not the answer); withdraw your own card only when it is obsolete (k2 thread withdraw <addr> <card-id>; void is the old name). A person may dismiss a card without answering: you get a [thread:<addr>] dismissed card <id> turn, which means not needed now (never a yes, no or denial). Closed cards stay on the Thread as Dismissed or Withdrawn. Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
+      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread <addr> --seq N | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread withdraw <addr> <card-id> [--why \"…\"] | k2 thread dismiss <addr> <card-id> [--why \"…\"] | k2 thread delete <addr> <seq|id> [--json]",
+      "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). A card stays open while people discuss it (their prose is not the answer); withdraw your own card only when it is obsolete (k2 thread withdraw <addr> <card-id>; void is the old name). A person may dismiss a card without answering: you get a [thread:<addr>] dismissed card <id> turn, which means not needed now (never a yes, no or denial). Closed cards stay on the Thread as Dismissed or Withdrawn. A person may delete a message they sent (k2 thread delete; people only): you get one [thread:<addr>] line saying so; never repeat, store or act on what it said. Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
       "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output (ask: {id,prompt,options}; secret never includes the value)."},
@@ -55132,6 +55211,14 @@ REPLIES (↩ #N)
   prints; <name> wrote it). `↩ part of #N` quotes only a piece of it.
   A quote over 600 characters is cut and ends in "…".
   Read message N whole: `k2 thread <addr> --seq N`.
+
+DELETED MESSAGES
+  A person may delete a message they sent (something sensitive, sent by
+  mistake). You get one line: `[thread:<addr>] <who> deleted a message
+  they sent at <time>. Don't repeat, store or act on what it said.`
+  Treat it as gone: don't quote it, save it to notes or memory, or act
+  on it. Only people delete messages (`k2 thread delete`); an agent
+  can't, and withdraws its own cards instead.
 
 FEEDBACK
   `k2 feedback ask "<title>" --html brief.html [--body] [--options a,b] [--wait]`

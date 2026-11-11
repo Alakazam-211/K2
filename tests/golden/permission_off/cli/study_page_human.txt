@@ -70,6 +70,14 @@ REPLIES (↩ #N)
   A quote over 600 characters is cut and ends in "…".
   Read message N whole: `k2 thread <addr> --seq N`.
 
+DELETED MESSAGES
+  A person may delete a message they sent (something sensitive, sent by
+  mistake). You get one line: `[thread:<addr>] <who> deleted a message
+  they sent at <time>. Don't repeat, store or act on what it said.`
+  Treat it as gone: don't quote it, save it to notes or memory, or act
+  on it. Only people delete messages (`k2 thread delete`); an agent
+  can't, and withdraws its own cards instead.
+
 FEEDBACK
   `k2 feedback ask "<title>" --html brief.html [--body] [--options a,b] [--wait]`
   Files a card your human answers later (or in-session). Use this for

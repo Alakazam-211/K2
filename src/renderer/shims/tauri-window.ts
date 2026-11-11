@@ -159,3 +159,16 @@ export function getCurrent(): WebWindow {
 export async function getAllWindows(): Promise<WebWindow[]> {
   return [current]
 }
+
+/**
+ * `Window` from `@tauri-apps/api/window`. The web client has no other native
+ * windows (the call pop-out is desktop only), so a lookup by label finds none.
+ */
+export class Window {
+  static async getByLabel(_label: string): Promise<WebWindow | null> {
+    return null
+  }
+  static async getAll(): Promise<WebWindow[]> {
+    return []
+  }
+}

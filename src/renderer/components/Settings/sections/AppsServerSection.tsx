@@ -39,7 +39,8 @@ import {
   SettingsLoadState,
 } from '../controls/SettingControls'
 import { AccessSheet } from './AccessDialogs'
-import { LinuxOnlyNote, PaneHeader, StatusDot, type DotTone } from './apps-ui'
+import { LinuxOnlyNote } from './LinuxOnlyNote'
+import { PaneHeader, StatusDot, type DotTone } from './apps-ui'
 import type { SettingEntry } from '../searchManifest'
 import {
   changeLines,

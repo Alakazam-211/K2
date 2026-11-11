@@ -28,6 +28,7 @@ import { AppsResourcesSection } from './AppsResourcesSection'
 import { AppPeopleAccess } from './AppPeopleAccess'
 import { AppPhonePairing } from './AppPhonePairing'
 import { AppReleases } from './AppReleases'
+import { LinuxOnlyNote } from './LinuxOnlyNote'
 import { ConfirmSheet } from './AccessDialogs'
 import {
   APPS_CONTENT_WIDTH,
@@ -35,7 +36,6 @@ import {
   APPS_ROW_OFF,
   APPS_ROW_ON,
   AppMonogram,
-  LinuxOnlyNote,
   PaneHeader,
   SelectedBar,
   StatusDot,

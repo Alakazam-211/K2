@@ -7,12 +7,26 @@ import React from 'react'
 import { Callout } from '@/components/ui'
 
 /** "<what> runs on Linux servers. …" `what` is the feature in sentence
- *  case, as a person would name it: "Email hosting", "Chat and voice". */
-export function LinuxOnlyNote({ what, testId = 'linux-only-note' }: { what: string; testId?: string }): React.JSX.Element {
+ *  case, as a person would name it: "Email hosting", "Chat and voice".
+ *  `children` replaces the sentence where the page shows no sample data
+ *  (Apps: "This runs on Linux servers. On this Mac it can't be turned on."). */
+export function LinuxOnlyNote({
+  what,
+  children,
+  testId = 'linux-only-note',
+}: {
+  what?: string
+  children?: React.ReactNode
+  testId?: string
+}): React.JSX.Element {
   return (
     <Callout tone="info" role="note" className="type-hint leading-relaxed" data-testid={testId}>
-      {what} runs on Linux servers. On this Mac the page shows sample data, so you can see how it works; connect to a
-      Linux server to set it up.
+      {children ?? (
+        <>
+          {what} runs on Linux servers. On this Mac the page shows sample data, so you can see how it works; connect to a
+          Linux server to set it up.
+        </>
+      )}
     </Callout>
   )
 }

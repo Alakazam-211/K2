@@ -3,7 +3,6 @@
 // Workspaces layout: a list on the left, a pane of card groups on the right).
 
 import React from 'react'
-import { Callout } from '@/components/ui'
 import { SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT } from '../controls/SettingControls'
 
 /** The pane's reading width, as Gardens'. */
@@ -102,16 +101,6 @@ export function AppMonogram({ name, size = 24 }: { name: string; size?: number }
     >
       {letter}
     </span>
-  )
-}
-
-/** The one line a Linux-only part of Apps shows on a Mac. Local for now;
- *  the Cores pages share one helper for it. */
-export function LinuxOnlyNote({ children, testId }: { children: React.ReactNode; testId?: string }): React.JSX.Element {
-  return (
-    <Callout tone="info" className="type-hint" data-testid={testId}>
-      {children}
-    </Callout>
   )
 }
 

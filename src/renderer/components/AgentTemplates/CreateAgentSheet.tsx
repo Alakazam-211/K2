@@ -1007,7 +1007,7 @@ function Charter({ text, startOpen }: { text: string; startOpen: boolean }): Rea
       </button>
       <div id={panel} hidden={!open} className="mt-2">
         <Surface role2="inset" chamfer className="px-4 py-3">
-          <div className="markdown-content type-hint text-[var(--color-text-primary)] select-text [overflow-wrap:anywhere]">
+          <div data-heading-cap="" className="markdown-content type-hint text-[var(--color-text-primary)] select-text [overflow-wrap:anywhere]">
             <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
           </div>
         </Surface>

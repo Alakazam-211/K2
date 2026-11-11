@@ -45,6 +45,8 @@ vi.mock('@/stores/presets', () => {
   return { usePresetsStore }
 })
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import CreateAgentSheet, {
@@ -312,6 +314,16 @@ describe('CreateAgentSheet', () => {
     useAgentTemplatesStore.getState().openCreate('gone')
     await openSheet()
     expect((screen.getByTestId('create-agent-template-general') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('the charter caps its headings: # reads at the ## size', async () => {
+    await toReview()
+    expect(screen.getByTestId('create-agent-charter').querySelector('.markdown-content[data-heading-cap]')).toBeTruthy()
+    const css = readFileSync(join(__dirname, '..', '..', 'globals.css'), 'utf8')
+    const size = (sel: string): string | undefined => new RegExp(`${sel.replace(/[.[\]]/g, '\\$&')} \\{[^}]*font-size: ([^;]+);`).exec(css)?.[1]
+    expect(size('.markdown-content[data-heading-cap] h1')).toBe(size('.markdown-content h2'))
+    expect(size('.markdown-content h2')).toBe('1.4em')
+    expect(size('.markdown-content h3')).toBe('1.15em')
   })
 
   it('focus moves to each step’s heading', async () => {

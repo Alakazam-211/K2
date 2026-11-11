@@ -57,6 +57,7 @@ const PRIMARY_TABS_USERS: Record<string, string> = {
   'components/Settings/sections/HeartbeatsSection.tsx': "Settings is about the window's server",
   'components/Settings/sections/WakeSchedulerSection.tsx': "Settings is about the window's server",
   'lib/usage-chat-link.ts': "Settings → Usage's chat link opens a chat on the window's server (the primary room)",
+  'lib/open-workspace-thread.ts': "K5's Thread opens on the window's server (the primary room), like the setup checklist",
 }
 
 /** Room components: everything server-bound comes from their room. */

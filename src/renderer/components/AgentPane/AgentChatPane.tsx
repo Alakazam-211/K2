@@ -891,7 +891,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     terminalRevealKey,
     threadPanel,
     setThreadPanel,
-  } = useSessionViewTab(overlayConv, room.scope)
+  } = useSessionViewTab(overlayConv, room.scope, projectId)
   // Split view's Thread column floats the picture and name, search and the
   // workspace's bell (SplitColumnFloats).
   const splitBell = useMemo(() => (projectId ? <ThreadFloatBell projectId={projectId} /> : null), [projectId])
@@ -1723,7 +1723,7 @@ function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSe
     terminalRevealKey,
     threadPanel,
     setThreadPanel,
-  } = useSessionViewTab(overlayConv, room.scope)
+  } = useSessionViewTab(overlayConv, room.scope, projectId)
   // Split view's Thread column floats the picture and name, search and the
   // workspace's bell (SplitColumnFloats).
   const splitBell = useMemo(() => (projectId ? <ThreadFloatBell projectId={projectId} /> : null), [projectId])

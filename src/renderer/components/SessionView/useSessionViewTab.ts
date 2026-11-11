@@ -16,6 +16,7 @@ import {
   writeSessionViewTab,
 } from './sessionViewTab'
 import type { ThreadPanelKind } from './threadPanels'
+import { sessionViewRequestFor, useSessionViewRequestStore } from '@/stores/session-view-request'
 
 export interface SessionViewChoice {
   viewTab: SessionViewTab
@@ -49,10 +50,14 @@ export function sessionViewHostKey(
 }
 
 /** Remembered view for this client + the room's server + named conversation,
- *  including both split sides. `scope` is the room's scope (`useRoom().scope`). */
+ *  including both split sides. `scope` is the room's scope (`useRoom().scope`).
+ *  `pinnedProjectId`: the workspace whose pinned Chat this is; given, an
+ *  opener's one-shot view ask for it (`stores/session-view-request.ts`, the
+ *  window's server only) wins over the remembered view once. */
 export function useSessionViewTab(
   sessionKey: string | null,
   scope: Pick<ServerScope, 'isPrimary' | 'hostKey'>,
+  pinnedProjectId?: string | null,
 ): SessionViewChoice {
   // Subscribed so the primary room re-reads after a server switch (Home M1).
   const windowHostKey = useConnectHostStore((s) => homeHostKey(s.activeHost))
@@ -100,6 +105,22 @@ export function useSessionViewTab(
       writeSessionSplitSides(splitKey, resolved.sides)
     }
   }, [storageKey, splitKey])
+
+  // An opener asked for this workspace's Chat in a set view (K5 opens in
+  // the Thread). Declared after the read above, so in the commit where the
+  // conversation becomes known it lands last. Shown at once; taken and
+  // remembered once there is a conversation to remember it for.
+  const viewRequest = useSessionViewRequestStore((s) =>
+    scope.isPrimary ? sessionViewRequestFor(s.pending, pinnedProjectId) : null,
+  )
+  useEffect(() => {
+    if (!viewRequest) return
+    setViewTabState(viewRequest.view)
+    if (storageKey) {
+      writeSessionViewTab(storageKey, viewRequest.view)
+      useSessionViewRequestStore.getState().clear(viewRequest.projectId)
+    }
+  }, [viewRequest, storageKey])
 
   const setViewTab = useCallback(
     (next: SessionViewTab) => {

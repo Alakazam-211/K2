@@ -13,7 +13,7 @@ import {
   type ContextCatalogEntry,
   type CreatedCatalogPack,
 } from '@/lib/context-stack'
-import { Button, Input, OverflowMenu, Tag } from '@/components/ui'
+import { Button, OverflowMenu, SearchField, Tag } from '@/components/ui'
 import { useSettingsStore } from '@/stores/settings'
 import type { SettingEntry } from '../searchManifest'
 import { ContextCatalogCreator } from '../ContextCatalogCreator'
@@ -186,8 +186,7 @@ export function ContextCatalogSection(): React.JSX.Element {
           ) : null}
           {yours.length >= SEARCH_FROM ? (
             <div className="px-4 py-2.5">
-              <Input
-                variant="search"
+              <SearchField
                 className="w-full"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}

@@ -60,7 +60,7 @@ function ReadRow({ r, open, onToggle }: { r: ReaderLogRow; open: boolean; onTogg
     { label: 'Through', value: agentTab ? 'An agent tab’s Inbox' : 'The Mail page' },
     {
       label: 'Outcome',
-      value: refused ? `Refused: K2 didn’t open the mail${typeof r.status === 'number' ? ` (code ${r.status})` : ''}` : 'Allowed',
+      value: refused ? 'Refused: K2 didn’t open the mail' : 'Allowed',
     },
     { label: 'Reason given', value: r.reason || 'None given' },
     { label: 'From', value: readerFromText(r.ipHint) },
@@ -73,11 +73,11 @@ function ReadRow({ r, open, onToggle }: { r: ReaderLogRow; open: boolean; onTogg
         aria-expanded={open}
         aria-controls={rowId}
         onClick={onToggle}
-        className={`group w-full grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-start gap-x-3 px-4 py-3 text-left no-drag cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
+        className={`group relative w-full grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-start gap-x-3 px-4 py-3 text-left no-drag cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
       >
         <span
           aria-hidden="true"
-          className={`mt-1.5 inline-block h-2 w-2 rounded-[var(--radius-status)] ${refused ? 'bg-[var(--color-status-error)]' : 'bg-[var(--color-status-ok)]'}`}
+          className={`mt-1.5 inline-block h-2 w-2 rounded-[var(--radius-badge)] ${refused ? 'bg-[var(--color-status-error)]' : 'bg-[var(--color-status-ok)]'}`}
         />
         <span className="min-w-0">
           <span className="block type-row text-[var(--color-text-primary)] break-words">
@@ -226,8 +226,8 @@ export function MailReaderLogSection(): React.JSX.Element {
       <header className="min-w-0" data-settings-id="email-reader-log.log">
         <h2 className="type-title text-[var(--color-text-primary)]">Email Reader Log</h2>
         <p className={SETTING_ROW_HINT}>
-          Each time someone opens, lists or changes a mailbox, from the Mail page or an agent tab, it’s written here first. The
-          mailbox’s owner isn’t told, and no message content is kept.
+          Each time someone opens, lists or changes a mailbox from the Mail page or an agent tab, K2 records it here before the
+          mail is opened. The mailbox’s owner isn’t told, and no message content is kept.
         </p>
       </header>
 
@@ -244,13 +244,16 @@ export function MailReaderLogSection(): React.JSX.Element {
           }}
         />
         <span className="flex items-center gap-2">
-          <span className="type-hint text-[var(--color-text-secondary)]">Who</span>
+          <span className="type-row text-[var(--color-text-secondary)]">Who</span>
           <SettingDropdown ariaLabel="Who" value={actor} onChange={(v) => setActor(v)} options={whoOptions} menuAlign="left" triggerData={{ 'data-testid': 'reader-log-actor' }} />
         </span>
         <span className="flex items-center gap-2">
-          <span className="type-hint text-[var(--color-text-secondary)]">When</span>
+          <span className="type-row text-[var(--color-text-secondary)]">When</span>
           <SettingDropdown ariaLabel="When" value={since} onChange={(v) => setSince(v)} options={READER_LOG_SINCE_CHOICES} menuAlign="left" triggerData={{ 'data-testid': 'reader-log-since' }} />
         </span>
+        <Button className="ml-auto" onClick={() => void load()} disabled={busy} data-testid="reader-log-refresh">
+          {busy && view.kind === 'rows' ? 'Refreshing…' : 'Refresh'}
+        </Button>
       </div>
 
       <SettingsGroup
@@ -262,11 +265,6 @@ export function MailReaderLogSection(): React.JSX.Element {
               ? 'Nothing matches these filters.'
               : `${rows.length === 1 ? 'One read' : `${rows.length} reads`}${q ? ` of mailboxes matching “${mailbox.trim()}”` : ''}${who ? ` by ${who}` : ''}, newest first.`
             : 'Newest first. Open a read for every detail.'
-        }
-        action={
-          <Button onClick={() => void load()} disabled={busy} data-testid="reader-log-refresh">
-            {busy && view.kind === 'rows' ? 'Refreshing…' : 'Refresh'}
-          </Button>
         }
         state={state}
         testId="reader-log-table"
@@ -294,8 +292,9 @@ export function MailReaderLogSection(): React.JSX.Element {
         )}
         <div className="px-4 py-2.5 flex items-center justify-between gap-4">
           <span className="type-hint text-[var(--color-text-secondary)]" data-testid="reader-log-count">
-            Showing {rows.length} of the newest {all.length === 1 ? "read" : `${all.length} reads`} {windowText}
-            {all.length >= READER_LOG_DEFAULT_LIMIT ? `; K2 reads at most ${READER_LOG_DEFAULT_LIMIT} at a time` : ''}
+            {narrowed ? `Showing ${rows.length} of ` : ''}
+            {all.length === 1 ? (narrowed ? 'one read' : 'One read') : `${all.length} reads`} {windowText}
+            {all.length >= READER_LOG_DEFAULT_LIMIT ? ` (K2 shows the newest ${READER_LOG_DEFAULT_LIMIT})` : ''}
           </span>
           {narrowed && rows.length > 0 && (
             <Button variant="quiet" onClick={clear}>

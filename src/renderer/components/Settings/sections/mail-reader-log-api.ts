@@ -105,15 +105,16 @@ export function readerActionPhrase(action: string): { phrase: string; agentTab: 
   return { phrase: base.charAt(0).toLowerCase() + base.slice(1), agentTab }
 }
 
-/** Who, by name: `user:pat` → "pat"; the owner token in words. */
+/** Who, by name: `user:pat` → "pat"; the owner token (the owner's own
+ *  key on the server) as "The server's owner". */
 export function readerActorName(actor: string): string {
-  if (actor === 'owner-token') return 'The owner token'
+  if (actor === 'owner-token') return 'The server’s owner'
   return actor.startsWith('user:') ? actor.slice(5) : actor
 }
 
 /** "pat (admin)" from `user:pat` / "Owner token". */
 export function readerActorLabel(row: Pick<ReaderLogRow, 'actor' | 'actorRole'>): string {
-  if (row.actor === 'owner-token') return 'Owner token'
+  if (row.actor === 'owner-token') return 'Server owner'
   const name = readerActorName(row.actor)
   return row.actorRole ? `${name} (${row.actorRole})` : name
 }

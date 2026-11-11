@@ -25,7 +25,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 }))
 
 import { MailReaderLogSection, MAIL_READER_LOG_MANIFEST } from './MailReaderLogSection'
-import { readerActionLabel, readerActionPhrase, readerActorLabel, readerFromText, readerMailboxText } from './mail-reader-log-api'
+import { readerActionLabel, readerActionPhrase, readerActorLabel, readerActorName, readerFromText, readerMailboxText } from './mail-reader-log-api'
 
 const ROWS = [
   { id: 7, at: 1793000000, actor: 'user:ann', actorRole: 'admin', source: 'hosted', address: 'pat@x.example', kind: 'person', own: false, action: 'reader/message', messageRef: 'm_1', reason: 'billing dispute', ipHint: 'tunnel 203.0.113.5', outcome: 'ok', status: 200 },
@@ -65,6 +65,11 @@ describe('Email Reader Log', () => {
     expect(d).toContain('ann, Admin')
     expect(d).toContain('The internet, through the tunnel (203.0.113.5)')
     expect(d).toContain('Allowed')
+    fireEvent.click(within(screen.getByTestId('reader-log-row-8')).getByRole('button'))
+    const r = screen.getByTestId('reader-log-details-8').textContent ?? ''
+    expect(r).toContain('Refused: K2 didn’t open the mail')
+    expect(r).not.toContain('404')
+    expect(screen.getByTestId('reader-log-count').textContent).toBe('2 reads in the last 7 days')
   })
 
   it('an empty window says so in the shared empty state, with a way to see everything kept', async () => {
@@ -131,7 +136,8 @@ describe('Email Reader Log', () => {
     expect(readerActionLabel('something/new')).toBe('something/new')
     expect(readerActionPhrase('reply')).toEqual({ phrase: 'replied', agentTab: true })
     expect(readerActionPhrase('something/new').phrase).toBe('did “something/new”')
-    expect(readerActorLabel({ actor: 'owner-token', actorRole: 'owner' })).toBe('Owner token')
+    expect(readerActorLabel({ actor: 'owner-token', actorRole: 'owner' })).toBe('Server owner')
+    expect(readerActorName('owner-token')).toBe('The server’s owner')
     expect(readerMailboxText({ kind: 'person', own: true, source: 'linked' })).toBe('Their own mailbox, a linked account')
     expect(readerFromText('lan -')).toBe('The local network')
     expect(readerFromText(null)).toBe('Not recorded')

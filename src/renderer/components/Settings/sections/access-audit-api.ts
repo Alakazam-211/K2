@@ -113,6 +113,37 @@ export function formatAuditTimeUtc(ts: string): string {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
 }
 
+/** The server's reason from an error body: `{"error": "…"}` or plain text. */
+export function serverReason(text: string): string {
+  const raw = text.trim()
+  if (!raw) return ''
+  try {
+    const body = JSON.parse(raw) as unknown
+    if (body && typeof body === 'object') {
+      const r = body as { error?: unknown; message?: unknown }
+      if (typeof r.error === 'string') return r.error
+      if (typeof r.message === 'string') return r.message
+    }
+  } catch {
+    // Not JSON: the text is the reason.
+  }
+  return raw
+}
+
+/** A line whose outcome is a refusal or failure (a bad password, a blocked
+ *  route, a denied handoff), as opposed to `ok …` or a switch's state. */
+export function isFailedRecord(ev: AuthAuditEvent): boolean {
+  const o = ev.outcome.trim()
+  if (o === '' || o === 'ok' || o.startsWith('ok ')) return false
+  if (ev.event === 'login' || ev.event === 'change-password' || ev.event === 'set-password') return true
+  return /^(deny|denied|refused|error|fail|bad_|blocked|locked|rate_limited)/.test(o)
+}
+
+/** A failed sign-in: wrong password, locked, blocked route or too many tries. */
+export function isFailedLogin(ev: AuthAuditEvent): boolean {
+  return ev.event === 'login' && isFailedRecord(ev)
+}
+
 function auditUrl(token: string, hostBase: string, tail: number): string {
   const search = cliSearchParams(token, { tail })
   const q = search.toString()
@@ -158,7 +189,7 @@ export async function fetchUsersAudit(opts: {
 
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    return { kind: 'error', message: text || `Could not load login history (${res.status}).` }
+    return { kind: 'error', message: serverReason(text) || `Could not load login history (${res.status}).` }
   }
 
   let body: unknown

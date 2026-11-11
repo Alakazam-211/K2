@@ -102,61 +102,113 @@ describe('Logs nav', () => {
 })
 
 describe('AccessAuditSection', () => {
-  it('empty events: H10 copy, no table', async () => {
+  const rowsText = (container: HTMLElement): string[] =>
+    Array.from(container.querySelectorAll('[data-audit-row]')).map((r) => r.textContent ?? '')
+  const pick = (name: string): void => {
+    fireEvent.click(screen.getByRole('radio', { name }))
+  }
+
+  it('empty events: plain empty card, no version number, no list', async () => {
     h.fetchWhoamiRole.mockResolvedValue('owner')
     h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [], tail: 200 })
-    render(<AccessAuditSection />)
+    const { container } = render(<AccessAuditSection />)
     await waitFor(() => {
-      expect(
-        screen.getByText(/No login records yet on this host. Logging started in 0.40.144/),
-      ).toBeTruthy()
+      expect(screen.getByText('No sign-ins recorded yet')).toBeTruthy()
     })
-    expect(screen.queryByRole('table')).toBeNull()
+    expect(container.textContent).not.toMatch(/0\.40\.144|v0\./)
+    expect(container.querySelector('[data-load-state="empty"]')).toBeTruthy()
+    expect(container.querySelectorAll('[data-audit-row]').length).toBe(0)
     expect(h.fetchUsersAudit).toHaveBeenCalledTimes(1)
     expect(h.fetchUsersAudit.mock.calls[0]?.[0]).toMatchObject({ tail: 200 })
   })
 
-  it('404: old-host copy; no retry loop', async () => {
+  it('404: says the server needs an update, without a version; no retry loop', async () => {
     h.fetchWhoamiRole.mockResolvedValue('owner')
     h.fetchUsersAudit.mockResolvedValue({ kind: 'not-found' })
-    render(<AccessAuditSection />)
+    const { container } = render(<AccessAuditSection />)
     await waitFor(() => {
-      expect(screen.getByText('This host predates login history — update it to v0.40.144.')).toBeTruthy()
+      expect(screen.getByText('This server can’t show its sign-in history yet')).toBeTruthy()
     })
+    expect(container.textContent).not.toMatch(/0\.40\.144/)
     expect(h.fetchUsersAudit).toHaveBeenCalledTimes(1)
-    expect(screen.queryByRole('table')).toBeNull()
+    expect(container.querySelectorAll('[data-audit-row]').length).toBe(0)
   })
 
-  it('owner table is newest-first; Successes hides bad_creds', async () => {
+  it('a failed read says so in plain words, shows the server reason quietly, and retries', async () => {
+    h.fetchWhoamiRole.mockResolvedValue('owner')
+    h.fetchUsersAudit.mockResolvedValueOnce({ kind: 'error', message: 'audit log is locked' })
+    h.fetchUsersAudit.mockResolvedValueOnce({ kind: 'ok', events: [OK], tail: 200 })
+    const { container } = render(<AccessAuditSection />)
+    await waitFor(() => expect(screen.getByText('Sign-in history couldn’t load')).toBeTruthy())
+    expect(screen.getByText('The server said: audit log is locked.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(container.querySelectorAll('[data-audit-row]').length).toBe(1))
+    expect(h.fetchUsersAudit).toHaveBeenCalledTimes(2)
+  })
+
+  it('records are newest first; Signed in hides failures; All shows them marked', async () => {
     h.fetchWhoamiRole.mockResolvedValue('owner')
     h.fetchUsersAudit.mockResolvedValue({
       kind: 'ok',
       events: [OLDEST, BAD, OK],
       tail: 200,
     })
-    render(<AccessAuditSection />)
+    const { container } = render(<AccessAuditSection />)
     await waitFor(() => {
-      expect(screen.getByRole('table')).toBeTruthy()
+      expect(container.querySelectorAll('[data-audit-row]').length).toBe(1)
     })
     expect(screen.getByText('Access Audit')).toBeTruthy()
-    expect(screen.getByText('203.0.113.9')).toBeTruthy()
-    expect(screen.queryByText('bad_creds')).toBeNull()
-    expect(screen.queryByText('blocked_ingress')).toBeNull()
-    expect(screen.queryByText('198.51.100.7')).toBeNull()
+    expect(rowsText(container)[0]).toContain('alice')
+    expect(rowsText(container)[0]).toContain('signed in')
+    expect(rowsText(container)[0]).toContain('203.0.113.9')
+    expect(rowsText(container)[0]).toContain('web sign-in')
+    expect(container.textContent).not.toContain('198.51.100.7')
 
-    fireEvent.click(screen.getByRole('button', { name: 'All' }))
-    const cells = screen.getAllByRole('cell').map((c) => c.textContent)
-    const firstUserRow = cells.slice(0, 6)
-    expect(firstUserRow.join(' ')).toContain('alice')
-    expect(firstUserRow.join(' ')).toContain('ok')
-    expect(firstUserRow.join(' ')).toContain('203.0.113.9')
-    expect(screen.getByText('bad_creds')).toBeTruthy()
-    expect(screen.getByText('blocked_ingress')).toBeTruthy()
-    const ipCells = screen.getAllByText(/203\.0\.113\.9|198\.51\.100\.7|^-$/)
-    expect(ipCells[0]?.textContent).toBe('203.0.113.9')
+    pick('All')
+    const all = rowsText(container)
+    expect(all.length).toBe(3)
+    expect(all[0]).toContain('203.0.113.9')
+    expect(all[1]).toContain('wrong username or password')
+    expect(all[2]).toContain('doesn’t accept')
+    expect(container.querySelectorAll('[data-audit-row][data-failed="true"]').length).toBe(2)
   })
 
-  it('an agent vault export is highlighted, shown under Successes, and bannered; a person export is not', async () => {
+  it('Failed sign-ins plus a person narrows to that person’s failures and says how many', async () => {
+    const SAM_BAD: AuthAuditEvent = { ...BAD, ts: '2026-09-16T15:00:00.000Z', user: 'sam' }
+    const SAM_LOCKED: AuthAuditEvent = { ...BAD, ts: '2026-09-16T15:01:00.000Z', user: 'sam', outcome: 'locked' }
+    const SAM_OK: AuthAuditEvent = { ...OK, ts: '2026-09-16T15:02:00.000Z', user: 'sam' }
+    h.fetchWhoamiRole.mockResolvedValue('owner')
+    h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [BAD, SAM_BAD, SAM_LOCKED, SAM_OK], tail: 200 })
+    const { container } = render(<AccessAuditSection />)
+    await waitFor(() => expect(container.querySelectorAll('[data-audit-row]').length).toBe(1))
+    pick('Failed sign-ins')
+    expect(rowsText(container).length).toBe(3)
+    fireEvent.change(screen.getByLabelText('Filter by person'), { target: { value: 'sam' } })
+    const rows = rowsText(container)
+    expect(rows.length).toBe(2)
+    expect(rows[0]).toContain('locked out')
+    expect(rows[1]).toContain('wrong username or password')
+    expect(screen.getByText('2 records for “sam”, newest first.')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Filter by person'), { target: { value: 'nobody' } })
+    expect(screen.getByTestId('audit-no-match')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Show all records' }))
+    expect(rowsText(container).length).toBe(4)
+  })
+
+  it('opening a record shows the raw line with its UTC time', async () => {
+    h.fetchWhoamiRole.mockResolvedValue('owner')
+    h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [OK], tail: 200 })
+    const { container } = render(<AccessAuditSection />)
+    await waitFor(() => expect(container.querySelectorAll('[data-audit-row]').length).toBe(1))
+    const toggle = container.querySelector('[data-audit-row] button') as HTMLButtonElement
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText('2026-09-16 14:02:11')).toBeTruthy()
+    expect(screen.getByText('edge:k2-edge-app-2026-09')).toBeTruthy()
+  })
+
+  it('an agent vault export is marked, shown under Signed in, and bannered; a person export is not', async () => {
     const AGENT_EXPORT: AuthAuditEvent = {
       ts: '2026-10-17T09:00:00.000Z',
       event: 'vault-carry',
@@ -170,28 +222,28 @@ describe('AccessAuditSection', () => {
     h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [OK, OWNER_EXPORT, AGENT_EXPORT], tail: 200 })
     const { container } = render(<AccessAuditSection />)
     await waitFor(() => {
-      expect(screen.getByRole('table')).toBeTruthy()
+      expect(container.querySelectorAll('[data-audit-row]').length).toBeGreaterThan(0)
     })
-    // Default filter (Successes) still shows the agent export, not the owner's.
+    // Default filter (Signed in) still shows the agent export, not the owner's.
     expect(screen.getByText(AGENT_EXPORT.outcome)).toBeTruthy()
     expect(screen.queryByText(OWNER_EXPORT.outcome)).toBeNull()
-    const flagged = container.querySelectorAll('tr[data-agent-vault-export="true"]')
+    const flagged = container.querySelectorAll('[data-audit-row][data-agent-vault-export="true"]')
     expect(flagged.length).toBe(1)
-    expect(flagged[0]?.textContent).toContain('agent export')
-    expect(flagged[0]?.textContent).toContain('agent:ws-sales/sess-9')
+    expect(flagged[0]?.textContent).toContain('exported secrets from this server’s vault')
+    expect(flagged[0]?.textContent).toContain('Agent ws-sales/sess-9')
     expect(screen.getByTestId('agent-vault-export-banner').textContent).toContain('An agent exported secrets')
     // All: the owner's export appears, unflagged.
-    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    pick('All')
     expect(screen.getByText(OWNER_EXPORT.outcome)).toBeTruthy()
-    expect(container.querySelectorAll('tr[data-agent-vault-export="true"]').length).toBe(1)
+    expect(container.querySelectorAll('[data-audit-row][data-agent-vault-export="true"]').length).toBe(1)
   })
 
   it('no agent export: no banner', async () => {
     h.fetchWhoamiRole.mockResolvedValue('owner')
     h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [OK], tail: 200 })
-    render(<AccessAuditSection />)
+    const { container } = render(<AccessAuditSection />)
     await waitFor(() => {
-      expect(screen.getByRole('table')).toBeTruthy()
+      expect(container.querySelectorAll('[data-audit-row]').length).toBe(1)
     })
     expect(screen.queryByTestId('agent-vault-export-banner')).toBeNull()
   })
@@ -209,18 +261,20 @@ describe('AccessAuditSection', () => {
     const DENY: AuthAuditEvent = { ...SEND, ts: '2026-10-17T09:01:00.000Z', outcome: 'deny send LOGIN to ops: never_sendable' }
     h.fetchWhoamiRole.mockResolvedValue('owner')
     h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [OK, SEND, DENY], tail: 200 })
-    render(<AccessAuditSection />)
-    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
-    // Successes (the default) is logins only.
+    const { container } = render(<AccessAuditSection />)
+    await waitFor(() => expect(container.querySelectorAll('[data-audit-row]').length).toBe(1))
+    // Signed in (the default) is sign-ins only.
     expect(screen.queryByText(SEND.outcome)).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Vault handoffs' }))
-    expect(screen.getByRole('button', { name: 'Vault handoffs' }).getAttribute('aria-pressed')).toBe('true')
+    pick('Vault handoffs')
+    expect(screen.getByRole('radio', { name: 'Vault handoffs' }).getAttribute('aria-checked')).toBe('true')
     expect(screen.getByText(SEND.outcome)).toBeTruthy()
     expect(screen.getByText(DENY.outcome)).toBeTruthy()
-    expect(screen.queryByText('203.0.113.9')).toBeNull()
+    expect(rowsText(container)[0]).toContain('was refused a secret handoff')
+    expect(rowsText(container)[1]).toContain('sent a secret')
+    expect(container.textContent).not.toContain('203.0.113.9')
     expect(screen.getByText(SEND.outcome).className).toContain('break-words')
-    fireEvent.click(screen.getByRole('button', { name: 'All' }))
-    expect(screen.getByText('203.0.113.9')).toBeTruthy()
+    pick('All')
+    expect(container.textContent).toContain('203.0.113.9')
     expect(screen.getByText(SEND.outcome)).toBeTruthy()
   })
 
@@ -228,7 +282,7 @@ describe('AccessAuditSection', () => {
     const line = (event: string, outcome: string, i: number): AuthAuditEvent => ({
       ts: `2026-10-21T10:0${i}:00.000Z`,
       event,
-      user: i === 0 ? 'agent:ws-billing/s1' : 'rosson',
+      user: i === 0 ? 'agent:ws-billing/s1' : 'alex',
       outcome,
       ingress: '-',
       ip: '-',
@@ -242,34 +296,35 @@ describe('AccessAuditSection', () => {
     const HANDOFF: AuthAuditEvent = { ...REQ, ts: '2026-10-21T10:06:00.000Z', event: 'vault-handoff', outcome: 'ok send KEY to ops' }
     h.fetchWhoamiRole.mockResolvedValue('owner')
     h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [OK, REQ, ANS, NOTE, UNDO, SWITCH, LOOKALIKE, HANDOFF], tail: 200 })
-    render(<AccessAuditSection />)
-    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    const { container } = render(<AccessAuditSection />)
+    await waitFor(() => expect(container.querySelectorAll('[data-audit-row]').length).toBe(1))
     expect(screen.queryByText(REQ.outcome)).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Permission cards' }))
-    expect(screen.getByRole('button', { name: 'Permission cards' }).getAttribute('aria-pressed')).toBe('true')
+    pick('Permission cards')
     for (const ev of [REQ, ANS, NOTE, UNDO, SWITCH]) expect(screen.getByText(ev.outcome)).toBeTruthy()
     expect(screen.queryByText(LOOKALIKE.outcome)).toBeNull()
     expect(screen.queryByText(HANDOFF.outcome)).toBeNull()
-    expect(screen.queryByText('203.0.113.9')).toBeNull()
+    expect(container.textContent).not.toContain('203.0.113.9')
+    // A switch's state is not a failure.
+    expect(container.querySelectorAll('[data-audit-row][data-failed="true"]').length).toBe(0)
     expect(ACCESS_AUDIT_MANIFEST[0]?.keywords).toContain('permission cards')
   })
 
   it('admin: owner-only note and no audit fetch', async () => {
     h.fetchWhoamiRole.mockResolvedValue('admin')
-    render(<AccessAuditSection />)
+    const { container } = render(<AccessAuditSection />)
     await waitFor(() => {
-      expect(screen.getByText('Login history is visible to the server owner.')).toBeTruthy()
+      expect(screen.getByText('Only the server’s owner can see this')).toBeTruthy()
     })
     expect(h.fetchWhoamiRole).toHaveBeenCalled()
     expect(h.fetchUsersAudit).not.toHaveBeenCalled()
-    expect(screen.queryByRole('table')).toBeNull()
+    expect(container.querySelectorAll('[data-audit-row]').length).toBe(0)
   })
 
   it('feature gate: remote 0.40.143 does not fetch', async () => {
     h.supportsAudit.value = false
     render(<AccessAuditSection />)
     await waitFor(() => {
-      expect(screen.getByText('This host predates login history — update it to v0.40.144.')).toBeTruthy()
+      expect(screen.getByText('This server can’t show its sign-in history yet')).toBeTruthy()
     })
     expect(h.fetchWhoamiRole).not.toHaveBeenCalled()
     expect(h.fetchUsersAudit).not.toHaveBeenCalled()

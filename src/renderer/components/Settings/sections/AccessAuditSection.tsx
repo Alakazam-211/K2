@@ -1,12 +1,19 @@
-// Settings → Logs → Access Audit. Thin owner-only table over
-// GET /cli/users/audit on the active host. No last-ok column on Users /
-// Access; no daemon schema. See prd-login-history-settings-v1.md.
+// Settings → Logs → Access Audit. Owner-only list over GET /cli/users/audit
+// on the active host: sign-ins, vault handoffs and permission cards. Each
+// record reads as a sentence (who did what, from where, when) and opens to
+// the raw line. See prd-login-history-settings-v1.md.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useServerSupports } from '@/lib/server-capabilities'
+import { Button, Callout, SearchField, Segmented } from '@/components/ui'
 import type { SettingEntry } from '../searchManifest'
-import { SettingDropdown } from '../controls/SettingControls'
+import {
+  SETTING_ROW_HINT,
+  SettingDropdown,
+  SettingsGroup,
+  SettingsLoadState,
+} from '../controls/SettingControls'
 import {
   AUDIT_TAIL_CHOICES,
   AUDIT_TAIL_DEFAULT,
@@ -14,6 +21,8 @@ import {
   fetchWhoamiRole,
   formatAuditTimeUtc,
   isAgentVaultExport,
+  isFailedLogin,
+  isFailedRecord,
   isPermissionCardsEvent,
   isSuccessLogin,
   isVaultHandoff,
@@ -26,25 +35,23 @@ export const ACCESS_AUDIT_MANIFEST: SettingEntry[] = [
     id: 'k2-connect.access-audit',
     section: 'access-audit',
     label: 'Access Audit',
-    description: 'Login history and vault handoffs for this host — who got in, from where, when; which secrets agents sent each other',
-    keywords: ['access audit', 'login history', 'audit', 'sign-in', 'compromised', 'vault handoff', 'secret sent', 'permission cards', 'permission request'],
+    description: 'Who signed in to this server, from where and when, and which secrets agents sent each other',
+    keywords: ['access audit', 'login history', 'audit', 'sign-in', 'failed sign-in', 'compromised', 'vault handoff', 'secret sent', 'permission cards', 'permission request'],
   },
 ]
 
-const EMPTY_COPY =
-  'No login records yet on this host. Logging started in 0.40.144 — earlier sign-ins are not in this log.'
-const OLD_HOST_COPY = 'This host predates login history — update it to v0.40.144.'
-const OWNER_ONLY_COPY = 'Login history is visible to the server owner.'
+const CONTENT_WIDTH = 'max-w-[52rem]'
 
-type FilterMode = 'successes' | 'handoffs' | 'permission' | 'all'
+type FilterMode = 'successes' | 'failed' | 'handoffs' | 'permission' | 'all'
 
-const FILTERS: { mode: FilterMode; label: string }[] = [
-  { mode: 'successes', label: 'Successes' },
-  { mode: 'handoffs', label: 'Vault handoffs' },
+const FILTERS: { mode: FilterMode; label: string; title: string }[] = [
+  { mode: 'successes', label: 'Signed in', title: 'Sign-ins' },
+  { mode: 'failed', label: 'Failed sign-ins', title: 'Failed sign-ins' },
+  { mode: 'handoffs', label: 'Vault handoffs', title: 'Vault handoffs' },
   // Permission cards (Beta, prd-agent-settings-cards-v1 §6.5): asks,
   // answers, notes, Turn off again and the switches.
-  { mode: 'permission', label: 'Permission cards' },
-  { mode: 'all', label: 'All' },
+  { mode: 'permission', label: 'Permission cards', title: 'Permission cards' },
+  { mode: 'all', label: 'All', title: 'All records' },
 ]
 
 type ViewState =
@@ -56,14 +63,170 @@ type ViewState =
   | { kind: 'error'; message: string }
   | { kind: 'unauthorized' }
 
-function outcomeClass(outcome: string): string {
-  return outcome === 'ok'
-    ? 'text-[var(--color-status-ok)]'
-    : 'text-[var(--color-text-muted)]'
-}
-
 function isAbort(err: unknown): boolean {
   return err instanceof Error && err.name === 'AbortError'
+}
+
+function matchesFilter(ev: AuthAuditEvent, filter: FilterMode): boolean {
+  switch (filter) {
+    // An agent's vault export always shows: it is why this page is open.
+    case 'successes':
+      return isSuccessLogin(ev) || isAgentVaultExport(ev)
+    case 'failed':
+      return isFailedLogin(ev)
+    case 'handoffs':
+      return isVaultHandoff(ev)
+    case 'permission':
+      return isPermissionCardsEvent(ev)
+    case 'all':
+      return true
+  }
+}
+
+/** Who did it, in plain words: an agent's stamp reads "Agent atlas/s1". */
+export function auditWho(user: string): string {
+  const u = user.trim()
+  if (!u || u === '-') return 'Someone'
+  if (u.startsWith('agent:')) return `Agent ${u.slice('agent:'.length)}`
+  if (u.startsWith('connect:')) return u.slice('connect:'.length)
+  return u
+}
+
+const SIGN_IN_FAILURES: Record<string, string> = {
+  bad_creds: 'couldn’t sign in: wrong username or password',
+  locked: 'couldn’t sign in: locked out after too many tries',
+  rate_limited: 'couldn’t sign in: too many tries, so K2 is waiting',
+  blocked_ingress: 'was blocked: came in by a route this server doesn’t accept',
+}
+
+const PERMISSION_WHAT: Record<string, string> = {
+  'permission-request': 'asked for a permission',
+  'permission-answer': 'answered a permission request',
+  'permission-note': 'added a note to a permission request',
+  'permission-undo': 'turned a permission off again',
+  'permission-switch': 'changed a permission switch',
+}
+
+/** What happened, as the rest of a sentence after the person's name. */
+export function auditWhat(ev: AuthAuditEvent): string {
+  const failed = isFailedRecord(ev)
+  const word = ev.outcome.trim().split(/\s+/)[1] ?? ''
+  switch (ev.event) {
+    case 'login':
+      if (!failed) return 'signed in'
+      if (ev.outcome.startsWith('bad_attest')) return 'was blocked: the sign-in couldn’t be verified'
+      return SIGN_IN_FAILURES[ev.outcome] ?? 'couldn’t sign in'
+    case 'logout':
+      return 'signed out'
+    case 'change-password':
+      return failed ? 'couldn’t change their password' : 'changed their password'
+    case 'set-password':
+      return failed ? 'couldn’t set a password' : 'had a password set'
+    case 'add-user':
+      return 'added a person'
+    case 'vault-handoff':
+      if (failed) return 'was refused a secret handoff'
+      if (word === 'send') return 'sent a secret'
+      if (word === 'accept') return 'accepted a secret'
+      if (word === 'decline') return 'declined a secret'
+      if (word === 'expire') return 'let a secret handoff expire'
+      return 'handed off a secret'
+    case 'vault-carry':
+      return word === 'export' ? 'exported secrets from this server’s vault' : 'moved secrets in the vault'
+    default:
+      return PERMISSION_WHAT[ev.event] ?? (ev.event || 'did something')
+  }
+}
+
+/** Where it came from: the address and the route, in plain words. */
+export function auditWhere(ev: AuthAuditEvent): string {
+  const ing = ev.ingress.trim()
+  const route =
+    ing === 'loopback'
+      ? 'on this computer'
+      : ing === 'lan'
+        ? 'local network'
+        : ing === 'tunnel'
+          ? 'through the tunnel'
+          : ing.startsWith('edge:')
+            ? 'web sign-in'
+            : ''
+  const ip = ev.ip && ev.ip !== '-' ? ev.ip : ''
+  return [ip, route].filter(Boolean).join(' · ')
+}
+
+/** Local date and time; the full UTC stamp is in the details. */
+function localWhen(ts: string): string {
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ts || '—'
+  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+function RecordRow({ ev, open, onToggle, rowId }: { ev: AuthAuditEvent; open: boolean; onToggle: () => void; rowId: string }): React.JSX.Element {
+  const failed = isFailedRecord(ev)
+  const exported = isAgentVaultExport(ev)
+  const where = auditWhere(ev)
+  const showOutcome = !(ev.event === 'login' && (ev.outcome === 'ok' || SIGN_IN_FAILURES[ev.outcome]))
+  const dot = failed
+    ? 'bg-[var(--color-status-error)]'
+    : exported
+      ? 'bg-[var(--color-status-warn)]'
+      : ev.event === 'login'
+        ? 'bg-[var(--color-status-ok)]'
+        : 'bg-[var(--color-text-muted)]'
+  const fields: Array<[string, string | undefined]> = [
+    ['Time (UTC)', formatAuditTimeUtc(ev.ts)],
+    ['Record', ev.event],
+    ['Result', ev.outcome],
+    ['Account', ev.user],
+    ['Route', ev.ingress],
+    ['Address', ev.ip],
+    ['App', ev.client],
+  ]
+  return (
+    <li data-audit-row="" data-failed={failed ? 'true' : undefined} data-agent-vault-export={exported ? 'true' : undefined}>
+      <button
+        type="button"
+        data-k2-focus=""
+        aria-expanded={open}
+        aria-controls={rowId}
+        onClick={onToggle}
+        className="group relative w-full grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-start gap-x-3 px-4 py-3 text-left no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-bg-hover)]"
+      >
+        <span aria-hidden="true" className={`mt-1.5 inline-block h-2 w-2 rounded-[var(--radius-status)] ${dot}`} />
+        <span className="min-w-0">
+          <span className="block type-row text-[var(--color-text-primary)]">
+            <span className="type-name">{auditWho(ev.user)}</span>{' '}
+            <span className={failed ? 'text-[var(--color-status-error-soft)]' : undefined}>{auditWhat(ev)}</span>
+          </span>
+          {where && <span className="block type-hint text-[var(--color-text-secondary)] mt-0.5">{where}</span>}
+          {showOutcome && ev.outcome && (
+            <span className="block type-hint font-mono text-[var(--color-text-secondary)] mt-0.5 whitespace-pre-wrap break-words">
+              {ev.outcome}
+            </span>
+          )}
+        </span>
+        <span className="type-hint text-[var(--color-text-secondary)] tabular-nums whitespace-nowrap" title={`${formatAuditTimeUtc(ev.ts)} UTC`}>
+          {localWhen(ev.ts)}
+        </span>
+        <span aria-hidden="true" className={`type-row text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)] transition-transform ${open ? 'rotate-90' : ''}`}>
+          ›
+        </span>
+      </button>
+      {open && (
+        <dl id={rowId} className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-4 gap-y-1 px-4 pb-3 pl-9">
+          {fields
+            .filter(([, v]) => v !== undefined && v !== '')
+            .map(([k, v]) => (
+              <React.Fragment key={k}>
+                <dt className="type-hint text-[var(--color-text-secondary)]">{k}</dt>
+                <dd className="type-hint font-mono text-[var(--color-text-primary)] break-words">{v}</dd>
+              </React.Fragment>
+            ))}
+        </dl>
+      )}
+    </li>
+  )
 }
 
 export function AccessAuditSection(): React.JSX.Element {
@@ -74,6 +237,7 @@ export function AccessAuditSection(): React.JSX.Element {
   const [userFilter, setUserFilter] = useState('')
   const [refreshNonce, setRefreshNonce] = useState(0)
   const [view, setView] = useState<ViewState>({ kind: 'loading' })
+  const [openRow, setOpenRow] = useState<string | null>(null)
 
   useEffect(() => {
     if (!supportsAudit) {
@@ -117,7 +281,7 @@ export function AccessAuditSection(): React.JSX.Element {
         if (ac.signal.aborted || isAbort(err)) return
         setView({
           kind: 'error',
-          message: err instanceof Error ? err.message : 'Could not load login history.',
+          message: err instanceof Error ? err.message : '',
         })
       }
     })()
@@ -132,10 +296,7 @@ export function AccessAuditSection(): React.JSX.Element {
     if (view.kind !== 'table') return []
     const q = userFilter.trim().toLowerCase()
     return view.events.filter((ev) => {
-      // An agent's vault export always shows: it is why this page is open.
-      if (filter === 'successes' && !isSuccessLogin(ev) && !isAgentVaultExport(ev)) return false
-      if (filter === 'handoffs' && !isVaultHandoff(ev)) return false
-      if (filter === 'permission' && !isPermissionCardsEvent(ev)) return false
+      if (!matchesFilter(ev, filter)) return false
       if (q && !ev.user.toLowerCase().includes(q)) return false
       return true
     })
@@ -146,172 +307,148 @@ export function AccessAuditSection(): React.JSX.Element {
     [view],
   )
 
+  const tryAgain = <Button onClick={onRefresh}>Try again</Button>
+  const gate =
+    view.kind === 'old-host' ? (
+      <SettingsLoadState kind="empty" title="This server can’t show its sign-in history yet" testId="audit-old-host">
+        Update K2 on this server, then come back here to see who signed in.
+      </SettingsLoadState>
+    ) : view.kind === 'owner-only' ? (
+      <SettingsLoadState kind="empty" title="Only the server’s owner can see this" testId="audit-owner-only">
+        Sign-in history is private to the owner. Ask them if you need to know who signed in.
+      </SettingsLoadState>
+    ) : view.kind === 'unauthorized' ? (
+      <SettingsLoadState kind="error" title="Your sign-in to this server has expired" action={tryAgain} testId="audit-unauthorized">
+        Sign in to this server again, then try again.
+      </SettingsLoadState>
+    ) : view.kind === 'error' ? (
+      <SettingsLoadState kind="error" title="Sign-in history couldn’t load" detail={view.message} action={tryAgain} testId="audit-error">
+        K2 couldn’t read this server’s access log. Nothing is lost; try again in a moment.
+      </SettingsLoadState>
+    ) : view.kind === 'loading' ? (
+      <SettingsLoadState kind="loading" title="Loading sign-in history…" testId="audit-loading">
+        The newest records on this server.
+      </SettingsLoadState>
+    ) : view.kind === 'empty' ? (
+      <SettingsLoadState kind="empty" title="No sign-ins recorded yet" action={<Button onClick={onRefresh}>Refresh</Button>} testId="audit-empty">
+        Each sign-in to this server, and each secret an agent hands to another, shows here as it happens.
+      </SettingsLoadState>
+    ) : null
+
+  const current = FILTERS.find((f) => f.mode === filter) ?? FILTERS[0]
+  const narrowed = filter !== 'all' || userFilter.trim() !== ''
+  const total = view.kind === 'table' ? view.events.length : 0
+  const who = userFilter.trim()
+
   return (
-    <div data-settings-id="access-audit">
-      <div
-        className="flex items-start justify-between gap-3 mb-1"
-        data-settings-id="k2-connect.access-audit"
-      >
-        <div>
-          <h2 className="type-title text-[var(--color-text-primary)]">Access Audit</h2>
-          <p className="type-hint text-[var(--color-text-muted)] mt-1">
-            Login history and vault handoffs for this host. A successful sign-in is the account
-            that got in; a handoff line names the secret, who sent it and to whom — passwords and
-            secret values are never stored in this log.
-          </p>
-        </div>
-      </div>
-
-      {view.kind === 'old-host' && (
-        <p className="type-hint text-[var(--color-text-muted)] mt-6">{OLD_HOST_COPY}</p>
-      )}
-      {view.kind === 'owner-only' && (
-        <p className="type-hint text-[var(--color-text-muted)] mt-6">{OWNER_ONLY_COPY}</p>
-      )}
-      {view.kind === 'unauthorized' && (
-        <p className="type-hint text-[var(--color-text-muted)] mt-6">
-          Could not load login history — sign in again.
+    <div data-settings-id="access-audit" className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`}>
+      <header className="min-w-0" data-settings-id="k2-connect.access-audit">
+        <h2 className="type-title text-[var(--color-text-primary)]">Access Audit</h2>
+        <p className={SETTING_ROW_HINT}>
+          Who signed in to this server, from where and when, and which secrets agents handed each other. Passwords and
+          secret values are never kept here.
         </p>
-      )}
-      {view.kind === 'error' && (
-        <p className="type-hint text-[var(--color-text-muted)] mt-6">{view.message}</p>
-      )}
-      {view.kind === 'loading' && (
-        <p className="type-hint text-[var(--color-text-muted)] mt-6">Loading login history…</p>
-      )}
+      </header>
 
-      {(view.kind === 'empty' || view.kind === 'table') && (
+      {gate ?? (
         <>
-          <div className="flex flex-wrap items-end justify-between gap-3 mt-6 mb-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="type-heading text-[var(--color-text-primary)]">
-                Records
-              </span>
-              <div className="flex gap-1">
-                {FILTERS.map(({ mode, label }) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    aria-pressed={filter === mode}
-                    onClick={() => setFilter(mode)}
-                    className={`type-control px-2 py-0.5 border cursor-pointer no-drag ${
-                      filter === mode
-                        ? 'border-[var(--color-accent)] text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]'
-                        : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]'
-                    }`}
+          {agentExports > 0 && (
+            <Callout tone="warn" role="status" data-testid="agent-vault-export-banner" className="type-row">
+              {agentExports === 1
+                ? 'An agent exported secrets from this server’s vault. It’s marked below; the log keeps names only, never values.'
+                : `Agents exported secrets from this server’s vault ${agentExports} times. They’re marked below; the log keeps names only, never values.`}
+            </Callout>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-3" data-testid="audit-filters">
+            <Segmented<FilterMode>
+              aria-label="Show"
+              value={filter}
+              onChange={(next) => {
+                setFilter(next)
+                setOpenRow(null)
+              }}
+              options={FILTERS.map((f) => ({ value: f.mode, label: f.label, buttonProps: { 'data-testid': `audit-filter-${f.mode}` } }))}
+            />
+            <SearchField
+              className="w-60"
+              value={userFilter}
+              onChange={(e) => setUserFilter(e.target.value)}
+              placeholder="Filter by person"
+              aria-label="Filter by person"
+            />
+          </div>
+
+          <SettingsGroup
+            card
+            title={current.title}
+            hint={
+              who
+                ? rows.length === 0
+                  ? `Nothing for “${who}” here.`
+                  : `${rows.length === 1 ? 'One record' : `${rows.length} records`} for “${who}”, newest first.`
+                : 'Newest first. Open a record for the full line.'
+            }
+            action={<Button onClick={onRefresh}>Refresh</Button>}
+            testId="audit-records"
+          >
+            {rows.length === 0 ? (
+              <div className="px-4 py-6 flex items-center justify-between gap-6" data-testid="audit-no-match">
+                <div className="min-w-0">
+                  <p className="type-row text-[var(--color-text-primary)]">
+                    {filter === 'failed' && !who ? 'No failed sign-ins' : 'Nothing matches'}
+                  </p>
+                  <p className={SETTING_ROW_HINT}>
+                    {filter === 'failed' && !who
+                      ? `No one failed to sign in within the newest ${total} records.`
+                      : `No ${current.title.toLowerCase()} ${who ? `for “${who}” ` : ''}in the newest ${total} records.`}
+                  </p>
+                </div>
+                {narrowed && (
+                  <Button
+                    onClick={() => {
+                      setFilter('all')
+                      setUserFilter('')
+                    }}
                   >
-                    {label}
-                  </button>
-                ))}
+                    Show all records
+                  </Button>
+                )}
               </div>
-              <label className="type-hint text-[var(--color-text-muted)] flex items-center gap-1">
-                User
-                <input
-                  type="text"
-                  value={userFilter}
-                  onChange={(e) => setUserFilter(e.target.value)}
-                  aria-label="Filter by user"
-                  className="type-control bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] px-2 py-0.5 outline-none w-28"
-                />
-              </label>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="type-hint text-[var(--color-text-muted)] flex items-center gap-1">
-                tail
+            ) : (
+              <ul className="max-h-[40rem] overflow-y-auto divide-y divide-[var(--color-border)]" data-testid="audit-rows">
+                {rows.map((ev, i) => {
+                  const key = `${ev.ts}-${ev.user}-${ev.event}-${i}`
+                  return (
+                    <RecordRow
+                      key={key}
+                      ev={ev}
+                      rowId={`audit-row-${i}`}
+                      open={openRow === key}
+                      onToggle={() => setOpenRow((k) => (k === key ? null : key))}
+                    />
+                  )
+                })}
+              </ul>
+            )}
+            <div className="px-4 py-2.5 flex items-center justify-between gap-4">
+              <span className="type-hint text-[var(--color-text-secondary)]" data-testid="audit-count">
+                Showing {rows.length} of the newest {total} records
+              </span>
+              <span className="flex items-center gap-2">
+                <span className="type-hint text-[var(--color-text-secondary)]">Read</span>
                 <SettingDropdown
-                  ariaLabel="Audit tail"
+                  ariaLabel="How many records to read"
                   value={String(tail)}
                   onChange={(value) => setTail(Number(value))}
                   options={AUDIT_TAIL_CHOICES.map((n) => ({
                     value: String(n),
-                    label: String(n),
+                    label: `Newest ${n.toLocaleString()}`,
                   }))}
                 />
-              </label>
-              <button
-                type="button"
-                onClick={onRefresh}
-                className="type-control px-2 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer no-drag"
-              >
-                Refresh
-              </button>
+              </span>
             </div>
-          </div>
-
-          {agentExports > 0 && (
-            <p
-              role="status"
-              data-testid="agent-vault-export-banner"
-              className="type-row mb-3 px-2 py-1.5 border border-[var(--color-status-warn)] text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]"
-            >
-              {agentExports === 1
-                ? 'An agent exported secrets from this box’s vault in this window. It is marked below; names only, never values.'
-                : `Agents exported secrets from this box’s vault ${agentExports} times in this window. They are marked below; names only, never values.`}
-            </p>
-          )}
-          {view.kind === 'empty' ? (
-            <p className="type-hint text-[var(--color-text-muted)]">{EMPTY_COPY}</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full type-row text-left border-collapse min-w-[640px]">
-                <thead>
-                  <tr className="type-section uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
-                    <th className="font-medium py-1.5 pr-3">Time (UTC)</th>
-                    <th className="font-medium py-1.5 pr-3">Event</th>
-                    <th className="font-medium py-1.5 pr-3">Outcome</th>
-                    <th className="font-medium py-1.5 pr-3">User</th>
-                    <th className="font-medium py-1.5 pr-3">Ingress</th>
-                    <th className="font-medium py-1.5">IP</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.length === 0 ? (
-                    <tr>
-                      <td
-                        colSpan={6}
-                        className="py-3 text-[var(--color-text-muted)]"
-                      >
-                        No matching records in this window.
-                      </td>
-                    </tr>
-                  ) : (
-                    rows.map((ev, i) => {
-                      const flagged = isAgentVaultExport(ev)
-                      return (
-                      <tr
-                        key={`${ev.ts}-${ev.user}-${ev.outcome}-${i}`}
-                        data-agent-vault-export={flagged ? 'true' : undefined}
-                        className={`border-b border-[var(--color-border)] text-[var(--color-text-primary)] ${
-                          flagged ? 'bg-[var(--color-status-warn)]/10 border-l-2 border-l-[var(--color-status-warn)]' : ''
-                        }`}
-                      >
-                        <td className="py-1.5 pr-3 font-mono whitespace-nowrap">
-                          {formatAuditTimeUtc(ev.ts)}
-                        </td>
-                        <td className="py-1.5 pr-3">
-                          {ev.event || '—'}
-                          {flagged && (
-                            <span className="ml-1 type-hint px-1 border border-[var(--color-status-warn)] text-[var(--color-status-warn)]">
-                              agent export
-                            </span>
-                          )}
-                        </td>
-                        <td
-                          className={`py-1.5 pr-3 font-mono whitespace-pre-wrap break-words max-w-[28rem] ${outcomeClass(ev.outcome)}`}
-                        >
-                          {ev.outcome || '—'}
-                        </td>
-                        <td className="py-1.5 pr-3">{ev.user || '—'}</td>
-                        <td className="py-1.5 pr-3 font-mono">{ev.ingress || '—'}</td>
-                        <td className="py-1.5 font-mono">{ev.ip || '—'}</td>
-                      </tr>
-                      )
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
+          </SettingsGroup>
         </>
       )}
     </div>

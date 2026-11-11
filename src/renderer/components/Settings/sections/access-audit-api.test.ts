@@ -196,3 +196,25 @@ describe('fetchWhoamiRole', () => {
     expect(h.invalidateDaemonWs).not.toHaveBeenCalled()
   })
 })
+
+describe('serverReason / isFailedRecord', () => {
+  it('reads the reason from a JSON error body or plain text', async () => {
+    const { serverReason } = await import('./access-audit-api')
+    expect(serverReason('{"error":"audit log is locked"}')).toBe('audit log is locked')
+    expect(serverReason('{"message":"busy"}')).toBe('busy')
+    expect(serverReason('  gateway timeout ')).toBe('gateway timeout')
+    expect(serverReason('')).toBe('')
+  })
+
+  it('marks refusals and failed sign-ins, not ok lines or switch states', async () => {
+    const { isFailedRecord, isFailedLogin } = await import('./access-audit-api')
+    const ev = (event: string, outcome: string) => ({ ts: '', event, user: 'sam', outcome, ingress: '-', ip: '-' })
+    expect(isFailedLogin(ev('login', 'bad_creds'))).toBe(true)
+    expect(isFailedLogin(ev('login', 'bad_attest:expired'))).toBe(true)
+    expect(isFailedLogin(ev('login', 'ok'))).toBe(false)
+    expect(isFailedRecord(ev('vault-handoff', 'deny send LOGIN to ops: never_sendable'))).toBe(true)
+    expect(isFailedRecord(ev('vault-handoff', 'ok send KEY to ops'))).toBe(false)
+    expect(isFailedRecord(ev('permission-switch', 'server on'))).toBe(false)
+    expect(isFailedLogin(ev('vault-handoff', 'deny send'))).toBe(false)
+  })
+})

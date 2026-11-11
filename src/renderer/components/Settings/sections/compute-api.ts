@@ -9,11 +9,12 @@
 //   - THIS COMPUTER (`scopeForHost('local')`, desktop only): whether this
 //     machine is itself a node, and the machine owner's word over it.
 //
-// Compute refusals are `{"error":{"code","hint"}}`. `daemon-cli` only lifts a
-// STRING `error` into the thrown message, so an object error arrives as the
-// raw JSON body text; `computeErrorInfo` parses it back out.
+// Compute refusals are `{"error":{"code","hint"}}`. `daemon-cli` throws a
+// DaemonHttpError carrying the code, with the hint as its message; older
+// paths and tests throw the raw JSON body. `computeErrorInfo` reads both.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { primaryScope, scopeForHost, type ServerScope } from '@/kessel/server-scope'
 import type { AdminRequest } from './compute-admin-api'
 
@@ -484,6 +485,12 @@ export type PolicyKey =
 // ── Errors ──────────────────────────────────────────────────────────────
 
 export function computeErrorInfo(err: unknown): { code?: string; hint?: string } {
+  // `daemon-cli` (0.46.1+) throws a DaemonHttpError: the hint is its message
+  // and the code rides the error. Reading only the raw body missed every
+  // live refusal, so "compute is off" showed as a failed load.
+  if (err instanceof DaemonHttpError && err.code) {
+    return { code: err.code, hint: err.message && err.message !== err.code ? err.message : undefined }
+  }
   const msg = err instanceof Error ? err.message : String(err)
   try {
     const parsed = JSON.parse(msg)

@@ -1,3 +1,4 @@
+import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/daemon-cli', () => ({
@@ -190,6 +191,13 @@ describe('errors and formatting', () => {
     expect(isComputeDisabled(err)).toBe(true)
     expect(isComputeDisabled(new Error('boom'))).toBe(false)
     expect(computeErrorMessage(new Error('plain'))).toBe('plain')
+  })
+
+  it('reads a DaemonHttpError (what daemon-cli throws): compute off is recognised', () => {
+    const err = new DaemonHttpError('compute nodes are a preview', 404, 'compute_disabled', { code: 'compute_disabled', hint: 'compute nodes are a preview' }, null)
+    expect(computeErrorInfo(err)).toEqual({ code: 'compute_disabled', hint: 'compute nodes are a preview' })
+    expect(isComputeDisabled(err)).toBe(true)
+    expect(isComputeDisabled(new DaemonHttpError('boom', 500, null, null, null))).toBe(false)
   })
 
   it('node names match the daemon rule', () => {

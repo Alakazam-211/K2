@@ -674,6 +674,9 @@ assert_contains "projects open by default" "$pj_out" "OPEN BY DEFAULT, WITH A PE
 assert_contains "projects switch name" "$pj_out" "\"Manage K2 projects\""
 assert_contains "projects refusal code" "$pj_out" "agent_permission_off"
 assert_contains "projects reads + chat stay" "$pj_out" "list, show, read and msg still work"
+assert_contains "projects: setting a view needs the switch" "$pj_out" "settings and setting a
+  \`view\` fail with agent_permission_off"
+assert_contains "projects: printing a view needs nothing" "$pj_out" "and so does printing a view."
 assert_contains "projects agent never flips" "$pj_out" "An agent never can"
 assert_contains "projects audit" "$pj_out" "is logged with who did it"
 pj_json="$("$K2" study projects --json)"

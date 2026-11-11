@@ -53988,8 +53988,9 @@ OPEN BY DEFAULT, WITH A PER-AGENT SWITCH
   Every workspace has "Manage K2 projects" (Settings → Workspaces →
   <ws> → Agent). It starts ON: your agent may create, rename and delete
   projects and add or remove members, its own or others'.
-  Off: create, rename, delete, add, remove, poc and settings fail with
-  agent_permission_off (exit 1). list, show, read and msg still work.
+  Off: create, rename, delete, add, remove, poc, settings and setting a
+  `view` fail with agent_permission_off (exit 1).
+  list, show, read and msg still work, and so does printing a view.
   Ask your human with `k2 thread` if you need it on; don't work around it.
 
 WHO MAY FLIP IT

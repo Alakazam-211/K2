@@ -469,7 +469,7 @@
   --color-divider: #525255;
   --color-text-primary: #ffffff;
   --color-text-secondary: #c7c7cc;
-  --color-text-muted: #98989d;
+  --color-text-muted: #a1a1a6;
   --color-accent: var(--glass-accent);
   --color-accent-hover: color-mix(in srgb, var(--color-accent) 82%, white);
   --color-accent-soft: color-mix(in srgb, var(--color-accent) 58%, white);
@@ -879,6 +879,12 @@
    icons drawn with --color-accent are untouched. */
 [data-style="glass"][data-palette="veil"] {
   --color-accent-text: color-mix(in srgb, var(--color-accent) 80%, black);
+}
+/* Obsidian: #0a84ff text on a selected row (accent at 10% over a tile) is
+   4.0:1, so small accent text lightens a little. Fills and icons keep
+   --color-accent. */
+[data-style="glass"][data-palette="obsidian"] {
+  --color-accent-text: color-mix(in srgb, var(--color-accent) 78%, white);
 }
 
 /* ── Fallback (G5): Frost becomes a tile ────────────────────────────────

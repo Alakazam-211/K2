@@ -60,7 +60,8 @@
       "$type": "color"
     },
     "text-muted": {
-      "$value": "#98989d",
+      "$value": "#a1a1a6",
+      "$description": "Hints, placeholders and quiet labels. 4.9:1 on a field inside a tile (#333336), where #98989d was 4.39.",
       "$type": "color"
     },
     "accent": {

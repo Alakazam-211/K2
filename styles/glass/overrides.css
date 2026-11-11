@@ -141,6 +141,12 @@
 [data-style="glass"][data-palette="veil"] {
   --color-accent-text: color-mix(in srgb, var(--color-accent) 80%, black);
 }
+/* Obsidian: #0a84ff text on a selected row (accent at 10% over a tile) is
+   4.0:1, so small accent text lightens a little. Fills and icons keep
+   --color-accent. */
+[data-style="glass"][data-palette="obsidian"] {
+  --color-accent-text: color-mix(in srgb, var(--color-accent) 78%, white);
+}
 
 /* ── Fallback (G5): Frost becomes a tile ────────────────────────────────
    lib/frost-support.ts stamps data-frost="tile" on <html> for reduced

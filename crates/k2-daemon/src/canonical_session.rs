@@ -6,8 +6,8 @@
 //! Pre-0.37.2, the only path that spawned a workspace's canonical PTY
 //! was `DaemonWakeProvider::wake` (when a wake signal arrived) or the
 //! renderer's AgentChatPane mount (when the user opened a chat tab).
-//! For automation deployments — Baden's acme-checkin Scout SMS bridge
-//! is the canonical example — a fresh workspace flow is:
+//! For automation deployments (an SMS bridge that opens workspaces and
+//! messages them, say) a fresh workspace flow is:
 //!
 //!   k2so workspace open <path>
 //!   k2so settings --mode custom

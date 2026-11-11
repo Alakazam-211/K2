@@ -50937,7 +50937,7 @@ if made:
         print("Tell your person on your Thread, and point them to %s (k2 msg %s)." % (d.get("name"), d.get("handle")))
     sys.exit(0)
 LABELS = {
-    "llm_sign_in": "Sign in to Claude, Codex or Grok",
+    "llm_sign_in": "Sign in to an AI tool",
     "first_agent": "Make your first agent",
     "chief_of_staff": "Hire your Chief of Staff",
     "tunnel": "Turn on the tunnel",
@@ -50946,7 +50946,7 @@ LABELS = {
 }
 NOTES = {
     "needs_tunnel": "Away from home, your phone needs the tunnel first.",
-    "needs_k5": "K5 helps you hire it, so you will meet K5 first.",
+    "needs_k5": "You will meet K5 first.",
 }
 MARK = {"done": "[x]", "todo": "[ ]", "skipped": "[-]"}
 rows = d.get("rows") or []

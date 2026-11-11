@@ -316,8 +316,6 @@ struct State {
     recordings: BTreeMap<String, Recording>,
     rec_changes: Vec<(String, Value)>,
     rec_seq: u64,
-    /// Feed changes at or below this seq were pruned (older cursors → 410).
-    rec_floor: u64,
     /// Sew 0.9.0: `POST /mgmt/v1/channels/{id}/recording` bodies, merged.
     channel_recording: BTreeMap<String, Value>,
 }
@@ -890,10 +888,10 @@ impl FakeSew {
         })
     }
 
-    /// Prune the App feed at or below `seq` (an older cursor answers 410).
+    /// Prune the App feed at or below `seq`. Like Sew's, the feed never
+    /// answers 410: an older cursor just gets the changes still kept.
     pub fn prune_recording_feed(&self, seq: u64) {
         self.with(|s| {
-            s.rec_floor = seq;
             s.rec_changes.retain(|(_, c)| c["seq"].as_u64().unwrap_or(0) > seq);
         })
     }
@@ -3405,9 +3403,6 @@ fn recordings_read(s: &mut State, path: &str, query: &str, actor: Option<&str>) 
         }
         let from = match after.as_deref().map(str::parse::<u64>) {
             None => 0,
-            Some(Ok(n)) if n < s.rec_floor => {
-                return err(410, "gone", "the cursor is gone", json!({"reason": "cursor_expired", "head": s.rec_seq.to_string()}));
-            }
             Some(Ok(n)) => n,
             Some(Err(_)) => {
                 s.bad_bodies.push(format!("recordings/changes: a cursor Sew never handed out: {after:?}"));
@@ -3422,7 +3417,8 @@ fn recordings_read(s: &mut State, path: &str, query: &str, actor: Option<&str>) 
             .map(|(_, c)| c.clone())
             .collect();
         let next = changes.last().and_then(|c| c["seq"].as_u64()).unwrap_or(s.rec_seq.max(from));
-        return (200, json!({"changes": changes, "next": next.to_string()}).to_string());
+        // Sew's `MgmtRecordingChanges`: `items`, and `next` a number.
+        return (200, json!({"items": changes, "next": next}).to_string());
     }
     let Some(app) = query_param(query, "app_id").map(pct_decode) else {
         // The Owner/Admin compliance view (no app_id).

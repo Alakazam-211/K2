@@ -28,9 +28,10 @@
 //!   `apps/{app}/recordings/changes` (`wait=30`, timeout `wait + 10 s`),
 //!   keeps the cursor in skin.db (`tool_recording_feed`), and sends each
 //!   change as `{kind: "recording_changed", seq, change, recordingId,
-//!   spaceId, channelId, at}`, never content. A cursor Sew dropped (older than
-//!   its 7 days, `410 cursor_expired`) sends `{kind: "recordings_refetch"}`
-//!   (the App calls `recordings.list` again) and starts at Sew's head. No
+//!   spaceId, channelId, at}`, never content. Sew's feed never answers 410
+//!   (its `k2_mgmt_0.9.2.json` golden): a cursor past its head gets an empty
+//!   page. A socket that falls behind K2's own buffer gets `{kind:
+//!   "recordings_refetch"}` (the App calls `recordings.list` again). No
 //!   App-server stop in 0.9.0 (Rosson's answer 4).
 
 use std::collections::HashMap;
@@ -317,8 +318,6 @@ pub fn frame_of(c: &sew_wire::RecordingChange) -> String {
 pub enum Polled {
     /// Changes sent (how many).
     Sent(usize),
-    /// Sew dropped the cursor: the sockets were told to refetch.
-    Refetch,
     /// The App may not read any more (server_read off, not governing,
     /// the flag gone): the feed ends.
     Ended(String),
@@ -356,14 +355,6 @@ pub async fn poll_once(app: &str, tx: &broadcast::Sender<String>, wait_s: u32) -
         Err(e) => return Polled::Retry(e.0),
     };
     let reason = r.error().and_then(|e| e.error.detail_str("reason").map(str::to_string));
-    if r.status == 410 {
-        // Older than Sew keeps: start at Sew's head and refetch.
-        let head = r.error().and_then(|e| e.error.detail_str("head").map(str::to_string));
-        let a = app.to_string();
-        let _ = blocking(move || hook::recording_set_feed_cursor(&a, head.as_deref())).await;
-        let _ = tx.send(json!({ "kind": FRAME_REFETCH }).to_string());
-        return Polled::Refetch;
-    }
     if r.status == 403 || reason.as_deref() == Some(sew_wire::reasons::APP_NOT_GOVERNING) {
         return Polled::Ended(reason.unwrap_or_else(|| r.error_line()));
     }
@@ -374,14 +365,14 @@ pub async fn poll_once(app: &str, tx: &broadcast::Sender<String>, wait_s: u32) -
         Ok(p) => p,
         Err(e) => return Polled::Retry(format!("feed answer: {e}")),
     };
-    for c in &page.changes {
+    for c in &page.items {
         let _ = tx.send(frame_of(c));
     }
     if !page.next.is_empty() {
         let (a, n) = (app.to_string(), page.next.clone());
         let _ = blocking(move || hook::recording_set_feed_cursor(&a, Some(&n))).await;
     }
-    Polled::Sent(page.changes.len())
+    Polled::Sent(page.items.len())
 }
 
 /// Listen to App `app`'s feed; the first listener starts its follower,
@@ -401,7 +392,7 @@ pub fn subscribe(app: &str) -> broadcast::Receiver<String> {
                 break;
             }
             match poll_once(&app, &tx, FEED_WAIT_S).await {
-                Polled::Sent(_) | Polled::Refetch => backoff = Duration::from_secs(1),
+                Polled::Sent(_) => backoff = Duration::from_secs(1),
                 Polled::Ended(why) => {
                     k2_core::log_debug!("[recording] feed {app} ended: {why}");
                     break;

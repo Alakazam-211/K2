@@ -248,7 +248,7 @@ async fn sew_0_9_0_speaks_the_recording_names() {
     let r = e.get_as(&sew_wire::app_recording_changes_path(APP, None, 0, 50), &actor).await;
     assert_eq!(r.status, 200, "{}", r.body_text());
     let f: sew_wire::RecordingChangesPage = serde_json::from_slice(&r.body).expect("feed");
-    assert_eq!((f.changes.len(), f.next.as_str()), (1, "1"));
+    assert_eq!((f.items.len(), f.next.as_str()), (1, "1"));
     assert!(!serde_json::to_string(&f).unwrap().contains("never on the feed"));
     // Every read named the App.
     let reads: Vec<_> = e.sew.calls().into_iter().filter(|c| c.method == "GET" && c.path.contains("recording")).collect();
@@ -348,8 +348,8 @@ async fn a_read_names_the_app_and_is_audited() {
 }
 
 /// PRD §8 K-d: a feed page reaches an open socket as `recording_changed`,
-/// with no content; a cursor Sew dropped tells the socket to refetch; the
-/// feed ends when server_read goes off.
+/// with no content; a pruned feed answers what it still keeps (Sew's feed
+/// never answers 410); the feed ends when server_read goes off.
 #[tokio::test]
 async fn the_feed_sends_changes_without_content() {
     let e = governed(&sew_090()).await;
@@ -367,12 +367,43 @@ async fn the_feed_sends_changes_without_content() {
     assert_eq!(hook::recording_feed_cursor(APP).unwrap().as_deref(), Some("2"), "the cursor is kept");
     assert_eq!(reads::poll_once(APP, &tx, 0).await, Polled::Sent(0), "nothing new");
     e.sew.push_recording_change(APP, "stopped", "71");
+    e.sew.push_recording_change(APP, "audio_expired", "71");
     e.sew.prune_recording_feed(3);
-    assert_eq!(reads::poll_once(APP, &tx, 0).await, Polled::Refetch);
+    assert_eq!(reads::poll_once(APP, &tx, 0).await, Polled::Sent(1), "only what Sew still keeps");
     let f: Value = serde_json::from_str(&rx.recv().await.unwrap()).unwrap();
-    assert_eq!(f, json!({"kind": "recordings_refetch"}));
+    assert_eq!(f["change"], json!("audio_expired"), "{f}");
+    assert_eq!(hook::recording_feed_cursor(APP).unwrap().as_deref(), Some("4"));
     server_read(false);
     assert!(matches!(reads::poll_once(APP, &tx, 0).await, Polled::Ended(_)), "server_read off ends the feed");
     let feed_calls = e.sew.calls().into_iter().filter(|c| c.path.ends_with("/recordings/changes")).count();
     assert_eq!(feed_calls, 3, "the last poll never reached Sew");
+}
+
+/// Sew's own golden of the mgmt calls K2 makes (`k2_mgmt_0.9.2.json`, exported
+/// from core 0489d7a5, sha256 2f7d6c4b…51fc): the App recording feed answers
+/// `{items, next}` with `next` a number, and a cursor past the head is a 200
+/// with no items and the same cursor, never a 410. K2's wire type and the fake
+/// Sew follow it.
+#[test]
+fn sews_0_9_2_golden_recording_feed_is_items_and_never_410() {
+    use sha2::Digest;
+    let raw = include_bytes!("../golden/sew/k2_mgmt_0.9.2.json");
+    let sha: String = sha2::Sha256::digest(raw).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(sha, "2f7d6c4bfd3f29dfc5ddc672612c6c68738aaad8007e20c083820911ad3c51fc", "the golden is Sew's file");
+    let g: Value = serde_json::from_slice(raw).expect("json");
+    assert_eq!(g["version"], json!("0.9.2"));
+    let calls = g["k2"].as_array().expect("k2 calls");
+    let call = |id: &str| calls.iter().find(|c| c["call"] == json!(id)).unwrap_or_else(|| panic!("{id} in the golden"));
+    for (id, after) in [("R5.4", 0u64), ("R5.4.past", 1_000_000)] {
+        let c = call(id);
+        assert!(c["req"].as_str().expect("req").contains("/recordings/changes?"), "{c}");
+        assert_eq!(c["status"], json!(200), "{id}: {c}");
+        assert_eq!(c["read"]["next"], json!(after), "{id}: next is the cursor, a number: {c}");
+        assert!(c["read"].get("items[]/kind").is_some(), "{id}: the page is items: {c}");
+    }
+    let feed: Vec<&Value> = calls.iter().filter(|c| c["req"].as_str().is_some_and(|r| r.contains("/recordings/changes"))).collect();
+    assert!(feed.iter().all(|c| c["status"] != json!(410)), "Sew's feed never answers 410");
+    let page: k2_core::tool_hook::sew_wire::RecordingChangesPage =
+        serde_json::from_value(json!({"items": [], "next": 1_000_000})).expect("Sew's page");
+    assert_eq!((page.items.len(), page.next.as_str()), (0, "1000000"));
 }

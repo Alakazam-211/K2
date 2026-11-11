@@ -1785,12 +1785,15 @@ pub struct RecordingChange {
     pub at: String,
 }
 
-/// `{changes: [RecordingChange…], next}`. On `410 gone` `cursor_expired`
-/// (Sew keeps 7 days), start again without `after` and refetch.
+/// `{items: [RecordingChange…], next}` (Sew's `MgmtRecordingChanges`; `next`
+/// is a number: the last item's `seq`, or the query's `after` when there was
+/// none). Sew's feed never answers 410: a cursor past its head (or one it
+/// pruned) answers 200 with no items (Sew's `k2_mgmt_0.9.2.json` golden, R5.4
+/// and R5.4.past).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordingChangesPage {
     #[serde(default)]
-    pub changes: Vec<RecordingChange>,
+    pub items: Vec<RecordingChange>,
     #[serde(default, deserialize_with = "de_stringy")]
     pub next: String,
 }
@@ -2382,11 +2385,14 @@ mod tests {
         let t: TranscriptPage =
             serde_json::from_str(r#"{"turns":[{"id":"m1","speaker_external_id":"k2:owner","start_ms":0,"end_ms":900,"text":"hi \\*"}]}"#).unwrap();
         assert_eq!(t.turns[0].end_ms, 900);
+        // Sew 0.9.2's own shape (`MgmtRecordingChanges`): `items`, `next` a number.
         let c: RecordingChangesPage = serde_json::from_str(
-            r#"{"changes":[{"seq":3,"kind":"transcript_ready","recording_id":71,"space_id":"5","channel_id":"9","at":"t","text":"never"}],"next":"3"}"#,
+            r#"{"items":[{"seq":3,"kind":"transcript_ready","recording_id":71,"space_id":"5","channel_id":"9","at":"t","text":"never"}],"next":3}"#,
         )
         .unwrap();
-        assert_eq!((c.changes[0].kind.as_str(), c.next.as_str()), (recording::CHANGE_TRANSCRIPT_READY, "3"));
+        assert_eq!((c.items[0].kind.as_str(), c.next.as_str()), (recording::CHANGE_TRANSCRIPT_READY, "3"));
+        let empty: RecordingChangesPage = serde_json::from_str(r#"{"items":[],"next":1000000}"#).unwrap();
+        assert_eq!((empty.items.len(), empty.next.as_str()), (0, "1000000"), "a cursor past the head: no items, the same cursor");
         assert!(!serde_json::to_string(&c).unwrap().contains("never"), "the feed carries no content");
         // Paths, percent-encoded and clamped.
         assert_eq!(recording_path("71", "svc"), "/mgmt/v1/recordings/71?app_id=svc");

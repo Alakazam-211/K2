@@ -1,0 +1,2109 @@
+{
+  "features": [
+    "app_channel_create",
+    "app_controls",
+    "app_governed_spaces",
+    "app_member_channels",
+    "app_mode_gate",
+    "app_origin",
+    "app_origins",
+    "app_participant_links",
+    "app_quotas",
+    "app_recording",
+    "app_scoped_sessions",
+    "app_session_member_role",
+    "app_voice_channel_create",
+    "call_credential",
+    "call_stats_native",
+    "dm_order_activity",
+    "group_dm_names",
+    "home_client",
+    "home_client_owner_approval",
+    "import_identity_map",
+    "k2_managed_avatar",
+    "k2_managed_guard",
+    "member_external_id",
+    "mgmt_recording_reads",
+    "mgmt_voice_states",
+    "person_notifications",
+    "principal_erase",
+    "principal_relink",
+    "private_spaces",
+    "recording_required",
+    "server_governed_space",
+    "space_unbind",
+    "turn_relay_only",
+    "voice_channel_closing",
+    "voice_media_path",
+    "voice_record_cap",
+    "voice_video_cap"
+  ],
+  "k2": [
+    {
+      "call": "A2",
+      "read": {
+        "ok": true
+      },
+      "req": "GET /mgmt/v1/health",
+      "status": 200
+    },
+    {
+      "call": "A1",
+      "read": {
+        "alarms": [
+          "backup_stale",
+          "keys_current_month_missing"
+        ],
+        "backup/age_ms": "<absent>",
+        "backup/last_error": "<absent>",
+        "backup/last_error_at": "<absent>",
+        "backup/last_id": "<absent>",
+        "backup/last_kind": "<absent>",
+        "backup/last_ok_at": "<absent>",
+        "db/ok": true,
+        "drill/age_ms": "<absent>",
+        "drill/last_error": "<absent>",
+        "drill/last_ok": "<absent>",
+        "drill/last_ok_at": "<absent>",
+        "identity/jwks_url": "<url>",
+        "install_id": "<install_id>",
+        "keys/kek_id": "<kek_id>",
+        "keys/mirror/kind": "dir",
+        "keys/rewrap_pending": 0,
+        "provider": "k2",
+        "version": "0.9.2"
+      },
+      "req": "GET /mgmt/v1/status",
+      "status": 200
+    },
+    {
+      "call": "A1.sweep",
+      "read": {
+        "features": [
+          "app_channel_create",
+          "app_controls",
+          "app_governed_spaces",
+          "app_member_channels",
+          "app_mode_gate",
+          "app_origin",
+          "app_origins",
+          "app_participant_links",
+          "app_quotas",
+          "app_recording",
+          "app_scoped_sessions",
+          "app_session_member_role",
+          "app_voice_channel_create",
+          "call_credential",
+          "call_stats_native",
+          "dm_order_activity",
+          "group_dm_names",
+          "home_client",
+          "home_client_owner_approval",
+          "import_identity_map",
+          "k2_managed_avatar",
+          "k2_managed_guard",
+          "member_external_id",
+          "mgmt_recording_reads",
+          "mgmt_voice_states",
+          "person_notifications",
+          "principal_erase",
+          "principal_relink",
+          "private_spaces",
+          "recording_required",
+          "server_governed_space",
+          "space_unbind",
+          "turn_relay_only",
+          "voice_channel_closing",
+          "voice_media_path",
+          "voice_record_cap",
+          "voice_video_cap"
+        ],
+        "install_id": "<install_id>",
+        "provider": "k2",
+        "version": "0.9.2"
+      },
+      "req": "GET /mgmt/v1/status",
+      "status": 200
+    },
+    {
+      "call": "B2.owner",
+      "read": {
+        "changed": false,
+        "created": true,
+        "member_id": "<m:owner>",
+        "reactivated": false
+      },
+      "req": "POST /mgmt/v1/principals/provision",
+      "status": 200
+    },
+    {
+      "call": "C1",
+      "read": {
+        "changed": true,
+        "owner_id": "<m:owner>",
+        "previous_owner_id": "<absent>"
+      },
+      "req": "POST /mgmt/v1/owner/set",
+      "status": 200
+    },
+    {
+      "call": "B1b",
+      "read": {
+        "has_more": false,
+        "items[]/agent_kind": [],
+        "items[]/assistant_of": [],
+        "items[]/created_at": [],
+        "items[]/deactivated": [],
+        "items[]/deactivated_at": [],
+        "items[]/display_name": [],
+        "items[]/email": [],
+        "items[]/external_id": [],
+        "items[]/install_role": [],
+        "items[]/kind": [],
+        "items[]/member_id": [],
+        "items[]/pronouns": [],
+        "items[]/title": [],
+        "items[]/username": []
+      },
+      "req": "GET /mgmt/v1/principals?external_id=k2:principal:00000000-0000-4000-8000-000000000001&limit=1",
+      "status": 200
+    },
+    {
+      "call": "B2.person",
+      "read": {
+        "changed": false,
+        "created": true,
+        "member_id": "<m:ann>",
+        "reactivated": false
+      },
+      "req": "POST /mgmt/v1/principals/provision",
+      "status": 200
+    },
+    {
+      "call": "B2.assistant",
+      "read": {
+        "changed": false,
+        "created": true,
+        "member_id": "<m:ops>",
+        "reactivated": false
+      },
+      "req": "POST /mgmt/v1/principals/provision",
+      "status": 200
+    },
+    {
+      "call": "B2.coworker",
+      "read": {
+        "changed": false,
+        "created": true,
+        "member_id": "<m:crew>",
+        "reactivated": false
+      },
+      "req": "POST /mgmt/v1/principals/provision",
+      "status": 200
+    },
+    {
+      "call": "B2.connect",
+      "read": {
+        "changed": false,
+        "created": true,
+        "member_id": "<m:bo>",
+        "reactivated": false
+      },
+      "req": "POST /mgmt/v1/principals/provision",
+      "status": 200
+    },
+    {
+      "call": "B2.person2",
+      "read": {
+        "changed": false,
+        "created": true,
+        "member_id": "<m:cy>",
+        "reactivated": false
+      },
+      "req": "POST /mgmt/v1/principals/provision",
+      "status": 200
+    },
+    {
+      "call": "B1a",
+      "read": {
+        "has_more": false,
+        "items[]/agent_kind": [
+          "<absent>",
+          "<absent>",
+          "assistant",
+          "coworker",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/assistant_of": [
+          "<absent>",
+          "<absent>",
+          "k2:principal:00000000-0000-4000-8000-000000000001",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/created_at": [
+          "<time>",
+          "<time>",
+          "<time>",
+          "<time>",
+          "<time>",
+          "<time>"
+        ],
+        "items[]/deactivated": [
+          false,
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "items[]/deactivated_at": [
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/display_name": [
+          "Owner Name",
+          "Ann Example",
+          "Ops Agent",
+          "Crew Agent",
+          "Bo",
+          "Cy Example"
+        ],
+        "items[]/email": [
+          "<absent>",
+          "ann@example.com",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/external_id": [
+          "k2:owner",
+          "k2:principal:00000000-0000-4000-8000-000000000001",
+          "k2:workspace:00000000-0000-4000-8000-000000000002",
+          "k2:workspace:00000000-0000-4000-8000-000000000005",
+          "k2:connect:00000000-0000-4000-8000-000000000003",
+          "k2:principal:00000000-0000-4000-8000-000000000004"
+        ],
+        "items[]/install_role": [
+          "owner",
+          "member",
+          "member",
+          "member",
+          "guest",
+          "member"
+        ],
+        "items[]/kind": [
+          "person",
+          "person",
+          "agent",
+          "agent",
+          "person",
+          "person"
+        ],
+        "items[]/member_id": [
+          "<m:owner>",
+          "<m:ann>",
+          "<m:ops>",
+          "<m:crew>",
+          "<m:bo>",
+          "<m:cy>"
+        ],
+        "items[]/pronouns": [
+          "<absent>",
+          "she/her",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/title": [
+          "<absent>",
+          "Ops",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/username": [
+          "owner",
+          "ann",
+          "ops",
+          "crew",
+          "bo",
+          "cy"
+        ]
+      },
+      "req": "GET /mgmt/v1/principals?limit=500",
+      "status": 200
+    },
+    {
+      "call": "H1",
+      "read": {
+        "policies/identity.managed_fields": "<absent>"
+      },
+      "req": "GET /mgmt/v1/policies",
+      "status": 200
+    },
+    {
+      "call": "H2",
+      "read": {
+        "policies/identity.managed_fields": [
+          "display_name",
+          "title",
+          "pronouns",
+          "avatar"
+        ]
+      },
+      "req": "POST /mgmt/v1/policies",
+      "status": 200
+    },
+    {
+      "call": "B3",
+      "req": "POST /mgmt/v1/principals/update",
+      "status": 200
+    },
+    {
+      "call": "B5",
+      "req": "POST /mgmt/v1/principals/avatar?external_id=k2:principal:00000000-0000-4000-8000-000000000001&force=true",
+      "status": 200
+    },
+    {
+      "call": "B6",
+      "req": "POST /mgmt/v1/principals/avatar/clear",
+      "status": 200
+    },
+    {
+      "call": "D1.sid",
+      "read": {
+        "revoked": 0
+      },
+      "req": "POST /mgmt/v1/sessions/revoke",
+      "status": 200
+    },
+    {
+      "call": "D1.ext",
+      "read": {
+        "revoked": 0
+      },
+      "req": "POST /mgmt/v1/sessions/revoke",
+      "status": 200
+    },
+    {
+      "call": "E1",
+      "req": "POST /mgmt/v1/spaces/bind",
+      "status": 200
+    },
+    {
+      "call": "E2a",
+      "read": {
+        "added[]/external_id": [
+          "k2:principal:00000000-0000-4000-8000-000000000001"
+        ],
+        "added[]/member_id": [
+          "<m:ann>"
+        ],
+        "already[]/external_id": [],
+        "already[]/member_id": [],
+        "not_added[]/external_id": [],
+        "not_added[]/reason": [],
+        "skipped": []
+      },
+      "req": "POST /mgmt/v1/spaces/members/add",
+      "status": 200
+    },
+    {
+      "call": "E2b",
+      "read": {
+        "added[]/external_id": [],
+        "added[]/member_id": [],
+        "already[]/external_id": [
+          "k2:principal:00000000-0000-4000-8000-000000000001"
+        ],
+        "already[]/member_id": [
+          "<m:ann>"
+        ],
+        "not_added[]/external_id": [
+          "k2:connect:00000000-0000-4000-8000-000000000003"
+        ],
+        "not_added[]/reason": [
+          "guest"
+        ],
+        "skipped": []
+      },
+      "req": "POST /mgmt/v1/spaces/members/add",
+      "status": 200
+    },
+    {
+      "call": "E5",
+      "read": {
+        "created": true,
+        "name": "Ops",
+        "owner_member_id": "<m:owner>",
+        "slug": "ops",
+        "space_id": "<space:ops>"
+      },
+      "req": "POST /mgmt/v1/spaces/create",
+      "status": 200
+    },
+    {
+      "call": "F1",
+      "read": {
+        "added[]/external_id": [
+          "k2:principal:00000000-0000-4000-8000-000000000001"
+        ],
+        "added[]/member_id": [
+          "<m:ann>"
+        ],
+        "already": [],
+        "channel_id": "<ch:jobs/standup>",
+        "created": true,
+        "name": "Standup",
+        "not_added[]/member": [],
+        "not_added[]/reason": [],
+        "private": true,
+        "skipped": [],
+        "slug": "standup",
+        "space_id": "<space:jobs>"
+      },
+      "req": "POST /mgmt/v1/channels/create",
+      "status": 200
+    },
+    {
+      "call": "F1.mismatch",
+      "error": {
+        "code": "conflict",
+        "existing_type": "voice",
+        "field": "type",
+        "reason": "channel_type_mismatch"
+      },
+      "req": "POST /mgmt/v1/channels/create",
+      "status": 409
+    },
+    {
+      "call": "G2",
+      "req": "POST /mgmt/v1/apps/jobs-app/settings",
+      "status": 200
+    },
+    {
+      "call": "G1.tip",
+      "error": {
+        "code": "missing_permission",
+        "reason": "owner_approval_required"
+      },
+      "req": "POST /mgmt/v1/home-client",
+      "status": 403
+    },
+    {
+      "call": "A1.G1",
+      "read": {
+        "install_id": "<install_id>"
+      },
+      "req": "GET /mgmt/v1/status",
+      "status": 200
+    },
+    {
+      "call": "G1",
+      "read": {
+        "app_id": "hearth-svc"
+      },
+      "req": "POST /mgmt/v1/home-client",
+      "status": 200
+    },
+    {
+      "call": "A1.G1.govern",
+      "read": {
+        "install_id": "<install_id>"
+      },
+      "req": "GET /mgmt/v1/status",
+      "status": 200
+    },
+    {
+      "call": "G1.govern",
+      "error": {
+        "code": "conflict",
+        "field": "app_id",
+        "reason": "home_client_cannot_govern"
+      },
+      "req": "POST /mgmt/v1/home-client",
+      "status": 409
+    },
+    {
+      "call": "A1.G1.clear",
+      "read": {
+        "install_id": "<install_id>"
+      },
+      "req": "GET /mgmt/v1/status",
+      "status": 200
+    },
+    {
+      "call": "G1.clear",
+      "read": {
+        "app_id": null
+      },
+      "req": "POST /mgmt/v1/home-client",
+      "status": 200
+    },
+    {
+      "call": "B1a.after_app",
+      "read": {
+        "has_more": false,
+        "items[]/agent_kind": [
+          "<absent>",
+          "<absent>",
+          "assistant",
+          "coworker",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/assistant_of": [
+          "<absent>",
+          "<absent>",
+          "k2:principal:00000000-0000-4000-8000-000000000001",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/created_at": [
+          "<time>",
+          "<time>",
+          "<time>",
+          "<time>",
+          "<time>",
+          "<time>"
+        ],
+        "items[]/deactivated": [
+          false,
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "items[]/deactivated_at": [
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/display_name": [
+          "Owner Name",
+          "Ann Example",
+          "Ops Agent",
+          "Crew Agent",
+          "Bo",
+          "Cy Example"
+        ],
+        "items[]/email": [
+          "<absent>",
+          "ann@example.com",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/external_id": [
+          "k2:owner",
+          "k2:principal:00000000-0000-4000-8000-000000000001",
+          "k2:workspace:00000000-0000-4000-8000-000000000002",
+          "k2:workspace:00000000-0000-4000-8000-000000000005",
+          "k2:connect:00000000-0000-4000-8000-000000000003",
+          "k2:principal:00000000-0000-4000-8000-000000000004"
+        ],
+        "items[]/install_role": [
+          "owner",
+          "member",
+          "member",
+          "member",
+          "guest",
+          "member"
+        ],
+        "items[]/kind": [
+          "person",
+          "person",
+          "agent",
+          "agent",
+          "person",
+          "person"
+        ],
+        "items[]/member_id": [
+          "<m:owner>",
+          "<m:ann>",
+          "<m:ops>",
+          "<m:crew>",
+          "<m:bo>",
+          "<m:cy>"
+        ],
+        "items[]/pronouns": [
+          "<absent>",
+          "she/her",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/title": [
+          "<absent>",
+          "Ops",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/username": [
+          "owner",
+          "ann",
+          "ops",
+          "crew",
+          "bo",
+          "cy"
+        ]
+      },
+      "req": "GET /mgmt/v1/principals?limit=500",
+      "status": 200
+    },
+    {
+      "call": "R1.1",
+      "read": {
+        "policies/recording.audio_default_days": 30,
+        "policies/recording.audio_max_days": 365,
+        "policies/recording.dm_enabled": false,
+        "policies/recording.enabled": true,
+        "policies/recording.require_consent_to_join": false,
+        "policies/recording.required": "off"
+      },
+      "req": "POST /mgmt/v1/policies",
+      "status": 200
+    },
+    {
+      "call": "R1.4",
+      "read": {
+        "policies/recording.audio_default_days": 30,
+        "policies/recording.audio_max_days": 365,
+        "policies/recording.dm_enabled": false,
+        "policies/recording.enabled": true,
+        "policies/recording.require_consent_to_join": false,
+        "policies/recording.required": "off"
+      },
+      "req": "GET /mgmt/v1/policies",
+      "status": 200
+    },
+    {
+      "call": "R2.1",
+      "read": {
+        "features": [
+          "app_channel_create",
+          "app_controls",
+          "app_governed_spaces",
+          "app_member_channels",
+          "app_mode_gate",
+          "app_origin",
+          "app_origins",
+          "app_participant_links",
+          "app_quotas",
+          "app_recording",
+          "app_scoped_sessions",
+          "app_session_member_role",
+          "app_voice_channel_create",
+          "call_credential",
+          "call_stats_native",
+          "dm_order_activity",
+          "group_dm_names",
+          "home_client",
+          "home_client_owner_approval",
+          "import_identity_map",
+          "k2_managed_avatar",
+          "k2_managed_guard",
+          "member_external_id",
+          "mgmt_recording_reads",
+          "mgmt_voice_states",
+          "person_notifications",
+          "principal_erase",
+          "principal_relink",
+          "private_spaces",
+          "recording_required",
+          "server_governed_space",
+          "space_unbind",
+          "turn_relay_only",
+          "voice_channel_closing",
+          "voice_media_path",
+          "voice_record_cap",
+          "voice_video_cap"
+        ]
+      },
+      "req": "GET /mgmt/v1/status",
+      "status": 200
+    },
+    {
+      "call": "R2.1b",
+      "read": {
+        "has_more": false,
+        "items[]/agent_kind": [
+          "<absent>",
+          "<absent>",
+          "assistant",
+          "coworker",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/assistant_of": [
+          "<absent>",
+          "<absent>",
+          "k2:principal:00000000-0000-4000-8000-000000000001",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/created_at": [
+          "<time>",
+          "<time>",
+          "<time>",
+          "<time>",
+          "<time>",
+          "<time>"
+        ],
+        "items[]/deactivated": [
+          false,
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "items[]/deactivated_at": [
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/display_name": [
+          "Owner Name",
+          "Ann Example",
+          "Ops Agent",
+          "Crew Agent",
+          "Bo",
+          "Cy Example"
+        ],
+        "items[]/email": [
+          "<absent>",
+          "ann@example.com",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/external_id": [
+          "k2:owner",
+          "k2:principal:00000000-0000-4000-8000-000000000001",
+          "k2:workspace:00000000-0000-4000-8000-000000000002",
+          "k2:workspace:00000000-0000-4000-8000-000000000005",
+          "k2:connect:00000000-0000-4000-8000-000000000003",
+          "k2:principal:00000000-0000-4000-8000-000000000004"
+        ],
+        "items[]/install_role": [
+          "owner",
+          "member",
+          "member",
+          "member",
+          "guest",
+          "member"
+        ],
+        "items[]/kind": [
+          "person",
+          "person",
+          "agent",
+          "agent",
+          "person",
+          "person"
+        ],
+        "items[]/member_id": [
+          "<m:owner>",
+          "<m:ann>",
+          "<m:ops>",
+          "<m:crew>",
+          "<m:bo>",
+          "<m:cy>"
+        ],
+        "items[]/pronouns": [
+          "<absent>",
+          "she/her",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/title": [
+          "<absent>",
+          "Ops",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/username": [
+          "owner",
+          "ann",
+          "ops",
+          "crew",
+          "bo",
+          "cy"
+        ]
+      },
+      "req": "GET /mgmt/v1/principals?limit=500",
+      "status": 200
+    },
+    {
+      "call": "R2.2",
+      "read": {
+        "policies/recording.audio_default_days": 30,
+        "policies/recording.audio_max_days": 365,
+        "policies/recording.dm_enabled": false,
+        "policies/recording.enabled": true,
+        "policies/recording.require_consent_to_join": false,
+        "policies/recording.required": "off"
+      },
+      "req": "GET /mgmt/v1/policies",
+      "status": 200
+    },
+    {
+      "call": "R2.3",
+      "read": {
+        "app_id": "jobs-app",
+        "display_name": "Jobs",
+        "origin": "wss://jobs.example.com",
+        "recording/audio_max_days": 30,
+        "recording/cap_required": true,
+        "recording/required": false,
+        "recording/server_read": true,
+        "recording/start_level": "moderator"
+      },
+      "req": "POST /mgmt/v1/apps/jobs-app/settings",
+      "status": 200
+    },
+    {
+      "call": "R2.3.nocap",
+      "read": {
+        "app_id": "jobs-app",
+        "display_name": "Jobs",
+        "origin": "wss://jobs.example.com",
+        "recording/audio_max_days": 30,
+        "recording/cap_required": true,
+        "recording/required": false,
+        "recording/server_read": true,
+        "recording/start_level": "moderator"
+      },
+      "req": "POST /mgmt/v1/apps/jobs-app/settings",
+      "status": 200
+    },
+    {
+      "call": "R2.3.norec",
+      "read": {
+        "app_id": "jobs-app",
+        "display_name": "Jobs",
+        "origin": "wss://jobs.example.com",
+        "recording/audio_max_days": 30,
+        "recording/cap_required": true,
+        "recording/required": false,
+        "recording/server_read": true,
+        "recording/start_level": "moderator"
+      },
+      "req": "POST /mgmt/v1/apps/jobs-app/settings",
+      "status": 200
+    },
+    {
+      "call": "R2.3.org_days",
+      "read": {
+        "app_id": "jobs-app",
+        "display_name": "Jobs",
+        "origin": "wss://jobs.example.com",
+        "recording/audio_max_days": "<absent>",
+        "recording/cap_required": true,
+        "recording/required": false,
+        "recording/server_read": true,
+        "recording/start_level": "moderator"
+      },
+      "req": "POST /mgmt/v1/apps/jobs-app/settings",
+      "status": 200
+    },
+    {
+      "call": "R2.3.retry",
+      "read": {
+        "app_id": "jobs-app",
+        "display_name": "Jobs",
+        "origin": "wss://jobs.example.com",
+        "recording/audio_max_days": 30,
+        "recording/cap_required": true,
+        "recording/required": false,
+        "recording/server_read": true,
+        "recording/start_level": "moderator"
+      },
+      "replayed": "true",
+      "req": "POST /mgmt/v1/apps/jobs-app/settings",
+      "status": 200
+    },
+    {
+      "call": "R2.4",
+      "read": {
+        "app_id": "jobs-app",
+        "governance": "sew",
+        "recording_required": true,
+        "recording_start_level": "member",
+        "space_id": "<space:jobs>"
+      },
+      "req": "POST /mgmt/v1/spaces/<space:jobs>/settings",
+      "status": 200
+    },
+    {
+      "call": "R2.4.inherit",
+      "read": {
+        "app_id": "jobs-app",
+        "governance": "sew",
+        "recording_required": "<absent>",
+        "recording_start_level": "<absent>",
+        "space_id": "<space:jobs>"
+      },
+      "req": "POST /mgmt/v1/spaces/<space:jobs>/settings",
+      "status": 200
+    },
+    {
+      "call": "R2.4.cui",
+      "read": {
+        "app_id": "jobs-app",
+        "governance": "sew",
+        "recording_required": false,
+        "recording_start_level": "none",
+        "space_id": "<space:jobs>"
+      },
+      "req": "POST /mgmt/v1/spaces/<space:jobs>/settings",
+      "status": 200
+    },
+    {
+      "call": "R2.4.retry",
+      "read": {
+        "app_id": "jobs-app",
+        "governance": "sew",
+        "recording_required": true,
+        "recording_start_level": "member",
+        "space_id": "<space:jobs>"
+      },
+      "replayed": "true",
+      "req": "POST /mgmt/v1/spaces/<space:jobs>/settings",
+      "status": 200
+    },
+    {
+      "call": "R2.5",
+      "read": {
+        "policies/recording.audio_default_days": 30,
+        "policies/recording.audio_max_days": 30,
+        "policies/recording.dm_enabled": false,
+        "policies/recording.enabled": true,
+        "policies/recording.require_consent_to_join": false,
+        "policies/recording.required": "multi_person"
+      },
+      "req": "POST /mgmt/v1/policies",
+      "status": 200
+    },
+    {
+      "call": "R2.5.retry",
+      "read": {
+        "policies/recording.audio_default_days": 30,
+        "policies/recording.audio_max_days": 30,
+        "policies/recording.dm_enabled": false,
+        "policies/recording.enabled": true,
+        "policies/recording.require_consent_to_join": false,
+        "policies/recording.required": "multi_person"
+      },
+      "replayed": "true",
+      "req": "POST /mgmt/v1/policies",
+      "status": 200
+    },
+    {
+      "call": "R5.1",
+      "read": {
+        "items[]/id": [],
+        "items[]/state": [],
+        "items[]/trigger": [],
+        "next": "<absent>"
+      },
+      "req": "GET /mgmt/v1/spaces/<space:jobs>/recordings?app_id=jobs-app&limit=50",
+      "status": 200
+    },
+    {
+      "call": "R5.2",
+      "error": {
+        "code": "not_found"
+      },
+      "req": "GET /mgmt/v1/recordings/<ch:jobs/lounge>?app_id=jobs-app",
+      "status": 404
+    },
+    {
+      "call": "R5.3",
+      "error": {
+        "code": "not_found"
+      },
+      "req": "GET /mgmt/v1/recordings/<ch:jobs/lounge>/transcript?app_id=jobs-app&limit=50",
+      "status": 404
+    },
+    {
+      "call": "R5.4",
+      "read": {
+        "items[]/kind": [],
+        "next": 0
+      },
+      "req": "GET /mgmt/v1/apps/jobs-app/recordings/changes?after=0&wait=30&limit=200",
+      "status": 200
+    },
+    {
+      "call": "R5.4.past",
+      "read": {
+        "items[]/kind": [],
+        "next": 1000000
+      },
+      "req": "GET /mgmt/v1/apps/jobs-app/recordings/changes?after=1000000&wait=0&limit=200",
+      "status": 200
+    },
+    {
+      "call": "R1.2",
+      "read": {
+        "policies/recording.audio_default_days": 30,
+        "policies/recording.audio_max_days": 30,
+        "policies/recording.dm_enabled": false,
+        "policies/recording.enabled": false,
+        "policies/recording.require_consent_to_join": false,
+        "policies/recording.required": "multi_person"
+      },
+      "req": "POST /mgmt/v1/policies",
+      "status": 200
+    },
+    {
+      "call": "R1.3",
+      "read": {
+        "policies/recording.audio_default_days": 30,
+        "policies/recording.audio_max_days": 30,
+        "policies/recording.dm_enabled": false,
+        "policies/recording.enabled": false,
+        "policies/recording.require_consent_to_join": false,
+        "policies/recording.required": "multi_person"
+      },
+      "req": "POST /mgmt/v1/policies",
+      "status": 200
+    },
+    {
+      "call": "R1.4.off",
+      "read": {
+        "policies/recording.audio_default_days": 30,
+        "policies/recording.audio_max_days": 30,
+        "policies/recording.dm_enabled": false,
+        "policies/recording.enabled": false,
+        "policies/recording.require_consent_to_join": false,
+        "policies/recording.required": "multi_person"
+      },
+      "req": "GET /mgmt/v1/policies",
+      "status": 200
+    },
+    {
+      "call": "K1.hub",
+      "read": {
+        "id": "<m:crew>",
+        "username": "crew"
+      },
+      "req": "GET /api/v1/me",
+      "status": 200
+    },
+    {
+      "call": "J1.head",
+      "read": {
+        "entries": [],
+        "has_more": false,
+        "head": 6,
+        "next_after": 6,
+        "sync_epoch": "<sync_epoch>"
+      },
+      "req": "GET /mgmt/v1/agents/<m:crew>/deliveries?after=0&timeout_ms=0",
+      "status": 200
+    },
+    {
+      "call": "J1.loop",
+      "read": {
+        "entries": [],
+        "has_more": false,
+        "head": 6,
+        "next_after": 6,
+        "sync_epoch": "<sync_epoch>"
+      },
+      "req": "GET /mgmt/v1/agents/<m:crew>/deliveries?after=6&timeout_ms=0",
+      "status": 200
+    },
+    {
+      "call": "K1",
+      "read": {
+        "id": "<m:crew>",
+        "username": "crew"
+      },
+      "req": "GET /api/v1/me",
+      "status": 200
+    },
+    {
+      "call": "K2",
+      "read": {
+        "has_more": false,
+        "items[]/id": [
+          "<space:jobs>",
+          "<space:ops>"
+        ],
+        "items[]/name": [
+          "Jobs",
+          "Ops"
+        ],
+        "items[]/slug": [
+          "jobs",
+          "ops"
+        ]
+      },
+      "req": "GET /api/v1/spaces?scope=mine&limit=100",
+      "status": 200
+    },
+    {
+      "call": "K22",
+      "read": {
+        "archived_at": "<absent>",
+        "dm_member_ids": [],
+        "id": "<ch:ops/standup>",
+        "my_perms": "12884967423",
+        "name": "Standup",
+        "slug": "standup",
+        "space_id": "<space:ops>",
+        "type": "text",
+        "visibility": "private"
+      },
+      "req": "POST /api/v1/spaces/<space:ops>/channels",
+      "status": 200
+    },
+    {
+      "call": "K3",
+      "read": {
+        "has_more": false,
+        "items[]/archived_at": [
+          "<absent>"
+        ],
+        "items[]/dm_member_ids": [
+          []
+        ],
+        "items[]/id": [
+          "<ch:ops/standup>"
+        ],
+        "items[]/my_perms": [
+          "12884967423"
+        ],
+        "items[]/name": [
+          "Standup"
+        ],
+        "items[]/slug": [
+          "standup"
+        ],
+        "items[]/space_id": [
+          "<space:ops>"
+        ],
+        "items[]/type": [
+          "text"
+        ],
+        "items[]/visibility": [
+          "private"
+        ]
+      },
+      "req": "GET /api/v1/spaces/<space:ops>/channels?limit=100",
+      "status": 200
+    },
+    {
+      "call": "K4",
+      "read": {
+        "has_more": false,
+        "items[]/archived_at": [],
+        "items[]/dm_member_ids": [],
+        "items[]/id": [],
+        "items[]/my_perms": [],
+        "items[]/name": [],
+        "items[]/slug": [],
+        "items[]/space_id": [],
+        "items[]/type": [],
+        "items[]/visibility": []
+      },
+      "req": "GET /api/v1/me/channels?kind=dm&limit=100",
+      "status": 200
+    },
+    {
+      "call": "K5",
+      "read": {
+        "channel_id": "<ch:ops/standup>"
+      },
+      "req": "GET /api/v1/resolve?addr=ops/%23standup",
+      "status": 200
+    },
+    {
+      "call": "K5.ids",
+      "read": {
+        "channel_id": "<ch:ops/standup>"
+      },
+      "req": "GET /api/v1/resolve?addr=id:<space:ops>/%23id:<ch:ops/standup>",
+      "status": 200
+    },
+    {
+      "call": "K6",
+      "read": {
+        "archived_at": "<absent>",
+        "dm_member_ids": [],
+        "id": "<ch:ops/standup>",
+        "my_perms": "12884967423",
+        "name": "Standup",
+        "slug": "standup",
+        "space_id": "<space:ops>",
+        "type": "text",
+        "visibility": "private"
+      },
+      "req": "GET /api/v1/channels/<ch:ops/standup>",
+      "status": 200
+    },
+    {
+      "call": "K16",
+      "read": {
+        "archived_at": "<absent>",
+        "dm_member_ids": [
+          "<m:ann>",
+          "<m:crew>"
+        ],
+        "id": "<ch:dm/ann>",
+        "my_perms": "993791",
+        "name": "<absent>",
+        "slug": "<absent>",
+        "space_id": "<absent>",
+        "type": "dm",
+        "visibility": "private"
+      },
+      "req": "POST /api/v1/dms",
+      "status": 200
+    },
+    {
+      "call": "K17",
+      "read": {
+        "author_id": "<m:crew>",
+        "body": "hello",
+        "channel_id": "<ch:ops/standup>",
+        "created_at": "<time>",
+        "deleted_at": "<absent>",
+        "edited_at": "<absent>",
+        "id": "<msg:hello>",
+        "mentions_me": "<absent>",
+        "on_behalf_of": "<absent>",
+        "thread/following": "<absent>",
+        "thread/reply_count": "<absent>",
+        "thread_root_id": "<absent>"
+      },
+      "req": "POST /api/v1/channels/<ch:ops/standup>/messages",
+      "status": 200
+    },
+    {
+      "call": "K17.reply",
+      "read": {
+        "author_id": "<m:crew>",
+        "body": "a reply",
+        "channel_id": "<ch:ops/standup>",
+        "created_at": "<time>",
+        "deleted_at": "<absent>",
+        "edited_at": "<absent>",
+        "id": "<msg:reply>",
+        "mentions_me": "<absent>",
+        "on_behalf_of": "<absent>",
+        "thread/following": "<absent>",
+        "thread/reply_count": "<absent>",
+        "thread_root_id": "<msg:hello>"
+      },
+      "req": "POST /api/v1/channels/<ch:ops/standup>/messages",
+      "status": 200
+    },
+    {
+      "call": "K7",
+      "read": {
+        "has_more": false,
+        "items[]/author_id": [
+          "<m:crew>",
+          "<m:crew>"
+        ],
+        "items[]/body": [
+          "a reply",
+          "hello"
+        ],
+        "items[]/channel_id": [
+          "<ch:ops/standup>",
+          "<ch:ops/standup>"
+        ],
+        "items[]/created_at": [
+          "<time>",
+          "<time>"
+        ],
+        "items[]/deleted_at": [
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/edited_at": [
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/id": [
+          "<msg:reply>",
+          "<msg:hello>"
+        ],
+        "items[]/mentions_me": [
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/on_behalf_of": [
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/thread/following": [
+          "<absent>",
+          true
+        ],
+        "items[]/thread/reply_count": [
+          "<absent>",
+          1
+        ],
+        "items[]/thread_root_id": [
+          "<msg:hello>",
+          "<absent>"
+        ]
+      },
+      "req": "GET /api/v1/channels/<ch:ops/standup>/messages?limit=50",
+      "status": 200
+    },
+    {
+      "call": "K7.before",
+      "read": {
+        "has_more": false,
+        "items[]/author_id": [
+          "<m:crew>"
+        ],
+        "items[]/body": [
+          "hello"
+        ],
+        "items[]/channel_id": [
+          "<ch:ops/standup>"
+        ],
+        "items[]/created_at": [
+          "<time>"
+        ],
+        "items[]/deleted_at": [
+          "<absent>"
+        ],
+        "items[]/edited_at": [
+          "<absent>"
+        ],
+        "items[]/id": [
+          "<msg:hello>"
+        ],
+        "items[]/mentions_me": [
+          "<absent>"
+        ],
+        "items[]/on_behalf_of": [
+          "<absent>"
+        ],
+        "items[]/thread/following": [
+          true
+        ],
+        "items[]/thread/reply_count": [
+          1
+        ],
+        "items[]/thread_root_id": [
+          "<absent>"
+        ]
+      },
+      "req": "GET /api/v1/channels/<ch:ops/standup>/messages?limit=10&before=<msg:reply>",
+      "status": 200
+    },
+    {
+      "call": "K7.wait",
+      "read": {
+        "has_more": false,
+        "items[]/author_id": [],
+        "items[]/body": [],
+        "items[]/channel_id": [],
+        "items[]/created_at": [],
+        "items[]/deleted_at": [],
+        "items[]/edited_at": [],
+        "items[]/id": [],
+        "items[]/mentions_me": [],
+        "items[]/on_behalf_of": [],
+        "items[]/thread/following": [],
+        "items[]/thread/reply_count": [],
+        "items[]/thread_root_id": []
+      },
+      "req": "GET /api/v1/channels/<ch:ops/standup>/messages?after=<msg:reply>&limit=100&wait_ms=100",
+      "status": 200
+    },
+    {
+      "call": "K8",
+      "read": {
+        "has_more": false,
+        "items[]/author_id": [
+          "<m:crew>"
+        ],
+        "items[]/body": [
+          "hello"
+        ],
+        "items[]/channel_id": [
+          "<ch:ops/standup>"
+        ],
+        "items[]/created_at": [
+          "<time>"
+        ],
+        "items[]/deleted_at": [
+          "<absent>"
+        ],
+        "items[]/edited_at": [
+          "<absent>"
+        ],
+        "items[]/id": [
+          "<msg:hello>"
+        ],
+        "items[]/mentions_me": [
+          "<absent>"
+        ],
+        "items[]/on_behalf_of": [
+          "<absent>"
+        ],
+        "items[]/thread/following": [
+          true
+        ],
+        "items[]/thread/reply_count": [
+          1
+        ],
+        "items[]/thread_root_id": [
+          "<absent>"
+        ]
+      },
+      "req": "GET /api/v1/messages?ids=<msg:hello>",
+      "status": 200
+    },
+    {
+      "call": "K9",
+      "read": {
+        "items[]/id": [
+          "<m:crew>",
+          "<m:ann>"
+        ],
+        "items[]/kind": [
+          "agent",
+          "person"
+        ],
+        "items[]/username": [
+          "crew",
+          "ann"
+        ]
+      },
+      "req": "GET /api/v1/members?ids=<m:crew>%2C<m:ann>",
+      "status": 200
+    },
+    {
+      "call": "K10",
+      "read": {
+        "items[0]/id": "<m:ann>",
+        "items[0]/kind": "person",
+        "items[0]/username": "ann"
+      },
+      "req": "GET /api/v1/members?username=ann",
+      "status": 200
+    },
+    {
+      "call": "B1c",
+      "read": {
+        "items[0]/member_id": "<m:crew>"
+      },
+      "req": "GET /mgmt/v1/principals?external_id=k2%3Aworkspace%3A00000000-0000-4000-8000-000000000005",
+      "status": 200
+    },
+    {
+      "call": "K11",
+      "read": {
+        "id": "<m:crew>",
+        "kind": "agent",
+        "username": "crew"
+      },
+      "req": "GET /api/v1/members/<m:crew>",
+      "status": 200
+    },
+    {
+      "call": "K20",
+      "read": {
+        "skipped": "<absent>"
+      },
+      "req": "POST /api/v1/spaces/<space:ops>/members/add",
+      "status": 200
+    },
+    {
+      "call": "K21",
+      "req": "POST /api/v1/spaces/<space:ops>/members/remove",
+      "status": 200
+    },
+    {
+      "call": "K12",
+      "read": {
+        "has_more": false,
+        "items[]/member_id": [
+          "<m:owner>",
+          "<m:ann>",
+          "<m:crew>"
+        ]
+      },
+      "req": "GET /api/v1/spaces/<space:ops>/members?limit=100",
+      "status": 200
+    },
+    {
+      "call": "K13",
+      "read": {
+        "items[]/id": [
+          "<space:ops>",
+          "<role:Managers>"
+        ],
+        "items[]/is_everyone": [
+          true,
+          false
+        ],
+        "items[]/name": [
+          "@everyone",
+          "Managers"
+        ]
+      },
+      "req": "GET /api/v1/spaces/<space:ops>/roles",
+      "status": 200
+    },
+    {
+      "call": "K23",
+      "error": {
+        "code": "missing_permission",
+        "reason": "hierarchy"
+      },
+      "req": "POST /api/v1/spaces/<space:ops>/roles",
+      "status": 403
+    },
+    {
+      "call": "K24",
+      "error": {
+        "code": "missing_permission",
+        "reason": "hierarchy"
+      },
+      "req": "POST /api/v1/spaces/<space:ops>/members/<m:ann>/roles/add",
+      "status": 403
+    },
+    {
+      "call": "K25",
+      "error": {
+        "code": "missing_permission",
+        "reason": "hierarchy"
+      },
+      "req": "POST /api/v1/spaces/<space:ops>/members/<m:ann>/roles/remove",
+      "status": 403
+    },
+    {
+      "call": "K14",
+      "read": {
+        "overwrites[]/allow": [],
+        "overwrites[]/deny": [],
+        "overwrites[]/target_id": [],
+        "overwrites[]/target_kind": [],
+        "space_id": "<space:ops>"
+      },
+      "req": "GET /api/v1/channels/<ch:ops/standup>/overwrites",
+      "status": 200
+    },
+    {
+      "call": "K26",
+      "req": "POST /api/v1/channels/<ch:ops/standup>/overwrites/set",
+      "status": 200
+    },
+    {
+      "call": "K27",
+      "req": "POST /api/v1/spaces/<space:ops>/members/<m:ann>/timeout",
+      "status": 200
+    },
+    {
+      "call": "K28",
+      "req": "POST /api/v1/spaces/<space:ops>/members/<m:ann>/timeout/clear",
+      "status": 200
+    },
+    {
+      "call": "K15",
+      "read": {
+        "items[]/channel_id": [
+          "<ch:jobs/lounge>",
+          "<ch:ops/standup>",
+          "<ch:dm/ann>"
+        ],
+        "items[]/last_message_id": [
+          "<absent>",
+          "<msg:reply>",
+          "<absent>"
+        ],
+        "items[]/last_read_id": [
+          "<absent>",
+          "<msg:reply>",
+          "<absent>"
+        ],
+        "items[]/mention_count": [
+          0,
+          0,
+          0
+        ],
+        "items[]/muted": [
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/unread": [
+          false,
+          false,
+          false
+        ]
+      },
+      "req": "GET /api/v1/me/read_states",
+      "status": 200
+    },
+    {
+      "call": "K29",
+      "req": "POST /api/v1/channels/<ch:ops/standup>/ack",
+      "status": 200
+    },
+    {
+      "call": "K30",
+      "req": "POST /api/v1/me/read_states/ack",
+      "status": 200
+    },
+    {
+      "call": "K31",
+      "req": "POST /api/v1/channels/<ch:ops/standup>/notify/set",
+      "status": 200
+    },
+    {
+      "call": "K31.null",
+      "req": "POST /api/v1/channels/<ch:ops/standup>/notify/set",
+      "status": 200
+    },
+    {
+      "call": "K32.follow",
+      "req": "POST /api/v1/threads/<msg:hello>/follow",
+      "status": 200
+    },
+    {
+      "call": "K32.unfollow",
+      "req": "POST /api/v1/threads/<msg:hello>/unfollow",
+      "status": 200
+    },
+    {
+      "call": "K18",
+      "read": {
+        "author_id": "<m:crew>",
+        "body": "fixed",
+        "channel_id": "<ch:ops/standup>",
+        "created_at": "<time>",
+        "deleted_at": "<absent>",
+        "edited_at": "<time>",
+        "id": "<msg:hello>",
+        "mentions_me": "<absent>",
+        "on_behalf_of": "<absent>",
+        "thread/following": false,
+        "thread/reply_count": 1,
+        "thread_root_id": "<absent>"
+      },
+      "req": "POST /api/v1/messages/<msg:hello>/edit",
+      "status": 200
+    },
+    {
+      "call": "K19",
+      "req": "POST /api/v1/messages/<msg:reply>/delete",
+      "status": 200
+    },
+    {
+      "call": "E3",
+      "read": {
+        "removed": true
+      },
+      "req": "POST /mgmt/v1/spaces/members/remove",
+      "status": 200
+    },
+    {
+      "call": "E4",
+      "read": {
+        "app_id": "<absent>",
+        "changed": true,
+        "orphaned_from": "jobs-app",
+        "space_id": "<space:jobs>"
+      },
+      "req": "POST /mgmt/v1/spaces/unbind",
+      "status": 200
+    },
+    {
+      "call": "B4a",
+      "read": {
+        "member_id": "<m:ops>",
+        "sessions_revoked": 0
+      },
+      "req": "POST /mgmt/v1/principals/deprovision",
+      "status": 200
+    },
+    {
+      "call": "B1a.end",
+      "read": {
+        "has_more": false,
+        "items[]/agent_kind": [
+          "<absent>",
+          "<absent>",
+          "assistant",
+          "coworker",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/assistant_of": [
+          "<absent>",
+          "<absent>",
+          "k2:principal:00000000-0000-4000-8000-000000000001",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/created_at": [
+          "<time>",
+          "<time>",
+          "<time>",
+          "<time>",
+          "<time>",
+          "<time>"
+        ],
+        "items[]/deactivated": [
+          false,
+          false,
+          true,
+          false,
+          false,
+          false
+        ],
+        "items[]/deactivated_at": [
+          "<absent>",
+          "<absent>",
+          "<time>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/display_name": [
+          "Owner Name",
+          "Ann Example",
+          "Ops Agent",
+          "Crew Agent",
+          "Bo",
+          "Cy Example"
+        ],
+        "items[]/email": [
+          "<absent>",
+          "ann@example.com",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/external_id": [
+          "k2:owner",
+          "k2:principal:00000000-0000-4000-8000-000000000001",
+          "k2:workspace:00000000-0000-4000-8000-000000000002",
+          "k2:workspace:00000000-0000-4000-8000-000000000005",
+          "k2:connect:00000000-0000-4000-8000-000000000003",
+          "k2:principal:00000000-0000-4000-8000-000000000004"
+        ],
+        "items[]/install_role": [
+          "owner",
+          "member",
+          "member",
+          "member",
+          "guest",
+          "member"
+        ],
+        "items[]/kind": [
+          "person",
+          "person",
+          "agent",
+          "agent",
+          "person",
+          "person"
+        ],
+        "items[]/member_id": [
+          "<m:owner>",
+          "<m:ann>",
+          "<m:ops>",
+          "<m:crew>",
+          "<m:bo>",
+          "<m:cy>"
+        ],
+        "items[]/pronouns": [
+          "<absent>",
+          "she/her",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/title": [
+          "<absent>",
+          "Ops",
+          "<absent>",
+          "<absent>",
+          "<absent>",
+          "<absent>"
+        ],
+        "items[]/username": [
+          "owner",
+          "ann",
+          "ops",
+          "crew",
+          "bo",
+          "cy"
+        ]
+      },
+      "req": "GET /mgmt/v1/principals?limit=500",
+      "status": 200
+    },
+    {
+      "call": "A3",
+      "read": {
+        "items[]/bytes": [],
+        "items[]/created_at": [],
+        "items[]/id": [],
+        "items[]/kind": [],
+        "items[]/schema_version": [],
+        "items[]/sew_version": []
+      },
+      "req": "GET /mgmt/v1/backups",
+      "status": 200
+    },
+    {
+      "call": "A4",
+      "read": {
+        "job_id": "<job:backup>"
+      },
+      "req": "POST /mgmt/v1/backup",
+      "status": 200
+    },
+    {
+      "call": "A5",
+      "read": {
+        "attempts": 1,
+        "created_at": "<time>",
+        "finished_at": "<time>",
+        "id": "<job:backup>",
+        "kind": "backup",
+        "last_error": "<absent>",
+        "result/bytes": "<n>",
+        "result/copied": 0,
+        "result/duration_ms": "<n>",
+        "result/id": "<bundle:1>",
+        "result/linked": 2,
+        "result/pruned": "<absent>",
+        "state": "succeeded"
+      },
+      "req": "GET /mgmt/v1/jobs/<job:backup>",
+      "status": 200
+    },
+    {
+      "call": "A3.after",
+      "read": {
+        "items[]/bytes": [
+          "<n>"
+        ],
+        "items[]/created_at": [
+          "<time>"
+        ],
+        "items[]/id": [
+          "<bundle:1>"
+        ],
+        "items[]/kind": [
+          "manual"
+        ],
+        "items[]/schema_version": [
+          991001
+        ],
+        "items[]/sew_version": [
+          "0.9.2"
+        ]
+      },
+      "req": "GET /mgmt/v1/backups",
+      "status": 200
+    },
+    {
+      "call": "A6",
+      "read": {
+        "content-type": "application/x-tar",
+        "non_empty": true
+      },
+      "req": "GET /mgmt/v1/backups/<bundle:1>/archive",
+      "status": 200
+    },
+    {
+      "call": "A7",
+      "error": {
+        "code": "invalid_state",
+        "reason": "no_retiring_master_key"
+      },
+      "req": "POST /mgmt/v1/keys/rotate-master",
+      "status": 422
+    }
+  ],
+  "line": "0.9.2",
+  "standalone": [
+    {
+      "call": "I1.owner",
+      "read": {
+        "changed": true,
+        "created": true,
+        "deactivated": false,
+        "install_role": "owner",
+        "member_id": "<m:bob>",
+        "reactivated": false,
+        "setup_link/expires_at": "<time>",
+        "setup_link/url": "<url>",
+        "username": "bob"
+      },
+      "req": "POST /mgmt/v1/local/setup-link",
+      "status": 200
+    },
+    {
+      "call": "I2",
+      "read": {
+        "changed": true,
+        "created": true,
+        "deactivated": false,
+        "install_role": "member",
+        "member_id": "<m:carol>",
+        "reactivated": false,
+        "setup_link/expires_at": "<time>",
+        "setup_link/url": "<url>",
+        "username": "carol"
+      },
+      "req": "POST /mgmt/v1/local/users",
+      "status": 200
+    },
+    {
+      "call": "B1d",
+      "read": {
+        "has_more": false,
+        "items[]/deactivated": [
+          false,
+          false
+        ],
+        "items[]/display_name": [
+          "Bob",
+          "Carol"
+        ],
+        "items[]/email": [
+          "<absent>",
+          "carol@example.com"
+        ],
+        "items[]/external_id": [
+          "local:bob",
+          "local:carol"
+        ],
+        "items[]/install_role": [
+          "owner",
+          "member"
+        ],
+        "items[]/kind": [
+          "person",
+          "person"
+        ],
+        "items[]/member_id": [
+          "<m:bob>",
+          "<m:carol>"
+        ],
+        "items[]/username": [
+          "bob",
+          "carol"
+        ]
+      },
+      "req": "GET /mgmt/v1/principals?limit=500",
+      "status": 200
+    },
+    {
+      "call": "B4b",
+      "read": {
+        "member_id": "<m:carol>",
+        "sessions_revoked": 0
+      },
+      "req": "POST /mgmt/v1/principals/deprovision",
+      "status": 200
+    },
+    {
+      "call": "B4b.owner",
+      "error": {
+        "code": "invalid_state",
+        "reason": "is_owner"
+      },
+      "req": "POST /mgmt/v1/principals/deprovision",
+      "status": 422
+    },
+    {
+      "call": "I3",
+      "read": {
+        "changed": false,
+        "created": false,
+        "deactivated": false,
+        "install_role": "member",
+        "member_id": "<m:carol>",
+        "reactivated": true,
+        "setup_link/expires_at": "<absent>",
+        "setup_link/url": "<absent>",
+        "username": "carol"
+      },
+      "req": "POST /mgmt/v1/local/users/reactivate",
+      "status": 200
+    },
+    {
+      "call": "I4",
+      "read": {
+        "changed": true,
+        "created": false,
+        "deactivated": false,
+        "install_role": "admin",
+        "member_id": "<m:carol>",
+        "reactivated": false,
+        "setup_link/expires_at": "<absent>",
+        "setup_link/url": "<absent>",
+        "username": "carol"
+      },
+      "req": "POST /mgmt/v1/local/users/role",
+      "status": 200
+    },
+    {
+      "call": "I1.reset",
+      "read": {
+        "changed": false,
+        "created": false,
+        "deactivated": false,
+        "install_role": "owner",
+        "member_id": "<m:bob>",
+        "reactivated": false,
+        "setup_link/expires_at": "<time>",
+        "setup_link/url": "<url>",
+        "username": "bob"
+      },
+      "req": "POST /mgmt/v1/local/setup-link",
+      "status": 200
+    }
+  ],
+  "version": "0.9.2"
+}

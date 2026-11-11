@@ -117,6 +117,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Home/HomeSidebar.tsx',
   // Setup checklist: the window's own server's list, in both sidebars.
   'components/SetupChecklist/SetupChecklist.tsx',
+  // K5 at first run: the K5 sheet makes K5 on the window's own server.
+  'components/K5Sheet/K5Sheet.tsx',
   'components/MergeDialog/MergeDialog.tsx',
   // 0.46.0: the "Your account" setup prompt is about the window's own server.
   'components/OwnerAccountPrompt/OwnerAccountPrompt.tsx',

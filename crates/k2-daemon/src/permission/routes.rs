@@ -397,12 +397,21 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
         super::actions::Check::Needed => {}
     }
     let hash = params_hash(&values);
-    // The denial block and ask limits stay per workspace; only the open card
-    // is per session, since its grant goes to the session that asked.
+    // The Thread this ask goes on. Its refusal (no Thread, a bad addr) is
+    // answered where it always was, after the limits and the dry run.
+    let thread = asking_thread(workspace_id, session_id, str_field(body, "addr"));
+    // The denial block and ask limits stay per workspace. The open card is
+    // per session when its grant goes to the session that asked, else per
+    // Thread: a sidecar's ask never answers with the main Thread's card (or
+    // another sidecar's), which its person doesn't see and whose answer goes
+    // to another session (a user's report, 0.46.10).
     let open = if super::actions::vault::asks_for_own_session(spec.id, &values) {
         store::open_same_in_session(workspace_id, spec.id, &hash, session_id)
     } else {
-        store::open_same(workspace_id, spec.id, &hash)
+        match &thread {
+            Ok((conversation_id, _)) => store::open_same_on_thread(workspace_id, spec.id, &hash, conversation_id),
+            Err(_) => store::open_same(workspace_id, spec.id, &hash),
+        }
     };
     if let Ok(Some(same)) = open {
         return ok(json!({
@@ -438,7 +447,7 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
             "expiresIn": spec.expiry.default_secs,
         }));
     }
-    let (conversation_id, addr) = match asking_thread(workspace_id, session_id, str_field(body, "addr")) {
+    let (conversation_id, addr) = match thread {
         Ok(x) => x,
         Err(r) => return r,
     };

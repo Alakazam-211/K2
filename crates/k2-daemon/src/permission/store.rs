@@ -179,15 +179,35 @@ pub(crate) fn open_same_in_session(workspace_id: &str, action: &str, params_hash
     open_matching(workspace_id, action, params_hash, Some(session_id))
 }
 
+/// [`open_same`], on one Thread (`conversation_id`): an ask from a sidecar
+/// finds the card on its own Thread, never another session's (a user's
+/// report, 0.46.10: the main Thread's open card answered a sidecar's ask, so
+/// the person found nothing on the sidecar's Thread and the sidecar never got
+/// its `[permission:]` turn). The same thing asked on two Threads is two
+/// cards; once one is applied, the other answers "Already on".
+pub(crate) fn open_same_on_thread(workspace_id: &str, action: &str, params_hash: &str, conversation_id: &str) -> Result<Option<PermissionRequest>, String> {
+    open_matching_on(workspace_id, action, params_hash, None, Some(conversation_id))
+}
+
 fn open_matching(workspace_id: &str, action: &str, params_hash: &str, session_id: Option<&str>) -> Result<Option<PermissionRequest>, String> {
+    open_matching_on(workspace_id, action, params_hash, session_id, None)
+}
+
+fn open_matching_on(
+    workspace_id: &str,
+    action: &str,
+    params_hash: &str,
+    session_id: Option<&str>,
+    conversation_id: Option<&str>,
+) -> Result<Option<PermissionRequest>, String> {
     with_conn(|c| {
         c.query_row(
             &format!(
                 "SELECT {COLS} FROM permission_requests WHERE workspace_id = ?1 AND action = ?2 AND params_hash = ?3 \
-                 AND (?4 IS NULL OR session_id = ?4) \
+                 AND (?4 IS NULL OR session_id = ?4) AND (?5 IS NULL OR conversation_id = ?5) \
                  AND state IN ('pending', 'already_done', 'applying') AND answered_at IS NULL ORDER BY created_at DESC LIMIT 1"
             ),
-            params![workspace_id, action, params_hash, session_id],
+            params![workspace_id, action, params_hash, session_id, conversation_id],
             from_row,
         )
         .optional()

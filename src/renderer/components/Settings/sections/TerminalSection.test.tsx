@@ -48,6 +48,10 @@ describe('terminalFontStack', () => {
 describe('TerminalSection', () => {
   it('Size is the size ⌘+ and ⌘− change, clamped, and says Saved', () => {
     render(<TerminalSection />)
+    expect(document.querySelector('[data-settings-id="terminal.font-size"]')?.textContent).toContain(
+      '⌘+ and ⌘− change it too. On this computer only.',
+    )
+    for (const gone of ['Cursor style', 'Scrollback', 'Renderer']) expect(screen.queryByText(gone)).toBeNull()
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Size, exact value' }), { target: { value: '16' } })
     expect(useTerminalSettingsStore.getState().fontSize).toBe(16)
     expect(document.querySelector('[data-save-note]')).toBeTruthy()

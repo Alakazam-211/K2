@@ -27,7 +27,7 @@ import { Button, Input, Slider, Toggle } from '@/components/ui'
 
 export const TERMINAL_MANIFEST: SettingEntry[] = [
   { id: 'terminal.font-family', section: 'terminal', group: 'Text', label: 'Font', description: 'The font for terminal text', keywords: ['font', 'typeface', 'family'] },
-  { id: 'terminal.font-size', section: 'terminal', group: 'Text', label: 'Size', description: 'Terminal text size; ⌘+ and ⌘− change it too', keywords: ['font', 'size', 'zoom', 'text size'] },
+  { id: 'terminal.font-size', section: 'terminal', group: 'Text', label: 'Size', description: 'Terminal text size on this computer; ⌘+ and ⌘− change it too', keywords: ['font', 'size', 'zoom', 'text size'] },
   { id: 'terminal.line-height', section: 'terminal', group: 'Text', label: 'Line spacing', description: 'Space between lines, as a multiple of the text size', keywords: ['line height', 'leading', 'spacing', 'rows', 'dense', 'open', 'webgl'] },
   { id: 'terminal.char-tracking', section: 'terminal', group: 'Text', label: 'Letter spacing', description: 'Space between letters', keywords: ['tracking', 'letter spacing', 'character spacing', 'kerning', 'width', 'cell', 'open', 'tight', 'webgl'] },
   { id: 'terminal.painter', section: 'terminal', group: 'Text', label: 'Draw with the GPU', description: 'Faster drawing; turn off if terminal text looks wrong', keywords: ['painter', 'renderer', 'kessel', 'webgl', 'gpu', 'canvas', 'rendering', 'dom'] },
@@ -192,7 +192,7 @@ export function TerminalSection(): React.JSX.Element {
         <SettingRow
           settingId="terminal.font-size"
           label="Size"
-          hint={<Hint status={sizeSave}>⌘+ and ⌘− change it too, in any terminal.</Hint>}
+          hint={<Hint status={sizeSave}>⌘+ and ⌘− change it too. On this computer only.</Hint>}
         >
           <SliderField
             label="Size"

@@ -664,6 +664,16 @@ describe("recording in K2's own rooms (Sew 0.9.0): told, not asked", () => {
     expect(sent).toContain(`${P}stop_recording`)
   })
 
+  it("hands the plugin the raw rights facts when it takes them (Sew 0.9.2), passed through unchanged", async () => {
+    const rights = { room: 'room-1', my_perms: '8388608', dm: false, recording_enabled: true, record_capped: false, agent: false }
+    const s = setup()
+    s.api.recordingControls.mockImplementation(async () => ({ recordCalls: true, manageChannels: false, rights }))
+    s.plugin.state = { state: 'connected', participants: [], call_id: 'r_x' }
+    await s.ctl.join(SEW, room1)
+    await settle()
+    expect(s.calls.filter(([x]) => x === `${P}set_recording_rights`)).toEqual([[`${P}set_recording_rights`, rights]])
+  })
+
   it("a window without the app's engine says where to join (the server refused a recorded room)", async () => {
     const sew = { code: 'conflict', hint: 'answer the recording notice', details: { reason: 'recording_consent_required' } }
     const s = setup({ plugin: { joinError: { code: 'conflict', detail: { hint: 'answer the recording notice', details: { sew } } } } })

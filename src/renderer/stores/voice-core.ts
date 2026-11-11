@@ -263,6 +263,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   let nativeSpeaking = new Set<string>()
   /** The notice (recording and version) this window already put up. */
   let toldRecording: string | null = null
+  /** The plugin takes `set_recording_rights` (Sew 0.9.2): null until tried. */
+  let rightsCommand: boolean | null = null
   /** Bumped per join/leave so a stale async step never touches a newer call. */
   let callGen = 0
   /** Lists in a row that didn't show this login in its room. */
@@ -707,6 +709,12 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       const perms = await read(deps.scopeFor(c.hostKey), c.roomId)
       const now = store.getState().call
       if (gen === callGen && now) store.setState({ call: { ...now, recordingPerms: perms } })
+      // Sew 0.9.2's plugin decides Record and Stop from these facts (passed
+      // through as read); 0.6.0's has no such command, and the derived rule
+      // stands in (`recordingButtons`).
+      if (native && perms.rights && rightsCommand !== false) {
+        rightsCommand = await native.setRecordingRights(perms.rights)
+      }
     } catch (err) {
       console.warn('[voice] reading the recording controls failed:', err)
     }

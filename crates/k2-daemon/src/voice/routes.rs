@@ -964,6 +964,24 @@ fn recording_controls(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
                 v["voiceChatOnly"] = json!(true);
             }
             v["agentReaders"] = json!(super::transcripts::any_reader());
+            // Sew 0.9.2's plugin (`set_recording_rights`) takes the raw facts
+            // and decides itself: the org policies as Sew last reported them
+            // (null when K2 hasn't seen them), the room is no DM, and no App
+            // caps the K5 Space.
+            let seen = |key: &str| {
+                k2_core::tool_hook::recording_policies()
+                    .ok()
+                    .and_then(|rows| rows.into_iter().find(|r| r.key == key))
+                    .and_then(|r| r.seen)
+                    .unwrap_or(Value::Null)
+            };
+            v["rights"] = json!({
+                "dm": false,
+                "recordingEnabled": seen(k2_core::tool_hook::sew_wire::recording::POLICY_ENABLED),
+                "recordingDmEnabled": seen(k2_core::tool_hook::sew_wire::recording::POLICY_DM_ENABLED),
+                "recordCapped": false,
+                "agent": false,
+            });
             ok(v)
         }
         Err(r) => refuse(&r),

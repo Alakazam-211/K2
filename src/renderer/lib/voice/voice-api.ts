@@ -101,7 +101,25 @@ export async function sendVoiceSelfState(scope: ServerScope, callId: string, mut
 export async function fetchRecordingControls(scope: ServerScope, roomId: string): Promise<RecordingPerms> {
   const v = (await daemonCliPost(scope, 'voice/recording/controls', { room: roomId })) as Record<string, unknown> | null
   if (!v || typeof v !== 'object') throw new Error('voice/recording/controls: not an answer')
-  return { recordCalls: v.recordCalls === true, manageChannels: v.manageChannels === true, voiceChatOnly: v.voiceChatOnly === true }
+  const r = v.rights && typeof v.rights === 'object' ? (v.rights as Record<string, unknown>) : null
+  const rights =
+    r && typeof v.myPerms === 'string'
+      ? {
+          room: roomId,
+          my_perms: v.myPerms,
+          dm: r.dm === true,
+          ...(typeof r.recordingEnabled === 'boolean' ? { recording_enabled: r.recordingEnabled } : {}),
+          ...(typeof r.recordingDmEnabled === 'boolean' ? { recording_dm_enabled: r.recordingDmEnabled } : {}),
+          record_capped: r.recordCapped === true,
+          agent: r.agent === true,
+        }
+      : undefined
+  return {
+    recordCalls: v.recordCalls === true,
+    manageChannels: v.manageChannels === true,
+    voiceChatOnly: v.voiceChatOnly === true,
+    ...(rights ? { rights } : {}),
+  }
 }
 
 /** Settings (§3.3, §4.5): `GET /cli/voice/status`. */

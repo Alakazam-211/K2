@@ -47,6 +47,17 @@ describe('Record and Stop, derived until Sew 0.9.2 sends can_record / can_stop',
     expect(recordingButtons({ perms: p, recording: rec({ required: true }), people: [me] }).canStop).toBe(true)
   })
 
+  it("Sew 0.9.2's can_record / can_stop decide when the event has them; the derived rule is the fallback", () => {
+    const p = { recordCalls: false, manageChannels: false }
+    expect(recordingButtons({ perms: p, recording: rec({ canRecord: true, canStop: true }), people: [me, other] })).toEqual({ canRecord: true, canStop: true })
+    expect(recordingButtons({ perms: { recordCalls: true, manageChannels: true }, recording: rec({ startedBy: '1', canRecord: false, canStop: false }), people: [me] })).toEqual({
+      canRecord: false,
+      canStop: false,
+    })
+    // Absent: derived from the perms (here: not the starter, no MANAGE_CHANNELS).
+    expect(recordingButtons({ perms: p, recording: rec(), people: [me, other] })).toEqual({ canRecord: false, canStop: false })
+  })
+
   it('a Voice & Chat only login never records or stops', () => {
     const p = { recordCalls: true, manageChannels: true, voiceChatOnly: true }
     expect(recordingButtons({ perms: p, recording: null, people: [me] })).toEqual({ canRecord: false, canStop: false })

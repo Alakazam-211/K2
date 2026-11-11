@@ -19,6 +19,20 @@ export interface RecordingPerms {
   manageChannels: boolean
   /** A Voice & Chat only login: it never records. */
   voiceChatOnly?: boolean
+  /** The raw facts Sew 0.9.2's plugin takes (`set_recording_rights`), as
+   *  the daemon read them: K2 adds no rule of its own. */
+  rights?: RecordingRights
+}
+
+/** `set_recording_rights`' arguments (tauri-plugin-sew-voice 0.6.2). */
+export interface RecordingRights {
+  room: string
+  my_perms: string
+  dm: boolean
+  recording_enabled?: boolean
+  recording_dm_enabled?: boolean
+  record_capped: boolean
+  agent: boolean
 }
 
 export interface RecordingButtons {
@@ -28,13 +42,32 @@ export interface RecordingButtons {
 
 /**
  * Which of Record and Stop to show. Sew 0.9.2's plugin sends `can_record` and
- * `can_stop` itself; until then this derives them (swap this one function out):
+ * `can_stop` on the `recording` event: when they are there, they decide. A
+ * Voice & Chat only login never records either way.
+ */
+export function recordingButtons(opts: {
+  perms: RecordingPerms | null
+  recording: NativeRecording | null
+  people: NativeParticipant[]
+  isDm?: boolean
+}): RecordingButtons {
+  if (opts.perms?.voiceChatOnly) return { canRecord: false, canStop: false }
+  const r = opts.recording
+  if (r && typeof r.canRecord === 'boolean' && typeof r.canStop === 'boolean') {
+    return { canRecord: r.canRecord, canStop: r.canStop }
+  }
+  return derivedButtons(opts)
+}
+
+/**
+ * FALLBACK for Sew 0.9.0's plugin, which has no `can_record` / `can_stop`
+ * (delete once every pinned plugin sends them):
  *   Record: RECORD_CALLS, and no recording is on.
  *   Stop: the person who started it, a DM call, or MANAGE_CHANNELS; hidden
  *   while the room requires recording and two or more people are in it (Sew
  *   refuses that Stop with `recording_required`).
  */
-export function recordingButtons(opts: {
+export function derivedButtons(opts: {
   perms: RecordingPerms | null
   recording: NativeRecording | null
   people: NativeParticipant[]

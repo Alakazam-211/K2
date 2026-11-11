@@ -11,6 +11,7 @@
 // `native_voice::tests` holds to the plugin's real types.
 
 import type { VoiceDevices } from './voice-engine'
+import type { RecordingRights } from './recording-controls'
 
 /** What this file needs from Tauri: injected, so tests run without it. */
 export interface NativeVoiceBridge {
@@ -79,6 +80,10 @@ export interface NativeRecording {
   startedBy: string | null
   /** The notice, while `myConsent` is `pending`. */
   prompt: NativeConsentPrompt | null
+  /** Sew 0.9.2's plugin: whether this person may press Record / Stop now.
+   *  Absent (null) from the 0.9.0 plugin: `recordingButtons` derives them. */
+  canRecord?: boolean | null
+  canStop?: boolean | null
 }
 
 /** No names here: the media token and call keys carry none (the rooms list does). */
@@ -205,6 +210,8 @@ export function parseRecording(v: unknown): NativeRecording | null {
     required: r.required === true,
     startedBy: typeof r.started_by === 'string' ? r.started_by : null,
     prompt: parsePrompt(r.consent_prompt),
+    ...(typeof r.can_record === 'boolean' ? { canRecord: r.can_record } : {}),
+    ...(typeof r.can_stop === 'boolean' ? { canStop: r.can_stop } : {}),
   }
 }
 
@@ -346,6 +353,23 @@ export class NativeVoiceEngine {
    *  A held join then joins; mid-call, Sew records them from here on. */
   async consent(granted: boolean, noticeVersion: number): Promise<void> {
     await this.command<null>('consent', { granted, notice_version: noticeVersion })
+  }
+
+  /** Sew 0.9.2's plugin (0.6.2): hand it the raw facts it computes
+   *  `can_record` / `can_stop` from. `false`: this plugin has no such command
+   *  (0.6.0, Sew 0.9.0), so the caller derives the buttons itself
+   *  (`recording-controls.ts` `derivedButtons`). Delete the `false` path with
+   *  the 0.9.2 pin. */
+  async setRecordingRights(rights: RecordingRights): Promise<boolean> {
+    try {
+      await this.command<null>('set_recording_rights', { ...rights })
+      return true
+    } catch (err) {
+      // A plain string is Tauri's own: the command doesn't exist (or isn't
+      // granted) in this plugin. Anything else is the plugin's refusal.
+      if (err instanceof NativeVoiceError && err.code === 'failed' && typeof err.detail === 'string') return false
+      throw err
+    }
   }
 
   /** Record (Sew 0.9.0, permission set `sew-voice:recording`). */

@@ -85,6 +85,9 @@ describe("Sew's contract (native-voice-contract.json, held to the plugin's types
       prompt: null,
     })
     expect(parseRecording(contract.recording.granted)).toMatchObject({ recordingId: '77', myConsent: 'granted', recorderPresent: true, startedBy: '7' })
+    // Sew 0.9.2's plugin adds can_record / can_stop; absent on 0.9.0's.
+    expect(parseRecording(contract.recording.granted)).not.toHaveProperty('canRecord')
+    expect(parseRecording({ ...contract.recording.granted, can_record: false, can_stop: true })).toMatchObject({ canRecord: false, canStop: true })
     expect(parseRecording(contract.recording.stopped)).toBeNull()
   })
 
@@ -237,6 +240,17 @@ describe('rejections', () => {
       { command: `${PLUGIN_COMMAND_PREFIX}stop_recording`, args: undefined },
     ])
     expect(contract.recordingCommands).toEqual(['start_recording', 'stop_recording'])
+  })
+
+  it("set_recording_rights: true where the plugin has it (Sew 0.9.2), false on 0.6.0's Tauri refusal, a plugin refusal throws", async () => {
+    const rights = { room: 'room-1', my_perms: '8388608', dm: false, record_capped: false, agent: false }
+    const ok = fakeBridge()
+    expect(await new NativeVoiceEngine(ok.bridge).setRecordingRights(rights)).toBe(true)
+    expect(ok.calls).toEqual([{ command: `${PLUGIN_COMMAND_PREFIX}set_recording_rights`, args: rights }])
+    const old = fakeBridge({}, { [`${PLUGIN_COMMAND_PREFIX}set_recording_rights`]: 'Command set_recording_rights not found' })
+    expect(await new NativeVoiceEngine(old.bridge).setRecordingRights(rights)).toBe(false)
+    const refused = fakeBridge({}, { [`${PLUGIN_COMMAND_PREFIX}set_recording_rights`]: { code: 'not_in_call', detail: null } })
+    await expect(new NativeVoiceEngine(refused.bridge).setRecordingRights(rights)).rejects.toMatchObject({ code: 'not_in_call' })
   })
 
   it('a join answer with no call id fails loudly', async () => {

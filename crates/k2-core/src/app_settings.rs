@@ -526,6 +526,14 @@ pub struct AppSettings {
     /// Wire name `setupChecklist`.
     #[serde(default)]
     pub setup_checklist: bool,
+    /// K5 at first run, and the Chief of Staff (prd-setup-checklist-v1
+    /// §10): the "Meet K5" offer, the `chief_of_staff` row in place of
+    /// `first_agent`, and the `/cli/first-run/k5` and `chief-of-staff`
+    /// routes. Owner only, off by default until K2 Design polishes the K5
+    /// sheet; off, the routes answer 404 `k5_first_run_off`. Wire name
+    /// `k5FirstRun`.
+    #[serde(default)]
+    pub k5_first_run: bool,
     /// Video in voice rooms: camera tiles, screen share and the camera
     /// picker in the desktop app's call panel. The daemon only stores and
     /// returns it; the desktop app reads it. On by default since Sew 0.8.2's
@@ -1284,6 +1292,7 @@ impl Default for AppSettings {
             voice_rooms_preview: false,
             board_file_preview: false,
             setup_checklist: false,
+            k5_first_run: false,
             video_rooms_preview: true,
             voice_tunnel_preview: false,
             voice_rooms_count: default_voice_rooms_count(),
@@ -1921,6 +1930,21 @@ mod tests {
             );
             assert_eq!(view.wake_scheduler.wake_system, full.wake_scheduler.wake_system, "wakeSystem for {raw:?}");
         }
+    }
+
+    /// K5 at first run (prd-setup-checklist-v1 §10): off by default, wire
+    /// name `k5FirstRun`, and an old file without it reads as off.
+    #[test]
+    fn k5_first_run_is_off_by_default_under_its_wire_name() {
+        assert!(!AppSettings::default().k5_first_run);
+        let mut v = serde_json::to_value(AppSettings::default()).expect("json");
+        assert_eq!(v["k5FirstRun"], serde_json::json!(false), "wire name");
+        v["k5FirstRun"] = serde_json::json!(true);
+        let on: AppSettings = serde_json::from_value(v.clone()).expect("parse");
+        assert!(on.k5_first_run);
+        v.as_object_mut().expect("object").remove("k5FirstRun");
+        let old: AppSettings = serde_json::from_value(v).expect("parse");
+        assert!(!old.k5_first_run, "missing reads as off");
     }
 
     #[test]

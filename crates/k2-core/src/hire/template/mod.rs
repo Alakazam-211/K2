@@ -248,7 +248,8 @@ pub fn resolve(id_or_alias: &str) -> Result<Template, HireError> {
 }
 
 /// `GET /cli/agent-templates`: built-ins first (General first), then the
-/// library ("Yours"). `kind = "system"` only with `all`.
+/// library ("Yours"). `kind = "system"` only with `all`. Carries
+/// `canSave: true` (the server has the save routes).
 pub fn list_json(all: bool) -> Result<serde_json::Value, HireError> {
     let mut items = Vec::new();
     let mut builtin: Vec<Template> = Vec::new();
@@ -263,7 +264,10 @@ pub fn list_json(all: bool) -> Result<serde_json::Value, HireError> {
         }
         items.push(t.summary_json());
     }
-    Ok(serde_json::json!({ "ok": true, "templates": items, "problems": problems }))
+    // `canSave`: this daemon has the save, add and remove routes (T6), so
+    // the app can offer Save as template. A static capability flag, not a
+    // per-caller one: a caller who may not save still gets 403 from save.
+    Ok(serde_json::json!({ "ok": true, "templates": items, "problems": problems, "canSave": true }))
 }
 
 /// `GET /cli/agent-templates/show`.

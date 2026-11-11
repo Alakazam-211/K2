@@ -191,3 +191,18 @@ fn template_upgrade_and_diff_routes() {
     let (st, e) = post(CLI_DIFF, Who::Owner, json!({ "id": id }));
     assert_eq!((st, e["error"]["code"].as_str()), (400, Some("usage")), "{e}");
 }
+
+/// The list says the server can save templates (a static capability flag,
+/// the same for every caller; save still checks who is asking).
+#[test]
+fn template_list_says_the_server_can_save() {
+    let _home = k2_core::test_env::TempHome::new();
+    ensure_test_root();
+    for who in [Who::Owner, Who::Agent { project_id: "w".into(), session_id: "s".into() }] {
+        let r = handle_cli(crate::hire_routes::CLI_TEMPLATES, who, false, b"", &HashMap::new(), None);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(v["canSave"], true, "{v}");
+        assert!(v["templates"].is_array() && v["problems"].is_array() && v["ok"] == true, "{v}");
+    }
+}

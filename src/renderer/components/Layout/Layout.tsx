@@ -3,7 +3,7 @@ import TopBar from '../TopBar/TopBar'
 import type { TopBarRemoteServer } from '../TopBar/TopBarTitle'
 import IconRail from '../Sidebar/IconRail'
 import { Surface } from '../ui'
-import { useSidebarStore } from '../../stores/sidebar'
+import { useSidebarDisplayWidth, useSidebarStore } from '../../stores/sidebar'
 import { usePanelsStore } from '../../stores/panels'
 import AnimatedDrawer from './AnimatedDrawer'
 
@@ -37,7 +37,8 @@ export default function Layout({
   workspaceName,
   remoteServer
 }: LayoutProps): React.JSX.Element {
-  const sidebarWidth = useSidebarStore((s) => s.width)
+  // The saved width, raised to the setup checklist's floor while it shows.
+  const sidebarWidth = useSidebarDisplayWidth()
   const isCollapsed = useSidebarStore((s) => s.isCollapsed)
 
   const leftPanelOpen = usePanelsStore((s) => s.leftPanelOpen)

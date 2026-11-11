@@ -1,10 +1,7 @@
 import { useCallback, useRef } from 'react'
-import { useSidebarStore } from '@/stores/sidebar'
-import {
-  SIDEBAR_DEFAULT_WIDTH,
-  SIDEBAR_MIN_WIDTH,
-  SIDEBAR_MAX_WIDTH
-} from '../../../shared/constants'
+import { displayedSidebarWidth, useSidebarStore } from '@/stores/sidebar'
+import { isSetupChecklistShowing } from '@/stores/first-run'
+import { SIDEBAR_DEFAULT_WIDTH } from '../../../shared/constants'
 
 export default function ResizeHandle(): React.JSX.Element {
   const setWidth = useSidebarStore((s) => s.setWidth)
@@ -16,13 +13,14 @@ export default function ResizeHandle(): React.JSX.Element {
       isDragging.current = true
 
       const startX = e.clientX
-      const startWidth = useSidebarStore.getState().width
+      // From the width on screen (the checklist's floor may be drawn over a
+      // narrower saved width); the store clamps and keeps the saved width.
+      const startWidth = displayedSidebarWidth(useSidebarStore.getState().width, isSetupChecklistShowing())
 
       const handleMouseMove = (moveEvent: MouseEvent): void => {
         if (!isDragging.current) return
         const delta = moveEvent.clientX - startX
-        const newWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, startWidth + delta))
-        setWidth(newWidth)
+        setWidth(startWidth + delta)
       }
 
       const handleMouseUp = (): void => {

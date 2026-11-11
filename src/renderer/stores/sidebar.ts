@@ -1,9 +1,11 @@
 import { create } from 'zustand'
 import {
+  SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH,
   SIDEBAR_DEFAULT_WIDTH,
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH
 } from '../../shared/constants'
+import { isSetupChecklistShowing, useSetupChecklistShowing } from '@/stores/first-run'
 import { settingsGet } from '@/lib/daemon-settings'
 import {
   getWindowLabel,
@@ -15,6 +17,9 @@ import {
 
 interface SidebarState {
   isCollapsed: boolean
+  /** The width the person chose (kept). What's drawn is
+   *  `displayedSidebarWidth`: never under the setup checklist's floor
+   *  while the checklist shows. */
   width: number
 
   toggle: () => void
@@ -22,6 +27,34 @@ interface SidebarState {
   collapse: () => void
   expand: () => void
   initFromSettings: () => Promise<void>
+}
+
+/** The narrowest the sidebar may be drawn: the setup checklist's floor
+ *  while it shows (until the intro is done), else the normal minimum. */
+export function sidebarMinWidth(checklistShowing: boolean): number {
+  return checklistShowing ? SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH : SIDEBAR_MIN_WIDTH
+}
+
+/** The width to draw: the saved width, raised to the checklist's floor
+ *  while it shows. The saved width itself is left alone. */
+export function displayedSidebarWidth(saved: number, checklistShowing: boolean): number {
+  return checklistShowing ? Math.max(saved, SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH) : saved
+}
+
+/** The width to save for a requested one (a drag, a double-click reset).
+ *  Clamped to the range; while the checklist shows, a request at or under
+ *  its floor keeps a narrower saved width (the floor is drawn either way),
+ *  so the person's own width comes back once the checklist goes. */
+export function nextSavedSidebarWidth(saved: number, requested: number, checklistShowing: boolean): number {
+  const next = Math.max(sidebarMinWidth(checklistShowing), Math.min(SIDEBAR_MAX_WIDTH, requested))
+  if (checklistShowing && next === SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH && saved < next) return saved
+  return next
+}
+
+/** The sidebar's drawn width for this window. */
+export function useSidebarDisplayWidth(): number {
+  const saved = useSidebarStore((s) => s.width)
+  return displayedSidebarWidth(saved, useSetupChecklistShowing())
 }
 
 /** First chrome hydrate. Later sync:settings must not restamp collapsed
@@ -52,7 +85,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   },
 
   setWidth: (width: number) =>
-    set({ width: Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, width)) }),
+    set({ width: nextSavedSidebarWidth(get().width, width, isSetupChecklistShowing()) }),
 
   collapse: () => {
     set({ isCollapsed: true })

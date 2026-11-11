@@ -6,6 +6,10 @@ export const TOPBAR_HEIGHT_CSS = `var(--k2-topbar-height, ${TOPBAR_HEIGHT}px)`
 export const SIDEBAR_MIN_WIDTH = 180
 export const SIDEBAR_MAX_WIDTH = 400
 export const SIDEBAR_DEFAULT_WIDTH = 240
+/** The sidebar's narrowest width while the setup checklist shows (K2 Design):
+ *  Terminal's longest row title needs about 253px with Skip on its line
+ *  (Glass fits at 240). A narrower saved width is drawn at this and kept. */
+export const SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH = 260
 
 // ── Terminal font size constants ──────────────────────────────────────
 export const TERMINAL_FONT_SIZE_MIN = 10

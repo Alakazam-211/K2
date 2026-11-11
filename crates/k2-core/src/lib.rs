@@ -259,6 +259,9 @@ pub mod federation;
 pub mod feedback;
 // The setup checklist (prd-setup-checklist-v1): rows, hide/skip/finish.
 pub mod first_run;
+// K5 at first run (prd-setup-checklist-v1 §10): the one-row seat naming
+// K2's own agent and the person's Chief of Staff (0293).
+pub mod orchestrator;
 // Ticket HTML brief (prd-ticket-html-brief-v1): clean + store the
 // agent's HTML brief next to its ticket (`feedback_briefs`, 0126).
 pub mod feedback_brief;

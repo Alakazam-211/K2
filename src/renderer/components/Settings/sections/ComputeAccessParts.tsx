@@ -346,8 +346,15 @@ function MachineLine({
             </span>
           </div>
           <div className={SETTING_ROW_HINT}>
-            {desc ? `${desc} · ` : ''}
-            <span data-testid="compute-machine-hw">{hardwareLine(cores(row.cpuCores), row.memBytes, row.diskFreeBytes)}</span>
+            {desc}
+            {row.cpuCores === null && row.memBytes === null ? (
+              row.status === 'pending' ? ' · reports its hardware once confirmed' : ''
+            ) : (
+              <>
+                {desc ? ' · ' : ''}
+                <span data-testid="compute-machine-hw">{hardwareLine(cores(row.cpuCores), row.memBytes, row.diskFreeBytes)}</span>
+              </>
+            )}
           </div>
           {row.status === 'on' && pause ? (
             <p className={SETTING_ROW_HINT} data-testid="compute-machine-paused">

@@ -36,7 +36,7 @@ import {
   SETTING_ROW_HINT,
   SETTING_ROW_LABEL,
 } from '../controls/SettingControls'
-import { BetaTag, Button, Input, Checkbox, OverflowMenu, Spinner, Surface, Toggle, Slider, type OverflowMenuItem } from '@/components/ui'
+import { BetaTag, Button, Input, Checkbox, OverflowMenu, Spinner, Toggle, Slider, type OverflowMenuItem } from '@/components/ui'
 import { AccessSheet, DIALOG_FIELD, DIALOG_LABEL, Field } from './AccessDialogs'
 import { StatusDot, type HealthTone } from './ConnectionsParts'
 import { useSettingsStore } from '@/stores/settings'
@@ -695,7 +695,9 @@ function NodeCard({
 
   return (
     <section data-testid={`compute-node-${node.name}`} aria-label={node.name}>
-      <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
+      {/* A card group without a heading: just the card, so its rows get the
+          card's padding and hairlines. */}
+      <SettingsGroup card>
         <div className="px-4 py-3 flex items-start justify-between gap-6">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -824,7 +826,7 @@ function NodeCard({
             <ActionError failure={failure} />
           </div>
         ) : null}
-      </Surface>
+      </SettingsGroup>
     </section>
   )
 }
@@ -874,7 +876,7 @@ function GrantsBlock({
         </Button>
       </div>
       {grants.length > 0 ? (
-        <div className="divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
+        <div className="divide-y divide-[var(--color-border)] border-t border-[var(--color-border)]">
           {grants.map((g) => {
             const project = projects.find((p) => p.id === g.workspaceId)
             const reported = project?.agentsCanUseCompute

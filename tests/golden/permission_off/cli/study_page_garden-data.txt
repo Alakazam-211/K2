@@ -20,7 +20,10 @@ KEYS AND REVS
   changes only the fields it names and keeps the rest (null removes one),
   so you never drop a field the widget added.
   `k2 store changes --since <rev> --wait 30` waits for
-  the next change; --follow keeps printing (on `resync`, list again).
+  the next change; --follow keeps printing. --since 0 (the default) is the
+  whole current state. An older rev is `resync` only when a delete under
+  your --prefix was dropped after it (deletes are kept 7 days); a quiet
+  prefix never is. On `resync`, list again.
 
 GRANTS (you need one; the person gives it)
   k2 store grants --widget <w>     what you can read and write, and why.

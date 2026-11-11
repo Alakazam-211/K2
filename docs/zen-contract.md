@@ -963,6 +963,23 @@ restore unless its `prefixes` name them. An agent's restore always names
 `prefixes` (the whole widget is the person's: `k2 zen data restore`, or
 Settings → Gardens → Local Data → Restore…).
 
+**Following changes (`store.subscribe`, `store.changes`; 0.46.12).** A
+cursor (`since`) is a store revision, never a time.
+- `since: 0`, or a subscribe with no `since`, is "I hold nothing": the
+  answer is the whole current state under the prefix, however long ago it
+  last changed. It is never `resync`.
+- An older cursor is `resync` (409, `reapedRev`) only when a delete under
+  the prefix (and inside the reader's grants) may have been dropped after
+  it: K2 keeps deletes 7 days, then notes which keys it dropped and at which
+  rev for 90 days. A quiet prefix is never a gap, so a cursor taken from a
+  list (the newest `rev` under the prefix) keeps working for months. Past
+  the notes, or for deletes an older K2 dropped, any cursor below them is
+  `resync`.
+- `k2.store.subscribe` handles `resync` itself: it lists the prefix again
+  and hands `{resync: true, items}` (redraw from `items`), then follows on
+  from `reapedRev`. Its first delivery is the current state as a list. A
+  widget never needs its own list-then-subscribe fallback.
+
 **Echoes after a restore (GH13).** Restored values are the old values byte
 for byte, including bookkeeping fields a widget keeps inside them
 (`updatedBy`, `updatedAt`, a batch id). So: match your own echoes by the rev

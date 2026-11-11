@@ -89,6 +89,11 @@ pub const GRANT_CHANGES_PER_MIN: u32 = 30;
 pub const MAX_WAIT_SECS: u32 = 30;
 pub const TOMBSTONE_KEEP_SECS: i64 = 7 * 86_400;
 pub const CHANGE_LOG_KEEP_SECS: i64 = 7 * 86_400;
+/// How long the reaper remembers which keys' tombstones it removed (and at
+/// which rev), so a change cursor older than the reaped rev is still
+/// honoured when nothing under its prefix was reaped after it. Past this,
+/// the space's `reap_marks.floor` rises instead.
+pub const REAPED_KEYS_KEEP_SECS: i64 = 90 * 86_400;
 pub const SNAPSHOT_DAILY_KEEP: usize = 7;
 pub const SNAPSHOT_WEEKLY_KEEP: usize = 4;
 pub const IDLE_CLOSE_SECS: u64 = 300;

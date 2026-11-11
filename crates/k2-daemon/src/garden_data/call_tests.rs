@@ -599,3 +599,59 @@ fn a_widget_reads_a_declared_neighbours_data_read_only() {
     person_grant("lists", "w-builder", "read", "holds/");
     assert_eq!(d.call("store.get", json!(["holds/ohana", {"from": "lists"}]))["value"], "freeze");
 }
+
+// ── a widget subscribing to a quiet prefix (0.46.12) ─────────────────
+
+/// History moved on past the tombstone keep (deletes elsewhere, reaped),
+/// while nothing under `projects/` or `acl/` changed. `k2.store.subscribe`
+/// with no cursor (since 0), or with the cursor a list shows (the prefix's
+/// newest rev), is the current state, never `resync`. Only a reaped delete
+/// under the prefix after the cursor is a gap, and that refusal carries
+/// `reapedRev`.
+#[test]
+fn a_widget_subscribing_to_a_quiet_prefix_is_never_refused() {
+    use k2_core::garden_data::backend::StoreBackend;
+    let d = door(&["store:read", "store:write"]);
+    d.stamp(MadeBy::Owner);
+    let p1 = d.call("store.put", json!(["projects/p1", {"name": "A"}]))["rev"].as_i64().expect("rev");
+    let a1 = d.call("store.put", json!(["acl/a", {"r": 1}]))["rev"].as_i64().expect("rev");
+    d.call("store.put", json!(["projects/p2", 2]));
+    let gone = d.call("store.delete", json!(["projects/p2"]))["rev"].as_i64().expect("rev");
+    for i in 0..4 {
+        d.call("store.put", json!([format!("other/{i}"), i]));
+        d.call("store.delete", json!([format!("other/{i}")]));
+    }
+    let later = crate::garden_data::now() + k2_core::garden_data::TOMBSTONE_KEEP_SECS + 60;
+    let r = crate::garden_data::store().reap(later).expect("reap");
+    assert_eq!(r.tombstones, 5);
+    let space = k2_core::garden_data::Space::data("board").expect("space");
+    let reaped = crate::garden_data::store().info(&space).expect("info").expect("space").reaped_rev;
+    assert!(reaped > gone && gone > a1, "{reaped} {gone} {a1}");
+
+    let keys = |v: &Value| -> Vec<(String, i64)> {
+        v["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|i| (i["key"].as_str().expect("key").to_string(), i["rev"].as_i64().expect("rev")))
+            .collect()
+    };
+    // No cursor: the whole current state, for every prefix the widget follows.
+    let ch = d.call("store.changes", json!([{"since": 0, "prefix": "projects/"}]));
+    assert_eq!(keys(&ch), vec![("projects/p1".to_string(), p1)]);
+    assert_eq!(ch["items"][0]["value"], json!({"name": "A"}));
+    assert_eq!(keys(&d.call("store.changes", json!([{"since": 0, "prefix": "acl/"}]))), vec![("acl/a".to_string(), a1)]);
+    assert_eq!(keys(&d.call("store.changes", json!([{"since": 0, "prefix": "settings/"}]))), vec![]);
+    assert_eq!(keys(&d.call("store.changes", json!([{"since": 0}]))).len(), 2, "the whole space from 0 too");
+    // The cursor a list shows (acl/'s newest key): nothing missed.
+    assert_eq!(keys(&d.call("store.changes", json!([{"since": a1, "prefix": "acl/"}]))), vec![]);
+    // A real gap: projects/p2's delete came after p1 and was reaped.
+    let (code, v) = d.raw(&d.hash(), "store.changes", json!([{"since": p1, "prefix": "projects/"}]));
+    assert_eq!(
+        (code, v["error"]["code"].as_str(), v["error"]["reapedRev"].as_i64()),
+        (409, Some("resync"), Some(reaped)),
+        "{v}"
+    );
+    // From the delete on, projects/ is quiet again.
+    assert_eq!(keys(&d.call("store.changes", json!([{"since": gone, "prefix": "projects/"}]))), vec![]);
+}

@@ -312,6 +312,169 @@ fn reaper_removes_old_tombstones_and_raises_reaped_rev() {
     assert_eq!(ok.items.len(), 1);
 }
 
+/// Push a space's history past the tombstone keep: `n` keys under `other/`
+/// put then deleted, the clock moved on, and the reaper run (`reaped`
+/// tombstones in all: the churn plus any the test deleted before). Answers
+/// the reaped rev.
+fn churn_and_reap(f: &Fixture, s: &Space, n: usize, reaped: usize) -> i64 {
+    for i in 0..n {
+        let k = format!("other/{i}");
+        f.store.put(s, &k, &json!(i), None, &owner()).unwrap();
+        f.store.delete(s, &k, None, &owner()).unwrap();
+    }
+    let later = f.clock.load(Ordering::SeqCst) + TOMBSTONE_KEEP_SECS + 1;
+    f.clock.store(later, Ordering::SeqCst);
+    let r = f.store.reap(later).unwrap();
+    assert_eq!(r.tombstones, reaped, "every old tombstone reaped");
+    f.store.info(s).unwrap().expect("space").reaped_rev
+}
+
+fn keys_of(p: &ChangesPage) -> Vec<(&str, i64)> {
+    p.items.iter().map(|c| (c.key.as_str(), c.rev)).collect()
+}
+
+/// A widget subscribing to a quiet prefix: nothing under `projects/`
+/// changed in the kept history, so neither no cursor (`since = 0`) nor a
+/// cursor at the prefix's newest key (what a list shows) is a gap.
+#[test]
+fn a_quiet_prefix_is_never_a_gap_however_old_its_cursor() {
+    let f = fixture();
+    let s = board();
+    let p1 = f.store.put(&s, "projects/p1", &json!({"name": "A"}), None, &owner()).unwrap();
+    let a1 = f.store.put(&s, "acl/a", &json!({"r": 1}), None, &owner()).unwrap();
+    let reaped = churn_and_reap(&f, &s, 5, 5);
+    assert!(reaped > a1 && a1 > p1, "history moved past both quiet prefixes ({p1}, {a1}, {reaped})");
+
+    // No cursor: the whole current state under the prefix.
+    let all = f.store.changes(&s, &Cursor { since: 0, after: None }, "projects/", None).unwrap();
+    assert_eq!(keys_of(&all), vec![("projects/p1", p1)]);
+    assert_eq!(all.items[0].value, json!({"name": "A"}));
+    // The whole space from 0 too: every live key, nothing refused.
+    let whole = f.store.changes(&s, &Cursor { since: 0, after: None }, "", None).unwrap();
+    assert_eq!(keys_of(&whole), vec![("projects/p1", p1), ("acl/a", a1)]);
+
+    // The cursor a list gives (the prefix's newest key): nothing missed.
+    let from_list = f.store.changes(&s, &Cursor { since: p1, after: None }, "projects/", None).unwrap();
+    assert_eq!((from_list.items.len(), from_list.head), (0, f.store.info(&s).unwrap().unwrap().rev));
+    let acl = f.store.changes(&s, &Cursor { since: a1, after: None }, "acl/", None).unwrap();
+    assert!(acl.items.is_empty());
+    // An empty prefix is quiet too.
+    assert!(f.store.changes(&s, &Cursor { since: 1, after: None }, "settings/", None).unwrap().items.is_empty());
+
+    // The same old cursor over the churned prefix (or the whole space)
+    // really missed deletes: resync, deterministically.
+    for prefix in ["other/", ""] {
+        assert_eq!(
+            f.store.changes(&s, &Cursor { since: p1, after: None }, prefix, None).unwrap_err(),
+            DataError::Resync { reaped_rev: reaped },
+            "{prefix:?}"
+        );
+    }
+    // A reader whose grant can't see other/ missed nothing it could read.
+    let grant = vec!["projects/".to_string(), "acl/".to_string()];
+    let g = f.store.changes(&s, &Cursor { since: p1, after: None }, "", Some(&grant)).unwrap();
+    assert_eq!(keys_of(&g), vec![("acl/a", a1)]);
+}
+
+/// A real gap: a key under the prefix was deleted after the cursor and its
+/// tombstone reaped. That is `resync` with the reaped rev; a cursor at or
+/// past the delete is fine again.
+#[test]
+fn a_reaped_delete_under_the_prefix_after_the_cursor_is_a_gap() {
+    let f = fixture();
+    let s = board();
+    let p1 = f.store.put(&s, "projects/p1", &json!(1), None, &owner()).unwrap();
+    f.store.put(&s, "projects/p2", &json!(2), None, &owner()).unwrap();
+    let gone = f.store.delete(&s, "projects/p2", None, &owner()).unwrap().expect("deleted");
+    let reaped = churn_and_reap(&f, &s, 2, 3);
+    assert!(reaped > gone);
+    assert_eq!(
+        f.store.changes(&s, &Cursor { since: p1, after: None }, "projects/", None).unwrap_err(),
+        DataError::Resync { reaped_rev: reaped }
+    );
+    let ok = f.store.changes(&s, &Cursor { since: gone, after: None }, "projects/", None).unwrap();
+    assert!(ok.items.is_empty(), "nothing under projects/ after its delete");
+    // No cursor: the current state, never a refusal.
+    let all = f.store.changes(&s, &Cursor { since: 0, after: None }, "projects/", None).unwrap();
+    assert_eq!(keys_of(&all), vec![("projects/p1", p1)]);
+}
+
+/// Deletes reaped without notes (by an older K2, or notes past their keep)
+/// are unknown: any cursor below them is a gap whatever the prefix; no
+/// cursor still reads the whole state.
+#[test]
+fn reaps_without_notes_count_as_gaps_below_them() {
+    let f = fixture();
+    let s = board();
+    let p1 = f.store.put(&s, "projects/p1", &json!(1), None, &owner()).unwrap();
+    churn_and_reap(&f, &s, 2, 2);
+    assert!(f.store.changes(&s, &Cursor { since: p1, after: None }, "projects/", None).is_ok(), "noted: quiet");
+    // An older K2 reaps a later delete: it raises reaped_rev, notes nothing.
+    f.store.put(&s, "other/x", &json!(1), None, &owner()).unwrap();
+    let old = f.store.delete(&s, "other/x", None, &owner()).unwrap().expect("deleted");
+    f.store
+        .with(|c| {
+            c.execute("DELETE FROM entries WHERE space = ?1 AND key = 'other/x'", [s.as_str()])?;
+            c.execute("UPDATE spaces SET reaped_rev = ?2 WHERE space = ?1", params![s.as_str(), old])?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        f.store.changes(&s, &Cursor { since: p1, after: None }, "projects/", None).unwrap_err(),
+        DataError::Resync { reaped_rev: old }
+    );
+    assert_eq!(keys_of(&f.store.changes(&s, &Cursor { since: 0, after: None }, "projects/", None).unwrap()), vec![("projects/p1", p1)]);
+    assert!(f.store.changes(&s, &Cursor { since: old, after: None }, "projects/", None).is_ok());
+
+    // A fresh store: notes past REAPED_KEYS_KEEP_SECS raise the floor.
+    let g = fixture();
+    let q1 = g.store.put(&s, "projects/p1", &json!(1), None, &owner()).unwrap();
+    let r = churn_and_reap(&g, &s, 1, 1);
+    assert!(g.store.changes(&s, &Cursor { since: q1, after: None }, "projects/", None).is_ok(), "noted: quiet");
+    let much_later = g.clock.load(Ordering::SeqCst) + crate::garden_data::REAPED_KEYS_KEEP_SECS + 1;
+    g.store.reap(much_later).unwrap();
+    assert_eq!(
+        g.store.changes(&s, &Cursor { since: q1, after: None }, "projects/", None).unwrap_err(),
+        DataError::Resync { reaped_rev: r },
+        "the notes are gone: unknown again"
+    );
+}
+
+/// A space delete takes the reaper's notes with it; a move carries them.
+#[test]
+fn reaper_notes_follow_the_space() {
+    let f = fixture();
+    let old = Space::data("board-old").unwrap();
+    let new = board();
+    let p1 = f.store.put(&old, "projects/p1", &json!(1), None, &owner()).unwrap();
+    f.store.put(&old, "projects/p2", &json!(1), None, &owner()).unwrap();
+    f.store.delete(&old, "projects/p2", None, &owner()).unwrap();
+    let reaped = churn_and_reap(&f, &old, 1, 2);
+    f.store.move_space(&old, &new).unwrap();
+    assert_eq!(
+        f.store.changes(&new, &Cursor { since: p1, after: None }, "projects/", None).unwrap_err(),
+        DataError::Resync { reaped_rev: reaped },
+        "the moved notes still name projects/p2"
+    );
+    let left: i64 = f
+        .store
+        .with(|c| Ok(c.query_row("SELECT COUNT(*) FROM reaped_keys WHERE space = ?1", [old.as_str()], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(left, 0);
+    f.store.drop_space(&new).unwrap();
+    let gone: i64 = f
+        .store
+        .with(|c| {
+            Ok(c.query_row(
+                "SELECT (SELECT COUNT(*) FROM reaped_keys WHERE space = ?1) + (SELECT COUNT(*) FROM reap_marks WHERE space = ?1)",
+                [new.as_str()],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(gone, 0);
+}
+
 #[test]
 fn drop_move_and_orphans() {
     let f = fixture();

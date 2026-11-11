@@ -18,12 +18,14 @@
 //   it pages `store.changes` until `next` is null, buffering while
 //   `partial`, so a subscriber never sees half a rev; then it hands the
 //   widget `[{key, rev, value | null, by}]`. The first delivery is the whole
-//   current state (a replay from rev 0). `resync` (the cursor is older than
-//   kept history) lists everything again and hands `{resync: true, items}`.
+//   current state (a replay from rev 0, never `resync` since 0.46.12). A
+//   `resync` (a delete under the prefix was dropped past the cursor) lists
+//   everything again and hands `{resync: true, items}`, then follows on.
 // - `stale_widget` (the frame runs an old version) reloads the widget once.
 
 import type { CatalogErrorCode, CatalogWireError } from '../contract/catalog-types'
 import { CATALOG_ERROR_CODES } from '../contract/catalog-types'
+import { httpDetailsOf } from '../daemon-http-error'
 
 /** Every verb this file answers (the catalog's `garden-local` rows). */
 export const ZEN_STORE_VERBS: ReadonlySet<string> = new Set([
@@ -110,18 +112,26 @@ export class ZenStoreError extends Error {
   }
 }
 
-/** The daemon's `{"error": {code, hint, …}}` envelope (thrown as the
- *  message text by the daemon client) as a `ZenStoreError`. */
+/** The daemon's `{"error": {code, hint, …}}` envelope as a `ZenStoreError`.
+ *  The daemon client throws a `DaemonHttpError` whose message is the hint
+ *  and whose `details` is that `error` object (since 0.46.1); older paths
+ *  and tests throw the envelope's JSON as the message. Both keep the
+ *  daemon's code (`resync`, `conflict`, `stale_widget`, …): reading only
+ *  the message turned every refusal into `failed`, so a `resync` never
+ *  reached the subscribe's own recovery. */
 export function zenStoreErrorFrom(err: unknown): ZenStoreError {
   if (err instanceof ZenStoreError) return err
   const text = err instanceof Error ? err.message : String(err)
-  let env: unknown = null
-  try {
-    env = JSON.parse(text)
-  } catch {
-    env = null
+  let e: unknown = httpDetailsOf(err)
+  if (e === null || typeof (e as { code?: unknown }).code !== 'string') {
+    let env: unknown = null
+    try {
+      env = JSON.parse(text)
+    } catch {
+      env = null
+    }
+    e = env !== null && typeof env === 'object' ? (env as { error?: unknown }).error : undefined
   }
-  const e = env !== null && typeof env === 'object' ? (env as { error?: unknown }).error : undefined
   if (e !== null && typeof e === 'object') {
     const o = e as Record<string, unknown>
     const code = typeof o.code === 'string' ? o.code : 'failed'

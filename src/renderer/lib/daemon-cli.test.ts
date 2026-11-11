@@ -88,6 +88,7 @@ import {
 import { __resetRemoteSessionForTests } from './remote-session'
 import { primaryScope } from '@/kessel/server-scope'
 import { DaemonHttpError, httpCodeOf, httpStatusOf } from './daemon-http-error'
+import { zenStoreErrorFrom } from './zen/zen-custom-store'
 
 const LOCAL_CREDS = { port: 47800, token: 'local-tok', host: '127.0.0.1', secure: false }
 const SECURE_CREDS = { port: 443, token: 'remote-tok', host: 'rosson.k2.dev', secure: true }
@@ -215,6 +216,23 @@ describe('daemonCliPost — body in body, token in query', () => {
     expect(opts.method).toBe('POST')
     expect(opts.headers).toMatchObject({ 'Content-Type': 'application/json' })
     expect(JSON.parse(opts.body as string)).toEqual({ workspace: 'k2', body: 'hi' })
+  })
+
+  it('a Garden data refusal keeps its own code through the widget store (resync, not failed)', async () => {
+    getDaemonWsMock.mockResolvedValue(LOCAL_CREDS)
+    const body = JSON.stringify({ error: { code: 'resync', hint: 'your cursor is older than kept history; list again', reapedRev: 209 } })
+    vi.stubGlobal('fetch', vi.fn(async () => fakeRes({ status: 409, body })))
+    const err = await daemonCliPost(primaryScope(), 'zen/call', { verb: 'store.changes', args: [{ since: 171 }] }).then(
+      () => {
+        throw new Error('expected a refusal')
+      },
+      (e: unknown) => e,
+    )
+    const e = zenStoreErrorFrom(err)
+    expect(e.wire.code).toBe('resync')
+    expect(e.daemonCode).toBe('resync')
+    expect(e.reapedRev).toBe(209)
+    expect(e.wire.message).toBe('your cursor is older than kept history; list again')
   })
 })
 

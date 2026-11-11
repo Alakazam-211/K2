@@ -10,7 +10,10 @@
 //! new space rev for the whole set of ops, one `changes` row per op. The
 //! change feed reads `entries` (each row carries the rev that last touched
 //! it; deletes leave tombstones until the reaper removes them and raises
-//! `reaped_rev`).
+//! `reaped_rev`). The reaper also notes which keys it reaped at which rev
+//! (`reaped_keys`), so a cursor older than `reaped_rev` is refused only when
+//! a delete under the reader's prefix was really lost (a quiet prefix is
+//! never a gap), and `since = 0` (no cursor) is the whole current state.
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -109,9 +112,33 @@ CREATE TABLE IF NOT EXISTS blob_refs (
 CREATE INDEX IF NOT EXISTS blob_refs_by_hash ON blob_refs(space, hash);
 "#;
 
+/// Which keys' tombstones the reaper removed, and where its notes start
+/// (beside schema version 1, like [`GARDENS_AUX_V1`]). `reap_marks.floor`:
+/// at or below this rev, reaped deletes are not noted (reaped before these
+/// tables, or notes past [`super::REAPED_KEYS_KEEP_SECS`]); `seen`: the
+/// space's `reaped_rev` after this K2's last reap (a higher `reaped_rev`
+/// means an older K2 reaped without notes, so everything up to it counts as
+/// unknown).
+pub const REAP_AUX_V1: &str = r#"
+CREATE TABLE IF NOT EXISTS reaped_keys (
+  space      TEXT NOT NULL,
+  key        TEXT NOT NULL,
+  rev        INTEGER NOT NULL,
+  reaped_at  INTEGER NOT NULL,
+  PRIMARY KEY (space, key)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS reaped_keys_by_at ON reaped_keys(reaped_at);
+CREATE TABLE IF NOT EXISTS reap_marks (
+  space  TEXT PRIMARY KEY,
+  floor  INTEGER NOT NULL,
+  seen   INTEGER NOT NULL
+) WITHOUT ROWID;
+"#;
+
 /// Every table keyed by space: a space delete or move carries all of them
-/// (GB8, V8; `restores` since history, GH9).
-pub const SPACE_TABLES: [&str; 6] = ["entries", "changes", "blob_refs", "space_blobs", "restores", "spaces"];
+/// (GB8, V8; `restores` since history, GH9; the reaper's notes since 0.46.12).
+pub const SPACE_TABLES: [&str; 8] =
+    ["entries", "changes", "blob_refs", "space_blobs", "restores", "reaped_keys", "reap_marks", "spaces"];
 
 /// Seconds since the Unix epoch (injectable for tests).
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -305,6 +332,7 @@ impl SqliteStore {
         }
         conn.execute_batch(GARDENS_SCHEMA_V1)?;
         conn.execute_batch(GARDENS_AUX_V1)?;
+        conn.execute_batch(REAP_AUX_V1)?;
         super::blob_store::upgrade_aux(&conn)?;
         super::history::upgrade(&conn)?;
         super::blob_store::reconcile_aux(&mut conn, self.now())?;
@@ -645,7 +673,7 @@ impl StoreBackend for SqliteStore {
                 })
                 .optional()?;
             let (head, reaped) = head.unwrap_or((0, 0));
-            if from.since < reaped {
+            if lost_deletes(conn, space, from.since, reaped, prefix, filter)? {
                 return Err(DataError::Resync { reaped_rev: reaped });
             }
             let after = from.after.clone();
@@ -820,17 +848,97 @@ impl StoreBackend for SqliteStore {
                 r.collect::<Result<Vec<_>, _>>()?
             };
             for (space, top) in &tops {
+                // Pin what is unknown before this reap (an older K2's reaps
+                // left no notes), then note every key reaped now.
+                let reaped: i64 = tx
+                    .query_row("SELECT reaped_rev FROM spaces WHERE space = ?1", [space], |r| r.get(0))
+                    .optional()?
+                    .unwrap_or(0);
+                let floor = reap_floor(&tx, space, reaped)?;
+                tx.execute(
+                    "INSERT INTO reaped_keys (space, key, rev, reaped_at)
+                     SELECT space, key, rev, ?3 FROM entries WHERE space = ?1 AND deleted = 1 AND updated_at < ?2
+                     ON CONFLICT(space, key) DO UPDATE SET rev = MAX(rev, excluded.rev), reaped_at = excluded.reaped_at",
+                    params![space, cutoff, now],
+                )?;
                 tx.execute(
                     "UPDATE spaces SET reaped_rev = MAX(reaped_rev, ?2) WHERE space = ?1",
                     params![space, top],
                 )?;
+                tx.execute(
+                    "INSERT INTO reap_marks (space, floor, seen) VALUES (?1, ?2, MAX(?3, ?4))
+                     ON CONFLICT(space) DO UPDATE SET floor = excluded.floor, seen = excluded.seen",
+                    params![space, floor, reaped, top],
+                )?;
             }
+            // Notes past their keep: whatever they covered becomes unknown.
+            let old_cut = now - super::REAPED_KEYS_KEEP_SECS;
+            let olds: Vec<(String, i64)> = {
+                let mut q =
+                    tx.prepare("SELECT space, MAX(rev) FROM reaped_keys WHERE reaped_at < ?1 GROUP BY space")?;
+                let r = q.query_map([old_cut], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                r.collect::<Result<Vec<_>, _>>()?
+            };
+            for (space, top) in &olds {
+                tx.execute("UPDATE reap_marks SET floor = MAX(floor, ?2) WHERE space = ?1", params![space, top])?;
+            }
+            tx.execute("DELETE FROM reaped_keys WHERE reaped_at < ?1", [old_cut])?;
             let tombstones = tx.execute("DELETE FROM entries WHERE deleted = 1 AND updated_at < ?1", [cutoff])?;
             let log_rows = tx.execute("DELETE FROM changes WHERE at < ?1", [now - CHANGE_LOG_KEEP_SECS])?;
             tx.commit()?;
             Ok(ReapReport { tombstones, log_rows })
         })
     }
+}
+
+/// At or below this rev, a reaped delete in `space` may have gone without a
+/// note: the mark's floor, or all of `reaped` when there is no mark or an
+/// older K2 reaped past the mark's `seen`.
+fn reap_floor(conn: &Connection, space: &str, reaped: i64) -> Result<i64, DataError> {
+    let mark: Option<(i64, i64)> = conn
+        .query_row("SELECT floor, seen FROM reap_marks WHERE space = ?1", [space], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    Ok(match mark {
+        Some((floor, seen)) if seen >= reaped => floor,
+        _ => reaped,
+    })
+}
+
+/// Would a change feed from `since` miss a reaped delete under `prefix`
+/// (and the reader's `filter`)? Only then is it `resync`:
+/// - `since = 0` reads the whole current state: nothing to miss;
+/// - a cursor at or past `reaped` misses nothing;
+/// - below the space's floor nothing is known: a gap;
+/// - otherwise, a gap only when a key under the prefix was reaped at a rev
+///   after the cursor. A quiet prefix is never a gap, however old its cursor.
+fn lost_deletes(
+    conn: &Connection,
+    space: &Space,
+    since: i64,
+    reaped: i64,
+    prefix: &str,
+    filter: Filter,
+) -> Result<bool, DataError> {
+    if since == 0 || since >= reaped {
+        return Ok(false);
+    }
+    if since < reap_floor(conn, space.as_str(), reaped)? {
+        return Ok(true);
+    }
+    let mut q = conn.prepare_cached(
+        "SELECT key FROM reaped_keys WHERE space = ?1 AND key >= ?2 AND rev > ?3 ORDER BY key",
+    )?;
+    let mut rows = q.query(params![space.as_str(), prefix, since])?;
+    while let Some(r) = rows.next()? {
+        let key: String = r.get(0)?;
+        if !key.starts_with(prefix) {
+            break;
+        }
+        if passes(&key, prefix, filter) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn space_info(r: &rusqlite::Row) -> rusqlite::Result<SpaceInfo> {

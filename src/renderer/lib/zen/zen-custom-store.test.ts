@@ -3,8 +3,10 @@
 // a rev, resync, the one stale reload, and the custom layer's verbs (every
 // verb's success and refusal paths, the Sources taint, 16 subscriptions).
 // The daemon is faked: `call` answers like `/cli/zen/call`, throwing the
-// error envelope text as the daemon client does.
+// error envelope as JSON text (`envelope`) or as the daemon client really
+// does since 0.46.1 (`daemonError`: the hint as message, envelope in details).
 import { describe, expect, it } from 'vitest'
+import { DaemonHttpError } from '../daemon-http-error'
 import type { ZenWidgetBridge } from './zen-bridge'
 import type { ZenCustomWidgetPayload, ZenFrameReply } from './zen-custom-types'
 import { createZenCustomLayer, type ZenCustomLayerDeps } from './zen-custom-bridge'
@@ -25,6 +27,13 @@ const flush = async (): Promise<void> => {
 
 function envelope(code: string, hint = code, extra: Record<string, unknown> = {}): Error {
   return new Error(JSON.stringify({ error: { code, hint, ...extra } }))
+}
+
+/** What `daemonCliPost` throws for `{"error": {code, hint, …}}` since
+ *  0.46.1: the hint as the message, the error object as `details`. */
+function daemonError(status: number, code: string, hint: string, extra: Record<string, unknown> = {}): Error {
+  const error = { code, hint, ...extra }
+  return new DaemonHttpError(hint, status, code, error, { error })
 }
 
 type Page = { head: number; items: unknown[]; next: { since: number; after?: string } | null; partial: boolean }
@@ -154,6 +163,27 @@ describe('the store: subscribe', () => {
     await flush()
     expect(got[0]).toEqual({ resync: true, items: [{ key: 'a', rev: 9, value: 1, updatedAt: 1, by: 'Baden' }] })
     expect(got[1]).toEqual([{ key: 'a', rev: 9, value: { k: 'a' }, by: 'agent:board-keeper' }])
+  })
+
+  it('a resync as the daemon client really throws it (hint as message, envelope in details) recovers, never fails', async () => {
+    // A widget subscribing to a quiet prefix on a daemon that still says
+    // resync: the subscribe lists, hands {resync, items}, and follows on.
+    let n = 0
+    const f = fake((verb, args) => {
+      if (verb === 'store.list') return { items: [{ key: 'projects/p1', rev: 171, value: 1, updatedAt: 1, by: 'you' }], next: null }
+      n += 1
+      if (n === 1) throw daemonError(409, 'resync', 'your cursor is older than kept history; list again', { reapedRev: 209 })
+      expect(args[0]).toMatchObject({ since: 209, prefix: 'projects/' })
+      return { head: 231, items: [], next: null, partial: false }
+    })
+    const s = createZenCustomStore(f.deps)
+    const got: unknown[] = []
+    s.subscribe('projects/', (v) => got.push(v), (e) => got.push({ failed: e }))
+    await flush()
+    expect(got).toEqual([{ resync: true, items: [{ key: 'projects/p1', rev: 171, value: 1, updatedAt: 1, by: 'Baden' }] }])
+    // Other codes keep theirs too: a conflict names the key and rev.
+    const c = zenStoreErrorFrom(daemonError(409, 'conflict', "'obj/7' changed", { key: 'obj/7', rev: 42 }))
+    expect(c.wire).toEqual({ code: 'conflict', message: "'obj/7' changed (now rev 42)", last: { key: 'obj/7', rev: 42 } })
   })
 
   it('a refusal ends the subscription; rate_limited retries later', async () => {

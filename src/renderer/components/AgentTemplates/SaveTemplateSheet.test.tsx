@@ -279,6 +279,19 @@ describe('SaveTemplateSheet', () => {
     }
   })
 
+  it('the saved state offers Create an agent from it, which opens the sheet on that template', async () => {
+    await openSheet()
+    await click('save-template-next')
+    await waitFor(() => expect(screen.getByTestId('save-template-save')).toBeTruthy())
+    await click('save-template-save')
+    await waitFor(() => expect(screen.getByTestId('save-template-done')).toBeTruthy())
+    expect(screen.getByTestId('save-template-create-from').textContent).toBe(SAVE_TEMPLATE_COPY.createFrom)
+    fireEvent.click(screen.getByTestId('save-template-create-from'))
+    expect(onClose).toHaveBeenCalled()
+    expect(useAgentTemplatesStore.getState().createOpen).toBe(true)
+    expect(useAgentTemplatesStore.getState().createStart).toBe('max-writer')
+  })
+
   it('closing is held while it saves', async () => {
     await openSheet()
     await click('save-template-next')

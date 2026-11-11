@@ -8,7 +8,9 @@ import { create } from 'zustand'
 
 interface AgentTemplatesState {
   createOpen: boolean
-  openCreate: () => void
+  /** The template the Create sheet starts on; null: its first card. */
+  createStart: string | null
+  openCreate: (startOn?: string) => void
   closeCreate: () => void
   /** Host keys whose server has no save route (an older version). */
   saveUnsupported: Record<string, true>
@@ -17,17 +19,19 @@ interface AgentTemplatesState {
 
 export const useAgentTemplatesStore = create<AgentTemplatesState>((set) => ({
   createOpen: false,
-  openCreate: () => set({ createOpen: true }),
-  closeCreate: () => set({ createOpen: false }),
+  createStart: null,
+  openCreate: (startOn) => set({ createOpen: true, createStart: startOn ?? null }),
+  closeCreate: () => set({ createOpen: false, createStart: null }),
   saveUnsupported: {},
   markSaveUnsupported: (hostKey) =>
     set((s) => (s.saveUnsupported[hostKey] ? s : { saveUnsupported: { ...s.saveUnsupported, [hostKey]: true } })),
 }))
 
-export function openCreateAgentSheet(): void {
-  useAgentTemplatesStore.getState().openCreate()
+/** Open Create an agent, on `startOn`'s card when given. */
+export function openCreateAgentSheet(startOn?: string): void {
+  useAgentTemplatesStore.getState().openCreate(startOn)
 }
 
 export function resetAgentTemplatesForTests(): void {
-  useAgentTemplatesStore.setState({ createOpen: false, saveUnsupported: {} })
+  useAgentTemplatesStore.setState({ createOpen: false, createStart: null, saveUnsupported: {} })
 }

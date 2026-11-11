@@ -313,7 +313,8 @@ function CreateAgentBody(): React.JSX.Element {
 
   const [step, setStep] = useState<Step>('pick')
   /** The person's pick; null: the first card. */
-  const [pickedId, setPicked] = useState<string | null>(null)
+  // The template to start on (Save as template's "Create an agent from it").
+  const [pickedId, setPicked] = useState<string | null>(() => useAgentTemplatesStore.getState().createStart)
   const details = useRef(new Map<string, TemplateDetail>())
   const [detail, setDetail] = useState<TemplateDetail | null>(null)
   const [detailBusy, setDetailBusy] = useState(false)
@@ -340,7 +341,16 @@ function CreateAgentBody(): React.JSX.Element {
   const serverDefaultPreset = useMemo(() => resolveAgentPreset(enabledPresets, serverDefault)?.id ?? null, [enabledPresets, serverDefault])
 
   // The first card is chosen until the person picks.
-  const picked = pickedId ?? groups.builtIn[0]?.id ?? groups.yours[0]?.id ?? null
+  const offered = (id: string | null): boolean => !!id && [...groups.builtIn, ...groups.yours].some((t) => t.id === id)
+  const picked = (offered(pickedId) ? pickedId : null) ?? groups.builtIn[0]?.id ?? groups.yours[0]?.id ?? null
+  // A starting template may sit under "Yours", past the fold: bring it into view.
+  const startShown = useRef(false)
+  useEffect(() => {
+    if (startShown.current || list.state !== 'ok' || !pickedId || !offered(pickedId)) return
+    startShown.current = true
+    const card = Array.from(document.querySelectorAll<HTMLElement>('[data-template-card]')).find((el) => el.dataset.templateCard === pickedId)
+    card?.scrollIntoView?.({ block: 'nearest' })
+  })
 
   // The handle follows the name, and the folder the handle, until changed.
   const handle = handleInput ?? handleFromName(name)

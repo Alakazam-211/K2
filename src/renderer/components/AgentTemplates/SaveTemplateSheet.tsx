@@ -33,7 +33,7 @@ import {
   type SaveTemplateResult,
 } from '@/lib/agent-templates-api'
 import { slugifyAddressToken } from '@/lib/federation'
-import { useAgentTemplatesStore } from '@/stores/agent-templates'
+import { openCreateAgentSheet, useAgentTemplatesStore } from '@/stores/agent-templates'
 import { ReviewCard, ReviewList, ReviewRow, ReviewSection, TemplateSheetFrame } from './TemplateSheetFrame'
 
 export const SAVE_TEMPLATE_COPY = {
@@ -49,6 +49,7 @@ export const SAVE_TEMPLATE_COPY = {
   save: 'Save template',
   saving: 'Saving…',
   done: 'Template saved',
+  createFrom: 'Create an agent from it',
   tryAgain: 'Try again',
 } as const
 
@@ -211,9 +212,22 @@ export function SaveTemplateSheet({ project, onClose }: { project: { path: strin
         title={SAVE_TEMPLATE_COPY.done}
         focusKey="done"
         footer={
-          <Button variant="accent" size="md" onClick={onClose} data-testid="save-template-close">
-            Close
-          </Button>
+          <>
+            <Button variant="ghost" size="md" onClick={onClose} data-testid="save-template-close">
+              Close
+            </Button>
+            <Button
+              variant="accent"
+              size="md"
+              onClick={() => {
+                onClose()
+                openCreateAgentSheet(saved.id)
+              }}
+              data-testid="save-template-create-from"
+            >
+              {SAVE_TEMPLATE_COPY.createFrom}
+            </Button>
+          </>
         }
       >
         <div className="space-y-3" data-testid="save-template-done">

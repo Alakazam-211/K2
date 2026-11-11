@@ -301,6 +301,19 @@ describe('CreateAgentSheet', () => {
     expect(screen.queryByTestId('create-agent-folder-problem')).toBeNull()
   })
 
+  it('opens on a starting template (Save as template’s Create an agent from it), else on the first card', async () => {
+    useAgentTemplatesStore.getState().openCreate('my-writer')
+    await openSheet()
+    expect((screen.getByTestId('create-agent-template-my-writer') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByTestId('create-agent-template-general') as HTMLInputElement).checked).toBe(false)
+    cleanup()
+    useAgentTemplatesStore.getState().closeCreate()
+    expect(useAgentTemplatesStore.getState().createStart).toBeNull()
+    useAgentTemplatesStore.getState().openCreate('gone')
+    await openSheet()
+    expect((screen.getByTestId('create-agent-template-general') as HTMLInputElement).checked).toBe(true)
+  })
+
   it('focus moves to each step’s heading', async () => {
     await openSheet()
     expect(document.activeElement?.textContent).toBe(CREATE_AGENT_COPY.pick)

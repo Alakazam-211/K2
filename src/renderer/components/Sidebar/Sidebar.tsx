@@ -41,6 +41,7 @@ import PresenceWorkspaceAvatars from '@/components/Presence/PresenceWorkspaceAva
 import FocusGroupDropdown from './FocusGroupDropdown'
 import { RowDropLine, reorderedZoneIds, useRowDragReorder } from './row-drag-reorder'
 import ActiveBar from './ActiveBar'
+import { ShortcutRangeHint } from './ShortcutRangeHint'
 import { NavProjectTags } from './NavProjectTags'
 import { KeyCombo } from '@/components/KeySymbol'
 import { primaryScope } from '@/kessel/server-scope'
@@ -180,13 +181,7 @@ export function ShortcutIndexBadge({ index, combo }: { index?: number; combo?: s
 }
 
 /** A section header's modifier hint beside its count (e.g. `⌥⌘ 1-9`). */
-export function ShortcutRangeHint({ combo }: { combo: string }): React.JSX.Element {
-  return (
-    <span className="text-[9px] font-mono text-[var(--color-text-muted)] opacity-50" data-shortcut-hint={combo}>
-      <KeyCombo combo={combo} />
-    </span>
-  )
-}
+export { ShortcutRangeHint }
 
 // ── Agent row shell (one workspace / agent in the nav) ──────────────────────
 

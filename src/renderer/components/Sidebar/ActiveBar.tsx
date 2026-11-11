@@ -22,7 +22,7 @@ import { serverSupports, useServerSupports } from '@/lib/server-capabilities'
 import { onActiveHostChange } from '@/stores/connect-host'
 import { showContextMenu } from '@/lib/context-menu'
 import ProjectAvatar from './ProjectAvatar'
-import { KeyCombo } from '@/components/KeySymbol'
+import { ShortcutRangeHint } from './ShortcutRangeHint'
 import { NAV_SECTION_HOVER_CLASS, NavCountTag, NavSectionChevron, NavSectionLabel } from './NavSection'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { primaryScope } from '@/kessel/server-scope'
@@ -495,9 +495,7 @@ export default function ActiveBar(): React.JSX.Element | null {
       >
         <NavSectionLabel>Active</NavSectionLabel>
         <NavCountTag count={items.length} />
-        <span className="text-[9px] font-mono text-[var(--color-text-muted)] opacity-50">
-          <KeyCombo combo={shortcutLayout === 'cmd-active-cmdshift-pinned' ? '⌘ 1-9' : '⌥⌘ 1-9'} />
-        </span>
+        <ShortcutRangeHint combo={shortcutLayout === 'cmd-active-cmdshift-pinned' ? '⌘ 1-9' : '⌥⌘ 1-9'} />
         <span className="flex-1" />
         <NavSectionChevron collapsed={collapsed} />
       </button>

@@ -355,7 +355,7 @@ export class NativeVoiceEngine {
     await this.command<null>('consent', { granted, notice_version: noticeVersion })
   }
 
-  /** Sew 0.9.2's plugin (0.6.2): hand it the raw facts it computes
+  /** Sew 0.9.2's plugin (0.6.1, gated on the command being there, not the version): hand it the raw facts it computes
    *  `can_record` / `can_stop` from. `false`: this plugin has no such command
    *  (0.6.0, Sew 0.9.0), so the caller derives the buttons itself
    *  (`recording-controls.ts` `derivedButtons`). Delete the `false` path with

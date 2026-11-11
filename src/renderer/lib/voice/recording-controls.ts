@@ -24,7 +24,7 @@ export interface RecordingPerms {
   rights?: RecordingRights
 }
 
-/** `set_recording_rights`' arguments (tauri-plugin-sew-voice 0.6.2). */
+/** `set_recording_rights`' arguments (tauri-plugin-sew-voice 0.6.1, Sew 0.9.2). */
 export interface RecordingRights {
   room: string
   my_perms: string

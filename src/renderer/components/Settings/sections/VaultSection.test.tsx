@@ -652,6 +652,12 @@ describe('groupSecrets', () => {
       ['other', ['E']],
     ])
   })
+
+  it('says a server secret reaches only the agents it is shared with', () => {
+    const [server] = groupSecrets([secret({ name: 'S', scope: { kind: 'server' } })])
+    expect(server.title).toBe('Server (only the agents you share with)')
+    expect(server.hint).toMatch(/^Only the workspaces you share one with/)
+  })
 })
 
 describe('originLabel (handoff, prd-agent-secret-handoff-v1 §10.3)', () => {

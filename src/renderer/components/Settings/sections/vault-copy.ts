@@ -190,7 +190,7 @@ export function groupSecrets(secrets: readonly VaultSecret[]): SecretGroup[] {
   const byName = (a: VaultSecret, b: VaultSecret) => a.name.localeCompare(b.name)
   const out: SecretGroup[] = []
   if (server.length)
-    out.push({ key: 'server', title: 'All agents on this server', hint: 'Any agent here can use these, at the sites you picked.', rows: server.sort(byName) })
+    out.push({ key: 'server', title: 'Server (only the agents you share with)', hint: 'Only the workspaces you share one with can use it, at the sites you picked.', rows: server.sort(byName) })
   for (const ws of [...byWs.keys()].sort((a, b) => a.localeCompare(b))) {
     out.push({ key: `ws:${ws}`, title: ws, hint: `Only the ${ws} workspace’s agents can use these.`, rows: byWs.get(ws)!.sort(byName) })
   }

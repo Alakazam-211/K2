@@ -501,8 +501,11 @@ export function AddSecretDialog({
       })
       el.value = ''
       setHas(false)
-      const who = scope === 'server' ? 'Any agent on this server' : `Agents in ${wsName(workspace)}`
-      onSaved(`${name.trim()} is saved. ${who} can use it from their next call.`)
+      onSaved(
+        scope === 'server'
+          ? `${name.trim()} is saved on the server. Share it with the workspaces that should use it.`
+          : `${name.trim()} is saved. Agents in ${wsName(workspace)} can use it from their next call.`,
+      )
     } catch (e) {
       setError(daemonErrorText(e))
     } finally {
@@ -594,11 +597,11 @@ export function AddSecretDialog({
               checked={scope === 'server'}
               disabled={member}
               onChange={() => setScope('server')}
-              aria-label="All agents on this server"
+              aria-label="The server (share it with agents after)"
             />
             <span>
-              <span className={SETTING_ROW_LABEL}>All agents on this server</span>
-              {member ? <span className={`block ${MUTED}`}>Only an Owner or Admin can keep a secret for every agent.</span> : null}
+              <span className={SETTING_ROW_LABEL}>The server (share it with agents after)</span>
+              {member ? <span className={`block ${MUTED}`}>Only an Owner or Admin can keep a secret on the server.</span> : null}
             </span>
           </label>
         </fieldset>

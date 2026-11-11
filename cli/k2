@@ -50810,7 +50810,7 @@ _setup_usage() {
 k2 setup [--json]       your setup list on this server: [x] done, [ ] to do, [-] skipped
 k2 setup hide           hide the list in the app (k2 setup still prints it)
 k2 setup show           bring the list back, skipped steps included, even after it finished
-k2 setup skip <step>    skip one step: llm_sign_in, first_agent (or chief_of_staff), tunnel, phone, own_sign_in
+k2 setup skip <step>    skip one step: dev_tools, llm_sign_in, first_agent (or chief_of_staff), tunnel, phone, own_sign_in
 
 K5, K2's own agent (when the owner has turned on k5FirstRun):
 k2 setup k5 [--tool claude|codex|grok] [--name N] [--handle H]
@@ -50827,7 +50827,8 @@ k2 setup chief-of-staff --name N --about "what they do" --tool claude|codex|grok
 k2 setup dismiss-offer  "Not now" on the Meet K5 offer (yours only)
 
 Each step is done by doing it: the list reads what is set up on this
-server, never a tick. It is yours: the owner and the logins the owner
+server, never a tick. dev_tools shows only while git does not run here:
+on a Mac, k2 git-tools install opens the Apple installer on its screen. It is yours: the owner and the logins the owner
 linked share one list, and every other login has its own. When every
 step is done or skipped the list finishes and the app stops showing it.
 Agents have no setup list (exit 3), except K5 running k2 setup chief-of-staff.
@@ -50946,6 +50947,7 @@ if made:
         print("Tell your person on your Thread, and point them to %s (k2 msg %s)." % (d.get("name"), d.get("handle")))
     sys.exit(0)
 LABELS = {
+    "dev_tools": "Install developer tools",
     "llm_sign_in": "Sign in to an AI tool",
     "first_agent": "Make your first agent",
     "chief_of_staff": "Hire your Chief of Staff",
@@ -50956,6 +50958,7 @@ LABELS = {
 NOTES = {
     "needs_tunnel": "Away from home, your phone needs your subdomain first.",
     "needs_k5": "You will meet K5 first.",
+    "installing": "The Apple installer is open. Follow it, and this step finishes by itself.",
 }
 MARK = {"done": "[x]", "todo": "[ ]", "skipped": "[-]"}
 rows = d.get("rows") or []
@@ -50965,6 +50968,11 @@ for r in rows:
     rid = r.get("id") or "?"
     line = "  %s %s" % (MARK.get(r.get("state"), "[?]"), LABELS.get(rid, rid))
     note = NOTES.get(r.get("note") or "")
+    if rid == "dev_tools" and r.get("opens") is None and r.get("note"):
+        # Linux: the note is the install line to run.
+        note = "run: " + str(r.get("note"))
+    elif rid == "dev_tools" and r.get("opens") == "dev_tools" and not note:
+        note = "The Apple tools include git, which workspaces need: k2 git-tools install"
     if note and r.get("state") != "done":
         line += " (" + note + ")"
     print(line)

@@ -1,32 +1,31 @@
-// Projects V1 §6.8.4 — the layout-presets menu: a stacked-squares
-// button at the RIGHT end of the dashboards|Feedback tab row opening a
-// small menu of preset thumbnails (pure CSS divs, no images). Picking
-// one RE-TILES the open dashboard's existing panes in reading order
-// into that shape (the tileIntoPreset rules; the mounted
-// ProjectDashboard applies + saves through the dashboard-dnd preset
-// registry). Owners/admins only — a resolved viewer-mode window sees
-// no button (the window-mode idiom, same as all layout edits); the
-// daemon's owner-or-admin save gate backstops.
+// Projects V1 §6.8.4 — the layout-presets menu: "Layout" in the project
+// bar (ProjectBar.tsx) opening a small menu of preset thumbnails (pure
+// CSS divs, no images). Picking one RE-TILES the open dashboard's
+// existing panes in reading order into that shape (the tileIntoPreset
+// rules; the mounted ProjectDashboard applies + saves through the
+// dashboard-dnd preset registry). Owners/admins only — the bar leaves it
+// out for a Member login (the daemon's owner-or-admin save gate) and a
+// resolved viewer-mode window sees no button (the window-mode idiom).
 //
-// Close behavior = the house popover idiom (WorkspaceFilterDropdown):
-// outside mousedown closes; capture-phase Esc closes BEFORE the
-// page-level Esc-to-pane handler sees it.
+// The menu is the bar's shared panel (bar-menu.tsx): Frost in Glass, a
+// cut solid box in Terminal; arrows move, Esc closes and gives focus back.
 
-import React, { useEffect, useRef, useState } from 'react'
-import { floatMaterial } from '@/components/ui/float-material'
+import React, { useState } from 'react'
+import { Button } from '@/components/ui'
 import { useWindowModeStore } from '@/stores/window-mode'
+import { BarMenuItem, BarMenuPanel, Chevron, useBarMenu } from './bar-menu'
 import { requestPreset } from './dashboard-dnd'
 import type { PresetShape } from './dashboard-layout'
 
 /** Thumbnail geometry: rows of relative column widths — enough to draw
  *  every §6.8.4 shape as nested flex divs. */
 const PRESETS: Array<{ shape: PresetShape; label: string; rows: number[][] }> = [
-  { shape: 'single', label: 'Single', rows: [[1]] },
-  { shape: 'cols2', label: '2 up', rows: [[1, 1]] },
-  { shape: 'cols3', label: '3 up', rows: [[1, 1, 1]] },
+  { shape: 'single', label: 'One tile', rows: [[1]] },
+  { shape: 'cols2', label: 'Two side by side', rows: [[1, 1]] },
+  { shape: 'cols3', label: 'Three side by side', rows: [[1, 1, 1]] },
   {
     shape: 'grid2x2',
-    label: '2 × 2 grid',
+    label: 'Grid of four',
     rows: [
       [1, 1],
       [1, 1],
@@ -34,14 +33,14 @@ const PRESETS: Array<{ shape: PresetShape; label: string; rows: number[][] }> = 
   },
   {
     shape: 'mainStack',
-    label: 'Main + stack',
+    label: 'One large, two stacked',
     // Drawn specially below (the right column stacks two cells).
     rows: [],
   },
 ]
 
 function PresetThumb({ rows, mainStack }: { rows: number[][]; mainStack?: boolean }): React.JSX.Element {
-  const cell = 'bg-[var(--color-text-muted)]/45'
+  const cell = 'bg-[var(--color-text-secondary)]/45'
   if (mainStack) {
     return (
       <div className="flex gap-[2px] w-9 h-6 flex-shrink-0">
@@ -66,48 +65,28 @@ function PresetThumb({ rows, mainStack }: { rows: number[][]; mainStack?: boolea
   )
 }
 
-export default function DashboardPresetsMenu(): React.JSX.Element | null {
+export default function DashboardPresetsMenu({ showWord = true }: { showWord?: boolean }): React.JSX.Element | null {
   const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
   const [open, setOpen] = useState(false)
-  const rootRef = useRef<HTMLDivElement>(null)
-
-  // Outside click closes; capture-phase Esc closes the popover BEFORE
-  // the dashboard's Esc-to-pane handler sees it.
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent): void => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey, true)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey, true)
-    }
-  }, [open])
+  const menu = useBarMenu(open, setOpen, { minWidth: 200, estimatedHeight: 220 })
 
   // §6.8.4 — viewers see no button at all.
   if (readOnly) return null
 
   return (
-    <div ref={rootRef} className="relative flex-shrink-0">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={`flex h-6 w-6 items-center justify-center transition-colors cursor-pointer ${
-          open
-            ? 'text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]'
-            : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]'
-        }`}
-        title="Layout presets"
+    <>
+      <Button
+        ref={menu.anchorRef}
+        variant="quiet"
+        className="flex items-center gap-1.5 flex-shrink-0"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={showWord ? undefined : 'Layout'}
+        title="Lay out this dashboard’s tiles"
+        onClick={() => setOpen(!open)}
+        data-layout-menu=""
       >
-        {/* Stacked squares. */}
+        {/* Two columns, the right one split. */}
         <svg
           width="14"
           height="14"
@@ -117,34 +96,37 @@ export default function DashboardPresetsMenu(): React.JSX.Element | null {
           strokeWidth="1.3"
           strokeLinecap="round"
           strokeLinejoin="round"
+          aria-hidden="true"
+          className="block flex-shrink-0"
         >
           <rect x="1" y="2" width="12" height="10" />
           <line x1="7" y1="2" x2="7" y2="12" />
           <line x1="7" y1="7" x2="13" y2="7" />
         </svg>
-      </button>
+        {showWord && <span>Layout</span>}
+        <Chevron open={open} />
+      </Button>
 
       {open && (
-        <div {...floatMaterial('menu')} className="absolute right-0 top-full mt-1 z-40 w-44 border border-[var(--color-border)] bg-[var(--color-bg)] shadow-xl py-1">
+        <BarMenuPanel menu={menu} label="Layout" onClose={() => setOpen(false)} testId="layout-menu">
           {PRESETS.map((p) => (
-            <button
+            <BarMenuItem
               key={p.shape}
-              type="button"
-              onClick={() => {
+              onSelect={() => {
                 requestPreset(p.shape)
                 setOpen(false)
+                menu.anchorRef.current?.focus({ preventScroll: true })
               }}
-              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 text-left text-[11px] text-[var(--color-text-secondary)] hover:bg-white/[0.06] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
             >
               <PresetThumb rows={p.rows} mainStack={p.shape === 'mainStack'} />
               <span className="truncate">{p.label}</span>
-            </button>
+            </BarMenuItem>
           ))}
-          <p className="px-2.5 pt-1 pb-0.5 text-[9px] leading-snug text-[var(--color-text-muted)] opacity-70">
-            Re-tiles the current panes in reading order.
+          <p className="px-3 pt-1.5 pb-1 mt-1 border-t border-[var(--color-border)] type-hint text-[var(--color-text-secondary)] max-w-[15rem]">
+            Puts this dashboard’s tiles into that shape, in reading order.
           </p>
-        </div>
+        </BarMenuPanel>
       )}
-    </div>
+    </>
   )
 }

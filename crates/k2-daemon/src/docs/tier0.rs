@@ -920,49 +920,6 @@ pub(super) fn utc(ms: u64) -> String {
     format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}", rem / 3600, rem / 60 % 60, rem % 60)
 }
 
-/// `K-T0-3`: a conflicting save tells both parties. An inbox note in the
-/// doc's workspace, and in the lease holder's when that is another
-/// workspace's agent. Off the session lock (the kit calls the host with it
-/// held); file names and version numbers only.
-pub fn notify_conflict(key: DocKey, current: VersionId, kept: VersionId, copy: Option<String>, holder: Option<String>) {
-    let _ = std::thread::Builder::new().name("k2-docs-conflict".into()).spawn(move || {
-        let holder_label = holder.as_deref().map(routes::pid_label);
-        let title = format!("Conflicting save: {}", key.path);
-        let mut body = format!(
-            "{} was saved by another program {}. Nothing was lost:\n\n- the save is current: version {current}\n- what it replaced is version {kept}",
-            key.path,
-            match &holder_label {
-                Some(h) => format!("while {h} held its lease"),
-                None => "over a version the file didn't have yet".to_string(),
-            },
-        );
-        if let Some(copy) = &copy {
-            body.push_str(&format!(", also kept as the copy \"{copy}\" (next to the file's folder, under .k2/conflicts)"));
-        }
-        body.push_str(&format!(
-            "\n\nk2 doc versions {p} lists them; k2 doc restore --version {kept} {p} makes the replaced one current again.",
-            p = key.path
-        ));
-        let mut spaces = vec![key.space.clone()];
-        if let Some(super::host::Principal::Agent(id)) = holder.as_deref().and_then(super::host::Principal::parse) {
-            if id != key.space {
-                spaces.push(id);
-            }
-        }
-        for space in spaces {
-            let path = {
-                let db = k2_core::db::shared();
-                let conn = db.lock();
-                k2_core::db::schema::Project::get(&conn, &space).ok().map(|p| p.path)
-            };
-            let Some(path) = path else { continue };
-            if let Err(e) = k2_core::inbox::compose(Path::new(&path), &title, &body, Some("high"), Some("docs"), Some("k2 doc")) {
-                k2_core::log_debug!("[docs] WARN: conflict notice for {}: {e}", super::host::key_label(&key));
-            }
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -775,6 +775,25 @@ pub enum SessionEvent {
         seq: Option<u64>,
         thread: Option<String>,
     },
+    /// Tier 0 (kit v0.14.0): another program's save replaced a version
+    /// (an agent's write, or one saved under someone's lease); both are
+    /// kept, the replaced one as a conflict copy (`docs/conflicts.rs`).
+    /// Sent once per copy. A client with that file open (`workspace` +
+    /// `rel`) shows `text` once as a notice; the same line goes to the
+    /// workspace's Thread. File names and version numbers only.
+    /// Wire: `{ "kind": "doc_conflict_copy", "projectId": "<workspace id>",
+    /// "workspace": "<absolute root>", "rel": "<path in it>", "current": n,
+    /// "kept": n, "copy": "<path in the workspace>"|null, "text": string }`.
+    DocConflictCopy {
+        #[serde(rename = "projectId")]
+        project_id: String,
+        workspace: String,
+        rel: String,
+        current: u64,
+        kept: u64,
+        copy: Option<String>,
+        text: String,
+    },
 
     /// prd-app-tickets-websocket-v1 (0.43.3) — one ticket changed. Emitted
     /// once per stored ticket mutation from `feedback_routes.rs`, next to
@@ -1250,6 +1269,7 @@ impl SessionEvent {
             SessionEvent::DocCoresChanged { .. } => "doc_cores_changed",
             SessionEvent::BoardFileChanged { .. } => "board_file_changed",
             SessionEvent::DocStructureChanged { .. } => "doc_structure_changed",
+            SessionEvent::DocConflictCopy { .. } => "doc_conflict_copy",
             SessionEvent::TicketChanged { .. } => "ticket_changed",
             SessionEvent::MailChanged { .. } => "mail_changed",
             SessionEvent::SewChanged { .. } => "sew_changed",

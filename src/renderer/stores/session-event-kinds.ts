@@ -143,6 +143,9 @@ export const SESSION_EVENT_ROUTES = {
     class: 'app',
     ignored: 'No client surface yet: the layer panel and comment pins are still to be built.',
   },
+  // Tier 0 kept both versions of a file (kit v0.14.0): an open tab of it
+  // shows the notice once (`DocConflictNotice`).
+  doc_conflict_copy: { class: 'app', app: true },
   // Changes tab v1 (prd-changes-tab-v1): the Changes tab refetches its
   // snapshot on it. Carried, so a pinned room's tab stays live too.
   git_changed: { class: 'app', app: true, carried: true },

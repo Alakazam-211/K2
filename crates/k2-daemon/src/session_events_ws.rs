@@ -757,6 +757,9 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // Like BoardFileChanged: a client with that blob doc open matches
         // projectId and rel (layer panel, comment pins, roster claims).
         SessionEvent::DocStructureChanged { .. } => None,
+        // Like DocStructureChanged: a client with that file open matches
+        // workspace and rel, and shows the notice once.
+        SessionEvent::DocConflictCopy { .. } => None,
         // prd-app-tickets-websocket-v1 — APP-LEVEL like FeedbackChanged.
         // The desktop board ignores it (it refetches on feedback_changed);
         // the app activity socket maps it per room on projectId.
@@ -1191,6 +1194,15 @@ mod tests {
                 version: Some(3),
                 seq: None,
                 thread: None,
+            },
+            SessionEvent::DocConflictCopy {
+                project_id: "p".into(),
+                workspace: "/x/foo".into(),
+                rel: "notes.md".into(),
+                current: 4,
+                kept: 3,
+                copy: Some(".k2/conflicts/notes (Ada's version).md".into()),
+                text: "Someone saved over Ada's change to notes.md. Both are kept: .k2/conflicts/notes (Ada's version).md".into(),
             },
             SessionEvent::TicketChanged {
                 project_id: "p".into(),

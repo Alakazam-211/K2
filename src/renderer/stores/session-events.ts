@@ -696,6 +696,21 @@ export interface DocStructureChangedEvent {
   thread: string | null
 }
 
+/** APP-LEVEL: tier 0 kept both versions after another program saved over
+ *  one (an agent's write, or one under someone's lock): the replaced one is
+ *  a conflict copy. Sent once per copy. A tab with `workspace` + `rel` open
+ *  shows `text` once (the same line goes to the workspace's Thread). */
+export interface DocConflictCopyEvent {
+  kind: 'doc_conflict_copy'
+  projectId: string
+  workspace: string
+  rel: string
+  current: number
+  kept: number
+  copy: string | null
+  text: string
+}
+
 /** APP-LEVEL — Changes tab v1 (prd-changes-tab-v1): the git state behind a
  *  workspace's Changes view may have moved (index / HEAD / refs, or a
  *  non-ignored working-tree edit). Debounced 300 ms (1 s max) per workspace
@@ -1025,6 +1040,7 @@ export type SessionEventMessage =
   | FsChangedEvent
   | BoardFileChangedEvent
   | DocStructureChangedEvent
+  | DocConflictCopyEvent
   | GitChangedEvent
   | GitNotesChangedEvent
   | OpenChangesEvent
@@ -1558,6 +1574,7 @@ type NotifyPrefsChangedHandler = () => void
 // 0.46.8 — people's pictures (`lib/person-pictures.ts`).
 type PersonPictureChangedHandler = (e: PersonPictureChangedEvent) => void
 type BoardFileChangedHandler = (e: BoardFileChangedEvent) => void
+type DocConflictCopyHandler = (e: DocConflictCopyEvent) => void
 // thread-read-v1 — the unread store's live state (`thread_read` /
 // `project_read`, the whole frame).
 export type ReadStateChangedHandler = (e: ThreadReadEvent | ProjectReadEvent) => void
@@ -1612,6 +1629,7 @@ interface AppBusHandlers {
   subscriptionUsageChanged: Set<SubscriptionUsageChangedHandler>
   fsChanged: Set<FsChangedHandler>
   boardFileChanged: Set<BoardFileChangedHandler>
+  docConflictCopy: Set<DocConflictCopyHandler>
   gitChanged: Set<GitChangedHandler>
   gitNotesChanged: Set<GitNotesChangedHandler>
   openChanges: Set<OpenChangesHandler>
@@ -1680,6 +1698,7 @@ function createBusState(scopeId: string): BusState {
       subscriptionUsageChanged: new Set(),
       fsChanged: new Set(),
       boardFileChanged: new Set(),
+      docConflictCopy: new Set(),
       gitChanged: new Set(),
       gitNotesChanged: new Set(),
       openChanges: new Set(),
@@ -2002,6 +2021,11 @@ export function onBoardFileChanged(scope: ServerScope, fn: BoardFileChangedHandl
   return addHandler(busFor(scope).handlers.boardFileChanged, fn)
 }
 
+/** Tier 0 kept both versions of a file (filter on `workspace` + `rel`). */
+export function onDocConflictCopy(scope: ServerScope, fn: DocConflictCopyHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.docConflictCopy, fn)
+}
+
 /** Changes tab v1 — subscribe to APP-LEVEL `git_changed` on `scope`'s
  *  server. Filter on `workspacePath`; refetch the snapshot when `rev`
  *  differs from the one you hold. */
@@ -2287,6 +2311,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   board_file_changed: (h, m) => {
     for (const fn of h.boardFileChanged) fn(m)
+  },
+  doc_conflict_copy: (h, m) => {
+    for (const fn of h.docConflictCopy) fn(m)
   },
   git_changed: (h, m) => {
     for (const fn of h.gitChanged) fn(m)

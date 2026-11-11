@@ -62,6 +62,7 @@ import { FILE_POLL_INTERVAL } from '@shared/constants'
 import { useLiveDocCore } from '@/lib/live-doc-core'
 import { Button } from '@/components/ui'
 import { AnyFileDocPanel } from './AnyFileDocPanel'
+import { DocConflictNotice } from './DocConflictNotice'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -1022,6 +1023,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           now opens the usual way.
         </div>
       )}
+
+      {/* Tier 0 kept both versions after another program's save (once per copy) */}
+      {anyFile && <DocConflictNotice scope={room.scope} filePath={filePath} />}
 
       {/* Re-read failed, buffer kept (non-blocking) */}
       {rereadIssue !== null && textLock === null && (

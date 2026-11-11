@@ -44,6 +44,7 @@ mod blob_flow_tests;
 pub mod blob_packs;
 pub mod caller;
 pub mod claims;
+pub mod conflicts;
 pub mod cores;
 pub mod export;
 pub mod export_worker;

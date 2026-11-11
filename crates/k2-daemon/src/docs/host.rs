@@ -54,9 +54,10 @@ pub const AUDIT_FILE: &str = "doc-file";
 const EXTERNAL: &str = k2_mpc_base::session::EXTERNAL_PID;
 /// Tier 0: an owner broke someone's lease.
 pub const AUDIT_LEASE_BROKEN: &str = "doc-lease-broken";
-/// Tier 0: another program saved a file under someone's lease (or over a
-/// version the file never got): the save is current, the replaced content
-/// is a version and a conflict copy.
+/// Tier 0: another program saved a file under someone's lease, over a
+/// version the file never got, or (kit v0.14.0) over a version the kit
+/// wrote (an agent's write, a restore, a merge): the save is current, the
+/// replaced content is a version and a conflict copy.
 pub const AUDIT_CONFLICT: &str = "doc-conflict";
 /// A purge (owner only; not on `k2 doc`): scope and counts, never content.
 pub const AUDIT_PURGED: &str = "doc-purged";
@@ -256,6 +257,13 @@ impl Host for K2Host {
         conflict_dir_for(file)
     }
 
+    /// Kit v0.14.0: the copy of an agent's replaced write is named after
+    /// the agent (`notes (Ada's version).md`); anything else keeps the
+    /// kit's name ([`super::conflicts::copy_name_for`]).
+    fn conflict_copy_name(&self, file_name: &str, _at_ms: u64, who: &str) -> Option<String> {
+        super::conflicts::copy_name_for(file_name, who, super::conflicts::is_agent_name)
+    }
+
     fn on_event(&self, ev: &AuditEvent) {
         match ev {
             AuditEvent::Refused { key, pid, action, need } => audit(
@@ -341,9 +349,16 @@ impl Host for K2Host {
                         lease_holder.as_deref().unwrap_or("-")
                     ),
                 );
-                // Both parties are told (K-T0-3): an inbox note, off the
-                // session lock.
-                super::tier0::notify_conflict(key.clone(), *current, *kept, copy.clone(), lease_holder.clone());
+                // The kit emits it once per copy: the person is told once
+                // (a tab notice and a Thread line) and the agents get an
+                // inbox note (K-T0-3), off the session lock.
+                super::conflicts::notify(super::conflicts::Conflict {
+                    key: key.clone(),
+                    current: *current,
+                    kept: *kept,
+                    copy: copy.clone(),
+                    lease_holder: lease_holder.clone(),
+                });
             }
             AuditEvent::BlobMerged { key, version } => {
                 audit(AUDIT_FILE, EXTERNAL, format!("{} merged version={version}", key_label(key)))

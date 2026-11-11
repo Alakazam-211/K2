@@ -75,6 +75,8 @@ export const K5_MADE_ELSEWHERE = {
 } as const
 /** Said beside the buttons while K5 is being made. */
 export const K5_BUSY_TEXT = 'Making K5’s folder and starting it…'
+/** The held ×’s tooltip while K5 is being made. */
+export const K5_CLOSE_HELD = 'Can’t close while K5 is being made'
 /** The main button after a failed create. */
 export const K5_TRY_AGAIN = 'Try again'
 export const K5_CREATE_FAILED = {
@@ -217,6 +219,7 @@ function K5Frame({
       <DialogFrame
         onCancel={onCancel}
         cancelHeld={busy}
+        cancelHeldReason={busy ? K5_CLOSE_HELD : undefined}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

@@ -53,6 +53,7 @@ import K5Sheet, {
   createFailedNext,
   K5_MADE_ELSEWHERE,
   K5_BUSY_TEXT,
+  K5_CLOSE_HELD,
   K5_TRY_AGAIN,
   K5_EXISTS_TITLE,
   K5_NO_TOOL_TEXT,
@@ -274,7 +275,7 @@ describe('K5Sheet', () => {
     expect((screen.getByTestId('k5-next') as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('while K5 is being made, Back, the tools and the × wait', async () => {
+  it('while K5 is being made, Back, the tools and the × wait, and the × says why', async () => {
     h.daemonCliPost.mockImplementation(() => new Promise(() => {}))
     await openSheet()
     await toStep2()
@@ -287,8 +288,12 @@ describe('K5Sheet', () => {
     expect(screen.getByTestId('k5-busy').textContent).toBe(K5_BUSY_TEXT)
     expect((screen.getByTestId('k5-back') as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByTestId('k5-tool-claude') as HTMLInputElement).disabled).toBe(true)
-    expect((screen.getByTestId('dialog-close') as HTMLButtonElement).disabled).toBe(true)
+    const close = screen.getByTestId('dialog-close') as HTMLButtonElement
+    expect(close.disabled).toBe(true)
+    expect(close.parentElement!.getAttribute('title')).toBe(K5_CLOSE_HELD)
     expect(screen.getByTestId('k5-sheet').getAttribute('aria-busy')).toBe('true')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByTestId('k5-sheet')).toBeTruthy()
   })
 
   it('no tool signed in: says so and Sign in goes to signing in', async () => {

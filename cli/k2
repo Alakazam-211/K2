@@ -9231,8 +9231,11 @@ The box (Linux):
                                        io.cost, reserved ports, nft, helper.
   k2 app doctor <app-id> [--json]      Is everything approved in the running App?
                                        Box services and database ports approved
-                                       but not yet applied, and a container's
-                                       missing database door. Exit 1 when one is.
+                                       but not yet applied; a container's
+                                       database door (127.0.0.1:5432 in its
+                                       wall), its open sessions and the
+                                       databases it admits, or why it has
+                                       none. Exit 1 when one is missing.
   k2 app doctor --store [<folder>] [--voice|--no-voice] [--json]
                                        Is this Tauri App's repo ready for App
                                        Store and Play review? Privacy manifest,
@@ -9394,6 +9397,10 @@ if rule:
     db = rule.get("dbPorts")
     print("  rule      gateway %s, box ports %s, Postgres %s" % (rule.get("gwPort"), ", ".join(str(p) for p in rule.get("boxPorts") or []) or "none",
           "the whole band" if db is None else (", ".join(str(p) for p in db) or "none")))
+door = r.get("dbDoor")
+if door:
+    print("  db door   127.0.0.1:%s in the wall, %s open session(s), databases: %s" % (door.get("inWallPort"), door.get("openSessions"),
+          ", ".join(door.get("databases") or []) or "none"))
 for f in r.get("findings") or []:
     print("  %-26s %s" % (f.get("id"), f.get("detail")))'
     fi

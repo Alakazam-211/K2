@@ -56,6 +56,7 @@ import CreateAgentSheet, {
   CREATE_AGENT_NOT_SIGNED_IN,
   NAME_GIVES_NO_HANDLE,
   buildHireRequest,
+  paramProblem,
   nameStepProblems,
   defaultPresetFor,
   folderFor,
@@ -408,13 +409,18 @@ describe('CreateAgentSheet', () => {
     expect(rows).toHaveLength(ROWS.length)
     expect(rows[0].textContent).toContain('/home/r/agents/max')
     expect(rows[0].textContent).toContain(HIRE_STATUS_LABELS.write)
-    const perms = within(screen.getByTestId('create-agent-group-permission')).getAllByTestId('create-agent-row')
-    expect(perms.map((r) => r.textContent)).toEqual([
-      `Can ask for permission cards${HIRE_STATUS_LABELS.suggest}`,
-      `compute.use${HIRE_STATUS_LABELS.suggest}`,
+    // Plain names first, the raw path or id as a quiet second line.
+    const step = (s: string) => rows.filter((r) => r.getAttribute('data-step') === s)
+    expect(step('permission').map((r) => r.textContent)).toEqual([
+      `Can ask you to change one of its settings, on a card in its Thread${HIRE_STATUS_LABELS.suggest}`,
+      `Use compute (permission)compute.use${HIRE_STATUS_LABELS.suggest}`,
     ])
-    expect(screen.getByTestId('create-agent-group-permission').querySelector('input')).toBeNull()
-    expect(screen.getByTestId('create-agent-group-heartbeat').textContent).toContain('a heartbeat with this name exists')
+    expect(step('permission')[0].querySelector('input')).toBeNull()
+    expect(step('role')[0].textContent).toBe(`Instructions (charter).k2/agent/ROLE.md${HIRE_STATUS_LABELS.write}`)
+    expect(step('register')[0].textContent).toBe(`Adds it to your agents in K2${HIRE_STATUS_LABELS.write}`)
+    expect(step('hello')[0].textContent).toBe(`Says hello in its Thread${HIRE_STATUS_LABELS.write}`)
+    // The heartbeat says why once: the reason, not the state as well.
+    expect(step('heartbeat')[0].textContent).toBe('Daily digest (heartbeat)daily-digestA heartbeat with this name exists')
     expect(screen.getByTestId('create-agent-open-questions').textContent).toContain('How would you describe your voice?')
     expect(screen.getByTestId('create-agent-charter').textContent).toContain('You write for Rosson.')
   })
@@ -486,12 +492,32 @@ describe('CreateAgentSheet', () => {
     const err = screen.getByTestId('create-agent-error').textContent
     expect(err).toContain('That folder is already in use.')
     expect(err).toContain('The server said: /home/r/agents/max already exists.')
-    expect(screen.getByTestId('create-agent-create').textContent).toBe(CREATE_AGENT_COPY.tryAgain)
+    expect(err).toContain('Nothing was made. Go back to change it.')
+    // The line says go back, so Back is the one main button (no Try again).
+    expect(screen.queryByTestId('create-agent-create')).toBeNull()
+    expect(screen.getByTestId('create-agent-back').textContent).toBe('Back')
     expect(useAgentTemplatesStore.getState().createOpen).toBe(true)
     expect(h.openWorkspaceThread).not.toHaveBeenCalled()
     // A folder problem goes back to the name and folder.
     fireEvent.click(screen.getByTestId('create-agent-back'))
     expect(screen.getByTestId('create-agent-folder')).toBeTruthy()
+  })
+
+  it('a refusal the name can’t fix says Try again, and the button says the same', async () => {
+    await toReview()
+    h.daemonCliPost.mockRejectedValue(new DaemonHttpError('disk full', 500, 'internal'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-agent-create'))
+    })
+    expect(screen.getByTestId('create-agent-error').textContent).toContain('Nothing was made. Try again.')
+    expect(screen.getByTestId('create-agent-create').textContent).toBe(CREATE_AGENT_COPY.tryAgain)
+  })
+
+  it('a required field left empty is named in its problem', async () => {
+    await toName('writer')
+    await next()
+    expect(screen.getByTestId('create-agent-param-about-problem').textContent).toBe(paramProblem('What should it focus on?'))
+    expect(paramProblem('What should it focus on?')).toContain('“What should it focus on?”')
   })
 
   it('a failed review says so and offers Try again', async () => {
@@ -557,7 +583,7 @@ describe('CreateAgentSheet', () => {
   it('Review: one card of the agent, each row’s Edit going back to its step', async () => {
     await toReview()
     const card = screen.getByTestId('create-agent-review-agent')
-    expect(card.textContent).toContain('Writer, version 1')
+    expect(card.textContent).toContain('Writer (version 1)')
     expect(card.textContent).toContain('Max @max')
     expect(card.textContent).toContain('/home/r/agents/max')
     expect(card.textContent).toContain('Codex')

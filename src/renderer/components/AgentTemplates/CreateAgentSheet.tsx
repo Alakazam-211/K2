@@ -64,9 +64,7 @@ import {
   hireErrorView,
   hireFromTemplate,
   hireStatusLabel,
-  hireStepLabel,
   listTemplates,
-  permissionTarget,
   pickerGroups,
   sayHello,
   showTemplate,
@@ -84,7 +82,8 @@ import { useLlmAccountsStore, watchLlmAccounts, type LlmAccountsDoc } from '@/st
 import { requestLlmSignIn } from '@/stores/llm-sign-in-request'
 import { usePresetsStore, type AgentPreset } from '@/stores/presets'
 import { useSettingsStore } from '@/stores/settings'
-import { ReviewCard, ReviewList, ReviewRow, ReviewSection, TemplateSheetFrame } from './TemplateSheetFrame'
+import { ReviewCard, ReviewItems, ReviewRow, ReviewSection, TemplateSheetFrame } from './TemplateSheetFrame'
+import { hireRowWords, rowNote } from './review-words'
 
 // ── Copy (purpose only) ──────────────────────────────────────────────
 
@@ -154,6 +153,12 @@ export function folderFor(root: string | null, handle: string): string | null {
 
 export function nameProblem(name: string): string | null {
   return name.trim() ? null : 'Give the agent a name.'
+}
+
+/** A required template field left empty: names it, since the agent can't
+ *  be made without it (unlike the questions, which it asks later). */
+export function paramProblem(label: string): string {
+  return `Answer “${label.trim()}” to go on. The agent needs it from the start.`
 }
 
 /** A name that gives no handle (only symbols, say) while the handle still
@@ -396,7 +401,7 @@ function CreateAgentBody(): React.JSX.Element {
   const paramProblems = useMemo(() => {
     const out: Record<string, string> = {}
     for (const [k, p] of Object.entries(detail?.params ?? {})) {
-      if (p.required && !(params[k] ?? '').trim()) out[k] = 'This one is needed.'
+      if (p.required && !(params[k] ?? '').trim()) out[k] = paramProblem(p.label)
     }
     return out
   }, [detail, params])
@@ -643,7 +648,7 @@ function CreateAgentBody(): React.JSX.Element {
           </label>
           <Input
             id={ids.handle}
-            className={`${DIALOG_FIELD} font-mono`}
+            className={DIALOG_FIELD}
             value={handle}
             autoComplete="off"
             spellCheck={false}
@@ -668,7 +673,7 @@ function CreateAgentBody(): React.JSX.Element {
           </label>
           <Input
             id={ids.folder}
-            className={`${DIALOG_FIELD} font-mono`}
+            className={DIALOG_FIELD}
             value={folder}
             placeholder={root ? undefined : 'Chosen by the server'}
             autoComplete="off"
@@ -813,6 +818,7 @@ function CreateAgentBody(): React.JSX.Element {
   // ── 4. Review ──
   const library = (plan?.state === 'ok' ? plan.value.template.origin : pickedSummary?.origin) === 'library'
   const planFailed = plan?.state === 'error' ? hireErrorView(plan.error) : null
+  const fixInName = !!(planFailed?.folderProblem || failed?.folderProblem)
   const chosenPreset = enabledPresets.find((p) => p.id === tool) ?? null
   const chosenTool = chosenPreset ? { label: chosenPreset.label, tool: presetTool(chosenPreset), signIn: presetSignIn(accounts, chosenPreset) } : null
   return (
@@ -822,7 +828,7 @@ function CreateAgentBody(): React.JSX.Element {
       intro={CREATE_AGENT_COPY.reviewIntro}
       step={{ at: 4, of: CREATE_AGENT_STEP_COUNT }}
       focusKey={`review-${plan?.state ?? 'none'}`}
-      onSubmit={() => (plan?.state === 'ok' ? void create() : planFailed ? void review() : undefined)}
+      onSubmit={() => (fixInName ? setStep('name') : plan?.state === 'ok' ? void create() : planFailed ? void review() : undefined)}
       status={
         busy ? (
           <p className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)]" role="status" data-testid="create-agent-busy">
@@ -832,14 +838,15 @@ function CreateAgentBody(): React.JSX.Element {
         ) : null
       }
       footer={
+        fixInName ? (
+          // The fix is the name or folder: Back is the way on, and the only
+          // main button (the line above says to go back).
+          <Button variant="accent" size="md" onClick={() => setStep('name')} data-testid="create-agent-back">
+            Back
+          </Button>
+        ) : (
         <>
-          <Button
-            variant="ghost"
-            size="md"
-            disabled={busy}
-            onClick={() => setStep(planFailed?.folderProblem || failed?.folderProblem ? 'name' : 'tool')}
-            data-testid="create-agent-back"
-          >
+          <Button variant="ghost" size="md" disabled={busy} onClick={() => setStep('tool')} data-testid="create-agent-back">
             Back
           </Button>
           {planFailed ? (
@@ -852,6 +859,7 @@ function CreateAgentBody(): React.JSX.Element {
             </Button>
           )}
         </>
+        )
       }
     >
       {plan?.state === 'loading' || !plan ? (
@@ -861,7 +869,7 @@ function CreateAgentBody(): React.JSX.Element {
         </div>
       ) : planFailed ? (
         <div data-testid="create-agent-review-error">
-          <FailedNote what={planFailed.text} next={planFailed.folderProblem ? 'Go back to change it.' : 'Nothing was made. Try again.'} detail={planFailed.detail} />
+          <FailedNote what={planFailed.text} next={planFailed.folderProblem ? 'Nothing was made. Go back to change it.' : 'Nothing was made. Try again.'} detail={planFailed.detail} />
         </div>
       ) : plan.state === 'ok' ? (
         <ReviewBody
@@ -877,7 +885,7 @@ function CreateAgentBody(): React.JSX.Element {
       ) : null}
       {failed ? (
         <div data-testid="create-agent-error">
-          <FailedNote what={failed.text} next={failed.folderProblem ? 'Nothing was made. Go back to change it.' : 'Nothing was made. Fix what the server says, then try again.'} detail={failed.detail} />
+          <FailedNote what={failed.text} next={failed.folderProblem ? 'Nothing was made. Go back to change it.' : 'Nothing was made. Try again.'} detail={failed.detail} />
         </div>
       ) : null}
     </TemplateSheetFrame>
@@ -923,15 +931,15 @@ function ReviewBody({
         <ReviewRow label="Kind" onEdit={edit('pick')} editLabel="Change the kind">
           {plan.template.name}
           <span className="text-[var(--color-text-secondary)]">
-            , version {plan.template.version}
-            {library ? `, by ${authorLabel(plan.template.author)}` : ''}
+            {' '}
+            (version {plan.template.version}){library ? `, by ${authorLabel(plan.template.author)}` : ''}
           </span>
         </ReviewRow>
         <ReviewRow label="Name" onEdit={edit('name')} editLabel="Change the name">
-          {plan.name} <span className="font-mono text-[var(--color-text-secondary)]">@{plan.handle}</span>
+          {plan.name} <span className="text-[var(--color-text-secondary)]">@{plan.handle}</span>
         </ReviewRow>
         <ReviewRow label="Folder" onEdit={edit('name')} editLabel="Change the folder">
-          <span className="font-mono select-text">{plan.path}</span>
+          <span className="select-text">{plan.path}</span>
         </ReviewRow>
         <ReviewRow label="Tool" onEdit={edit('tool')} editLabel="Change the tool">
           {tool ? (
@@ -948,26 +956,15 @@ function ReviewBody({
         </ReviewRow>
       </ReviewCard>
       <ReviewSection title="What K2 sets up" testId="create-agent-rows">
-        <ReviewCard>
-          {groupRows(asArray(plan.rows)).map((g, i) => (
-            <ReviewRow key={`${g.step}-${i}`} label={hireStepLabel(g.step)} testId={`create-agent-group-${g.step}`}>
-              <ReviewList
-                items={g.rows.map((r, j) => ({
-                  key: `${r.target}-${j}`,
-                  what: g.step === 'permission' ? permissionTarget(r.target) : r.target,
-                  mono: g.step !== 'permission' && g.step !== 'hello',
-                  note: (
-                    <>
-                      {hireStatusLabel(r.status)}
-                      {r.reason ? <span className="block text-[var(--color-text-muted)]">{r.reason}</span> : null}
-                    </>
-                  ),
-                  testId: 'create-agent-row',
-                }))}
-              />
-            </ReviewRow>
-          ))}
-        </ReviewCard>
+        <ReviewItems
+          items={asArray<HireResult['rows'][number]>(plan.rows).map((r, i) => ({
+            key: `${r.step}-${r.target}-${i}`,
+            ...hireRowWords(r),
+            note: rowNote(hireStatusLabel(r.status), r.reason),
+            testId: 'create-agent-row',
+            step: r.step,
+          }))}
+        />
       </ReviewSection>
       {open.length ? (
         <ReviewSection title="It will ask you" hint="When it starts, in its Thread." testId="create-agent-open-questions">
@@ -1007,7 +1004,7 @@ function Charter({ text, startOpen }: { text: string; startOpen: boolean }): Rea
       </button>
       <div id={panel} hidden={!open} className="mt-2">
         <Surface role2="inset" chamfer className="px-4 py-3">
-          <div data-heading-cap="" className="markdown-content type-hint text-[var(--color-text-primary)] select-text [overflow-wrap:anywhere]">
+          <div data-heading-cap="" data-ui-font="" className="markdown-content type-hint text-[var(--color-text-primary)] select-text [overflow-wrap:anywhere]">
             <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
           </div>
         </Surface>

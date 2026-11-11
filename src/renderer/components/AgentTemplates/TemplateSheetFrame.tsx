@@ -219,17 +219,61 @@ export function ReviewRow({
   )
 }
 
-/** A list inside a review row: one item a line, with an optional quiet note
- *  on its right (a size, "Will add"). */
-export function ReviewList({ items, testId }: { items: Array<{ key: string; what: React.ReactNode; note?: React.ReactNode; mono?: boolean; testId?: string }>; testId?: string }): React.JSX.Element {
+/** One thing in a review list: its plain name, the raw path or id it stands
+ *  for as a quiet second line, and an optional note on its right (a size,
+ *  "Will add"). The theme's text face: Terminal's is already the code face,
+ *  so Glass never shows monospace here. */
+export interface ReviewItem {
+  key: string
+  what: React.ReactNode
+  raw?: string
+  note?: React.ReactNode
+  testId?: string
+  /** A `data-step` hook (tests, shots). */
+  step?: string
+}
+
+function ReviewItemBody({ x }: { x: ReviewItem }): React.JSX.Element {
   return (
-    <ul className="m-0 p-0 list-none space-y-1" data-testid={testId}>
+    <>
+      <span className="min-w-0 [overflow-wrap:anywhere]">
+        <span className="block">{x.what}</span>
+        {x.raw ? (
+          <span className="block text-[var(--color-text-muted)] select-text" data-review-raw="">
+            {x.raw}
+          </span>
+        ) : null}
+      </span>
+      {x.note ? <span className="flex-shrink-0 max-w-[45%] text-right text-[var(--color-text-secondary)]">{x.note}</span> : null}
+    </>
+  )
+}
+
+/** A list inside a review row, one item a line. */
+export function ReviewList({ items, testId }: { items: ReviewItem[]; testId?: string }): React.JSX.Element {
+  return (
+    <ul className="m-0 p-0 list-none space-y-1.5" data-testid={testId}>
       {items.map((x) => (
-        <li key={x.key} className="flex items-baseline justify-between gap-3" data-testid={x.testId}>
-          <span className={`min-w-0 [overflow-wrap:anywhere] ${x.mono ? 'font-mono' : ''}`}>{x.what}</span>
-          {x.note ? <span className="flex-shrink-0 text-right text-[var(--color-text-secondary)]">{x.note}</span> : null}
+        <li key={x.key} className="flex items-start justify-between gap-3" data-testid={x.testId} data-step={x.step}>
+          <ReviewItemBody x={x} />
         </li>
       ))}
     </ul>
+  )
+}
+
+/** A card of review items, one a row with hairlines between (the Create
+ *  review's "What K2 sets up"). */
+export function ReviewItems({ items, testId }: { items: ReviewItem[]; testId?: string }): React.JSX.Element {
+  return (
+    <Surface chamfer material="tile" data-testid={testId}>
+      <ul className="m-0 p-0 list-none divide-y divide-[var(--color-border)]">
+        {items.map((x) => (
+          <li key={x.key} className="flex items-start justify-between gap-3 px-4 py-2.5 type-hint text-[var(--color-text-primary)]" data-testid={x.testId} data-step={x.step}>
+            <ReviewItemBody x={x} />
+          </li>
+        ))}
+      </ul>
+    </Surface>
   )
 }

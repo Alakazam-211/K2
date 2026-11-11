@@ -543,6 +543,13 @@ html[data-os]:not([data-os="mac"]) select optgroup {
   border-bottom: 1px solid var(--color-border);
 }
 
+/* A block that reads in the theme's text face (an agent's charter in a
+   sheet): Terminal's is the code face already, and Glass never shows
+   monospace for text. Code inside keeps its own face. */
+.markdown-content[data-ui-font] {
+  font-family: var(--font-ui);
+}
+
 /* A capped block (an agent's charter in a sheet): `#` reads at the `##`
    size; the rest of the scale is unchanged. */
 .markdown-content[data-heading-cap] h1 {

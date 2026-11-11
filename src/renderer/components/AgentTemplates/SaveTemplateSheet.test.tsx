@@ -31,7 +31,8 @@ vi.mock('@/components/Wiki/wiki-api', () => ({
 
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { SAVE_TEMPLATE_COPY, SaveTemplateRow, SaveTemplateSheet, formatBytes, idProblem } from './SaveTemplateSheet'
+import { SAVE_ID_HINT, SAVE_TEMPLATE_COPY, SAVE_UNSUPPORTED_NEXT, SaveTemplateRow, SaveTemplateSheet, formatBytes, idProblem } from './SaveTemplateSheet'
+import { FIELD_INVALID } from '@/components/ui/Input'
 import { SAVE_ERROR_COPY, SAVE_UNSUPPORTED_TEXT } from '@/lib/agent-templates-api'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { primaryScope } from '@/kessel/server-scope'
@@ -158,13 +159,16 @@ describe('SaveTemplateSheet', () => {
     await waitFor(() => expect(screen.getByTestId('save-template-files')).toBeTruthy())
     expect(document.activeElement?.textContent).toBe(SAVE_TEMPLATE_COPY.review)
     expect(screen.getAllByTestId('save-template-file').map((r) => r.textContent)).toEqual([
-      'template.toml812 B',
-      'ROLE.md2.0 KB',
-      'wiki/Voice and style.md300 B',
+      'Template recordtemplate.toml812 B',
+      'Instructions (charter)ROLE.md2.0 KB',
+      'Voice and style (wiki note)wiki/Voice and style.md300 B',
     ])
     expect(screen.getByTestId('save-template-catalog').textContent).toContain('wiki:index')
     expect(screen.getByTestId('save-template-suggest').textContent).toContain('compute.use')
-    expect(screen.getByTestId('save-template-tool').textContent).toContain('codex')
+    expect(screen.getByTestId('save-template-tool').textContent).toContain('Codex')
+    // Plain names first, the raw path or id quietly under them.
+    expect(screen.getByTestId('save-template-catalog').textContent).toContain('Wiki index')
+    expect(screen.getByTestId('save-template-suggest').textContent).toContain('Use compute')
     expect(screen.getByTestId('save-template-heartbeats').textContent).toContain('daily-digest')
     const skip = screen.getByTestId('save-template-skip').textContent
     expect(skip).toContain('Skill')
@@ -180,7 +184,7 @@ describe('SaveTemplateSheet', () => {
     await click('save-template-save')
     expect(h.daemonCliPost.mock.calls[1][1]).toMatchObject({ dryRun: false, id: 'max-writer' })
     await waitFor(() => expect(screen.getByTestId('save-template-done')).toBeTruthy())
-    expect(screen.getByTestId('save-template-done').textContent).toContain('max-writer, version 2')
+    expect(screen.getByTestId('save-template-done').textContent).toContain('max-writer (version 2)')
     fireEvent.click(screen.getByTestId('save-template-close'))
     expect(onClose).toHaveBeenCalled()
   })
@@ -241,6 +245,7 @@ describe('SaveTemplateSheet', () => {
     await click('save-template-next')
     await waitFor(() => expect(screen.getByTestId('save-template-unsupported')).toBeTruthy())
     expect(screen.getByTestId('save-template-unsupported').textContent).toBe(SAVE_UNSUPPORTED_TEXT)
+    expect(screen.getByTestId('save-template-unsupported-next').textContent).toBe(SAVE_UNSUPPORTED_NEXT)
     expect(useAgentTemplatesStore.getState().saveUnsupported[primaryScope().hostKey]).toBe(true)
     fireEvent.click(screen.getByTestId('save-template-cancel'))
     expect(screen.queryByTestId('save-template-open')).toBeNull()
@@ -290,6 +295,33 @@ describe('SaveTemplateSheet', () => {
     expect(onClose).toHaveBeenCalled()
     expect(useAgentTemplatesStore.getState().createOpen).toBe(true)
     expect(useAgentTemplatesStore.getState().createStart).toBe('max-writer')
+  })
+
+  it('the id field is named Template id with its rule; a bad id marks the field and holds Next until it’s fixed', async () => {
+    await openSheet()
+    expect(screen.getByLabelText('Template id')).toBe(screen.getByTestId('save-template-id'))
+    expect(screen.getByText(SAVE_ID_HINT)).toBeTruthy()
+    fireEvent.change(screen.getByTestId('save-template-id'), { target: { value: 'Not OK!' } })
+    await click('save-template-next')
+    const field = screen.getByTestId('save-template-id')
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    expect(field.className).toContain(FIELD_INVALID)
+    expect((screen.getByTestId('save-template-next') as HTMLButtonElement).disabled).toBe(true)
+    expect(h.daemonCliPost).not.toHaveBeenCalled()
+    fireEvent.change(field, { target: { value: 'ok-id' } })
+    expect((screen.getByTestId('save-template-next') as HTMLButtonElement).disabled).toBe(false)
+    expect(field.getAttribute('aria-invalid')).toBeNull()
+  })
+
+  it('the saved state shows what the template holds', async () => {
+    await openSheet()
+    await click('save-template-next')
+    await waitFor(() => expect(screen.getByTestId('save-template-save')).toBeTruthy())
+    await click('save-template-save')
+    await waitFor(() => expect(screen.getByTestId('save-template-done')).toBeTruthy())
+    const done = screen.getByTestId('save-template-done')
+    expect(done.querySelector('[data-testid="save-template-files"]')).toBeTruthy()
+    expect(done.textContent).toContain('Instructions (charter)')
   })
 
   it('closing is held while it saves', async () => {

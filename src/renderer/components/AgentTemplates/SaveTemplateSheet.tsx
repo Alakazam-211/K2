@@ -34,7 +34,8 @@ import {
 } from '@/lib/agent-templates-api'
 import { slugifyAddressToken } from '@/lib/federation'
 import { openCreateAgentSheet, useAgentTemplatesStore } from '@/stores/agent-templates'
-import { ReviewCard, ReviewList, ReviewRow, ReviewSection, TemplateSheetFrame } from './TemplateSheetFrame'
+import { ReviewCard, ReviewList, ReviewRow, ReviewSection, TemplateSheetFrame, type ReviewItem } from './TemplateSheetFrame'
+import { contextWords, fileWords, humanize, permissionWords, toolWords } from './review-words'
 
 export const SAVE_TEMPLATE_COPY = {
   button: 'Save as template',
@@ -52,6 +53,11 @@ export const SAVE_TEMPLATE_COPY = {
   createFrom: 'Create an agent from it',
   tryAgain: 'Try again',
 } as const
+
+/** After step 1 on a server without the save: what happened and what next. */
+export const SAVE_UNSUPPORTED_NEXT = 'Nothing was saved. Update K2 on this server to save templates.'
+/** The id's rule, under its field. */
+export const SAVE_ID_HINT = 'Lowercase letters, numbers and single hyphens. Saving again with the same id makes a new version.'
 
 export const SAVE_TEMPLATE_CLOSE_HELD = 'Can’t close while the template saves'
 
@@ -112,7 +118,7 @@ type Phase = 'details' | 'review' | 'done'
 export function SaveTemplateSheet({ project, onClose }: { project: { path: string; name: string }; onClose: () => void }): React.JSX.Element {
   const scope = primaryScope()
   const markUnsupported = useAgentTemplatesStore((s) => s.markSaveUnsupported)
-  const ids = { id: useId(), name: useId(), summary: useId(), wiki: useId() }
+  const ids = { id: useId(), idHint: useId(), name: useId(), summary: useId(), wiki: useId() }
 
   const [phase, setPhase] = useState<Phase>('details')
   const [id, setId] = useState(() => slugifyAddressToken(project.name) ?? '')
@@ -236,12 +242,13 @@ export function SaveTemplateSheet({ project, onClose }: { project: { path: strin
             <div className="min-w-0 space-y-0.5">
               <p className="type-row text-[var(--color-text-primary)]">
                 {saved.id}
-                <span className="text-[var(--color-text-secondary)]">, version {saved.version}</span>
+                <span className="text-[var(--color-text-secondary)]"> (version {saved.version})</span>
               </p>
-              <p className="type-hint text-[var(--color-text-secondary)] font-mono select-text [overflow-wrap:anywhere]">{saved.path}</p>
+              <p className="type-hint text-[var(--color-text-secondary)] select-text [overflow-wrap:anywhere]">{saved.path}</p>
             </div>
           </Surface>
           <p className={DIALOG_MUTED}>It’s under “Yours” when you create an agent.</p>
+          <SaveHolds plan={saved} />
         </div>
       </TemplateSheetFrame>
     )
@@ -292,7 +299,7 @@ export function SaveTemplateSheet({ project, onClose }: { project: { path: strin
             {unsupported ? 'Close' : 'Cancel'}
           </Button>
           {unsupported ? null : (
-            <Button type="submit" variant="accent" size="md" disabled={busy} data-testid="save-template-next">
+            <Button type="submit" variant="accent" size="md" disabled={busy || !!problem} data-testid="save-template-next">
               Next
             </Button>
           )}
@@ -300,32 +307,40 @@ export function SaveTemplateSheet({ project, onClose }: { project: { path: strin
       }
     >
       {unsupported ? (
-        <p className={DIALOG_MUTED} data-testid="save-template-unsupported">
-          {SAVE_UNSUPPORTED_TEXT}
-        </p>
+        <div className="space-y-1">
+          <p className={DIALOG_MUTED} data-testid="save-template-unsupported">
+            {SAVE_UNSUPPORTED_TEXT}
+          </p>
+          <p className={DIALOG_MUTED} data-testid="save-template-unsupported-next">
+            {SAVE_UNSUPPORTED_NEXT}
+          </p>
+        </div>
       ) : (
         <>
           <div>
             <label htmlFor={ids.id} className={DIALOG_LABEL}>
-              Id
+              Template id
             </label>
             <Input
               id={ids.id}
-              className={`${DIALOG_FIELD} font-mono`}
+              className={DIALOG_FIELD}
               value={id}
               autoComplete="off"
               spellCheck={false}
               aria-invalid={problem || error?.fieldsProblem ? true : undefined}
+              aria-describedby={ids.idHint}
               onChange={(e) => setId(e.target.value)}
               data-testid="save-template-id"
             />
-            {problem ? (
-              <p className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="save-template-id-problem">
-                {problem}
-              </p>
-            ) : (
-              <p className={`${DIALOG_MUTED} mt-1`}>Saving again with the same id makes a new version.</p>
-            )}
+            <div id={ids.idHint}>
+              {problem ? (
+                <p className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="save-template-id-problem">
+                  {problem}
+                </p>
+              ) : (
+                <p className={`${DIALOG_MUTED} mt-1`}>{SAVE_ID_HINT}</p>
+              )}
+            </div>
           </div>
           <div>
             <label htmlFor={ids.name} className={DIALOG_LABEL}>
@@ -376,10 +391,29 @@ export function SaveTemplateSheet({ project, onClose }: { project: { path: strin
   )
 }
 
-/** The dry run, drawn: the template on one card, then everything it holds
- *  and leaves out on a second, every list it returned (an empty one said
- *  so). */
-function SaveReview({ plan: raw }: { plan: SaveTemplateResult }): React.JSX.Element {
+/** The dry run, drawn: the template on one card, then what it holds. */
+function SaveReview({ plan }: { plan: SaveTemplateResult }): React.JSX.Element {
+  return (
+    <>
+      <ReviewCard testId="save-template-review-head">
+        <ReviewRow label="Template">
+          {plan.id}
+          <span className="text-[var(--color-text-secondary)]"> (version {plan.version})</span>
+        </ReviewRow>
+        <ReviewRow label="By">{authorLabel(plan.author)}</ReviewRow>
+        <ReviewRow label="Saved in">
+          <span className="select-text">{plan.path}</span>
+        </ReviewRow>
+      </ReviewCard>
+      <SaveHolds plan={plan} />
+    </>
+  )
+}
+
+/** Everything a template holds and leaves out, in plain names with the raw
+ *  path or id under each, every list the server returned (an empty one said
+ *  so). The review shows it before saving; the saved state shows it again. */
+function SaveHolds({ plan: raw }: { plan: SaveTemplateResult }): React.JSX.Element {
   // Every list through asArray: an older or odd body never breaks the map.
   const plan = {
     ...raw,
@@ -390,46 +424,28 @@ function SaveReview({ plan: raw }: { plan: SaveTemplateResult }): React.JSX.Elem
     skipped: asArray<SaveTemplateResult['skipped'][number]>(raw.skipped),
   }
   const none = <span className="text-[var(--color-text-secondary)]">None</span>
-  const list = (items: string[], testId: string, mono = true): React.JSX.Element =>
-    items.length ? <ReviewList testId={testId} items={items.map((x) => ({ key: x, what: x, mono }))} /> : none
+  const list = (items: ReviewItem[], testId: string): React.JSX.Element => (items.length ? <ReviewList testId={testId} items={items} /> : none)
   return (
     <>
-      <ReviewCard testId="save-template-review-head">
-        <ReviewRow label="Template">
-          {plan.id}
-          <span className="text-[var(--color-text-secondary)]">, version {plan.version}</span>
-        </ReviewRow>
-        <ReviewRow label="By">{authorLabel(plan.author)}</ReviewRow>
-        <ReviewRow label="Saved in">
-          <span className="font-mono select-text">{plan.path}</span>
-        </ReviewRow>
-      </ReviewCard>
       <ReviewSection title="What it holds">
         <ReviewCard>
           <ReviewRow label="Files" testId="save-template-files">
-            {plan.files.length ? (
-              <ReviewList
-                items={plan.files.map((f) => ({ key: f.path, what: f.path, mono: true, note: formatBytes(f.bytes), testId: 'save-template-file' }))}
-              />
-            ) : (
-              none
+            {list(
+              plan.files.map((f) => ({ key: f.path, ...fileWords(f.path), note: formatBytes(f.bytes), testId: 'save-template-file' })),
+              'save-template-files-list',
             )}
           </ReviewRow>
           <ReviewRow label="Context" testId="save-template-catalog">
-            {list(plan.catalog, 'save-template-catalog-list')}
+            {list(plan.catalog.map((x) => ({ key: x, what: contextWords(x), raw: x })), 'save-template-catalog-list')}
           </ReviewRow>
           <ReviewRow label="Permissions" testId="save-template-suggest">
-            {plan.suggest.length ? (
-              <ReviewList testId="save-template-suggest-list" items={plan.suggest.map((x) => ({ key: x, what: x, mono: true, note: 'Suggested' }))} />
-            ) : (
-              none
-            )}
+            {list(plan.suggest.map((x) => ({ key: x, what: permissionWords(x), raw: x, note: 'Suggested' })), 'save-template-suggest-list')}
           </ReviewRow>
           <ReviewRow label="Tool" testId="save-template-tool">
-            {plan.tool ? <span className="font-mono">{plan.tool}</span> : <span className="text-[var(--color-text-secondary)]">The server default</span>}
+            {plan.tool ? toolWords(plan.tool) : <span className="text-[var(--color-text-secondary)]">The server default</span>}
           </ReviewRow>
           <ReviewRow label="Heartbeats" testId="save-template-heartbeats">
-            {list(plan.heartbeats, 'save-template-heartbeats-list')}
+            {list(plan.heartbeats.map((x) => ({ key: x, what: humanize(x), raw: x })), 'save-template-heartbeats-list')}
           </ReviewRow>
         </ReviewCard>
       </ReviewSection>
@@ -437,8 +453,8 @@ function SaveReview({ plan: raw }: { plan: SaveTemplateResult }): React.JSX.Elem
         {plan.skipped.length ? (
           <ReviewCard>
             {plan.skipped.map((x) => (
-              <ReviewRow key={`${x.what}-${x.name}`} label={x.what ? x.what[0].toUpperCase() + x.what.slice(1) : x.what} testId="save-template-skip">
-                <ReviewList items={[{ key: x.name, what: x.name, mono: true, note: SKIP_WHY[x.why] ?? x.why }]} />
+              <ReviewRow key={`${x.what}-${x.name}`} label={x.what ? humanize(x.what) : x.what} testId="save-template-skip">
+                <ReviewList items={[{ key: x.name, what: `${humanize(x.name)} (${x.what})`, raw: x.name, note: SKIP_WHY[x.why] ?? x.why }]} />
               </ReviewRow>
             ))}
           </ReviewCard>

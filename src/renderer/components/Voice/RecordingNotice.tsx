@@ -10,6 +10,7 @@
 // drops a person who doesn't answer within a minute.
 
 import { useEffect, useRef } from 'react'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { recordingNoticeText } from '@/lib/voice/recording-controls'
 import type { VoiceCall } from '@/stores/voice-core'
 
@@ -23,6 +24,10 @@ export interface RecordingNoticeProps {
 export default function RecordingNotice({ call, agentReaders, onAnswer }: RecordingNoticeProps): React.JSX.Element | null {
   const n = call.recordingNotice
   const first = useRef<HTMLDivElement>(null)
+  const root = useRef<HTMLDivElement>(null)
+  // A live Browser page is a native view drawn over the app: the notice must
+  // claim it, or someone browsing would never see they are being recorded.
+  useBrowserOverlay({ active: !!n, ref: root, fullscreen: true, kind: 'modal' })
   useEffect(() => {
     first.current?.focus()
   }, [n?.recordingId, n?.prompt.noticeVersion])
@@ -30,6 +35,7 @@ export default function RecordingNotice({ call, agentReaders, onAnswer }: Record
   const text = recordingNoticeText({ roomName: call.roomName, prompt: n.prompt, agentReaders, ask: n.ask })
   return (
     <div
+      ref={root}
       data-testid="recording-notice"
       className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50"
       // Never dismissed into an answer: a click outside does nothing.

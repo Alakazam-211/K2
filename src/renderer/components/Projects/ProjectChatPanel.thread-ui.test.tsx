@@ -222,7 +222,10 @@ describe('project chat in the Thread look', () => {
     const input = screen.getByTestId('project-chat-input') as HTMLTextAreaElement
     fireEvent.change(input, { target: { value: 'ship it' } })
     fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() => expect(screen.getByText(/Load failed/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('project-chat-send-error')).toBeTruthy())
+    expect(screen.getByTestId('project-chat-send-error').textContent).toBe(
+      'Couldn’t send your message (Load failed). It’s still in the box: press Enter to try again.',
+    )
     expect(input.value).toBe('ship it')
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(posted()).toHaveLength(2))
@@ -333,11 +336,13 @@ describe('the stash in project chat (Rosson 2026-10-30)', () => {
 })
 
 describe('project chat states and header', () => {
-  it('a failed read shows the state card with the reason, and Try again loads the chat', async () => {
+  it('a failed read shows the state card with the reason; Try again is busy while it reads, then the chat loads', async () => {
     let fail = true
+    let answer: () => void = () => {}
     cli.get.mockImplementation(async (path: string) => {
       if (path !== 'project-group/messages') return {}
       if (fail) throw new Error('database is locked')
+      await new Promise<void>((r) => (answer = r))
       return { ok: true, messages: MESSAGES, truncated: false }
     })
     const view = render(<ProjectChatPanel show={show()} />)
@@ -346,10 +351,41 @@ describe('project chat states and header', () => {
     expect(card.textContent).toContain('Couldn’t load the chat')
     expect(card.querySelector('[data-load-detail]')?.textContent).toBe('database is locked')
     expect(card.textContent).not.toContain('Failed to load chat')
+    // The page's card, outside the Thread box (whose rules would keep the
+    // card and its button square and drop the theme's focus ring).
+    expect(card.closest('[data-k2-thread-zen]')).toBeNull()
+    expect(card.getAttribute('data-k2-chamfer')).toBe('surface')
+    const again = screen.getByRole('button', { name: 'Try again' })
+    expect(again.closest('[data-k2-thread-zen]')).toBeNull()
+    expect(again.className).toContain('k2-focus')
+    // The message box is off while the chat isn't there.
+    const input = screen.getByTestId('project-chat-input') as HTMLTextAreaElement
+    expect(input.disabled).toBe(true)
+    expect(input.placeholder).toBe('The chat didn’t load')
+    expect(screen.queryByTestId('stash-button')).toBeNull()
     fail = false
-    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    fireEvent.click(again)
+    const busy = (await screen.findByRole('button', { name: 'Trying again…' })) as HTMLButtonElement
+    expect(busy.disabled).toBe(true)
+    expect(screen.getByTestId('project-chat-error')).toBeTruthy()
+    await act(async () => answer())
     await waitFor(() => expect(view.container.querySelectorAll('[data-zen-message]').length).toBe(MESSAGES.length))
     expect(screen.queryByTestId('project-chat-error')).toBeNull()
+    expect((screen.getByTestId('project-chat-input') as HTMLTextAreaElement).disabled).toBe(false)
+  })
+
+  it('while the chat loads: the loading card, and the message box is off', async () => {
+    cli.get.mockImplementation(async (path: string) =>
+      path === 'project-group/messages' ? new Promise(() => {}) : {},
+    )
+    render(<ProjectChatPanel show={show()} />)
+    const card = await screen.findByTestId('project-chat-loading')
+    expect(card.closest('[data-k2-thread-zen]')).toBeNull()
+    const input = screen.getByTestId('project-chat-input') as HTMLTextAreaElement
+    expect(input.disabled).toBe(true)
+    expect(input.placeholder).toBe('Loading the chat…')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(cli.post.mock.calls.filter(([p]) => p === 'project-group/msg')).toHaveLength(0)
   })
 
   it('an empty chat says who gets each message, in plain words', async () => {

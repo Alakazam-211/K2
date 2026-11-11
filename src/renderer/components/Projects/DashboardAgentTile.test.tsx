@@ -43,9 +43,18 @@ vi.mock('@/components/SessionView/ChatterOverlayPane', () => ({
   ChatterOverlayPane: ({ addr }: { addr: string }) => <div data-testid="chatter-pane" data-addr={addr} />,
 }))
 vi.mock('@/components/SessionView/ThreadDrawerPanel', () => ({
-  InputsList: ({ cwd, active }: { cwd: string; active: boolean }) => (
-    <div data-testid="heartbeats-list" data-cwd={cwd} data-active={String(active)} />
+  // Draws its `empty` (the list is empty in these tests).
+  InputsList: ({ cwd, active, empty }: { cwd: string; active: boolean; empty?: ReactNode }) => (
+    <div data-testid="heartbeats-list" data-cwd={cwd} data-active={String(active)}>
+      {empty}
+    </div>
   ),
+}))
+const nav = vi.hoisted(() => ({ agents: [] as string[] }))
+vi.mock('@/lib/page-selection', () => ({
+  openOnAgentsPage: (id: string) => {
+    nav.agents.push(id)
+  },
 }))
 vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({ AgentAvatar: () => <span /> }))
 vi.mock('@/stores/projects', () => ({ activateProject: vi.fn() }))
@@ -100,6 +109,7 @@ beforeEach(() => {
   mounts.terminal = 0
   mounts.unmounts = 0
   wake.calls = []
+  nav.agents = []
   useProjectGroupsStore.setState({ tileViews: {} })
 })
 afterEach(() => cleanup())
@@ -257,7 +267,7 @@ describe('an asleep tile', () => {
   it('Terminal view offers Wake too; Heartbeats reads without a session', () => {
     renderInRoom(room, <Tile phase={DORMANT} />)
     pick('terminal')
-    expect(screen.getByText('sales is asleep.')).toBeTruthy()
+    expect(screen.getByText('sales is asleep')).toBeTruthy()
     expect(screen.getByText('Wake')).toBeTruthy()
     pick('heartbeats')
     expect(screen.getByTestId('heartbeats-list')).toBeTruthy()
@@ -297,30 +307,73 @@ describe('tile states', () => {
     expect(screen.queryByTestId('tile-wake-bar')).toBeNull()
   })
 
-  it("a failed session read says whose session, the reason quietly, and Try again checks again", async () => {
+  it("a failed session read says whose session, the reason quietly, and Try again checks again (busy while it does)", async () => {
     const { resolveAllMemberSessions } = await import('./wake-member-session')
-    vi.mocked(resolveAllMemberSessions).mockResolvedValueOnce({ 'ws-sales': { kind: 'dormant' } } as never)
+    let answer: (v: unknown) => void = () => {}
+    vi.mocked(resolveAllMemberSessions).mockImplementationOnce(
+      () => new Promise((r) => (answer = r as (v: unknown) => void)) as never,
+    )
     renderInRoom(room, <Tile phase={{ kind: 'error', message: 'session registry is not answering' }} />)
     const state = screen.getByTestId('tile-error')
     expect(state.getAttribute('role')).toBe('alert')
-    expect(state.textContent).toContain('Couldn’t reach sales’s session.')
+    expect(state.getAttribute('data-k2-chamfer')).toBe('surface')
+    expect(state.textContent).toContain('Couldn’t reach sales’s session')
     expect(state.querySelector('[data-load-detail]')?.textContent).toBe('session registry is not answering')
+    expect(state.querySelector('[data-load-detail]')?.className).not.toContain('font-mono')
     const again = screen.getByRole('button', { name: 'Try again' })
     expect(again.getAttribute('data-k2-chamfer')).toBe('control')
     await act(async () => {
       fireEvent.click(again)
     })
+    // Still the failure, its button busy, until the read answers.
+    const busy = screen.getByRole('button', { name: 'Trying again…' }) as HTMLButtonElement
+    expect(busy.disabled).toBe(true)
+    expect(busy.getAttribute('aria-busy')).toBe('true')
+    expect(screen.getByTestId('tile-error')).toBeTruthy()
+    await act(async () => {
+      answer({ 'ws-sales': { kind: 'dormant' } })
+    })
     expect(resolveAllMemberSessions).toHaveBeenCalledWith(['ws-sales'], expect.any(Function))
     expect(screen.queryByTestId('tile-error')).toBeNull()
   })
 
-  it('checking and waking are quiet status lines with the name, in type roles', () => {
+  it('a failure names one more next step: open the agent on the Agents page', () => {
+    renderInRoom(room, <Tile phase={{ kind: 'error', message: 'session registry is not answering' }} />)
+    const state = screen.getByTestId('tile-error')
+    expect(state.textContent).toContain('If it keeps failing, open sales on the Agents page.')
+    const link = screen.getByRole('button', { name: 'open sales on the Agents page' })
+    expect(link.hasAttribute('data-k2-focus')).toBe(true)
+    fireEvent.click(link)
+    expect(nav.agents).toEqual(['ws-sales'])
+  })
+
+  it('checking and waking are the compact state card with the name, in type roles', () => {
     renderInRoom(room, <Tile phase={{ kind: 'checking' }} />)
     pick('terminal')
     const line = screen.getByText('Checking sales’s session…')
-    expect(line.closest('[data-tile-state]')?.getAttribute('data-tile-state')).toBe('busy')
-    expect(line.closest('p')?.className).toContain('type-row')
+    const card = line.closest('[data-tile-state]')
+    expect(card?.getAttribute('data-tile-state')).toBe('busy')
+    expect(card?.getAttribute('data-k2-chamfer')).toBe('surface')
+    expect(line.closest('p')?.className).toContain('type-name')
     expect(line.closest('p')?.className).not.toMatch(/text-\[\d+px\]|text-xs/)
+  })
+
+  it('Heartbeats with nothing yet: the compact card says what shows there and how to set one up', async () => {
+    const { useSettingsStore } = await import('@/stores/settings')
+    const opened: unknown[][] = []
+    const real = useSettingsStore.getState().openSettings
+    useSettingsStore.setState({ openSettings: ((...a: unknown[]) => void opened.push(a)) as never })
+    try {
+      renderInRoom(room, <Tile phase={LIVE} />)
+      pick('heartbeats')
+      const card = screen.getByTestId('tile-heartbeats-empty')
+      expect(card.textContent).toContain('No heartbeats yet')
+      expect(card.textContent).toContain('A heartbeat wakes sales on a schedule. Each run shows here.')
+      fireEvent.click(screen.getByRole('button', { name: 'Set up heartbeats' }))
+      expect(opened).toEqual([['projects', 'ws-sales', 'schedule']])
+    } finally {
+      useSettingsStore.setState({ openSettings: real })
+    }
   })
 })
 

@@ -54,28 +54,57 @@ export function StateAction({
   onClick,
   glyph,
   disabled,
+  busy = false,
   children,
 }: {
-  onClick: () => void
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
   glyph?: React.ReactNode
   disabled?: boolean
+  /** In flight: the shared Button's disabled look, a spinner for the glyph. */
+  busy?: boolean
   children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <Button variant="accent" size="md" onClick={onClick} disabled={disabled} className="inline-flex items-center gap-1.5">
-      {glyph}
+    <Button
+      variant="accent"
+      size="md"
+      onClick={onClick}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
+      className="inline-flex items-center gap-1.5"
+    >
+      {busy ? <Spinner /> : glyph}
       {children}
     </Button>
   )
 }
 
-/** "Try again" as the card's primary button. */
-export function StateRetry({ onClick, disabled }: { onClick: () => void; disabled?: boolean }): React.JSX.Element {
+/** "Try again" as the card's primary button; "Trying again…" while it runs. */
+export function StateRetry({ onClick, busy = false }: { onClick: () => void; busy?: boolean }): React.JSX.Element {
   return (
-    <StateAction onClick={onClick} glyph={<RetryGlyph />} disabled={disabled}>
-      Try again
+    <StateAction onClick={onClick} glyph={<RetryGlyph />} busy={busy}>
+      {busy ? 'Trying again…' : 'Try again'}
     </StateAction>
   )
+}
+
+/** The server's own reason, quietly, in its inset: the UI face (the code
+ *  face in Terminal, the system font in Glass). */
+export function StateReason({ reason }: { reason: string }): React.JSX.Element {
+  return (
+    <p
+      data-load-detail=""
+      title="What the server said"
+      className="mt-1 max-w-full px-2.5 py-1 type-hint text-[var(--color-text-secondary)] bg-[var(--color-wash-1)] rounded-[var(--radius-field)] break-words"
+    >
+      {reason}
+    </p>
+  )
+}
+
+/** Tidy a server's reason for the inset (no trailing full stop). */
+export function tidyReason(detail: string | null | undefined): string {
+  return detail?.trim().replace(/[.\s]+$/, '') ?? ''
 }
 
 export function ProjectStateCard({
@@ -98,7 +127,7 @@ export function ProjectStateCard({
   icon?: React.ReactNode
   testId?: string
 }): React.JSX.Element {
-  const reason = detail?.trim().replace(/[.\s]+$/, '')
+  const reason = tidyReason(detail)
   const glyph = kind === 'loading' ? <Spinner /> : kind === 'error' ? <WarnIcon /> : icon
   return (
     <Surface
@@ -122,15 +151,7 @@ export function ProjectStateCard({
       )}
       <p className="type-heading text-[var(--color-text-primary)]">{title}</p>
       {children && <p className="type-row text-[var(--color-text-secondary)] max-w-[34ch]">{children}</p>}
-      {reason && (
-        <p
-          data-load-detail=""
-          title="What the server said"
-          className="mt-1 max-w-full px-2.5 py-1 type-hint font-mono text-[var(--color-text-muted)] bg-[var(--color-wash-1)] rounded-[var(--radius-field)] break-words"
-        >
-          {reason}
-        </p>
-      )}
+      {reason && <StateReason reason={reason} />}
       {action && <div className="mt-2.5 w-full flex justify-center">{action}</div>}
     </Surface>
   )

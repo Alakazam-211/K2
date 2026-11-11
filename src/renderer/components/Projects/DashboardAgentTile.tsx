@@ -46,7 +46,8 @@ import {
 } from './wake-member-session'
 import { resolveTileView, TILE_VIEWS, tileViewKey, type TileView } from './tile-view'
 import { projectDefaultView, type ProjectDefaultView, type ProjectGroupMemberInfo } from './projects-api'
-import { TileState, TryAgain } from './TileState'
+import { TileState, TileStateLink, TryAgain } from './TileState'
+import { openOnAgentsPage } from '@/lib/page-selection'
 
 const AgentAvatar = lazy(() =>
   import('@/components/Thread/ThreadSenderAvatars').then((m) => ({ default: m.AgentAvatar })),
@@ -265,21 +266,52 @@ export function DashboardAgentTile({
     }
   }, [projectPath, workspaceId, scope])
 
+  // Try again on a failed read: the failure stays up with its button busy
+  // ("Trying again…") until the read answers.
+  const [retrying, setRetrying] = useState(false)
   const retry = useCallback(async (): Promise<void> => {
-    setFailedWake(false)
-    setPhase({ kind: 'checking' })
-    setPhase(await resolveMemberSession(scope, workspaceId))
+    setRetrying(true)
+    try {
+      const next = await resolveMemberSession(scope, workspaceId)
+      setFailedWake(false)
+      setPhase(next)
+    } finally {
+      setRetrying(false)
+    }
   }, [workspaceId, scope])
 
   if (!member || !projectPath) {
     return (
-      <TileState title="This agent isn’t here any more.">
+      <TileState title="This agent isn’t here any more">
         It left the project or was removed from this server.
       </TileState>
     )
   }
 
-  const heartbeats = view === 'heartbeats' ? <InputsList cwd={projectPath} active={pageLive} /> : null
+  const heartbeats =
+    view === 'heartbeats' ? (
+      <InputsList
+        cwd={projectPath}
+        active={pageLive}
+        empty={
+          <TileState
+            title="No heartbeats yet"
+            testId="tile-heartbeats-empty"
+            action={
+              <Button
+                variant="quiet"
+                size="md"
+                onClick={() => useSettingsStore.getState().openSettings('projects', workspaceId, 'schedule')}
+              >
+                Set up heartbeats
+              </Button>
+            }
+          >
+            A heartbeat wakes {name} on a schedule. Each run shows here.
+          </TileState>
+        }
+      />
+    ) : null
 
   if (phase.kind === 'live') {
     // One tree for every view, so TerminalPane never remounts on a switch.
@@ -322,11 +354,14 @@ export function DashboardAgentTile({
     return (
       <TileState
         error
-        title={failedWake ? `Couldn’t wake ${name}.` : `Couldn’t reach ${name}’s session.`}
+        title={failedWake ? `Couldn’t wake ${name}` : `Couldn’t reach ${name}’s session`}
         detail={phase.message}
         testId="tile-error"
-        action={<TryAgain onClick={() => void (failedWake ? wake() : retry())} />}
-      />
+        action={<TryAgain busy={retrying} onClick={() => void (failedWake ? wake() : retry())} />}
+      >
+        If it keeps failing,{' '}
+        <TileStateLink onClick={() => openOnAgentsPage(workspaceId)}>open {name} on the Agents page</TileStateLink>.
+      </TileState>
     )
   }
 
@@ -335,12 +370,12 @@ export function DashboardAgentTile({
   if (view === 'heartbeats') return <TileHost view={view}>{heartbeats}</TileHost>
   if (view === 'terminal' || !addr) {
     if (phase.kind === 'checking') return <TileState busy title={`Checking ${name}’s session…`} />
-    if (phase.kind === 'waking') return <TileState busy title={`Waking ${name}…`} />
+    if (phase.kind === 'waking') return <TileState busy title={`Waking ${name}…`}>It opens here once it’s up.</TileState>
     return (
       <TileState
-        title={`${name} is asleep.`}
+        title={`${name} is asleep`}
         action={
-          <Button variant="accent" onClick={() => void wake()}>
+          <Button variant="accent" size="md" onClick={() => void wake()}>
             Wake
           </Button>
         }

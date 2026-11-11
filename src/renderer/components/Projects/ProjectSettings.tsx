@@ -849,7 +849,7 @@ function AgentsSection({
       <SettingsGroup
         card
         title="Agents"
-        hint="The Point of contact gets every message posted in the project’s chat."
+        hint="The point of contact gets every message posted in the project’s chat."
         action={
           readOnly ? undefined : (
             <Button variant="quiet" onClick={goToPicker} className="inline-flex items-center gap-1.5">
@@ -891,7 +891,7 @@ function AgentsSection({
                     title="It gets every message in the project’s chat."
                     onClick={() => void setPoc(m.workspaceId, display)}
                   >
-                    Make Point of contact
+                    Make point of contact
                   </Button>
                 )}
                 {!readOnly && (

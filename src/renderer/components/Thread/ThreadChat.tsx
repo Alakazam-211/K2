@@ -249,6 +249,9 @@ export interface ThreadChatComposerProps {
   onSend: () => void
   /** A send in flight: Send is off. */
   busy?: boolean
+  /** The box is off (the chat isn't there yet, or didn't load): no typing,
+   *  no Send, no stash; the field reads as disabled. */
+  disabled?: boolean
   placeholder: string
   inputTestId?: string
   sendTestId?: string
@@ -286,6 +289,7 @@ export function ThreadChatComposer({
   onChange,
   onSend,
   busy = false,
+  disabled = false,
   placeholder,
   inputTestId,
   sendTestId,
@@ -314,7 +318,7 @@ export function ThreadChatComposer({
     },
     [inputRef],
   )
-  const canSend = !busy && (value.trim().length > 0 || canSendEmpty)
+  const canSend = !busy && !disabled && (value.trim().length > 0 || canSendEmpty)
   const hasTools = tools != null && tools !== false
 
   // Grow with the text; past 3 lines the box stacks (the kit's rule, the
@@ -348,6 +352,8 @@ export function ThreadChatComposer({
       data-zen-compose=""
       data-compose-look="zen"
       data-thread-chat-compose=""
+      data-compose-disabled={disabled ? '' : undefined}
+      aria-disabled={disabled || undefined}
       data-testid={testId}
       {...rootData}
       onDragOver={
@@ -374,7 +380,7 @@ export function ThreadChatComposer({
       {above}
       <div className="flex min-w-0 items-end" style={{ gap: 8 }}>
         {leading}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-w-0 flex-1 flex-col" style={disabled ? { opacity: 0.6 } : undefined}>
           <ThreadComposeBox stacked={stacked} drawer={drawer}>
             {tools}
             <div className="relative min-w-0 flex-1" style={{ alignSelf: 'center', ...threadComposeTextSlotStyle(stacked) }}>
@@ -394,6 +400,7 @@ export function ThreadChatComposer({
                   }
                 }}
                 rows={1}
+                disabled={disabled}
                 placeholder={placeholder}
                 title="Enter to send, Shift+Enter for a new line"
                 className="block w-full resize-none overflow-x-hidden bg-transparent focus:outline-none selectable-copy"
@@ -419,7 +426,7 @@ export function ThreadChatComposer({
               />
             </div>
             <ThreadComposeStackSpacer stacked={stacked} />
-            {stash && value.length === 0 && !canSendEmpty ? (
+            {stash && !disabled && value.length === 0 && !canSendEmpty ? (
               <ThreadRoundButton
                 label={stashButtonLabel(stash.count)}
                 title={`Stash: ${stash.chord} saves what you're writing; ${stash.chord} on an empty box opens this`}

@@ -702,6 +702,7 @@ export function CreateProjectForm({ onDone }: { onDone: () => void }): React.JSX
       const store = useProjectGroupsStore.getState()
       await store.fetchGroups()
       store.selectGroup(group.id)
+      useToastStore.getState().addToast(`Created ${group.name ?? trimmed}.`, 'success')
       onDone()
     } catch (err) {
       setError(createErrorMessage(err))
@@ -744,8 +745,13 @@ export function CreateProjectForm({ onDone }: { onDone: () => void }): React.JSX
         <Button variant="quiet" disabled={busy} onClick={onDone}>
           Cancel
         </Button>
-        <Button variant="accent" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>
-          Create
+        <Button
+          variant="accent"
+          disabled={busy || name.trim().length === 0}
+          aria-busy={busy || undefined}
+          onClick={() => void submit()}
+        >
+          {busy ? 'Creating…' : 'Create'}
         </Button>
       </div>
     </div>

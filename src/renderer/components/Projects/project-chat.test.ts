@@ -156,15 +156,15 @@ describe('composerPlaceholder (exactly "Message <PoC agent name>")', () => {
     expect(composerPlaceholder(members, 'w2')).toBe('Message relay')
   })
 
-  it('"Message the PoC" when no PoC exists or its row is unresolvable', () => {
-    expect(composerPlaceholder(members, null)).toBe('Message the PoC')
-    expect(composerPlaceholder(members, 'w9')).toBe('Message the PoC')
+  it('"Message the point of contact" when no PoC exists or its row is unresolvable', () => {
+    expect(composerPlaceholder(members, null)).toBe('Message the point of contact')
+    expect(composerPlaceholder(members, 'w9')).toBe('Message the point of contact')
     expect(
       composerPlaceholder(
         [{ workspaceId: 'w3', name: null, path: null, agentName: null, createdAt: 3 }],
         'w3',
       ),
-    ).toBe('Message the PoC')
+    ).toBe('Message the point of contact')
   })
 })
 
@@ -194,7 +194,7 @@ describe('deliveredLine (§6.4 indicator mapping)', () => {
   })
 
   it('delivered with no resolvable PoC label still reads sanely', () => {
-    expect(deliveredLine(true, null, null)).toBe('delivered to the PoC')
+    expect(deliveredLine(true, null, null)).toBe('delivered to the point of contact')
   })
 
   it('author-is-poc renders nothing (should not occur for owner posts — handled gracefully)', () => {
@@ -203,20 +203,20 @@ describe('deliveredLine (§6.4 indicator mapping)', () => {
 
   it('no_poc is a normal stored-only outcome, not an unreachable session', () => {
     expect(deliveredLine(false, 'no_poc', null)).toBe(
-      'stored — this project has no Point of Contact yet',
+      'saved; this project has no point of contact yet',
     )
   })
 
   it('queued (the daemon answers before the inject) is on its way, not a failure', () => {
     expect(deliveredLine(false, 'queued', 'Ada')).toBe('sending to Ada')
-    expect(deliveredLine(false, 'queued', null)).toBe('sending to the PoC')
+    expect(deliveredLine(false, 'queued', null)).toBe('sending to the point of contact')
   })
 
-  it('every other failure reason → "PoC session unreachable"', () => {
-    expect(deliveredLine(false, 'wake_timeout', 'Ada')).toBe('PoC session unreachable')
-    expect(deliveredLine(false, 'no_agent_mode', 'Ada')).toBe('PoC session unreachable')
-    expect(deliveredLine(false, 'workspace_not_found', 'Ada')).toBe('PoC session unreachable')
-    expect(deliveredLine(false, null, 'Ada')).toBe('PoC session unreachable')
+  it('every other failure reason → the point of contact didn’t get it', () => {
+    expect(deliveredLine(false, 'wake_timeout', 'Ada')).toBe('Ada didn’t get it: its session isn’t answering')
+    expect(deliveredLine(false, 'no_agent_mode', 'Ada')).toBe('Ada didn’t get it: its session isn’t answering')
+    expect(deliveredLine(false, 'workspace_not_found', 'Ada')).toBe('Ada didn’t get it: its session isn’t answering')
+    expect(deliveredLine(false, null, null)).toBe('the point of contact didn’t get it: its session isn’t answering')
   })
 })
 

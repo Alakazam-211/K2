@@ -15,6 +15,16 @@ import { fetchAllFeedback, type FeedbackListRow, type FeedbackProjectRef } from 
 import { TicketBoard } from './TicketBoard'
 import { ProjectStateCard, StateCanvas, StateRetry } from '@/components/Projects/StateCard'
 
+/** The empty tab's icon: a speech bubble with a question in it. */
+function AskIcon(): React.JSX.Element {
+  return (
+    <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 5.5h16v10.5H9.5L5 19.5V16H4z" />
+      <path d="M10 9.2a2 2 0 1 1 2.6 1.9c-.4.15-.6.5-.6.9v.3M12 13.9v.1" />
+    </svg>
+  )
+}
+
 /** Pure scoping helper (unit-tested): the fan-out refs for a project's
  *  member list. Members whose workspace has been unregistered since
  *  they were added carry null name/path — they have no list route to
@@ -86,18 +96,31 @@ export function ProjectFeedbackTab({
   }, [loadList])
 
   // Nothing loaded and the read failed: one state card in place of the
-  // board (a refetch failing under loaded tickets keeps the board's line).
-  if (error && !retrying && (rows === null || rows.length === 0)) {
+  // board (a refetch failing under loaded questions keeps the board's
+  // line). Try again keeps the card up, its button busy.
+  if (error && (rows === null || rows.length === 0)) {
     return (
       <StateCanvas>
         <ProjectStateCard
           kind="error"
-          title="Couldn’t load this project’s tickets"
+          title="Couldn’t load your agents’ questions"
           detail={error}
           testId="project-feedback-error"
-          action={<StateRetry onClick={retry} />}
+          action={<StateRetry onClick={retry} busy={retrying} />}
         >
-          K2 couldn’t get the tickets from the server. Your agents are fine.
+          K2 couldn’t get them from the server. Your agents are fine.
+        </ProjectStateCard>
+      </StateCanvas>
+    )
+  }
+
+  // Nothing yet: one card in place of the board (no list to search, no
+  // detail pane asking for a pick).
+  if (rows !== null && rows.length === 0) {
+    return (
+      <StateCanvas>
+        <ProjectStateCard kind="empty" icon={<AskIcon />} title="Nothing to answer yet" testId="project-feedback-empty">
+          When an agent in this project asks you something, it shows up here.
         </ProjectStateCard>
       </StateCanvas>
     )
@@ -109,7 +132,6 @@ export function ProjectFeedbackTab({
       error={error}
       revision={revision}
       onMutated={onMutated}
-      emptyHint="When an agent in this project asks you something, it shows up here."
     />
   )
 }

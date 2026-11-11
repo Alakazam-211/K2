@@ -79,7 +79,7 @@ import {
   type TermPhase,
 } from './DashboardAgentTile'
 import { TileState, TryAgain } from './TileState'
-import { emptyDashboardHint } from './ProjectStates'
+import { EmptyDashboardState } from './ProjectStates'
 import { PaneChrome } from './PaneChrome'
 import { TileBarTools, tileToolsPlace } from './TileBarTools'
 import {
@@ -262,6 +262,8 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
   // Bumped by Try again: restart the read (the poll stops on a
   // connection-level failure).
   const [attempt, setAttempt] = useState(0)
+  // Try again in flight: the failure stays up, its button busy.
+  const [retrying, setRetrying] = useState(false)
 
   // Initial host-aware read + the FileViewerPane 2s poll, guarded by
   // hasSelectionWithin so a copy-in-progress never collapses. Focused
@@ -279,6 +281,7 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
       },
       apply: (content) => {
         if (cancelled) return
+        setRetrying(false)
         setPhase((prev) =>
           prev.kind === 'ready' && prev.content === content
             ? prev
@@ -287,7 +290,9 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
       },
       onError: (err) => {
         const reason = err instanceof Error ? err.message : err ? String(err) : null
-        if (!cancelled) setPhase((prev) => (prev.kind === 'ready' ? prev : { kind: 'missing', reason }))
+        if (cancelled) return
+        setRetrying(false)
+        setPhase((prev) => (prev.kind === 'ready' ? prev : { kind: 'missing', reason }))
       },
       shouldSkip: () => hasSelectionWithin(rootRef.current),
     })
@@ -302,19 +307,20 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
     return (
       <TileState
         error
-        title={`Couldn’t open ${fileName}.`}
+        title={`Couldn’t open ${fileName}`}
         detail={phase.reason}
         testId="doc-tile-error"
         action={
           <TryAgain
+            busy={retrying}
             onClick={() => {
-              setPhase({ kind: 'loading' })
+              setRetrying(true)
               setAttempt((n) => n + 1)
             }}
           />
         }
       >
-        It may have moved, or this server can’t read it right now.
+        It may have moved or been renamed. Close this tile, or open the file again from Resources on the left.
       </TileState>
     )
   }
@@ -833,18 +839,13 @@ export default function ProjectDashboard({
            first-pane target). */
         <div
           ref={gridRef}
-          className={`flex-1 flex items-center justify-center border border-dashed text-center px-8 transition-colors ${
+          className={`flex-1 min-h-0 flex items-center justify-center p-6 transition-colors ${
             externalDrag && !readOnly
-              ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/5'
-              : 'border-[var(--color-border)]'
+              ? 'outline outline-2 -outline-offset-2 outline-dashed outline-[var(--color-accent)] bg-[var(--color-accent)]/5'
+              : ''
           }`}
         >
-          <div data-testid="dashboard-empty" role="status">
-            <p className="type-row text-[var(--color-text-primary)]">Nothing on this dashboard yet</p>
-            <p className="type-hint text-[var(--color-text-secondary)] mt-1 max-w-[48ch]">
-              {emptyDashboardHint(show.members.length, readOnly)}
-            </p>
-          </div>
+          <EmptyDashboardState groupId={show.id} memberCount={show.members.length} readOnly={readOnly} />
         </div>
       ) : (
         <div ref={gridRef} className="relative flex-1 min-h-0 min-w-0">

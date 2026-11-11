@@ -302,7 +302,17 @@ const TONE_CLASS: Record<ThreadInputTone, string> = {
 /** The workspace's heartbeat fires (and other outside input), newest at the
  *  bottom, read again every 15 s while `active`. Thread view's Heartbeats
  *  drawer, and an agent tile's Heartbeats view (Projects) full-tile. */
-export function InputsList({ cwd, active }: { cwd: string; active: boolean }): JSX.Element {
+export function InputsList({
+  cwd,
+  active,
+  empty,
+}: {
+  cwd: string
+  active: boolean
+  /** In place of the empty line, when there is nothing yet (the Projects
+   *  page's agent tile shows its own tile state). */
+  empty?: ReactNode
+}): JSX.Element {
   // A tab's cwd can be one of the workspace's worktrees: read by the
   // workspace's own path.
   const projectPath =
@@ -332,6 +342,8 @@ export function InputsList({ cwd, active }: { cwd: string; active: boolean }): J
     body = <PanelError what="heartbeats" error={error} onRetry={refresh} />
   } else if (loading && rows.length === 0) {
     body = <PanelNote testId="thread-drawer-loading">Loading heartbeats…</PanelNote>
+  } else if (rows.length === 0 && empty) {
+    body = empty
   } else if (rows.length === 0) {
     body = (
       <PanelNote testId="thread-drawer-empty">

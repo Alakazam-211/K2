@@ -1,21 +1,49 @@
 // The state inside an agent or document tile on the Projects page, and the
-// quiet Try again every failure on the page offers. Kept apart from
+// quiet Try again every tile failure offers. Kept apart from
 // ProjectStates.tsx so the tiles import no page code.
+//
+// A tile state is the page's state card made compact (StateCard.tsx): a
+// title, one plain line, the server's reason quietly, the next step. Every
+// tile places it the same way, a fixed step under the tile's bar (the step
+// gives way in a short tile), so tiles side by side show theirs level.
 
 import React from 'react'
-import { Button, Spinner } from '@/components/ui'
+import { Button, Spinner, Surface } from '@/components/ui'
+import { RetryGlyph, StateReason, tidyReason } from './StateCard'
 
-/** The quiet "Try again" every failure offers. */
+/** The quiet "Try again" every tile failure offers; "Trying again…" while
+ *  it runs (the shared Button's disabled look). */
 export function TryAgain({ onClick, busy = false }: { onClick: () => void; busy?: boolean }): React.JSX.Element {
   return (
-    <Button variant="quiet" onClick={onClick} disabled={busy}>
-      Try again
+    <Button
+      variant="quiet"
+      size="md"
+      onClick={onClick}
+      disabled={busy}
+      aria-busy={busy || undefined}
+      className="inline-flex items-center gap-1.5"
+    >
+      {busy ? <Spinner /> : <RetryGlyph />}
+      {busy ? 'Trying again…' : 'Try again'}
     </Button>
   )
 }
 
-/** A state inside an agent or document tile: one plain sentence, an
- *  optional line, the server's reason quietly, and the next step, centred. */
+/** A text link inside a tile state's line (the next step after Try again). */
+export function TileStateLink({ onClick, children }: { onClick: () => void; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      data-k2-focus=""
+      onClick={onClick}
+      className="relative px-0.5 -mx-0.5 text-[var(--color-accent-text)] underline underline-offset-2 hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+    >
+      {children}
+    </button>
+  )
+}
+
+/** A state inside an agent or document tile: the compact state card. */
 export function TileState({
   title,
   children,
@@ -26,42 +54,38 @@ export function TileState({
   testId,
 }: {
   title: string
+  /** One plain line under the title. */
   children?: React.ReactNode
+  /** The server's own reason, shown quietly in its inset. */
   detail?: string | null
   action?: React.ReactNode
-  /** Checking or waking: a spinner and the quiet colour. */
+  /** Checking, waking or opening: a spinner beside the title. */
   busy?: boolean
   error?: boolean
   testId?: string
 }): React.JSX.Element {
-  const reason = detail?.trim().replace(/[.\s]+$/, '')
+  const reason = tidyReason(detail)
   return (
-    <div
-      className="h-full flex flex-col items-center justify-center gap-1 px-4 text-center"
-      role={error ? 'alert' : 'status'}
-      aria-busy={busy || undefined}
-      data-tile-state={error ? 'error' : busy ? 'busy' : 'idle'}
-      data-testid={testId}
-    >
-      <p
-        className={`type-row max-w-[40ch] flex items-center gap-2 ${
-          busy ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-primary)]'
-        }`}
+    <div className="h-full min-h-0 overflow-y-auto flex flex-col items-center px-3 pb-3" data-tile-state-host="">
+      {/* The fixed step under the bar; it shrinks first in a short tile. */}
+      <div aria-hidden="true" className="flex-[0_1_48px] min-h-3" />
+      <Surface
+        chamfer
+        material="tile"
+        role={error ? 'alert' : 'status'}
+        aria-busy={busy || undefined}
+        data-tile-state={error ? 'error' : busy ? 'busy' : 'idle'}
+        data-testid={testId}
+        className="flex-shrink-0 w-full max-w-[340px] px-5 pt-4 pb-4 flex flex-col items-center gap-1.5 text-center"
       >
-        {busy && <Spinner />}
-        <span>{title}</span>
-      </p>
-      {children && <p className="type-hint text-[var(--color-text-secondary)] max-w-[40ch]">{children}</p>}
-      {reason && (
-        <p
-          data-load-detail=""
-          title="What the server said"
-          className="mt-1 max-w-[40ch] px-2.5 py-1 type-hint font-mono text-[var(--color-text-muted)] bg-[var(--color-wash-1)] rounded-[var(--radius-field)] break-words"
-        >
-          {reason}
+        <p className="type-name font-semibold text-[var(--color-text-primary)] flex items-center justify-center gap-2 max-w-full">
+          {busy && <Spinner />}
+          <span className="min-w-0 break-words">{title}</span>
         </p>
-      )}
-      {action && <div className="mt-2 flex items-center gap-2">{action}</div>}
+        {children && <p className="type-hint text-[var(--color-text-secondary)] max-w-[36ch]">{children}</p>}
+        {reason && <StateReason reason={reason} />}
+        {action && <div className="mt-1.5 flex flex-wrap items-center justify-center gap-2">{action}</div>}
+      </Surface>
     </div>
   )
 }

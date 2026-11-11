@@ -160,6 +160,18 @@ describe('opening', () => {
     expect(screen.getByTestId('project-settings-sheet-close')).toBeTruthy()
   })
 
+  it('opened at Agents (an empty dashboard’s Add an agent): the add-an-agent search has the cursor', async () => {
+    const opener = renderWithOpener()
+    act(() => useProjectGroupsStore.getState().openProjectSettingsSheet('g2', opener, 'agents'))
+    const sheet = await screen.findByTestId('project-settings-sheet')
+    await waitFor(() => {
+      const field = sheet.querySelector('input[aria-label="Search agents to add"]')
+      expect(field).not.toBeNull()
+      expect(document.activeElement).toBe(field)
+    })
+    expect(useProjectGroupsStore.getState().settingsSheet?.focus).toBe('agents')
+  })
+
   it('off the Projects page the same entry opens Settings → Projects instead', () => {
     usePageViewStore.setState({ page: 'agents' })
     openProjectSettings('g2')

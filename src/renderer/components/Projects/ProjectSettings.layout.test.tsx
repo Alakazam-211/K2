@@ -376,12 +376,12 @@ describe('quiet destructive actions, steady paths, search follows', () => {
     expect(screen.queryByRole('menuitem', { name: /Make point of contact/ })).toBeNull()
   })
 
-  it('each agent but the point of contact has a quiet "Make Point of contact" beside its … menu', async () => {
+  it('each agent but the point of contact has a quiet "Make point of contact" beside its … menu', async () => {
     await renderReady()
     const rows = screen.getAllByTestId('project-agent-row')
     const [poc, ada] = rows
-    expect(within(poc).queryByRole('button', { name: 'Make Point of contact' })).toBeNull()
-    const make = within(ada).getByRole('button', { name: 'Make Point of contact' })
+    expect(within(poc).queryByRole('button', { name: 'Make point of contact' })).toBeNull()
+    const make = within(ada).getByRole('button', { name: 'Make point of contact' })
     expect(make.className).not.toMatch(/status-error|danger|accent/)
     fireEvent.click(make)
     await waitFor(() => expect(projectsApi.setProjectGroupPoc).toHaveBeenCalledWith(expect.anything(), 'g1', 'w2'))

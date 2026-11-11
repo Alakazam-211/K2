@@ -69,11 +69,14 @@ function SelectedProjectView({
   show,
   error,
   onReload,
+  retrying = false,
 }: {
   /** The project's name from the list (its state cards say which). */
   name: string
   show: ProjectGroupShow | null
   error: string | null
+  /** Try again in flight (its button busy on the failure card). */
+  retrying?: boolean
   /** Read the project again (Try again; after creating its dashboard). */
   onReload: () => void
 }): React.JSX.Element {
@@ -115,7 +118,7 @@ function SelectedProjectView({
     )
   }, [paneRequestNonce])
 
-  if (error || !show) return <ProjectLoadState name={name} error={error} onRetry={onReload} />
+  if (error || !show) return <ProjectLoadState name={name} error={error} onRetry={onReload} retrying={retrying} />
 
   const activeDashboard = dashboards.find((d) => d.id === activeTab) ?? null
 
@@ -243,6 +246,8 @@ export default function ProjectsPage(): React.JSX.Element | null {
   const [showError, setShowError] = useState<{ id: string; message: string } | null>(null)
   // Bumped by Try again / a created dashboard: read the project again.
   const [showNonce, setShowNonce] = useState(0)
+  // Try again in flight: the failure stays up with its button busy.
+  const [showRetrying, setShowRetrying] = useState(false)
   // Stay mounted after the first visit so a remote dashboard does not
   // re-pay spawn + grid handshake on every Agents ↔ Projects switch.
   const [everOpened, setEverOpened] = useState(false)
@@ -282,19 +287,22 @@ export default function ProjectsPage(): React.JSX.Element | null {
         if (cancelled) return
         setShow(data)
         setShowError(null)
+        setShowRetrying(false)
       })
       .catch((e) => {
         if (cancelled) return
         setShowError({ id: selectedGroupId, message: e instanceof Error ? e.message : String(e) })
+        setShowRetrying(false)
       })
     return () => {
       cancelled = true
     }
   }, [isOpen, selectedGroupId, revision, showNonce])
 
-  // Try again: clear the failure (the loading card shows) and read again.
+  // Read the project again (Try again, a created dashboard). A failure
+  // stays up meanwhile, its Try again busy ("Trying again…").
   const reloadShow = useCallback((): void => {
-    setShowError(null)
+    setShowRetrying(true)
     setShowNonce((n) => n + 1)
   }, [])
 
@@ -406,6 +414,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
               name={selectedGroup.name}
               show={show?.id === selectedGroup.id ? show : null}
               error={showError?.id === selectedGroup.id ? showError.message : null}
+              retrying={showRetrying}
               onReload={reloadShow}
             />
           )}

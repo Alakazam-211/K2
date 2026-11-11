@@ -109,7 +109,7 @@ export function composerPlaceholder(
   pocWorkspaceId: string | null,
 ): string {
   const label = pocLabel(members, pocWorkspaceId)
-  return label !== null ? `Message ${label}` : 'Message the PoC'
+  return label !== null ? `Message ${label}` : 'Message the point of contact'
 }
 
 // ── Connect-role post gate (not window-mode) ─────────────────────────────
@@ -134,11 +134,11 @@ export function deliveredLine(
   deliveryReason: string | null,
   poc: string | null,
 ): string | null {
-  if (delivered) return `delivered to ${poc ?? 'the PoC'}`
+  if (delivered) return `delivered to ${poc ?? 'the point of contact'}`
   // 0.46.8: the daemon answers before the inject, which runs after on the
   // PoC's delivery lane; the outcome is not known yet.
-  if (deliveryReason === 'queued') return `sending to ${poc ?? 'the PoC'}`
+  if (deliveryReason === 'queued') return `sending to ${poc ?? 'the point of contact'}`
   if (deliveryReason === 'author-is-poc') return null
-  if (deliveryReason === 'no_poc') return 'stored — this project has no Point of Contact yet'
-  return 'PoC session unreachable'
+  if (deliveryReason === 'no_poc') return 'saved; this project has no point of contact yet'
+  return `${poc ?? 'the point of contact'} didn’t get it: its session isn’t answering`
 }

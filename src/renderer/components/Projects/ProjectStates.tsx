@@ -9,6 +9,7 @@
 
 import React, { useEffect, useState } from 'react'
 import { useProjectGroupsStore } from '@/stores/project-groups'
+import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore } from '@/stores/window-mode'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { primaryScope } from '@/kessel/server-scope'
@@ -38,13 +39,13 @@ export function ProjectListLoadState(): React.JSX.Element {
   }
   return (
     <Canvas>
-      {error && !retrying ? (
+      {error ? (
         <ProjectStateCard
           kind="error"
           title="Couldn’t load your projects"
           detail={error}
           testId="projects-list-error"
-          action={<StateRetry onClick={retry} />}
+          action={<StateRetry onClick={retry} busy={retrying} />}
         >
           K2 couldn’t get the project list from the server. Your agents are fine.
         </ProjectStateCard>
@@ -88,11 +89,14 @@ export function ProjectLoadState({
   name,
   error,
   onRetry,
+  retrying = false,
 }: {
   /** The project's name, from the list (the card says which failed). */
   name: string | null
   error: string | null
   onRetry: () => void
+  /** Try again in flight: the failure stays up, its button busy. */
+  retrying?: boolean
 }): React.JSX.Element {
   return (
     <Canvas>
@@ -102,7 +106,7 @@ export function ProjectLoadState({
           title={name ? `Couldn’t load ${name}` : 'Couldn’t load this project'}
           detail={error}
           testId="project-load-error"
-          action={<StateRetry onClick={onRetry} />}
+          action={<StateRetry onClick={onRetry} busy={retrying} />}
         >
           K2 couldn’t get this project from the server. Your agents are fine.
         </ProjectStateCard>
@@ -147,7 +151,10 @@ export function NoDashboardState({
     setBusy(true)
     setError(null)
     createProjectGroupDashboard(primaryScope(), groupId, 'Main')
-      .then(() => onCreated())
+      .then((d) => {
+        useToastStore.getState().addToast(`Created the ${d?.name ?? 'Main'} dashboard.`, 'success')
+        onCreated()
+      })
       .catch((e) => setError(createErrorMessage(e)))
       .finally(() => setBusy(false))
   }
@@ -159,7 +166,7 @@ export function NoDashboardState({
           title="Couldn’t create the dashboard"
           detail={error}
           testId="project-dashboard-create-error"
-          action={<StateRetry onClick={create} disabled={busy} />}
+          action={<StateRetry onClick={create} busy={busy} />}
         >
           Nothing changed in this project.
         </ProjectStateCard>
@@ -171,8 +178,8 @@ export function NoDashboardState({
           testId="project-no-dashboard"
           action={
             canCreate ? (
-              <StateAction onClick={create} disabled={busy} glyph={<PlusGlyph />}>
-                Create a dashboard
+              <StateAction onClick={create} busy={busy} glyph={<PlusGlyph />}>
+                {busy ? 'Creating…' : 'Create a dashboard'}
               </StateAction>
             ) : undefined
           }
@@ -186,9 +193,44 @@ export function NoDashboardState({
   )
 }
 
+/** A dashboard with nothing on it: the state card, saying what to do next.
+ *  A project with no agents yet gets Add an agent, which opens the
+ *  project's settings sheet at its Agents half. (The dashboard around it is
+ *  the drop target for a dragged agent.) */
+export function EmptyDashboardState({
+  groupId,
+  memberCount,
+  readOnly,
+}: {
+  groupId: string
+  memberCount: number
+  readOnly: boolean
+}): React.JSX.Element {
+  return (
+    <ProjectStateCard
+      kind="empty"
+      icon={<ProjectsIcon />}
+      title="Nothing on this dashboard yet"
+      testId="dashboard-empty"
+      action={
+        !readOnly && memberCount === 0 ? (
+          <StateAction
+            glyph={<PlusGlyph />}
+            onClick={(e) => useProjectGroupsStore.getState().openProjectSettingsSheet(groupId, e.currentTarget, 'agents')}
+          >
+            Add an agent
+          </StateAction>
+        ) : undefined
+      }
+    >
+      {emptyDashboardHint(memberCount, readOnly)}
+    </ProjectStateCard>
+  )
+}
+
 /** What an empty dashboard tells the person to do next. */
 export function emptyDashboardHint(memberCount: number, readOnly: boolean): string {
   if (readOnly) return 'Agents show here once the project’s owner or an admin adds them.'
-  if (memberCount === 0) return 'Add an agent to this project in its settings, then drag it here.'
+  if (memberCount === 0) return 'Add an agent, then click it on the left to open it here.'
   return 'Drag an agent from Members onto this space, or click one to open it.'
 }

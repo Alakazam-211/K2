@@ -18,7 +18,7 @@
 
 import React, { useCallback, useEffect, useId, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { useProjectGroupsStore } from '@/stores/project-groups'
+import { useProjectGroupsStore, type ProjectSettingsSheetFocus } from '@/stores/project-groups'
 import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
@@ -91,10 +91,22 @@ export default function ProjectSettingsSheet(): React.JSX.Element | null {
   }, [sheet, pageOpen, settingsOpen, gone])
 
   if (!sheet || !pageOpen || settingsOpen) return null
-  return <SheetFrame key={sheet.groupId} groupId={sheet.groupId} opener={sheet.opener} />
+  return <SheetFrame key={sheet.groupId} groupId={sheet.groupId} opener={sheet.opener} focus={sheet.focus} />
 }
 
-function SheetFrame({ groupId, opener }: { groupId: string; opener: HTMLElement | null }): React.JSX.Element {
+/** The add-an-agent search in the sheet's Agents half. */
+const ADD_AGENT_SEARCH = 'input[aria-label="Search agents to add"]'
+
+function SheetFrame({
+  groupId,
+  opener,
+  focus,
+}: {
+  groupId: string
+  opener: HTMLElement | null
+  /** 'agents': open at the Agents half, the cursor in its search. */
+  focus?: ProjectSettingsSheetFocus
+}): React.JSX.Element {
   const titleId = useId()
   const frameRef = useRef<HTMLDivElement>(null)
   const groupName = useProjectGroupsStore((s) => s.groups?.find((g) => g.id === groupId)?.name ?? null)
@@ -125,6 +137,20 @@ function SheetFrame({ groupId, opener }: { groupId: string; opener: HTMLElement 
       })
     }
   }, [opener])
+
+  // Opened at Agents (the empty dashboard's Add an agent): once the
+  // project's settings show, the add-an-agent search takes the cursor and
+  // comes into view. Once per opening.
+  const ready = shown !== null && !switching
+  const focusedAt = useRef(false)
+  useEffect(() => {
+    if (focus !== 'agents' || !ready || focusedAt.current) return
+    const field = frameRef.current?.querySelector<HTMLInputElement>(ADD_AGENT_SEARCH)
+    if (!field) return
+    focusedAt.current = true
+    field.scrollIntoView?.({ block: 'center' })
+    field.focus({ preventScroll: true })
+  }, [focus, ready])
 
   // Keep focus inside: anything focused behind the sheet (a page shortcut,
   // a stray click target) comes back to it. Layers the sheet opened over

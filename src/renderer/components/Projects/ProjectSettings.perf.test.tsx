@@ -433,7 +433,7 @@ function makePocButton(agent: string): HTMLElement {
   const row = screen
     .getAllByTestId('project-agent-row')
     .find((r) => r.textContent?.includes(agent))
-  // The row's … menu (the row also has a quiet "Make Point of contact").
+  // The row's … menu (the row also has a quiet "Make point of contact").
   fireEvent.click(must(row?.querySelector('button[aria-label^="More actions for"]') ?? null))
   return screen.getByRole('menuitem', { name: /Make point of contact/ })
 }

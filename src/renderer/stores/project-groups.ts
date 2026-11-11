@@ -204,14 +204,18 @@ interface ProjectGroupsState {
   /** The project whose settings show in a sheet over the Projects page
    *  (ProjectSettingsSheet), and the control that opened it (focus goes
    *  back there on close). null = no sheet. Session-only. */
-  settingsSheet: { groupId: string; opener: HTMLElement | null } | null
+  settingsSheet: { groupId: string; opener: HTMLElement | null; focus?: ProjectSettingsSheetFocus } | null
   /** Show a project's settings in a sheet over the Projects page (the
    *  nav's right-click, the project bar's ⚙). `opener` defaults to the
    *  focused element; pass the clicked control where a click doesn't
    *  focus it (WebKit buttons). */
-  openProjectSettingsSheet: (groupId: string, opener?: HTMLElement | null) => void
+  openProjectSettingsSheet: (groupId: string, opener?: HTMLElement | null, focus?: ProjectSettingsSheetFocus) => void
   closeProjectSettingsSheet: () => void
 }
+
+/** Where the project settings sheet opens: 'agents' scrolls to the
+ *  Agents half and puts the cursor in its add-an-agent search. */
+export type ProjectSettingsSheetFocus = 'agents'
 
 export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   groups: null,
@@ -230,10 +234,10 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   dashPaneNumbers: {},
   tileViews: {},
   settingsSheet: null,
-  openProjectSettingsSheet: (groupId, opener) => {
+  openProjectSettingsSheet: (groupId, opener, focus) => {
     const focused = typeof document !== 'undefined' ? document.activeElement : null
     const fallback = focused instanceof HTMLElement && focused !== document.body ? focused : null
-    set({ settingsSheet: { groupId, opener: opener ?? fallback } })
+    set({ settingsSheet: { groupId, opener: opener ?? fallback, ...(focus ? { focus } : {}) } })
   },
   closeProjectSettingsSheet: () => {
     if (get().settingsSheet) set({ settingsSheet: null })

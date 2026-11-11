@@ -147,7 +147,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   const [truncated, setTruncated] = useState(false)
   const [limit, setLimit] = useState(MESSAGES_DEFAULT_LIMIT)
   const [loadError, setLoadError] = useState<string | null>(null)
-  // Try again in flight (the loading card shows meanwhile).
+  // Try again in flight: the failure stays up, its button busy.
   const [retrying, setRetrying] = useState(false)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
 
@@ -406,6 +406,10 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   }, [])
 
   const poc = pocLabel(show.members, show.pocWorkspaceId)
+  // The stream's own state: loading, or the read failed (a failed refetch
+  // under loaded messages too: what's shown may be stale). Meanwhile the
+  // message box is off.
+  const chatState: 'loading' | 'error' | null = loadError !== null ? 'error' : messages === null ? 'loading' : null
   // Save to stash (the "+" menu and Cmd+S, as in the Thread box); the
   // source is the PoC agent the chat's posts land in.
   const stash = useComposeStash({ scope: primaryScope(), agent: poc, agentName: poc })
@@ -487,11 +491,38 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
       {/* 0.46.3: paths that are files in the project's Point of Contact
           workspace are links, like the main Thread. */}
       <WorkspaceFileLinks workspace={show.pocWorkspaceId} scope={primaryScope()}>
-      <ThreadChatScope className="flex-1 flex flex-col min-h-0" style={{ background: 'var(--zen-canvas)' }} testId="project-chat-thread">
+      {/* Loading or failed: the page's state card, outside the Thread box
+          (whose rules keep its own controls square and ringless), so the
+          card, its button and its focus ring are the page's in every
+          Style. The canvas is the Thread box's (--zen-canvas). */}
+      {chatState && (
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col bg-[var(--color-bg)]" data-project-chat-state={chatState}>
+          <StateCanvas>
+            {chatState === 'error' ? (
+              <ProjectStateCard
+                kind="error"
+                title="Couldn’t load the chat"
+                detail={loadError}
+                testId="project-chat-error"
+                action={<StateRetry onClick={retryLoad} busy={retrying} />}
+              >
+                K2 couldn’t get this project’s messages from the server. Your agents are fine.
+              </ProjectStateCard>
+            ) : (
+              <ProjectStateCard kind="loading" title="Loading the chat…" testId="project-chat-loading" />
+            )}
+          </StateCanvas>
+        </div>
+      )}
+      <ThreadChatScope
+        className={chatState ? 'flex-shrink-0 flex flex-col' : 'flex-1 flex flex-col min-h-0'}
+        style={{ background: 'var(--zen-canvas)' }}
+        testId="project-chat-thread"
+      >
         {/* The stream, oldest-first — SelectableRegion re-enables text
             selection (form textareas work without this; div text does not
             under body user-select:none / parent gesture handlers). */}
-        <SelectableRegion className="flex-1 min-h-0 flex flex-col">
+        <SelectableRegion className={chatState ? 'hidden' : 'flex-1 min-h-0 flex flex-col'}>
         <div
           ref={scrollRef}
           className="flex-1 overflow-y-auto overflow-x-hidden min-h-0"
@@ -508,23 +539,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
             win.onScroll()
           }}
         >
-          {loadError && !retrying ? (
-            <StateCanvas>
-              <ProjectStateCard
-                kind="error"
-                title="Couldn’t load the chat"
-                detail={loadError}
-                testId="project-chat-error"
-                action={<StateRetry onClick={retryLoad} />}
-              >
-                K2 couldn’t get this project’s messages from the server.
-              </ProjectStateCard>
-            </StateCanvas>
-          ) : messages === null ? (
-            <StateCanvas>
-              <ProjectStateCard kind="loading" title="Loading the chat…" testId="project-chat-loading" />
-            </StateCanvas>
-          ) : messages.length === 0 ? (
+          {chatState || messages === null ? null : messages.length === 0 ? (
             <ThreadChatEmpty testId="project-chat-empty">
               <p className="type-row" style={{ color: 'var(--zen-text)' }}>No messages yet</p>
               <p className="type-hint mt-1">
@@ -614,6 +629,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
             sendTestId="project-chat-send"
             onSend={send}
             busy={busy}
+            disabled={chatState !== null}
             inputRef={chatInputRef}
             drawer={
               <StashDrawerSlot drawer={<ZenActivityDrawer turn={pocTurn} />} open={stashDrawer.open}>
@@ -630,7 +646,13 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
               </StashDrawerSlot>
             }
             stash={{ count: stashCount, open: stashDrawer.open && !stashDrawer.closing, onToggle: stashDrawer.toggle, chord: stash.chord }}
-            placeholder={composerPlaceholder(show.members, show.pocWorkspaceId)}
+            placeholder={
+              chatState === 'loading'
+                ? 'Loading the chat…'
+                : chatState === 'error'
+                  ? 'The chat didn’t load'
+                  : composerPlaceholder(show.members, show.pocWorkspaceId)
+            }
             onKeyDown={(e) => {
               // Keep Esc local — the page-level Esc focuses the
               // dashboard's last-used terminal pane (§6.7.4).
@@ -647,6 +669,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
               <ThreadRoundButton
                 label="Save to stash"
                 title="Save to stash"
+                disabled={chatState !== null}
                 lightable
                 menuOpen={plusMenu.menuOpen}
                 buttonRef={plusRef}
@@ -662,7 +685,13 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                 +
               </ThreadRoundButton>
             }
-            above={sendError ? <ThreadChatNote error>{sendError}</ThreadChatNote> : undefined}
+            above={
+              sendError ? (
+                <ThreadChatNote error testId="project-chat-send-error">
+                  {sendFailedLine(sendError)}
+                </ThreadChatNote>
+              ) : undefined
+            }
             // Hide (left) beside the box, across from Send (right, in the
             // box); level with a one-line field (40px) at its bottom.
             leading={
@@ -691,6 +720,13 @@ function HideChatButton(): React.JSX.Element {
       onToggle={() => useProjectGroupsStore.getState().setChatCollapsed(true)}
     />
   )
+}
+
+/** The line above the box when a send fails: what failed, the server's
+ *  reason, and that the text is still there to send again. */
+export function sendFailedLine(reason: string): string {
+  const why = reason.trim().replace(/[.\s]+$/, '')
+  return `Couldn’t send your message${why ? ` (${why})` : ''}. It’s still in the box: press Enter to try again.`
 }
 
 /** The one session a project chat post lands in: the PoC workspace's

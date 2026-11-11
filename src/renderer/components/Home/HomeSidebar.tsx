@@ -53,6 +53,7 @@ import { AgentRowButton, SingleProjectItem } from '@/components/Sidebar/Sidebar'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
 import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
+import { NAV_FOOTER_ROW_CLASS, NavFooterButton, NavFooterPlus } from '@/components/Sidebar/NavFooterButton'
 import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAvatars'
 import { RowDropLine, dropTargetIndex, useRowDragReorder } from '@/components/Sidebar/row-drag-reorder'
 import HomePicker from './HomePicker'
@@ -489,22 +490,15 @@ export default function HomeSidebar(): React.JSX.Element {
           the window's top-bar toggle, prd-zen-gardens-v1 G5/G6.) */}
       <div ref={barRef} className="relative p-3 border-t border-[var(--color-border)] flex flex-col gap-2" data-nav-footer="">
         {pickerOpen && <AddAgentPicker home={home} />}
-        <div className="flex gap-2">
-          <button
-            data-material="frost"
-            data-frost-shape="pill"
-            data-nav-control=""
-            className="no-drag flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] transition-colors text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08]"
+        <div className={NAV_FOOTER_ROW_CLASS}>
+          <NavFooterButton
+            label="Add Agent"
+            icon={<NavFooterPlus />}
             onClick={() => setPickerOpen(!pickerOpen)}
             aria-expanded={pickerOpen}
             aria-haspopup="dialog"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            Add Agent
-          </button>
-          <SidebarCollapseButton />
+          />
+          <SidebarCollapseButton reserveSlot />
         </div>
       </div>
     </div>

@@ -1,15 +1,45 @@
 import { useSidebarStore } from '@/stores/sidebar'
 import { useSetupChecklistShowing } from '@/stores/first-run'
+import { Button } from '@/components/ui'
 
 /** Collapse or open the workspaces nav. Lives at the bottom of the nav
  *  (collapse) and on the rails (open). The collapse side is hidden while
  *  the setup checklist shows, since the nav holds it until the intro is
- *  done; a nav already collapsed stays so, and the rail still opens it. */
-export function SidebarCollapseButton(): React.JSX.Element | null {
+ *  done; a nav already collapsed stays so, and the rail still opens it.
+ *
+ *  `reserveSlot` (the nav footer): the shared quiet Button, one system with
+ *  Add Workspace / Add Agent and Get started (the control edge and cut
+ *  corners in Terminal, the Frost round in Glass). While the checklist hides
+ *  it, it keeps its slot invisible (out of the tab order and the
+ *  accessibility tree), so the footer row keeps one shape. */
+export function SidebarCollapseButton({ reserveSlot = false }: { reserveSlot?: boolean } = {}): React.JSX.Element | null {
   const collapsed = useSidebarStore((s) => s.isCollapsed)
   const toggle = useSidebarStore((s) => s.toggle)
   const checklistShowing = useSetupChecklistShowing()
-  if (checklistShowing && !collapsed) return null
+  const hidden = checklistShowing && !collapsed
+  if (hidden && !reserveSlot) return null
+  const label = collapsed ? 'Open workspaces sidebar' : 'Collapse workspaces sidebar'
+  const glyph = <DoubleChevron direction={collapsed ? 'right' : 'left'} className="w-4 h-4" />
+  if (reserveSlot) {
+    return (
+      <Button
+        variant="quiet"
+        size="md"
+        data-material="frost"
+        data-frost-shape="round"
+        data-nav-control=""
+        data-nav-collapse=""
+        className={'flex items-center justify-center w-8 h-8 p-0! flex-shrink-0 [--k2-ch-bw:1px]' + (hidden ? ' invisible' : '')}
+        onClick={hidden ? undefined : () => toggle()}
+        title={hidden ? undefined : label}
+        aria-label={label}
+        aria-hidden={hidden ? true : undefined}
+        tabIndex={hidden ? -1 : undefined}
+      >
+        {glyph}
+      </Button>
+    )
+  }
   return (
     <button
       type="button"
@@ -18,10 +48,10 @@ export function SidebarCollapseButton(): React.JSX.Element | null {
       data-nav-control=""
       className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 bg-white/[0.04] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08] transition-colors"
       onClick={() => toggle()}
-      title={collapsed ? 'Open workspaces sidebar' : 'Collapse workspaces sidebar'}
-      aria-label={collapsed ? 'Open workspaces sidebar' : 'Collapse workspaces sidebar'}
+      title={label}
+      aria-label={label}
     >
-      <DoubleChevron direction={collapsed ? 'right' : 'left'} className="w-4 h-4" />
+      {glyph}
     </button>
   )
 }

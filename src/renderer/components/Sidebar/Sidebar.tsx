@@ -4,6 +4,7 @@ import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useSettingsStore } from '@/stores/settings'
 import { SidebarCollapseButton } from './SidebarCollapseButton'
+import { NAV_FOOTER_ROW_CLASS, NavFooterButton, NavFooterPlus } from './NavFooterButton'
 import { useToastStore } from '@/stores/toast'
 import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
 import { useAgentStatus } from '@/components/AgentStatus/useAgentStatus'
@@ -802,31 +803,16 @@ export default function Sidebar(): React.JSX.Element {
       <SetupChecklist />
 
       {/* Add Workspace + collapse the nav */}
-      <div className="p-3 border-t border-[var(--color-border)] flex gap-2" data-nav-footer="">
-        <button
-          data-material="frost"
-          data-frost-shape="pill"
-          data-nav-control=""
-          className={`no-drag flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] transition-colors ${
-            !focusGroupsEnabled && projects.length >= 15
-              ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
-              : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08]'
-          }`}
-          onClick={!focusGroupsEnabled && projects.length >= 15 ? undefined : handleAddProject}
-          disabled={!focusGroupsEnabled && projects.length >= 15}
-        >
-          <svg
-            className="w-3.5 h-3.5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-          </svg>
-          Add Workspace
-        </button>
-        <SidebarCollapseButton />
+      <div className="p-3 border-t border-[var(--color-border)]" data-nav-footer="">
+        <div className={NAV_FOOTER_ROW_CLASS}>
+          <NavFooterButton
+            label="Add Workspace"
+            icon={<NavFooterPlus />}
+            onClick={!focusGroupsEnabled && projects.length >= 15 ? undefined : handleAddProject}
+            disabled={!focusGroupsEnabled && projects.length >= 15}
+          />
+          <SidebarCollapseButton reserveSlot />
+        </div>
       </div>
 
       {/* Worktree creation dialog */}

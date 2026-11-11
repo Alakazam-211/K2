@@ -37,6 +37,7 @@ import {
 import { nextSavedSidebarWidth, useSidebarDisplayWidth, useSidebarStore } from '@/stores/sidebar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
 import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
+import { NAV_FOOTER_ROW_CLASS, NavFooterButton, NavFooterPlus } from '@/components/Sidebar/NavFooterButton'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -187,6 +188,48 @@ describe('sidebar collapse button', () => {
     render(<SidebarCollapseButton />)
     expect(screen.queryByRole('button', { name: 'Open workspaces sidebar' })).not.toBeNull()
     expect(useSidebarStore.getState().isCollapsed).toBe(true)
+  })
+
+  it('in the nav footer it keeps its slot while hidden: invisible, out of the tab order and the tree, and inert', () => {
+    render(<SidebarCollapseButton reserveSlot />)
+    const slot = (): HTMLElement => document.querySelector('[data-nav-collapse]') as HTMLElement
+    // The footer's button: the shared quiet Button (cut corners in Terminal).
+    expect(slot().getAttribute('data-k2-chamfer')).toBe('control')
+    expect(slot().className).toContain('border-[var(--color-control-edge)]')
+    expect(collapse()).toBe(slot())
+    showChecklist()
+    // Still drawn (so Add Workspace keeps its width), but not there for anyone.
+    expect(slot()).not.toBeNull()
+    expect(slot().className).toContain('invisible')
+    expect(slot().getAttribute('aria-hidden')).toBe('true')
+    expect(slot().tabIndex).toBe(-1)
+    expect(collapse()).toBeNull()
+    fireEvent.click(slot())
+    expect(useSidebarStore.getState().isCollapsed).toBe(false)
+    hideChecklist()
+    expect(slot().className).not.toContain('invisible')
+    expect(slot().getAttribute('aria-hidden')).toBeNull()
+    expect(collapse()).toBe(slot())
+  })
+})
+
+describe('nav footer action', () => {
+  it('is the shared quiet Button with a one-line label that drops to the icon when the row is narrow', () => {
+    render(
+      <div className={NAV_FOOTER_ROW_CLASS}>
+        <NavFooterButton label="Add Workspace" icon={<NavFooterPlus />} />
+      </div>,
+    )
+    const btn = screen.getByRole('button', { name: 'Add Workspace' })
+    expect(btn.getAttribute('data-k2-chamfer')).toBe('control')
+    expect(btn.className).toContain('border-[var(--color-control-edge)]')
+    expect(btn.className).toContain('whitespace-nowrap')
+    expect(btn.getAttribute('title')).toBe('Add Workspace')
+    expect(btn.parentElement!.className).toContain('@container')
+    const label = btn.querySelector('[data-nav-footer-label]')!
+    expect(label.className).toContain('truncate')
+    // Below 12.5rem the label is for screen readers only, so the name stays.
+    expect(label.className).toContain('@max-[12.5rem]:sr-only')
   })
 })
 

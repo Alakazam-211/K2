@@ -174,7 +174,7 @@ export function groupSecrets(secrets: readonly VaultSecret[]): SecretGroup[] {
   }
   const byName = (a: VaultSecret, b: VaultSecret) => a.name.localeCompare(b.name)
   const out: SecretGroup[] = []
-  if (server.length) out.push({ key: 'server', title: 'Server (all my agents, or shared)', rows: server.sort(byName) })
+  if (server.length) out.push({ key: 'server', title: 'Server (only the agents you share with)', rows: server.sort(byName) })
   for (const ws of [...byWs.keys()].sort((a, b) => a.localeCompare(b))) {
     out.push({ key: `ws:${ws}`, title: ws, rows: byWs.get(ws)!.sort(byName) })
   }
@@ -1263,7 +1263,7 @@ function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; 
         )}
         <label className="flex items-center gap-1.5 text-[var(--color-text-secondary)] cursor-pointer">
           <Radio checked={scope === 'server'} onChange={() => setScope('server')} />
-          all my agents
+          the server (share it with agents after)
         </label>
       </fieldset>
       <div className={`block type-hint ${muted}`}>

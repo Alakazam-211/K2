@@ -553,6 +553,9 @@ pub struct CardResult {
     pub inject_was: Option<String>,
     /// Shares above the card's delivery that went with the old value.
     pub shares_removed: usize,
+    /// A server-scope card: the workspace (id) it was shared with on Save,
+    /// the one that asked, at the card's delivery.
+    pub shared_with: Option<String>,
 }
 
 /// Pending recovery-key setup (phrase shown once, not yet confirmed).
@@ -3932,6 +3935,27 @@ impl LocalVault {
                 Ok(((), Vec::new()))
             })?;
         }
+        // Field report (0.46.10): a server secret reaches no agent until it
+        // is shared (§ server scope needs a grant per workspace), so a card
+        // saved for the server gave the agent that asked nothing, while the
+        // card told the person "<agent> will get this as …". The person's
+        // Save is the share the card showed: the asking workspace gets it at
+        // the card's delivery. Other workspaces still need their own share.
+        let shared_with = if scope.kind == ScopeKind::Server {
+            let g = GrantRequest {
+                selector: Selector::Id(out.meta.id.clone()),
+                consumer: Consumer::workspace(req.workspace_id.clone()),
+                delivery,
+                env_name: None,
+                file_name: None,
+                hosts_narrowed: None,
+                expires_at: None,
+                version: None,
+            };
+            Some(self.grant_inner(g, actor)?.consumer.id)
+        } else {
+            None
+        };
         self.request_set_status(card_id, "set", Some(&actor.stamp()), Some(&out.meta.id), &actor.stamp())?;
         let reference = crate::refs::VaultRef {
             scope_kind: scope.kind,
@@ -3940,7 +3964,7 @@ impl LocalVault {
             version: None,
         }
         .render();
-        Ok(CardResult { meta: out.meta, reference, trimmed: out.trimmed, replaced, inject_was, shares_removed })
+        Ok(CardResult { meta: out.meta, reference, trimmed: out.trimmed, replaced, inject_was, shares_removed, shared_with })
     }
 
     /// A session secret that is over: destroyed, or past its time (the

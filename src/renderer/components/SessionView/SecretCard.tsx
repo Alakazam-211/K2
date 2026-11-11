@@ -171,7 +171,7 @@ function sameInject(a: SecretInject | null, b: SecretInject | null): boolean {
 /** Where the secret is kept, in the plain sentence. */
 export const SECRET_SCOPE_WORDS: Record<SecretScope, string> = {
   workspace: 'this workspace',
-  server: 'all your agents',
+  server: 'this server (other agents get it when you share it)',
   session: 'this session only',
 }
 
@@ -443,7 +443,7 @@ export function SecretCard({
 
   const scopeLabel: Record<SecretScope, string> = {
     workspace: `${workspace} only`,
-    server: 'all my agents',
+    server: 'the server (share with others later)',
     session: 'this session',
   }
   const deliveryLabel: Record<SecretDelivery, string> = {

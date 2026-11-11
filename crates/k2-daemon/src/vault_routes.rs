@@ -853,14 +853,33 @@ fn show(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) -
     // C (2026-10-30): how to use it at the delivery it has. For an agent,
     // the delivery that reaches it (its grants included); else the
     // secret's own. Fetch is named only for an HTTP key with sites.
-    let have = c
+    let item = c
         .requester()
         .ok()
         .and_then(|who| vault.spawn_items(&who).ok())
         .and_then(|items| items.into_iter().find(|i| i.secret_id == m.id))
-        .map(|i| i.delivery)
-        .unwrap_or(m.default_delivery);
-    out["use"] = json!(k2_vault::handoff::use_hint_for(have, &m.name, !m.hosts.is_empty()));
+        .map(|i| i.delivery);
+    // Field report (0.46.10): an agent that sees a server secret it wasn't
+    // shared (its workspace may manage the vault) read the secret's own
+    // delivery here as its own. Nothing reaches it: say so, and the share.
+    use crate::vault_use_routes::Reach;
+    let unreached = match crate::vault_use_routes::reach(vault, c, &sel, &m) {
+        Some(Reach::Nothing) if item.is_none() => Some("it isn't shared with this workspace".to_string()),
+        Some(Reach::Ended(at)) if item.is_none() => Some(format!("its share with this workspace ended at {at}")),
+        _ => None,
+    };
+    let have = match (&unreached, item) {
+        (Some(_), _) => Delivery::None,
+        (None, Some(d)) => d,
+        (None, None) => m.default_delivery,
+    };
+    out["use"] = json!(match &unreached {
+        Some(why) => format!(
+            "nothing reaches you yet: {why}. A person shares it: {}",
+            crate::vault_use_routes::share_command(c, &m, if m.default_delivery == Delivery::None { Delivery::Fetch } else { m.default_delivery })
+        ),
+        None => k2_vault::handoff::use_hint_for(have, &m.name, !m.hosts.is_empty()),
+    });
     out["delivered"] = json!(have.as_str());
     // A: a person accepted it into this agent's workspace; what the agent
     // may take itself, no owner needed.

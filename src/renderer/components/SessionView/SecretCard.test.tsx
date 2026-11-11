@@ -114,7 +114,7 @@ describe('SecretCard: the simple view', () => {
 
   it('says each choice in plain words', () => {
     card({ delivery: 'env', scope: 'server' }, async () => {})
-    expect(plan()).toBe('sales will get this as an environment variable it can read, for all your agents.')
+    expect(plan()).toBe('sales will get this as an environment variable it can read, for this server (other agents get it when you share it).')
     cleanup()
     card({ delivery: 'fetch', scope: 'session', hosts: ['https://api.stripe.com:443', 'https://files.stripe.com:443'] }, async () => {})
     expect(plan()).toBe(
@@ -314,7 +314,7 @@ describe('SecretCard: other answers', () => {
     })
     card({ hosts: ['https://api.stripe.com:443'] }, onSubmit)
     openAdvanced()
-    fireEvent.click(screen.getByLabelText('all my agents'))
+    fireEvent.click(screen.getByLabelText('the server (share with others later)'))
     paste(VALUE)
     fireEvent.click(screen.getByTestId('thread-secret-submit'))
     expect((await screen.findByTestId('thread-secret-error')).textContent).toBe(

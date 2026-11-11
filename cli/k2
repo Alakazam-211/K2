@@ -23248,7 +23248,13 @@ WHERE IT GOES
                              until --ttl runs out: after a restart, the chat's next
                              session gets it within a minute (k2 vault sync: now).
                              Another chat never does. Workspace scope keeps it for
-                             good. If a guest or Member saves it
+                             good. server (an Owner or Admin saves it): kept on
+                             the server and shared with your workspace on Save;
+                             other workspaces get it only when a person shares
+                             it (k2 vault grant NAME --to ws:<name> --scope
+                             server). Name it with --scope server when you use
+                             it (k2 vault env-file NAME --scope server).
+                             If a guest or Member saves it
                              and a workspace secret has the same name, a bare name
                              keeps the workspace one: use it with --scope session.
   --kind api_key|password|generic|…  what it is, so the card names it (default
@@ -35116,14 +35122,17 @@ Example: k2 vault doctor --transcripts
 EOF
             ;;
         env-file) cat <<'EOF'
-k2 vault env-file NAME [NAME2 …] [--scope session] [--ttl 90s] [--wait 10m]
+k2 vault env-file NAME [NAME2 …] [--scope session|server|ws:<name>] [--ttl 90s] [--wait 10m]
 k2 vault env-file --done <path>
 
 From a K2 terminal: a short-lived 0600 file of NAME=value lines for
 docker/podman --env-file, in a memory-backed folder. Removed after --ttl
 (90s, 10m or seconds; default 60s, 5s to 1h) or with --done. Each secret
-needs env delivery for you; a value with a line break is refused (use file
-delivery). --secret NAME works too. One value for a tool's stdin or a file
+needs env delivery for you: your workspace's own secret set to env, or a
+server (or other workspace's) secret shared with your workspace as env
+(k2 vault grant NAME --to ws:<you> --as env --scope server, by a person;
+then name it with --scope server). A value with a line break is refused
+(use file delivery). --secret NAME works too. One value for a tool's stdin or a file
 flag: k2 vault file NAME. --wait 10m blocks until a person saves the card
 that asks for it (see k2 vault file --help).
 

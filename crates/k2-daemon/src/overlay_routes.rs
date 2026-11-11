@@ -3257,7 +3257,24 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         1 => " K2 removed 1 share that could read more than this card says.".to_string(),
         n => format!(" K2 removed {n} shares that could read more than this card says."),
     };
-    let told = format!("{}{}{}{}", file_delivery.as_ref().map_or("", |(_, words)| words.as_str()), session_only, same_name, shares);
+    // A server secret reaches only the workspaces it is shared with: Save
+    // shared it with the one that asked (field report 0.46.10).
+    let server_share = match &result.shared_with {
+        Some(ws) => {
+            let label = crate::vault::workspace_label(ws);
+            let now = if m.default_delivery == k2_vault::Delivery::Env {
+                format!(" In a running session: k2 vault env-file --secret {} --scope server.", m.name)
+            } else {
+                String::new()
+            };
+            format!(
+                " Shared with ws:{label} as {}; other workspaces get it only when a person shares it (k2 vault grant {} --to ws:<name> --scope server).{now}",
+                m.default_delivery, m.name
+            )
+        }
+        None => String::new(),
+    };
+    let told = format!("{}{}{}{}{}", file_delivery.as_ref().map_or("", |(_, words)| words.as_str()), session_only, same_name, shares, server_share);
     let inject_line = format!(
         "secret {} set → {} ({}{}{}). Use: {}{}{}{}",
         m.name,

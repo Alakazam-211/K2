@@ -686,9 +686,54 @@ pub(crate) fn use_refusal(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::S
         }
         _ => {}
     }
-    // Not readable at all here: fetch only (or a delivery below what was
-    // asked). Say how to use it, and who can widen it.
     let Ok(m) = vault.meta(sel, &c.actor) else { return e };
+    // Field report (0.46.10): a server secret saved as env and not shared
+    // with the caller's workspace was refused with "it is delivered to you
+    // as env only ... widen it: k2 vault delivery NAME env". The secret's own
+    // delivery is what its own workspace (or a share) gets, not what this
+    // caller has. Say what the caller really has, and the one step.
+    match reach(vault, c, sel, &m) {
+        Some(Reach::Own) | None => {}
+        Some(Reach::Shared(d)) if d.level() >= want.level() => {
+            if vault.in_rollback() {
+                return refuse(format!(
+                    "{name} is shared with this workspace as {d}, but K2 holds every share while the vault looks rolled back: the owner confirms it in Settings → Vault"
+                ));
+            }
+            return e;
+        }
+        Some(Reach::Shared(d)) => {
+            let now = if matches!(d, Delivery::Fetch | Delivery::Proxy) && !m.hosts.is_empty() {
+                format!(" (k2 vault fetch --secret {name}{} <url> works now: K2 adds it)", scope_arg(&m))
+            } else {
+                String::new()
+            };
+            return refuse(format!(
+                "{name} is shared with this workspace as {d}, not {want}{now}. To read it as {want}, a person shares it as {want}: {}{}",
+                share_command(c, &m, want),
+                after_share(want, &m)
+            ));
+        }
+        Some(Reach::Ended(at)) => {
+            return refuse(format!(
+                "{name}'s share with this workspace ended at {at}. A person shares it again: {}{}",
+                share_command(c, &m, want),
+                after_share(want, &m)
+            ));
+        }
+        Some(Reach::Nothing) => {
+            return refuse(format!(
+                "{name} isn't shared with this workspace, so nothing reaches you yet ({}; its delivery, {}, is what a share gives). A person shares it: {} (or Settings → Vault → Share){}",
+                if m.scope.kind == k2_vault::ScopeKind::Server { "a server secret".to_string() } else { format!("{}'s secret", scope_words(&m.scope)) },
+                m.default_delivery,
+                share_command(c, &m, want),
+                after_share(want, &m)
+            ));
+        }
+    }
+    // Its own workspace's (or chat's) secret, not readable here: fetch only
+    // (or a delivery below what was asked). Say how to use it, and who can
+    // widen it.
     let how = if matches!(m.default_delivery, Delivery::Fetch | Delivery::Proxy) && !m.hosts.is_empty() {
         format!("it is delivered to you for fetch only: k2 vault fetch --secret {name} <url> (K2 adds it; you never see it). ")
     } else {
@@ -700,6 +745,97 @@ pub(crate) fn use_refusal(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::S
     refuse(format!(
         "{name}: {how}To read it as {want}, its delivery must be widened by a person: k2 vault delivery {name} {want} (Settings → Vault); an agent may only widen secrets its own workspace created"
     ))
+}
+
+/// What reaches an agent caller of `m` (field report 0.46.10), from what it
+/// really has: its own workspace's or chat's secret, a share to its
+/// workspace (`ws:<id>`, `ws:*`) or its session at that share's delivery
+/// (the highest live one), only shares whose time ran out, or nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Reach {
+    Own,
+    Shared(k2_vault::Delivery),
+    /// When the last of them ended.
+    Ended(String),
+    Nothing,
+}
+
+/// [`Reach`] for an agent caller; `None` for anyone else.
+pub(crate) fn reach(vault: &LocalVault, c: &VaultCaller, sel: &Selector, m: &k2_vault::SecretMeta) -> Option<Reach> {
+    use k2_vault::{ConsumerKind, ScopeKind};
+    let ws = c.workspace_id()?;
+    let own = match m.scope.kind {
+        ScopeKind::Workspace => m.scope.id == ws,
+        ScopeKind::Session => c.session_id.as_deref() == Some(m.scope.id.as_str()),
+        _ => false,
+    };
+    if own {
+        return Some(Reach::Own);
+    }
+    let mine: Vec<k2_vault::Grant> = vault
+        .grants(sel, &c.actor)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|g| match g.consumer.kind {
+            ConsumerKind::Workspace => g.consumer.id == ws || g.consumer.id == "*",
+            ConsumerKind::Session => c.session_id.as_deref() == Some(g.consumer.id.as_str()),
+            _ => false,
+        })
+        .collect();
+    let now = chrono::Utc::now();
+    let ended_at = |g: &k2_vault::Grant| {
+        g.expires_at
+            .as_deref()
+            .and_then(|x| chrono::DateTime::parse_from_rfc3339(x).ok())
+            .map(|x| x.with_timezone(&chrono::Utc))
+            .filter(|x| *x < now)
+    };
+    if let Some(d) = mine.iter().filter(|g| ended_at(*g).is_none()).map(|g| g.delivery).max_by_key(|d| d.level()) {
+        return Some(Reach::Shared(d));
+    }
+    match mine.iter().filter_map(ended_at).max() {
+        Some(at) => Some(Reach::Ended(at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))),
+        None => Some(Reach::Nothing),
+    }
+}
+
+/// How people name where a secret lives (`ws:sales`, `server`).
+fn scope_words(s: &Scope) -> String {
+    match s.kind {
+        k2_vault::ScopeKind::Workspace => format!("ws:{}", crate::vault::workspace_label(&s.id)),
+        k2_vault::ScopeKind::Server => "server".to_string(),
+        k2_vault::ScopeKind::Session => "another chat".to_string(),
+        _ => s.id.clone(),
+    }
+}
+
+/// The share a person runs so the caller's workspace gets `m` as `want`.
+pub(crate) fn share_command(c: &VaultCaller, m: &k2_vault::SecretMeta, want: k2_vault::Delivery) -> String {
+    let ws = c.workspace_id().map(crate::vault::workspace_label).unwrap_or_else(|| "<name>".to_string());
+    format!("k2 vault grant {} --to ws:{ws} --as {want}{}", m.name, scope_arg(m))
+}
+
+/// ` --scope server` / ` --scope ws:<name>`: an agent's bare name means its
+/// own workspace's secret, so a shared one is named with its scope.
+fn scope_arg(m: &k2_vault::SecretMeta) -> String {
+    match m.scope.kind {
+        k2_vault::ScopeKind::Server | k2_vault::ScopeKind::Workspace => format!(" --scope {}", scope_words(&m.scope)),
+        _ => String::new(),
+    }
+}
+
+/// What a share of another scope's secret gives at once ([`after_grant`]
+/// with the `--scope` the agent then needs).
+fn after_share(d: k2_vault::Delivery, m: &k2_vault::SecretMeta) -> String {
+    match d {
+        k2_vault::Delivery::Env => format!(
+            " (then k2 vault env-file --secret {}{} works at once; ${} in new sessions)",
+            m.name,
+            scope_arg(m),
+            k2_vault::delivery::default_env_name(&m.name)
+        ),
+        _ => after_grant(d, &m.name),
+    }
 }
 
 /// Accepting is consent (2026-10-30): when a person accepted `m` into the

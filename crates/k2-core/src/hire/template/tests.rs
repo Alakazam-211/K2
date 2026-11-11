@@ -373,3 +373,191 @@ fn every_builtin_template_applies_headless() {
         assert!(!again.changed, "{}: {:?}", t.meta.id, again.rows);
     }
 }
+
+// ── first-conversation questions ─────────────────────────────────────
+//
+// These go through the hire body's JSON (`answers`, as /cli/agents/hire
+// and /v1/w take it), so they also build against a K2 without questions
+// and fail there.
+
+/// The picker types: each asks its person a few questions.
+const PICKERS: &[&str] = &["general", "writer", "researcher", "developer", "designer", "reviewer", "support", "ops", "lead", "app-owner"];
+
+/// Hire through converge with a JSON body (the hire routes' shape).
+fn hire_json(body: serde_json::Value) -> Result<crate::hire::converge::ConvergeOutcome, crate::hire::HireError> {
+    let req: crate::hire::converge::ConvergeRequest = serde_json::from_value(body).expect("a converge body");
+    crate::hire::converge::converge(&req, &HireCaller::Owner, &crate::hire::converge::ConvergeAuthority::unrestricted())
+}
+
+fn questions_of(id: &str) -> Vec<serde_json::Value> {
+    let t = resolve(id).unwrap_or_else(|e| panic!("{id}: {e}"));
+    t.show_json(false)["questions"].as_array().unwrap_or_else(|| panic!("{id}: show lists no questions")).clone()
+}
+
+#[test]
+fn every_picker_template_loads_with_its_questions() {
+    let _home = setup();
+    for id in PICKERS {
+        let qs = questions_of(id);
+        assert!((3..=5).contains(&qs.len()), "{id}: 3–5 questions, got {}", qs.len());
+        for q in &qs {
+            for k in ["id", "ask", "fills"] {
+                assert!(q[k].as_str().is_some_and(|s| !s.trim().is_empty()), "{id}: question without {k}: {q}");
+            }
+            let fills = q["fills"].as_str().unwrap();
+            assert!(fills == "role" || fills.starts_with("wiki:"), "{id}: {fills}");
+        }
+        let t = resolve(id).unwrap();
+        let hello = t.meta.hello.as_ref().expect("hello").brief.clone();
+        assert!(hello.contains("{{open_questions}}"), "{id}: the hello names the open questions: {hello}");
+    }
+    // The system types are K2 Onboarding's: no questions here.
+    for id in ["k5", "chief-of-staff"] {
+        assert_eq!(questions_of(id).len(), 0, "{id}");
+    }
+}
+
+#[test]
+fn template_loader_rejects_a_bad_question() {
+    let home = setup();
+    let note = "---\ntitle: Notes\n---\n\n# Notes\n\n## Audience\n";
+    let q = |id: &str, ask: &str, fills: &str| format!("\n[[questions]]\nid = \"{id}\"\nask = \"{ask}\"\nfills = \"{fills}\"\n");
+    let cases: Vec<(&str, String, &str)> = vec![
+        ("q-dup", format!("{}{}", q("who", "Who reads it?", "role"), q("who", "Who else?", "role")), "used twice"),
+        ("q-target", q("who", "Who reads it?", "notes:Notes"), "must be role or wiki:"),
+        ("q-note", q("who", "Who reads it?", "wiki:Nope#Audience"), "doesn't ship"),
+        ("q-heading", q("who", "Who reads it?", "wiki:Notes#Nope"), "no heading 'Nope'"),
+        ("q-ask", q("who", " ", "role"), "ask is 1–200 characters"),
+        ("q-id", q("Who", "Who reads it?", "role"), "must be a-z"),
+        ("q-unknown", "\n[[questions]]\nid = \"who\"\nask = \"Who?\"\nfills = \"role\"\nhint = \"x\"\n".to_string(), "unknown field"),
+    ];
+    for (id, extra, want) in cases {
+        library_template(&home, id, 1, &[
+            ("template.toml", &manifest(id, 1, &extra)),
+            ("ROLE.md", "You are {{name}}.\n"),
+            ("wiki/Notes.md", note),
+        ]);
+        let e = resolve(id).expect_err(id);
+        assert_eq!(e.code, "bad_template", "{id}: {e}");
+        assert!(e.hint.contains(want), "{id}: want {want:?} in {:?}", e.hint);
+    }
+    // A good one loads.
+    let good = format!("{}{}", q("who", "Who reads it?", "wiki:Notes#Audience"), q("where", "Where do drafts go?", "role"));
+    library_template(&home, "q-good", 1, &[("template.toml", &manifest("q-good", 1, &good)), ("ROLE.md", "You are {{name}}.\n"), ("wiki/Notes.md", note)]);
+    let ids: Vec<String> = questions_of("q-good").iter().map(|q| q["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(ids, vec!["who", "where"]);
+}
+
+#[test]
+fn template_hire_answers_render_into_role_and_wiki() {
+    let home = setup();
+    let path = ws(&home, "ada-writer");
+    let out = hire_json(serde_json::json!({
+        "path": path,
+        "name": "Ada",
+        "template": "writer",
+        "params": { "person": "Sam Lee" },
+        "answers": {
+            "audience": "Small-business owners who read on their phones.",
+            "samples": "https://example.k2.dev/blog\nThe two posts pinned at the top.",
+        },
+    }))
+    .expect("hire with answers");
+    let role = read(&path, ".k2/agent/ROLE.md");
+    assert!(role.contains("## What I know about my work"), "{role}");
+    assert!(role.contains("- **Who do you write for?** Small-business owners who read on their phones."), "{role}");
+    assert!(!role.contains("example.k2.dev"), "a wiki answer stays in its note: {role}");
+    assert!(role.contains("## Your first conversation"), "{role}");
+    assert!(role.contains("Answered at hire, in your wiki: [[Voice and style]]."), "{role}");
+    let open = role.split("Still open from your hire:").nth(1).expect("an open list");
+    assert!(open.contains("- Any words, tone or topics to avoid?") && open.contains("- Where should my drafts go when they're ready?"), "{open}");
+    assert!(!open.contains("Who do you write for?") && !open.contains("samples or links"), "only the open ones: {open}");
+    assert!(!role.contains("{{"), "{role}");
+    // The note: the answer under its heading, the other headings kept.
+    let voice = read(&path, ".k2/wiki/Voice and style.md");
+    assert!(
+        voice.contains("## Examples\n\nhttps://example.k2.dev/blog\nThe two posts pinned at the top.\n"),
+        "under Examples: {voice}"
+    );
+    assert!(voice.contains("## How they sound\n\n## Words they use and avoid\n\n## Examples"), "{voice}");
+    // The hello names only the open questions.
+    let t = out.template.expect("the template ran");
+    let hello = t.hello.clone().expect("hello on the first create");
+    assert!(hello.contains("\"Any words, tone or topics to avoid?\"; \"Where should my drafts go when they're ready?\""), "{hello}");
+    assert!(!hello.contains("Who do you write for?") && !hello.contains("samples or links"), "{hello}");
+    assert!(hello.contains("Sam Lee"), "{hello}");
+    let states = serde_json::to_value(&t).unwrap()["questions"].clone();
+    let answered: Vec<(&str, bool)> =
+        states.as_array().expect("questions").iter().map(|q| (q["id"].as_str().unwrap(), q["answered"].as_bool().unwrap())).collect();
+    assert_eq!(answered, vec![("audience", true), ("samples", true), ("avoid", false), ("drafts", false)]);
+}
+
+#[test]
+fn template_hire_with_no_answers_leaves_every_question_open() {
+    let home = setup();
+    let path = ws(&home, "plain-writer");
+    let out = hire_json(serde_json::json!({ "path": path, "template": "writer" })).expect("hire");
+    let role = read(&path, ".k2/agent/ROLE.md");
+    assert!(!role.contains("## What I know about my work"), "nothing answered: {role}");
+    assert!(role.contains("## Your first conversation"), "{role}");
+    for ask in ["Who do you write for?", "samples or links?", "topics to avoid?", "when they're ready?"] {
+        assert!(role.contains(ask), "{ask}: {role}");
+    }
+    let hello = out.template.expect("template").hello.expect("hello");
+    assert!(hello.contains("Still open from your hire: \"Who do you write for?\"; "), "{hello}");
+    let starter = resolve("writer").unwrap().files["wiki/Voice and style.md"].clone();
+    assert_eq!(read(&path, ".k2/wiki/Voice and style.md"), starter, "an unanswered note is the bare starter");
+
+    // Everything answered: nothing open, and the hello's open line drops.
+    let all = ws(&home, "all-writer");
+    let out = hire_json(serde_json::json!({ "path": all, "template": "writer", "answers": {
+        "audience": "Founders", "samples": "example.k2.dev/notes", "avoid": "Jargon", "drafts": "The drafts folder",
+    } }))
+    .expect("hire");
+    let role = read(&all, ".k2/agent/ROLE.md");
+    assert!(role.contains("Still open from your hire: nothing."), "{role}");
+    let hello = out.template.expect("template").hello.expect("hello");
+    assert!(!hello.contains("Still open"), "{hello}");
+}
+
+#[test]
+fn template_hire_refuses_an_unknown_answer_id() {
+    let home = setup();
+    let path = ws(&home, "bad-answer");
+    let e = hire_json(serde_json::json!({ "path": path, "template": "writer", "answers": { "tone": "warm" } })).expect_err("unknown id");
+    assert_eq!(e.code, "usage", "{e}");
+    assert!(e.hint.contains("no question 'tone'") && e.hint.contains("audience, samples, avoid, drafts"), "{}", e.hint);
+    assert!(!Path::new(&path).exists(), "nothing written");
+    let e = hire_json(serde_json::json!({ "path": path, "template": "writer", "answers": { "audience": "  " } })).expect_err("empty");
+    assert!(e.hint.contains("answer audience is empty"), "{}", e.hint);
+    let e = hire_json(serde_json::json!({ "path": path, "answers": { "audience": "x" } })).expect_err("no template");
+    assert!(e.hint.contains("answers go with a template"), "{}", e.hint);
+    assert!(!Path::new(&path).exists(), "nothing written");
+}
+
+#[test]
+fn template_reapply_with_answers_is_idempotent_and_keeps_edits() {
+    let home = setup();
+    let path = ws(&home, "again");
+    let body = serde_json::json!({ "path": path, "template": "developer", "answers": {
+        "repo": "~/code/shop", "done": "Tests pass and a PR is open.",
+    } });
+    hire_json(body.clone()).expect("first");
+    assert!(read(&path, ".k2/wiki/Codebase map.md").contains("## Layout\n\n~/code/shop\n"));
+    assert!(read(&path, ".k2/agent/ROLE.md").contains("- **What does done mean for a change"));
+    let before = snapshot(Path::new(&path));
+    let again = hire_json(body.clone()).expect("again");
+    assert!(!again.changed, "{:?}", again.template.map(|t| t.rows));
+    assert_eq!(snapshot(Path::new(&path)), before, "no file changed");
+    // The agent edits its notes and ROLE.md; new answers never overwrite.
+    let map = Path::new(&path).join(".k2/wiki/Codebase map.md");
+    fs::write(&map, "# Codebase map\n\nMine now.\n").unwrap();
+    let role_path = Path::new(&path).join(".k2/agent/ROLE.md");
+    let mine = format!("{}\nWe ship on Fridays.\n", read(&path, ".k2/agent/ROLE.md"));
+    fs::write(&role_path, &mine).unwrap();
+    let other = serde_json::json!({ "path": path, "template": "developer", "answers": { "repo": "~/code/other", "tests": "make test" } });
+    let out = hire_json(other).expect("re-apply with other answers");
+    assert_eq!(fs::read_to_string(&map).unwrap(), "# Codebase map\n\nMine now.\n");
+    assert_eq!(fs::read_to_string(&role_path).unwrap(), mine);
+    assert!(out.template.expect("template").hello.is_none(), "the hello went out once");
+}

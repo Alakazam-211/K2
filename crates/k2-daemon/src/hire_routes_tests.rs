@@ -652,6 +652,41 @@ fn template_hire_through_the_cli_door() {
     assert_eq!(st, 400);
 }
 
+/// First-conversation questions: `show` lists them for a hiring agent, the
+/// CLI door takes `answers` and reports which stay open, and an unknown
+/// question id is refused with the valid ids.
+#[test]
+fn template_hire_answers_through_the_cli_door() {
+    let _home = k2_core::test_env::TempHome::new();
+    ensure_test_root();
+    let agent = Who::Agent { project_id: "w".into(), session_id: "s".into() };
+    let (st, v) = cli(CLI_TEMPLATES_SHOW, agent, false, json!({}), &[("id", "writer")]);
+    assert_eq!(st, 200, "{v}");
+    let ids: Vec<&str> = v["template"]["questions"].as_array().expect("questions").iter().map(|q| q["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["audience", "samples", "avoid", "drafts"], "{v}");
+    assert!(v["template"]["questions"][0]["ask"].as_str().is_some_and(|a| a.ends_with('?')), "{v}");
+
+    let name = uniq("Ada");
+    let (st, e) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": name, "answers": { "tone": "warm" } }), &[]);
+    assert_eq!((st, e["error"]["code"].as_str()), (400, Some("usage")), "{e}");
+    assert!(e["error"]["hint"].as_str().unwrap().contains("audience, samples, avoid, drafts"), "{e}");
+
+    let (st, out) = cli(
+        CLI_HIRE,
+        Who::Owner,
+        true,
+        json!({ "template": "writer", "name": name, "answers": { "audience": "Founders", "drafts": "The drafts folder" } }),
+        &[],
+    );
+    assert_eq!(st, 200, "{out}");
+    let open: Vec<&str> = out["questions"].as_array().expect("questions").iter().filter(|q| q["answered"] == false).map(|q| q["id"].as_str().unwrap()).collect();
+    assert_eq!(open, vec!["samples", "avoid"], "{out}");
+    let hello = out["hello"].as_str().expect("hello");
+    assert!(hello.contains("samples or links") && !hello.contains("Who do you write for?"), "{hello}");
+    let role = std::fs::read_to_string(Path::new(out["path"].as_str().unwrap()).join(".k2/agent/ROLE.md")).expect("ROLE.md");
+    assert!(role.contains("- **Who do you write for?** Founders") && role.contains("The drafts folder"), "{role}");
+}
+
 /// A recipe member takes any template id (AT11); an API key can't hire a
 /// system template (checked on the plan, before anything is written).
 #[test]

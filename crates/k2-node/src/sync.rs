@@ -5,6 +5,16 @@
 //! tar of `k2-dirty/patch.diff` + `k2-dirty/untracked/…`. Each job gets
 //! its own detached worktree.
 //!
+//! **Tags (0.46.12).** A job's checkout has the repo's tags, so `git
+//! describe --tags` works there: a fetch from the remote takes the tags
+//! that point into the history it fetched or already has (git's own tag
+//! following: no `--no-tags`; a tag the node already has stays where it
+//! pointed, as in any clone, and never fails the fetch), and the
+//! controller's bundle carries the tags that point into the job's history
+//! (`refs/tags/*`, an unpushed local one too; these do update a tag).
+//! Nothing is fetched from anywhere else; tags are never tips
+//! ([`Git::tips`]).
+//!
 //! **Hardened git (V49).** Every git call runs with no hooks and no
 //! fsmonitor (`core.hooksPath=/dev/null`, `core.fsmonitor=false`), an
 //! explicit `--git-dir`, and never with its cwd inside a tree a job
@@ -237,7 +247,7 @@ impl Git {
             "-c", "credential.helper=",
             "-c", &pin,
             "--git-dir", &m,
-            "fetch", "-q", "--no-tags", "--no-recurse-submodules", url, "+refs/heads/*:refs/remotes/origin/*",
+            "fetch", "-q", "--no-recurse-submodules", url, "+refs/heads/*:refs/remotes/origin/*",
         ];
         let mut env = self.env.clone();
         env.push(("GIT_PROTOCOL_FROM_USER".into(), "0".into()));
@@ -280,7 +290,7 @@ impl Git {
             return Err("remote url can't start with '-'".into());
         }
         let m = mirror.display().to_string();
-        let args = ["--git-dir", &m, "fetch", "-q", "--no-tags", url, "+refs/heads/*:refs/remotes/origin/*"];
+        let args = ["--git-dir", &m, "fetch", "-q", url, "+refs/heads/*:refs/remotes/origin/*"];
         let out = match auth {
             None => self.git(&args, None, FETCH_LIMIT).await?,
             Some(c) => {
@@ -296,17 +306,23 @@ impl Git {
         Ok(())
     }
 
-    /// Up to 50 distinct ref tips, newest first.
+    /// Up to 50 distinct ref tips, newest first. Tags are not tips (an
+    /// annotated tag's object is no commit, and a repo's many tags would
+    /// crowd out the branches the controller cuts a bundle against).
     pub async fn tips(&self, mirror: &Path) -> Result<Vec<String>, String> {
         let m = mirror.display().to_string();
         let out = check(
             "git for-each-ref",
-            self.git(&["--git-dir", &m, "for-each-ref", "--sort=-committerdate", "--format=%(objectname)"], None, LOCAL_LIMIT)
+            self.git(&["--git-dir", &m, "for-each-ref", "--sort=-committerdate", "--format=%(refname) %(objectname)"], None, LOCAL_LIMIT)
                 .await?,
         )?;
         let mut v: Vec<String> = Vec::new();
         for l in out.stdout.lines() {
-            let l = l.trim().to_string();
+            let Some((name, sha)) = l.trim().rsplit_once(' ') else { continue };
+            if name.starts_with("refs/tags/") {
+                continue;
+            }
+            let l = sha.to_string();
             if valid_sha(&l) && !v.contains(&l) {
                 v.push(l);
             }
@@ -322,7 +338,9 @@ impl Git {
         let b = bundle.display().to_string();
         check(
             "git fetch bundle",
-            self.git(&["--git-dir", &m, "fetch", "-q", "--no-tags", &b, "+refs/k2-compute/*:refs/k2-compute/*"], None, LOCAL_LIMIT)
+            // The job's ref and the tags the controller sent with it (an
+            // older controller sends none; a glob that matches none is fine).
+            self.git(&["--git-dir", &m, "fetch", "-q", "--no-tags", &b, "+refs/k2-compute/*:refs/k2-compute/*", "+refs/tags/*:refs/tags/*"], None, LOCAL_LIMIT)
                 .await?,
         )?;
         Ok(())

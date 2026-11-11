@@ -1844,9 +1844,11 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     if b(&v, "now") == Some(true) && tier_ask == Tier::Batch {
         return Err(no(codes::BAD_REQUEST, 400, "--now and --tier batch don't mix: a Batch job waits for an idle node"));
     }
-    // `--avoid NODE` (0.46.8): nodes auto-placement never picks for it.
-    let avoid = crate::compute_move::avoid_from(who, v, &ws.id)?;
-    if !avoid.is_empty() && !any {
+    // `--avoid NODE` (0.46.8): nodes auto-placement never picks for it. A
+    // name that isn't one of this workspace's nodes is a note (0.46.12).
+    let (avoid, avoid_notes) = crate::compute_move::avoid_from(who, v, &ws.id)?;
+    let avoid_asked = v.get("avoid").and_then(|a| a.as_array()).is_some_and(|a| !a.is_empty());
+    if avoid_asked && !any {
         return Err(crate::compute_move::avoid_with_pinned(s(&v, "node").unwrap_or("--same-node-as")));
     }
     // `--only NODE` (0.46.9): the auto-placement allow list.
@@ -1888,7 +1890,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         gpu,
     };
     // Node: by name (pinned), or auto (no node named, or --any).
-    let mut warnings: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = avoid_notes;
     let (node, placement) = pick_node(who, v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
     // The node list again, whichever way the node was picked (auto never
     // offers a node off it; a pinned one was checked in pick_node).

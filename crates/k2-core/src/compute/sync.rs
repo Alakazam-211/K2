@@ -5,7 +5,8 @@
 //! workspace's object store, so no ref is ever written into the human's
 //! repo. History normally doesn't cross the relay at all: the node
 //! fetches from the project's remote itself, and a bundle carries only
-//! `have..commit`.
+//! `have..commit`, plus (0.46.12) the repo's tags that point into the
+//! job's history, so `git describe --tags` works in the job's checkout.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -298,9 +299,30 @@ fn is_hex40(s: &str) -> bool {
     s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Most tags one bundle carries (the newest; a tag is a few bytes).
+const BUNDLE_TAGS_MAX: usize = 1000;
+
+/// The repo's tags that point into `commit`'s history (`git describe` can
+/// reach them), newest first: `(object, refs/tags/…)`. Best effort: a
+/// listing that fails leaves the bundle without tags, never fails it.
+fn tags_into(root: &Path, commit: &str) -> Vec<(String, String)> {
+    let mut c = git(root);
+    c.args(["for-each-ref", "--merged", commit, "--sort=-creatordate", "--format=%(objectname) %(refname)", "refs/tags/"]);
+    let Ok(out) = run(c, "list the tags") else { return Vec::new() };
+    out.lines()
+        .filter_map(|l| l.split_once(' '))
+        .filter(|(o, n)| is_hex40(o) && n.starts_with("refs/tags/") && !n.contains(char::is_whitespace))
+        .take(BUNDLE_TAGS_MAX)
+        .map(|(o, n)| (o.to_string(), n.to_string()))
+        .collect()
+}
+
 /// `git bundle` of `have..commit` into `out`. Haves the controller doesn't
-/// have are dropped (the bundle then carries more history). Returns the
-/// bundle size.
+/// have are dropped (the bundle then carries more history). The repo's
+/// tags that point into `commit`'s history ride along (0.46.12; an
+/// unpushed local tag too); a lightweight tag on a commit the node already
+/// has is left out by git (the node has it from the bundle that brought
+/// that commit). Returns the bundle size.
 pub fn create_bundle(root: &Path, commit: &str, have: &[String], job_id: &str, out: &Path) -> Result<u64, String> {
     if !is_hex40(commit) || !job_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("bad bundle request".to_string());
@@ -325,6 +347,22 @@ pub fn create_bundle(root: &Path, commit: &str, have: &[String], job_id: &str, o
         let r = bundle_ref(job_id);
         run(gd(&["update-ref", &r, commit]), "name the commit")?;
         let mut args: Vec<String> = vec!["bundle".into(), "create".into(), "-q".into(), out.display().to_string(), r.clone()];
+        // The tags, named in the throwaway repo in one go (never in the
+        // workspace's); if that fails the bundle goes without them.
+        let tags = tags_into(root, commit);
+        if !tags.is_empty() {
+            let input: String = tags.iter().map(|(o, n)| format!("update {n} {o}\n")).collect();
+            let mut c = gd(&["update-ref", "--stdin"]);
+            c.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+            let named = c.spawn().ok().is_some_and(|mut child| {
+                use std::io::Write;
+                let wrote = child.stdin.take().is_some_and(|mut i| i.write_all(input.as_bytes()).is_ok());
+                child.wait().is_ok_and(|s| s.success()) && wrote
+            });
+            if named {
+                args.extend(tags.into_iter().map(|(_, n)| n));
+            }
+        }
         for h in have.iter().filter(|h| is_hex40(h)).take(200) {
             let mut probe = gd(&["cat-file", "-e", &format!("{h}^{{commit}}")]);
             probe.stdout(Stdio::null()).stderr(Stdio::null());

@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.12
+
+### Compute
+- **`--avoid` takes a node that isn't yours.** `k2 compute run --avoid k2n9` (and `--plan`, `test`, `move --auto`) no longer fails with `node_not_found` when that node isn't granted to your workspace, or doesn't exist: it could never be picked, so the job runs and one note says `--avoid k2n9: not one of your nodes; nothing to avoid`. A standing "never those nodes" list now works as flags. The note is the same whether such a node exists or not.
+- **Tags in a job's checkout.** `git describe --tags`, or a semver check against a tag (`--baseline v0.9.2`), now works on a compute node with no archive to ship. The checkout has the repo's tags that point into its history: from the remote, the tags in the history the node fetched (as in a clone, a tag the node already has keeps its place); from your machine, for a commit the remote doesn't have yet, the tags that point into it, an unpushed local tag too. Nothing is fetched from any other remote. Needs this K2 and k2-node 0.46.12; an older node or server leaves tags out, as before.
+
 ## 0.46.11
 
 ### App SDK

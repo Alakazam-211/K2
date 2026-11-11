@@ -66,7 +66,12 @@ AVOID A NODE (0.46.8)
   It works with --any and --shards (both auto). With a node named it is
   refused (avoid_with_pinned_node, exit 2). When every node that could
   take the job is avoided, nothing is queued (avoid_leaves_no_node,
-  exit 3).
+  exit 3). A node that isn't yours (not granted to this workspace, or no
+  node by that name) could never be picked, so naming it is fine: the job
+  runs and one note says so. Keep a standing "never those nodes" list as
+  flags:
+    k2 compute run --avoid k2n9 --avoid k2-arch --mem 8G -- make test
+    [k2 compute] note: --avoid k2n9: not one of your nodes; nothing to avoid
   --only <node> (repeatable, run and test; 0.46.9) is the other way round:
   K2 picks only among the nodes you list. Use it to keep private work on
   your own nodes without listing every node to avoid:
@@ -157,6 +162,12 @@ RUN
   worktree. Uncommitted work is NOT sent unless --dirty (the diff and
   untracked files on top of HEAD; never .k2/). A warm target dir per repo
   keeps cargo incremental, so a node's second build is quick.
+  Tags (0.46.12): the checkout has the repo's tags that point into its
+  history, so git describe --tags or a semver check against a tag
+  (--baseline v0.9.2) works with no archive. From the remote: the tags
+  that point into the history fetched (a tag the node has keeps its place).
+  From your machine (a commit the remote lacks): the tags that point
+  into it, an unpushed local one too. Nothing comes from another remote.
   Env starts empty: PATH, HOME, CARGO_*, TMPDIR, CI=1 and your --env
   NAME=value. No K2 token, socket or port ever reaches a job.
   --env values are stored (the plan, the job row, the node's ledger):

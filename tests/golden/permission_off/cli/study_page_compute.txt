@@ -349,15 +349,44 @@ GPU JOBS (0.46.11, Linux nodes with the job wall, k2-node 0.46.11+)
     device …, the host's own use included)
   VRAM and GTT are the peak over what the GPU held when the job started
   (on an APU, GTT is system RAM). Intel GPUs don't report busy %.
-  --mem caps the job's RAM. On an APU (an iGPU sharing system memory) the
-  GPU's buffers also come from system RAM and aren't counted in --mem
-  yet: leave headroom.
+  GPU memory (--gpu-mem; k2-node 0.46.11 on the node):
+    --mem caps the job's RAM. On an APU or iGPU (k2 compute info <node>
+    says "unified" after the GPU; --json: host.gpus[].unified) the GPU's
+    buffers also come out of system RAM but are NOT counted in --mem, so
+    a GPU job has a second budget (only with --gpu; alone it exits 2):
+      k2 compute run --gpu --mem 4G --gpu-mem 6G -- ./render-tests
+    - On a unified GPU, K2 reserves --mem + --gpu-mem of the node's memory
+      before the job starts, so GPU jobs never overpack it. Left out,
+      --gpu-mem is 2G there, and that 2G is watched like a given one: a
+      test holding more GPU memory must pass a bigger --gpu-mem. A job too
+      big for the node with both is refused (exceeds_node_caps, exit 2).
+    - The node reads the job's own GPU memory once a second (the DRM
+      fdinfo of its processes: GTT and VRAM together, the host's own use
+      not included) and stops the job when it goes over --gpu-mem by more
+      than 10% (4G: stopped above 4.4G): failed/gpu_mem_cap, with the
+      numbers in the log and in k2 compute get's hint. Raise --gpu-mem.
+    - On a discrete GPU (its own VRAM) nothing is reserved; with --gpu-mem
+      the job is watched the same way.
+    - Sizing on an APU: --mem = what the CPU side needs (as for any job);
+      --gpu-mem = the textures, buffers and render targets the test holds
+      at its peak, plus a margin. The VRAM carve-out the BIOS sets (UMA
+      size) is separate: it isn't in the RAM the node reports.
+    - An older k2-node (0.46.10 or earlier) reserves nothing and watches
+      nothing: --gpu-mem is refused there (gpu_mem_needs_update, exit 3);
+      without it the job runs as before, so leave headroom in --mem.
+  The end line also says "this job's own GPU memory: peak 1.2G of
+  --gpu-mem 2.0G" (k2 compute get --json: result.resources.gpu
+  jobMemPeakBytes and memLimitBytes). That peak is the job's alone;
+  the VRAM +/GTT + numbers before it are the whole device.
   Codes: no_gpu_node (exit 3): no node granted to your workspace runs GPU
   jobs for this server (or none of that vendor); the hint names both steps. gpu_needs_grant (exit 3): a node has a GPU for
   you but your grant lacks --gpu (the error names the node; agents get the
   card line). gpu_busy: it waits for the GPU. gpu_unavailable: the node
   stopped running GPU jobs for you since it was placed; the job fails,
-  run it again.
+  run it again. gpu_mem_cap: its own GPU memory went over --gpu-mem
+  (+10%): raise it. gpu_mem_needs_update (exit 3): --gpu-mem, but the GPU
+  nodes for you run an older k2-node: run without it, or ask the owner to
+  update.
 
 MEMORY (--mem, required; 0.46.6)
   Always pass --mem with what the job needs. Rough guide: any cargo
@@ -737,9 +766,12 @@ RESULTS (one object, artifacts, test lists)
     resources  {peakMemBytes, memSource, cpuSecs, cpuSource, memLimitBytes,
                gpu}; a mem_cap end's hint says "used 25.3G of --mem 24G".
                gpu (--gpu jobs): {model, pci, busyAvgPct, busyMaxPct,
-               vramPeakBytes, gttPeakBytes, samples, source: "sysfs-device"}:
-               the whole device once a second, the host's own use included;
-               memory = the peak over what it held at the job's start
+               vramPeakBytes, gttPeakBytes, samples, source: "sysfs-device",
+               jobMemPeakBytes, memLimitBytes}: busy, VRAM and GTT are the
+               whole device once a second, the host's own use included
+               (memory = the peak over what it held at the job's start);
+               jobMemPeakBytes is the job's own GPU memory (DRM fdinfo) and
+               memLimitBytes its --gpu-mem (null where not watched)
     host       the node's load at the job's start and end:
                {start: {at, load1: 0.8, cpus: 12, steal: 0.3, jobs: 2,
                quiet: false, gpuBusy: 41}, end: …}
@@ -1043,6 +1075,11 @@ COMMON ERRORS
   gpu_busy               the node's GPU is held by another job: it waits
   gpu_unavailable        the node stopped running GPU jobs for you after it was
                          placed (its owner turned them off): the job fails
+  gpu_mem_cap            the job's own GPU memory went over its --gpu-mem by more
+                         than 10%: stopped (failed); pass a bigger --gpu-mem
+  gpu_mem_needs_update   --gpu-mem, but the GPU nodes for you run k2-node 0.46.10 or
+                         older (no GPU memory watch): run without --gpu-mem, or the
+                         node's owner updates k2-node; exit 3
   allow_nodes_needs_person  adding a node to the list or --clear: a person's
                          (the owner or an Admin); exit 3, ask on a card
 

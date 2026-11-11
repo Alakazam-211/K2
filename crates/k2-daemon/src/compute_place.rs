@@ -133,9 +133,28 @@ pub struct Want {
     /// server with a GPU of that vendor open to it, and a grant that says
     /// `--gpu` (or an owner/Admin caller).
     pub gpu: Option<k2_core::compute::proto::gpu::GpuAsk>,
+    /// GPU jobs S6 (`--gpu-mem`, bytes, only with `gpu`): the job's GPU
+    /// memory budget. Only nodes offering `gpu-mem` take an explicit one;
+    /// on a unified GPU it (default 2G) counts against the node's memory
+    /// beside `--mem` ([`Want::mem_on`]).
+    pub gpu_mem: Option<u64>,
 }
 
 impl Want {
+    /// GPU jobs S6: the job's memory on the node behind `offer`: its
+    /// `--mem`, plus its GPU memory when the GPU it would get there is
+    /// unified (an APU's GPU buffers are system RAM outside `--mem`). The
+    /// node counts the same (`k2-node`'s `plan_mem`).
+    pub fn mem_on(&self, offer: &Offer) -> Option<u64> {
+        mem_with_gpu(self.mem_bytes, self.gpu.as_ref(), self.gpu_mem, Some(offer))
+    }
+
+    /// [`Want::probe`] on the node behind `offer` (its memory per
+    /// [`Want::mem_on`]).
+    fn probe_on(&self, offer: &Offer) -> scheduler::QueuedJob {
+        scheduler::QueuedJob { mem_bytes: self.mem_on(offer), ..self.probe() }
+    }
+
     pub fn of_job(j: &JobRow, plan: &Plan) -> Self {
         Want {
             ws_id: j.workspace_id.clone(),
@@ -157,6 +176,7 @@ impl Want {
             multi_repo: !plan.with.is_empty(),
             receipt_v2: plan.receipt_v.is_some(),
             gpu: plan.gpu,
+            gpu_mem: plan.gpu_mem,
         }
     }
 
@@ -179,6 +199,21 @@ impl Want {
     fn wants_sys(&self) -> bool {
         self.needs.iter().any(|n| n.starts_with("sys:") || n.starts_with("profile:"))
     }
+}
+
+/// GPU jobs S6: `mem` (a job's `--mem`) on the node behind `offer`, plus
+/// its GPU memory (`gpu_mem`, default 2G) when the GPU `gpu` would get
+/// there is unified. No offer: as if discrete (nothing added).
+pub fn mem_with_gpu(mem: Option<u64>, gpu: Option<&k2_core::compute::proto::gpu::GpuAsk>, gpu_mem: Option<u64>, offer: Option<&Offer>) -> Option<u64> {
+    use k2_core::compute::proto::gpu as pgpu;
+    let Some(ask) = gpu else { return mem };
+    let unified = offer.and_then(|o| o.host.as_ref()).is_some_and(|h| pgpu::unified_for(&h.gpus, ask));
+    pgpu::with_gpu_mem(mem, pgpu::counted_bytes(Some(ask), gpu_mem, unified))
+}
+
+/// [`mem_with_gpu`] for a queued job's plan.
+pub fn plan_mem_on(plan: &Plan, offer: Option<&Offer>) -> Option<u64> {
+    mem_with_gpu(plan.limits.mem_bytes, plan.gpu.as_ref(), plan.gpu_mem, offer)
 }
 
 /// May `w`'s workspace send CI to the node behind `offer` with `grant`?
@@ -204,6 +239,10 @@ pub fn gpu_skip(w: &Want, grant: Option<&GrantRow>, offer: &Offer) -> Option<&'s
     if !(w.admin || grant.is_some_and(|g| g.allow_gpu)) {
         return Some(skip::GPU_NEEDS_GRANT);
     }
+    // S6: an explicit `--gpu-mem` only where the node watches it.
+    if w.gpu_mem.is_some() && !offer.features.iter().any(|f| f == gpu::FEATURE_GPU_MEM) {
+        return Some(skip::GPU_MEM_NEEDS_UPDATE);
+    }
     None
 }
 
@@ -217,6 +256,10 @@ pub fn gpu_refusal(w: &Want, report: &CandReport, ws_handle: &str) -> Option<(&'
     w.gpu.as_ref()?;
     if !report.cands.is_empty() {
         return None;
+    }
+    // S6: GPU nodes for this server, but none takes `--gpu-mem` yet.
+    if report.skipped.get(skip::GPU_MEM_NEEDS_UPDATE).copied().unwrap_or(0) > 0 && report.gpu_needs_grant.is_empty() {
+        return Some((codes::GPU_MEM_NEEDS_UPDATE, 409, gpu_mem_needs_update_hint(None), None));
     }
     if let Some(node) = report.gpu_needs_grant.first() {
         return Some((
@@ -232,6 +275,17 @@ pub fn gpu_refusal(w: &Want, report: &CandReport, ws_handle: &str) -> Option<(&'
         return Some((codes::NO_GPU_NODE, 404, no_gpu_node_hint(ws_handle), None));
     }
     None
+}
+
+/// The hint for [`codes::GPU_MEM_NEEDS_UPDATE`] (a named node, or every
+/// GPU node this workspace may use).
+///
+/// [`codes::GPU_MEM_NEEDS_UPDATE`]: k2_core::compute::proto::gpu::codes::GPU_MEM_NEEDS_UPDATE
+pub fn gpu_mem_needs_update_hint(node: Option<&str>) -> String {
+    let which = node.map(|n| format!("'{n}' runs GPU jobs for this server, but its k2-node")).unwrap_or_else(|| "the nodes that run GPU jobs for this server run a k2-node that".into());
+    format!(
+        "--gpu-mem: {which} is older than 0.46.11 and can't watch a job's GPU memory. Its owner updates k2-node there; or run without --gpu-mem (an older node doesn't count or watch GPU memory at all: on an APU, leave headroom in --mem)"
+    )
 }
 
 /// F10 (CP-A4): an explicit `--timeout` within the grant's max per job.
@@ -388,10 +442,11 @@ impl Cand {
         (self.offer.free.mem_bytes.saturating_sub(self.pending.mem_bytes), self.offer.free.cpu_millis.saturating_sub(self.pending.cpu_millis))
     }
 
-    /// The job's `--mem` and `--cpus` fit in [`Cand::free_now`].
+    /// The job's `--mem` (with its GPU memory on a unified GPU, S6) and
+    /// `--cpus` fit in [`Cand::free_now`].
     fn fits_free(&self, w: &Want) -> bool {
         let (mem, cpu) = self.free_now();
-        w.mem_bytes.is_none_or(|m| m <= mem) && w.cpu_millis.is_none_or(|c| c <= cpu)
+        w.mem_on(&self.offer).is_none_or(|m| m <= mem) && w.cpu_millis.is_none_or(|c| c <= cpu)
     }
 
     /// Jobs running there now, as far as anyone here knows (node-wide).
@@ -421,7 +476,7 @@ impl Cand {
                 && !(w.exclusive && self.running_now() > 0)
                 && self.ws_running(w) < self.grant_cap();
         }
-        let probe = w.probe();
+        let probe = w.probe_on(&self.offer);
         let ask = refusal::JobAsk {
             workspace_id: &w.ws_id,
             cpu_millis: probe.cpu_millis,
@@ -464,7 +519,7 @@ impl Cand {
     fn load_after(&self, w: &Want) -> u32 {
         let (mem, cpu) = self.free_now();
         let used = |free: u64, ask: u64, cap: u64| if cap == 0 { 0 } else { 1000 - (free.saturating_sub(ask).saturating_mul(1000) / cap).min(1000) as u32 };
-        let um = used(mem, w.mem_bytes.unwrap_or(0), self.offer.caps.mem_bytes);
+        let um = used(mem, w.mem_on(&self.offer).unwrap_or(0), self.offer.caps.mem_bytes);
         let uc = used(cpu, w.cpu_millis.unwrap_or(0), self.offer.caps.cpu_millis);
         let ur = if self.shared_view().is_none() && self.offer.parallel_max > 0 { ((self.running_now() + 1) * 1000 / self.offer.parallel_max).min(1000) } else { 0 };
         um.max(uc).max(ur)
@@ -864,6 +919,9 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     if w.gpu.is_some() {
         f.push(k2_core::compute::proto::gpu::FEATURE_GPU);
     }
+    if w.gpu_mem.is_some() {
+        f.push(k2_core::compute::proto::gpu::FEATURE_GPU_MEM);
+    }
     f
 }
 
@@ -920,6 +978,9 @@ pub mod skip {
     /// GPU jobs (0.46.11): the node has a GPU for this server, the grant
     /// doesn't say `--gpu`.
     pub const GPU_NEEDS_GRANT: &str = "gpu_needs_grant";
+    /// GPU jobs S6: `--gpu-mem` on a GPU node whose k2-node doesn't offer
+    /// `gpu-mem` (older than 0.46.11, or its executor is).
+    pub const GPU_MEM_NEEDS_UPDATE: &str = k2_core::compute::proto::gpu::codes::GPU_MEM_NEEDS_UPDATE;
 }
 
 /// One spelling per OS and arch, so `--arch aarch64` finds a Mac that
@@ -1066,7 +1127,7 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
         }
         // Over the node's caps (--cpus/--mem): it would never start there
         // (compute DX slice A: never queued where it can't ever fit).
-        if scheduler::never_fits(&offer, &w.probe()).is_some() {
+        if scheduler::never_fits(&offer, &w.probe_on(&offer)).is_some() {
             skipped(&mut out, skip::TOO_SMALL);
             continue;
         }
@@ -1484,6 +1545,7 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::NOT_ONLY => "off your --only list".to_string(),
         skip::NO_GPU => "with no GPU jobs for you (--gpu)".to_string(),
         skip::GPU_NEEDS_GRANT => "with a GPU, but your grant there doesn't say --gpu".to_string(),
+        skip::GPU_MEM_NEEDS_UPDATE => "with GPU jobs, but a k2-node too old for --gpu-mem".to_string(),
         other => other.to_string(),
     };
     format!("{n} {what}")
@@ -2422,6 +2484,7 @@ mod tests {
             multi_repo: false,
             receipt_v2: false,
             gpu: None,
+            gpu_mem: None,
         }
     }
 
@@ -2509,6 +2572,70 @@ mod tests {
         c.offer.free.gpus = 0;
         assert!(!c.starts_now(&w), "its GPU is held");
         assert!(c.starts_now(&Want { gpu: None, ..w }), "a job without --gpu still starts");
+    }
+
+    /// GPU jobs S6: on a unified GPU (an APU) a GPU job's `--gpu-mem`
+    /// (default 2G) counts against the node's free memory beside its
+    /// `--mem`, so placement never overpacks it; on a discrete GPU nothing
+    /// is added. A node whose caps can't hold both is too small.
+    #[test]
+    fn unified_gpu_memory_counts_against_the_nodes_memory() {
+        use k2_core::compute::proto::gpu::GpuVendor;
+        let mut c = gpu_cand("apu");
+        c.offer.free.mem_bytes = 5 * GB;
+        let w = Want { mem_bytes: Some(4 * GB), ..gpu_want(true, GpuVendor::Any) };
+        assert_eq!(w.mem_on(&c.offer), Some(4 * GB), "a discrete GPU: --mem alone");
+        assert!(c.starts_now(&w), "4G fits in 5G free");
+        c.offer.host.as_mut().unwrap().gpus[0].unified = true;
+        assert_eq!(w.mem_on(&c.offer), Some(6 * GB), "--mem 4G + the default --gpu-mem 2G");
+        assert!(!c.starts_now(&w), "4G + 2G of GPU memory doesn't fit in 5G free");
+        let small = Want { gpu_mem: Some(512 << 20), ..w.clone() };
+        assert_eq!(small.mem_on(&c.offer), Some(4 * GB + (512 << 20)));
+        assert!(c.starts_now(&small), "a smaller --gpu-mem fits");
+        assert!(c.starts_now(&Want { gpu: None, gpu_mem: None, ..w.clone() }), "no --gpu: --mem alone");
+        // Over the node's caps with its GPU memory: never fits there.
+        c.offer.caps.mem_bytes = 5 * GB;
+        assert!(scheduler::never_fits(&c.offer, &w.probe_on(&c.offer)).is_some());
+        assert!(scheduler::never_fits(&c.offer, &small.probe_on(&c.offer)).is_none());
+        // A queued plan counts the same way (the solo scheduler, pending asks).
+        let mut p: Plan = serde_json::from_value(serde_json::json!({
+            "job_id": "j", "workspace_id": ME, "workspace_label": "w", "requested_by": "owner", "node_id": "apu", "argv": ["true"], "env": {},
+            "limits": {"max_secs": 60, "cpu_millis": null, "mem_bytes": 4 * GB, "disk_bytes": GB, "log_cap_bytes": 1024},
+            "src": null, "exclusive": false, "created_at": 1
+        }))
+        .expect("a plan");
+        assert_eq!(plan_mem_on(&p, Some(&c.offer)), Some(4 * GB));
+        p.gpu = w.gpu;
+        assert_eq!(plan_mem_on(&p, Some(&c.offer)), Some(6 * GB));
+        p.gpu_mem = Some(GB);
+        assert_eq!(plan_mem_on(&p, Some(&c.offer)), Some(5 * GB));
+        assert_eq!(plan_mem_on(&p, None), Some(4 * GB), "no offer: nothing to say it's unified");
+    }
+
+    /// GPU jobs S6: an explicit `--gpu-mem` goes only to a node offering
+    /// `gpu-mem` (k2-node 0.46.11 with a new executor); an older GPU node
+    /// is skipped with its own code, and with none left the refusal says
+    /// to update k2-node or drop `--gpu-mem` (409, exit 3). Without
+    /// `--gpu-mem` the older node still takes the GPU job.
+    #[test]
+    fn gpu_mem_needs_a_node_that_watches_it() {
+        use k2_core::compute::proto::gpu::{codes, GpuVendor, FEATURE_GPU_MEM};
+        let mut c = gpu_cand("old");
+        c.grant.as_mut().unwrap().allow_gpu = true;
+        let plain = gpu_want(false, GpuVendor::Any);
+        let budget = Want { gpu_mem: Some(4 * GB), ..plain.clone() };
+        assert_eq!(gpu_skip(&plain, c.grant.as_ref(), &c.offer), None, "an older GPU node takes --gpu as before");
+        assert_eq!(gpu_skip(&budget, c.grant.as_ref(), &c.offer), Some(skip::GPU_MEM_NEEDS_UPDATE));
+        assert!(required_features(&budget).contains(&FEATURE_GPU_MEM));
+        assert!(!required_features(&plain).contains(&FEATURE_GPU_MEM));
+        let mut r = CandReport { visible: 1, ..Default::default() };
+        r.skipped.insert(skip::GPU_MEM_NEEDS_UPDATE, 1);
+        let (code, status, hint, _) = gpu_refusal(&budget, &r, "builder").expect("refused");
+        assert_eq!((code, status), (codes::GPU_MEM_NEEDS_UPDATE, 409));
+        assert!(hint.contains("0.46.11") && hint.contains("without --gpu-mem"), "{hint}");
+        assert!(skip_words(skip::GPU_MEM_NEEDS_UPDATE, 1, &budget).contains("too old for --gpu-mem"));
+        c.offer.features.push(FEATURE_GPU_MEM.into());
+        assert_eq!(gpu_skip(&budget, c.grant.as_ref(), &c.offer), None);
     }
 
     fn pick(policy: compute::PlacementPolicy, cands: &[Cand], w: &Want) -> (String, Tier) {

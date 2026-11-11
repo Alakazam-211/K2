@@ -309,7 +309,7 @@ impl Node {
                 RunningJob {
                     generation: gen,
                     cpu_millis: a.plan.limits.cpu_millis,
-                    mem_bytes: a.plan.limits.mem_bytes,
+                    mem_bytes: self.plan_mem(&a.plan),
                     exclusive: a.plan.exclusive,
                     stop: stop_tx,
                     seq: self.job_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -325,7 +325,7 @@ impl Node {
             );
         }
         let caps = self.queue_caps();
-        self.fairq.started(t.slot, &a, self.now(), &caps, Default::default());
+        self.fairq.started(t.slot, &a, self.now(), &caps, Default::default(), self.gpu_mem_counted(&a.plan));
         self.set_ci_run(t, &job, gen, f.ci_run.clone());
         let lease = f.lease.as_ref().map(|l| {
             if let Some(n) = l.slot {

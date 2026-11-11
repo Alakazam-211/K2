@@ -105,6 +105,8 @@ const JOB_FAILED_REASONS: &[&str] = &[
     "tool_unsupported",
     "need_invalid",
     "mem_cap",
+    // GPU jobs S6: its own GPU memory over its --gpu-mem.
+    super::proto::gpu::codes::GPU_MEM_CAP,
     "wrong_node",
     "queue_timeout",
     // Over the node's caps (compute DX slice A): the job asks too much.

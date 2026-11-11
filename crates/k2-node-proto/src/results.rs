@@ -214,6 +214,17 @@ pub struct GpuUse {
     pub samples: u32,
     /// [`gpu_source`] codes.
     pub source: String,
+    /// GPU jobs S6: the most GPU memory the job's **own** processes held
+    /// (every resident region, each DRM client once), as root read it from
+    /// their DRM fdinfo ([`gpu_source::DRM_FDINFO`]). Absent where it
+    /// wasn't read (an older executor, or no budget to watch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_mem_peak_bytes: Option<u64>,
+    /// GPU jobs S6: the GPU memory budget the job ran under (`--gpu-mem`,
+    /// or the default on a unified device); a `gpu_mem_cap` end says "used
+    /// 2.6G of 2.0G".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_limit_bytes: Option<u64>,
 }
 
 /// How [`GpuUse`] was measured.
@@ -221,6 +232,9 @@ pub mod gpu_source {
     /// The device's sysfs counters (`gpu_busy_percent`,
     /// `mem_info_vram_used`, `mem_info_gtt_used`): the whole device.
     pub const SYSFS_DEVICE: &str = "sysfs-device";
+    /// S6: `GpuUse.job_mem_peak_bytes`: the DRM fdinfo of the job unit's
+    /// own processes (`drm-resident-*`, else `drm-memory-*`), read by root.
+    pub const DRM_FDINFO: &str = "drm-fdinfo";
 }
 
 /// How [`JobResources::peak_mem_bytes`] was measured.

@@ -1103,11 +1103,28 @@ impl Node {
         // device: memory counts from what it held as the job started).
         let gpu_sys = std::path::Path::new(crate::gpu::SYS);
         let mut gpu_watch = gpu.as_deref().map(|pci| crate::jobstat::GpuWatch::new(pci, crate::jobstat::read_gpu(gpu_sys, pci)));
+        // GPU jobs S6: the job's own GPU memory against its budget
+        // (`--gpu-mem`, or the default on a unified GPU), read by root
+        // from the DRM fdinfo of its unit's processes on the usage tick.
+        let gpu_unit = match &proc {
+            Proc::Unit { unit, .. } if a.plan.gpu.is_some() => Some(unit.clone()),
+            _ => None,
+        };
+        let mut gpu_mem_watch = gpu_unit.as_ref().and_then(|_| self.gpu_mem_cap(&a.plan)).map(crate::jobstat::GpuMemWatch::new);
+        let mut gpu_mem_detail: Option<String> = None;
 
         // Output into the journal: pipes are pumped, spool files tailed.
         // `last_out` = ms after `t0` of the last stdout/stderr bytes (the
         // stall watch reads it).
         let journal = Arc::new(Mutex::new(journal));
+        if let Some(w) = gpu_mem_watch.as_ref().filter(|_| easy && !adopted) {
+            let line = if self.gpu_usage_ready() {
+                format!("[k2-node] GPU memory: this job's own is watched against its --gpu-mem {} (stopped above it by more than {}%)\n", crate::jobstat::gib(w.cap), k2_node_proto::gpu::GPU_MEM_SLACK_PCT)
+            } else {
+                format!("[k2-node] GPU memory: not watched on this node (its root executor is older than k2-node 0.46.11); on an APU it comes out of system RAM beside --mem, so leave {} for it\n", crate::jobstat::gib(w.cap))
+            };
+            let _ = journal.lock().unwrap().append(k2_node_proto::frames::LogStream::Sys, line.as_bytes());
+        }
         // Git access: the credential helper's lines go into the shared journal.
         self.git_helper_attach(&t, &job, gen, &journal);
         let t0 = std::time::Instant::now();
@@ -1235,7 +1252,16 @@ impl Node {
                         next_busy_note_ms = now_ms.saturating_add(k2_node_proto::frames::QUIET_BUSY_NOTE_SECS * 1000);
                     }
                 }
-                _ = usage_tick.tick(), if watch_usage || mem_cap.is_some() || gpu_watch.is_some() => {
+                _ = usage_tick.tick(), if watch_usage || mem_cap.is_some() || gpu_watch.is_some() || gpu_mem_watch.is_some() => {
+                    if let (Some(w), Some(unit)) = (gpu_mem_watch.as_mut(), gpu_unit.as_deref()) {
+                        if let Some(r) = self.gpu_mem_sample(unit).await {
+                            if let Some(d) = w.fold(&r) {
+                                gpu_mem_detail = Some(d);
+                                ended_by = Some(StopReason { state: JobState::Failed, reason: k2_node_proto::gpu::codes::GPU_MEM_CAP.into() });
+                                break;
+                            }
+                        }
+                    }
                     if let Some(g) = gpu_watch.as_mut() {
                         let pci = g.pci.clone();
                         if let Ok(r) = tokio::task::spawn_blocking(move || crate::jobstat::read_gpu(std::path::Path::new(crate::gpu::SYS), &pci)).await {
@@ -1311,6 +1337,9 @@ impl Node {
             let model = self.host.lock().unwrap().gpus.iter().find(|f| f.pci == g.pci).map(|f| f.model.clone()).unwrap_or_default();
             used.gpu = Some(g.usage(&model));
         }
+        if let (Some(w), Some(g)) = (gpu_mem_watch.as_ref(), used.gpu.as_mut()) {
+            w.fill(g);
+        }
         // CE-19: the host at the end (the steal window runs beside the
         // reap and the artifacts).
         let host_end = easy.then(|| {
@@ -1359,6 +1388,9 @@ impl Node {
             if let Some(j) = journal.as_mut() {
                 let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {}\n", mem_cap_detail_used(mem_limit, peak_shown)).as_bytes());
             }
+        }
+        if let (Some(d), Some(j)) = (gpu_mem_detail.as_ref(), journal.as_mut()) {
+            let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {d}\n").as_bytes());
         }
         // Artifacts and test results: after the command (and its group)
         // are gone, before the warm slot goes back to the pool.
@@ -1439,6 +1471,7 @@ impl Node {
             match reason.as_deref() {
             Some("stalled") => Some(format!("no output for {}s", a.plan.stall_secs.unwrap_or(0))),
             Some("mem_cap") => Some(mem_cap_detail_used(mem_limit, peak_shown)),
+            Some(k2_node_proto::gpu::codes::GPU_MEM_CAP) => gpu_mem_detail.clone(),
             Some(refusal::DISK_LOW) => {
                 let d = super::disk::disk_low_detail(self.disk_free_bytes(), self.local.lock().unwrap().policy.disk_floor_bytes);
                 if let Some(j) = journal.as_mut() {
@@ -2612,6 +2645,120 @@ pub(super) mod tests {
         assert!(e.contains(crate::admin::jobpool::JOB_UID_UNAVAILABLE), "{e} (the fake executor: {:?})", rx.try_recv());
         let got = rx.recv_timeout(Duration::from_secs(20)).expect("the fake executor answered").expect("the fake executor ran");
         assert!(got.is_empty(), "the unit's stdin got {} bytes: a secret reached a job without its own uid", got.len());
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    /// GPU jobs S6: a running GPU job whose own GPU memory (the fake
+    /// executor's `gpu_usage` feed: 1G, then 3G) goes over its `--gpu-mem
+    /// 2G` by more than 10% is stopped through the executor and ends
+    /// `failed/gpu_mem_cap` with both numbers; the feed is only asked
+    /// because `Ready` said `gpu_usage`.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_gpu_job_over_its_gpu_mem_is_stopped_as_gpu_mem_cap() {
+        use crate::admin::exec::{LocalRequest, LocalResponse};
+        use crate::admin::jobs::{JobAnswer, JobOp, UnitStatus};
+        let d = crate::util::temp_dir("s6-gpu-mem");
+        let sock = crate::admin::server::short_sock(&d);
+        let _ = std::fs::remove_file(&sock);
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<String>>();
+        std::thread::spawn(move || {
+            let mut seen: Vec<String> = Vec::new();
+            let (mut stopped, mut usage_calls) = (false, 0u32);
+            loop {
+                let Ok((mut s, _)) = l.accept() else { break };
+                let Ok(h) = crate::admin::server::read_frame(&mut s, 1 << 20) else { continue };
+                let answer = match serde_json::from_slice::<LocalRequest>(&h) {
+                    Ok(LocalRequest::Job { job: JobOp::Status { .. } }) => {
+                        seen.push("status".into());
+                        let (active, sub) = if stopped { ("failed", "failed") } else { ("active", "running") };
+                        JobAnswer::Status(UnitStatus { loaded: true, active_state: active.into(), sub_state: sub.into(), result: if stopped { "signal".into() } else { String::new() }, main_code: if stopped { 2 } else { 0 }, main_status: if stopped { 15 } else { 0 }, ..Default::default() })
+                    }
+                    Ok(LocalRequest::Job { job: JobOp::GpuUsage { unit } }) => {
+                        usage_calls += 1;
+                        seen.push(format!("gpu_usage {unit}"));
+                        let bytes = if usage_calls < 3 { 1u64 << 30 } else { 3u64 << 30 };
+                        JobAnswer::GpuUsage(k2_node_proto::gpu::GpuMemUsage { bytes, gtt_bytes: bytes, clients: 1, pids: 2, ..Default::default() })
+                    }
+                    Ok(LocalRequest::Job { job: JobOp::Stop { unit } }) => {
+                        stopped = true;
+                        seen.push(format!("stop {unit}"));
+                        JobAnswer::Done { detail: serde_json::json!({}) }
+                    }
+                    Ok(LocalRequest::Job { job: JobOp::Release { unit } }) => {
+                        seen.push(format!("release {unit}"));
+                        JobAnswer::Done { detail: serde_json::json!({}) }
+                    }
+                    _ => JobAnswer::Refused(k2_node_proto::admin::AdminRefusal::new("not_configured", "the test executor answers status, gpu_usage, stop, release")),
+                };
+                let _ = crate::admin::server::write_frame(&mut s, &serde_json::to_vec(&LocalResponse::Job(answer)).unwrap());
+                if seen.iter().any(|x| x.starts_with("release")) && stopped {
+                    let _ = tx.send(seen.clone());
+                }
+            }
+        });
+        let layout = crate::paths::Layout::new(d.join("home"), d.join("cfg"));
+        layout.ensure().unwrap();
+        std::fs::create_dir_all(&layout.config).unwrap();
+        let mut o = super::super::NodeOptions::new(layout);
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        o.wall = Some(Wall::JobUser { user: "k2job".into() });
+        o.exec_stdin = Some(true);
+        o.exec_gpus = Some(vec![crate::admin::gpu::ReadyGpu { pci: "0000:c4:00.0".into(), vendor: "amd".into(), render: "renderD128".into(), servers: vec!["owner".into()] }]);
+        o.exec_gpu_usage = Some(true);
+        o.admin_socket = sock.clone();
+        o.cancel_grace = Duration::from_millis(100);
+        o.rss_every = Duration::from_millis(50);
+        o.unit_poll = Duration::from_millis(50);
+        o.facts = Some(crate::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: false });
+        let n = Node::open(o).await.unwrap();
+        let t = n.owner();
+        let mut a = crate::ledger::tests::assign("gm", 1);
+        a.plan.gpu = Some(k2_node_proto::gpu::GpuAsk::one(k2_node_proto::gpu::GpuVendor::Any));
+        a.plan.gpu_mem = Some(2 << 30);
+        a.plan.limits.max_secs = 120;
+        a.fence.plan_digest = a.plan.digest().unwrap();
+        assert_eq!(n.gpu_mem_cap(&a.plan), Some(2 << 30), "the budget it asked for");
+        t.ledger.lock().unwrap().insert(&a, n.opts.clock.as_ref()).unwrap();
+        let dirs = JobDirs::new(d.join("job"));
+        dirs.create().unwrap();
+        let jp = t.paths.journal("gm", 1);
+        std::fs::create_dir_all(jp.parent().unwrap()).unwrap();
+        let journal = JournalWriter::create(&jp, 1 << 20).unwrap();
+        let live = Live {
+            cwd: dirs.root.clone(),
+            target: dirs.root.clone(),
+            dirs,
+            src_ran: None,
+            lease: None,
+            proc: Proc::Unit { unit: "k2job-gm-g1.service".into(), last: None, cg: None },
+            outs: Vec::new(),
+            journal,
+            redactor: None,
+            mem_limit: 1 << 30,
+            easy: false,
+            tools_used: Default::default(),
+            deadline: std::time::Instant::now() + Duration::from_secs(60),
+            facts: None,
+            preset: None,
+            preset_detail: None,
+            adopted: false,
+            gpu: None,
+        };
+        let (_stop_tx, stop_rx) = watch::channel(None);
+        tokio::time::timeout(Duration::from_secs(60), n.clone().supervise(t.clone(), a.clone(), live, stop_rx)).await.expect("supervise ended within a minute");
+        let row = t.ledger.lock().unwrap().get("gm", 1).unwrap().expect("its ledger row");
+        assert_eq!((row.state, row.reason.as_deref()), (JobState::Failed, Some(k2_node_proto::gpu::codes::GPU_MEM_CAP)), "{row:?}");
+        let detail = row.detail.clone().unwrap_or_default();
+        assert!(detail.contains("3.0G") && detail.contains("--gpu-mem is 2.0G"), "{detail}");
+        let seen = rx.recv_timeout(Duration::from_secs(20)).expect("the fake executor saw the release");
+        let usage = seen.iter().filter(|x| x.starts_with("gpu_usage k2job-gm-g1.service")).count();
+        assert!(usage >= 3, "read until it went over: {seen:?}");
+        let stop_at = seen.iter().position(|x| x == "stop k2job-gm-g1.service").expect("stopped through the executor");
+        assert!(seen[..stop_at].iter().filter(|x| x.starts_with("gpu_usage")).count() >= 3, "{seen:?}");
         let _ = std::fs::remove_file(&sock);
     }
 

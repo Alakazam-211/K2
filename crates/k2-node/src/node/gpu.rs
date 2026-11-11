@@ -66,6 +66,62 @@ impl Node {
         self.gpus_for(t).min(self.gpus_on().saturating_sub(self.used_gpus()))
     }
 
+    /// GPU jobs S6: root reads a job's own GPU memory here (`gpu_usage`).
+    pub(crate) fn gpu_usage_ready(&self) -> bool {
+        self.gpu_capable() && self.exec_gpu_usage.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// S6: `t`'s server may send `--gpu-mem` here (`gpu-mem` beside `gpu`).
+    pub(crate) fn offers_gpu_mem(&self, t: &Tenant) -> bool {
+        self.gpus_for(t) > 0 && self.gpu_usage_ready()
+    }
+
+    /// S6: would `ask` get a unified GPU (an APU or iGPU) here? Any GPU of
+    /// that vendor open to jobs here that the facts call unified (root
+    /// picks the device; this never undercounts).
+    fn gpu_unified(&self, ask: &k2_node_proto::gpu::GpuAsk) -> bool {
+        let open: Vec<String> = self.exec_gpus.lock().unwrap().iter().map(|g| g.pci.clone()).collect();
+        self.host.lock().unwrap().gpus.iter().any(|g| g.unified && ask.vendor.matches(&g.vendor) && open.contains(&g.pci))
+    }
+
+    /// S6: the system RAM `plan`'s GPU memory takes here beside its
+    /// `--mem` (its `--gpu-mem`, default 2G, on a unified GPU; else 0).
+    pub(crate) fn gpu_mem_counted(&self, plan: &Plan) -> u64 {
+        plan.gpu.as_ref().map_or(0, |a| k2_node_proto::gpu::counted_bytes(Some(a), plan.gpu_mem, self.gpu_unified(a)))
+    }
+
+    /// S6: `plan`'s memory as this node counts it (its `--mem` plus
+    /// [`Node::gpu_mem_counted`]): what it holds while it runs, and what
+    /// must fit before it starts.
+    pub(crate) fn plan_mem(&self, plan: &Plan) -> Option<u64> {
+        k2_node_proto::gpu::with_gpu_mem(plan.limits.mem_bytes, self.gpu_mem_counted(plan))
+    }
+
+    /// S6: the GPU memory budget the node watches `plan`'s job against
+    /// (`None`: none; a discrete GPU without `--gpu-mem`).
+    pub(crate) fn gpu_mem_cap(&self, plan: &Plan) -> Option<u64> {
+        plan.gpu.as_ref().and_then(|a| k2_node_proto::gpu::cap_bytes(Some(a), plan.gpu_mem, self.gpu_unified(a)))
+    }
+
+    /// S6: one reading of what `unit`'s own processes hold on the GPU
+    /// (root's `gpu_usage`), or `None` (no such op here, or it failed).
+    pub(crate) async fn gpu_mem_sample(&self, unit: &str) -> Option<k2_node_proto::gpu::GpuMemUsage> {
+        if !self.gpu_usage_ready() {
+            return None;
+        }
+        match self.job_op(crate::admin::jobs::JobOp::GpuUsage { unit: unit.to_string() }, vec![], std::time::Duration::from_secs(10)).await {
+            Ok(crate::admin::jobs::JobAnswer::GpuUsage(u)) => Some(u),
+            Ok(other) => {
+                crate::nlog!("gpu_usage {unit}: unexpected answer {other:?}");
+                None
+            }
+            Err(e) => {
+                crate::nlog!("gpu_usage {unit}: {e}");
+                None
+            }
+        }
+    }
+
     /// Set `jobs` on each GPU fact `t`'s server may use here.
     pub(crate) fn mark_gpu_jobs(&self, t: &Tenant, facts: &mut [k2_node_proto::gpu::GpuFact]) {
         let mine = self.ready_gpus_for(t);
@@ -77,9 +133,22 @@ impl Node {
     /// Why `plan`'s GPU ask can't run here for `t` now, or `None` (no ask,
     /// or a GPU of that vendor is open to it).
     pub(crate) fn gpu_plan_refusal(&self, t: &Tenant, plan: &Plan) -> Option<String> {
-        let ask = plan.gpu?;
+        let Some(ask) = plan.gpu else {
+            return plan.gpu_mem.map(|_| "a GPU memory budget (--gpu-mem) without --gpu".to_string());
+        };
         if let Err(e) = ask.check() {
             return Some(e);
+        }
+        // S6: a budget this node can't watch is never taken (the server
+        // sends one only where `gpu-mem` is offered; the executor may
+        // have been rolled back since).
+        if let Some(b) = plan.gpu_mem {
+            if let Err(e) = k2_node_proto::gpu::check_gpu_mem(b) {
+                return Some(e);
+            }
+            if !self.gpu_usage_ready() {
+                return Some("this node can't watch a job's GPU memory (--gpu-mem): its root executor is older than k2-node 0.46.11 (update k2-node there)".into());
+            }
         }
         if self.ready_gpus_for(t).iter().any(|g| ask.vendor.matches(&g.vendor)) {
             return None;
@@ -262,6 +331,135 @@ mod tests {
         plain.fence.plan_digest = plain.plan.digest().unwrap();
         assert_eq!(n.assign_refusal(&owner, &plain), None, "a job without --gpu starts beside it");
         assert_eq!(n.offer(&owner).free.gpus, 0);
+    }
+
+    /// GPU jobs S6: `gpu-mem` only beside `gpu`, and only when root reads
+    /// a job's own GPU memory (`Ready.gpu_usage`); a budget an executor
+    /// can't watch is refused at assign, never run unwatched.
+    #[tokio::test]
+    async fn gpu_mem_is_offered_only_where_root_reads_gpu_memory() {
+        use k2_node_proto::gpu::FEATURE_GPU_MEM;
+        let (n, owner, t1, t2) = rig("gpu-mem-offer", ready(&["owner", "0000000000000001"])).await;
+        let mem = |t: &Tenant| n.session_features(t).iter().any(|f| f == FEATURE_GPU_MEM);
+        assert!(!mem(&owner) && !mem(&t1), "an older executor (no gpu_usage): no gpu-mem");
+        let mut a = gpu_assign(&n, &owner, "m1");
+        a.plan.gpu_mem = Some(4 << 30);
+        let why = n.gpu_plan_refusal(&owner, &a.plan).expect("refused");
+        assert!(why.contains("--gpu-mem") && why.contains("0.46.11"), "{why}");
+        n.exec_gpu_usage.store(true, Ordering::SeqCst);
+        assert!(mem(&owner) && mem(&t1), "with gpu");
+        assert!(!mem(&t2), "never without gpu");
+        assert_eq!(n.gpu_plan_refusal(&owner, &a.plan), None);
+        let mut plain = crate::ledger::tests::assign("p", 1);
+        plain.plan.gpu_mem = Some(4 << 30);
+        assert!(n.gpu_plan_refusal(&owner, &plain.plan).is_some(), "--gpu-mem without --gpu");
+        a.plan.gpu_mem = Some(1024);
+        assert!(n.gpu_plan_refusal(&owner, &a.plan).is_some(), "out of range");
+    }
+
+    /// GPU jobs S6: on a unified GPU a GPU job's memory is its `--mem` plus
+    /// its `--gpu-mem` (default 2G): it must fit before it starts and is
+    /// held while it runs. On a discrete GPU only `--mem` counts, and only
+    /// an explicit `--gpu-mem` is watched.
+    #[tokio::test]
+    async fn a_unified_gpu_job_counts_its_gpu_memory_beside_its_mem() {
+        let (n, owner, _, _) = rig("gpu-mem-count", ready(&["owner"])).await;
+        let caps_mem = n.queue_caps().mem_bytes;
+        let mut a = gpu_assign(&n, &owner, "u1");
+        a.plan.limits.mem_bytes = Some(caps_mem - (1 << 30));
+        a.fence.plan_digest = a.plan.digest().unwrap();
+        // Discrete (the rig's facts): --mem alone; not watched.
+        assert_eq!((n.gpu_mem_counted(&a.plan), n.gpu_mem_cap(&a.plan)), (0, None));
+        assert_eq!(n.assign_refusal(&owner, &a), None, "caps - 1G fits");
+        n.host.lock().unwrap().gpus[0].unified = true;
+        assert_eq!(n.gpu_mem_counted(&a.plan), 2 << 30, "the default --gpu-mem on a unified GPU");
+        assert_eq!(n.gpu_mem_cap(&a.plan), Some(2 << 30));
+        assert_eq!(n.plan_mem(&a.plan), Some(caps_mem + (1 << 30)));
+        let r = n.assign_refusal(&owner, &a).expect("caps - 1G + 2G of GPU memory doesn't fit");
+        assert_eq!(r.code, k2_node_proto::refusal::LOCAL_RESOURCE_LIMIT, "{r:?}");
+        a.plan.gpu_mem = Some(512 << 20);
+        a.fence.plan_digest = a.plan.digest().unwrap();
+        assert_eq!(n.assign_refusal(&owner, &a), None, "a smaller --gpu-mem fits");
+        // A running GPU job holds its GPU memory: the offer's free memory
+        // shows it.
+        let free_before = n.offer(&owner).free.mem_bytes;
+        a.plan.limits.mem_bytes = Some(1 << 30);
+        a.plan.gpu_mem = None;
+        n.jobs.lock().unwrap().insert(
+            (0, "held".into()),
+            RunningJob {
+                generation: 1,
+                cpu_millis: Some(100),
+                mem_bytes: n.plan_mem(&a.plan),
+                exclusive: false,
+                stop: tokio::sync::watch::channel(None).0,
+                seq: 0,
+                gate: false,
+                workspace: "w".into(),
+                secret: false,
+                uid: Default::default(),
+                port_block: None,
+                adoptable: false,
+                rust: Vec::new(),
+                gpus: 1,
+            },
+        );
+        assert_eq!(free_before - n.offer(&owner).free.mem_bytes, 3 << 30, "1G --mem + 2G GPU memory held");
+        // A plan without --gpu never counts GPU memory, whatever it says.
+        let mut plain = crate::ledger::tests::assign("p", 1);
+        plain.plan.gpu_mem = Some(8 << 30);
+        assert_eq!((n.gpu_mem_counted(&plain.plan), n.gpu_mem_cap(&plain.plan)), (0, None));
+        // Discrete with an explicit budget: watched, not counted.
+        n.host.lock().unwrap().gpus[0].unified = false;
+        a.plan.gpu_mem = Some(1 << 30);
+        assert_eq!((n.gpu_mem_counted(&a.plan), n.gpu_mem_cap(&a.plan)), (0, Some(1 << 30)));
+    }
+
+    /// GPU jobs S6: the node asks root for a unit's GPU memory only when
+    /// `Ready` said `gpu_usage`, and reads the answer off the wire.
+    #[tokio::test]
+    async fn gpu_mem_sample_asks_root_only_when_it_can() {
+        use crate::admin::exec::{LocalRequest, LocalResponse};
+        use crate::admin::jobs::{JobAnswer, JobOp};
+        let (n, _, _, _) = rig("gpu-mem-sample", ready(&["owner"])).await;
+        assert_eq!(n.gpu_mem_sample("k2job-x-g1.service").await, None, "no gpu_usage: never asked (the rig's socket doesn't exist)");
+        let d = crate::util::temp_dir("gpu-mem-sock");
+        let sock = crate::admin::server::short_sock(&d);
+        let _ = std::fs::remove_file(&sock);
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        // Every other op (the node's own open asks root for its key's
+        // taint mark) is refused, and on.
+        std::thread::spawn(move || loop {
+            let Ok((mut s, _)) = l.accept() else { break };
+            let Ok(h) = crate::admin::server::read_frame(&mut s, 1 << 20) else { continue };
+            let ans = match serde_json::from_slice::<LocalRequest>(&h) {
+                Ok(LocalRequest::Job { job: JobOp::GpuUsage { unit } }) => {
+                    let _ = tx.send(unit);
+                    JobAnswer::GpuUsage(k2_node_proto::gpu::GpuMemUsage { bytes: 5 << 30, gtt_bytes: 5 << 30, clients: 2, pids: 3, ..Default::default() })
+                }
+                _ => JobAnswer::Refused(k2_node_proto::admin::AdminRefusal::new("not_configured", "the test executor answers gpu_usage only")),
+            };
+            let _ = crate::admin::server::write_frame(&mut s, &serde_json::to_vec(&LocalResponse::Job(ans)).unwrap());
+        });
+        // A node whose executor reads GPU memory, on that socket.
+        let mut o = NodeOptions::new(crate::paths::Layout::new(d.join("home"), d.join("cfg")));
+        o.layout.ensure().unwrap();
+        std::fs::create_dir_all(&o.layout.config).unwrap();
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        o.wall = Some(Wall::JobUser { user: "k2job".into() });
+        o.exec_stdin = Some(true);
+        o.exec_gpus = Some(ready(&["owner"]));
+        o.exec_gpu_usage = Some(true);
+        o.admin_socket = sock.clone();
+        o.facts = Some(crate::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: false });
+        let m = Node::open(o).await.unwrap();
+        let u = m.gpu_mem_sample("k2job-x-g1.service").await.expect("an answer");
+        assert_eq!((u.bytes, u.clients, u.pids), (5 << 30, 2, 3));
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), "k2job-x-g1.service");
+        let _ = std::fs::remove_file(&sock);
     }
 
     #[tokio::test]

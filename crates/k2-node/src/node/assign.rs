@@ -190,7 +190,8 @@ impl Node {
             RunningJob {
                 generation: a.fence.generation,
                 cpu_millis: a.plan.limits.cpu_millis,
-                mem_bytes: a.plan.limits.mem_bytes,
+                // GPU jobs S6: on a unified GPU its GPU memory is RAM too.
+                mem_bytes: self.plan_mem(&a.plan),
                 exclusive: a.plan.exclusive,
                 stop: stop_tx,
                 seq: self.job_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -209,7 +210,7 @@ impl Node {
         );
         drop(jobs);
         let caps = self.queue_caps();
-        self.fairq.started(t.slot, &a, self.now(), &caps, uid);
+        self.fairq.started(t.slot, &a, self.now(), &caps, uid, self.gpu_mem_counted(&a.plan));
         self.jobs_changed();
         let (node, tenant) = (self.clone(), t.clone());
         tokio::spawn(async move { node.run_job(tenant, a, stop_rx).await });
@@ -241,7 +242,8 @@ impl Node {
         let ask = JobAsk {
             workspace_id: &a.plan.workspace_id,
             cpu_millis: a.plan.limits.cpu_millis,
-            mem_bytes: a.plan.limits.mem_bytes,
+            // GPU jobs S6: `--mem` plus its GPU memory on a unified GPU.
+            mem_bytes: self.plan_mem(&a.plan),
             // `limits.disk_bytes` is the grant's ceiling for this job, not
             // space it needs free right now; a start only needs the node's
             // floor (checked in `node_refusal`). Requiring the ceiling free
@@ -379,6 +381,9 @@ impl Node {
             ));
         }
         let caps = self.queue_caps();
+        // GPU jobs S6: the node's caps count its GPU memory on a unified
+        // GPU too (the share's per-job memory is its --mem alone).
+        let mem = self.plan_mem(&a.plan);
         if cpu.is_some_and(|c| c > caps.cpu_millis) || mem.is_some_and(|m| m > caps.mem_bytes) {
             return Some((k2_node_proto::share::blocked::EXCEEDS_NODE_CAPS, "bigger than this node's caps".into()));
         }

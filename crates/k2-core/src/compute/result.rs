@@ -87,6 +87,9 @@ pub fn resources(j: &JobRow) -> Value {
             "gttPeakBytes": g.get("gtt_peak_bytes"),
             "samples": g.get("samples"),
             "source": g.get("source"),
+            // S6: the job's own GPU memory (DRM fdinfo) and its budget.
+            "jobMemPeakBytes": g.get("job_mem_peak_bytes"),
+            "memLimitBytes": g.get("mem_limit_bytes"),
         });
     }
     v
@@ -440,6 +443,17 @@ mod tests {
         let g = &resources(&j)["gpu"];
         assert_eq!((g["model"].as_str(), g["busyAvgPct"].as_u64(), g["gttPeakBytes"].as_u64(), g["vramPeakBytes"].as_u64()), (Some("AMD Radeon Test APU"), Some(37), Some(3 << 30), None));
         assert_eq!(g["source"], "sysfs-device");
+        assert_eq!((g["jobMemPeakBytes"].as_u64(), g["memLimitBytes"].as_u64()), (None, None), "an S4 node's result: no per-job numbers");
+        // GPU jobs S6: the job's own GPU memory and its budget.
+        j.summary_json = Some(
+            json!({"artifacts": [], "notes": [],
+                   "resources": {"mem_source": "memory.peak", "cpu_source": "cpu.stat",
+                                 "gpu": {"model": "m", "pci": "0000:c4:00.0", "samples": 3, "source": "sysfs-device",
+                                         "job_mem_peak_bytes": 3u64 << 30, "mem_limit_bytes": 2u64 << 30}}})
+            .to_string(),
+        );
+        let g = &resources(&j)["gpu"];
+        assert_eq!((g["jobMemPeakBytes"].as_u64(), g["memLimitBytes"].as_u64()), (Some(3 << 30), Some(2 << 30)));
         j.requested_by = "owner".into();
         j.ctl.tag = Some("fuzz:p3".into());
         let v = envelope(&j, None);

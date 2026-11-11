@@ -112,6 +112,9 @@ pub struct NodeOptions {
     /// The GPUs the executor says jobs may use (`Ready.gpus`, GPU jobs
     /// 0.46.11). `None` = ask it with `exec_stdin` (tests set it).
     pub exec_gpus: Option<Vec<crate::admin::gpu::ReadyGpu>>,
+    /// Does the executor read a job's own GPU memory (`Ready.gpu_usage`,
+    /// GPU jobs S6)? `None` = ask it with `exec_stdin` (tests set it).
+    pub exec_gpu_usage: Option<bool>,
     /// How long a job waits for its secret env (SE18; tests shorten it).
     pub secret_wait: Duration,
     /// The `k2-node` binary that runs `job-hold` (§5.2): set, jobs not
@@ -185,6 +188,7 @@ impl NodeOptions {
             exec_stdin: None,
             exec_job_uid: None,
             exec_gpus: None,
+            exec_gpu_usage: None,
             secret_wait: Duration::from_secs(k2_node_proto::secret::NEED_TIMEOUT_SECS),
             job_holder: default_job_holder(),
             tenant_adopt_wait: adopt::TENANT_ADOPT_WAIT,
@@ -201,21 +205,33 @@ impl NodeOptions {
 /// Does the executor relay a secret-env stdin pipe (`Ready.stdin`, SE21,
 /// SV18)? An older executor omits it: false.
 pub async fn probe_exec_stdin(admin_socket: &Path) -> bool {
-    probe_exec_caps(admin_socket).await.0
+    probe_exec_caps(admin_socket).await.stdin
 }
 
-/// What the executor's `Ready` says it can do: (relay a secret-env stdin
-/// pipe, give secret jobs a per-job uid, the GPUs jobs may use). An older
-/// one says none of them.
-pub async fn probe_exec_caps(admin_socket: &Path) -> (bool, bool, Vec<crate::admin::gpu::ReadyGpu>) {
+/// What the executor's `Ready` says it can do.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExecCaps {
+    /// Relays a secret-env stdin pipe.
+    pub stdin: bool,
+    /// Gives secret jobs a per-job uid.
+    pub job_uid: bool,
+    /// The GPUs jobs may use.
+    pub gpus: Vec<crate::admin::gpu::ReadyGpu>,
+    /// Reads a job's own GPU memory (GPU jobs S6).
+    pub gpu_usage: bool,
+}
+
+/// What the executor's `Ready` says it can do. An older one says none of
+/// them.
+pub async fn probe_exec_caps(admin_socket: &Path) -> ExecCaps {
     let sock = admin_socket.to_path_buf();
     let r = tokio::task::spawn_blocking(move || {
         crate::admin::server::job_request(&sock, &crate::admin::jobs::JobOp::Ready, &[], Duration::from_secs(10))
     })
     .await;
     match r {
-        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { stdin, job_uid, gpus, .. })) => (stdin, job_uid, gpus),
-        _ => (false, false, Vec::new()),
+        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { stdin, job_uid, gpus, gpu_usage, .. })) => ExecCaps { stdin, job_uid, gpus, gpu_usage },
+        _ => ExecCaps::default(),
     }
 }
 
@@ -430,6 +446,9 @@ pub struct Node {
     /// GPU jobs (0.46.11): the GPUs the executor says jobs may use, and
     /// who may (`Ready.gpus`; asked with `exec_stdin`).
     pub exec_gpus: Mutex<Vec<crate::admin::gpu::ReadyGpu>>,
+    /// GPU jobs S6: the executor reads a job's own GPU memory
+    /// (`Ready.gpu_usage`; asked with `exec_stdin`).
+    pub exec_gpu_usage: std::sync::atomic::AtomicBool,
     /// Job caches running jobs hold (module `job_cache`).
     job_caches_busy: Mutex<job_cache::Busy>,
     /// Which running attempt holds which job cache, by (slot, job, gen):
@@ -553,11 +572,12 @@ impl Node {
         // Tests set `exec_stdin` (and then never probe a real executor).
         let probed = match (&opts.exec_stdin, &wall) {
             (None, Wall::JobUser { .. }) => probe_exec_caps(&opts.admin_socket).await,
-            _ => (false, false, Vec::new()),
+            _ => ExecCaps::default(),
         };
-        let exec_stdin = opts.exec_stdin.unwrap_or(probed.0);
-        let exec_job_uid = opts.exec_job_uid.unwrap_or(probed.1);
-        let exec_gpus = opts.exec_gpus.clone().unwrap_or(probed.2);
+        let exec_stdin = opts.exec_stdin.unwrap_or(probed.stdin);
+        let exec_job_uid = opts.exec_job_uid.unwrap_or(probed.job_uid);
+        let exec_gpus = opts.exec_gpus.clone().unwrap_or(probed.gpus);
+        let exec_gpu_usage = opts.exec_gpu_usage.unwrap_or(probed.gpu_usage);
         let facts = opts.facts.clone().unwrap_or_else(|| machine_facts(&layout));
         let policy = Policy::resolve(&config::PolicyFile::default(), &facts)?;
         let cgroups = if opts.use_cgroups { Cgroups::detect() } else { None };
@@ -599,6 +619,7 @@ impl Node {
             exec_stdin: std::sync::atomic::AtomicBool::new(exec_stdin),
             exec_job_uid: std::sync::atomic::AtomicBool::new(exec_job_uid),
             exec_gpus: Mutex::new(exec_gpus),
+            exec_gpu_usage: std::sync::atomic::AtomicBool::new(exec_gpu_usage),
             job_caches_busy: Mutex::new(job_cache::Busy::default()),
             job_cache_holds: Mutex::new(HashMap::new()),
             git_helpers: Mutex::new(HashMap::new()),
@@ -666,7 +687,7 @@ impl Node {
         if self.opts.exec_stdin.is_some() || !matches!(self.wall, Wall::JobUser { .. }) {
             return false;
         }
-        let (stdin, job_uid, gpus) = probe_exec_caps(&self.opts.admin_socket).await;
+        let ExecCaps { stdin, job_uid, gpus, gpu_usage } = probe_exec_caps(&self.opts.admin_socket).await;
         let mut changed = self.exec_stdin.swap(stdin, std::sync::atomic::Ordering::SeqCst) != stdin;
         if self.opts.exec_job_uid.is_none() {
             changed |= self.exec_job_uid.swap(job_uid, std::sync::atomic::Ordering::SeqCst) != job_uid;
@@ -679,6 +700,9 @@ impl Node {
                 *g = gpus;
                 changed = true;
             }
+        }
+        if self.opts.exec_gpu_usage.is_none() {
+            changed |= self.exec_gpu_usage.swap(gpu_usage, std::sync::atomic::Ordering::SeqCst) != gpu_usage;
         }
         changed
     }
@@ -1430,7 +1454,7 @@ mod wall_tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None,
             with: Vec::new(),
         };
         let fence = k2_node_proto::frames::Fence { job_id: job.into(), attempt: 1, generation: 1, plan_digest: plan.digest().unwrap() };

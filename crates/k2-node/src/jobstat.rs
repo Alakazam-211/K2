@@ -397,7 +397,39 @@ impl GpuWatch {
             gtt_peak_bytes: over(self.gtt_max, self.start.gtt_used),
             samples: self.samples,
             source: k2_node_proto::results::gpu_source::SYSFS_DEVICE.into(),
+            job_mem_peak_bytes: None,
+            mem_limit_bytes: None,
         }
+    }
+}
+
+/// GPU jobs S6: a GPU job's **own** GPU memory (root's `gpu_usage`, the
+/// DRM fdinfo of its unit's processes) against its budget (`--gpu-mem`,
+/// or the default on a unified device). The node stops the job once a
+/// reading is over the budget by more than 10% (`failed/gpu_mem_cap`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuMemWatch {
+    pub cap: u64,
+    pub peak: Option<u64>,
+    pub samples: u32,
+}
+
+impl GpuMemWatch {
+    pub fn new(cap: u64) -> Self {
+        Self { cap, peak: None, samples: 0 }
+    }
+
+    /// One reading. `Some(detail)`: over the budget; stop the job.
+    pub fn fold(&mut self, u: &k2_node_proto::gpu::GpuMemUsage) -> Option<String> {
+        self.samples += 1;
+        self.peak = Some(self.peak.map_or(u.bytes, |p| p.max(u.bytes)));
+        k2_node_proto::gpu::over_cap(self.cap, u.bytes).then(|| k2_node_proto::gpu::gpu_mem_cap_detail(self.cap, u.bytes))
+    }
+
+    /// Into the footer's GPU use (a peak only when one was read).
+    pub fn fill(&self, g: &mut k2_node_proto::results::GpuUse) {
+        g.job_mem_peak_bytes = self.peak;
+        g.mem_limit_bytes = Some(self.cap);
     }
 }
 
@@ -415,7 +447,14 @@ pub fn gpu_line(g: &k2_node_proto::results::GpuUse) -> String {
     if let Some(t) = g.gtt_peak_bytes {
         parts.push(format!("GTT +{}", gib(t)));
     }
-    format!("GPU {}: {} (the whole device over {} sample(s), the host's own use included)", g.model, parts.join(", "), g.samples)
+    let mut line = format!("GPU {}: {} (the whole device over {} sample(s), the host's own use included)", g.model, parts.join(", "), g.samples);
+    // S6: the job's own GPU memory, against its budget.
+    match (g.job_mem_peak_bytes, g.mem_limit_bytes) {
+        (Some(p), Some(c)) => line.push_str(&format!("; this job's own GPU memory: peak {} of --gpu-mem {}", gib(p), gib(c))),
+        (None, Some(c)) => line.push_str(&format!("; this job's own GPU memory: not read (--gpu-mem {})", gib(c))),
+        _ => {}
+    }
+    line
 }
 
 // ── host stamp (CE-19) ────────────────────────────────────────────────
@@ -716,6 +755,28 @@ mod tests {
         // An older reader's JSON: no gpu key without a GPU.
         let r = ResWatch::new(Source::None).resources(Some(1));
         assert!(!serde_json::to_string(&r).unwrap().contains("gpu"));
+    }
+
+    /// S6: the watch keeps the peak, says nothing within the budget plus
+    /// 10% and stops the job above it; the footer names the job's own peak.
+    #[test]
+    fn gpu_mem_watch_stops_only_over_the_budget() {
+        use k2_node_proto::gpu::GpuMemUsage;
+        let cap = 2u64 << 30;
+        let mut w = GpuMemWatch::new(cap);
+        let at = |b: u64| GpuMemUsage { bytes: b, ..Default::default() };
+        assert_eq!(w.fold(&at(1 << 30)), None);
+        assert_eq!(w.fold(&at(cap + cap / 10)), None, "within the 10%");
+        assert_eq!(w.peak, Some(cap + cap / 10));
+        let d = w.fold(&at(3 << 30)).expect("over the budget: stop");
+        assert!(d.contains("3.0G") && d.contains("--gpu-mem is 2.0G"), "{d}");
+        assert_eq!((w.peak, w.samples), (Some(3 << 30), 3));
+        let mut g = GpuWatch::new("0000:c4:00.0", GpuReading::default()).usage("AMD Radeon Test APU");
+        w.fill(&mut g);
+        assert_eq!((g.job_mem_peak_bytes, g.mem_limit_bytes), (Some(3 << 30), Some(cap)));
+        assert!(gpu_line(&g).ends_with("; this job's own GPU memory: peak 3.0G of --gpu-mem 2.0G"), "{}", gpu_line(&g));
+        g.job_mem_peak_bytes = None;
+        assert!(gpu_line(&g).ends_with("not read (--gpu-mem 2.0G)"), "{}", gpu_line(&g));
     }
 
     #[test]

@@ -191,6 +191,133 @@ pub fn facts(sys: &Path) -> Vec<GpuFact> {
     gpus.iter().map(|g| g.fact(ids.as_deref().and_then(|t| pci_model(t, &g.vendor_id, &g.device_id)))).collect()
 }
 
+// ── a job's own GPU memory (GPU jobs S6) ─────────────────────────────
+
+/// One DRM client (one open of a DRM device) as its fdinfo says
+/// (`Documentation/gpu/drm-usage-stats.rst`): the device, the client id
+/// and the memory it holds, by region.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DrmClient {
+    /// `drm-pdev` (the PCI address), else `drm-driver`.
+    pub dev: String,
+    pub client_id: u64,
+    /// Resident bytes by region (`vram`, `gtt`, `cpu`, `system0`, …):
+    /// `drm-resident-<region>` when the kernel prints it, else the legacy
+    /// `drm-memory-<region>` (the same number, older kernels).
+    pub regions: std::collections::BTreeMap<String, u64>,
+}
+
+/// `1024 KiB` / `3 MiB` / `4096` (bytes) → bytes.
+fn fdinfo_bytes(v: &str) -> Option<u64> {
+    let mut it = v.split_whitespace();
+    let n: u64 = it.next()?.parse().ok()?;
+    let mul: u64 = match it.next() {
+        None => 1,
+        Some("KiB") => 1 << 10,
+        Some("MiB") => 1 << 20,
+        Some("GiB") => 1 << 30,
+        Some(_) => return None,
+    };
+    Some(n.saturating_mul(mul))
+}
+
+/// The DRM client an fdinfo text describes, or `None` (not a DRM fd, or
+/// a driver without client stats).
+pub fn parse_fdinfo(text: &str) -> Option<DrmClient> {
+    let mut c = DrmClient::default();
+    let (mut id, mut pdev, mut driver) = (None, None, None);
+    let mut resident = std::collections::BTreeMap::new();
+    let mut legacy = std::collections::BTreeMap::new();
+    for line in text.lines() {
+        let Some((k, v)) = line.split_once(':') else { continue };
+        let (k, v) = (k.trim(), v.trim());
+        match k {
+            "drm-client-id" => id = v.parse::<u64>().ok(),
+            "drm-pdev" => pdev = Some(v.to_string()),
+            "drm-driver" => driver = Some(v.to_string()),
+            _ => {
+                if let Some(r) = k.strip_prefix("drm-resident-") {
+                    if let Some(b) = fdinfo_bytes(v) {
+                        resident.insert(r.to_string(), b);
+                    }
+                } else if let Some(r) = k.strip_prefix("drm-memory-") {
+                    if let Some(b) = fdinfo_bytes(v) {
+                        legacy.insert(r.to_string(), b);
+                    }
+                }
+            }
+        }
+    }
+    c.client_id = id?;
+    c.dev = pdev.or(driver).unwrap_or_default();
+    c.regions = if resident.is_empty() { legacy } else { resident };
+    Some(c)
+}
+
+/// The processes of a cgroup and its children (`cgroup.procs`), at most
+/// [`MAX_PIDS`].
+fn cgroup_pids(cg: &Path) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut stack = vec![(cg.to_path_buf(), 0u32)];
+    while let Some((d, depth)) = stack.pop() {
+        if let Ok(t) = std::fs::read_to_string(d.join("cgroup.procs")) {
+            out.extend(t.lines().filter_map(|l| l.trim().parse::<u32>().ok()));
+        }
+        if out.len() >= MAX_PIDS || depth >= 16 {
+            continue;
+        }
+        if let Ok(rd) = std::fs::read_dir(&d) {
+            stack.extend(rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).map(|e| (e.path(), depth + 1)));
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out.truncate(MAX_PIDS);
+    out
+}
+
+/// A job unit's processes read for GPU memory, at most.
+pub const MAX_PIDS: usize = 4096;
+/// Open files of one process looked at, at most.
+pub const MAX_FDS: usize = 65536;
+
+/// GPU jobs S6 (root, the executor's `gpu_usage`): the GPU memory the
+/// processes of the cgroup `cg` (a job unit's, under `/sys/fs/cgroup`)
+/// hold, from `<proc>/<pid>/fdinfo` of every fd open on a `/dev/dri/`
+/// node. Each DRM client counts once (a forked or duplicated fd shares
+/// one), with every resident region: on an APU all of it is system RAM.
+/// A process gone between reads is skipped.
+pub fn unit_gpu_mem(cg: &Path, proc_root: &Path) -> k2_node_proto::gpu::GpuMemUsage {
+    let mut seen: std::collections::BTreeMap<(String, u64), DrmClient> = std::collections::BTreeMap::new();
+    let pids = cgroup_pids(cg);
+    for pid in &pids {
+        let base = proc_root.join(pid.to_string());
+        let Ok(rd) = std::fs::read_dir(base.join("fd")) else { continue };
+        for e in rd.flatten().take(MAX_FDS) {
+            let Ok(target) = std::fs::read_link(e.path()) else { continue };
+            if !target.starts_with("/dev/dri/") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(base.join("fdinfo").join(e.file_name())) else { continue };
+            if let Some(c) = parse_fdinfo(&text) {
+                seen.entry((c.dev.clone(), c.client_id)).or_insert(c);
+            }
+        }
+    }
+    let mut u = k2_node_proto::gpu::GpuMemUsage { pids: pids.len() as u32, clients: seen.len() as u32, ..Default::default() };
+    for c in seen.values() {
+        for (r, b) in &c.regions {
+            u.bytes = u.bytes.saturating_add(*b);
+            if r.starts_with("vram") || r.starts_with("local") {
+                u.vram_bytes = u.vram_bytes.saturating_add(*b);
+            } else if r == "gtt" {
+                u.gtt_bytes = u.gtt_bytes.saturating_add(*b);
+            }
+        }
+    }
+    u
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -265,6 +392,64 @@ pub(crate) mod tests {
         assert_eq!(pci_model(ids, "1002", "1586").as_deref(), Some("AMD Test APU [Radeon Graphics]"));
         assert_eq!(pci_model(ids, "1002", "ffff"), None);
         assert_eq!(pci_model(ids, "8086", "a780"), None);
+    }
+
+    const FDINFO_NEW: &str = "pos:\t0\nflags:\t02100002\nmnt_id:\t26\ndrm-driver:\tamdgpu\ndrm-client-id:\t42\ndrm-pdev:\t0000:c4:00.0\n\
+drm-memory-vram:\t1024 KiB\ndrm-memory-gtt:\t2097152 KiB\ndrm-memory-cpu:\t0 KiB\n\
+drm-total-vram:\t4096 KiB\ndrm-resident-vram:\t1024 KiB\ndrm-resident-gtt:\t2097152 KiB\ndrm-resident-cpu:\t512 KiB\ndrm-engine-gfx:\t123 ns\n";
+    const FDINFO_OLD: &str = "pos:\t0\ndrm-driver:\tamdgpu\ndrm-pdev:\t0000:c4:00.0\ndrm-client-id:\t43\ndrm-memory-vram:\t0 KiB\ndrm-memory-gtt:\t512 MiB\n";
+
+    /// The current amdgpu prints both the legacy `drm-memory-*` and
+    /// `drm-resident-*`: the resident ones count, never both. An older
+    /// kernel has only the legacy lines.
+    #[test]
+    fn fdinfo_counts_resident_regions_once() {
+        let c = parse_fdinfo(FDINFO_NEW).expect("a DRM client");
+        assert_eq!((c.dev.as_str(), c.client_id), ("0000:c4:00.0", 42));
+        assert_eq!(c.regions.get("gtt"), Some(&(2u64 << 30)));
+        assert_eq!(c.regions.get("vram"), Some(&(1u64 << 20)));
+        assert_eq!(c.regions.get("cpu"), Some(&(512u64 << 10)));
+        assert_eq!(c.regions.len(), 3, "{:?}", c.regions);
+        let o = parse_fdinfo(FDINFO_OLD).expect("a DRM client");
+        assert_eq!(o.regions.get("gtt"), Some(&(512u64 << 20)));
+        assert_eq!(parse_fdinfo("pos:\t0\nflags:\t0100002\n"), None, "not a DRM client");
+        assert_eq!(parse_fdinfo("drm-driver:\tamdgpu\ndrm-memory-gtt:\t5 KiB\n"), None, "no client id: not counted");
+        assert_eq!(fdinfo_bytes("4096"), Some(4096));
+        assert_eq!(fdinfo_bytes("3 MiB"), Some(3 << 20));
+        assert_eq!(fdinfo_bytes("3 TiB"), None);
+    }
+
+    /// A unit's cgroup with two processes sharing one DRM client (a fork),
+    /// a child cgroup with another client, an fd that isn't DRM and a DRM
+    /// fd without client stats: each client counts once, the rest never.
+    #[test]
+    fn unit_gpu_mem_sums_each_client_once() {
+        let d = crate::util::temp_dir("gpu-fdinfo");
+        let (cg, proc_root) = (d.join("cg"), d.join("proc"));
+        std::fs::create_dir_all(cg.join("sub")).unwrap();
+        std::fs::write(cg.join("cgroup.procs"), "100\n101\n").unwrap();
+        std::fs::write(cg.join("sub/cgroup.procs"), "102\n").unwrap();
+        let fd = |pid: u32, n: u32, target: &str, info: Option<&str>| {
+            let b = proc_root.join(pid.to_string());
+            std::fs::create_dir_all(b.join("fd")).unwrap();
+            std::fs::create_dir_all(b.join("fdinfo")).unwrap();
+            std::os::unix::fs::symlink(target, b.join("fd").join(n.to_string())).unwrap();
+            if let Some(i) = info {
+                std::fs::write(b.join("fdinfo").join(n.to_string()), i).unwrap();
+            }
+        };
+        fd(100, 3, "/dev/dri/renderD128", Some(FDINFO_NEW));
+        fd(101, 3, "/dev/dri/renderD128", Some(FDINFO_NEW));
+        fd(101, 4, "/dev/null", Some(FDINFO_OLD));
+        fd(102, 7, "/dev/dri/renderD128", Some(FDINFO_OLD));
+        fd(102, 8, "/dev/dri/renderD128", Some("pos:\t0\ndrm-driver:\tamdgpu\n"));
+        let u = unit_gpu_mem(&cg, &proc_root);
+        assert_eq!((u.pids, u.clients), (3, 2), "{u:?}");
+        assert_eq!(u.gtt_bytes, (2u64 << 30) + (512 << 20));
+        assert_eq!(u.vram_bytes, 1 << 20);
+        assert_eq!(u.bytes, (2u64 << 30) + (512 << 20) + (1 << 20) + (512 << 10));
+        // No such cgroup: nothing, never an error.
+        assert_eq!(unit_gpu_mem(&d.join("gone"), &proc_root), k2_node_proto::gpu::GpuMemUsage::default());
     }
 
     #[test]

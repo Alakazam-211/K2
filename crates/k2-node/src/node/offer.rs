@@ -258,6 +258,12 @@ impl Node {
         if self.gpus_for(t) > 0 && !f.iter().any(|x| x == k2_node_proto::gpu::FEATURE_GPU) {
             f.push(k2_node_proto::gpu::FEATURE_GPU.to_string());
         }
+        // GPU jobs S6: `--gpu-mem` here only beside `gpu`, and only when
+        // root reads a job's own GPU memory (an older executor can't, so
+        // the budget would go unwatched).
+        if self.offers_gpu_mem(t) && !f.iter().any(|x| x == k2_node_proto::gpu::FEATURE_GPU_MEM) {
+            f.push(k2_node_proto::gpu::FEATURE_GPU_MEM.to_string());
+        }
         // Compute easy mode (protocol 6, same release): only to a server
         // that speaks it, the only one the node does that work for.
         if t.speaks_easy() {

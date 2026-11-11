@@ -107,11 +107,17 @@ Remote admin (prd-k2-node-admin-v1; root, at this machine):
                                                  agents also need a grant with --gpu (k2 compute grant <node>
                                                  --workspace <ws> --gpu, by that server's owner or an Admin). Runs a self-test, and warns that a GPU fault can
                                                  end the desktop session. Never a display (card) node or
-                                                 /dev/kfd; NVIDIA isn't supported yet
+                                                 /dev/kfd; NVIDIA isn't supported yet. On an APU a GPU job's
+                                                 --gpu-mem (default 2G) is reserved beside its --mem, and root
+                                                 reads its own GPU memory (DRM fdinfo) so the node stops it
+                                                 above that (failed/gpu_mem_cap)
   sudo k2-node admin gpu off [--device <pci>] [--server <server>]
                                                  turn GPU jobs off (all, one GPU, or one server); new starts
                                                  see it at once, a running GPU job keeps its device until it ends
   k2-node admin gpu status [--json]              every GPU: on or off, for whom, its last lease
+  sudo k2-node admin gpu usage --unit <unit> [--json]
+                                                 the GPU memory a job unit's own processes hold now (their DRM
+                                                 fdinfo; what the node watches a GPU job's --gpu-mem against)
 
 The job wall (0.46.3): Linux jobs run as k2job in a sandboxed systemd unit; macOS
 jobs run under a Seatbelt profile. Neither can read the node's key or state or
@@ -1279,7 +1285,28 @@ fn cmd_admin_gpu(a: &Args, config_dir: &std::path::Path, state: &std::path::Path
             println!("{}", gpu::cli_status(config_dir, sys, state, a.has("--json"))?);
             Ok(())
         }
-        _ => Err("admin gpu on [--device <pci>|all] [--server <server>]... | off [--device <pci>] [--server <server>] | status [--json]".into()),
+        // GPU jobs S6: what the executor's `gpu_usage` reads for a unit (its
+        // processes' DRM fdinfo), for the owner's own checks. Read only.
+        Some("usage") => {
+            if !is_root() {
+                return Err("admin gpu usage reads other users' /proc/<pid>/fdinfo: run it with sudo".into());
+            }
+            let unit = a.get("unit").ok_or("admin gpu usage --unit <name>.service")?;
+            if !unit.ends_with(".service") || !unit.chars().all(|c| c.is_ascii_alphanumeric() || "-_.@".contains(c)) {
+                return Err("--unit is a systemd service name (k2job-….service)".into());
+            }
+            let u = gpu::unit_gpu_usage(unit)?;
+            if a.has("--json") {
+                println!("{}", serde_json::to_string(&u).map_err(|e| e.to_string())?);
+            } else {
+                println!(
+                    "{unit}: {} bytes of GPU memory (VRAM {}, GTT {}) in {} DRM client(s) of {} process(es)",
+                    u.bytes, u.vram_bytes, u.gtt_bytes, u.clients, u.pids
+                );
+            }
+            Ok(())
+        }
+        _ => Err("admin gpu on [--device <pci>|all] [--server <server>]... | off [--device <pci>] [--server <server>] | status [--json] | usage --unit <unit> [--json]".into()),
     }
 }
 

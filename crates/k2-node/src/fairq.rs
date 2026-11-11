@@ -290,7 +290,9 @@ impl FairQ {
     }
 
     /// An attempt started (any path): account it from now.
-    pub(crate) fn started(&self, slot: Slot, a: &Assign, now: i64, caps: &Caps, uid: k2_node_proto::queue::UidShare) {
+    /// `gpu_mem`: what its GPU memory adds to its memory here (GPU jobs
+    /// S6, [`crate::node::Node::gpu_mem_counted`]).
+    pub(crate) fn started(&self, slot: Slot, a: &Assign, now: i64, caps: &Caps, uid: k2_node_proto::queue::UidShare, gpu_mem: u64) {
         let hash = cmd_hash(&a.plan.argv);
         let mut st = self.st.lock().unwrap();
         let hist = st.store.duration(slot, &hash).ok().flatten();
@@ -303,7 +305,7 @@ impl FairQ {
             submitter: a.plan.turn_key(),
             cmd_hash: hash,
             cpu: a.plan.limits.cpu_millis.unwrap_or_else(|| caps.default_cpu()),
-            mem: a.plan.limits.mem_bytes.unwrap_or_else(|| caps.default_mem()),
+            mem: a.plan.limits.mem_bytes.unwrap_or_else(|| caps.default_mem()).saturating_add(gpu_mem),
             exclusive: a.plan.exclusive,
             started_at: now,
             started: std::time::Instant::now(),
@@ -473,7 +475,8 @@ impl FairQ {
                     class: r.plan.class.unwrap_or_default(),
                     tier: r.plan.tier_or_class(),
                     cpu_millis: r.plan.limits.cpu_millis,
-                    mem_bytes: r.plan.limits.mem_bytes,
+                    // GPU jobs S6: plus its GPU memory on a unified GPU.
+                    mem_bytes: node.plan_mem(&r.plan),
                     exclusive: r.plan.exclusive,
                     enqueued_at: r.enqueued_at.unwrap_or(r.created_at),
                     arrival: r.seq as u64,

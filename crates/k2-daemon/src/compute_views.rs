@@ -1128,6 +1128,22 @@ fn mem_cap_hint(j: &store::JobRow) -> Option<String> {
     })
 }
 
+/// GPU jobs S6: a job the node stopped over its GPU memory budget
+/// (`failed`/`gpu_mem_cap`): the numbers and what to try next.
+fn gpu_mem_cap_hint(j: &store::JobRow) -> Option<String> {
+    if j.state != "failed" || j.reason.as_deref() != Some(k2_core::compute::proto::gpu::codes::GPU_MEM_CAP) {
+        return None;
+    }
+    let budget = match j.plan().and_then(|p| p.gpu_mem) {
+        Some(b) => format!("its --gpu-mem {}", gib_shown(b)),
+        None => format!("the default --gpu-mem {} (a unified GPU)", gib_shown(k2_core::compute::proto::gpu::DEFAULT_GPU_MEM_UNIFIED)),
+    };
+    Some(format!(
+        "stopped: its own GPU memory went over {budget} by more than {}%. On an APU (an iGPU), GPU buffers come out of system RAM beside --mem: pass a bigger --gpu-mem (k2 study compute: GPU JOBS)",
+        k2_core::compute::proto::gpu::GPU_MEM_SLACK_PCT
+    ))
+}
+
 /// CE-10: a running job's stall watch, as `get` shows it: the limit the
 /// node enforces (`stallSecs`, null = off) and when the warning went out.
 fn stall_json(j: &store::JobRow) -> serde_json::Value {
@@ -1214,7 +1230,7 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
     let mut v = job_summary(&j);
     // `commit` is srcCommit; `dirty` says whether --dirty changes rode along.
     v["dirty"] = j.dirty_sha256.is_some().into();
-    if let Some(h) = mem_cap_hint(&j) {
+    if let Some(h) = mem_cap_hint(&j).or_else(|| gpu_mem_cap_hint(&j)) {
         v["hint"] = h.into();
     }
     // The audit line: who asked for the cancel, and when.

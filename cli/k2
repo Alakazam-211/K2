@@ -26983,6 +26983,16 @@ Agents:
                                 no_gpu_node or gpu_needs_grant, exit 3; a busy GPU:
                                 it waits, gpu_busy). Bare --gpu = any. k2 study
                                 compute: GPU JOBS
+                 [--gpu-mem 4G]  only with --gpu (alone: exit 2): the job's GPU
+                                memory budget. On an APU or iGPU (GPU memory is
+                                system RAM, outside --mem) it is reserved beside
+                                --mem, 2G when left out, and a job whose own GPU
+                                memory goes over it by more than 10% is stopped
+                                (failed/gpu_mem_cap; the 2G default too: pass more
+                                for bigger textures). On a discrete GPU: nothing
+                                reserved, watched only when given. Needs k2-node
+                                0.46.11 on the node (else gpu_mem_needs_update,
+                                exit 3)
                  [--receipt-v2]  the node signs receipt v2 (how and where the job
                                 ran, and its signed self-statement; k2 compute receipt
                                 shows both); only nodes on protocol 9 take it
@@ -27930,6 +27940,10 @@ elif verb == "get":
             if g.get("vramPeakBytes") is not None: bits.append("VRAM +" + gb(g["vramPeakBytes"]))
             if g.get("gttPeakBytes") is not None: bits.append("GTT +" + gb(g["gttPeakBytes"]))
             print("  gpu: %s: %s (whole device, %s)" % (g.get("model") or g.get("pci"), ", ".join(bits), g.get("source") or "-"))
+            # GPU jobs S6: the GPU memory of the job itself (DRM fdinfo) and its budget.
+            if g.get("memLimitBytes") is not None:
+                own = "peak " + gb(g["jobMemPeakBytes"]) if g.get("jobMemPeakBytes") is not None else "not read"
+                print("  gpu memory (the job itself): %s of --gpu-mem %s" % (own, gb(g["memLimitBytes"])))
     hs = r.get("host") or {}
     if hs:
         # CE-19: the load of the node at the start and end (other K2 jobs, steal).
@@ -28225,7 +28239,7 @@ cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
-    local preset="" now=0 tag="" same_node="" distro="" receipt_v="" gpu=""
+    local preset="" now=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -28325,6 +28339,8 @@ sys.exit(0 if ok else 1)'; then
                     ''|-*) gpu="any"; shift ;;
                     *) gpu="$2"; shift 2; _compute_gpu_arg "$gpu" || exit 2 ;;
                 esac ;;
+            # --gpu-mem SIZE (GPU jobs S6): the GPU job's GPU memory budget.
+            --gpu-mem) gpu_mem="$(_compute_bytes "${2:-}")" || exit 2; shift 2 ;;
             --receipt-v2) receipt_v=2; shift ;;
             --retry-interrupted) retry=1; shift ;;
             --no-retry) retry=0; retries=0; shift ;;
@@ -28486,6 +28502,11 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
     # --gpu (0.46.11): one GPU of the vendor asked (count 1 in v1).
     local gpu_json=""
     [ -n "$gpu" ] && gpu_json="{\"vendor\": \"$gpu\", \"count\": 1}"
+    # --gpu-mem (GPU jobs S6): only with --gpu.
+    if [ -n "$gpu_mem" ] && [ -z "$gpu" ]; then
+        echo "usage: --gpu-mem needs --gpu: it is the GPU memory budget of a GPU job (k2 compute run --gpu --gpu-mem 4G --mem 8G -- <command>)" >&2
+        exit 2
+    fi
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_distro="$distro" K2_CJ_arch="$arch" K2_CJ_avoid_j="$avoid_json" K2_CJ_only_j="$only_json" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
@@ -28497,7 +28518,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
         K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json" \
         K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v" \
-        K2_CJ_gpu_j="$gpu_json")"
+        K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -28564,6 +28585,17 @@ if isinstance(g, dict):
         sys.stderr.write("[k2 compute] gpu: %s, %s free now (one GPU, this job alone)\n" % (" · ".join(x.get("model") or x.get("pci") for x in gs), g.get("free")))
     else:
         sys.stderr.write("[k2 compute] gpu: none on %s for this server (it would fail there)\n" % v["node"])
+    m = g.get("mem")
+    if isinstance(m, dict):
+        # GPU jobs S6: the GPU memory budget there and what it counts.
+        gib = lambda b: "%.1fG" % (b / (1 << 30))
+        if m.get("budgetBytes") is None:
+            s = "gpu memory: not watched (a discrete GPU; --gpu-mem sets a budget)"
+        else:
+            s = "gpu memory: budget %s%s" % (gib(m["budgetBytes"]), "" if m.get("watched") else " (NOT watched: an older k2-node there)")
+            if m.get("countedBytes"):
+                s += ", counted with --mem (unified GPU: its memory is system RAM)"
+        sys.stderr.write("[k2 compute] %s\n" % s)
 if ends:
     sys.stderr.write("[k2 compute] limits: %s\n" % " · ".join(ends))
 eff = v.get("effective") or {}
@@ -28848,6 +28880,7 @@ cmd_compute_test() {
                     ''|-*) pass+=("$1"); shift ;;
                     *) pass+=("$1" "$2"); shift 2 ;;
                 esac ;;
+            --gpu-mem) pass+=("$1" "${2:-}"); shift 2 ;;
             -*) echo "usage: unknown flag '$1' (k2 compute test --help)" >&2; exit 2 ;;
             *) if [ -z "$node" ]; then node="$1"; shift; else echo "usage: put nextest's own arguments after --" >&2; exit 2; fi ;;
         esac
@@ -59086,15 +59119,44 @@ GPU JOBS (0.46.11, Linux nodes with the job wall, k2-node 0.46.11+)
     device …, the host's own use included)
   VRAM and GTT are the peak over what the GPU held when the job started
   (on an APU, GTT is system RAM). Intel GPUs don't report busy %.
-  --mem caps the job's RAM. On an APU (an iGPU sharing system memory) the
-  GPU's buffers also come from system RAM and aren't counted in --mem
-  yet: leave headroom.
+  GPU memory (--gpu-mem; k2-node 0.46.11 on the node):
+    --mem caps the job's RAM. On an APU or iGPU (k2 compute info <node>
+    says "unified" after the GPU; --json: host.gpus[].unified) the GPU's
+    buffers also come out of system RAM but are NOT counted in --mem, so
+    a GPU job has a second budget (only with --gpu; alone it exits 2):
+      k2 compute run --gpu --mem 4G --gpu-mem 6G -- ./render-tests
+    - On a unified GPU, K2 reserves --mem + --gpu-mem of the node's memory
+      before the job starts, so GPU jobs never overpack it. Left out,
+      --gpu-mem is 2G there, and that 2G is watched like a given one: a
+      test holding more GPU memory must pass a bigger --gpu-mem. A job too
+      big for the node with both is refused (exceeds_node_caps, exit 2).
+    - The node reads the job's own GPU memory once a second (the DRM
+      fdinfo of its processes: GTT and VRAM together, the host's own use
+      not included) and stops the job when it goes over --gpu-mem by more
+      than 10% (4G: stopped above 4.4G): failed/gpu_mem_cap, with the
+      numbers in the log and in k2 compute get's hint. Raise --gpu-mem.
+    - On a discrete GPU (its own VRAM) nothing is reserved; with --gpu-mem
+      the job is watched the same way.
+    - Sizing on an APU: --mem = what the CPU side needs (as for any job);
+      --gpu-mem = the textures, buffers and render targets the test holds
+      at its peak, plus a margin. The VRAM carve-out the BIOS sets (UMA
+      size) is separate: it isn't in the RAM the node reports.
+    - An older k2-node (0.46.10 or earlier) reserves nothing and watches
+      nothing: --gpu-mem is refused there (gpu_mem_needs_update, exit 3);
+      without it the job runs as before, so leave headroom in --mem.
+  The end line also says "this job's own GPU memory: peak 1.2G of
+  --gpu-mem 2.0G" (k2 compute get --json: result.resources.gpu
+  jobMemPeakBytes and memLimitBytes). That peak is the job's alone;
+  the VRAM +/GTT + numbers before it are the whole device.
   Codes: no_gpu_node (exit 3): no node granted to your workspace runs GPU
   jobs for this server (or none of that vendor); the hint names both steps. gpu_needs_grant (exit 3): a node has a GPU for
   you but your grant lacks --gpu (the error names the node; agents get the
   card line). gpu_busy: it waits for the GPU. gpu_unavailable: the node
   stopped running GPU jobs for you since it was placed; the job fails,
-  run it again.
+  run it again. gpu_mem_cap: its own GPU memory went over --gpu-mem
+  (+10%): raise it. gpu_mem_needs_update (exit 3): --gpu-mem, but the GPU
+  nodes for you run an older k2-node: run without it, or ask the owner to
+  update.
 
 MEMORY (--mem, required; 0.46.6)
   Always pass --mem with what the job needs. Rough guide: any cargo
@@ -59474,9 +59536,12 @@ RESULTS (one object, artifacts, test lists)
     resources  {peakMemBytes, memSource, cpuSecs, cpuSource, memLimitBytes,
                gpu}; a mem_cap end's hint says "used 25.3G of --mem 24G".
                gpu (--gpu jobs): {model, pci, busyAvgPct, busyMaxPct,
-               vramPeakBytes, gttPeakBytes, samples, source: "sysfs-device"}:
-               the whole device once a second, the host's own use included;
-               memory = the peak over what it held at the job's start
+               vramPeakBytes, gttPeakBytes, samples, source: "sysfs-device",
+               jobMemPeakBytes, memLimitBytes}: busy, VRAM and GTT are the
+               whole device once a second, the host's own use included
+               (memory = the peak over what it held at the job's start);
+               jobMemPeakBytes is the job's own GPU memory (DRM fdinfo) and
+               memLimitBytes its --gpu-mem (null where not watched)
     host       the node's load at the job's start and end:
                {start: {at, load1: 0.8, cpus: 12, steal: 0.3, jobs: 2,
                quiet: false, gpuBusy: 41}, end: …}
@@ -59780,6 +59845,11 @@ COMMON ERRORS
   gpu_busy               the node's GPU is held by another job: it waits
   gpu_unavailable        the node stopped running GPU jobs for you after it was
                          placed (its owner turned them off): the job fails
+  gpu_mem_cap            the job's own GPU memory went over its --gpu-mem by more
+                         than 10%: stopped (failed); pass a bigger --gpu-mem
+  gpu_mem_needs_update   --gpu-mem, but the GPU nodes for you run k2-node 0.46.10 or
+                         older (no GPU memory watch): run without --gpu-mem, or the
+                         node's owner updates k2-node; exit 3
   allow_nodes_needs_person  adding a node to the list or --clear: a person's
                          (the owner or an Admin); exit 3, ask on a card
 

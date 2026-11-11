@@ -2533,11 +2533,14 @@ fn send_to(node_id: &str, f: Frame) -> bool {
 /// Queued jobs on a node as the scheduler sees them.
 pub fn queued_view(conn: &rusqlite::Connection, node_id: &str) -> (Vec<scheduler::QueuedJob>, scheduler::Load) {
     let now = compute::now();
+    // GPU jobs S6: a GPU job's memory there counts its GPU memory on a
+    // unified GPU (what the node itself counts).
+    let offer = live_view(node_id).2;
     let queue = store::jobs_in_states(conn, node_id, &["queued"])
         .into_iter()
         // A retry waiting out its backoff isn't placeable yet.
         .filter(|j| j.ctl.not_before.is_none_or(|nb| nb <= now))
-        .map(|j| qjob_of(&j))
+        .map(|j| qjob_of(&j, offer.as_ref()))
         .collect();
     let mut load = scheduler::Load::default();
     for j in store::jobs_in_states(conn, node_id, store::ACTIVE_STATES) {
@@ -2551,8 +2554,9 @@ pub fn queued_view(conn: &rusqlite::Connection, node_id: &str) -> (Vec<scheduler
     (queue, load)
 }
 
-/// A job row as the scheduler sees it.
-fn qjob_of(j: &store::JobRow) -> scheduler::QueuedJob {
+/// A job row as the scheduler sees it, on the node behind `offer` (its
+/// memory with its GPU memory on a unified GPU there, GPU jobs S6).
+fn qjob_of(j: &store::JobRow, offer: Option<&Offer>) -> scheduler::QueuedJob {
     let plan = j.plan();
     scheduler::QueuedJob {
         id: j.id.clone(),
@@ -2560,7 +2564,7 @@ fn qjob_of(j: &store::JobRow) -> scheduler::QueuedJob {
         created_at: j.created_at,
         exclusive: j.exclusive,
         cpu_millis: plan.as_ref().and_then(|p| p.limits.cpu_millis),
-        mem_bytes: plan.as_ref().and_then(|p| p.limits.mem_bytes),
+        mem_bytes: plan.as_ref().and_then(|p| crate::compute_place::plan_mem_on(p, offer)),
         disk_bytes: 0,
         needs_git: plan.as_ref().is_some_and(|p| p.src.is_some()),
         tier: j.tier(),
@@ -2600,7 +2604,7 @@ struct SharedPass {
 /// this server behind a full share (`tenant_queue_full`) and never reach
 /// the node's queue to jump it.
 fn rotation_order(jobs: Vec<store::JobRow>, turns: &scheduler::Turns) -> Vec<store::JobRow> {
-    let probes: Vec<scheduler::QueuedJob> = jobs.iter().map(qjob_of).collect();
+    let probes: Vec<scheduler::QueuedJob> = jobs.iter().map(|j| qjob_of(j, None)).collect();
     let ids: Vec<String> = scheduler::order_with(compute::now(), &probes, turns).into_iter().map(|q| q.id.clone()).collect();
     let mut by_id: HashMap<String, store::JobRow> = jobs.into_iter().map(|j| (j.id.clone(), j)).collect();
     ids.into_iter().filter_map(|id| by_id.remove(&id)).collect()
@@ -2644,7 +2648,7 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             created_at: j.created_at,
             exclusive: j.exclusive,
             cpu_millis: plan.limits.cpu_millis,
-            mem_bytes: plan.limits.mem_bytes,
+            mem_bytes: crate::compute_place::plan_mem_on(&plan, Some(offer)),
             disk_bytes: 0,
             needs_git: plan.src.is_some(),
             tier: j.tier(), submitter: j.submitter.clone(),
@@ -2821,7 +2825,7 @@ fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
         if store::assign_if_queued(&conn, &job.id, now) != Ok(true) {
             continue;
         }
-        let (ask_mem, ask_cpu) = (plan.limits.mem_bytes, plan.limits.cpu_millis);
+        let (ask_mem, ask_cpu) = (crate::compute_place::plan_mem_on(&plan, Some(offer)), plan.limits.cpu_millis);
         if tx.send(Out::Frame(Box::new(Frame::Assign(Assign { fence, plan })))).is_err() {
             let _ = store::set_job_state(&conn, &job.id, JobState::Queued, Some("node_offline"), None, now);
             return;
@@ -2945,7 +2949,7 @@ pub fn kick(node_id: &str) {
         return;
     }
     // Until the node's next offer shows it (CP-A7).
-    let (ask_mem, ask_cpu) = (plan.limits.mem_bytes, plan.limits.cpu_millis);
+    let (ask_mem, ask_cpu) = (crate::compute_place::plan_mem_on(&plan, offer.as_ref()), plan.limits.cpu_millis);
     if tx.send(Out::Frame(Box::new(Frame::Assign(Assign { fence, plan })))).is_err() {
         let _ = store::set_job_state(&conn, &job.id, JobState::Queued, Some("node_offline"), None, compute::now());
         return;
@@ -3203,7 +3207,7 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None,
             with: Vec::new(),
         };
         store::insert_job(

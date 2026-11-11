@@ -11,6 +11,9 @@
 # --gpu / --no-gpu send allowGpu and the answer says "GPU jobs allowed";
 # `k2 compute test --gpu` passes it through; the help and `k2 study
 # compute` (GPU JOBS) name the flag, the codes and the card.
+# S6: `--gpu-mem 4G` sends gpuMemBytes (only with --gpu: alone, or a bad
+# size, exits 2 with no request); `compute test` passes it; `get` shows
+# the job's own GPU memory against its budget; help and study name it.
 
 set -euo pipefail
 
@@ -63,7 +66,8 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/cli/compute/jobs/get":
             res = {"peakMemBytes": 1 << 30, "memSource": "memory.peak", "cpuSecs": 4.2, "cpuSource": "cpu.stat", "memLimitBytes": 8 << 30,
                    "gpu": {"model": "AMD Radeon Test APU", "pci": "0000:c4:00.0", "busyAvgPct": 37, "busyMaxPct": 98,
-                           "vramPeakBytes": 512 << 20, "gttPeakBytes": 3 << 30, "samples": 12, "source": "sysfs-device"}}
+                           "vramPeakBytes": 512 << 20, "gttPeakBytes": 3 << 30, "samples": 12, "source": "sysfs-device",
+                           "jobMemPeakBytes": 3 << 29, "memLimitBytes": 2 << 30}}
             host = {"start": {"at": 1, "load1": 0.4, "cpus": 16, "steal": 0.0, "jobs": 0, "quiet": True, "gpuBusy": 2},
                     "end": {"at": 2, "load1": 5.1, "cpus": 16, "steal": 0.0, "jobs": 1, "quiet": False, "gpuBusy": 41}}
             return self.reply(200, {"id": "abcd1234" * 4, "short": "abcd1234", "node": "k2n-gpu", "state": "done", "exitCode": 0, "argv": ["true"],
@@ -140,6 +144,25 @@ expect_eq "no --gpu: no gpu key" "$(last_gpu)" "null"
 "$K2" compute test --no-source --workspace builder --gpu amd -- -p x >/dev/null 2>&1 || true
 expect_eq "compute test passes --gpu amd through" "$(last_gpu)" '{"count": 1, "vendor": "amd"}'
 
+echo "== --gpu-mem (S6) =="
+"$K2" compute run --no-source --workspace builder --gpu --gpu-mem 4G -- true >/dev/null 2>&1 || true
+expect_eq "--gpu-mem 4G sends gpuMemBytes" "$(last_key gpuMemBytes)" "4294967296"
+expect_eq "... beside the GPU ask" "$(last_gpu)" '{"count": 1, "vendor": "any"}'
+"$K2" compute run --no-source --workspace builder --gpu amd -- true >/dev/null 2>&1 || true
+expect_eq "no --gpu-mem: no key" "$(last_key gpuMemBytes)" "null"
+"$K2" compute test --no-source --workspace builder --gpu --gpu-mem 512M -- -p x >/dev/null 2>&1 || true
+expect_eq "compute test passes --gpu-mem through" "$(last_key gpuMemBytes)" "536870912"
+for args in "--gpu-mem 4G" "--gpu --gpu-mem lots" "--gpu --gpu-mem"; do
+    n0="$(reqs)"
+    set +e
+    # shellcheck disable=SC2086
+    err="$("$K2" compute run --no-source --workspace builder $args -- true 2>&1 >/dev/null)"; rc=$?
+    set -e
+    expect_eq "$args exits 2" "$rc" "2"
+    expect_eq "$args sends nothing" "$(reqs)" "$n0"
+done
+expect_has "--gpu-mem alone says why" "$("$K2" compute run --no-source --gpu-mem 4G -- true 2>&1 || true)" "--gpu-mem needs --gpu"
+
 echo "== gpu_needs_grant: exit 3, ends with the card line =="
 set +e
 err="$("$K2" compute run --no-source --workspace builder --gpu --tag needs-grant -- true 2>&1 >/dev/null)"; rc=$?
@@ -163,16 +186,20 @@ out="$("$K2" compute get abcd1234 2>&1)"
 expect_has "get: gpu line" "$out" "gpu: AMD Radeon Test APU: busy avg 37% (max 98%), VRAM +0.5G, GTT +3.0G (whole device, sysfs-device)"
 expect_has "get: start stamp quiet" "$out" "GPU 2% busy, quiet"
 expect_has "get: end stamp not quiet" "$out" "GPU 41% busy, not quiet"
+expect_has "get: the job's own GPU memory (S6)" "$out" "gpu memory (the job itself): peak 1.5G of --gpu-mem 2.0G"
 
 echo "== help and study =="
 help="$("$K2" compute --help)"
 expect_has "help: run --gpu" "$help" "[--gpu [any|amd|intel]]"
 expect_has "help: grant --gpu" "$help" "--gpu: this workspace may send --gpu jobs"
 expect_has "help: the card" "$help" "k2 permission request compute.gpu"
+expect_has "help: run --gpu-mem" "$help" "[--gpu-mem 4G]"
+expect_has "help: gpu_mem_cap" "$help" "failed/gpu_mem_cap"
 study="$("$K2" study compute)"
 expect_has "study: section" "$study" "GPU JOBS (0.46.11, Linux nodes with the job wall"
 for c in no_gpu_node gpu_needs_grant gpu_busy gpu_unavailable K2_GPU_RENDER "sudo k2-node admin gpu on" "--label gpu=amd" \
-    "quiet host: yes" "starting anyway" "profile:gpu-headless" "weston --backend=headless" XDG_RUNTIME_DIR MESA_SHADER_CACHE_DIR "busy avg" "the host's own use included"; do
+    "quiet host: yes" "starting anyway" "profile:gpu-headless" "weston --backend=headless" XDG_RUNTIME_DIR MESA_SHADER_CACHE_DIR "busy avg" "the host's own use included" \
+    "--gpu-mem 6G" gpu_mem_cap gpu_mem_needs_update "VRAM carve-out" jobMemPeakBytes; do
     expect_has "study: $c" "$study" "$c"
 done
 

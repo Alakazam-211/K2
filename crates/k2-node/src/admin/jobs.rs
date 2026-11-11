@@ -272,6 +272,11 @@ pub enum JobOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mark: Option<String>,
     },
+    /// GPU jobs S6: the GPU memory a job unit's own processes hold (root
+    /// reads the DRM fdinfo of every process in the unit's cgroup:
+    /// [`crate::gpu::unit_gpu_mem`]). Read-only. Asked only when `Ready`
+    /// said `gpu_usage`: an older executor refuses the op.
+    GpuUsage { unit: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,6 +373,11 @@ pub enum JobAnswer {
         /// older executor omits it (none).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         gpus: Vec<super::gpu::ReadyGpu>,
+        /// GPU jobs S6: this executor answers [`JobOp::GpuUsage`] (a job's
+        /// own GPU memory). An older one omits it (false): the node then
+        /// never offers `gpu-mem` and can't watch a GPU job's budget.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        gpu_usage: bool,
     },
     Started {
         unit: String,
@@ -385,6 +395,8 @@ pub enum JobAnswer {
     Tenants(TenantWall),
     /// [`JobOp::KeyTaint`]: root holds a taint mark for the key.
     KeyTaint { tainted: bool },
+    /// [`JobOp::GpuUsage`].
+    GpuUsage(k2_node_proto::gpu::GpuMemUsage),
 }
 
 /// What `systemctl show` says about a job unit.
@@ -1227,7 +1239,13 @@ impl Executor {
     pub fn handle_job(&self, op: &JobOp, fds: Vec<OwnedFd>) -> JobAnswer {
         let r = match op {
             JobOp::Ready => {
-                self.job_user().map(|(u, _)| JobAnswer::Ready { job_user: u, stdin: true, job_uid: self.job_uid_ready().is_ok(), gpus: self.gpu_ready() })
+                self.job_user().map(|(u, _)| JobAnswer::Ready {
+                    job_user: u,
+                    stdin: true,
+                    job_uid: self.job_uid_ready().is_ok(),
+                    gpus: self.gpu_ready(),
+                    gpu_usage: cfg!(target_os = "linux"),
+                })
             }
             // No job starts while an owner change is unfinished (its trees
             // and users are moving), whatever the node's control says
@@ -1249,6 +1267,7 @@ impl Executor {
             JobOp::TenantPrepare(p) => self.tenant_prepare(p).map(|detail| JobAnswer::Done { detail }),
             JobOp::TenantWipe(w) => self.tenant_wipe(w).map(|detail| JobAnswer::Done { detail }),
             JobOp::KeyTaint { node_fp, mark } => self.key_taint(node_fp, mark.as_deref()),
+            JobOp::GpuUsage { unit } => self.with_unit(unit, |u| super::gpu::unit_gpu_usage(u).map(JobAnswer::GpuUsage)),
         };
         r.unwrap_or_else(JobAnswer::Refused)
     }
@@ -2259,6 +2278,7 @@ mod tests {
             JobOp::TenantWipe(share::TenantWipe { slot: 1 }),
             JobOp::Status { unit: "k2job-j-g1.service".into() },
             JobOp::Reclaim { path: "/r".into(), slot: 2 },
+            JobOp::GpuUsage { unit: "k2job-j-g1.service".into() },
         ];
         for op in ops {
             let s = serde_json::to_string(&op).unwrap();
@@ -2277,7 +2297,19 @@ mod tests {
         // An older executor's Ready (no stdin) reads as "can't relay stdin",
         // and as "no per-job uids" (C2).
         let a: JobAnswer = serde_json::from_str(r#"{"answer":"ready","job_user":"k2job"}"#).unwrap();
-        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false, gpus: vec![] });
+        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false, gpus: vec![], gpu_usage: false });
+        // GPU jobs S6: a newer executor says it reads a job's GPU memory; a
+        // Ready without it is 0.46.10's bytes.
+        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: false };
+        assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"answer":"ready","job_user":"k2job","stdin":true}"#);
+        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: true };
+        let back: JobAnswer = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back, r);
+        let u = JobAnswer::GpuUsage(k2_node_proto::gpu::GpuMemUsage { bytes: 3 << 30, gtt_bytes: 3 << 30, clients: 1, pids: 2, ..Default::default() });
+        assert_eq!(serde_json::from_str::<JobAnswer>(&serde_json::to_string(&u).unwrap()).unwrap(), u);
+        // An older executor doesn't know the op: it never parses (so it
+        // refuses), which is why the node asks only after Ready said so.
+        assert!(serde_json::from_str::<JobOp>(r#"{"do":"gpu_usage","unit":"k2job-j-g1.service"}"#).is_ok());
         // An older executor's Started has no uid index: the node fails a
         // job_uid start on it.
         let a: JobAnswer = serde_json::from_str(r#"{"answer":"started","unit":"k2job-k.service"}"#).unwrap();

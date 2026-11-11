@@ -85,7 +85,8 @@ pub enum DeviceMode {
 /// What a desktop owner must know (Q3): printed by `gpu on`.
 pub const DESKTOP_WARNING: &str = "Note: GPU jobs share this GPU with anything else using it, your desktop included. \
 A GPU hang or reset caused by a job can end the desktop session (a hard GPU fault can freeze the machine). \
-On an APU, a job's GPU buffers come from system RAM and aren't counted in its --mem.";
+On an APU, a job's GPU buffers come from system RAM outside its --mem: the node reserves its --gpu-mem \
+(default 2G) beside it and stops a job that goes over (failed/gpu_mem_cap).";
 
 // ── gpu.toml ────────────────────────────────────────────────────────
 
@@ -654,6 +655,20 @@ impl Executor {
             }
         }
     }
+}
+
+// ── a job's own GPU memory (S6) ─────────────────────────────────────
+
+/// [`super::jobs::JobOp::GpuUsage`] (root): the GPU memory `unit`'s own
+/// processes hold, from their DRM fdinfo. A unit that's gone, or has no
+/// cgroup yet, holds none. Linux only.
+pub fn unit_gpu_usage(unit: &str) -> Result<k2_node_proto::gpu::GpuMemUsage, String> {
+    if !cfg!(target_os = "linux") {
+        return Err("GPU jobs are Linux only".into());
+    }
+    let s = jobs::unit_status(unit)?;
+    let Some(cg) = s.control_group.filter(|_| s.loaded) else { return Ok(Default::default()) };
+    Ok(crate::gpu::unit_gpu_mem(&Path::new("/sys/fs/cgroup").join(cg.trim_start_matches('/')), Path::new("/proc")))
 }
 
 // ── `sudo k2-node admin gpu on|off|status` ──────────────────────────

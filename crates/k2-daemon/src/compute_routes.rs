@@ -1568,6 +1568,7 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         multi_repo: false,
         receipt_v2: false,
         gpu: None,
+        gpu_mem: None,
     };
     // Every matching node: each one's package states are reported, and the
     // names their owners must approve go out as ONE batched request (§7.3).
@@ -1779,6 +1780,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let cache = cache_from(v)?;
     // GPU jobs (0.46.11, `--gpu`): one GPU of the node, to this job alone.
     let gpu = gpu_from(v)?;
+    // GPU jobs S6 (`--gpu-mem`): its GPU memory budget, only with `--gpu`.
+    let gpu_mem = gpu_mem_from(v, gpu.is_some())?;
     if cache.is_some() && !secret_asks.is_empty() {
         return Err(no(pcache::codes::CACHE_WITH_SECRET, 400, "--cache and --secret don't mix: a job with secret env keeps nothing between runs on the node"));
     }
@@ -1888,6 +1891,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         multi_repo: !with_asks(v)?.is_empty(),
         receipt_v2: receipt_v.is_some(),
         gpu,
+        gpu_mem,
     };
     // Node: by name (pinned), or auto (no node named, or --any).
     let mut warnings: Vec<String> = avoid_notes;
@@ -2171,7 +2175,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // forever and hold every later job from this workspace: refuse it now.
     let (_, _, live) = compute_ws::live_view(&node.id);
     if let Some(offer) = live.or_else(|| node.last_offer.clone()) {
-        if let Some(r) = scheduler::never_fits(&offer, &probe_job(&ws, &v, cpu_millis, mem_bytes)) {
+        // GPU jobs S6: with its GPU memory on a unified GPU there.
+        if let Some(r) = scheduler::never_fits(&offer, &probe_job(&ws, &v, cpu_millis, crate::compute_place::Want { mem_bytes, ..want.clone() }.mem_on(&offer))) {
             return Err(no(
                 scheduler::EXCEEDS_NODE_CAPS,
                 400,
@@ -2407,6 +2412,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         // GPU jobs (0.46.11): only ever placed on nodes offering `gpu` for
         // this server (placement's `no_gpu` skip, the pinned check above).
         gpu: want.gpu,
+        // GPU jobs S6: only an explicit `--gpu-mem`, and only ever placed
+        // on nodes offering `gpu-mem` (the default is the node's own).
+        gpu_mem: want.gpu_mem,
     };
     let job = {
         let db = k2_core::db::shared();
@@ -2710,9 +2718,25 @@ fn gpu_from(v: &serde_json::Value) -> R<Option<k2_core::compute::proto::gpu::Gpu
     Ok(Some(ask))
 }
 
+/// `gpuMemBytes` from a run request (`--gpu-mem 4G`): only with `--gpu`.
+fn gpu_mem_from(v: &serde_json::Value, gpu: bool) -> R<Option<u64>> {
+    let b = match v.get("gpuMemBytes") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(x) => x.as_u64().ok_or_else(|| no(codes::BAD_REQUEST, 400, "--gpu-mem is a size: --gpu-mem 4G (gpuMemBytes, bytes)"))?,
+    };
+    if !gpu {
+        return Err(no(codes::BAD_REQUEST, 400, "--gpu-mem needs --gpu: it is the GPU memory budget of a GPU job (k2 compute run --gpu --gpu-mem 4G --mem 8G -- <command>)"));
+    }
+    k2_core::compute::proto::gpu::check_gpu_mem(b).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    Ok(Some(b))
+}
+
 /// A named node that can't take a `--gpu` job (`gpu_skip`'s code): exit 3.
 fn gpu_node_refusal(code: &str, node: &str, ws: &str) -> Refusal {
     use k2_core::compute::proto::gpu::codes as g;
+    if code == crate::compute_place::skip::GPU_MEM_NEEDS_UPDATE {
+        return no(g::GPU_MEM_NEEDS_UPDATE, 409, crate::compute_place::gpu_mem_needs_update_hint(Some(node))).with("node", node.to_string());
+    }
     if code == crate::compute_place::skip::GPU_NEEDS_GRANT {
         return no(
             g::GPU_NEEDS_GRANT,
@@ -3088,6 +3112,17 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
     if let Some(g) = f.want.gpu {
         let gpus: Vec<_> = offer.as_ref().and_then(|o| o.host.as_ref()).map(|h| h.gpus.iter().filter(|x| x.jobs && g.vendor.matches(&x.vendor)).cloned().collect()).unwrap_or_default();
         out["gpu"] = serde_json::json!({"ask": g, "gpus": gpus, "free": offer.as_ref().map(|o| o.free.gpus)});
+        // GPU jobs S6: its GPU memory there: the budget the node watches,
+        // and what it adds to the job's memory (a unified GPU only).
+        use k2_core::compute::proto::gpu as pgpu;
+        let unified = offer.as_ref().and_then(|o| o.host.as_ref()).is_some_and(|h| pgpu::unified_for(&h.gpus, &g));
+        let watched = offer.as_ref().is_some_and(|o| o.features.iter().any(|x| x == pgpu::FEATURE_GPU_MEM));
+        out["gpu"]["mem"] = serde_json::json!({
+            "unified": unified,
+            "budgetBytes": pgpu::cap_bytes(Some(&g), f.want.gpu_mem, unified),
+            "countedBytes": pgpu::counted_bytes(Some(&g), f.want.gpu_mem, unified),
+            "watched": watched,
+        });
     }
     if let Some(a) = f.tier_asked {
         out["tierAsked"] = a.as_str().into();
@@ -3748,7 +3783,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         secret_env: Vec::new(),
         tier: None,
         cache: None,
-        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None,
+        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None,
         with: Vec::new(),
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());

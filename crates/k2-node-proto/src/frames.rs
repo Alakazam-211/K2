@@ -789,6 +789,14 @@ pub struct Plan {
     /// node would compute another digest and refuse the assign).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu: Option<crate::gpu::GpuAsk>,
+    /// GPU jobs S6 (`--gpu-mem`, bytes): the job's GPU memory budget, only
+    /// with `gpu`. Absent unless asked (the node then uses
+    /// [`crate::gpu::DEFAULT_GPU_MEM_UNIFIED`] on a unified device), so
+    /// every other plan and digest is unchanged; sent only to nodes
+    /// offering [`crate::gpu::FEATURE_GPU_MEM`] (an older node would
+    /// compute another digest and refuse the assign).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_mem: Option<u64>,
 }
 
 impl Plan {
@@ -1728,6 +1736,7 @@ mod tests {
             with: Vec::new(),
             receipt_v: None,
             gpu: None,
+            gpu_mem: None,
         }
     }
 
@@ -1813,6 +1822,25 @@ mod tests {
         assert_eq!((o.caps.gpus, o.free.gpus), (0, 0));
         let back = serde_json::to_string(&o).unwrap();
         assert!(!back.contains("gpus"), "no GPU keys without GPUs: {back}");
+    }
+
+    /// GPU jobs S6: `--gpu-mem` rides as `gpu_mem` only when asked; a GPU
+    /// plan without it keeps S1's wire form and digest.
+    #[test]
+    fn plan_digest_unchanged_without_gpu_mem() {
+        let mut g = plan();
+        g.gpu = Some(crate::gpu::GpuAsk::one(crate::gpu::GpuVendor::Any));
+        let text = serde_json::to_string(&g).unwrap();
+        assert!(!text.contains("gpu_mem"), "{text}");
+        let before = g.digest().unwrap();
+        g.gpu_mem = Some(4 << 30);
+        assert!(serde_json::to_string(&g).unwrap().contains(r#""gpu_mem":4294967296"#));
+        assert_ne!(g.digest().unwrap(), before, "a budget changes the digest (an older node refuses, never ignores it)");
+        g.gpu_mem = None;
+        assert_eq!(g.digest().unwrap(), before);
+        // An older server's GPU plan reads with no budget.
+        let back: Plan = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.gpu_mem, None);
     }
 
     #[test]

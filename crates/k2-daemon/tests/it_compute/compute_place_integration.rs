@@ -550,6 +550,74 @@ async fn gpu_jobs_place_only_on_granted_gpu_nodes() {
     compute_ws::test_detach("g-gpu");
 }
 
+/// GPU jobs S6 (APU memory): `--gpu-mem` needs `--gpu` (exit 2); it goes
+/// only to a node offering `gpu-mem`, so an older GPU node (0.46.10) is
+/// refused with `gpu_mem_needs_update` while a plain `--gpu` job still
+/// runs there with an unchanged plan; on a newer node the budget rides in
+/// the plan and `--plan` shows it. On a unified GPU the budget counts
+/// against the node's memory: `--mem` + `--gpu-mem` over the node's caps
+/// is refused as too big for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gpu_mem_goes_only_to_nodes_that_watch_it_and_counts_on_an_apu() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "gpumem");
+    let agent = passport(&me);
+    let gpu = json!({"vendor": "any", "count": 1});
+    active_node("m-old");
+    grant("m-old", &me, None, 2);
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "m-old", "workspace": me.id, "allowGpu": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // An older GPU node: `gpu`, no `gpu-mem`.
+    let _a = compute_ws::test_attach("m-old", gpu_offer(1, true));
+    // --gpu-mem without --gpu, or out of range: exit 2 at the door.
+    for (body, why) in [
+        (json!({"gpuMemBytes": 4u64 << 30}), "needs --gpu"),
+        (json!({"gpu": gpu, "gpuMemBytes": 1024}), "between"),
+        (json!({"gpu": gpu, "gpuMemBytes": "4G"}), "is a size"),
+    ] {
+        let r = run(d.port, &agent, &me, body.clone()).await;
+        assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{body}: {}", r.body);
+        assert!(j(&r)["error"]["message"].as_str().unwrap_or_default().contains(why) || r.body.contains(why), "{body}: {}", r.body);
+    }
+    let r = run(d.port, &agent, &me, json!({"gpu": gpu, "gpuMemBytes": 4u64 << 30})).await;
+    assert_eq!((r.status, code(&r)), (409, "gpu_mem_needs_update".to_string()), "{}", r.body);
+    assert!(r.body.contains("0.46.11") && r.body.contains("without --gpu-mem"), "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"node": "m-old", "gpu": gpu, "gpuMemBytes": 4u64 << 30})).await;
+    assert_eq!((r.status, code(&r)), (409, "gpu_mem_needs_update".to_string()), "named: {}", r.body);
+    assert_eq!(j(&r)["error"]["node"], "m-old", "{}", r.body);
+    // A plain --gpu job still runs on the older node, its plan as in S1.
+    let r = run(d.port, &agent, &me, json!({"gpu": gpu})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let plan = row(j(&r)["job"]["id"].as_str().unwrap()).plan().expect("a plan");
+    assert_eq!(plan.gpu_mem, None);
+    assert!(!serde_json::to_string(&plan).unwrap().contains("gpu_mem"));
+    // The node updates: it offers gpu-mem, and its GPU is unified.
+    let mut new = gpu_offer(2, true);
+    new.features.push(k2_core::compute::proto::gpu::FEATURE_GPU_MEM.into());
+    new.host.as_mut().unwrap().gpus[0].unified = true;
+    compute_ws::test_frame("m-old", Frame::Offer(new.clone()));
+    let r = run(d.port, &agent, &me, json!({"gpu": gpu, "gpuMemBytes": 4u64 << 30, "memBytes": 8u64 << 30})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "m-old", "{}", r.body);
+    let plan = row(j(&r)["job"]["id"].as_str().unwrap()).plan().expect("a plan");
+    assert_eq!(plan.gpu_mem, Some(4 << 30));
+    // --plan: the budget, what it counts on this unified GPU, and that the
+    // node watches it.
+    let r = run(d.port, &agent, &me, json!({"gpu": gpu, "plan": true, "memBytes": 8u64 << 30})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let m = &j(&r)["gpu"]["mem"];
+    assert_eq!((m["unified"].as_bool(), m["budgetBytes"].as_u64(), m["countedBytes"].as_u64(), m["watched"].as_bool()), (Some(true), Some(2 << 30), Some(2 << 30), Some(true)), "{m}");
+    // On the unified GPU, --mem 31G + the default --gpu-mem 2G is over the
+    // node's 32G caps: never fits there (exceeds_node_caps, named; with no
+    // node named it's too small for every node).
+    let r = run(d.port, &agent, &me, json!({"node": "m-old", "gpu": gpu, "memBytes": 31u64 << 30})).await;
+    assert_eq!((r.status, code(&r)), (400, "exceeds_node_caps".to_string()), "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"node": "m-old", "gpu": gpu, "memBytes": 29u64 << 30})).await;
+    assert_eq!(r.status, 200, "29G + 2G fits in 32G: {}", r.body);
+    compute_ws::test_detach("m-old");
+}
+
 /// D2 at the route (CP-A9: the commit is resolved at submit): a warm,
 /// lightly loaded node beats a cold idle one; a warm, heavily loaded one
 /// loses to it. The v1 switch restores the old order (warm first).

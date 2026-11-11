@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.6 (2026-11-10)
+
+Pairs with kit v0.13.1 (`6ef688e4`, the public cut; no kit API change since v0.13.0). The bridge's lock and kit pin text move to it; the pack's code doesn't change. `scripts/check-private.sh` is the kit's (k2-mpc-base `tools/check-private.sh`): its patterns are no longer in the tree. It reads them from `MPC_PRIVATE_PATTERNS`, else the file `MPC_PRIVATE_PATTERNS_FILE` names, else `~/.config/k2-mpc/private-patterns.txt`, and with none it exits 2; `scripts/private-allow.txt` works as before.
+
+## v0.1.5 (2026-11-10)
+
+Pairs with kit v0.13.0 (`8bcbc39b`, the public cut). The bridge's lock moves to it; the pack's code doesn't change. The kit's additions (the structure index, anchors, comment threads and claims by node, opt-in per pack and per host) are additive, and the bridge uses none of them, so nothing here changes.
+
 ## v0.1.4 (2026-11-07)
 
 Pairs with kit v0.12.0 (`178b449e`, the public cut). The bridge's lock moves to it; the pack's code doesn't change. The bridge builds and reads no kit `LogEntry` and holds no kit grid, so the kit's breaking change (`LogEntry.body: EntryBody`) and its grid row limit don't reach it.

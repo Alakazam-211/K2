@@ -799,7 +799,10 @@ fn draft_json(row: &drafts::DraftRow, full: Option<&EmailFull>, hint: Option<&st
             .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
             .unwrap_or_default()
     };
-    let editable = full.is_some() && row.backend_ref.is_some();
+    // A Microsoft Graph draft is never editable here, whatever K2 can read
+    // of it (keyed off the backend, not the provider label).
+    let outlook_only = drafts::outlook_only(row);
+    let editable = full.is_some() && row.backend_ref.is_some() && !outlook_only;
     let mut v = serde_json::json!({
         "id": row.id,
         "draft": true,
@@ -835,11 +838,11 @@ fn draft_json(row: &drafts::DraftRow, full: Option<&EmailFull>, hint: Option<&st
             (None, None) => String::new(),
         });
     }
-    let hint = hint.map(str::to_string).or_else(|| {
-        (!editable).then(|| {
-            "K2 can show this draft but not change it; edit or send it from the inbox's own mail app".to_string()
-        })
-    });
+    // A read-only draft carries no default hint: the card words it per
+    // provider. Outlook-only drafts and read errors say their own.
+    let hint = hint
+        .map(str::to_string)
+        .or_else(|| outlook_only.then(|| drafts::OUTLOOK_ONLY_HINT.to_string()));
     if let Some(h) = hint {
         v["hint"] = serde_json::json!(h);
     }
@@ -1021,6 +1024,10 @@ fn handle_draft_action(verb: &str, body: &[u8]) -> CliResponse {
         Ok(x) => x,
         Err(r) => return r,
     };
+    // Outlook's own drafts stay Outlook's: no save, send or discard here.
+    if drafts::outlook_only(&row) {
+        return drafts::not_editable(&row);
+    }
     if let Some(r) = level_refusal(if verb == "draft-send" { "send" } else { "draft" }, &inbox) {
         return r;
     }

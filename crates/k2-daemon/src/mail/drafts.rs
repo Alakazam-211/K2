@@ -274,8 +274,35 @@ pub fn status_wire(row: &DraftRow) -> &'static str {
     }
 }
 
+/// What the reader says about a draft only Outlook can change.
+pub const OUTLOOK_ONLY_HINT: &str = "This draft can only be edited in Outlook.";
+
+/// Is this a draft in a Microsoft 365 inbox linked over Microsoft Graph?
+/// K2 shows those but never changes them (Graph drafts are left to their
+/// mailbox). Keyed off the backend that serves the address, not the
+/// provider label: Outlook over IMAP is labelled microsoft too, and K2 can
+/// edit that one.
+pub fn outlook_only(row: &DraftRow) -> bool {
+    row.source == Source::Linked
+        && crate::mail::messages::backend_for_address(&row.address) == crate::mail::messages::MailBackend::Graph
+}
+
+/// May the reader change this draft: open, located in its mailbox, and
+/// not one only Outlook can change.
+pub fn editable(row: &DraftRow) -> bool {
+    row.state == STATE_OPEN && row.backend_ref.is_some() && !outlook_only(row)
+}
+
 /// A draft's record as JSON (no mail content).
 pub fn meta_json(row: &DraftRow) -> serde_json::Value {
+    let mut v = meta_json_fields(row);
+    if outlook_only(row) {
+        v["hint"] = serde_json::json!(OUTLOOK_ONLY_HINT);
+    }
+    v
+}
+
+fn meta_json_fields(row: &DraftRow) -> serde_json::Value {
     serde_json::json!({
         "id": row.id,
         "inbox": row.address,
@@ -288,7 +315,7 @@ pub fn meta_json(row: &DraftRow) -> serde_json::Value {
         "stateAt": row.state_at,
         "stateBy": row.state_by,
         "outboundId": row.outbound_id,
-        "editable": row.state == STATE_OPEN && row.backend_ref.is_some(),
+        "editable": editable(row),
     })
 }
 
@@ -589,6 +616,9 @@ fn trash_linked(row: &DraftRow, uid_token: &str) {
 }
 
 pub fn not_editable(row: &DraftRow) -> CliResponse {
+    if outlook_only(row) {
+        return error_response("409 Conflict", "not_editable", OUTLOOK_ONLY_HINT);
+    }
     error_response(
         "409 Conflict",
         "not_editable",

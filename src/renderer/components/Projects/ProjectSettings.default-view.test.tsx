@@ -175,7 +175,7 @@ describe('Agents open in', () => {
     await renderReady()
     fireEvent.click(segment('Chatter'))
     const alert = await within(row()).findByRole('alert')
-    expect(alert.textContent).toBe("Couldn't change it: only the owner or an admin can.")
+    expect(alert.textContent).toBe('Couldn’t change it. Only the owner or an admin can.')
     expect(checked()).toBe('Thread')
     expect(useProjectGroupsStore.getState().groups?.[0].defaultView).toBe('thread')
   })
@@ -185,7 +185,8 @@ describe('Agents open in', () => {
     await renderReady()
     fireEvent.click(segment('Terminal'))
     const alert = await within(row()).findByRole('alert')
-    expect(alert.textContent).toBe("Couldn't change it: connection refused")
+    // What failed, the server's reason quietly, then the next step.
+    expect(alert.textContent).toBe('Couldn’t change how agents open. Nothing changed.The server said: connection refused.Try again')
     fireEvent.click(segment('Terminal'))
     await waitFor(() => expect(within(row()).queryByRole('alert')).toBeNull())
     expect(checked()).toBe('Terminal')

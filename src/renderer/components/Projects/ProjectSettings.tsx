@@ -100,6 +100,7 @@ import {
 import { onWorkspaceResourcesChanged } from '@/stores/session-events'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { pickIconImage } from '@/lib/pick-remote-image'
+import { agentDisplayName } from '@/lib/workspace-agent'
 import ProjectGroupAvatar, { GROUP_AVATAR_COLORS, groupAvatarColor, useGroupIcon } from './ProjectGroupAvatar'
 import { loadGroupIcon, setCachedGroupIcon } from './group-icon-cache'
 import IconCropDialog from '@/components/Settings/IconCropDialog'
@@ -121,6 +122,7 @@ import {
   SETTING_LIST_ROW_BAND,
   SETTING_LIST_ROW_HOVER,
   SETTING_ROW_HINT,
+  SETTING_SERVER_REASON,
   SaveError,
   SaveNote,
   SettingDropdown,
@@ -131,7 +133,7 @@ import {
   type SaveState,
 } from '@/components/Settings/controls/SettingControls'
 import { AccessSheet, ConfirmSheet, DIALOG_FIELD, FailedNote, Field } from '@/components/Settings/sections/AccessDialogs'
-import { Button, Callout, Input, OverflowMenu, SearchField, Segmented, Surface, Tag, Toggle, cx } from '@/components/ui'
+import { Button, Callout, Input, OverflowMenu, SearchField, Segmented, Spinner, Surface, Tag, Toggle, cx } from '@/components/ui'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { primaryScope } from '@/kessel/server-scope'
 import { clientToCssPx } from '@/lib/app-zoom'
@@ -159,10 +161,23 @@ function errorMessage(err: unknown): string {
   return hint || raw
 }
 
-/** A failed write that isn't a plain save (delete, add, move): what failed,
- *  that nothing changed, and the server's reason, quietly. A role refusal
- *  says who can do it instead of "try again". */
-function ActionError({ what, reason }: { what: string; reason: string }): React.JSX.Element {
+/** A failed write that isn't a plain save (delete, add, move), in the
+ *  order the page's state cards use: what failed and that nothing changed,
+ *  in plain words; the server's reason, quietly; then the next step (a
+ *  "Try again" button when the caller can retry, else a line). A role
+ *  refusal says who can do it instead (trying again won't help). */
+function ActionError({
+  what,
+  reason,
+  onRetry,
+  next = 'Try again in a moment.',
+}: {
+  what: string
+  reason: string
+  onRetry?: () => void
+  /** The next step in words, when there is no retry. */
+  next?: string
+}): React.JSX.Element {
   if (reason === ROLE_REFUSED) {
     return (
       <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">
@@ -170,10 +185,19 @@ function ActionError({ what, reason }: { what: string; reason: string }): React.
       </p>
     )
   }
+  const why = reason.trim().replace(/[.\s]+$/, '')
   return (
-    <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">
-      {what} Nothing changed; try again. The server said: {reason.trim().replace(/[.\s]+$/, '')}.
-    </p>
+    <div role="alert" data-action-error="" className="max-w-[75ch]">
+      <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed">{what} Nothing changed.</p>
+      {why && <p className={SETTING_SERVER_REASON}>The server said: {why}.</p>}
+      {onRetry ? (
+        <Button variant="quiet" onClick={onRetry} className="mt-2">
+          Try again
+        </Button>
+      ) : (
+        <p className={SETTING_ROW_HINT}>{next}</p>
+      )}
+    </div>
   )
 }
 
@@ -219,6 +243,98 @@ function useElementWidth(fallback: number): [React.RefObject<HTMLDivElement | nu
     return () => ro.disconnect()
   }, [])
   return [ref, width]
+}
+
+/** A fade at the top or bottom edge of a scrolling half, shown while there
+ *  is more to scroll that way, so a row cut by the edge reads as "more
+ *  below" instead of clipped. A zero-height sticky child of the scroller:
+ *  place the top one first and the bottom one last. `inset` stretches it
+ *  over the scroller's side padding. The top one sits under the sticky
+ *  dashboard bar (z-[5] < z-10); the bottom one over it. */
+function ScrollEdge({ at, inset = '' }: { at: 'top' | 'bottom'; inset?: string }): React.JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  const [more, setMore] = useState(false)
+  useLayoutEffect(() => {
+    const host = ref.current?.parentElement
+    if (!host) return
+    const update = (): void => {
+      const room = host.scrollHeight - host.clientHeight
+      setMore(room > 1 && (at === 'top' ? host.scrollTop > 1 : host.scrollTop < room - 1))
+    }
+    update()
+    host.addEventListener('scroll', update, { passive: true })
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
+    ro?.observe(host)
+    for (const child of Array.from(host.children)) ro?.observe(child)
+    return () => {
+      host.removeEventListener('scroll', update)
+      ro?.disconnect()
+    }
+  }, [at])
+  return (
+    <div
+      ref={ref}
+      aria-hidden="true"
+      data-scroll-edge={at}
+      data-more={more || undefined}
+      className={cx('sticky h-0 pointer-events-none', at === 'top' ? 'top-0 z-[5]' : 'bottom-0 z-20', inset)}
+    >
+      <div
+        className={cx(
+          'absolute inset-x-0 h-6 transition-opacity duration-150',
+          at === 'top'
+            ? 'top-0 bg-gradient-to-b from-[var(--color-bg)] to-transparent'
+            : 'bottom-0 bg-gradient-to-t from-[var(--color-bg)] to-transparent',
+          more ? 'opacity-100' : 'opacity-0',
+        )}
+      />
+    </div>
+  )
+}
+
+/** Where the dashboard bar is in its scroller. `stickBottom`: the bar may
+ *  also stick to the bottom edge (so it is in view however far up the half
+ *  is scrolled) only when General and the bar fit the half together: when
+ *  they don't (a short window), a bottom-stuck bar would sit over General's
+ *  last rows, so it only sticks to the top. `stuck`: the bar is held at an
+ *  edge with content passing under it (it draws a hairline on that side). */
+function useDashboardBar(
+  hostRef: React.RefObject<HTMLDivElement | null>,
+  leadRef: React.RefObject<HTMLDivElement | null>,
+  layout: string,
+): { stickBottom: boolean; stuck: 'top' | 'bottom' | null } {
+  const [state, setState] = useState<{ stickBottom: boolean; stuck: 'top' | 'bottom' | null }>({
+    stickBottom: true,
+    stuck: null,
+  })
+  useLayoutEffect(() => {
+    const host = hostRef.current
+    const lead = leadRef.current
+    const bar = host?.querySelector<HTMLElement>('[data-testid="dashboard-selector"]')
+    if (!host || !lead || !bar) return
+    const update = (): void => {
+      const h = host.clientHeight
+      if (h <= 0) return
+      // The bar's own place in the content (right under General).
+      const at = lead.getBoundingClientRect().bottom - host.getBoundingClientRect().top + host.scrollTop
+      const barH = bar.offsetHeight
+      const stickBottom = at + barH <= h
+      const y = at - host.scrollTop
+      const stuck = y < 0 ? 'top' : stickBottom && y + barH > h ? 'bottom' : null
+      setState((s) => (s.stickBottom === stickBottom && s.stuck === stuck ? s : { stickBottom, stuck }))
+    }
+    update()
+    host.addEventListener('scroll', update, { passive: true })
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
+    ro?.observe(host)
+    ro?.observe(lead)
+    ro?.observe(bar)
+    return () => {
+      host.removeEventListener('scroll', update)
+      ro?.disconnect()
+    }
+  }, [hostRef, leadRef, layout])
+  return state
 }
 
 // ── Name (always-visible field; Enter/blur saves) ────────────────────────
@@ -399,12 +515,15 @@ function DashboardsSection({
   docs,
   docsError,
   onReloadDocs,
+  bar = { stickBottom: true, stuck: null },
 }: {
   detail: ProjectGroupShow
   caps: ProjectSettingsCaps
   docs: ProjectGroupHtmlDoc[] | null
   docsError: string | null
   onReloadDocs: () => void
+  /** Where the bar sits in its scroller (useDashboardBar). */
+  bar?: { stickBottom: boolean; stuck: 'top' | 'bottom' | null }
 }): React.JSX.Element {
   const readOnly = !caps.canEditDashboards
   const dashboards = useMemo(() => orderedDashboards(detail.dashboards), [detail.dashboards])
@@ -431,7 +550,13 @@ function DashboardsSection({
   const [creating, setCreating] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<ProjectGroupDashboard | null>(null)
   /** The last failed dashboard write, shown under the row it came from. */
-  const [failure, setFailure] = useState<{ where: 'move' | 'delete' | string; what: string; reason: string } | null>(null)
+  const [failure, setFailure] = useState<{
+    where: 'move' | 'delete' | string
+    what: string
+    reason: string
+    retry?: () => void
+    next?: string
+  } | null>(null)
   /** What the last write did, for a moment ("Added to Main"). */
   const [done, setDone] = useState<{ where: string; text: string } | null>(null)
   const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -454,7 +579,7 @@ function DashboardsSection({
         await reorderProjectGroupDashboards(primaryScope(), detail.id, order)
         flash('move', direction < 0 ? 'Moved earlier' : 'Moved later')
       } catch (err) {
-        setFailure({ where: 'move', what: 'Couldn’t move the dashboard.', reason: errorMessage(err) })
+        setFailure({ where: 'move', what: 'Couldn’t move the dashboard.', reason: errorMessage(err), retry: () => void reorder(dashboardId, direction) })
       } finally {
         setBusy(false)
       }
@@ -476,6 +601,8 @@ function DashboardsSection({
           where: 'delete',
           what: 'Couldn’t delete the dashboard.',
           reason: code === 'last_dashboard' ? 'a project keeps at least one dashboard' : errorMessage(err),
+          retry: code === 'last_dashboard' ? undefined : () => setConfirmDelete(dashboard),
+          next: code === 'last_dashboard' ? 'Add another dashboard first, then delete this one.' : undefined,
         })
       }
     },
@@ -499,6 +626,7 @@ function DashboardsSection({
           where: key,
           what: `Couldn’t ${shown ? 'remove' : 'add'} ${doc.fileName}.`,
           reason: errorMessage(err),
+          retry: () => void toggleDoc(doc, dashboard, shown),
         })
       } finally {
         setDocBusy(null)
@@ -518,7 +646,7 @@ function DashboardsSection({
     ) : null
 
   const failureFor = (where: string): React.ReactNode =>
-    failure?.where === where ? <ActionError what={failure.what} reason={failure.reason} /> : undefined
+    failure?.where === where ? <ActionError what={failure.what} reason={failure.reason} onRetry={failure.retry} next={failure.next} /> : undefined
 
   const filesState: React.ReactNode =
     docsError && docs === null ? (
@@ -565,13 +693,22 @@ function DashboardsSection({
 
       {/* The selector bar: a DIRECT child of the left half, sticky at its
           top AND bottom, so it stays in view however far the half is
-          scrolled (above it General, below it the dashboard). */}
+          scrolled (above it General, below it the dashboard). In a half too
+          short for General and the bar together it sticks to the top only,
+          so it never sits over General's rows. Held at an edge, it draws a
+          hairline on that side: the content passes under it. */}
       <div
         data-testid="dashboard-selector"
         role="group"
         aria-label="Dashboard picker"
         data-settings-id="project-groups.dashboards"
-        className="sticky top-0 bottom-0 z-10 bg-[var(--color-bg)] pt-3 pb-2 space-y-2"
+        data-stuck={bar.stuck ?? undefined}
+        className={cx(
+          'sticky top-0 z-10 bg-[var(--color-bg)] pt-3 pb-2 space-y-2',
+          bar.stickBottom && 'bottom-0',
+          bar.stuck === 'top' && 'shadow-[0_1px_0_var(--color-border)]',
+          bar.stuck === 'bottom' && 'shadow-[0_-1px_0_var(--color-border)]',
+        )}
       >
         <div className="flex items-center justify-between gap-4 min-h-[1.5rem]">
           <h3 className="type-heading text-[var(--color-text-primary)]">Dashboards</h3>
@@ -693,7 +830,7 @@ function DashboardsSection({
                           {owner ? `From ${owner}` : doc.filePath}
                         </span>
                       ) : (
-                        'Only HTML files can show on a dashboard for now'
+                        'Not an HTML file, so it can’t go on a dashboard.'
                       )
                     }
                     below={failureFor(key)}
@@ -738,6 +875,39 @@ function FolderLine({ path }: { path: string }): React.JSX.Element {
   )
 }
 
+/** Agents' display names (AGENT.md), by folder, for the Add an agent list:
+ *  the project's own agents show theirs (`show` carries them), so the list
+ *  under them does too, not the sidebar's folder names. One GET per folder,
+ *  once per host, cached here; until it lands (or when it fails) the row
+ *  shows the sidebar name. The workspace list doesn't carry these names
+ *  (projects/list), so they come one by one. */
+const displayNameCache = new Map<string, string>()
+const displayNameAsked = new Set<string>()
+
+function useAgentDisplayNames(paths: string[]): (path: string) => string | null {
+  const hostKey = activeHostKey(useConnectHostStore((s) => s.activeHost))
+  const [, bump] = useState(0)
+  const wanted = paths.join('\n')
+  useEffect(() => {
+    let live = true
+    for (const path of wanted ? wanted.split('\n') : []) {
+      const key = `${hostKey}|${path}`
+      if (displayNameAsked.has(key)) continue
+      displayNameAsked.add(key)
+      agentDisplayName(primaryScope(), path)
+        .then((name) => {
+          displayNameCache.set(key, name.trim())
+          if (live && name.trim()) bump((n) => n + 1)
+        })
+        .catch(() => displayNameCache.set(key, ''))
+    }
+    return () => {
+      live = false
+    }
+  }, [wanted, hostKey])
+  return (path) => displayNameCache.get(`${hostKey}|${path}`) || null
+}
+
 const PLUS = (
   <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" className="w-3 h-3 flex-shrink-0">
     <path d="M8 3.5v9M3.5 8h9" />
@@ -774,11 +944,22 @@ export function AddAgentPicker({
   // -1 = no row picked yet: a row lights up once you type or use the arrows.
   const [highlight, setHighlight] = useState(-1)
   const [adding, setAdding] = useState<string | null>(null)
-  const [failure, setFailure] = useState<{ what: string; reason: string } | null>(null)
-  const candidates = useMemo(
-    () => addableWorkspaces(registered, memberIds, query),
-    [registered, memberIds, query],
-  )
+  const [failure, setFailure] = useState<{ what: string; reason: string; retry: () => void } | null>(null)
+  /** The agent just added, said under the search for a moment. */
+  const [added, setAdded] = useState<string | null>(null)
+  const addedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (addedTimer.current) clearTimeout(addedTimer.current)
+  }, [])
+  const outside = useMemo(() => addableWorkspaces(registered, memberIds), [registered, memberIds])
+  const displayNameOf = useAgentDisplayNames(useMemo(() => outside.map((w) => w.path), [outside]))
+  const labelOf = (w: { name: string; path: string }): string => displayNameOf(w.path) ?? w.name
+  // The search matches what the row shows (the display name) as well as
+  // the sidebar name and the folder.
+  const q = query.trim().toLowerCase()
+  const candidates = q
+    ? outside.filter((w) => labelOf(w).toLowerCase().includes(q) || addableWorkspaces([w], [], q).length > 0)
+    : outside
   useEffect(() => setHighlight(query.trim() ? 0 : -1), [query])
 
   const addMember = useCallback(
@@ -788,10 +969,17 @@ export function AddAgentPicker({
       try {
         await addProjectGroupMember(primaryScope(), groupId, workspaceId)
         setQuery('')
+        if (addedTimer.current) clearTimeout(addedTimer.current)
+        setAdded(displayName)
+        addedTimer.current = setTimeout(() => setAdded(null), 4000)
         useToastStore.getState().addToast(`Added ${displayName} to ${groupName}.`, 'success')
         onAdded?.(workspaceId, displayName)
       } catch (err) {
-        setFailure({ what: `Couldn’t add ${displayName}.`, reason: errorMessage(err) })
+        setFailure({
+          what: `Couldn’t add ${displayName}.`,
+          reason: errorMessage(err),
+          retry: () => void addMember(workspaceId, displayName),
+        })
       } finally {
         setAdding(null)
       }
@@ -816,20 +1004,29 @@ export function AddAgentPicker({
               setHighlight((h) => Math.max(h - 1, 0))
             } else if (e.key === 'Enter' && candidates[highlight]) {
               e.preventDefault()
-              void addMember(candidates[highlight].id, candidates[highlight].name)
+              void addMember(candidates[highlight].id, labelOf(candidates[highlight]))
             }
           }}
           aria-label="Search agents to add"
           placeholder="Search agents"
           className="w-full"
         />
-        {failure && (
+        {failure ? (
           <div className="mt-2">
-            <ActionError what={failure.what} reason={failure.reason} />
+            <ActionError what={failure.what} reason={failure.reason} onRetry={failure.retry} />
           </div>
-        )}
+        ) : added ? (
+          <div className="mt-2">
+            <DoneNote text={`Added ${added}`} />
+          </div>
+        ) : null}
       </div>
-      <ul className={cx(listClassName, 'overflow-y-auto divide-y divide-[var(--color-border)]')} aria-label="Agents you can add">
+      <ul
+        className={cx(listClassName, 'overflow-y-auto divide-y divide-[var(--color-border)]')}
+        aria-label="Agents you can add"
+        // The pointer leaving drops a hover pick (a typed search keeps its first match).
+        onMouseLeave={() => setHighlight(query.trim() ? 0 : -1)}
+      >
         {/* Each row is one quiet button: the agent first, "Add" in the
             hint colour until the row is hovered, focused or picked by
             the arrows, so the project's own agents above read first. */}
@@ -838,10 +1035,10 @@ export function AddAgentPicker({
             <button
               type="button"
               data-k2-focus=""
-              aria-label={`Add ${w.name}`}
+              aria-label={`Add ${labelOf(w)}`}
               title={w.path}
               disabled={adding === w.id}
-              onClick={() => void addMember(w.id, w.name)}
+              onClick={() => void addMember(w.id, labelOf(w))}
               className={cx(
                 'group relative w-full flex items-center gap-4 py-2.5 text-left no-drag cursor-pointer outline-none transition-colors disabled:cursor-wait',
                 inset,
@@ -849,7 +1046,7 @@ export function AddAgentPicker({
               )}
             >
               <span className="flex-1 min-w-0">
-                <span className="block type-name text-[var(--color-text-primary)] truncate">{w.name}</span>
+                <span className="block type-name text-[var(--color-text-primary)] truncate">{labelOf(w)}</span>
                 <span className="block type-hint text-[var(--color-text-secondary)] truncate">{shortFolder(w.path)}</span>
               </span>
               <span
@@ -875,17 +1072,30 @@ export function AddAgentPicker({
         {candidates.length === 0 && (
           <li className={cx('py-3', inset)}>
             <div className="type-row text-[var(--color-text-primary)]">
-              {registered.every((w) => memberIds.includes(w.id)) ? 'Every agent is already here' : 'No agents match'}
+              {outside.length === 0 ? 'Every agent is already here' : `No agents match “${query.trim()}”`}
             </div>
             <div className={SETTING_ROW_HINT}>
-              {registered.every((w) => memberIds.includes(w.id))
+              {outside.length === 0
                 ? 'Every agent on this server is already in this project.'
-                : 'Try another name, or clear the search to see them all.'}
+                : 'Try another name or folder, or clear the search to see them all.'}
             </div>
           </li>
         )}
       </ul>
     </div>
+  )
+}
+
+/** "Added", "Moved later": what a change just did, by the control, in the
+ *  ok colour with a check, for a moment. */
+function DoneNote({ text }: { text: string }): React.JSX.Element {
+  return (
+    <span role="status" className="inline-flex items-center gap-1 type-hint text-[var(--color-status-ok-soft)] whitespace-nowrap">
+      <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+        <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+      </svg>
+      {text}
+    </span>
   )
 }
 
@@ -901,7 +1111,18 @@ function AgentsSection({
   const readOnly = !caps.canEdit
   const [memberBusy, setMemberBusy] = useState<string | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<{ id: string; name: string } | null>(null)
-  const [failure, setFailure] = useState<{ id: string; what: string; reason: string } | null>(null)
+  const [failure, setFailure] = useState<{ id: string; what: string; reason: string; retry?: () => void } | null>(null)
+  /** What the last change did, on the row it changed, for a moment. */
+  const [done, setDone] = useState<{ id: string; text: string } | null>(null)
+  const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (doneTimer.current) clearTimeout(doneTimer.current)
+  }, [])
+  const flash = (id: string, text: string): void => {
+    if (doneTimer.current) clearTimeout(doneTimer.current)
+    setDone({ id, text })
+    doneTimer.current = setTimeout(() => setDone(null), 4000)
+  }
   const addSearchRef = useRef<HTMLInputElement>(null)
   /** The Agents heading's "Add an agent": to the picker below, ready to type. */
   const goToPicker = (): void => {
@@ -920,7 +1141,12 @@ function AgentsSection({
         await removeProjectGroupMember(primaryScope(), detail.id, workspaceId)
         useToastStore.getState().addToast(`Removed ${displayName} from ${detail.name}.`, 'success')
       } catch (err) {
-        setFailure({ id: workspaceId, what: `Couldn’t remove ${displayName}.`, reason: errorMessage(err) })
+        setFailure({
+          id: workspaceId,
+          what: `Couldn’t remove ${displayName}.`,
+          reason: errorMessage(err),
+          retry: () => setConfirmRemove({ id: workspaceId, name: displayName }),
+        })
       } finally {
         setMemberBusy(null)
       }
@@ -936,14 +1162,18 @@ function AgentsSection({
         await edit({ pocWorkspaceId: workspaceId }, () =>
           setProjectGroupPoc(primaryScope(), detail.id, workspaceId),
         )
+        flash(workspaceId, 'Gets the project chat now')
         useToastStore
           .getState()
           .addToast(`${displayName} is now the point of contact and gets the project chat.`, 'success')
       } catch (err) {
-        useToastStore
-          .getState()
-          .addToast(`Couldn't change the point of contact: ${errorMessage(err)}`, 'error')
-        setFailure({ id: workspaceId, what: 'Couldn’t change the point of contact.', reason: errorMessage(err) })
+        useToastStore.getState().addToast('Couldn’t change the point of contact. Nothing changed.', 'error')
+        setFailure({
+          id: workspaceId,
+          what: 'Couldn’t change the point of contact.',
+          reason: errorMessage(err),
+          retry: () => void setPoc(workspaceId, displayName),
+        })
       } finally {
         setMemberBusy(null)
       }
@@ -989,7 +1219,7 @@ function AgentsSection({
           const blocked = removeMemberBlockedReason(m.workspaceId, detail.pocWorkspaceId)
           const display = m.agentName ?? m.name ?? m.workspaceId.slice(0, 8)
           return (
-            <div key={m.workspaceId} data-testid="project-agent-row">
+            <div key={m.workspaceId} data-testid="project-agent-row" className="group/agent">
               <SettingRow
                 label={
                   <span className="flex items-center gap-2 min-w-0">
@@ -998,13 +1228,22 @@ function AgentsSection({
                   </span>
                 }
                 hint={m.path ? <FolderLine path={m.path} /> : 'Not on this server any more'}
-                below={failure?.id === m.workspaceId ? <ActionError what={failure.what} reason={failure.reason} /> : undefined}
+                below={
+                  failure?.id === m.workspaceId ? (
+                    <ActionError what={failure.what} reason={failure.reason} onRetry={failure.retry} />
+                  ) : undefined
+                }
               >
                 {memberBusy === m.workspaceId ? <SavingNote on /> : null}
+                {done?.id === m.workspaceId && memberBusy !== m.workspaceId ? <DoneNote text={done.text} /> : null}
+                {/* Shown on the row's hover and keyboard focus only, so the
+                    rows read as names first; the … menu keeps it too. */}
                 {!readOnly && !isPoc && (
                   <Button
-                    variant="quiet"
+                    variant="ghost"
                     size="sm"
+                    data-reveal="row"
+                    className="opacity-0 transition-opacity group-hover/agent:opacity-100 group-focus-within/agent:opacity-100 focus-visible:opacity-100"
                     disabled={memberBusy === m.workspaceId}
                     title="It gets every message in the project’s chat."
                     onClick={() => void setPoc(m.workspaceId, display)}
@@ -1052,7 +1291,13 @@ function AgentsSection({
           hint="Pick an agent on this server to join the project and its chat."
           settingId="project-groups.add-agent"
         >
-          <AddAgentPicker groupId={detail.id} groupName={detail.name} memberIds={detail.members.map((m) => m.workspaceId)} searchRef={addSearchRef} />
+          <AddAgentPicker
+            groupId={detail.id}
+            groupName={detail.name}
+            memberIds={detail.members.map((m) => m.workspaceId)}
+            searchRef={addSearchRef}
+            onAdded={(workspaceId) => flash(workspaceId, 'Added')}
+          />
         </SettingsGroup>
       )}
     </section>
@@ -1071,14 +1316,18 @@ const DEFAULT_VIEW_OPTIONS: { value: ProjectDefaultView; label: string }[] = [
 const DEFAULT_VIEW_HINT =
   'Terminal is the agent’s shell, Thread its chat with you, Chatter its messages with other agents. Anyone can still switch their own.'
 
-/** Why a save was refused, in words for this row. */
-function defaultViewErrorMessage(err: unknown): string {
+/** Why a save was refused, for this row: a refusal by role or permission
+ *  is one plain sentence (trying again won't help); anything else is the
+ *  shared failure (plain words, the server's reason quietly, Try again). */
+type DefaultViewError = { plain: string } | { reason: string; tried: ProjectDefaultView }
+
+function defaultViewError(err: unknown, tried: ProjectDefaultView): DefaultViewError {
   // A refusal arrives as a DaemonHttpError carrying the code; the older
   // JSON-in-the-message shape is read too.
   const code = (err instanceof DaemonHttpError ? err.code : null) ?? daemonErrorInfo(err).code
-  if (code === 'forbidden') return "Couldn't change it: only the owner or an admin can."
-  if (code === 'agent_permission_off') return "Couldn't change it: this agent needs Manage K2 projects on."
-  return `Couldn't change it: ${errorMessage(err)}`
+  if (code === 'forbidden') return { plain: 'Couldn’t change it. Only the owner or an admin can.' }
+  if (code === 'agent_permission_off') return { plain: 'Couldn’t change it. This agent needs Manage K2 projects on.' }
+  return { reason: errorMessage(err), tried }
 }
 
 /** The view every agent tile in this project opens in. Daemon-owned (the
@@ -1104,7 +1353,7 @@ function DefaultViewRow({
   const value = projectDefaultView(detail)
   const lockReason = defaultViewLockReason(caps, detail.defaultView !== undefined)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<DefaultViewError | null>(null)
   const save = useSaveStatus()
   const groupId = detail.id
   const shownId = useRef(groupId)
@@ -1128,7 +1377,7 @@ function DefaultViewRow({
         if (shownId.current === groupId) save.saved()
       })
       .catch((err) => {
-        if (shownId.current === groupId) setError(defaultViewErrorMessage(err))
+        if (shownId.current === groupId) setError(defaultViewError(err, next))
       })
       .finally(() => {
         if (shownId.current === groupId) setSaving(false)
@@ -1136,10 +1385,12 @@ function DefaultViewRow({
   }
 
   const below =
-    error ? (
+    error && 'plain' in error ? (
       <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed">
-        {error}
+        {error.plain}
       </p>
+    ) : error ? (
+      <ActionError what="Couldn’t change how agents open." reason={error.reason} onRetry={() => change(error.tried)} />
     ) : lockReason ? (
       <p className={cx(SETTING_ROW_HINT, '!mt-0')} data-testid="project-default-view-locked">
         {lockReason}
@@ -1280,7 +1531,11 @@ export function ProjectSettingsDetail({
   const [cropImage, setCropImage] = useState<string | null>(null)
   const iconInputRef = useRef<HTMLInputElement>(null)
   const pictureSave = useSaveStatus()
+  /** The last picture write that failed, and what it sent, for Try again. */
+  const [pictureFailure, setPictureFailure] = useState<{ reason: string; dataUrl: string | null } | null>(null)
   const colorSave = useSaveStatus()
+  /** The last colour write that failed, and the colour, for Try again. */
+  const [colorFailure, setColorFailure] = useState<{ reason: string; color: string | null } | null>(null)
   const pinSave = useSaveStatus()
 
   const handleIconFileSelected = (e: React.ChangeEvent<HTMLInputElement>): void => {
@@ -1296,6 +1551,8 @@ export function ProjectSettingsDetail({
   const saveIcon = useCallback(
     async (dataUrl: string | null): Promise<void> => {
       setIconBusy(true)
+      setPictureFailure(null)
+      pictureSave.reset()
       try {
         const res = await setProjectGroupIcon(primaryScope(), detail.id, dataUrl)
         // Cache what we just sent under the daemon's new key, so neither
@@ -1308,7 +1565,7 @@ export function ProjectSettingsDetail({
         setIconSaves((n) => n + 1)
         pictureSave.saved()
       } catch (err) {
-        pictureSave.failed(new Error(errorMessage(err)))
+        setPictureFailure({ reason: errorMessage(err), dataUrl })
       } finally {
         setIconBusy(false)
       }
@@ -1325,13 +1582,15 @@ export function ProjectSettingsDetail({
   const saveColor = useCallback(
     async (color: string | null): Promise<void> => {
       if (color === detail.color) return
+      setColorFailure(null)
+      colorSave.reset()
       try {
         // Optimistic: the swatch, the avatars and the list move at once;
         // a refusal puts the old color back and says why.
         await edit({ color }, () => setProjectGroupColor(primaryScope(), detail.id, color))
         colorSave.saved()
       } catch (err) {
-        colorSave.failed(new Error(errorMessage(err)))
+        setColorFailure({ reason: errorMessage(err), color })
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1386,6 +1645,9 @@ export function ProjectSettingsDetail({
 
   const [bodyRef, bodyWidth] = useElementWidth(HALVES_MIN_WIDTH)
   const stacked = bodyWidth < HALVES_MIN_WIDTH
+  const leftRef = useRef<HTMLDivElement>(null)
+  const generalRef = useRef<HTMLDivElement>(null)
+  const bar = useDashboardBar(stacked ? bodyRef : leftRef, generalRef, stacked ? 'stacked' : 'split')
 
   const general = (
     <section aria-label="General">
@@ -1402,11 +1664,22 @@ export function ProjectSettingsDetail({
           label="Picture"
           hint={caps.canEditLooks ? 'Shown in the sidebar. Square images work best.' : 'Shown in the sidebar.'}
           settingId="project-groups.picture"
-          below={belowFor(pictureSave.state)}
+          below={
+            pictureFailure ? (
+              <ActionError
+                what={pictureFailure.dataUrl ? 'Couldn’t save the picture.' : 'Couldn’t remove the picture.'}
+                reason={pictureFailure.reason}
+                onRetry={() => void saveIcon(pictureFailure.dataUrl)}
+              />
+            ) : undefined
+          }
         >
           <SavingNote on={iconBusy} />
           <SaveNote state={iconBusy ? 'idle' : pictureSave.state} />
-          <span className={AVATAR_ROUND}>
+          <span
+            data-k2-chamfer="control"
+            className={cx(AVATAR_ROUND, 'border-transparent transition-opacity', iconBusy && 'opacity-60')}
+          >
             <ProjectGroupAvatar
               name={detail.name}
               groupId={detail.id}
@@ -1429,7 +1702,7 @@ export function ProjectSettingsDetail({
                 }
                 disabled={iconBusy}
               >
-                Upload
+                {iconBusy ? 'Uploading…' : 'Upload'}
               </Button>
               <input
                 ref={iconInputRef}
@@ -1496,7 +1769,8 @@ export function ProjectSettingsDetail({
                     onBlur={() => commitCustomHex()}
                     placeholder={detail.color ?? '#rrggbb'}
                     spellCheck={false}
-                    className={cx('w-24 type-control font-mono ml-auto', hexError && '!border-[var(--color-status-error-soft)]')}
+                    aria-invalid={hexError || undefined}
+                    className={cx('w-24 type-control ml-2', hexError && '!border-[var(--color-status-error-soft)]')}
                   />
                 </div>
                 {hexError && (
@@ -1504,7 +1778,13 @@ export function ProjectSettingsDetail({
                     That isn’t a color. Type six hex digits, or an rgb() value.
                   </p>
                 )}
-                <RowSaveError state={colorSave.state} />
+                {colorFailure && (
+                  <ActionError
+                    what="Couldn’t change the color."
+                    reason={colorFailure.reason}
+                    onRetry={() => void saveColor(colorFailure.color)}
+                  />
+                )}
               </div>
             ) : undefined
           }
@@ -1540,7 +1820,7 @@ export function ProjectSettingsDetail({
                 .then(() => pinSave.saved())
                 .catch((err) => {
                   pinSave.failed(new Error(errorMessage(err)))
-                  useToastStore.getState().addToast(`Couldn't change Pinned: ${errorMessage(err)}`, 'error')
+                  useToastStore.getState().addToast("Couldn't change Pinned. Nothing changed.", 'error')
                 })
             }}
           />
@@ -1554,7 +1834,9 @@ export function ProjectSettingsDetail({
           }
           settingId="project-groups.delete"
           below={
-            deleteError ? <ActionError what="Couldn’t delete the project." reason={deleteError} /> : undefined
+            deleteError ? (
+              <ActionError what="Couldn’t delete the project." reason={deleteError} onRetry={() => setConfirmDelete(true)} />
+            ) : undefined
           }
         >
           <Button
@@ -1562,8 +1844,16 @@ export function ProjectSettingsDetail({
             disabled={!caps.canDelete || deleting}
             title={caps.canDelete ? undefined : 'Only the owner or an admin can delete a project'}
             onClick={() => setConfirmDelete(true)}
+            className="inline-flex items-center gap-1.5"
           >
-            {deleting ? 'Deleting…' : 'Delete project'}
+            {deleting ? (
+              <>
+                <Spinner />
+                Deleting…
+              </>
+            ) : (
+              'Delete project'
+            )}
           </Button>
         </SettingRow>
       </SettingsGroup>
@@ -1603,7 +1893,7 @@ export function ProjectSettingsDetail({
           data-testid="project-settings-head"
         >
           <div className="flex items-center gap-3 min-w-0">
-            <span className={AVATAR_ROUND}>
+            <span data-k2-chamfer="control" className={cx(AVATAR_ROUND, 'border-transparent')}>
               <ProjectGroupAvatar
                 name={detail.name}
                 groupId={detail.id}
@@ -1656,28 +1946,40 @@ export function ProjectSettingsDetail({
             stacked ? 'overflow-y-auto' : 'grid grid-cols-2 divide-x divide-[var(--color-border)]',
           )}
         >
+          {stacked && <ScrollEdge at="top" />}
           <div
+            ref={leftRef}
             data-testid="project-settings-left"
             className={cx('px-6 pb-8 [scrollbar-gutter:stable]', stacked ? '' : 'overflow-y-auto min-h-0')}
           >
-            <div className="pt-5 pb-3">{general}</div>
+            {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
+            <div ref={generalRef} className="pt-5 pb-3">
+              {general}
+            </div>
             <DashboardsSection
               detail={detail}
               caps={caps}
               docs={docs}
               docsError={docsError}
               onReloadDocs={onReloadDocs}
+              bar={bar}
             />
+            {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
           </div>
           <div
             data-testid="project-settings-right"
             className={cx(
-              'px-6 pb-8 pt-5 [scrollbar-gutter:stable]',
-              stacked ? 'border-t border-[var(--color-border)]' : 'overflow-y-auto min-h-0',
+              'px-6 pb-8 [scrollbar-gutter:stable]',
+              stacked ? 'pt-5 border-t border-[var(--color-border)]' : 'overflow-y-auto min-h-0',
             )}
           >
-            <AgentsSection detail={detail} caps={caps} edit={edit} />
+            {!stacked && <ScrollEdge at="top" inset="-mx-6" />}
+            <div className={stacked ? '' : 'pt-5'}>
+              <AgentsSection detail={detail} caps={caps} edit={edit} />
+            </div>
+            {!stacked && <ScrollEdge at="bottom" inset="-mx-6" />}
           </div>
+          {stacked && <ScrollEdge at="bottom" />}
         </div>
       </div>
     </>

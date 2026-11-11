@@ -66,6 +66,12 @@ const OWN_LAYERS =
 const OWNS_ESCAPE =
   '[aria-haspopup][aria-expanded="true"], [role="combobox"][aria-expanded="true"], [role="menu"], [role="listbox"]'
 
+/** While the project loads or after it failed, the one state card sits in
+ *  the middle of the sheet's body (the body keeps the page's ground), at a
+ *  reading width, so the sheet never shows a thin bar over an empty box. */
+const SHEET_STATE_BODY = 'flex-1 min-h-0 overflow-y-auto p-6 bg-[var(--color-bg)] flex items-center justify-center'
+const SHEET_STATE_CARD = 'w-full max-w-[34rem]'
+
 function focusables(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
     (el) => el.getClientRects().length > 0 && !el.closest('[aria-hidden="true"], [inert]'),
@@ -295,7 +301,8 @@ function SheetFrame({
           {detailError && detailError.id === groupId ? (
             <>
               {plainHead}
-              <div className="flex-1 min-h-0 overflow-y-auto p-6 bg-[var(--color-bg)]">
+              <div className={SHEET_STATE_BODY}>
+                <div className={SHEET_STATE_CARD}>
                 <SettingsLoadState
                   kind="error"
                   title="Couldn’t load this project’s settings"
@@ -309,13 +316,18 @@ function SheetFrame({
                 >
                   Its settings can’t be shown right now. The project itself is fine.
                 </SettingsLoadState>
+                </div>
               </div>
             </>
           ) : shown === null || switching ? (
             <>
               {plainHead}
-              <div className="flex-1 min-h-0 p-6 bg-[var(--color-bg)]">
-                <SettingsLoadState kind="loading" title="Loading the project’s settings…" testId="project-settings-sheet-loading" />
+              <div className={SHEET_STATE_BODY}>
+                <div className={SHEET_STATE_CARD}>
+                  <SettingsLoadState kind="loading" title="Loading the project’s settings…" testId="project-settings-sheet-loading">
+                    Its name, picture, dashboards and agents.
+                  </SettingsLoadState>
+                </div>
               </div>
             </>
           ) : (

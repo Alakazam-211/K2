@@ -57,6 +57,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import ProjectSettings, { HALVES_MIN_WIDTH, PROJECTS_SPLIT_MIN_PX, shortFolder } from './ProjectSettings'
 import * as projectsApi from './projects-api'
 import { applyAppZoomForTest, resetAppZoomForTest } from '@/test-utils/app-zoom'
+import * as daemonCli from '@/lib/daemon-cli'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
@@ -307,7 +308,7 @@ describe('the dashboard selector', () => {
     ])
     expect(projectsApi.saveDashboardLayout).not.toHaveBeenCalled()
     // A non-HTML file says why it can't be added, in plain words.
-    expect(screen.getByText('Only HTML files can show on a dashboard for now')).toBeTruthy()
+    expect(screen.getByText('Not an HTML file, so it can’t go on a dashboard.')).toBeTruthy()
   })
 })
 
@@ -410,5 +411,91 @@ describe('quiet destructive actions, steady paths, search follows', () => {
     fireEvent.change(search, { target: { value: 'zebra' } })
     expect(await screen.findByTestId('project-settings-pick')).toBeTruthy()
     expect(screen.queryByTestId('project-settings-detail')).toBeNull()
+  })
+})
+
+describe('sheet round 2: rows read first, failures say what next, the bar never covers General', () => {
+  it('"Make point of contact" on a row shows on the row’s hover and keyboard focus only (the … menu keeps it)', async () => {
+    await renderReady()
+    const ada = screen.getAllByTestId('project-agent-row')[1]
+    expect(ada.className).toContain('group/agent')
+    const make = within(ada).getAllByRole('button').find((b) => b.getAttribute('data-reveal') === 'row')
+    expect(make).toBeTruthy()
+    expect(make?.className).toContain('opacity-0')
+    expect(make?.className).toContain('group-hover/agent:opacity-100')
+    expect(make?.className).toContain('group-focus-within/agent:opacity-100')
+    fireEvent.click(within(ada).getByRole('button', { name: 'More actions for Ada' }))
+    expect(screen.getByRole('menuitem', { name: /Make point of contact/ })).toBeTruthy()
+  })
+
+  it('the Add an agent list shows display names, the folder under them, and searches them', async () => {
+    vi.mocked(daemonCli.daemonCliGet).mockImplementation((async (_s: unknown, route: string, params?: Record<string, unknown>) =>
+      route === 'workspace/agent-display-name' && params?.project === '/w/dn-ledger' ? { display_name: 'Ledger Desk' } : {}) as never)
+    useProjectsStore.setState({
+      projects: [
+        { id: 'w9', name: 'dn-ledger', path: '/w/dn-ledger' },
+        { id: 'w8', name: 'dn-sales', path: '/w/dn-sales' },
+      ],
+    } as never)
+    await renderReady()
+    const list = screen.getByRole('list', { name: 'Agents you can add' })
+    await waitFor(() => expect(within(list).getByRole('button', { name: 'Add Ledger Desk' })).toBeTruthy())
+    // No display name (or none yet): the sidebar name.
+    expect(within(list).getByRole('button', { name: 'Add dn-sales' })).toBeTruthy()
+    expect(within(list).getByText('/w/dn-ledger')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Search agents to add'), { target: { value: 'desk' } })
+    expect(within(list).getByRole('button', { name: 'Add Ledger Desk' })).toBeTruthy()
+    expect(within(list).queryByRole('button', { name: 'Add dn-sales' })).toBeNull()
+    fireEvent.change(screen.getByLabelText('Search agents to add'), { target: { value: 'zebra' } })
+    expect(within(list).getByText('No agents match “zebra”')).toBeTruthy()
+    vi.mocked(daemonCli.daemonCliGet).mockImplementation((async () => ({})) as never)
+  })
+
+  it('a failed change says what failed, then the server’s reason quietly, then Try again (which retries)', async () => {
+    vi.mocked(projectsApi.setProjectGroupPoc).mockRejectedValueOnce(new Error('database is locked'))
+    await renderReady()
+    const ada = screen.getAllByTestId('project-agent-row')[1]
+    fireEvent.click(within(ada).getByRole('button', { name: 'More actions for Ada' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Make point of contact/ }))
+    const alert = await within(ada).findByRole('alert')
+    const lines = Array.from(alert.querySelectorAll('p')).map((p) => p.textContent)
+    expect(lines).toEqual(['Couldn’t change the point of contact. Nothing changed.', 'The server said: database is locked.'])
+    vi.mocked(projectsApi.setProjectGroupPoc).mockClear()
+    fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(projectsApi.setProjectGroupPoc).toHaveBeenCalledWith(expect.anything(), 'g1', 'w2'))
+  })
+
+  it('the custom color field sits right after the swatches, in the row’s own type', async () => {
+    await renderReady()
+    const field = screen.getByLabelText('Custom color')
+    expect(field.className).not.toContain('font-mono')
+    expect(field.className).not.toContain('ml-auto')
+  })
+
+  it('in a half too short for General and the bar together, the bar sticks to the top only', async () => {
+    const fit = { h: 600, leadBottom: 700 }
+    const rect = Element.prototype.getBoundingClientRect
+    Element.prototype.getBoundingClientRect = function (this: Element): DOMRect {
+      if (this.firstElementChild?.getAttribute('aria-label') === 'General') {
+        return { width: 400, height: fit.leadBottom, top: 0, left: 0, right: 400, bottom: fit.leadBottom, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      }
+      return rect.call(this)
+    }
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.dataset?.testid === 'project-settings-left' ? fit.h : 0
+      },
+    })
+    try {
+      await renderReady()
+      const selector = screen.getByTestId('dashboard-selector')
+      expect(selector.className).toContain('sticky')
+      expect(selector.className).toContain('top-0')
+      expect(selector.className).not.toContain('bottom-0')
+    } finally {
+      delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+      Element.prototype.getBoundingClientRect = rect
+    }
   })
 })

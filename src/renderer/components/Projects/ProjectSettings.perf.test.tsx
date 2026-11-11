@@ -424,7 +424,9 @@ describe('Settings → Projects optimistic edits', () => {
     expect(document.body.textContent).toContain('Point of contact: WS-A')
     await advance(1000)
     expect(document.body.textContent).toContain('Point of contact: WS-B')
-    expect(useToastStore.getState().toasts.some((t) => t.message.includes('not allowed'))).toBe(true)
+    // A plain toast; the server's reason sits quietly under the row.
+    expect(useToastStore.getState().toasts.some((t) => t.message.includes('Couldn’t change the point of contact'))).toBe(true)
+    expect(document.body.textContent).toContain('The server said: not allowed.')
   })
 })
 

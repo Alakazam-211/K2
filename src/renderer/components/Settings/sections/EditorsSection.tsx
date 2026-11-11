@@ -2,43 +2,47 @@ import React from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '@/stores/settings'
-import { SettingDropdown } from '../controls/SettingControls'
+import { Button } from '@/components/ui'
+import {
+  SaveError,
+  SaveNote,
+  SETTING_ROW_HINT,
+  SettingDropdown,
+  SettingRow,
+  SettingsGroup,
+  SettingsLoadState,
+  useSaveStatus,
+} from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
+import { StatusDot } from './ConnectionsParts'
 
 export const EDITORS_MANIFEST: SettingEntry[] = [
   {
     id: 'editors.default-editor',
     section: 'editors',
-    group: 'Defaults',
-    label: 'Default Editor',
-    description: 'Opens files and projects with this editor',
-    keywords: ['editor', 'default', 'cursor', 'vscode', 'zed'],
+    group: 'Open with',
+    label: 'Editor',
+    description: 'Listed first when you open a workspace in an editor',
+    keywords: ['editor', 'default', 'cursor', 'vscode', 'zed', 'open in'],
   },
   {
     id: 'editors.default-terminal',
     section: 'editors',
-    group: 'Defaults',
-    label: 'Default Terminal',
-    description: 'Right-click a tab to open in this terminal',
-    keywords: ['terminal', 'default', 'iterm', 'warp', 'ghostty'],
+    group: 'Open with',
+    label: 'Terminal app',
+    description: 'Opens a tab’s folder from the tab’s right-click menu',
+    keywords: ['terminal', 'default', 'iterm', 'warp', 'ghostty', 'open in'],
   },
   {
     id: 'editors.detected-editors',
     section: 'editors',
-    label: 'Detected Editors',
-    description: 'Editors discovered on your system',
-    keywords: ['detected', 'editors', 'scan', 'refresh'],
-  },
-  {
-    id: 'editors.terminal-apps',
-    section: 'editors',
-    label: 'Terminal Apps',
-    description: 'Terminal emulators detected on your system',
-    keywords: ['terminal', 'apps', 'detected'],
+    label: 'Apps on this Mac',
+    description: 'The editors and terminal apps K2 found, with Rescan',
+    keywords: ['detected', 'editors', 'terminal apps', 'scan', 'rescan', 'refresh', 'installed'],
   },
 ]
 
-interface EditorDetected {
+export interface EditorDetected {
   id: string
   label: string
   macApp: string
@@ -47,173 +51,225 @@ interface EditorDetected {
   type: 'editor' | 'terminal'
 }
 
-export function EditorsSection(): React.JSX.Element {
-  const projectSettings = useSettingsStore((s) => s.projectSettings)
-  const updateProjectSetting = useSettingsStore((s) => s.updateProjectSetting)
-  const [editors, setEditors] = useState<EditorDetected[]>([])
-  const [editorsLoading, setEditorsLoading] = useState(false)
+/** macOS Terminal: always there, so always offered. */
+const MAC_TERMINAL = 'Terminal'
 
-  const loadEditors = useCallback(async () => {
-    setEditorsLoading(true)
+/** The server's list, or null when the reply isn't one (an old server, a
+ *  web client with no editor scan): the page then says it couldn't check. */
+export function parseDetectedApps(raw: unknown): EditorDetected[] | null {
+  if (!Array.isArray(raw)) return null
+  return raw.filter(
+    (e): e is EditorDetected =>
+      !!e && typeof e === 'object' && typeof (e as EditorDetected).label === 'string' && typeof (e as EditorDetected).id === 'string',
+  )
+}
+
+function reasonOf(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  return ''
+}
+
+type Load =
+  | { kind: 'loading' }
+  | { kind: 'ready'; apps: EditorDetected[] }
+  | { kind: 'error'; detail: string }
+
+const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
+
+export function EditorsSection(): React.JSX.Element {
+  const global = useSettingsStore((s) => s.projectSettings['__global__'] as { defaultEditor?: string; defaultTerminal?: string } | undefined)
+  const updateProjectSetting = useSettingsStore((s) => s.updateProjectSetting)
+  const [load, setLoad] = useState<Load>({ kind: 'loading' })
+  const [scanning, setScanning] = useState(false)
+  /** What the last Rescan did, said under the card title. */
+  const [scanNote, setScanNote] = useState<{ ok: boolean; text: string } | null>(null)
+  const editorSave = useSaveStatus()
+  const terminalSave = useSaveStatus()
+
+  const loadApps = useCallback(async () => {
+    setLoad({ kind: 'loading' })
+    setScanNote(null)
     try {
-      const result = await invoke<EditorDetected[]>('projects_get_all_editors')
-      setEditors(result)
+      const apps = parseDetectedApps(await invoke<unknown>('projects_get_all_editors'))
+      setLoad(apps ? { kind: 'ready', apps } : { kind: 'error', detail: '' })
     } catch (err) {
-      console.error('Failed to load editors:', err)
-    } finally {
-      setEditorsLoading(false)
+      setLoad({ kind: 'error', detail: reasonOf(err) })
     }
   }, [])
 
-  const refreshEditors = useCallback(async () => {
-    setEditorsLoading(true)
+  const rescan = useCallback(async () => {
+    setScanning(true)
+    setScanNote(null)
     try {
-      const result = await invoke<EditorDetected[]>('projects_refresh_editors')
-      setEditors(result)
+      const apps = parseDetectedApps(await invoke<unknown>('projects_refresh_editors'))
+      if (!apps) throw new Error('')
+      setLoad({ kind: 'ready', apps })
+      const editors = apps.filter((a) => a.installed && a.type === 'editor').length
+      const terminals = apps.filter((a) => a.installed && a.type === 'terminal').length
+      setScanNote({
+        ok: true,
+        text: `Rescanned just now: ${plural(editors, 'editor', 'editors')} and ${plural(terminals, 'terminal app', 'terminal apps')} installed.`,
+      })
     } catch (err) {
-      console.error('Failed to refresh editors:', err)
+      const reason = reasonOf(err).trim().replace(/[.\s]+$/, '')
+      setScanNote({
+        ok: false,
+        text: `Couldn’t rescan${reason ? `: ${reason}` : ''}. The list shows the last scan; try again.`,
+      })
     } finally {
-      setEditorsLoading(false)
+      setScanning(false)
     }
   }, [])
 
   useEffect(() => {
-    void loadEditors()
-  }, [loadEditors])
+    void loadApps()
+  }, [loadApps])
 
-  const editorApps = editors.filter((e) => e.type === 'editor')
-  const terminalApps = editors.filter((e) => e.type === 'terminal')
+  const apps = load.kind === 'ready' ? load.apps : []
+  const installedEditors = apps.filter((e) => e.type === 'editor' && e.installed)
+  const installedTerminals = apps.filter((e) => e.type === 'terminal' && e.installed)
+
+  const savedEditor = global?.defaultEditor
+  const editorValue = savedEditor ?? installedEditors[0]?.label ?? ''
+  const editorOptions = installedEditors.map((ed) => ({ value: ed.label, label: ed.label }))
+  if (editorValue && !editorOptions.some((o) => o.value === editorValue)) {
+    editorOptions.push({ value: editorValue, label: load.kind === 'ready' ? `${editorValue} (not installed)` : editorValue })
+  }
+  const terminalValue = global?.defaultTerminal ?? MAC_TERMINAL
+  const terminalOptions = [
+    { value: MAC_TERMINAL, label: MAC_TERMINAL },
+    ...installedTerminals.map((t) => ({ value: t.label, label: t.label })),
+  ]
+  if (!terminalOptions.some((o) => o.value === terminalValue)) {
+    terminalOptions.push({ value: terminalValue, label: load.kind === 'ready' ? `${terminalValue} (not installed)` : terminalValue })
+  }
+
+  const save = async (key: 'defaultEditor' | 'defaultTerminal', value: string, status: ReturnType<typeof useSaveStatus>): Promise<void> => {
+    status.reset()
+    await Promise.resolve(updateProjectSetting('__global__', key, value))
+    const now = useSettingsStore.getState().projectSettings['__global__'] as Record<string, string> | undefined
+    if (now?.[key] === value) status.saved()
+    else status.failed('')
+  }
+
+  // Installed first, editors before terminal apps, in the server's order.
+  const listed = [...apps].sort((a, b) => Number(b.installed) - Number(a.installed) || (a.type === b.type ? 0 : a.type === 'editor' ? -1 : 1))
+  const anyInstalled = installedEditors.length + installedTerminals.length > 0
+
+  const rescanButton = (
+    <Button variant="quiet" onClick={() => void rescan()} disabled={scanning || load.kind === 'loading'} aria-busy={scanning || undefined}>
+      {scanning ? 'Scanning…' : 'Rescan'}
+    </Button>
+  )
+
+  const appsState =
+    load.kind === 'loading' ? (
+      <SettingsLoadState kind="loading" title="Looking for editors and terminal apps…" testId="editors-loading">
+        K2 checks which apps are installed on this Mac.
+      </SettingsLoadState>
+    ) : load.kind === 'error' ? (
+      <SettingsLoadState
+        kind="error"
+        title="K2 couldn’t check which apps are installed"
+        detail={load.detail}
+        action={<Button onClick={() => void loadApps()}>Try again</Button>}
+        testId="editors-error"
+      >
+        Your choices above are kept. Try again in a moment.
+      </SettingsLoadState>
+    ) : !anyInstalled ? (
+      <SettingsLoadState kind="empty" title="No editors or terminal apps found" action={rescanButton} testId="editors-empty">
+        Install one, such as VS Code, Cursor or iTerm2, then rescan. macOS Terminal is always available.
+      </SettingsLoadState>
+    ) : undefined
 
   return (
-    <div className="max-w-2xl space-y-8">
-      <div>
-        <h2 className="type-title text-[var(--color-text-primary)] mb-3">Defaults</h2>
-        <div className="border border-[var(--color-border)]">
-          <div
-            className="flex items-center justify-between px-3 py-2.5 border-b border-[var(--color-border)]"
-            data-settings-id="editors.default-editor"
-          >
-            <div>
-              <div className="type-row text-[var(--color-text-secondary)]">Default Editor</div>
-              <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
-                Opens files and projects with this editor
-              </div>
-            </div>
-            <SettingDropdown
-              value={
-                (projectSettings['__global__'] as { defaultEditor?: string } | undefined)
-                  ?.defaultEditor ??
-                editorApps.find((e) => e.installed)?.label ??
-                'Cursor'
-              }
-              options={editorApps
-                .filter((e) => e.installed)
-                .map((ed) => ({ value: ed.label, label: ed.label }))}
-              onChange={(v) => updateProjectSetting('__global__', 'defaultEditor', v)}
-            />
-          </div>
-          <div
-            className="flex items-center justify-between px-3 py-2.5"
-            data-settings-id="editors.default-terminal"
-          >
-            <div>
-              <div className="type-row text-[var(--color-text-secondary)]">Default Terminal</div>
-              <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
-                Right-click a tab to open in this terminal
-              </div>
-            </div>
-            <SettingDropdown
-              value={
-                (projectSettings['__global__'] as { defaultTerminal?: string } | undefined)
-                  ?.defaultTerminal ?? 'Terminal'
-              }
-              options={[
-                { value: 'Terminal', label: 'Terminal' },
-                ...terminalApps
-                  .filter((e) => e.installed)
-                  .map((ed) => ({ value: ed.label, label: ed.label })),
-              ]}
-              onChange={(v) => updateProjectSetting('__global__', 'defaultTerminal', v)}
-            />
-          </div>
-        </div>
-      </div>
+    <div className="w-full max-w-[52rem] space-y-6 pb-6" data-testid="editors-page">
+      <header className="min-w-0">
+        <h2 className="type-title text-[var(--color-text-primary)]">Defaults</h2>
+        <p className={SETTING_ROW_HINT}>The apps K2 opens for you outside K2: your code editor and your terminal app.</p>
+      </header>
 
-      <div data-settings-id="editors.detected-editors">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="type-title text-[var(--color-text-primary)]">Detected Editors</h2>
-          <button
-            type="button"
-            onClick={() => void refreshEditors()}
-            disabled={editorsLoading}
-            className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default font-mono"
-          >
-            {editorsLoading ? 'Scanning...' : 'Refresh'}
-          </button>
-        </div>
+      <SettingsGroup card title="Open with" testId="editors-defaults">
+        <SettingRow
+          settingId="editors.default-editor"
+          label="Editor"
+          hint={
+            <>
+              Listed first under Open in when you right-click a workspace. <SaveNote state={editorSave.state} />
+              <SaveError state={editorSave.state} />
+            </>
+          }
+          field
+        >
+          <SettingDropdown
+            fullWidth
+            ariaLabel="Editor"
+            value={editorValue}
+            placeholder={load.kind === 'loading' ? 'Looking…' : load.kind === 'error' ? 'Couldn’t check' : 'No editor found'}
+            options={editorOptions}
+            disabled={editorOptions.length === 0}
+            onChange={(v) => save('defaultEditor', v, editorSave)}
+          />
+        </SettingRow>
+        <SettingRow
+          settingId="editors.default-terminal"
+          label="Terminal app"
+          hint={
+            <>
+              Opens a tab’s folder when you right-click the tab and pick Open in. <SaveNote state={terminalSave.state} />
+              <SaveError state={terminalSave.state} />
+            </>
+          }
+          field
+        >
+          <SettingDropdown
+            fullWidth
+            ariaLabel="Terminal app"
+            value={terminalValue}
+            options={terminalOptions}
+            onChange={(v) => save('defaultTerminal', v, terminalSave)}
+          />
+        </SettingRow>
+      </SettingsGroup>
 
-        <div className="border border-[var(--color-border)]">
-          {editorApps.map((editor, i) => (
-            <div
-              key={editor.id}
-              className={`flex items-center gap-3 px-3 py-1.5 ${
-                i < editorApps.length - 1 ? 'border-b border-[var(--color-border)]' : ''
-              }`}
+      <SettingsGroup
+        card
+        title="Apps on this Mac"
+        hint={
+          scanNote ? (
+            <span
+              role={scanNote.ok ? 'status' : 'alert'}
+              data-testid="editors-scan-note"
+              className={scanNote.ok ? undefined : 'text-[var(--color-status-error-soft)]'}
             >
-              <span
-                className={`w-1.5 h-1.5 flex-shrink-0 ${
-                  editor.installed
-                    ? 'bg-[var(--color-status-ok)]'
-                    : 'bg-[color-mix(in_srgb,var(--color-status-error)_60%,transparent)]'
-                }`}
-              />
-              <span className="type-row text-[var(--color-text-primary)] font-mono flex-1">
-                {editor.label}
-              </span>
-              <span className="type-hint text-[var(--color-text-muted)] font-mono">
-                {editor.installed ? editor.cliCommand || editor.macApp : 'not found'}
-              </span>
+              {scanNote.text}
+            </span>
+          ) : appsState ? (
+            'The editors and terminal apps K2 finds on this Mac.'
+          ) : (
+            'The editors and terminal apps K2 found. Installed one just now? Rescan to add it.'
+          )
+        }
+        action={appsState ? undefined : rescanButton}
+        state={appsState}
+        settingId="editors.detected-editors"
+        testId="editors-apps"
+      >
+        {listed.map((app) => (
+          <div key={app.id} className="px-4 py-3 flex items-center justify-between gap-6" data-testid={`editor-app-${app.id}`}>
+            <div className="min-w-0">
+              <div className="type-row text-[var(--color-text-primary)]">{app.label}</div>
+              <div className={SETTING_ROW_HINT}>{app.type === 'editor' ? 'Code editor' : 'Terminal app'}</div>
             </div>
-          ))}
-          {editorApps.length === 0 && !editorsLoading && (
-            <div className="px-3 py-2 type-hint text-[var(--color-text-muted)]">
-              No editors detected yet. Click Refresh to scan.
-            </div>
-          )}
-        </div>
-
-        {terminalApps.length > 0 && (
-          <div className="mt-3" data-settings-id="editors.terminal-apps">
-            <div className="type-badge text-[var(--color-text-muted)] uppercase tracking-wider mb-1 px-1">
-              Terminal Apps
-            </div>
-            <div className="border border-[var(--color-border)]">
-              {terminalApps.map((app, i) => (
-                <div
-                  key={app.id}
-                  className={`flex items-center gap-3 px-3 py-1.5 ${
-                    i < terminalApps.length - 1 ? 'border-b border-[var(--color-border)]' : ''
-                  }`}
-                >
-                  <span
-                    className={`w-1.5 h-1.5 flex-shrink-0 ${
-                      app.installed
-                        ? 'bg-[var(--color-status-ok)]'
-                        : 'bg-[color-mix(in_srgb,var(--color-status-error)_60%,transparent)]'
-                    }`}
-                  />
-                  <span className="type-row text-[var(--color-text-primary)] font-mono flex-1">
-                    {app.label}
-                  </span>
-                  <span className="type-hint text-[var(--color-text-muted)] font-mono">
-                    {app.installed ? 'installed' : 'not found'}
-                  </span>
-                </div>
-              ))}
-            </div>
+            <span className="inline-flex items-center gap-2 type-hint text-[var(--color-text-secondary)] flex-shrink-0">
+              <StatusDot tone={app.installed ? 'ok' : 'neutral'} />
+              {app.installed ? 'Installed' : 'Not installed'}
+            </span>
           </div>
-        )}
-      </div>
+        ))}
+      </SettingsGroup>
     </div>
   )
 }

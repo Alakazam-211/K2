@@ -49,6 +49,7 @@ import { WorkspaceThreadUnreadBadge } from '@/components/common/UnreadBadge'
 import { threadSumForProject, useUnreadStore } from '@/stores/unread'
 import { MARK_ALL_READ_MENU_ID, markAllReadMenuItems, runMarkAllRead } from '@/lib/mark-all-read-menu'
 import { revealInFileManagerLabel } from '@/lib/reveal-label'
+import { installedEditorsDefaultFirst } from '@/lib/installed-editors'
 
 // ── Nav-visible worktrees (DB-backed via workspace.navVisible field) ─────────
 
@@ -528,13 +529,8 @@ export default function Sidebar(): React.JSX.Element {
       if (!project) return
 
       // Fetch installed editors for the submenu
-      let editors: Array<{ id: string; label: string }> = []
-      try {
-        const raw = await invoke<Array<{ id: string; label: string }>>('projects_get_editors')
-        editors = Array.isArray(raw) ? raw : []
-      } catch {
-        // ignore
-      }
+      // Default editor (Settings → Defaults) first.
+      const editors = await installedEditorsDefaultFirst()
 
       // Build menu items -- pin/Active sit above Open in [IDE] so the
       // day-to-day placement actions stay above the (often long) editor list.

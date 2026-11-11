@@ -24,6 +24,7 @@ import ProjectAvatar from './ProjectAvatar'
 import { SidebarCollapseButton } from './SidebarCollapseButton'
 import { primaryScope } from '@/kessel/server-scope'
 import { revealInFileManagerLabel } from '@/lib/reveal-label'
+import { installedEditorsDefaultFirst } from '@/lib/installed-editors'
 
 const RAIL_WIDTH = 48
 
@@ -164,13 +165,8 @@ export default function IconRail(): React.JSX.Element {
       if (!project) return
 
       // Fetch installed editors
-      let editors: Array<{ id: string; label: string }> = []
-      try {
-        const raw = await invoke<Array<{ id: string; label: string }>>('projects_get_editors')
-        editors = Array.isArray(raw) ? raw : []
-      } catch {
-        // ignore
-      }
+      // Default editor (Settings → Defaults) first.
+      const editors = await installedEditorsDefaultFirst()
 
       const menuItems: Array<{ id: string; label: string; type?: string }> = [
         { id: 'settings', label: 'Workspace Settings' },

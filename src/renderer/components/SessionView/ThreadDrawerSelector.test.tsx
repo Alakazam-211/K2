@@ -331,6 +331,8 @@ describe('ThreadDrawerSelector in switch mode', () => {
     expect(group.getAttribute('data-material')).toBe('frost')
     expect(group.getAttribute('data-frost-shape')).toBe('pill')
     expect(group.hasAttribute('data-k2-float')).toBe(false)
+    // Terminal cuts its corners, as the folded menu button and the drawers' capsule.
+    expect(group.getAttribute('data-k2-chamfer')).toBe('control')
     expect(radios().map((b) => b.getAttribute('data-thread-drawer-segment'))).toEqual(['terminal', 'thread', 'chatter', 'heartbeats'])
     expect(radios().map((b) => b.getAttribute('aria-label'))).toEqual(['Terminal', 'Thread', 'Chatter', 'Heartbeats'])
     expect(radios().map((b) => b.title)).toEqual([

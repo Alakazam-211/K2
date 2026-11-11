@@ -204,6 +204,9 @@ export function ThreadDrawerSelector(props: ThreadDrawerSelectorProps): JSX.Elem
         'data-material': 'frost',
         'data-frost-shape': 'pill',
         'data-tab-mode': 'switch',
+        // Terminal cuts the hairline box like its folded menu button and
+        // the drawers' capsule (`floatProps`); Glass keeps the pill.
+        'data-k2-chamfer': 'control',
         // globals.css scales the capsule from `--k2-tab-scale`.
         'data-tab-size': props.mode === 'switch' && props.size === 'sm' ? 'sm' : undefined,
       }

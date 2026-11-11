@@ -167,7 +167,7 @@ if [ "$WAIT_LOCKS" = 1 ]; then
     printf 'k2 GPU jobs S6 proof\nstarted %s\npid %s\n' "$(date -u +%FT%TZ)" "$$" > "$LOCK_K2"
     WROTE_LOCK=1
 fi
-# The node's control now (active | paused | stopped): only an active node
+# The node's control now (active | paused | stopped | draining): only an active node
 # is paused here, and only a node this script paused is resumed.
 CONTROL="$(k2-node status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("control", ""))' 2>/dev/null)"
 case "$CONTROL" in
@@ -181,6 +181,9 @@ case "$CONTROL" in
         ;;
     paused|stopped)
         say "k2-node was already $CONTROL before this run: left $CONTROL at the end"
+        ;;
+    draining)
+        echo "k2-node is draining (someone ran k2-node drain): let it finish, or resume it, then run this again. Nothing tested" >&2; exit 2
         ;;
     *)
         echo "can't read k2-node's control state (sudo k2-node status --json gave '${CONTROL}'): nothing tested" >&2; exit 2

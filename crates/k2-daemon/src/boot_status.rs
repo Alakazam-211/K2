@@ -1408,6 +1408,7 @@ mod tests {
                 "thread-attachments-v1",
                 "thread-images-v1",
                 "thread-delta-v1",
+                "thread-message-delete-v1",
                 "project-chat-paging-v1",
                 "app-project-chat-v1",
                 "app-mobile-access-v1",

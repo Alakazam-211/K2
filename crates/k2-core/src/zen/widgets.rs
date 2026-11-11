@@ -63,6 +63,8 @@ pub const KNOWN_FEATURES: &[&str] = &[
     "thread-attachments-v1",
     "thread-images-v1",
     "thread-delta-v1",
+    // 0.46.11: Delete message (a person deletes a post they sent).
+    "thread-message-delete-v1",
     // 0.46.3: the Garden bridge's person rows (tickets, activity, files,
     // thread.catchup/unread/mute through `/cli/zen/call`).
     "garden-person-rows-v1",

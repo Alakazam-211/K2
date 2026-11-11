@@ -122,13 +122,135 @@ export function formatSqlListen(listen: string | null | undefined, port?: number
   return listen
 }
 
+/** GET /cli/db/status, checked: the daemon always sends `supported` and
+ *  `state` (sql::supervisor::status_json). A reply without them is not a
+ *  status, so it throws (the page shows a failed-read card with Try again)
+ *  instead of rendering an empty one. Optional fields are normalised. */
+export function parseSqlStatus(raw: unknown): SqlStatus {
+  const v = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null
+  if (!v || typeof v.supported !== 'boolean' || typeof v.state !== 'string' || !v.state) {
+    throw new Error('the reply had no server state')
+  }
+  const str = (x: unknown): string | null => (typeof x === 'string' && x ? x : null)
+  return {
+    ...(v as unknown as SqlStatus),
+    ok: v.ok !== false,
+    supported: v.supported,
+    state: v.state,
+    installedMajor: num(v.installedMajor),
+    listen: str(v.listen),
+    port: num(v.port) ?? undefined,
+    publishHint: str(v.publishHint),
+    lastError: str(v.lastError),
+    clusters: Array.isArray(v.clusters) ? (v.clusters as SqlCluster[]).filter((c) => c && typeof c.major === 'number') : [],
+    databases: Array.isArray(v.databases) ? (v.databases as SqlStatus['databases']) : [],
+    upgradeAvailable: Array.isArray(v.upgradeAvailable) ? (v.upgradeAvailable as SqlStatus['upgradeAvailable']) : [],
+  }
+}
+
 export async function fetchSqlStatus(): Promise<SqlStatus> {
-  return daemonCliGet<SqlStatus>(primaryScope(), 'db/status')
+  return parseSqlStatus(await daemonCliGet<unknown>(primaryScope(), 'db/status'))
+}
+
+function parseParticipant(raw: unknown): SqlParticipant | null {
+  const g = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null
+  if (!g || typeof g.projectId !== 'string') return null
+  return {
+    projectId: g.projectId,
+    workspace: typeof g.workspace === 'string' ? g.workspace : null,
+    level: g.level === 'write' ? 'write' : 'read',
+    canManage: g.canManage === true,
+  }
+}
+
+/** GET /cli/db/list, checked: `{ ok, databases: [...] }` (sql::ops::
+ *  catalog_json). A reply without the list throws, so a broken read never
+ *  looks like "no databases yet"; a row missing a field keeps a safe
+ *  default instead of crashing the page. */
+export function parseSqlDatabases(raw: unknown): SqlDatabase[] {
+  const v = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null
+  if (!v || !Array.isArray(v.databases)) throw new Error('the reply had no list of databases')
+  return v.databases
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object' && typeof (r as Record<string, unknown>).id === 'string')
+    .map((r) => {
+      const ownerProjectId = typeof r.ownerProjectId === 'string' ? r.ownerProjectId : ''
+      const ownerWorkspace = typeof r.ownerWorkspace === 'string' ? r.ownerWorkspace : null
+      const cap = r.cap && typeof r.cap === 'object' ? (r.cap as Record<string, unknown>) : {}
+      return {
+        id: r.id as string,
+        name: typeof r.name === 'string' && r.name ? r.name : (r.id as string),
+        status: typeof r.status === 'string' ? r.status : 'active',
+        createdAt: num(r.createdAt) ?? 0,
+        type: 'sql',
+        documents: r.documents !== false,
+        ownerProjectId,
+        ownerWorkspace,
+        bindRole: typeof r.bindRole === 'string' && r.bindRole ? r.bindRole : null,
+        cap: { used: num(cap.used) ?? 0, cap: num(cap.cap) ?? 0 },
+        owner: parseParticipant(r.owner) ?? { projectId: ownerProjectId, workspace: ownerWorkspace, level: 'write', canManage: true },
+        grants: (Array.isArray(r.grants) ? r.grants : []).map(parseParticipant).filter((g): g is SqlParticipant => g !== null),
+        yourLevel: r.yourLevel === 'write' || r.yourLevel === 'read' ? r.yourLevel : null,
+        dbAgentAccess: r.dbAgentAccess === 'read' || r.dbAgentAccess === 'write' ? r.dbAgentAccess : 'off',
+      }
+    })
 }
 
 export async function fetchSqlDatabases(): Promise<SqlDatabase[]> {
-  const res = await daemonCliGet<{ ok: boolean; databases: SqlDatabase[] }>(primaryScope(), 'db/list')
-  return Array.isArray(res?.databases) ? res.databases : []
+  return parseSqlDatabases(await daemonCliGet<unknown>(primaryScope(), 'db/list'))
+}
+
+/** The server's state in a word a person reads, and its dot. */
+export function sqlStateWord(state: string): { word: string; tone: 'ok' | 'warn' | 'error' | 'neutral' } {
+  switch (state) {
+    case 'running':
+      return { word: 'Running', tone: 'ok' }
+    case 'degraded':
+      return { word: 'Running with problems', tone: 'warn' }
+    case 'installing':
+      return { word: 'Starting', tone: 'warn' }
+    case 'error':
+      return { word: 'Stopped by an error', tone: 'error' }
+    case 'disabled':
+    case 'stopped':
+      return { word: 'Off', tone: 'neutral' }
+    case 'not-installed':
+      return { word: 'Not set up', tone: 'neutral' }
+    default:
+      return { word: state.charAt(0).toUpperCase() + state.slice(1).replace(/-/g, ' '), tone: 'neutral' }
+  }
+}
+
+/** "Postgres 16" for a database, from status, or null when unknown. */
+export function dbVersionWord(status: Pick<SqlStatus, 'databases' | 'upgradeAvailable'> | null | undefined, dbId: string): string | null {
+  const row = status?.databases?.find((d) => d.id === dbId)
+  if (!row || row.major == null) return null
+  const up = status?.upgradeAvailable?.some((u) => u.id === dbId)
+  return up ? `Postgres ${row.major}, a newer version is available` : `Postgres ${row.major}`
+}
+
+/** A live move's progress in plain words: "3 of 3 tables copied, 2 MB behind." */
+export function livePlainLine(r: LiveRun): string {
+  const lag = r.lagBytes === null ? '' : r.lagBytes < 1024 ** 2 ? ', up to date' : `, ${Math.round(r.lagBytes / 1024 ** 2)} MB behind`
+  return `${r.ready} of ${r.total} tables copied${lag}.`
+}
+
+/** A live move's state as a word. */
+export function liveStateWord(state: string): string {
+  switch (state) {
+    case 'syncing':
+      return 'Copying'
+    case 'streaming':
+      return 'Ready to switch'
+    case 'stalled':
+      return 'Stalled'
+    case 'switched':
+    case 'done':
+      return 'Switched'
+    case 'aborted':
+      return 'Stopped'
+    default:
+      return state.charAt(0).toUpperCase() + state.slice(1)
+  }
 }
 
 export async function enableSqlServer(): Promise<{ ok: boolean; state?: string }> {

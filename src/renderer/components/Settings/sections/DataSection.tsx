@@ -1,41 +1,66 @@
-// Settings → Data (prd-workspace-data-sidecar-v1 D23) — owner surface:
-// supervised Postgres sidecar, workspace databases, and sql_grants
-// (manage / read / write). Mail-shaped master-detail. Thin client:
-// daemon `/cli/db/*` is the only catalog. Grants are workspaces, never
-// skin people. No fetchProjects in render paths (workspace picker reads
-// the already-loaded store; mutations are optimistic). Headless CLI
-// still works with no UI.
+// Settings → Database (prd-workspace-data-sidecar-v1 D23): the owner's page
+// for the Postgres server K2 runs on this box, the workspace databases on
+// it, and who else may use each one (sql_grants: read / write / manage).
+// Thin client: the daemon's `/cli/db/*` is the only catalog. Grants are
+// workspaces, never App people. No fetchProjects in render paths (pickers
+// read the already-loaded store; grant changes are optimistic).
+//
+// Layout: the Settings reference pattern. A page header, a tab strip
+// (Databases / Server), card groups of rows. Databases is a list that
+// opens one database (its access and agent sign-in) with a way back.
+// Destructive actions are quiet buttons that confirm in the shared dialog
+// frame (AccessDialogs); a dialog's failure stays in the dialog, and a
+// page-level result is a dismissable note under the header.
+//
+// CAPABILITY: the page keys off GET /cli/db/status `supported` (the
+// daemon's report, never the platform). Unsupported: sample data under
+// the shared Linux note, every change off, no further network calls.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { useWindowModeStore } from '@/stores/window-mode'
-import { Toggle, Input } from '@/components/ui'
-import { SettingDropdown } from '../controls/SettingControls'
+import { Button, Callout, Input, Toggle } from '@/components/ui'
+import {
+  SETTING_LIST_ROW_HOVER,
+  SETTING_ROW_HINT,
+  SETTING_SERVER_REASON,
+  SaveError,
+  SaveNote,
+  SettingDropdown,
+  SettingRow,
+  SettingsGroup,
+  SettingsLoadState,
+  useSaveStatus,
+} from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
+import { AccessSheet, DIALOG_LABEL, DIALOG_MUTED, FailedNote } from './AccessDialogs'
+import { HealthWord, StatusDot } from './ConnectionsParts'
+import { LinuxOnlyNote } from './LinuxOnlyNote'
 import {
   SAMPLE_DATABASES,
   SAMPLE_STATUS,
   bindSqlRole,
-  clustersLine,
   createSqlDatabase,
-  dbMajorChip,
-  dbTypeLabel,
-  formatSqlListen,
+  dbVersionWord,
   disableSqlServer,
   enableSqlServer,
   fetchSqlDatabases,
   fetchSqlStatus,
+  formatSqlListen,
   grantSqlAccess,
   revokeSqlAccess,
   sqlErrorMessage,
+  sqlStateWord,
   abortLiveMove,
   fetchLiveStatus,
-  liveLine,
+  livePlainLine,
+  liveStateWord,
   prepareLiveMoves,
   switchLiveMove,
   type LiveStatus,
   type SqlDatabase,
   type SqlLevel,
+  type SqlParticipant,
   type SqlStatus,
 } from './data-api'
 
@@ -43,261 +68,712 @@ export const DATA_MANIFEST: SettingEntry[] = [
   {
     id: 'data.server',
     section: 'data',
-    label: 'Database sidecar',
-    description: 'Enable and supervise Postgres on Linux deployments',
-    keywords: ['sql', 'postgres', 'database', 'sidecar', 'db', 'enable'],
+    label: 'Database server',
+    description: 'Turn the Postgres server on this server on or off, and see its address',
+    keywords: ['sql', 'postgres', 'database', 'sidecar', 'db', 'enable', 'server'],
   },
   {
     id: 'data.databases',
     section: 'data',
     label: 'Databases',
-    description: 'Per-workspace SQL databases (documents in the same DB)',
-    keywords: ['database', 'sql', 'jsonb', 'documents', 'workspace', 'cap'],
+    description: 'One database per workspace, for its agents and apps',
+    keywords: ['database', 'sql', 'jsonb', 'documents', 'workspace', 'cap', 'create'],
   },
   {
     id: 'data.grants',
     section: 'data',
     label: 'Database access',
-    description: 'Grant other workspaces manage / read / write (not skin people)',
+    description: 'Let other workspaces read, change or manage a database',
     keywords: ['grant', 'access', 'read', 'write', 'manage', 'workspace'],
   },
   {
     id: 'data.live',
     section: 'data',
-    label: 'Live moves',
-    description: 'Move a database to a newer Postgres while it keeps serving: switch or abort, prepare an older cluster',
+    label: 'Move to a newer Postgres',
+    description: 'Move a database to a newer Postgres while it keeps working: switch over or stop the move',
     keywords: ['live', 'dual-run', 'logical replication', 'upgrade', 'postgres', 'switch', 'abort', 'wal_level'],
   },
   {
     id: 'data.bind',
     section: 'data',
-    label: 'Bind role',
-    description: 'Postgres role the workspace assistant uses',
+    label: 'Agent sign-in role',
+    description: 'The Postgres role a workspace’s agents sign in as',
     keywords: ['bind', 'role', 'pg_role', 'rls', 'agent'],
   },
 ]
 
-const MAC_BANNER =
-  'THIS FEATURE ONLY WORKS ON LINUX DEPLOYMENTS, THIS PAGE IS JUST HERE FOR EXAMPLE PURPOSES.'
+type Tab = 'databases' | 'server'
+const TAB_LABEL: Record<Tab, string> = { databases: 'Databases', server: 'Server' }
+const TAB_SETTINGS_ID: Record<Tab, string> = { databases: 'data.databases', server: 'data.server' }
 
-type Selection = { kind: 'server' } | { kind: 'db'; id: string }
+/** A page-level result: what happened, and (for a failure) the server's reason. */
+type Notice = { tone: 'ok' | 'error'; text: string; detail?: string }
 
-function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
+const LEVEL_OPTIONS = [
+  { value: 'read', label: 'Read' },
+  { value: 'write', label: 'Read and change' },
+]
+
+function fmtDay(unixSecs: number): string | null {
+  if (!unixSecs || unixSecs <= 0) return null
+  return new Date(unixSecs * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function participantName(p: Pick<SqlParticipant, 'workspace' | 'projectId'>, names: Map<string, string>): string {
+  return p.workspace ?? names.get(p.projectId) ?? 'A removed workspace'
+}
+
+/** A short value (an address) with Copy beside it. */
+function CopyValue({ value, label }: { value: string; label: string }): React.JSX.Element {
+  const [copy, setCopy] = useState<'idle' | 'done' | 'failed'>('idle')
+  const doCopy = (): void => {
+    const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+    if (!clip) return setCopy('failed')
+    clip.writeText(value).then(
+      () => setCopy('done'),
+      () => setCopy('failed'),
+    )
+  }
   return (
-    <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-      {children}
-    </h3>
+    <span className="flex items-center gap-2">
+      <span className="type-hint font-mono text-[var(--color-text-secondary)] select-all" data-testid="db-listen">
+        {value}
+      </span>
+      <Button aria-label={`Copy the ${label}`} onClick={doCopy}>
+        {copy === 'done' ? 'Copied' : copy === 'failed' ? 'Couldn’t copy' : 'Copy'}
+      </Button>
+    </span>
   )
 }
 
-function stateColor(state: string): string {
-  switch (state) {
+/** A confirm-first action in the shared dialog frame. Cancel has the focus;
+ *  the action runs in place, and a failure stays in the dialog with the
+ *  server's reason so the person can try again or cancel. */
+function ActionSheet({
+  title,
+  message,
+  confirmLabel,
+  busyLabel,
+  destructive = false,
+  failWhat,
+  failNext,
+  run,
+  onDone,
+  onClose,
+  testId,
+}: {
+  title: string
+  message: React.ReactNode
+  confirmLabel: string
+  busyLabel: string
+  destructive?: boolean
+  failWhat: string
+  failNext: string
+  run: () => Promise<unknown>
+  onDone: () => void
+  onClose: () => void
+  testId: string
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const go = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      await run()
+      onDone()
+    } catch (e) {
+      setError(sqlErrorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <AccessSheet
+      title={title}
+      onClose={onClose}
+      busy={busy}
+      testId={testId}
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
+            Cancel
+          </Button>
+          <Button variant={destructive ? 'danger-muted' : 'accent'} size="md" onClick={() => void go()} disabled={busy}>
+            {busy ? busyLabel : error ? 'Try again' : confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <p className={DIALOG_MUTED}>{message}</p>
+      {error ? <FailedNote what={failWhat} detail={error} next={failNext} /> : null}
+    </AccessSheet>
+  )
+}
+
+// ── Server tab ────────────────────────────────────────────────────────────
+
+function statusSentence(status: SqlStatus): string {
+  const pg = status.installedMajor != null ? `Postgres ${status.installedMajor}` : 'Postgres'
+  switch (status.state) {
     case 'running':
-      return 'var(--color-status-ok)'
+      return `${pg} is running. Agents and apps on this server can use their databases.`
     case 'degraded':
-      return 'var(--color-status-warn)'
+      return `${pg} is running, but K2 found a problem. Databases may be slow or miss changes.`
     case 'installing':
-      return 'var(--color-status-working)'
+      return `${pg} is starting. Databases are ready in a moment.`
     case 'error':
-      return 'var(--color-status-error-soft)'
+      return `${pg} stopped because of an error. Databases can’t be used until it runs again.`
     default:
-      return 'var(--color-text-muted)'
+      return `${pg} isn’t running.`
   }
 }
 
-const LEVEL_LABEL: Record<SqlLevel, string> = {
-  read: 'Read',
-  write: 'Read + Write',
-}
-
-function AccessPanel({
-  db,
+function LiveMovesGroup({
   canMutate,
-  patchDb,
+  setNotice,
 }: {
-  db: SqlDatabase
   canMutate: boolean
-  patchDb: (id: string, patch: (row: SqlDatabase) => SqlDatabase) => void
-}): React.JSX.Element {
-  const projects = useProjectsStore((s) => s.projects)
+  setNotice: (n: Notice | null) => void
+}): React.JSX.Element | null {
+  const [live, setLive] = useState<LiveStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [pending, setPending] = useState<string | null>(null)
-  const [newProject, setNewProject] = useState('')
-  const [newLevel, setNewLevel] = useState<SqlLevel>('read')
+  const [ask, setAsk] = useState<
+    | { kind: 'switch'; db: string; to: number; from: number }
+    | { kind: 'abort'; db: string; from: number; to: number }
+    | { kind: 'prepare'; major: number }
+    | null
+  >(null)
 
-  const grantedIds = useMemo(() => new Set(db.grants.map((g) => g.projectId)), [db.grants])
-  const projectName = useCallback(
-    (id: string): string => projects.find((p) => p.id === id)?.name ?? id,
-    [projects],
-  )
-  const addOptions = useMemo(
-    () =>
-      projects
-        .filter((p) => p.id !== db.ownerProjectId && !grantedIds.has(p.id))
-        .map((p) => ({ value: p.id, label: p.name || p.path })),
-    [projects, db.ownerProjectId, grantedIds],
-  )
-
-  const changeGrant = useCallback(
-    async (projectId: string, level: SqlLevel, canManage: boolean): Promise<void> => {
-      setError(null)
-      setPending(projectId)
-      const before = db.grants
-      patchDb(db.id, (row) => ({
-        ...row,
-        grants: row.grants.map((g) =>
-          g.projectId === projectId ? { ...g, level, canManage } : g,
-        ),
-      }))
-      try {
-        await grantSqlAccess({ project: projectId, db: db.id, level, manage: canManage })
-      } catch (e) {
-        patchDb(db.id, (row) => ({ ...row, grants: before }))
-        setError(sqlErrorMessage(e))
-      } finally {
-        setPending(null)
-      }
-    },
-    [db.grants, db.id, patchDb],
-  )
-
-  const addGrant = useCallback(async (): Promise<void> => {
-    if (!newProject) return
-    setError(null)
-    setPending('add')
-    const workspace = projects.find((p) => p.id === newProject)?.name ?? null
-    const added = {
-      projectId: newProject,
-      workspace,
-      level: newLevel,
-      canManage: false,
-    }
-    const before = db.grants
-    patchDb(db.id, (row) => ({ ...row, grants: [...row.grants, added] }))
+  const load = useCallback(async (): Promise<void> => {
     try {
-      await grantSqlAccess({ project: newProject, db: db.id, level: newLevel })
-      setNewProject('')
-      setNewLevel('read')
-    } catch (e) {
-      patchDb(db.id, (row) => ({ ...row, grants: before }))
-      setError(sqlErrorMessage(e))
-    } finally {
-      setPending(null)
-    }
-  }, [db.grants, db.id, newLevel, newProject, patchDb, projects])
-
-  const removeGrant = useCallback(
-    async (projectId: string): Promise<void> => {
+      setLive(await fetchLiveStatus())
       setError(null)
-      setPending(projectId)
-      const before = db.grants
-      patchDb(db.id, (row) => ({
-        ...row,
-        grants: row.grants.filter((g) => g.projectId !== projectId),
-      }))
-      try {
-        await revokeSqlAccess({ project: projectId, db: db.id })
-      } catch (e) {
-        patchDb(db.id, (row) => ({ ...row, grants: before }))
-        setError(sqlErrorMessage(e))
-      } finally {
-        setPending(null)
-      }
-    },
-    [db.grants, db.id, patchDb],
-  )
+    } catch (e) {
+      setError(sqlErrorMessage(e))
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  if (error) {
+    return (
+      <SettingsGroup
+        card
+        title="Move to a newer Postgres"
+        settingId="data.live"
+        testId="data-live-moves"
+        state={
+          <SettingsLoadState kind="error" title="Couldn’t check for moves to a newer Postgres" detail={error} action={<Button onClick={() => void load()}>Try again</Button>}>
+            Your databases keep working. Try again in a moment.
+          </SettingsLoadState>
+        }
+      />
+    )
+  }
+  if (!live || (live.runs.length === 0 && live.notLogical.length === 0)) return null
 
   return (
-    <div className="space-y-3" data-settings-id="data.grants">
-      <SectionTitle>Access</SectionTitle>
-      <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-        <div className="px-3 py-2 space-y-1.5">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="type-section uppercase tracking-wide text-[var(--color-text-muted)]">
-              Owner
-            </span>
-            <span className="type-row text-[var(--color-text-primary)] truncate">
-              {db.owner.workspace ?? projectName(db.owner.projectId)}
-            </span>
-            <span className="flex-1" />
-            <span className="type-hint text-[var(--color-text-muted)]">
-              {LEVEL_LABEL.write} · manage
-            </span>
-          </div>
-        </div>
-        {db.grants.map((g) => (
-          <div key={g.projectId} className="px-3 py-2 space-y-1.5">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="type-row text-[var(--color-text-primary)] truncate flex-1">
-                {g.workspace ?? projectName(g.projectId)}
-              </span>
-              <SettingDropdown
-                value={g.level}
-                options={[
-                  { value: 'read', label: LEVEL_LABEL.read },
-                  { value: 'write', label: LEVEL_LABEL.write },
-                ]}
-                onChange={(next) => {
-                  if (!canMutate || pending === g.projectId) return
-                  void changeGrant(g.projectId, next as SqlLevel, g.canManage)
-                }}
-              />
-              <button
-                type="button"
-                disabled={!canMutate || pending === g.projectId}
-                onClick={() => void removeGrant(g.projectId)}
-                className="px-2 py-0.5 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-              >
-                Remove
-              </button>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="type-hint text-[var(--color-text-secondary)]">Allow manage</span>
-              <Toggle
-                checked={g.canManage}
-                disabled={!canMutate || pending === g.projectId}
-                onChange={(next) => void changeGrant(g.projectId, g.level, next)}
-                aria-label="Allow manage"
-              />
-            </div>
-          </div>
-        ))}
-        {addOptions.length > 0 && (
-          <div className="px-3 py-2 flex items-center gap-2">
-            <SettingDropdown
-              value={newProject}
-              placeholder="Add workspace…"
-              options={[{ value: '', label: 'Add workspace…' }, ...addOptions]}
-              onChange={(v) => setNewProject(v)}
-              menuAlign="left"
-            />
-            <SettingDropdown
-              value={newLevel}
-              options={[
-                { value: 'read', label: LEVEL_LABEL.read },
-                { value: 'write', label: LEVEL_LABEL.write },
-              ]}
-              onChange={(v) => setNewLevel(v as SqlLevel)}
-            />
-            <button
-              type="button"
-              disabled={!canMutate || !newProject || pending === 'add'}
-              onClick={() => void addGrant()}
-              className="px-2 py-0.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+    <>
+      <SettingsGroup
+        card
+        title="Move to a newer Postgres"
+        hint="A database can move to a newer Postgres version while it keeps working. When the copy is ready, switch over."
+        settingId="data.live"
+        testId="data-live-moves"
+      >
+        {live.runs.map((r) => {
+          const word = liveStateWord(r.state)
+          const tone = r.state === 'stalled' ? 'warn' : r.state === 'streaming' ? 'ok' : 'neutral'
+          return (
+            <SettingRow
+              key={r.db}
+              testId={`data-live-${r.db}`}
+              label={
+                <span>
+                  <span className="font-mono">{r.db}</span>: Postgres {r.from} to {r.to}
+                </span>
+              }
+              hint={
+                <>
+                  <span className="inline-flex items-center gap-1.5">
+                    <StatusDot tone={tone} />
+                    <HealthWord tone={tone}>{word}</HealthWord>
+                  </span>{' '}
+                  {livePlainLine(r)}
+                  {r.lastError ? <span className={`block ${SETTING_SERVER_REASON}`}>The server said: {r.lastError.replace(/[.\s]+$/, '')}.</span> : null}
+                </>
+              }
             >
-              Grant
-            </button>
-          </div>
-        )}
-      </div>
-      {error && (
-        <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
-      )}
+              {['syncing', 'streaming', 'stalled'].includes(r.state) ? (
+                <Button variant="danger-quiet" disabled={!canMutate} onClick={() => setAsk({ kind: 'abort', db: r.db, from: r.from, to: r.to })}>
+                  Stop the move…
+                </Button>
+              ) : null}
+              {r.state === 'streaming' ? (
+                <Button variant="accent" disabled={!canMutate} onClick={() => setAsk({ kind: 'switch', db: r.db, from: r.from, to: r.to })}>
+                  Switch now…
+                </Button>
+              ) : null}
+            </SettingRow>
+          )
+        })}
+        {live.notLogical.map((m) => (
+          <SettingRow
+            key={m}
+            testId={`data-live-prepare-${m}`}
+            label={`Postgres ${m} isn’t ready for moves yet`}
+            hint={
+              live.helper
+                ? `Getting it ready restarts Postgres ${m} once: its databases pause for about 5 to 15 seconds, after a minute’s notice.`
+                : 'This server’s setup is too old to move databases while they work. Update the server, then come back.'
+            }
+          >
+            <Button disabled={!canMutate || !live.helper} onClick={() => setAsk({ kind: 'prepare', major: m })}>
+              Get it ready…
+            </Button>
+          </SettingRow>
+        ))}
+      </SettingsGroup>
+
+      {ask?.kind === 'switch' ? (
+        <ActionSheet
+          testId="data-live-switch-confirm"
+          title={`Switch ${ask.db} to Postgres ${ask.to}?`}
+          message={`Changes to ${ask.db} pause for a few seconds while K2 switches over; reading keeps working. After that, ${ask.db} runs on Postgres ${ask.to}.`}
+          confirmLabel="Switch now"
+          busyLabel="Switching…"
+          failWhat={`Couldn’t switch ${ask.db}.`}
+          failNext={`It’s still on Postgres ${ask.from} and working. Try again in a moment.`}
+          run={() => switchLiveMove(ask.db)}
+          onDone={() => {
+            setAsk(null)
+            setNotice({ tone: 'ok', text: `${ask.db} now runs on Postgres ${ask.to}.` })
+            void load()
+          }}
+          onClose={() => setAsk(null)}
+        />
+      ) : null}
+      {ask?.kind === 'abort' ? (
+        <ActionSheet
+          testId="data-live-abort-confirm"
+          destructive
+          title={`Stop moving ${ask.db}?`}
+          message={`${ask.db} stays on Postgres ${ask.from} and keeps working. You can start the move again later.`}
+          confirmLabel="Stop the move"
+          busyLabel="Stopping…"
+          failWhat="Couldn’t stop the move."
+          failNext="The move is still running. Try again in a moment."
+          run={() => abortLiveMove(ask.db)}
+          onDone={() => {
+            setAsk(null)
+            setNotice({ tone: 'ok', text: `Stopped moving ${ask.db}. It stays on Postgres ${ask.from}.` })
+            void load()
+          }}
+          onClose={() => setAsk(null)}
+        />
+      ) : null}
+      {ask?.kind === 'prepare' ? (
+        <ActionSheet
+          testId="data-live-prepare-confirm"
+          title={`Get Postgres ${ask.major} ready for moves?`}
+          message={`Postgres ${ask.major} restarts once. Every database on it pauses for about 5 to 15 seconds; agents and apps get a minute’s notice first.`}
+          confirmLabel={`Restart Postgres ${ask.major}`}
+          busyLabel="Restarting…"
+          failWhat={`Couldn’t restart Postgres ${ask.major}.`}
+          failNext="Nothing changed. Try again in a moment."
+          run={() => prepareLiveMoves(ask.major)}
+          onDone={() => {
+            setAsk(null)
+            setNotice({ tone: 'ok', text: `Postgres ${ask.major} is ready: its databases can move to a newer version while they work.` })
+            void load()
+          }}
+          onClose={() => setAsk(null)}
+        />
+      ) : null}
+    </>
+  )
+}
+
+function ServerTab({
+  status,
+  canMutate,
+  sample,
+  onChanged,
+  setNotice,
+}: {
+  status: SqlStatus
+  canMutate: boolean
+  sample: boolean
+  onChanged: () => void
+  setNotice: (n: Notice | null) => void
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [askOff, setAskOff] = useState(false)
+  const notInstalled = status.state === 'not-installed'
+  const off = status.state === 'disabled' || status.state === 'stopped'
+  const listen = formatSqlListen(status.listen, status.port)
+  const { word, tone } = sqlStateWord(status.state)
+  const clusters = status.clusters ?? []
+
+  const turnOn = useCallback(async (): Promise<void> => {
+    if (sample) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      await enableSqlServer()
+      setNotice({ tone: 'ok', text: 'The database server is on. Agents and apps can use their databases again.' })
+      onChanged()
+    } catch (e) {
+      setNotice({ tone: 'error', text: 'Couldn’t turn on the database server. Nothing changed; try again.', detail: sqlErrorMessage(e) })
+    } finally {
+      setBusy(false)
+    }
+  }, [onChanged, sample, setNotice])
+
+  if (notInstalled || off) {
+    return (
+      <SettingsGroup
+        card
+        title="Server"
+        settingId="data.server"
+        state={
+          <SettingsLoadState
+            kind="empty"
+            testId={notInstalled ? 'db-not-installed' : 'db-off'}
+            title={notInstalled ? 'The database server isn’t set up' : 'The database server is off'}
+            action={
+              <Button variant="accent" disabled={!canMutate || busy} onClick={() => void turnOn()}>
+                {busy ? 'Turning on…' : 'Turn on'}
+              </Button>
+            }
+          >
+            {notInstalled
+              ? 'Turning it on starts Postgres here, so each workspace can have its own database. Postgres has to be installed on this server first; the server’s setup does that.'
+              : 'Your databases and their data are kept. Turn it on to use them again.'}
+          </SettingsLoadState>
+        }
+      />
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      <SettingsGroup card title="Server" settingId="data.server" testId="db-server">
+        <SettingRow
+          label="Status"
+          hint={statusSentence(status)}
+          below={
+            status.lastError ? (
+              <p className={SETTING_SERVER_REASON} data-testid="db-last-error">
+                The server said: {status.lastError.replace(/[.\s]+$/, '')}.
+              </p>
+            ) : undefined
+          }
+        >
+          <span className="flex items-center gap-2 type-row" data-testid="db-state">
+            <StatusDot tone={tone} />
+            <HealthWord tone={tone}>{word}</HealthWord>
+          </span>
+        </SettingRow>
+        {clusters.length > 1 ? (
+          <SettingRow label="Versions" hint="Each database stays on its own version until you move it.">
+            <span className="type-row text-[var(--color-text-secondary)]">
+              Postgres {clusters.map((c) => c.major).join(' and ')}
+            </span>
+          </SettingRow>
+        ) : null}
+        {listen ? (
+          <SettingRow
+            label="Address"
+            hint="Only agents and apps on this server can connect. To reach a database from another computer, ask an agent to publish it on a web address."
+          >
+            <CopyValue value={listen} label="database address" />
+          </SettingRow>
+        ) : null}
+      </SettingsGroup>
+
+      {status.state === 'running' && !sample ? <LiveMovesGroup canMutate={canMutate} setNotice={setNotice} /> : null}
+
+      <SettingsGroup card title="Turn off">
+        <SettingRow
+          label="Turn off the database server"
+          hint="Stops Postgres. Agents and apps can’t use their databases until you turn it back on. Every database and its data is kept."
+        >
+          <Button variant="danger-quiet" disabled={!canMutate || busy} onClick={() => setAskOff(true)} data-testid="db-turn-off">
+            Turn off…
+          </Button>
+        </SettingRow>
+      </SettingsGroup>
+
+      {askOff ? (
+        <ActionSheet
+          testId="db-turn-off-confirm"
+          destructive
+          title="Turn off the database server?"
+          message="Agents and apps can’t use their databases until you turn it back on. Every database and its data is kept."
+          confirmLabel="Turn off"
+          busyLabel="Turning off…"
+          failWhat="Couldn’t turn off the database server."
+          failNext="It’s still running. Try again in a moment."
+          run={() => disableSqlServer()}
+          onDone={() => {
+            setAskOff(false)
+            setNotice({ tone: 'ok', text: 'The database server is off. Your databases and their data are kept; turn it on again here.' })
+            onChanged()
+          }}
+          onClose={() => setAskOff(false)}
+        />
+      ) : null}
     </div>
   )
 }
 
-function BindPanel({
+// ── Databases tab ─────────────────────────────────────────────────────────
+
+function CreateDatabaseDialog({
+  databases,
+  onClose,
+  onCreated,
+}: {
+  databases: SqlDatabase[]
+  onClose: () => void
+  onCreated: (workspaceId: string, name: string | null) => void
+}): React.JSX.Element {
+  const projects = useProjectsStore((s) => s.projects)
+  const [ws, setWs] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const formId = useId()
+  const owners = useMemo(() => new Set(databases.map((d) => d.ownerProjectId)), [databases])
+  const options = useMemo(
+    () => projects.map((p) => ({ value: p.id, label: p.name || p.path, badge: owners.has(p.id) ? 'Has one' : undefined })),
+    [projects, owners],
+  )
+
+  const submit = async (): Promise<void> => {
+    if (!ws || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await createSqlDatabase(ws)
+      onCreated(ws, res?.name ?? null)
+    } catch (e) {
+      setError(sqlErrorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <AccessSheet
+      title="Create a database"
+      intro="A workspace’s agents and apps keep their data in its database. Only that workspace can use it until you give others access."
+      onClose={onClose}
+      busy={busy}
+      testId="db-create-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} variant="accent" size="md" disabled={!ws || busy} data-testid="db-create-submit">
+            {busy ? 'Creating…' : 'Create database'}
+          </Button>
+        </>
+      }
+    >
+      <form
+        id={formId}
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submit()
+        }}
+      >
+        <div>
+          <p className={DIALOG_LABEL}>Workspace</p>
+          <SettingDropdown
+            ariaLabel="Workspace"
+            value={ws}
+            placeholder="Choose a workspace"
+            options={[{ value: '', label: 'Choose a workspace' }, ...options]}
+            onChange={(v) => {
+              setWs(v)
+              setError(null)
+            }}
+            menuAlign="left"
+            fullWidth
+          />
+          <p className={`${DIALOG_MUTED} mt-1`}>The database belongs to this workspace. Its agents can read and change everything in it.</p>
+        </div>
+        {error ? <FailedNote what="Couldn’t create the database." detail={error} next="Nothing was created. Try again, or choose another workspace." /> : null}
+      </form>
+    </AccessSheet>
+  )
+}
+
+function GiveAccessDialog({
+  db,
+  onClose,
+  onGiven,
+}: {
+  db: SqlDatabase
+  onClose: () => void
+  onGiven: (g: SqlParticipant) => void
+}): React.JSX.Element {
+  const projects = useProjectsStore((s) => s.projects)
+  const [ws, setWs] = useState('')
+  const [level, setLevel] = useState<SqlLevel>('read')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const formId = useId()
+  const taken = useMemo(() => new Set([db.ownerProjectId, ...db.grants.map((g) => g.projectId)]), [db])
+  const options = useMemo(() => projects.filter((p) => !taken.has(p.id)).map((p) => ({ value: p.id, label: p.name || p.path })), [projects, taken])
+
+  const submit = async (): Promise<void> => {
+    if (!ws || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await grantSqlAccess({ project: ws, db: db.id, level })
+      onGiven({ projectId: ws, workspace: projects.find((p) => p.id === ws)?.name ?? null, level, canManage: false })
+    } catch (e) {
+      setError(sqlErrorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <AccessSheet
+      title={`Give access to ${db.name}`}
+      intro="Agents and apps in the workspace you choose can use this database. You can change or remove this later."
+      onClose={onClose}
+      busy={busy}
+      testId="db-grant-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} variant="accent" size="md" disabled={!ws || busy}>
+            {busy ? 'Giving access…' : 'Give access'}
+          </Button>
+        </>
+      }
+    >
+      <form
+        id={formId}
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submit()
+        }}
+      >
+        <div>
+          <p className={DIALOG_LABEL}>Workspace</p>
+          {options.length === 0 ? (
+            <p className={DIALOG_MUTED}>Every workspace already has access.</p>
+          ) : (
+            <SettingDropdown
+              ariaLabel="Workspace"
+              value={ws}
+              placeholder="Choose a workspace"
+              options={[{ value: '', label: 'Choose a workspace' }, ...options]}
+              onChange={setWs}
+              menuAlign="left"
+              fullWidth
+            />
+          )}
+        </div>
+        <div>
+          <p className={DIALOG_LABEL}>What it can do</p>
+          <SettingDropdown ariaLabel="What it can do" value={level} options={LEVEL_OPTIONS} onChange={(v) => setLevel(v as SqlLevel)} menuAlign="left" fullWidth />
+        </div>
+        {error ? <FailedNote what="Couldn’t give access." detail={error} next="Nothing changed. Try again in a moment." /> : null}
+      </form>
+    </AccessSheet>
+  )
+}
+
+function GrantRow({
+  db,
+  grant,
+  name,
+  canMutate,
+  patchDb,
+  onRemove,
+}: {
+  db: SqlDatabase
+  grant: SqlParticipant
+  name: string
+  canMutate: boolean
+  patchDb: (id: string, patch: (row: SqlDatabase) => SqlDatabase) => void
+  onRemove: () => void
+}): React.JSX.Element {
+  const save = useSaveStatus()
+  const [busy, setBusy] = useState(false)
+
+  const change = async (level: SqlLevel, canManage: boolean): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    const before = db.grants
+    patchDb(db.id, (row) => ({ ...row, grants: row.grants.map((g) => (g.projectId === grant.projectId ? { ...g, level, canManage } : g)) }))
+    try {
+      await grantSqlAccess({ project: grant.projectId, db: db.id, level, manage: canManage })
+      save.saved()
+    } catch (e) {
+      patchDb(db.id, (row) => ({ ...row, grants: before }))
+      save.failed(new Error(sqlErrorMessage(e)))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const can = grant.level === 'write' ? 'Can read and change it' : 'Can read it'
+  return (
+    <SettingRow
+      testId="db-grant-row"
+      label={name}
+      hint={
+        <>
+          {can}
+          {grant.canManage ? ', and give other workspaces access.' : '.'}
+          <SaveError state={save.state} />
+        </>
+      }
+    >
+      <SaveNote state={save.state} />
+      <SettingDropdown
+        ariaLabel={`What ${name} can do`}
+        value={grant.level}
+        options={LEVEL_OPTIONS}
+        disabled={!canMutate || busy}
+        onChange={(next) => void change(next as SqlLevel, grant.canManage)}
+      />
+      <span className="flex items-center gap-2">
+        <Toggle
+          size="sm"
+          checked={grant.canManage}
+          disabled={!canMutate || busy}
+          onChange={(next) => void change(grant.level, next)}
+          aria-label={`${name} can manage access`}
+        />
+        <span className="type-hint text-[var(--color-text-secondary)]" aria-hidden="true">
+          Manage
+        </span>
+      </span>
+      <Button variant="danger-quiet" disabled={!canMutate || busy} onClick={onRemove} aria-label={`Remove ${name}’s access`}>
+        Remove…
+      </Button>
+    </SettingRow>
+  )
+}
+
+function RoleGroup({
   db,
   canMutate,
   patchDb,
@@ -308,372 +784,263 @@ function BindPanel({
 }): React.JSX.Element {
   const [draft, setDraft] = useState(db.bindRole ?? '')
   const [busy, setBusy] = useState(false)
-  const [note, setNote] = useState<string | null>(null)
+  const save = useSaveStatus()
+  const inputId = useId()
 
   useEffect(() => {
     setDraft(db.bindRole ?? '')
   }, [db.bindRole, db.id])
 
-  const save = useCallback(async (): Promise<void> => {
+  const changed = draft.trim() !== '' && draft.trim() !== (db.bindRole ?? '')
+  const submit = async (): Promise<void> => {
     const role = draft.trim()
-    if (!role) return
+    if (!role || busy) return
     setBusy(true)
-    setNote(null)
     const before = db.bindRole
     patchDb(db.id, (row) => ({ ...row, bindRole: role }))
     try {
-      const res = await bindSqlRole({
-        project: db.ownerProjectId,
-        db: db.id,
-        role,
-      })
-      if (res.bindRole) patchDb(db.id, (row) => ({ ...row, bindRole: res.bindRole ?? role }))
-      setNote('Saved.')
+      const res = await bindSqlRole({ project: db.ownerProjectId, db: db.id, role })
+      if (res?.bindRole) patchDb(db.id, (row) => ({ ...row, bindRole: res.bindRole ?? role }))
+      save.saved()
     } catch (e) {
       patchDb(db.id, (row) => ({ ...row, bindRole: before }))
-      setNote(sqlErrorMessage(e))
+      setDraft(before ?? '')
+      save.failed(new Error(sqlErrorMessage(e)))
     } finally {
       setBusy(false)
     }
-  }, [db.bindRole, db.id, db.ownerProjectId, draft, patchDb])
+  }
 
   return (
-    <div className="space-y-2" data-settings-id="data.bind">
-      <SectionTitle>Bind role</SectionTitle>
-      <p className="type-hint text-[var(--color-text-muted)]">
-        Postgres role the workspace assistant uses. Default is{' '}
-        <span className="font-mono">ws_&lt;id&gt;_agent</span>. Does not mint RLS at spawn.
-      </p>
-      <div className="flex items-center gap-2">
+    <SettingsGroup card title="Agent sign-in" settingId="data.bind">
+      <SettingRow
+        label={<label htmlFor={inputId}>Sign in as</label>}
+        hint={
+          <>
+            The Postgres role the owner workspace’s agents use. Leave it as it is unless an app needs its own role.
+            <SaveError state={save.state} />
+          </>
+        }
+      >
+        <SaveNote state={save.state} />
         <Input
+          id={inputId}
           type="text"
           value={draft}
           disabled={!canMutate || busy}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="ws_<workspace>_agent"
-          className="flex-1 min-w-0 type-control font-mono disabled:opacity-50"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void submit()
+          }}
+          placeholder="Role name"
+          className="w-48 type-control font-mono"
         />
-        <button
-          type="button"
-          disabled={!canMutate || busy || !draft.trim()}
-          onClick={() => void save()}
-          className="px-2.5 py-1 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-        >
-          {busy ? 'Saving…' : 'Bind'}
-        </button>
-      </div>
-      {note && (
-        <p
-          className={`type-hint ${
-            note === 'Saved.'
-              ? 'text-[var(--color-text-muted)]'
-              : 'text-[var(--color-status-error-soft)]'
-          }`}
-        >
-          {note}
-        </p>
-      )}
-    </div>
+        <Button disabled={!canMutate || busy || !changed} onClick={() => void submit()}>
+          {busy ? 'Saving…' : 'Save'}
+        </Button>
+      </SettingRow>
+    </SettingsGroup>
   )
 }
 
-function ServerPanel({
+function DatabaseDetail({
+  db,
   status,
   canMutate,
-  sample,
-  onChanged,
-}: {
-  status: SqlStatus
-  canMutate: boolean
-  sample: boolean
-  onChanged: () => void
-}): React.JSX.Element {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const notInstalled = status.state === 'not-installed'
-  const stopped = status.state === 'disabled' || status.state === 'stopped'
-  const listenLine = formatSqlListen(status.listen, status.port)
-
-  const doEnable = useCallback(async (): Promise<void> => {
-    if (sample) return
-    setBusy(true)
-    setError(null)
-    try {
-      await enableSqlServer()
-      onChanged()
-    } catch (e) {
-      setError(sqlErrorMessage(e))
-    } finally {
-      setBusy(false)
-    }
-  }, [onChanged, sample])
-
-  const doDisable = useCallback(async (): Promise<void> => {
-    if (sample) return
-    setBusy(true)
-    setError(null)
-    try {
-      await disableSqlServer()
-      onChanged()
-    } catch (e) {
-      setError(sqlErrorMessage(e))
-    } finally {
-      setBusy(false)
-    }
-  }, [onChanged, sample])
-
-  return (
-    <div className="grid gap-6 grid-cols-[minmax(0,42rem)]">
-      <div className="min-w-0" data-settings-id="data.server">
-        <h2 className="type-title text-[var(--color-text-primary)]">Database sidecar</h2>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1">
-          K2 supervises Postgres on this box (one Postgres per major, loopback only). Agents mint
-          a per-workspace database with <span className="font-mono">k2 db create</span>; documents
-          live as JSONB in the same DB. Files stay in the workspace filesystem.
-        </p>
-      </div>
-
-      <div className="space-y-2">
-        <SectionTitle>Status</SectionTitle>
-        <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-          <div className="flex items-center gap-2 px-3 py-2">
-            <span
-              className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0"
-              style={{ backgroundColor: stateColor(status.state) }}
-            />
-            <span className="type-row text-[var(--color-text-primary)]">{status.state}</span>
-            <span className="flex-1" />
-            {clustersLine(status) ? (
-              <span className="type-hint text-[var(--color-text-muted)]">{clustersLine(status)}</span>
-            ) : (
-              status.installedMajor != null && (
-                <span className="type-hint text-[var(--color-text-muted)]">
-                  PG {status.installedMajor}
-                </span>
-              )
-            )}
-          </div>
-          {listenLine && (
-            <div className="flex items-center gap-3 px-3 py-2">
-              <span className="type-hint text-[var(--color-text-secondary)] w-24 flex-shrink-0">
-                Listen
-              </span>
-              <span className="type-row font-mono text-[var(--color-text-primary)]">
-                {listenLine}
-              </span>
-            </div>
-          )}
-          {status.publishHint && (
-            <div className="px-3 py-2">
-              <p className="type-hint text-[var(--color-text-muted)] break-words font-mono">
-                {status.publishHint}
-              </p>
-            </div>
-          )}
-          {status.lastError && (
-            <div className="px-3 py-2">
-              <p className="type-hint text-[var(--color-status-error-soft)] break-words">
-                {status.lastError}
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {(notInstalled || stopped) && (
-        <div className="space-y-2">
-          <SectionTitle>{notInstalled ? 'Enable' : 'Resume'}</SectionTitle>
-          <p className="type-hint text-[var(--color-text-muted)]">
-            Bake first with <span className="font-mono">provision-k2-server.sh --bake --with-db</span>
-            . Enable is catalog + start — the daemon never apt-gets.
-          </p>
-          <button
-            type="button"
-            disabled={!canMutate || busy}
-            onClick={() => void doEnable()}
-            className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {busy ? 'Starting…' : 'Enable database sidecar'}
-          </button>
-        </div>
-      )}
-
-      {status.state === 'running' && !sample && <LiveMovesPanel canMutate={canMutate} />}
-
-      {status.state === 'running' && (
-        <div className="space-y-2 pb-6">
-          <SectionTitle>Danger zone</SectionTitle>
-          <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2 flex items-center gap-3">
-            <div className="flex-1 min-w-0">
-              <p className="type-row text-[var(--color-text-primary)]">Disable</p>
-              <p className="type-hint text-[var(--color-text-muted)]">
-                Stops the unit, keeps PGDATA.
-              </p>
-            </div>
-            <button
-              type="button"
-              disabled={!canMutate || busy}
-              onClick={() => void doDisable()}
-              className="px-2.5 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-            >
-              Disable
-            </button>
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p>
-      )}
-    </div>
-  )
-}
-
-/** PA40: the live runs (tables, lag, WAL), Switch now / Abort, and
- *  "Prepare for live moves" on a cluster that isn't logical yet. The daemon
- *  decides who may (the owner, for now) and answers a refusal we show. */
-function LiveMovesPanel({ canMutate }: { canMutate: boolean }): React.JSX.Element | null {
-  const [live, setLive] = useState<LiveStatus | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [confirm, setConfirm] = useState<string | null>(null)
-
-  const load = useCallback(async (): Promise<void> => {
-    try {
-      setLive(await fetchLiveStatus())
-    } catch (e) {
-      setError(sqlErrorMessage(e))
-    }
-  }, [])
-
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  const act = useCallback(
-    async (key: string, fn: () => Promise<unknown>): Promise<void> => {
-      setBusy(key)
-      setError(null)
-      setConfirm(null)
-      try {
-        await fn()
-      } catch (e) {
-        setError(sqlErrorMessage(e))
-      } finally {
-        setBusy(null)
-        await load()
-      }
-    },
-    [load],
-  )
-
-  if (!live || (live.runs.length === 0 && live.notLogical.length === 0)) {
-    return error ? <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p> : null
-  }
-  const btn =
-    'px-2.5 py-1 type-control border border-[var(--color-border)] hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0'
-  return (
-    <div className="space-y-2" data-settings-id="data.live" data-testid="data-live-moves">
-      <SectionTitle>Live moves</SectionTitle>
-      <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-        {live.runs.map((r) => (
-          <div key={r.db} className="px-3 py-2 flex items-center gap-3" data-testid={`data-live-${r.db}`}>
-            <div className="flex-1 min-w-0">
-              <p className="type-row text-[var(--color-text-primary)] font-mono">
-                {r.db} · PG {r.from} → {r.to} · {r.state}
-              </p>
-              <p className="type-hint text-[var(--color-text-muted)]">{liveLine(r)}</p>
-              {r.lastError ? <p className="type-hint text-[var(--color-status-error-soft)] break-words">{r.lastError}</p> : null}
-            </div>
-            {r.state === 'streaming' ? (
-              confirm === `switch:${r.db}` ? (
-                <button type="button" className={btn} disabled={!canMutate || busy !== null} onClick={() => void act(`switch:${r.db}`, () => switchLiveMove(r.db))}>
-                  Writes pause a few seconds: switch
-                </button>
-              ) : (
-                <button type="button" className={btn} disabled={!canMutate || busy !== null} onClick={() => setConfirm(`switch:${r.db}`)}>
-                  Switch now
-                </button>
-              )
-            ) : null}
-            {['syncing', 'streaming', 'stalled'].includes(r.state) ? (
-              <button type="button" className={btn} disabled={!canMutate || busy !== null} onClick={() => void act(`abort:${r.db}`, () => abortLiveMove(r.db))}>
-                Abort
-              </button>
-            ) : null}
-          </div>
-        ))}
-        {live.notLogical.map((m) => (
-          <div key={m} className="px-3 py-2 flex items-center gap-3" data-testid={`data-live-prepare-${m}`}>
-            <div className="flex-1 min-w-0">
-              <p className="type-row text-[var(--color-text-primary)]">Postgres {m} can&apos;t move live yet</p>
-              <p className="type-hint text-[var(--color-text-muted)]">
-                One restart allows it: every database on Postgres {m} pauses for about 5–15 s (a 60 s notice first).
-              </p>
-            </div>
-            {confirm === `prepare:${m}` ? (
-              <button type="button" className={btn} disabled={!canMutate || busy !== null} onClick={() => void act(`prepare:${m}`, () => prepareLiveMoves(m))}>
-                Restart Postgres {m} now
-              </button>
-            ) : (
-              <button type="button" className={btn} disabled={!canMutate || busy !== null || !live.helper} onClick={() => setConfirm(`prepare:${m}`)}>
-                Prepare for live moves
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-      {error ? <p className="type-hint text-[var(--color-status-error-soft)] break-words">{error}</p> : null}
-    </div>
-  )
-}
-
-function DatabasePanel({
-  db,
-  canMutate,
   patchDb,
+  onBack,
+  setNotice,
 }: {
   db: SqlDatabase
+  status: SqlStatus
   canMutate: boolean
   patchDb: (id: string, patch: (row: SqlDatabase) => SqlDatabase) => void
+  onBack: () => void
+  setNotice: (n: Notice | null) => void
 }): React.JSX.Element {
+  const projects = useProjectsStore((s) => s.projects)
+  const names = useMemo(() => new Map(projects.map((p) => [p.id, p.name])), [projects])
+  const [dialog, setDialog] = useState<{ kind: 'grant' } | { kind: 'remove'; grant: SqlParticipant } | null>(null)
+  const owner = participantName(db.owner, names)
+  const facts = [`Owned by ${owner}`, dbVersionWord(status, db.id), fmtDay(db.createdAt) ? `created ${fmtDay(db.createdAt)}` : null].filter(Boolean).join(' · ')
+
   return (
-    <div className="grid gap-6 grid-cols-[minmax(0,44rem)]">
-      <div className="min-w-0" data-settings-id="data.databases">
-        <h2 className="type-title text-[var(--color-text-primary)] font-mono truncate">
-          {db.name}
-        </h2>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1">
-          {dbTypeLabel(db)} · owner {db.ownerWorkspace ?? db.ownerProjectId} · {db.status}
-          {db.cap ? ` · cap ${db.cap.used}/${db.cap.cap === 0 ? '∞' : db.cap.cap}` : ''}
-        </p>
-        {db.bindRole && (
-          <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 font-mono">
-            bind {db.bindRole}
-          </p>
-        )}
-      </div>
-      <AccessPanel db={db} canMutate={canMutate} patchDb={patchDb} />
-      <BindPanel db={db} canMutate={canMutate} patchDb={patchDb} />
+    <div className="space-y-5" data-testid="db-detail">
+      <Button variant="quiet" onClick={onBack} data-testid="db-back">
+        &larr; All databases
+      </Button>
+      <header className="min-w-0">
+        <h3 className="type-heading text-[var(--color-text-primary)] font-mono truncate">{db.name}</h3>
+        <p className={SETTING_ROW_HINT}>{facts}.</p>
+      </header>
+
+      <SettingsGroup
+        card
+        title="Who can use it"
+        hint="The owner workspace’s agents can always read and change it. Manage lets another workspace give access too."
+        settingId="data.grants"
+        action={
+          <Button disabled={!canMutate} onClick={() => setDialog({ kind: 'grant' })} data-testid="db-grant-open">
+            Give access…
+          </Button>
+        }
+      >
+        <SettingRow label={owner} hint="Owner. Can read and change it, and give other workspaces access." testId="db-owner-row">
+          <span className="type-hint text-[var(--color-text-secondary)]">Owner</span>
+        </SettingRow>
+        {db.grants.map((g) => (
+          <GrantRow
+            key={g.projectId}
+            db={db}
+            grant={g}
+            name={participantName(g, names)}
+            canMutate={canMutate}
+            patchDb={patchDb}
+            onRemove={() => setDialog({ kind: 'remove', grant: g })}
+          />
+        ))}
+        {db.grants.length === 0 ? (
+          <div className="px-4 py-3">
+            <p className={SETTING_ROW_HINT}>No other workspace can use it. Give access to share it.</p>
+          </div>
+        ) : null}
+      </SettingsGroup>
+
+      <RoleGroup db={db} canMutate={canMutate} patchDb={patchDb} />
+
+      {dialog?.kind === 'grant' ? (
+        <GiveAccessDialog
+          db={db}
+          onClose={() => setDialog(null)}
+          onGiven={(g) => {
+            setDialog(null)
+            patchDb(db.id, (row) => ({ ...row, grants: [...row.grants, g] }))
+            setNotice({ tone: 'ok', text: `${participantName(g, names)} can now ${g.level === 'write' ? 'read and change' : 'read'} ${db.name}.` })
+          }}
+        />
+      ) : null}
+      {dialog?.kind === 'remove' ? (
+        <ActionSheet
+          testId="db-remove-confirm"
+          destructive
+          title={`Remove ${participantName(dialog.grant, names)}’s access?`}
+          message={`Agents and apps in ${participantName(dialog.grant, names)} can no longer use ${db.name}. Nothing in the database is deleted, and you can give access again later.`}
+          confirmLabel="Remove access"
+          busyLabel="Removing…"
+          failWhat="Couldn’t remove access."
+          failNext="They still have access. Try again in a moment."
+          run={() => revokeSqlAccess({ project: dialog.grant.projectId, db: db.id })}
+          onDone={() => {
+            const gone = dialog.grant
+            setDialog(null)
+            patchDb(db.id, (row) => ({ ...row, grants: row.grants.filter((x) => x.projectId !== gone.projectId) }))
+            setNotice({ tone: 'ok', text: `Removed ${participantName(gone, names)}’s access to ${db.name}.` })
+          }}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
     </div>
   )
 }
+
+function DatabaseList({
+  databases,
+  listError,
+  status,
+  running,
+  canMutate,
+  onOpen,
+  onCreate,
+  onRetry,
+  onServerTab,
+}: {
+  databases: SqlDatabase[] | null
+  listError: string | null
+  status: SqlStatus
+  running: boolean
+  canMutate: boolean
+  onOpen: (id: string) => void
+  onCreate: () => void
+  onRetry: () => void
+  onServerTab: () => void
+}): React.JSX.Element {
+  const projects = useProjectsStore((s) => s.projects)
+  const names = useMemo(() => new Map(projects.map((p) => [p.id, p.name])), [projects])
+  const state = !running ? (
+    <SettingsLoadState kind="empty" title="The database server isn’t running" testId="db-server-off" action={<Button onClick={onServerTab}>Open Server</Button>}>
+      Databases are kept, but can’t be used or created until the server runs. Turn it on from Server.
+    </SettingsLoadState>
+  ) : databases === null ? (
+    <SettingsLoadState kind="loading" title="Loading databases…" testId="db-list-loading">
+      Reading the databases on this server.
+    </SettingsLoadState>
+  ) : listError ? (
+    <SettingsLoadState kind="error" title="Couldn’t load the databases" detail={listError} action={<Button onClick={onRetry}>Try again</Button>} testId="db-list-error">
+      Your databases are safe; this page just couldn’t read the list. Try again in a moment.
+    </SettingsLoadState>
+  ) : databases.length === 0 ? (
+    <SettingsLoadState kind="empty" title="No databases yet" testId="db-list-empty">
+      Create one for a workspace, and its agents and apps can keep their data in it.
+    </SettingsLoadState>
+  ) : undefined
+
+  return (
+    <SettingsGroup
+      card
+      title="Databases"
+      hint="Each workspace can have its own database. Open one to choose who else can use it."
+      settingId="data.databases"
+      action={
+        <Button variant="accent" disabled={!canMutate || !running} onClick={onCreate} data-testid="db-create-open">
+          Create database…
+        </Button>
+      }
+      state={state}
+    >
+      {(databases ?? []).map((d) => {
+        const owner = participantName(d.owner, names)
+        const shared = d.grants.length === 0 ? 'only its owner uses it' : d.grants.length === 1 ? 'shared with 1 workspace' : `shared with ${d.grants.length} workspaces`
+        const facts = [`Owned by ${owner}`, dbVersionWord(status, d.id), shared].filter(Boolean).join(' · ')
+        return (
+          <button
+            key={d.id}
+            type="button"
+            data-testid="db-row"
+            data-db={d.name}
+            data-k2-focus=""
+            onClick={() => onOpen(d.id)}
+            aria-label={`Open ${d.name}`}
+            className={`w-full text-left px-4 py-3 flex items-center justify-between gap-6 cursor-pointer outline-none no-drag ${SETTING_LIST_ROW_HOVER}`}
+          >
+            <span className="min-w-0">
+              <span className="block type-row font-mono text-[var(--color-text-primary)] truncate">{d.name}</span>
+              <span className={`block ${SETTING_ROW_HINT}`}>{facts}</span>
+            </span>
+            <span aria-hidden="true" className="type-row text-[var(--color-text-secondary)] flex-shrink-0">
+              &rsaquo;
+            </span>
+          </button>
+        )
+      })}
+    </SettingsGroup>
+  )
+}
+
+// ── The page ──────────────────────────────────────────────────────────────
 
 export function DataSection(): React.JSX.Element {
   const viewerReadOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
-  const projects = useProjectsStore((s) => s.projects)
 
   const [status, setStatus] = useState<SqlStatus | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
   const [databases, setDatabases] = useState<SqlDatabase[] | null>(null)
   const [listError, setListError] = useState<string | null>(null)
-  const [selection, setSelection] = useState<Selection>({ kind: 'server' })
+  const [tab, setTab] = useState<Tab>('databases')
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [notice, setNotice] = useState<Notice | null>(null)
   const [revision, setRevision] = useState(0)
   const bump = useCallback(() => setRevision((r) => r + 1), [])
-
-  const [createWs, setCreateWs] = useState('')
-  const [createBusy, setCreateBusy] = useState(false)
-  const [createError, setCreateError] = useState<string | null>(null)
 
   const sample = status !== null && !status.supported
   const canMutate = status !== null && status.supported && !viewerReadOnly
@@ -720,198 +1087,155 @@ export function DataSection(): React.JSX.Element {
     }
   }, [supported, revision])
 
+  // A database that went away (dropped elsewhere) closes back to the list.
   useEffect(() => {
-    if (selection.kind !== 'db' || databases === null) return
-    if (!databases.some((d) => d.id === selection.id)) {
-      setSelection({ kind: 'server' })
-    }
-  }, [databases, selection])
+    if (openId && databases && !databases.some((d) => d.id === openId)) setOpenId(null)
+  }, [databases, openId])
 
   const patchDb = useCallback((id: string, patch: (row: SqlDatabase) => SqlDatabase): void => {
     setDatabases((prev) => prev?.map((row) => (row.id === id ? patch(row) : row)) ?? null)
   }, [])
 
-  const createOptions = useMemo(
-    () => projects.map((p) => ({ value: p.id, label: p.name || p.path })),
-    [projects],
+  const retryStatus = useCallback(() => {
+    setStatusError(null)
+    setStatus(null)
+    bump()
+  }, [bump])
+
+  const header = (
+    <header className="min-w-0">
+      <h2 className="type-title text-[var(--color-text-primary)]">Database</h2>
+      <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed max-w-[75ch]">
+        Postgres databases for your workspaces. Each workspace can have its own, for its agents and apps, and you choose which other
+        workspaces can use it.
+      </p>
+      {viewerReadOnly ? (
+        <p className={SETTING_ROW_HINT} data-testid="db-viewer-note">
+          You’re viewing this server. Only its owner can change these settings.
+        </p>
+      ) : null}
+    </header>
   )
 
-  const submitCreate = useCallback(async (): Promise<void> => {
-    if (!createWs || createBusy || sample) return
-    setCreateBusy(true)
-    setCreateError(null)
-    try {
-      const res = await createSqlDatabase(createWs)
-      const owner = projects.find((p) => p.id === createWs)
-      const optimistic: SqlDatabase = {
-        id: `tmp_${Date.now()}`,
-        name: res.name ?? 'ws_new',
-        status: 'active',
-        createdAt: Math.floor(Date.now() / 1000),
-        type: 'sql',
-        documents: true,
-        ownerProjectId: createWs,
-        ownerWorkspace: owner?.name ?? null,
-        bindRole: null,
-        cap: { used: 1, cap: 1 },
-        owner: {
-          projectId: createWs,
-          workspace: owner?.name ?? null,
-          level: 'write',
-          canManage: true,
-        },
-        grants: [],
-        yourLevel: 'write',
-        dbAgentAccess: 'off',
-      }
-      setDatabases((prev) => [...(prev ?? []), optimistic])
-      setCreateWs('')
-      bump()
-    } catch (e) {
-      setCreateError(sqlErrorMessage(e))
-    } finally {
-      setCreateBusy(false)
-    }
-  }, [bump, createBusy, createWs, projects, sample])
+  const frame = (body: React.ReactNode): React.JSX.Element => (
+    <div className="h-full min-h-0 overflow-y-auto p-6">
+      <div className="w-full max-w-[52rem] space-y-5 pb-6">{body}</div>
+    </div>
+  )
 
   if (statusError) {
-    return (
-      <div className="p-6 space-y-2">
-        <p className="type-hint text-[var(--color-status-error-soft)]">
-          Couldn&rsquo;t read the database sidecar status: {statusError}
-        </p>
-        <button
-          type="button"
-          onClick={bump}
-          className="px-2.5 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-        >
-          Retry
-        </button>
-      </div>
+    return frame(
+      <>
+        {header}
+        <SettingsLoadState kind="error" title="Couldn’t read the database server’s status" detail={statusError} action={<Button onClick={retryStatus}>Try again</Button>} testId="db-status-error">
+          Your databases are safe; this page just couldn’t reach the server. Try again in a moment.
+        </SettingsLoadState>
+      </>,
     )
   }
   if (status === null) {
-    return <p className="p-6 type-hint text-[var(--color-text-muted)]">Loading…</p>
+    return frame(
+      <>
+        {header}
+        <SettingsLoadState kind="loading" title="Checking the database server…" testId="db-status-loading">
+          Reading its status and your databases.
+        </SettingsLoadState>
+      </>,
+    )
   }
 
-  const displayStatus = sample ? { ...SAMPLE_STATUS, ...status, supported: false } : status
-  const selectedDb =
-    selection.kind === 'db' ? (databases ?? []).find((d) => d.id === selection.id) : undefined
+  // On a server that can't run it, the whole page is the sample.
+  const view: SqlStatus = sample ? SAMPLE_STATUS : status
+  const running = view.state === 'running' || view.state === 'degraded'
+  const openDb = openId ? (databases ?? []).find((d) => d.id === openId) : undefined
+  const tabs: Tab[] = ['databases', 'server']
 
-  return (
-    <div className="flex flex-col h-full min-h-0">
-      {sample && (
-        <div className="flex-shrink-0 px-4 py-2 type-hint tracking-wide text-center text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_18%,transparent)] border-b border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)]">
-          {MAC_BANNER}
-        </div>
-      )}
-
-      <div className="flex flex-1 min-h-0">
-        <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0">
-          <button
-            type="button"
-            onClick={() => setSelection({ kind: 'server' })}
-            className={`text-left px-3 py-2.5 border-b border-[var(--color-border)] transition-colors no-drag cursor-pointer ${
-              selection.kind === 'server'
-                ? 'bg-[var(--color-accent)]/10'
-                : 'hover:bg-[var(--color-bg-hover)]'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <span
-                className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0"
-                style={{ backgroundColor: stateColor(displayStatus.state) }}
-              />
-              <span className="type-name text-[var(--color-text-primary)]">
-                Database sidecar
-              </span>
-            </div>
-            <p className="type-hint text-[var(--color-text-muted)] mt-0.5 truncate">
-              {displayStatus.state}
-              {displayStatus.installedMajor != null ? ` · PG ${displayStatus.installedMajor}` : ''}
-            </p>
-          </button>
-
-          <div className="px-3 pt-3 pb-1">
-            <SectionTitle>Databases</SectionTitle>
+  return frame(
+    <>
+      {header}
+      {sample ? <LinuxOnlyNote what="Database hosting" /> : null}
+      {notice ? (
+        <Callout
+          tone={notice.tone}
+          role={notice.tone === 'error' ? 'alert' : 'status'}
+          className="type-hint flex items-start justify-between gap-4"
+          data-testid="db-notice"
+        >
+          <div className="min-w-0">
+            <p>{notice.text}</p>
+            {notice.detail ? <p className="mt-0.5">The server said: {notice.detail.trim().replace(/[.\s]+$/, '')}.</p> : null}
           </div>
-          <div className="flex-1 overflow-y-auto px-1 py-1">
-            {databases === null ? (
-              <p className="px-2 py-1 type-hint text-[var(--color-text-muted)]">Loading…</p>
-            ) : listError ? (
-              <p className="px-2 py-1 type-hint text-[var(--color-status-error-soft)] break-words">
-                {listError}
-              </p>
-            ) : databases.length === 0 ? (
-              <p className="px-2 py-1 type-hint text-[var(--color-text-muted)] italic">
-                No databases yet.
-              </p>
-            ) : (
-              databases.map((d) => {
-                const isSelected = selection.kind === 'db' && selection.id === d.id
-                return (
-                  <button
-                    key={d.id}
-                    type="button"
-                    onClick={() => setSelection({ kind: 'db', id: d.id })}
-                    className={`w-full flex flex-col items-start gap-0.5 px-2 py-1.5 text-left transition-colors no-drag cursor-pointer min-w-0 ${
-                      isSelected
-                        ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                        : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
-                    }`}
-                  >
-                    <span className="type-row font-mono truncate w-full">{d.name}</span>
-                    <span className="type-hint text-[var(--color-text-muted)] truncate w-full">
-                      {dbTypeLabel(d)} · {d.ownerWorkspace ?? 'workspace'} · {d.status}
-                      {d.cap ? ` · ${d.cap.used}/${d.cap.cap === 0 ? '∞' : d.cap.cap}` : ''}
-                      {dbMajorChip(displayStatus, d.id) ? ` · ${dbMajorChip(displayStatus, d.id)}` : ''}
-                    </span>
-                  </button>
-                )
-              })
-            )}
-          </div>
+          <Button variant="quiet" className="flex-shrink-0" onClick={() => setNotice(null)}>
+            Dismiss
+          </Button>
+        </Callout>
+      ) : null}
 
-          <div className="border-t border-[var(--color-border)] px-2 py-2 space-y-1.5">
-            <p className="type-hint text-[var(--color-text-muted)] px-1">Create database</p>
-            <SettingDropdown
-              value={createWs}
-              placeholder="Workspace…"
-              options={[{ value: '', label: 'Workspace…' }, ...createOptions]}
-              onChange={(v) => setCreateWs(v)}
-              menuAlign="left"
-              menuPlacement="up"
-            />
+      <div role="tablist" aria-label="Database" className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] w-full">
+        {tabs.map((t) => {
+          const active = tab === t
+          return (
             <button
+              key={t}
               type="button"
-              disabled={!canMutate || !createWs || createBusy}
-              onClick={() => void submitCreate()}
-              className="w-full px-2 py-1 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              role="tab"
+              aria-selected={active}
+              onClick={() => {
+                setTab(t)
+                setOpenId(null)
+              }}
+              data-settings-id={TAB_SETTINGS_ID[t]}
+              data-k2-focus=""
+              className={`relative px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px outline-none ${
+                active
+                  ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                  : 'border-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+              }`}
             >
-              {createBusy ? 'Creating…' : 'Create'}
+              {TAB_LABEL[t]}
             </button>
-            {createError && (
-              <p className="type-hint text-[var(--color-status-error-soft)] break-words px-1">
-                {createError}
-              </p>
-            )}
-          </div>
-        </div>
-
-        <div className="flex-1 min-w-0 overflow-y-auto p-6">
-          {selection.kind === 'server' && (
-            <ServerPanel
-              status={displayStatus}
-              canMutate={canMutate}
-              sample={sample}
-              onChanged={bump}
-            />
-          )}
-          {selection.kind === 'db' && selectedDb && (
-            <DatabasePanel db={selectedDb} canMutate={canMutate} patchDb={patchDb} />
-          )}
-        </div>
+          )
+        })}
       </div>
-    </div>
+
+      <div className="pt-1">
+        {tab === 'server' ? (
+          <ServerTab status={view} canMutate={canMutate} sample={sample} onChanged={bump} setNotice={setNotice} />
+        ) : openDb ? (
+          <DatabaseDetail db={openDb} status={view} canMutate={canMutate} patchDb={patchDb} onBack={() => setOpenId(null)} setNotice={setNotice} />
+        ) : (
+          <DatabaseList
+            databases={databases}
+            listError={listError}
+            status={view}
+            running={running}
+            canMutate={canMutate}
+            onOpen={(id) => {
+              setNotice(null)
+              setOpenId(id)
+            }}
+            onCreate={() => setCreating(true)}
+            onRetry={() => {
+              setDatabases(null)
+              bump()
+            }}
+            onServerTab={() => setTab('server')}
+          />
+        )}
+      </div>
+
+      {creating ? (
+        <CreateDatabaseDialog
+          databases={databases ?? []}
+          onClose={() => setCreating(false)}
+          onCreated={(wsId, name) => {
+            setCreating(false)
+            const ws = useProjectsStore.getState().projects.find((p) => p.id === wsId)?.name ?? 'the workspace'
+            setNotice({ tone: 'ok', text: `Created ${name ?? 'a database'} for ${ws}. Its agents and apps can use it now.` })
+            bump()
+          }}
+        />
+      ) : null}
+    </>,
   )
 }

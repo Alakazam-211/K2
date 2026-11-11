@@ -22,10 +22,50 @@ import {
   switchLiveMove,
   sqlErrorInfo,
   sqlErrorMessage,
+  parseSqlStatus,
+  parseSqlDatabases,
+  sqlStateWord,
+  dbVersionWord,
+  livePlainLine,
+  liveStateWord,
   type SqlDatabase,
 } from './data-api'
 
 const post = vi.mocked(daemonCliPost)
+
+describe('checked replies', () => {
+  it('parseSqlStatus throws on a reply without supported or state', () => {
+    expect(() => parseSqlStatus({})).toThrow('the reply had no server state')
+    expect(() => parseSqlStatus({ supported: true })).toThrow('the reply had no server state')
+    expect(() => parseSqlStatus(null)).toThrow('the reply had no server state')
+  })
+
+  it('parseSqlStatus keeps the daemon fields and normalises missing lists', () => {
+    const s = parseSqlStatus({ ok: true, supported: true, state: 'running', installedMajor: 16, listen: 'localhost', port: 5432 })
+    expect(s.state).toBe('running')
+    expect(s.installedMajor).toBe(16)
+    expect(s.clusters).toEqual([])
+    expect(s.lastError).toBeNull()
+  })
+
+  it('parseSqlDatabases throws without a list and defaults a row’s missing fields', () => {
+    expect(() => parseSqlDatabases({ ok: true })).toThrow('the reply had no list of databases')
+    const rows = parseSqlDatabases({ databases: [{ id: 'd1', ownerProjectId: 'p1', grants: [{ projectId: 'p2', level: 'write' }, { nope: 1 }] }, { name: 'no id' }] })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].name).toBe('d1')
+    expect(rows[0].owner).toEqual({ projectId: 'p1', workspace: null, level: 'write', canManage: true })
+    expect(rows[0].grants).toEqual([{ projectId: 'p2', workspace: null, level: 'write', canManage: false }])
+  })
+
+  it('states, versions and live moves read as plain words', () => {
+    expect(sqlStateWord('running')).toEqual({ word: 'Running', tone: 'ok' })
+    expect(sqlStateWord('not-installed').word).toBe('Not set up')
+    expect(sqlStateWord('disabled').word).toBe('Off')
+    expect(dbVersionWord({ databases: [{ id: 'a', name: 'ws_a', major: 16 }], upgradeAvailable: [] }, 'a')).toBe('Postgres 16')
+    expect(livePlainLine({ db: 'ws_a', from: 16, to: 17, state: 'syncing', ready: 2, total: 3, lagBytes: 3 * 1024 ** 2, walStatus: null, lastError: null })).toBe('2 of 3 tables copied, 3 MB behind.')
+    expect(liveStateWord('streaming')).toBe('Ready to switch')
+  })
+})
 
 describe('data-api helpers', () => {
   it('dbTypeLabel is sql / documents-in-same-DB', () => {

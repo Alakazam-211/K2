@@ -1606,4 +1606,22 @@ mod tests {
         assert!(a.images_error.is_none());
         assert_eq!(serde_json::from_str::<CleanAnswer>(&serde_json::to_string(&a).unwrap()).unwrap(), a);
     }
+
+    /// 0.46.11: an exec may carry the command's stdin as a body of
+    /// `stdinLen` bytes after the header (no protocol bump: the
+    /// `exec-stdin` feature). The plain exec line is unchanged, so an
+    /// older engine reads it as before; the argv cap stays.
+    #[test]
+    fn an_exec_carries_stdin_as_a_body() {
+        assert!(ENGINE_FEATURES.contains(&"exec-stdin"), "{ENGINE_FEATURES:?}");
+        let line = r#"{"verb":"exec","app":"jobs","deployment":"d-0123456789ab","argv":["wc","-c"],"timeoutSecs":60,"stdinLen":5}"#;
+        let req: Request = serde_json::from_str(line).expect("an exec with stdinLen parses");
+        let back = serde_json::to_string(&req).unwrap();
+        assert!(back.contains("\"stdinLen\":5"), "{back}");
+        let plain = r#"{"verb":"exec","app":"jobs","deployment":"d-0123456789ab","argv":["ls"],"timeoutSecs":60}"#;
+        let req: Request = serde_json::from_str(plain).expect("the plain exec still parses");
+        assert!(!serde_json::to_string(&req).unwrap().contains("stdinLen"), "no stdinLen on a plain exec: an older engine refuses unknown fields");
+        assert!(exec_argv_ok(&["a".repeat(4096)]), "4096 bytes a word");
+        assert!(!exec_argv_ok(&["a".repeat(4097)]), "the cap stays");
+    }
 }

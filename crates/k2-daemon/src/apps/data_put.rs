@@ -319,4 +319,43 @@ mod tests {
     fn chunks_fit_one_argument() {
         assert!(CHUNK < 128 * 1024);
     }
+
+    /// Bytes that don't compress (a scanned PDF, a photo, a tarball).
+    fn noise(n: usize, seed: u64) -> Vec<u8> {
+        let mut x = seed | 1;
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x >> 24) as u8
+            })
+            .collect()
+    }
+
+    /// 0.46.11 field report: a put of anything that doesn't compress failed
+    /// with `App engine: argv`. The engine refuses an argv word over 4096
+    /// bytes (`exec_argv_ok`), and the put sent 96 KiB base64 words. This
+    /// runner refuses exactly what the engine refuses.
+    #[cfg(unix)]
+    #[test]
+    fn a_put_of_random_bytes_passes_the_engine_argv_cap() {
+        let d = Scratch::new();
+        let src = d.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let body = noise(4096, 7);
+        std::fs::write(src.join("scan.pdf"), &body).unwrap();
+        let root = d.path().join("data");
+        std::fs::create_dir_all(&root).unwrap();
+        let engine_like = |argv: &[String]| -> Result<(i64, String), String> {
+            if !k2_root_proto::engine::exec_argv_ok(argv) {
+                return Err("App engine: argv".into());
+            }
+            let o = std::process::Command::new(&argv[0]).args(&argv[1..]).output().map_err(|e| e.to_string())?;
+            Ok((o.status.code().unwrap_or(-1) as i64, String::from_utf8_lossy(&o.stderr).to_string()))
+        };
+        let (tgz, _) = tar_gz(&src.join("scan.pdf")).unwrap();
+        put_via_exec(&tgz, &root.to_string_lossy(), "", &engine_like).expect("a 4 KB random file goes in");
+        assert_eq!(std::fs::read(root.join("scan.pdf")).unwrap(), body);
+    }
 }

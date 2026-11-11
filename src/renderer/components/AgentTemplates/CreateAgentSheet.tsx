@@ -156,6 +156,31 @@ export function nameProblem(name: string): string | null {
   return name.trim() ? null : 'Give the agent a name.'
 }
 
+/** A name that gives no handle (only symbols, say) while the handle still
+ *  follows it. */
+export const NAME_GIVES_NO_HANDLE = 'Use at least one letter or number in the name.'
+
+/** The name step's problems. While the handle follows the name (and the
+ *  folder the handle), only the name's problem shows, covering what it
+ *  gives them; the handle's and folder's own show once each is edited. */
+export function nameStepProblems(f: {
+  name: string
+  handle: string
+  folder: string
+  handleEdited: boolean
+  folderEdited: boolean
+}): { name: string | null; handle: string | null; folder: string | null } {
+  const own = nameProblem(f.name)
+  const handle = handleProblem(f.handle)
+  return {
+    name: own ?? (!f.handleEdited && handle ? NAME_GIVES_NO_HANDLE : null),
+    handle: f.handleEdited ? handle : null,
+    // Unedited, the folder is `<root>/<handle>` (or the server's pick), so
+    // its only problem is the handle's.
+    folder: f.folderEdited ? folderProblem(f.folder) : null,
+  }
+}
+
 export function handleProblem(handle: string): string | null {
   if (!handle.trim()) return 'Give the agent a handle.'
   return slugifyAddressToken(handle) ? null : 'Use letters, numbers and hyphens.'
@@ -365,11 +390,13 @@ function CreateAgentBody(): React.JSX.Element {
     }
     return out
   }, [detail, params])
-  const problems = {
-    name: nameProblem(name),
-    handle: handleProblem(handle),
-    folder: folderTouched || root ? folderProblem(folder) : null,
-  }
+  const problems = nameStepProblems({
+    name,
+    handle,
+    folder,
+    handleEdited: handleInput !== null,
+    folderEdited: folderTouched,
+  })
   const nameStepOk = !problems.name && !problems.handle && !problems.folder && Object.keys(paramProblems).length === 0
 
   const request = (dryRun: boolean): HireRequest =>

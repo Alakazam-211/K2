@@ -52,7 +52,9 @@ import CreateAgentSheet, {
   CREATE_AGENT_COPY,
   CREATE_AGENT_NO_TOOL,
   CREATE_AGENT_NOT_SIGNED_IN,
+  NAME_GIVES_NO_HANDLE,
   buildHireRequest,
+  nameStepProblems,
   defaultPresetFor,
   folderFor,
   handleFromName,
@@ -240,6 +242,20 @@ describe('helpers', () => {
     expect(buildHireRequest({ ...base, folder: '/elsewhere/max' }).path).toBe('/elsewhere/max')
   })
 
+  it('name step: while the handle and folder follow the name, only the name’s problem shows', () => {
+    const base = { handleEdited: false, folderEdited: false }
+    expect(nameStepProblems({ ...base, name: '', handle: '', folder: '' })).toEqual({ name: 'Give the agent a name.', handle: null, folder: null })
+    expect(nameStepProblems({ ...base, name: '!!!', handle: '', folder: '' })).toEqual({ name: NAME_GIVES_NO_HANDLE, handle: null, folder: null })
+    expect(nameStepProblems({ ...base, name: 'Max', handle: 'max', folder: '/r/max' })).toEqual({ name: null, handle: null, folder: null })
+    // Edited: each says its own.
+    expect(nameStepProblems({ name: 'Max', handle: 'a b/c', folder: '', handleEdited: true, folderEdited: false })).toEqual({ name: null, handle: 'Use letters, numbers and hyphens.', folder: null })
+    expect(nameStepProblems({ name: '', handle: 'max', folder: 'rel/path', handleEdited: true, folderEdited: true })).toEqual({
+      name: 'Give the agent a name.',
+      handle: null,
+      folder: 'Give the full path to the folder.',
+    })
+  })
+
   it('the template’s tool is chosen first, else the server default', () => {
     const ps = [preset('p-claude', 'Claude', 'claude'), preset('p-codex', 'Codex', 'codex')]
     expect(defaultPresetFor(ps, 'codex', 'claude')).toBe('p-codex')
@@ -267,6 +283,22 @@ describe('CreateAgentSheet', () => {
     expect(yours.map((r) => (r as HTMLInputElement).value)).toEqual(['my-writer'])
     expect(screen.getByTestId('create-agent-author-my-writer').textContent).toBe('By rosson')
     expect((screen.getByTestId('create-agent-template-general') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('name step: clearing the name shows only the name’s problem; the handle’s shows once it’s edited', async () => {
+    await toName('writer')
+    fireEvent.change(screen.getByTestId('create-agent-param-about'), { target: { value: 'Posts' } })
+    fireEvent.change(screen.getByTestId('create-agent-name'), { target: { value: '' } })
+    await next()
+    expect(screen.getByTestId('create-agent-name-problem').textContent).toBe('Give the agent a name.')
+    expect(screen.queryByTestId('create-agent-handle-problem')).toBeNull()
+    expect(screen.queryByTestId('create-agent-folder-problem')).toBeNull()
+    expect(screen.queryByTestId('create-agent-tools')).toBeNull()
+    // Edited (typed, then cleared): now the handle says its own.
+    fireEvent.change(screen.getByTestId('create-agent-handle'), { target: { value: 'x' } })
+    fireEvent.change(screen.getByTestId('create-agent-handle'), { target: { value: '' } })
+    expect(screen.getByTestId('create-agent-handle-problem').textContent).toBe('Give the agent a handle.')
+    expect(screen.queryByTestId('create-agent-folder-problem')).toBeNull()
   })
 
   it('focus moves to each step’s heading', async () => {

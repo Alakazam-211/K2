@@ -1279,3 +1279,7 @@ mod tests {
         assert!(result.body.contains("project not registered"), "got: {}", result.body);
     }
 }
+
+#[cfg(test)]
+#[path = "pinned_chat_first_tests.rs"]
+mod first_chat_tests;

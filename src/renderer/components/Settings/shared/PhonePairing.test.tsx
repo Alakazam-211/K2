@@ -5,7 +5,7 @@
 // the password need, the code with its QR (from the daemon's link) for its
 // 10 minutes, the phones with Revoke, and the daemon's refusal hints.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { menuLabels, menuValues, pickValue, pickedValue } from '@/test-utils/setting-dropdown'
 import type { PairCodeChangedEvent } from '@/stores/session-events'
 
@@ -73,6 +73,8 @@ const PHONE = {
   current: false,
 }
 
+const PAIRS_AS_ONE = { user: 'rosson', source: 'owner-linked', needsPassword: false, choices: ['rosson'] }
+
 const CODE = {
   ok: true,
   code: 'K2P-AAAAA-BBBBB-CCCCC-DDDDD',
@@ -137,7 +139,7 @@ describe('PhonePairing in Settings → K2 Companion (mode="all")', () => {
     const qr = document.querySelector('[data-pair-qr] svg')
     expect(qr, 'QR drawn from the daemon link').toBeTruthy()
     expect(screen.getByText(CODE.pairUrl)).toBeTruthy()
-    expect(document.querySelector('[data-pair-countdown]')?.textContent).toBe('Works once, for 10:00')
+    expect(document.querySelector('[data-pair-countdown]')?.textContent).toBe('Works once · 10:00 left')
     now += 10 * 60 * 1000
     await waitFor(() => expect(document.querySelector('[data-pair-code]')).toBeNull(), { timeout: 3000 })
     // 0.46.6: the countdown running out says so instead of just vanishing.
@@ -200,8 +202,61 @@ describe('PhonePairing in Settings → K2 Companion (mode="all")', () => {
     expect(row.textContent).toContain('<img src=x onerror=alert(1)>')
     expect(row.textContent).toContain('rosson · paired')
     expect(row.querySelector('img')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
-    await waitFor(() => expect(screen.getByText('No paired phones.')).toBeTruthy())
+    // Remove asks first, in a dialog; nothing is sent until it's confirmed.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove <img src=x onerror=alert(1)>…' }))
+    const dialog = await screen.findByTestId('pair-remove-dialog')
+    expect(dialog.textContent).toContain('Remove <img src=x onerror=alert(1)>?')
+    expect(calls.some((c) => c.url.includes('revoke'))).toBe(false)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove phone' }))
+    await waitFor(() => expect(screen.getByText('No phones paired yet')).toBeTruthy())
+    expect(screen.queryByTestId('pair-remove-dialog')).toBeNull()
+    expect(document.querySelector('[data-pair-removed]')?.textContent).toContain('Removed <img src=x onerror=alert(1)>.')
+  })
+
+  it('Cancel keeps the phone; a failed remove stays in the dialog with the reason', async () => {
+    handler = (url) => {
+      if (url.includes('/cli/auth/devices')) {
+        return { status: 200, body: { ok: true, devices: [{ ...PHONE, name: 'iPhone' }], pairAs: PAIRS_AS_ONE } }
+      }
+      if (url.includes('/cli/auth/device/revoke')) {
+        return { status: 500, body: { ok: false, error: { code: 'internal', hint: 'session database is locked' } } }
+      }
+      throw new Error(`unexpected ${url}`)
+    }
+    render(<PhonePairing scope={SCOPE} mode="all" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove iPhone…' }))
+    fireEvent.click(within(screen.getByTestId('pair-remove-dialog')).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByTestId('pair-remove-dialog')).toBeNull()
+    expect(calls.some((c) => c.url.includes('revoke'))).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove iPhone…' }))
+    fireEvent.click(within(screen.getByTestId('pair-remove-dialog')).getByRole('button', { name: 'Remove phone' }))
+    const err = await screen.findByTestId('dialog-error')
+    expect(err.textContent).toContain("Couldn't remove this phone.")
+    expect(err.textContent).toContain('session database is locked')
+    expect(document.querySelector('[data-pair-device="sess-1"]')).toBeTruthy()
+  })
+
+  it('a list that fails to load says so once, with Try again', async () => {
+    let fail = true
+    handler = (url) => {
+      if (url.includes('/cli/auth/devices')) {
+        if (fail) return { status: 500, body: { ok: false, error: { code: 'internal', hint: 'session database is locked' } } }
+        return { status: 200, body: { ok: true, devices: [PHONE], pairAs: PAIRS_AS_ONE } }
+      }
+      throw new Error(`unexpected ${url}`)
+    }
+    render(<PhonePairing scope={SCOPE} mode="all" />)
+    const card = await waitFor(() => {
+      const el = document.querySelector('[data-load-state="error"]')
+      if (!el) throw new Error('no error card yet')
+      return el as HTMLElement
+    })
+    expect(card.textContent).toContain("Couldn't load your paired phones")
+    expect(card.textContent).toContain('session database is locked')
+    expect(screen.queryByText('Paired phones'), 'no second card for the same failure').toBeNull()
+    fail = false
+    fireEvent.click(within(card).getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(document.querySelector('[data-pair-device="sess-1"]')).toBeTruthy())
   })
 })
 
@@ -322,7 +377,7 @@ describe('PhonePairing success state (0.46.6)', () => {
     const row = document.querySelector('[data-pair-device="sess-new"]')
     expect(row?.hasAttribute('data-pair-new')).toBe(true)
     expect(row?.textContent).toContain('iPhone')
-    expect(row?.textContent).toContain('just paired')
+    expect(row?.textContent).toContain('Just paired')
     // The refetch keeps it (one row, not two).
     await waitFor(() => expect(calls.filter((c) => c.url.includes('/cli/auth/devices')).length).toBe(2))
     await waitFor(() => expect(document.querySelectorAll('[data-pair-device="sess-new"]').length).toBe(1))

@@ -1,5 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { renderSVG } from 'uqr'
+import React, { useCallback, useEffect, useState } from 'react'
 import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useSettingsStore } from '@/stores/settings'
 import { serverSupports } from '@/lib/server-capabilities'
@@ -8,27 +7,45 @@ import type { SettingEntry } from '../searchManifest'
 import appStoreBadge from '@/assets/app-store-badge.svg?url'
 import googlePlayBadge from '@/assets/google-play-badge.png'
 import { primaryScope } from '@/kessel/server-scope'
-import { PhonePairing } from '../shared/PhonePairing'
-import { BetaTag } from '@/components/ui/Tag'
+import { PhonePairing, QrCode } from '../shared/PhonePairing'
+import { BetaTag, Button } from '@/components/ui'
+import { SETTING_ROW_HINT, SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { HealthWord, StatusDot } from './ConnectionsParts'
 import { usePhonePairingFocus, usePhonePairingFocusStore } from '@/stores/phone-pairing-focus'
 
-// K2 Companion (task #615) — the mobile app and K2 Connect now share ONE
-// tunnel (the frpc reverse tunnel exposed by K2 Connect at <sub>.k2.dev).
-// The phone pairs to the same public URL the daemon is exposed at, so
-// Companion no longer runs its own ngrok tunnel. This section is now just
-// (a) a link to install the mobile app and (b) a live read of the K2
-// Connect tunnel status (GET /cli/tunnel/status), reusing the same
-// direct-daemon fetch pattern as K2ConnectSection.tsx.
+// K2 Companion (task #615) — the mobile app and the Tunnel share ONE
+// tunnel (the frpc reverse tunnel at <sub>.k2.dev). The phone pairs to the
+// same public URL the daemon is exposed at, so Companion runs no tunnel of
+// its own. The page, in the order a person needs it: can a phone reach this
+// server (a live read of GET /cli/tunnel/status, with a way to Tunnel when
+// it can't), get the app (store QRs and badges), pair a phone, and the
+// paired phones (the shared PhonePairing cards).
 
 // Store listings linked from https://k2.dev (home footer badges).
 export const APP_STORE_URL = 'https://apps.apple.com/us/app/k2so/id6762076766'
 export const PLAY_STORE_URL =
   'https://play.google.com/store/apps/details?id=com.alakazamlabs.k2so.companion'
 
+const CONTENT_WIDTH = 'max-w-[52rem]'
+
 interface TunnelStatus {
   running: boolean
   public_url: string | null
   frpc_installed: boolean
+}
+
+/** The daemon's reason from a failed read, in its own words. */
+function failReason(body: unknown, status: number): string {
+  if (body && typeof body === 'object') {
+    const e = (body as { error?: unknown }).error
+    if (typeof e === 'string' && e.trim()) return e
+    if (e && typeof e === 'object') {
+      const r = e as { hint?: unknown; message?: unknown }
+      if (typeof r.hint === 'string' && r.hint.trim()) return r.hint
+      if (typeof r.message === 'string' && r.message.trim()) return r.message
+    }
+  }
+  return `HTTP ${status}`
 }
 
 async function tunnelStatus(): Promise<TunnelStatus> {
@@ -37,14 +54,18 @@ async function tunnelStatus(): Promise<TunnelStatus> {
     `${daemonHttpBase(creds)}/cli/tunnel/status?token=${creds.token}`,
     { method: 'GET' },
   )
-  if (!res.ok) throw new Error(`tunnel status ${res.status}`)
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new Error(failReason(body, res.status))
+  }
   return (await res.json()) as TunnelStatus
 }
 
 export const COMPANION_MANIFEST: SettingEntry[] = [
+  { id: 'companion.status', section: 'companion', label: 'Reachable from your phone', description: 'Whether your phone can reach this server, and its address', keywords: ['status', 'tunnel', 'connect', 'reachable', 'subdomain', 'k2.dev', 'pair', 'address'] },
   { id: 'companion.get-app', section: 'companion', label: 'Get the K2 mobile app', description: 'Install the K2 Companion app on iPhone or Android', keywords: ['mobile', 'companion', 'app', 'download', 'install', 'iphone', 'ios', 'app store', 'android', 'google play', 'qr'] },
-  { id: 'companion.status', section: 'companion', label: 'K2 Connect Status', description: 'Whether the mobile app can reach this server', keywords: ['status', 'tunnel', 'connect', 'reachable', 'subdomain', 'k2.dev', 'pair'] },
-  { id: 'companion.pair', section: 'companion', label: 'Pair a phone', description: 'A one-time code and QR that pair the K2 phone app; every paired phone, with Revoke', keywords: ['pair', 'phone', 'qr', 'code', 'companion', 'mobile', 'device', 'revoke', 'iphone', 'android', 'web access'] },
+  { id: 'companion.pair', section: 'companion', label: 'Pair a phone', description: 'A one-time code and QR that sign the K2 phone app in', keywords: ['pair', 'phone', 'qr', 'code', 'companion', 'mobile', 'device', 'iphone', 'android', 'web access'] },
+  { id: 'companion.phones', section: 'companion', label: 'Paired phones', description: 'Every phone paired with this server, with Remove', keywords: ['paired', 'phones', 'devices', 'remove', 'revoke', 'sign out', 'iphone', 'android'] },
 ]
 
 /** Bring the Pair a phone block into view and put the cursor on its first
@@ -69,6 +90,19 @@ export function revealPhonePairing(): void {
 
 export function CompanionSection(): React.JSX.Element {
   const [status, setStatus] = useState<TunnelStatus | null>(null)
+  const [statusError, setStatusError] = useState<string | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
+
+  const refresh = useCallback(async (): Promise<void> => {
+    try {
+      const s = await tunnelStatus()
+      setStatus(s)
+      setStatusError(null)
+    } catch (e) {
+      setStatusError(e instanceof Error ? e.message : String(e))
+    }
+  }, [])
 
   // The setup checklist's phone row: open on pairing (once per request).
   const pairingFocusSeq = usePhonePairingFocus()
@@ -86,20 +120,16 @@ export function CompanionSection(): React.JSX.Element {
   // we KEEP the 5s poll fallback.
   useEffect(() => {
     let cancelled = false
-    const refresh = async () => {
-      try {
-        const s = await tunnelStatus()
-        if (!cancelled) setStatus(s)
-      } catch {
-        /* ignore — leave previous status / null */
-      }
+    const run = (): void => {
+      if (!cancelled) void refresh()
     }
-    void refresh()
+    run()
 
     if (serverSupports('daemon-broadcasts')) {
-      const offHello = onAppHello(primaryScope(), () => void refresh())
+      const offHello = onAppHello(primaryScope(), run)
       const offTunnel = onTunnelStatusChanged(primaryScope(), (e) => {
         if (cancelled) return
+        setStatusError(null)
         setStatus((prev) => ({
           running: e.running,
           public_url: e.publicUrl,
@@ -116,140 +146,163 @@ export function CompanionSection(): React.JSX.Element {
       }
     }
 
-    const interval = setInterval(() => void refresh(), 5000)
+    const interval = setInterval(run, 5000)
     return () => {
       cancelled = true
       clearInterval(interval)
     }
-  }, [])
+  }, [refresh])
 
-  const running = status?.running ?? false
   const publicUrl = status?.public_url ?? null
-  const connected = running && !!publicUrl
+  const reachable = !!status?.running && !!publicUrl
 
-  const goToK2Connect = () => {
+  const goToTunnel = (): void => {
     useSettingsStore.getState().setSection('k2-connect')
   }
+  const checkAgain = async (): Promise<void> => {
+    setChecking(true)
+    try {
+      await refresh()
+    } finally {
+      setChecking(false)
+    }
+  }
+  const copyAddress = async (url: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied('done')
+    } catch {
+      setCopied('failed')
+    }
+    setTimeout(() => setCopied('idle'), 2000)
+  }
+
+  // ── Status: can a phone reach this server? ──
+  // A read that failed while an earlier answer is on screen keeps that
+  // answer; only a first read that failed shows the error card.
+  const statusState = !status ? (
+    statusError ? (
+      <SettingsLoadState
+        kind="error"
+        title="Couldn't check whether your phone can reach this server"
+        detail={statusError}
+        testId="companion-status-error"
+        action={
+          <Button onClick={() => void checkAgain()} disabled={checking}>
+            {checking ? 'Checking…' : 'Try again'}
+          </Button>
+        }
+      >
+        K2 couldn&apos;t read the tunnel&apos;s status.
+      </SettingsLoadState>
+    ) : (
+      <SettingsLoadState kind="loading" title="Checking whether your phone can reach this server…" testId="companion-status-loading" />
+    )
+  ) : undefined
+
+  const notReachableHint =
+    status && status.frpc_installed === false
+      ? 'Phones reach this server through its tunnel, and the tunnel helper isn’t installed on this computer. Set it up in Tunnel.'
+      : 'Phones reach this server through its tunnel, which is off. Turn it on in Tunnel, then pair your phone.'
 
   return (
-    <div className="max-w-xl">
-      <h2 className="type-title text-[var(--color-text-primary)] mb-1 flex items-center gap-2">
-        K2 Companion
-        <BetaTag />
-      </h2>
-      <p className="type-hint text-[var(--color-text-muted)] mb-4">
-        Reach your K2 agents from your phone. The mobile app pairs to the same
-        public address K2 Connect exposes this daemon at — one tunnel, both
-        clients. No separate setup here.
-      </p>
+    <div className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`}>
+      <header className="min-w-0">
+        <h2 className="type-title text-[var(--color-text-primary)] flex items-center gap-2">
+          K2 Companion
+          <BetaTag />
+        </h2>
+        <p className={SETTING_ROW_HINT}>Use K2 from your phone. Install the app, then pair it with this server.</p>
+      </header>
 
-      {/* ── Get the app ───────────────────────────────────────────── */}
-      <div
-        className="mb-4 px-3 py-3 border border-[var(--color-border)]"
-        data-settings-id="companion.get-app"
+      <SettingsGroup title="Status" card settingId="companion.status" testId="companion-status" state={statusState}>
+        <SettingRow
+          testId="companion-status-row"
+          label={
+            <span className="inline-flex items-center gap-2 flex-wrap" aria-live="polite">
+              <StatusDot tone={reachable ? 'ok' : 'neutral'} />
+              <HealthWord tone={reachable ? 'ok' : 'neutral'}>{reachable ? 'Reachable' : 'Not reachable from a phone'}</HealthWord>
+              {reachable && (
+                <a
+                  href={publicUrl as string}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="k2-focus font-mono text-[var(--color-accent-text)] hover:underline no-drag"
+                >
+                  {publicUrl}
+                </a>
+              )}
+            </span>
+          }
+          hint={
+            <>
+              {reachable ? 'Your phone reaches this server at this address, at home or away.' : notReachableHint}
+              {copied === 'failed' && (
+                <span role="alert" className="block text-[var(--color-status-error-soft)]">
+                  Couldn&apos;t copy the address. Select it and copy it by hand.
+                </span>
+              )}
+            </>
+          }
+        >
+          {reachable ? (
+            <Button variant="quiet" className="flex-shrink-0" onClick={() => void copyAddress(publicUrl as string)}>
+              {copied === 'done' ? 'Copied' : 'Copy address'}
+            </Button>
+          ) : (
+            <Button variant="accent" className="flex-shrink-0" onClick={goToTunnel}>
+              Open Tunnel
+            </Button>
+          )}
+        </SettingRow>
+      </SettingsGroup>
+
+      <SettingsGroup
+        title="Get the app"
+        hint="Scan a code with your phone's camera, or open the store page."
+        card
+        settingId="companion.get-app"
       >
-        <div className="type-row text-[var(--color-text-primary)]">Get the K2 mobile app</div>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5 mb-3">
-          Scan a code with your phone, or open the store page. Then pair the app
-          to your daemon&apos;s public address (shown below).
-        </p>
-        <div className="flex flex-wrap gap-6">
-          <StoreQrCard url={APP_STORE_URL} label="App Store" badgeSrc={appStoreBadge} />
-          <StoreQrCard url={PLAY_STORE_URL} label="Google Play" badgeSrc={googlePlayBadge} />
+        <div className="px-4 py-4 flex flex-wrap gap-8">
+          <StoreTile url={APP_STORE_URL} label="App Store" platform="iPhone" badgeSrc={appStoreBadge} />
+          <StoreTile url={PLAY_STORE_URL} label="Google Play" platform="Android" badgeSrc={googlePlayBadge} />
         </div>
-      </div>
+      </SettingsGroup>
 
-      {/* ── Pair a phone (phone-web-off) ──────────────────────────── */}
-      <div className="mb-4 px-3 py-3 border border-[var(--color-border)]" data-settings-id="companion.pair">
-        <div className="type-row text-[var(--color-text-primary)]">Pair a phone</div>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5 mb-3 leading-relaxed">
-          A one-time code (10 minutes) signs the K2 app in on a phone. A paired phone keeps working when web
-          access is off, and stays signed in while it&apos;s used: it pairs again after 30 days unused or 180
-          days in all, after its login&apos;s password changes, or when you revoke it. Password sign-in on the
-          phone keeps working too.
-        </p>
-        <PhonePairing mode="all" scope={primaryScope()} />
-      </div>
-
-      {/* ── K2 Connect status (live) ──────────────────────────────── */}
-      <div data-settings-id="companion.status">
-        {connected ? (
-          <div className="px-3 py-3 border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-ok)_5%,transparent)]">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)]" style={{ backgroundColor: 'var(--color-status-ok)' }} />
-              <span className="type-row text-[var(--color-text-secondary)]">Connected</span>
-            </div>
-            <p className="type-hint text-[var(--color-text-muted)] mt-2 leading-relaxed">
-              This server is reachable at the address below. Open the K2 app and
-              pair to it.
-            </p>
-            <a
-              href={publicUrl!}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-block mt-1.5 type-control text-[var(--color-accent)] hover:underline font-mono break-all no-drag cursor-pointer"
-            >
-              {publicUrl}
-            </a>
-          </div>
-        ) : (
-          <div className="px-3 py-3 border border-[var(--color-border)]">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 flex-shrink-0 rounded-[var(--radius-badge)]" style={{ backgroundColor: 'var(--color-neutral)' }} />
-              <span className="type-row text-[var(--color-text-secondary)]">K2 Connect isn&apos;t running</span>
-            </div>
-            <p className="type-hint text-[var(--color-text-muted)] mt-2 leading-relaxed">
-              The mobile app reaches this server through the K2 Connect tunnel.
-              Start it to get a <span className="font-mono">https://&lt;sub&gt;.k2.dev</span> address
-              you can pair to.
-            </p>
-            <button
-              onClick={goToK2Connect}
-              className="mt-2 type-hint text-[var(--color-accent)] hover:underline no-drag cursor-pointer"
-            >
-              Set up K2 Connect →
-            </button>
-          </div>
-        )}
-      </div>
+      <PhonePairing mode="all" scope={primaryScope()} />
     </div>
   )
 }
 
-function StoreQrCard({
+const STORE_TILE = 140
+
+/** A store's QR above its badge: one link to the store page. */
+function StoreTile({
   url,
   label,
+  platform,
   badgeSrc,
 }: {
   url: string
   label: string
+  platform: string
   badgeSrc: string
 }): React.JSX.Element {
-  const svg = useMemo(
-    () =>
-      renderSVG(url, {
-        border: 1,
-        ecc: 'M',
-        blackColor: '#111111',
-        whiteColor: '#ffffff',
-      }),
-    [url],
-  )
   return (
     <a
       href={url}
       target="_blank"
       rel="noreferrer"
-      className="flex flex-col items-center gap-2 no-drag cursor-pointer"
+      data-k2-focus=""
+      aria-label={`Get K2 for ${platform} on ${label}`}
+      className="relative flex flex-col items-center gap-2 p-1.5 -m-1.5 no-drag cursor-pointer"
     >
-      <div
-        className="bg-white p-1.5 border border-[var(--color-border)] [&>svg]:block [&>svg]:h-full [&>svg]:w-full"
-        style={{ width: 163, height: 163 }}
-        role="img"
-        aria-label={`${label} QR code`}
-        dangerouslySetInnerHTML={{ __html: svg }}
-      />
-      <img src={badgeSrc} alt={label} className="block w-[163px] h-auto" />
+      <QrCode url={url} size={STORE_TILE} border={2} label={`${label} QR code`} />
+      {/* The two badges differ in height: one box keeps the captions level. */}
+      <span className="flex items-center justify-center" style={{ width: STORE_TILE, height: 52 }}>
+        <img src={badgeSrc} alt="" className="block h-auto" style={{ width: STORE_TILE }} />
+      </span>
+      <span className="type-hint text-[var(--color-text-secondary)]">For {platform}</span>
     </a>
   )
 }

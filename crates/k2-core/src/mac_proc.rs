@@ -24,7 +24,8 @@ pub struct BsdInfo {
 
 /// The pid's BSD info, or `None` when there is no such process or the
 /// kernel won't tell us (another user's process, unless we are root).
-/// A zombie is still found (flavor arg 0 asks for zombies too).
+/// A zombie is still found: a nonzero arg asks the kernel to look among
+/// zombies too (with 0 a zombie reads as no such process).
 #[cfg(target_os = "macos")]
 pub fn bsd_info(pid: i32) -> Option<BsdInfo> {
     if pid <= 0 {
@@ -38,7 +39,7 @@ pub fn bsd_info(pid: i32) -> Option<BsdInfo> {
         libc::proc_pidinfo(
             pid,
             libc::PROC_PIDTBSDINFO,
-            0,
+            1,
             (&mut info as *mut libc::proc_bsdinfo).cast(),
             size,
         )

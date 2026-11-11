@@ -8,6 +8,11 @@
 //!          job would respawn it otherwise). Linux and Windows quit the
 //!          app only; the daemon is left alone there.
 //!
+//! Linux: by design (K2, 2026-11-11). The daemon is a systemd service and
+//! runs headless, so closing a window must never stop it.
+//! Windows: an open question. Should setting OFF stop the daemon there,
+//! as on macOS? Left as is until that's decided.
+//!
 //! Cmd+Q, the tray's Quit and the menu's Quit are not this path: they
 //! land in `RunEvent::ExitRequested` in lib.rs, which never stops the
 //! daemon. Pure so it can be tested without a window; the event closure

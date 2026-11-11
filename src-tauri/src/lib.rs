@@ -15,6 +15,8 @@ static RELAUNCH_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 mod agent_hooks;
 // The call's own window (pop out).
 mod call_window;
+// How the process ends once the app quits (_exit, or exit when relaunching).
+mod app_exit;
 // What the main window's close button does (keep the server, or quit).
 mod close_button;
 mod commands;
@@ -1372,22 +1374,9 @@ pub fn run() {
                         // The red-close path never reaches ExitRequested.
                         commands::native_voice::leave_on_quit(&app_handle);
 
-                        // Use _exit() to skip C++ static destructors (ggml_metal).
-                        // Without this, __cxa_finalize_ranges runs ggml's Metal cleanup
-                        // which races against macOS Metal device teardown → SIGABRT.
-                        // Skip _exit during relaunch so the process plugin can spawn
-                        // the new process before this one exits.
-                        if RELAUNCH_MODE.load(std::sync::atomic::Ordering::Relaxed) {
-                            log_debug!("[shutdown] Relaunch mode — using normal exit");
-                            std::process::exit(0);
-                        } else {
-                            #[cfg(unix)]
-                            unsafe {
-                                libc::_exit(0);
-                            }
-                            #[cfg(not(unix))]
-                            std::process::exit(0);
-                        }
+                        // _exit (no C++ destructors), or a normal exit when
+                        // relaunching: see app_exit.rs.
+                        app_exit::now(RELAUNCH_MODE.load(std::sync::atomic::Ordering::Relaxed));
                         }
                         _ => {}
                     }
@@ -1746,20 +1735,10 @@ pub fn run() {
                     commands::native_voice::leave_on_quit(app);
                 }
                 tauri::RunEvent::Exit => {
-                    if RELAUNCH_MODE.load(std::sync::atomic::Ordering::Relaxed) {
-                        // Relaunch mode — use normal exit so the spawned process survives
-                        std::process::exit(0);
-                    } else {
-                        // Use _exit() to skip C++ static destructors (ggml_metal).
-                        // This handles Cmd+Q (NSApplication terminate:) which bypasses
-                        // the window CloseRequested event and goes straight to exit().
-                        #[cfg(unix)]
-                        unsafe {
-                            libc::_exit(0);
-                        }
-                        #[cfg(not(unix))]
-                        std::process::exit(0);
-                    }
+                    // Cmd+Q (NSApplication terminate:) skips CloseRequested
+                    // and lands here: the same ending as the close button
+                    // (app_exit.rs).
+                    app_exit::now(RELAUNCH_MODE.load(std::sync::atomic::Ordering::Relaxed));
                 }
                 // macOS: user clicked the Dock icon while the window was
                 // hidden (e.g. they had closed it with the red button and

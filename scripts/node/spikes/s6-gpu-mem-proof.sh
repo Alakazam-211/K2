@@ -5,6 +5,8 @@
 #   P1  GPU buffers (GTT, system RAM) are NOT charged to the unit's
 #       MemoryMax: a job unit under MemoryMax=512M allocates well over it
 #       and keeps running (C4). This is why --gpu-mem is a second budget.
+#       If GTT IS charged, the unit is OOM-killed part way: reported as
+#       "P1 CHARGED … (oom-kill at N MiB)", the outcome that matters most.
 #   P2  The executor's reading (`k2-node admin gpu usage`, the same code as
 #       the `gpu_usage` op) sees that unit's own GPU memory: its GTT within
 #       a few percent of what the program allocated, and the device's
@@ -25,7 +27,8 @@
 #                    amdgpu device)
 #   --report PATH    the report (default /var/tmp/k2-gpu-s6-report.txt)
 #   --no-wait-locks  don't wait for the CI job lock or K2's smoke lock
-#   --no-pause       don't pause k2-node (only if it's already paused)
+#   --no-pause       don't pause k2-node: refused unless it is already paused
+#                    or stopped
 #   --keep-binary    leave the allocator at /usr/local/libexec/k2-s6-gpu-alloc
 #                    and print the end-to-end k2 compute command (step E2E);
 #                    remove it afterwards with: sudo rm /usr/local/libexec/k2-s6-gpu-alloc
@@ -33,7 +36,9 @@
 # Before it starts (it checks and prints these again):
 #   - It pauses this node (sudo k2-node pause) for its whole run, because it
 #     runs as root on a shared node, and resumes it at the end (also on
-#     Ctrl-C or an error). A node paused before it started stays paused.
+#     Ctrl-C or an error). It reads the node's control first (k2-node status
+#     --json): a node already paused or stopped is left as it was, and only
+#     a node this script paused is resumed.
 #   - Lid OPEN, mains power. Or tell K2 Hardware first so it can watch the
 #     GPU edge temperature: the clamshell thermal regulator caps the CPU
 #     only, and GPU-heavy load with the lid closed is untested.
@@ -65,7 +70,7 @@ while [ $# -gt 0 ]; do
         --no-wait-locks) WAIT_LOCKS=0; shift ;;
         --no-pause) PAUSE=0; shift ;;
         --keep-binary) KEEP=1; shift ;;
-        -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,55p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1 (--help)" >&2; exit 2 ;;
     esac
 done
@@ -117,13 +122,15 @@ VRAM_MB=$(( $(mib "$CARVE") / 8 ))
 VRAM_MB=$(( VRAM_MB / 256 * 256 ))
 
 say "K2 GPU jobs — S6 APU memory proof ($(date -u +%FT%TZ))"
-say "kernel $(uname -r) · systemd $(systemctl --version | head -1 | awk '{print $2}') · k2-node $(k2-node --version 2>/dev/null | head -1)"
+NODE_V="$(k2-node version 2>/dev/null | head -1)"
+[ -n "$NODE_V" ] || NODE_V="$(k2-node --version 2>/dev/null | head -1)"
+say "kernel $(uname -r) · systemd $(systemctl --version | head -1 | awk '{print $2}') · ${NODE_V:-k2-node version unknown}"
 say "device $DEVICE ($PCI, $(basename "$(readlink -f "$DEV/driver")"))"
 say "this boot: carve-out (VRAM) $(mib "$CARVE") MiB (CPU-visible $(mib "$VIS") MiB) · RAM Linux sees $(mib "$MEM_TOTAL") MiB, available $(mib "$MEM_AVAIL") MiB · GTT $(mib "$GTT_TOTAL") MiB (used $(mib "$(gtt_used)") MiB)"
 say "sizes: GTT allocation ${ALLOC_MB} MiB under MemoryMax=${MEMMAX_MB}M · second client ${SECOND_MB} MiB · VRAM allocation ${VRAM_MB} MiB"
 say ""
 say "NOTES: lid open and on mains (or K2 Hardware watching the GPU edge temperature: the thermal"
-say "regulator caps the CPU only). The node is paused for the whole run and resumed at the end."
+say "regulator caps the CPU only). An active node is paused for the whole run and resumed at the end."
 say "Allocations stay well under the RAM Linux sees; filling it would OOM the whole box."
 say ""
 if [ "$ALLOC_MB" -lt $(( MEMMAX_MB * 2 )) ]; then
@@ -139,6 +146,7 @@ PAUSED_BY_ME=0
 SCRATCH=/run/k2-s6-proof
 cleanup() {
     systemctl stop 'k2-s6-proof-*' >/dev/null 2>&1 || true
+    systemctl reset-failed 'k2-s6-proof-*' >/dev/null 2>&1 || true
     rm -rf "$SCRATCH"
     if [ "$PAUSED_BY_ME" = 1 ]; then
         if k2-node resume --by s6-proof >/dev/null 2>&1; then
@@ -159,10 +167,26 @@ if [ "$WAIT_LOCKS" = 1 ]; then
     printf 'k2 GPU jobs S6 proof\nstarted %s\npid %s\n' "$(date -u +%FT%TZ)" "$$" > "$LOCK_K2"
     WROTE_LOCK=1
 fi
-if [ "$PAUSE" = 1 ]; then
-    k2-node pause --by s6-proof || { echo "k2-node pause failed: nothing tested" >&2; exit 2; }
-    PAUSED_BY_ME=1
-    say "k2-node paused (it resumes at the end)"
+# The node's control now (active | paused | stopped): only an active node
+# is paused here, and only a node this script paused is resumed.
+CONTROL="$(k2-node status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("control", ""))' 2>/dev/null)"
+case "$CONTROL" in
+    active)
+        if [ "$PAUSE" = 0 ]; then
+            echo "--no-pause: k2-node is active (k2-node status); pause it first or drop --no-pause" >&2; exit 2
+        fi
+        k2-node pause --by s6-proof || { echo "k2-node pause failed: nothing tested" >&2; exit 2; }
+        PAUSED_BY_ME=1
+        say "k2-node paused (this script resumes it at the end)"
+        ;;
+    paused|stopped)
+        say "k2-node was already $CONTROL before this run: left $CONTROL at the end"
+        ;;
+    *)
+        echo "can't read k2-node's control state (sudo k2-node status --json gave '${CONTROL}'): nothing tested" >&2; exit 2
+        ;;
+esac
+if [ "$CONTROL" = active ] || [ "$CONTROL" = paused ]; then
     # A job that was running finishes first: wait for no k2job unit but ours.
     for _ in $(seq 1 120); do
         systemctl list-units --type=service --state=active --no-legend 'k2job-*' 2>/dev/null | grep -q . || break
@@ -245,6 +269,8 @@ int main(int argc, char **argv) {
         memset(p, 0x5a, chunk);
         vkUnmapMemory(dev, m);
         done += chunk;
+        printf("progress: %llu MB\n", (unsigned long long)(done >> 20));
+        fflush(stdout);
     }
     printf("allocated: %llu MB\n", (unsigned long long)(done >> 20));
     fflush(stdout);
@@ -283,14 +309,25 @@ start_unit() {
     echo "$u"
 }
 # wait_allocated <unit>: until it printed "allocated:" (or ended).
+# Records the unit's memory.events oom_kill while its cgroup exists (it
+# goes with the unit).
 wait_allocated() {
     for _ in $(seq 1 120); do
+        cg_file "$1" memory.events | awk '/^oom_kill / {print $2}' > "$SCRATCH/$1.oomk.new" 2>/dev/null \
+            && [ -s "$SCRATCH/$1.oomk.new" ] && mv "$SCRATCH/$1.oomk.new" "$SCRATCH/$1.oomk"
         grep -q '^allocated:' "$SCRATCH/$1.out" 2>/dev/null && return 0
         [ "$(systemctl show -p SubState --value "$1")" = "running" ] || return 1
         sleep 0.5
     done
     return 1
 }
+# oom_killed <unit>: its Result is oom-kill, or its cgroup saw an OOM kill.
+oom_killed() {
+    [ "$(systemctl show -p Result --value "$1" 2>/dev/null)" = "oom-kill" ] && return 0
+    [ "$(cat "$SCRATCH/$1.oomk" 2>/dev/null || echo 0)" -gt 0 ] 2>/dev/null
+}
+# reached <unit>: the last "progress:" MiB it printed (0 if none).
+reached() { sed -n 's/^progress: \([0-9]*\) MB/\1/p' "$SCRATCH/$1.out" 2>/dev/null | tail -1 | grep . || echo 0; }
 usage_json() { k2-node admin gpu usage --unit "$1" --json 2>&1; }
 jget() { python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get(sys.argv[2], 0))' "$1" "$2" 2>/dev/null || echo 0; }
 cg_file() { local cg; cg="$(systemctl show -p ControlGroup --value "$1")"; cat "/sys/fs/cgroup$cg/$2" 2>/dev/null; }
@@ -367,6 +404,9 @@ if wait_allocated "$U"; then
     else
         res P4 FAIL "GTT still $(mib "$left") MiB over where it started 3 s after the unit stopped"
     fi
+elif oom_killed "$U"; then
+    res P1 CHARGED "GTT IS charged to MemoryMax (oom-kill at $(reached "$U") MiB of ${ALLOC_MB} MiB, MemoryMax ${MEMMAX_MB}M). Tell the K2 builder: on this kernel --mem already holds GPU buffers, so --gpu-mem double counts"
+    res P2 SKIP "needs P1's unit alive (it was OOM-killed); P3 and P4 too"
 else
     res P1 FAIL "the allocation didn't finish: $(tr '\n' ';' < "$SCRATCH/$U.out" | cut -c1-300) (state $(systemctl show -p SubState,Result --value "$U" | tr '\n' ' '))"
 fi
@@ -388,6 +428,8 @@ else
         else
             res P5 FAIL "the reading has VRAM $(mib "$v") MiB for ${VRAM_MB} MiB"
         fi
+    elif oom_killed "$V"; then
+        res P5 CHARGED "VRAM allocations were charged to MemoryMax (oom-kill at $(reached "$V") MiB of ${VRAM_MB} MiB, MemoryMax ${MEMMAX_MB}M)"
     else
         res P5 info "no device-local host-visible allocation: $(tr '\n' ';' < "$SCRATCH/$V.out" | cut -c1-200)"
     fi

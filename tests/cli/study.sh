@@ -1044,7 +1044,7 @@ for needle in "k2 agent template list" "k2 agent template show writer" "kessel a
     "<file>.proposed" "K2:MANAGED" "Never changed: permissions" ".k2/agent/template.lock" \
     "unknown_template (4)" "template_conflict (3)" "folder_exists (3)" "id_reserved (1)" "id_taken (1)" \
     "too_large (1)" "bad_id (2)" "own_workspace_only (3)" "not_author (3)" "no_template (4)" "role_required (3)" \
-    "Add --launch the first time" "the Thread is the person's chat" "No override" "not a path" "\"Your notes\" part" "role_required" \
+    "The hello goes once, the first time the agent starts" "Later starts send nothing" "the Thread is the person's chat" "No override" "not a path" "\"Your notes\" part" "role_required" \
     "would write · skip ·" "yours, kept" "(the same for k2 agent hire and k2 agent template)"; do
     assert_contains "agent-templates names $needle" "$at_out" "$needle"
 done
@@ -1066,7 +1066,7 @@ assert_eq "agent template save --help is the same page" "$("$K2" agent template 
 hh="$("$K2" agent hire --help)"
 for needle in "k2 study agent-templates" "--template <id>" "--agent <preset>" "--param <key>=<value>" "--answer <id>=<text>" \
     "--dry-run" "--launch" "--take-app <app>" "--brief <file>" "suggested" "(the same for k2 agent hire and k2 agent template)" \
-    "folder_exists" "[--name <name>]" "would write · skip ·" "yours, kept" "previews: nothing is written or started" "else Claude"; do
+    "folder_exists" "[--name <name>]" "would write · skip ·" "yours, kept" "nothing is written or started" "The hello goes once, the first time the agent starts" "else Claude"; do
     assert_contains "agent hire --help names $needle" "$hh" "$needle"
 done
 at_schema="$("$K2" --schema)"

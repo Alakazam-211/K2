@@ -586,6 +586,13 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
         rows.push(row("permission", id.clone(), "suggest", None));
     }
 
+    // The hello, rendered on the first create only. It is kept in the lock
+    // until something starts the agent and sends it (T9).
+    let hello_text = match t.meta.hello.as_ref() {
+        Some(h) if inp.created => Some(render(&h.brief, &vars).trim().to_string()).filter(|s| !s.is_empty()),
+        _ => None,
+    };
+
     // The lock: rewritten only when what it records changed.
     let next = TemplateLock {
         id: t.meta.id.clone(),
@@ -602,6 +609,13 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
         // What the text was rendered with: the first apply's, kept after.
         vars: prev.as_ref().map(|l| l.vars.clone()).unwrap_or_else(|| vars.clone()),
         answers: prev.as_ref().map(|l| l.answers.clone()).unwrap_or_else(|| inp.answers.clone()),
+        // First apply: the hello waits here for the agent's first start.
+        // After: as it was (pending, or sent).
+        hello_pending: match prev.as_ref() {
+            Some(l) => l.hello_pending.clone(),
+            None => hello_text.clone(),
+        },
+        hello_sent_at: prev.as_ref().and_then(|l| l.hello_sent_at),
     };
     let lock_changed = prev.as_ref().is_none_or(|p| !p.same_content(&next));
     let wrote_something = rows.iter().any(|r| r.status == "done");
@@ -616,12 +630,17 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
 
     // Hello: on the first create only.
     let hello = match t.meta.hello.as_ref() {
-        Some(h) if inp.created => {
+        Some(_) if inp.created => {
             rows.push(row("hello", "thread", wrote, None));
-            Some(render(&h.brief, &vars).trim().to_string()).filter(|s| !s.is_empty())
+            hello_text
         }
         Some(_) => {
-            rows.push(row("hello", "thread", "skip", Some("sent on the first create only")));
+            let why = if prev.as_ref().is_some_and(|l| l.hello_pending.is_some()) {
+                "not sent yet: it goes when the agent first starts"
+            } else {
+                "sent once already (or this agent predates it)"
+            };
+            rows.push(row("hello", "thread", "skip", Some(why)));
             None
         }
         None => None,

@@ -133,6 +133,7 @@ pub mod heartbeat_routes;
 pub mod jobs;
 pub mod hire_routes;
 pub(crate) mod template_routes;
+pub(crate) mod template_hello;
 pub mod heartbeat_wait;
 pub mod home_avatar_routes;
 // Desktop mirrors (0.46.4): this computer's app forwards its former

@@ -37,10 +37,9 @@ WHAT A TEMPLATE IS
     to its person on the Thread (the Thread is the person's chat with
     the agent).
   Or, to make it without starting it, leave out --launch: nothing starts.
-  Add --launch the first time if you want the hello; a later --launch
-  starts the agent without one. An agent first opened without a hello
-  starts from its ROLE.md, which tells it to ask its person the
-  questions still open.
+  The hello goes once, the first time the agent starts: with --launch
+  here, a later re-run with --launch, or its person opening it in the
+  app. Later starts send nothing.
   --name <name>      optional; the display name. Left out, it is the
                      folder's name: the template id with no <dir>
                      (<hire root>/writer), else the <dir> folder's name.

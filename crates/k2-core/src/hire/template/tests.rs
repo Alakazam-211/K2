@@ -299,6 +299,34 @@ fn template_dry_run_writes_nothing_and_matches_the_apply() {
     assert_eq!(want, got);
 }
 
+/// T9: the first create keeps the hello in the lock until it is taken,
+/// once; a re-apply keeps it as it is; an old lock has none.
+#[test]
+fn template_hello_waits_in_the_lock_and_is_taken_once() {
+    let home = setup();
+    let path = ws(&home, "hello");
+    let mut r = req("writer", &path);
+    r.name = Some("Max".into());
+    apply(&r, &HireCaller::Owner).expect("apply");
+    assert!(lock::has_pending_hello(&path));
+    apply(&r, &HireCaller::Owner).expect("re-apply");
+    assert!(lock::has_pending_hello(&path), "a re-apply keeps it");
+    let hello = lock::take_pending_hello(&path).unwrap().expect("taken");
+    assert!(hello.contains("Say hello"), "{hello}");
+    assert!(lock::take_pending_hello(&path).unwrap().is_none(), "once");
+    let l = lock::read(&path).unwrap().unwrap();
+    assert!(l.hello_sent_at.is_some() && l.hello_pending.is_none(), "{l:?}");
+    apply(&r, &HireCaller::Owner).expect("re-apply after");
+    assert!(!lock::has_pending_hello(&path), "a re-apply never brings it back");
+    // A lock written before the field: nothing to take.
+    let old = "id = \"writer\"\nversion = 1\nhash = \"x\"\napplied_at = 0\nby = \"owner-token\"\n";
+    let p2 = ws(&home, "old");
+    std::fs::create_dir_all(Path::new(&p2).join(".k2/agent")).unwrap();
+    std::fs::write(Path::new(&p2).join(LOCK_REL), old).unwrap();
+    assert!(!lock::has_pending_hello(&p2));
+    assert!(lock::take_pending_hello(&p2).unwrap().is_none());
+}
+
 /// Every built-in hired with no `about`: the "focus on" line is dropped
 /// whole, no placeholder is left, and the shared block's rules are there.
 #[test]

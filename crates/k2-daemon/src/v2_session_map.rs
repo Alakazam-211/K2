@@ -58,7 +58,13 @@ fn shared() -> AgentMap {
 /// Worktree chats and ad-hoc Cmd+T tabs register under their own
 /// terminal-id-shaped keys; nothing depends on a bare-name slot.
 pub fn register(agent_name: impl Into<String>, session: Arc<DaemonPtySession>) {
-    register_inner(agent_name.into(), session);
+    let key: String = agent_name.into();
+    let program = session.program.clone();
+    register_inner(key.clone(), session);
+    // T9: a template agent's first start sends its pending hello. After
+    // the insert (the delivery finds this session, never spawns another);
+    // the check runs off this thread.
+    crate::template_hello::on_session_registered(&key, program.as_deref());
     // Active membership is window/pin only. A spawn without a need
     // does not join the set; recompute still broadcasts so a concurrent
     // need's touch is visible. Must run AFTER register_inner: the inner

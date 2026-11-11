@@ -51,6 +51,15 @@ pub struct TemplateLock {
     /// or a starter note already).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub answers: BTreeMap<String, String>,
+    /// The hello still to send (rendered at the first create): whatever
+    /// starts the agent first sends it once, then clears it (T9). Absent
+    /// in a lock written before this field, and once sent: an agent made
+    /// before it never gets a surprise hello.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hello_pending: Option<String>,
+    /// When the hello was taken to be sent (unix seconds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hello_sent_at: Option<i64>,
 }
 
 pub fn lock_path(workspace: &str) -> PathBuf {
@@ -80,6 +89,28 @@ pub fn write(workspace: &str, lock: &TemplateLock) -> Result<(), HireError> {
     let mut text = String::from("# Written by K2 when this agent was made from a template. Don't edit.\n");
     text.push_str(&toml::to_string(lock).map_err(|e| HireError::internal(format!("template lock: {e}")))?);
     crate::fs_atomic::atomic_write_str(&p, &text).map_err(|e| HireError::internal(format!("{}: {e}", p.display())))
+}
+
+/// One take of a pending hello at a time in this process, so two starts
+/// of one agent never both send it.
+static HELLO_TAKE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The workspace's lock holds a hello still to send (a cheap read; it
+/// takes nothing).
+pub fn has_pending_hello(workspace: &str) -> bool {
+    matches!(read(workspace), Ok(Some(l)) if l.hello_pending.as_deref().is_some_and(|h| !h.trim().is_empty()))
+}
+
+/// Take the pending hello: clear it and record `hello_sent_at` in the lock
+/// FIRST, then return its text for the caller to deliver. `None` when
+/// there is no lock, the lock predates the field, or it went already.
+pub fn take_pending_hello(workspace: &str) -> Result<Option<String>, HireError> {
+    let _g = HELLO_TAKE.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(mut l) = read(workspace)? else { return Ok(None) };
+    let Some(text) = l.hello_pending.take().filter(|h| !h.trim().is_empty()) else { return Ok(None) };
+    l.hello_sent_at = Some(super::super::now_secs());
+    write(workspace, &l)?;
+    Ok(Some(text))
 }
 
 impl TemplateLock {

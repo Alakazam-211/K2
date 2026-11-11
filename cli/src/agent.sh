@@ -811,14 +811,12 @@ FROM A TEMPLATE, IN THREE STEPS (k2 study agent-templates)
               and permission with its label: would write · skip ·
               yours, kept · suggested. Nothing is written.
   3. Hire:    the same line without --dry-run. Nothing starts unless you add
-              --launch; with it, K2 starts the agent and, on this first
-              create only, it says hello on its Thread. Tell your person
-              what you hired.
-  Add --launch the first time if you want the hello; a later --launch
-  starts the agent without one. An agent first opened without a hello
-  starts from its ROLE.md, which tells it to ask its person the
-  questions still open. --dry-run with --launch or --onboard only
-  previews: nothing is written or started.
+              --launch; with it, K2 starts the agent and it says hello on
+              its Thread. Tell your person what you hired.
+  The hello goes once, the first time the agent starts: with --launch
+  here, a later re-run with --launch, or its person opening it in the
+  app. Later starts send nothing. --dry-run with --launch or --onboard
+  only previews: nothing is written or started.
   Re-running the same --template and --name with no <dir> reuses
   <hire root>/<handle>; folder_exists means that folder holds something
   else (another agent or other files).
@@ -914,10 +912,10 @@ FLAGS
                           .k2/AGENTS.md. Generate is on by default for new agents.
   --fanout                Plant leftover harness names (CLAUDE.md, GEMINI.md,
                           AGENT.md, …). Off by default.
-  --launch                Start the agent's session after provisioning. On a
-                          template hire's FIRST create, K2 then has it say
-                          hello on its Thread (once; without --launch, or on
-                          a re-run, nothing starts and no hello is sent).
+  --launch                Start the agent's session after provisioning. A
+                          template agent says hello on its Thread the first
+                          time it starts (here, a later --launch, or the
+                          app), once. Without --launch nothing starts.
   --onboard <msg>         Send <msg> to the agent after it starts (implies --launch).
                           With a template's hello, <msg> goes after the hello.
   --db-access off|read|write
@@ -2758,20 +2756,20 @@ if a and a["status"] == "pending":
         else:
             changed = True
 
-# 7b. hello (0.46.12, prd-agent-templates-v1 §3): with --launch, a template
-#     hire's first create starts the agent and sends its hello from the
-#     daemon (helloDelivered), before --onboard. An older daemon only returns
-#     the hello: then it goes in here, after the launch, as the first
-#     message. Without --launch it isn't sent: hire never starts an agent
-#     you didn't ask to start.
-if template_hello:
+# 7b. hello (0.46.12, prd-agent-templates-v1 §3; T9): with --launch the
+#     daemon starts a template agent whose hello was never sent and sends it
+#     (helloDelivered), before --onboard: on the first create or a later
+#     re-run. An older daemon only returns the hello on the first create:
+#     then it goes in here, after the launch, as the first message. Without
+#     --launch nothing starts; the hello waits for the agent's first start.
+if template_hello or hello_by_daemon:
     ha = {"step": "hello", "status": "pending"}
     la = one("launch")
     if hello_by_daemon:
         ha.update(status="done", reason="sent by K2 when it started the agent")
         changed = True
     elif not la:
-        ha.update(status="skipped", reason="not launched: the hello goes only with --launch on the first create")
+        ha.update(status="skipped", reason="not launched: it goes the first time the agent starts")
     elif la["status"] == "failed":
         ha.update(status="not-run", reason="launch failed")
     else:

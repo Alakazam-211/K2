@@ -774,6 +774,81 @@ fn template_recipe_member_takes_a_template() {
     assert_eq!(st, 400, "{v}");
 }
 
+fn hellos_to(handle: &str) -> Vec<(String, Option<String>)> {
+    crate::template_hello::TEST_HELLOS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(h, _, _)| h == handle)
+        .map(|(_, hello, onboard)| (hello.clone(), onboard.clone()))
+        .collect()
+}
+
+/// T9: a hire that didn't launch keeps its hello in the lock; the agent's
+/// first start (any door) sends it once, and later starts send nothing.
+#[test]
+fn template_hello_waits_for_the_first_start() {
+    let _home = k2_core::test_env::TempHome::new();
+    ensure_test_root();
+    // Hire without launch, then the agent starts: exactly one hello.
+    let (st, out) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": uniq("Late") }), &[]);
+    assert_eq!(st, 200, "{out}");
+    assert_eq!(out["helloDelivered"], false, "{out}");
+    let handle = out["handle"].as_str().unwrap().to_string();
+    let path = out["path"].as_str().unwrap().to_string();
+    assert!(hellos_to(&handle).is_empty(), "nothing starts at the hire");
+    assert!(k2_core::hire::template::lock::has_pending_hello(&path), "the lock holds the hello");
+    assert!(crate::template_hello::launch_hello(&handle), "the first start sends it");
+    let got = hellos_to(&handle);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(got[0].0.contains("Say hello"), "{got:?}");
+    let lock = k2_core::hire::template::lock::read(&path).unwrap().unwrap();
+    assert!(lock.hello_pending.is_none() && lock.hello_sent_at.is_some(), "{lock:?}");
+    // Started again: nothing.
+    assert!(!crate::template_hello::launch_hello(&handle));
+    // A re-run with launch: nothing either.
+    let (_, again) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": out["name"], "launch": true }), &[]);
+    assert_eq!(again["helloDelivered"], false, "{again}");
+    assert_eq!(hellos_to(&handle).len(), 1, "the hello goes once");
+
+    // Hire without launch, then a re-run WITH launch: that run sends it,
+    // then the onboard message; a later start sends nothing.
+    let (_, quiet) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": uniq("Rerun") }), &[]);
+    let rh = quiet["handle"].as_str().unwrap().to_string();
+    let (st, run) = cli(
+        CLI_HIRE,
+        Who::Owner,
+        true,
+        json!({ "template": "writer", "name": quiet["name"], "launch": true, "onboard": "Start with the blog." }),
+        &[],
+    );
+    assert_eq!(st, 200, "{run}");
+    assert_eq!((run["helloDelivered"].as_bool(), run["onboardQueued"].as_bool()), (Some(true), Some(true)), "{run}");
+    let got = hellos_to(&rh);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0].1.as_deref(), Some("Start with the blog."));
+    assert!(!crate::template_hello::launch_hello(&rh), "then nothing on a start");
+
+    // Hire WITH launch: one hello at the hire, none on a later start.
+    let (_, now) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": uniq("Now"), "launch": true }), &[]);
+    let nh = now["handle"].as_str().unwrap().to_string();
+    assert_eq!(hellos_to(&nh).len(), 1);
+    assert!(!crate::template_hello::launch_hello(&nh));
+    assert_eq!(hellos_to(&nh).len(), 1);
+
+    // A lock from before the field (no hello_pending): never a hello.
+    let (_, old) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": uniq("Old") }), &[]);
+    let (oh, op) = (old["handle"].as_str().unwrap().to_string(), old["path"].as_str().unwrap().to_string());
+    let text = std::fs::read_to_string(Path::new(&op).join(".k2/agent/template.lock")).unwrap();
+    let mut l = k2_core::hire::template::lock::read(&op).unwrap().unwrap();
+    l.hello_pending = None;
+    k2_core::hire::template::lock::write(&op, &l).unwrap();
+    let stripped = std::fs::read_to_string(Path::new(&op).join(".k2/agent/template.lock")).unwrap();
+    assert!(text.contains("hello_pending") && !stripped.contains("hello_pending") && !stripped.contains("hello_sent_at"), "{stripped}");
+    assert!(!crate::template_hello::launch_hello(&oh), "an old lock sends nothing");
+    assert!(hellos_to(&oh).is_empty());
+}
+
 /// Daemon-first hello (PRD §3 Hello row): with `launch: true` a first
 /// template hire starts the agent and delivers its hello once (then the
 /// `onboard` message after it). `launch` absent (an older CLI) or false
@@ -783,7 +858,7 @@ fn template_hire_delivers_the_hello_from_the_daemon_once() {
     let _home = k2_core::test_env::TempHome::new();
     ensure_test_root();
     let sent = |handle: &str| -> Vec<(String, Option<String>)> {
-        super::TEST_HELLOS
+        crate::template_hello::TEST_HELLOS
             .lock()
             .unwrap()
             .iter()

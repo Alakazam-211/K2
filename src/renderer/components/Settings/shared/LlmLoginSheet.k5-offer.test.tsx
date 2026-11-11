@@ -105,7 +105,8 @@ async function signIn(state: string, scope: ServerScope = primaryScope()): Promi
   await act(async () => {
     fireEvent.click(screen.getByTestId('llm-login-start'))
   })
-  await screen.findByTestId('llm-login-state')
+  // Signed in, the sheet shows its success note; under way, the state line.
+  await screen.findByTestId(state === 'signed_in' ? 'llm-login-done' : 'llm-login-state')
 }
 
 describe('the K5 offer after a sign-in', () => {

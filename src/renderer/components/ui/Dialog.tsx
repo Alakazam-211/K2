@@ -47,6 +47,9 @@ export interface DialogFrameProps extends React.HTMLAttributes<HTMLDivElement> {
   cancelHeld?: boolean
   /** Why closing is held: the held ×'s tooltip (a generic line without it). */
   cancelHeldReason?: string
+  /** False: a press outside does nothing (Esc and the × still cancel), for
+   *  a dialog whose work goes on in another window. Default true. */
+  cancelOnPressOutside?: boolean
   /** `inline`: the caller puts `<DialogCloseButton>` in its own header, so
    *  the frame draws no corner ×. Esc and a press outside still cancel. */
   closeButton?: 'corner' | 'inline'
@@ -68,12 +71,13 @@ export function DialogFrame({
   onCancel,
   cancelHeld = false,
   cancelHeldReason,
+  cancelOnPressOutside = true,
   closeButton = 'corner',
   ...rest
 }: DialogFrameProps): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   useBrowserOverlay({ active: true, ref, kind: 'modal' })
-  const cancel = useDialogCancel(onCancel, cancelHeld)
+  const cancel = useDialogCancel(onCancel, cancelHeld, { pressOutside: cancelOnPressOutside })
   return (
     <div
       ref={ref}

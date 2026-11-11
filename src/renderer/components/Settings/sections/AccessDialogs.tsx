@@ -28,6 +28,7 @@ export function AccessSheet({
   intro,
   onClose,
   busy = false,
+  pressOutside = true,
   testId,
   children,
 }: {
@@ -35,6 +36,8 @@ export function AccessSheet({
   intro?: React.ReactNode
   onClose: () => void
   busy?: boolean
+  /** False: a press outside does nothing (Esc and the × still close). */
+  pressOutside?: boolean
   testId: string
   children: React.ReactNode
 }): React.JSX.Element {
@@ -53,6 +56,7 @@ export function AccessSheet({
         onCancel={onClose}
         cancelHeld={busy}
         cancelHeldReason="Can’t close while this change saves"
+        cancelOnPressOutside={pressOutside}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

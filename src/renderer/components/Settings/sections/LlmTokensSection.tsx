@@ -20,21 +20,22 @@ export const LLM_TOKENS_MANIFEST: SettingEntry[] = [
     id: 'agents.accounts',
     section: 'llm-tokens',
     label: 'Subs / Tokens',
-    description: 'Which subscription or API token each agent CLI uses on this server; add, switch or remove tokens',
+    description: 'The subscriptions and API tokens your agents sign in with on this server; add, switch or remove them',
     keywords: ['token', 'tokens', 'subscription', 'subscriptions', 'llm', 'llms', 'language models', 'api token', 'api key', 'server default', 'account', 'login', 'sign in', 'switch', 'claude', 'codex', 'grok'],
   },
   {
     id: 'agents.add-login',
     section: 'llm-tokens',
-    label: 'Add subscription or API token',
-    description: 'Sign another Claude, Codex or Grok subscription in, or paste an API token, on this server',
+    label: 'Add a token',
+    description: 'Sign in with a Claude, Codex or Grok subscription, or paste an API token, on this server',
     keywords: ['add', 'token', 'subscription', 'tokens', 'llm', 'language models', 'api token', 'api key', 'account', 'login', 'sign in', 'claude', 'codex', 'grok', 'gemini'],
   },
 ]
 
 export function LlmTokensSection(): React.JSX.Element {
   return (
-    <div className="max-w-3xl" data-llm-tokens-section="">
+    // One content width with Providers / Models and Workspaces / Agents.
+    <div className="max-w-[52rem]" data-llm-tokens-section="">
       <AgentAccountsColumn />
     </div>
   )

@@ -2,6 +2,14 @@
 // from 0.45.7, LlmTokensSection; before, the right column of Settings → LLMs).
 // (Internally: the LLM login wallet; routes and types keep those names.)
 //
+// The page follows Settings → Workspaces / Agents and Admin Access: a title
+// with one plain line, the page's one primary action (Add a token), then a
+// card per provider with a row per token (name and facts left, the row's
+// main action and its "…" menu on one right edge). Loading, failed and
+// empty use the shared load-state card; a change says what it did in the
+// provider's card; anything that removes or moves the default asks first,
+// in the same dialog frame as Admin Access.
+//
 // The server default ("the pool" internally): one token per tool is the
 // server default (the tool's normal store), so every chat on Server
 // default uses it and conversations never split. The other tokens wait in
@@ -13,10 +21,8 @@
 // click.
 
 import React from 'react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import AgentIcon from '@/components/AgentIcon/AgentIcon'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { primaryScope } from '@/kessel/server-scope'
-import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 import { isWebClient } from '@/lib/is-web'
 import { formatResetsIn, isChipWindow, limitState, limitStateText, sourceText } from '@/lib/subscription-usage'
@@ -25,7 +31,6 @@ import { findLimitsLogin, type LimitsLogin } from '@/lib/usage-limits'
 import { useUsageLimitsStore, watchUsageLimits } from '@/stores/usage-limits'
 import { LimitBar } from '@/components/Usage/LimitBar'
 import {
-  addApiKey,
   checkedAgoText,
   clearDefaultLogin,
   errorText,
@@ -48,13 +53,12 @@ import {
   type LlmAccountsDoc,
   type LlmTool,
 } from '@/stores/llm-accounts'
-import type { ServerScope } from '@/kessel/server-scope'
-import { LlmLoginSheet, type LoginSheetStart } from './LlmLoginSheet'
+import { LlmLoginSheet, type LoginSheetResult, type LoginSheetStart } from './LlmLoginSheet'
 import { SIGN_IN_TOOLS, useLlmSignInRequestStore } from '@/stores/llm-sign-in-request'
-import { Button, DialogCloseButton, Tag, useDialogCancel } from '@/components/ui'
-
-/** Visible keyboard focus on the tile actions (Button leaves outline to the UA). */
-const ACTION_FOCUS = 'outline-none focus-visible:outline-solid focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)]'
+import { Button, Callout, Input, OverflowMenu, Tag, type OverflowMenuItem } from '@/components/ui'
+import { SETTING_ROW_HINT, SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { AccessSheet, ConfirmSheet, DIALOG_FIELD, Field } from '../sections/AccessDialogs'
+import { StatusDot, type HealthTone } from '../sections/ConnectionsParts'
 
 /** The big 7 rows, in the page's order, with their icon names. */
 export const LOGIN_TOOL_ROWS: Array<{ id: string; label: string; agentIcon: string }> = [
@@ -67,18 +71,25 @@ export const LOGIN_TOOL_ROWS: Array<{ id: string; label: string; agentIcon: stri
   { id: 'pi', label: 'Pi', agentIcon: 'Pi' },
 ]
 
+/** The page's line under its title: what it's for. */
+export const PAGE_INTRO = 'The subscriptions and API tokens your agents sign in with.'
+
+/** How the server default works, in the page's words. */
 export const SWITCH_NOTE =
-  'One token per tool is the server default. Changing it affects every chat that uses Server default on this server; running sessions pick up the new token. Workspaces and chats set to their own token keep it.'
+  'Each provider has one server default: every chat set to Server default uses it, and running chats pick up a change.'
+
+/** Said wherever the default moves: who keeps their own token. */
+export const KEEP_OWN_NOTE = 'Workspaces and chats that picked their own token keep it.'
 
 /** A Member login can't change the server default (Admin and above). */
-export const ADMIN_SWITCH_REASON = 'Only an Admin or the Owner can change the server default token.'
+export const ADMIN_SWITCH_REASON = 'Only an Admin or the Owner can change the server default.'
 
-export const ACTIVE_REMOVE_REASON = 'This is the server default; make another token the server default first'
+export const ACTIVE_REMOVE_REASON = 'This is the server default. Make another token the default first.'
 
-/** On the server default's row: why it has no "Sign in again". */
-export const ACTIVE_RELOGIN_HINT = 'To sign this token in again, make another token the server default first.'
+/** On the server default's menu: why it has no "Sign in again". */
+export const ACTIVE_RELOGIN_HINT = 'To sign it in again, make another token the server default first.'
 
-export const SIGNING_IN_SWITCH_REASON = 'This token is signing in; finish or cancel that sign-in first'
+export const SIGNING_IN_SWITCH_REASON = 'This token is signing in. Finish or cancel that first.'
 
 /** What "no server default" means for `tool` (said in the confirm). A
  *  subscription still signed in to the tool itself becomes the default
@@ -88,8 +99,8 @@ export function noDefaultText(tool: Pick<LlmTool, 'display' | 'activeId' | 'live
     ? tool.accounts.find((a) => a.id === tool.liveAccountId) ?? null
     : null
   return live
-    ? `${tokenName(tool.display, live)}, still signed in to ${tool.display} itself, becomes the server default again.`
-    : `${tool.display} then has no server default: chats on Server default get no token from K2.`
+    ? `“${live.label}”, still signed in to ${tool.display} itself, becomes the server default again.`
+    : `${tool.display} then has no server default: chats set to Server default get no token from K2.`
 }
 
 /** The confirm before a server-default switch: from → to, plus a
@@ -107,45 +118,50 @@ export function switchConfirmText(
     `From: ${fromName}`,
     `To: ${toName}`,
     '',
-    `Every chat that uses Server default on this server moves to ${to.label}; running sessions pick it up. Workspaces and chats set to their own token keep it.`,
+    `Every chat set to Server default on this server moves to “${to.label}”, and running chats pick it up. ${KEEP_OWN_NOTE}`,
   ]
   if (warnings.length > 0) lines.push('', ...warnings.map((w) => `Warning: ${w}`))
-  return { title: `Switch the ${tool.display} server default?`, message: lines.join('\n'), warnings }
+  return { title: `Make “${to.label}” the ${tool.display} server default?`, message: lines.join('\n'), warnings }
 }
 
-const STATE_COLORS: Record<string, string> = {
-  signed_in: '#22c55e',
-  needs_login: '#ef4444',
-  signing_in: '#eab308',
-  not_set_up: '#6b7280',
-  unknown: '#6b7280',
+const STATE_TONE: Record<string, HealthTone> = {
+  signed_in: 'ok',
+  needs_login: 'error',
+  signing_in: 'warn',
+}
+
+/** "Max subscription · alex@example.com · Example Studio": what a token is. */
+function kindLine(a: LlmAccount): string {
+  if (a.kind === 'api_key') return 'API token · billed per token'
+  const plan = (a.plan ?? '').trim()
+  const kind = plan ? `${plan.charAt(0).toUpperCase()}${plan.slice(1)} subscription` : 'Subscription'
+  return [kind, a.email, a.org].filter(Boolean).join(' · ')
 }
 
 /** Usage v2 (Q4, P8): each token's subscription windows as T3-style bars
  *  (all of them, B30: model-scoped weeks too), with the pace mark, amber /
- *  red bands, "reset — re-checking", how old the reading is, why there are
- *  no numbers, and a Refresh for this one login. The reading is the
- *  daemon's `/cli/usage/limits` row for this token when this login may read
- *  it (Owner, Admin), else the wallet's own last reading. */
+ *  red bands, "reset — re-checking", how old the reading is and why there
+ *  are no numbers. The reading is the daemon's `/cli/usage/limits` row for
+ *  this token when this login may read it (Owner, Admin), else the
+ *  wallet's own last reading. "Check usage now" is in the row's menu. */
 function UsageMeter({
   account,
   limits,
-  onRefresh,
+  refreshing,
+  refreshError,
 }: {
   account: LlmAccount
   limits: LimitsLogin | null
-  /** Re-check this login now; absent when this login may not. */
-  onRefresh?: () => Promise<void>
+  refreshing: boolean
+  refreshError: string | null
 }): React.JSX.Element | null {
   const [now, setNow] = useState(() => Date.now())
-  const [refreshing, setRefreshing] = useState(false)
-  const [refreshError, setRefreshError] = useState<string | null>(null)
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), USAGE_CACHE_POLL_MS)
     return () => clearInterval(id)
   }, [])
   const usage = limits ?? account.usage
-  // API tokens: the row name already says "billed per token".
+  // API tokens: the row already says "billed per token".
   if (!usage || account.kind === 'api_key') return null
   const windows = usage.windows ?? []
   // Each token's own last reading, with its age: a failed check keeps the
@@ -157,59 +173,40 @@ function UsageMeter({
   const live = sourceText(usage.source)
   const nextProbe = usage.nextProbeAt ? Date.parse(usage.nextProbeAt) : NaN
   return (
-    <div className="mt-1" data-testid={`llm-usage-${account.id}`}>
+    <div className="mt-2" data-testid={`llm-usage-${account.id}`}>
       {windows.length > 0 && (
-        <div className="flex flex-wrap gap-x-3 gap-y-1">
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
           {windows.map((w) => (
-            <div key={w.id ?? w.label} className="w-32">
+            <div key={w.id ?? w.label} className="w-44">
               <LimitBar window={w} nowMs={now} dense drivesChip={isChipWindow(usage.chipWindow, w)} labelTestId={`llm-usage-window-${account.id}-${w.label}`} />
             </div>
           ))}
         </div>
       )}
       {why && (
-        <div
-          className={`type-hint mt-0.5 ${state === 'expired' ? 'text-amber-400' : 'text-[var(--color-text-muted)]'}`}
+        <p
+          className={`type-hint mt-1 ${state === 'expired' ? 'text-[var(--color-status-warn-amber-soft)]' : 'text-[var(--color-text-secondary)]'}`}
           data-testid={`llm-usage-state-${account.id}`}
         >
           {why}
-        </div>
+        </p>
       )}
-      <div className="type-hint text-[var(--color-text-muted)] mt-0.5 flex flex-wrap items-center gap-x-1" data-testid={`llm-usage-age-${account.id}`}>
-        <span>
-          {windows.length === 0 && !why && usage.status ? `${usage.status} · ` : ''}
-          Usage {age}
-          {live ? ` · ${live}` : ''}
-          {Number.isFinite(nextProbe) && nextProbe > now ? ` · next check ${formatResetsIn(usage.nextProbeAt ?? '', now)}` : ''}
-        </span>
+      <p className="type-hint text-[var(--color-text-secondary)] mt-1" data-testid={`llm-usage-age-${account.id}`}>
+        {windows.length === 0 && !why && usage.status ? `${usage.status} · ` : ''}
+        {refreshing ? 'Checking usage…' : `Usage ${age}`}
+        {live ? ` · ${live}` : ''}
+        {Number.isFinite(nextProbe) && nextProbe > now ? ` · next check ${formatResetsIn(usage.nextProbeAt ?? '', now)}` : ''}
         {usage.error && (
-          <span className="text-amber-400" data-testid={`llm-usage-error-${account.id}`}>
-            · last check failed ({usage.error})
+          <span className="text-[var(--color-status-warn-amber-soft)]" data-testid={`llm-usage-error-${account.id}`}>
+            {' '}· last check failed ({usage.error})
           </span>
         )}
-        {onRefresh && (
-          <button
-            type="button"
-            className="text-[var(--color-accent)] disabled:opacity-40"
-            data-testid={`llm-usage-refresh-${account.id}`}
-            disabled={refreshing}
-            onClick={() => {
-              setRefreshing(true)
-              setRefreshError(null)
-              onRefresh()
-                .catch((e: unknown) => setRefreshError(errorText(e)))
-                .finally(() => setRefreshing(false))
-            }}
-          >
-            · {refreshing ? 'Refreshing…' : 'Refresh'}
-          </button>
-        )}
-        {refreshError && (
-          <span className="text-red-400" role="alert">
-            · {refreshError}
-          </span>
-        )}
-      </div>
+      </p>
+      {refreshError && (
+        <p className="type-hint text-[var(--color-status-error-soft)] mt-1" role="alert">
+          Couldn’t check usage. The server said: {refreshError.replace(/[.\s]+$/, '')}.
+        </p>
+      )}
     </div>
   )
 }
@@ -225,14 +222,22 @@ function pinLabel(a: LlmAccount): string {
     .join(', ')
 }
 
+/** What one row may do, and why not. */
+interface RowActions {
+  onMakeDefault: (a: LlmAccount) => void
+  onLoginAgain: (a: LlmAccount) => void
+  onRename: (a: LlmAccount) => void
+  onRemove: (a: LlmAccount) => void
+  onNoDefault: (a: LlmAccount) => void
+}
+
 function AccountRow({
   account,
   tool,
   doc,
   limits,
   onRefreshLimits,
-  onLoginAgain,
-  onError,
+  actions,
 }: {
   account: LlmAccount
   tool: LlmTool
@@ -240,13 +245,10 @@ function AccountRow({
   /** This token's `/cli/usage/limits` row (Owner/Admin), else null. */
   limits: LimitsLogin | null
   onRefreshLimits?: (accountId: string) => Promise<void>
-  onLoginAgain: (a: LlmAccount) => void
-  onError: (msg: string) => void
+  actions: RowActions
 }): React.JSX.Element {
-  const scope = primaryScope()
-  const confirm = useConfirmDialogStore((s) => s.confirm)
-  const [renaming, setRenaming] = useState(false)
-  const [newLabel, setNewLabel] = useState(account.label)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
   const apiKey = account.kind === 'api_key'
   const signedIn = account.state === 'signed_in'
   const needsLogin = !apiKey && (account.state === 'needs_login' || account.state === 'not_set_up')
@@ -264,51 +266,12 @@ function AccountRow({
       : signingIn
         ? SIGNING_IN_SWITCH_REASON
         : undefined
-  const who = [account.email, account.org].filter(Boolean).join(' · ')
   const pinnedTo = pinLabel(account)
-
-  const run = useCallback(
-    (p: Promise<unknown>) => {
-      p.catch((e: unknown) => onError(errorText(e)))
-    },
-    [onError],
-  )
-
-  const makeDefault = useCallback(async () => {
-    const from = tool.accounts.find((a) => a.id === tool.activeId) ?? null
-    const { title, message } = switchConfirmText(tool, from, account)
-    const ok = await useConfirmDialogStore.getState().confirm({ title, message, confirmLabel: 'Switch' })
-    if (ok) run(switchLogin(scope, account.id))
-  }, [tool, account, run, scope])
-
   // The server default API token may be removed (or just stop being the
   // default) after a confirm: that leaves the tool with no default.
   // Admin and above, like any default change. A subscription default
   // can't: it sits in the tool's own store.
   const clearsDefault = account.active && apiKey
-  const remove = useCallback(async () => {
-    const ok = await confirm({
-      title: `Remove ${account.label}?`,
-      message: clearsDefault
-        ? `${account.label} is the ${tool.display} server default. ${noDefaultText(tool)} K2 moves the token to the trash on the server.`
-        : apiKey
-          ? `K2 moves this ${tool.display} API token to the trash on the server.`
-          : `K2 moves this ${tool.display} subscription to the trash on the server. Add it again later to use it.`,
-      confirmLabel: 'Remove',
-      destructive: true,
-    })
-    if (ok) run(removeLogin(scope, account.id, clearsDefault))
-  }, [confirm, account, apiKey, clearsDefault, tool.display, run, scope])
-
-  const clearDefault = useCallback(async () => {
-    const ok = await confirm({
-      title: `No ${tool.display} server default?`,
-      message: `${account.label} stops being the server default and stays in your tokens. ${noDefaultText(tool)}`,
-      confirmLabel: 'No default',
-    })
-    if (ok) run(clearDefaultLogin(scope, tool.tool))
-  }, [confirm, account.label, tool.display, tool.tool, run, scope])
-
   const removeBlocked = account.active
     ? clearsDefault
       ? (doc.canChangeDefault ? undefined : (doc.changeDefaultReason ?? ADMIN_SWITCH_REASON))
@@ -316,246 +279,239 @@ function AccountRow({
     : pinnedBlock
       ? PINNED_SWITCH_REASON
       : undefined
+  // Any subscription that isn't the server default can be signed in
+  // again (same flow as `k2 llm tokens login`).
+  const canLoginAgain = !account.active && !apiKey && (signedIn || needsLogin)
+
+  const refresh = (): void => {
+    if (!onRefreshLimits) return
+    setRefreshing(true)
+    setRefreshError(null)
+    onRefreshLimits(account.id)
+      .catch((e: unknown) => setRefreshError(errorText(e)))
+      .finally(() => setRefreshing(false))
+  }
+
+  // The row's one button: what this token most likely needs next.
+  const primary: React.ReactNode = !account.active && signedIn ? (
+    <Button
+      disabled={switchBlocked !== undefined}
+      title={switchBlocked ?? `Make “${account.label}” the ${tool.display} server default`}
+      onClick={() => actions.onMakeDefault(account)}
+    >
+      Make default
+    </Button>
+  ) : needsLogin && !account.active ? (
+    <Button
+      disabled={pinnedBlock}
+      title={pinnedBlock ? PINNED_SWITCH_REASON : `Sign “${account.label}” in again`}
+      onClick={() => actions.onLoginAgain(account)}
+    >
+      Sign in again
+    </Button>
+  ) : null
+
+  const items: OverflowMenuItem[] = [
+    { id: 'rename', label: 'Rename…', onSelect: () => actions.onRename(account) },
+  ]
+  if (!apiKey && !(needsLogin && !account.active)) {
+    items.push({
+      id: 'relogin',
+      label: 'Sign in again…',
+      disabled: !canLoginAgain || pinnedBlock,
+      hint: account.active ? ACTIVE_RELOGIN_HINT : pinnedBlock ? PINNED_SWITCH_REASON : undefined,
+      onSelect: () => actions.onLoginAgain(account),
+    })
+  }
+  if (onRefreshLimits && !apiKey) {
+    items.push({ id: 'usage', label: 'Check usage now', disabled: refreshing, onSelect: refresh })
+  }
+  if (clearsDefault) {
+    items.push({
+      id: 'no-default',
+      label: 'Stop using as default…',
+      disabled: !doc.canChangeDefault,
+      hint: doc.canChangeDefault ? `${tool.display} is left with no server default.` : (doc.changeDefaultReason ?? ADMIN_SWITCH_REASON),
+      onSelect: () => actions.onNoDefault(account),
+    })
+  }
+  items.push({
+    id: 'remove',
+    label: 'Remove…',
+    danger: true,
+    group: true,
+    disabled: removeBlocked !== undefined,
+    hint: removeBlocked,
+    onSelect: () => actions.onRemove(account),
+  })
+
+  const facts: string[] = []
+  if (account.active && tool.switchedAt !== null) facts.push(`Server default since ${formatWhen(tool.switchedAt)}`)
+  if (pinnedTo) facts.push(`Used by ${pinnedTo}`)
+  if (account.inUse) facts.push('In use by a chat right now')
 
   return (
-    <div className="px-3 py-2 border-t border-[var(--color-border)]" data-testid={`llm-account-${account.id}`}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0 flex items-center gap-1.5">
-          <span
-            className="w-1.5 h-1.5 flex-shrink-0"
-            style={{ backgroundColor: STATE_COLORS[account.state] ?? STATE_COLORS.unknown }}
-          />
-          {renaming ? (
-            <input
-              autoFocus
-              value={newLabel}
-              aria-label="New label"
-              onChange={(e) => setNewLabel(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newLabel.trim()) {
-                  setRenaming(false)
-                  run(renameLogin(scope, account.id, newLabel.trim()))
-                } else if (e.key === 'Escape') {
-                  setRenaming(false)
-                  setNewLabel(account.label)
-                }
-              }}
-              className="w-28 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-1 type-control text-[var(--color-text-primary)] outline-none"
-            />
-          ) : (
-            <span className="type-row text-[var(--color-text-secondary)] truncate" data-testid={`llm-name-${account.id}`}>
-              {tokenName(tool.display, account)}
-            </span>
-          )}
-          {account.active && (
-            <Tag tone="accent">
-              Server default
+    <div className="px-4 py-3 transition-colors hover:bg-[var(--color-wash-1)]" data-testid={`llm-account-${account.id}`}>
+      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3">
+        <span title={STATE_LABELS[account.state] ?? account.state} className="flex">
+          <StatusDot tone={STATE_TONE[account.state] ?? 'neutral'} />
+        </span>
+        <div className="flex items-center gap-2 min-w-0 flex-wrap">
+          <span className="type-name text-[var(--color-text-primary)] truncate" data-testid={`llm-name-${account.id}`}>
+            {account.label}
+          </span>
+          {account.active && <Tag tone="accent">Server default</Tag>}
+          {signedIn ? null : (
+            <Tag tone={needsLogin ? 'warn' : 'muted'} data-testid={`llm-state-${account.id}`}>
+              {STATE_LABELS[account.state] ?? account.state}
             </Tag>
           )}
           {account.addedOutsideK2 && (
             <Tag
               tone="muted"
-              title="Someone signed in outside K2 (for example /login in a terminal). K2 saved that sign-in as this token. Keep it, or remove it."
+              title="Someone signed in outside K2, for example with /login in a terminal, and K2 saved that sign-in as this token. Keep it, or remove it."
               data-testid={`llm-outside-${account.id}`}
             >
               Added outside K2
             </Tag>
           )}
-          <span className="type-hint text-[var(--color-text-muted)]">
-            {STATE_LABELS[account.state] ?? account.state}
-          </span>
         </div>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {!account.active && signedIn && (
-            <Button
-              variant="accent"
-              className={ACTION_FOCUS}
-              disabled={switchBlocked !== undefined}
-              title={switchBlocked ?? `Make ${tokenName(tool.display, account)} the server default`}
-              onClick={() => void makeDefault()}
-            >
-              Use this token
-            </Button>
+        <div className="flex items-center gap-2 pl-3">
+          {primary}
+          <OverflowMenu label={`More actions for ${account.label}`} items={items} />
+        </div>
+        <div className="col-start-2 min-w-0">
+          <p className={`${SETTING_ROW_HINT} truncate`} data-testid={`llm-kind-${account.id}`}>
+            {kindLine(account)}
+          </p>
+          {facts.length > 0 && (
+            <p className={SETTING_ROW_HINT} data-testid={`llm-facts-${account.id}`}>
+              {facts.join(' · ')}
+            </p>
           )}
-          {/* Any subscription that isn't the server default can be signed
-              in again (same flow as `k2 llm tokens login`). */}
-          {!account.active && !apiKey && (signedIn || needsLogin) && (
-            <Button
-              className={ACTION_FOCUS}
-              disabled={pinnedBlock}
-              title={pinnedBlock ? PINNED_SWITCH_REASON : `Sign ${tokenName(tool.display, account)} in again`}
-              onClick={() => onLoginAgain(account)}
-            >
-              Sign in again
-            </Button>
-          )}
-          {clearsDefault && (
-            <Button
-              className={ACTION_FOCUS}
-              disabled={!doc.canChangeDefault}
-              title={doc.canChangeDefault ? `Leave ${tool.display} with no server default` : (doc.changeDefaultReason ?? ADMIN_SWITCH_REASON)}
-              onClick={() => void clearDefault()}
-              data-testid={`llm-no-default-${account.id}`}
-            >
-              No default
-            </Button>
-          )}
-          <Button
-            className={ACTION_FOCUS}
-            title={`Rename ${tokenName(tool.display, account)}`}
-            onClick={() => setRenaming(true)}
-          >
-            Rename
-          </Button>
-          <Button
-            variant="danger-muted"
-            className={ACTION_FOCUS}
-            disabled={removeBlocked !== undefined}
-            title={removeBlocked ?? `Remove ${tokenName(tool.display, account)}`}
-            onClick={() => void remove()}
-          >
-            Remove
-          </Button>
+          {account.detail && account.state !== 'signed_in' && <p className={SETTING_ROW_HINT}>{account.detail}</p>}
+          <UsageMeter account={account} limits={limits} refreshing={refreshing} refreshError={refreshError} />
         </div>
       </div>
-      {who && <div className="type-hint text-[var(--color-text-muted)] mt-0.5 truncate">{who}</div>}
-      {account.active && tool.switchedAt !== null && (
-        <div className="type-hint text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-default-since-${account.id}`}>
-          Server default since {formatWhen(tool.switchedAt)}
-        </div>
-      )}
-      {account.active && !apiKey && (
-        <div className="type-hint text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-relogin-hint-${account.id}`}>
-          {ACTIVE_RELOGIN_HINT}
-        </div>
-      )}
-      {pinnedTo && (
-        <div className="type-hint text-[var(--color-text-muted)] mt-0.5 truncate" data-testid={`llm-pinned-${account.id}`}>
-          Used by: {pinnedTo}
-        </div>
-      )}
-      {account.inUse && (
-        <div className="type-hint text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-inuse-${account.id}`}>
-          In use by a chat right now
-        </div>
-      )}
-      {account.detail && account.state !== 'signed_in' && (
-        <div className="type-hint text-[var(--color-text-muted)] mt-0.5">{account.detail}</div>
-      )}
-      <UsageMeter
-        account={account}
-        limits={limits}
-        onRefresh={onRefreshLimits ? () => onRefreshLimits(account.id) : undefined}
-      />
     </div>
   )
 }
 
-/** "+ Add API token": label + key (password field). The key is sent once
- *  and cleared from state right after; the daemon never returns it. */
-function ApiKeyDialog({
-  scope,
-  tool,
-  toolLabel,
-  onClose,
-}: {
-  scope: ServerScope
-  tool: string
-  toolLabel: string
-  onClose: () => void
-}): React.JSX.Element {
-  const [label, setLabel] = useState('')
-  const [key, setKey] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  // Esc (claimed: Settings stays open), the × and a press outside close it
-  // (nothing saved); held while saving.
-  const cancel = useDialogCancel(onClose, busy)
-  const submit = useCallback(async () => {
-    const sentKey = key.trim()
-    setKey('')
-    setBusy(true)
-    setError(null)
-    try {
-      await addApiKey(scope, tool, label.trim(), sentKey)
-      onClose()
-    } catch (e) {
-      setError(errorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }, [scope, tool, label, key, onClose])
-  return (
-    <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Add ${toolLabel} API token`}
-      data-testid="llm-apikey-dialog"
-    >
-      <div {...cancel} className="relative w-[min(420px,92vw)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] p-4 space-y-3">
-        <DialogCloseButton placement="corner" onClick={onClose} disabled={busy} heldReason="Can’t close while the token is saved" />
-        <h3 className="type-heading pr-6 text-[var(--color-text-primary)]">Add {toolLabel} API token</h3>
-        <label className="block type-hint text-[var(--color-text-muted)]">
-          Label
-          <input
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            aria-label="API token label"
-            className="mt-1 w-full bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1 type-control text-[var(--color-text-primary)] outline-none"
-          />
-        </label>
-        <label className="block type-hint text-[var(--color-text-muted)]">
-          API token
-          <input
-            type="password"
-            autoComplete="off"
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-            aria-label="API token"
-            className="mt-1 w-full bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1 type-control text-[var(--color-text-primary)] outline-none"
-          />
-        </label>
-        <p className="type-hint text-[var(--color-text-muted)]">
-          Billed per token by the provider. The key stays on the server and is never shown again.
-        </p>
-        {error && (
-          <p className="type-hint text-red-400" role="alert">
-            {error}
+/** A change in one provider's card: what happened, or what failed. */
+type Note =
+  | { tool: string; kind: 'ok'; text: string }
+  /** `next` defaults to "Nothing changed; try again."; `detail` is the
+   *  server's reason, when there is one. */
+  | { tool: string; kind: 'error'; what: string; next?: string; detail?: string }
+
+function NoteRow({ note, onDismiss }: { note: Note; onDismiss: () => void }): React.JSX.Element {
+  if (note.kind === 'error') {
+    return (
+      <div role="alert" className="px-4 py-2.5 flex items-start justify-between gap-4" data-testid="llm-row-error">
+        <div className={`${SETTING_ROW_HINT} mt-0`}>
+          <p className="text-[var(--color-status-error-soft)]">
+            {note.what} {note.next ?? 'Nothing changed; try again.'}
           </p>
-        )}
-        <div className="flex justify-end gap-2 type-row">
-          <Button variant="ghost" size="md" className={ACTION_FOCUS} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="accent"
-            size="md"
-            className={ACTION_FOCUS}
-            disabled={busy || !label.trim() || !key.trim()}
-            onClick={() => void submit()}
-          >
-            Add API token
-          </Button>
+          {note.detail ? <p>The server said: {note.detail.trim().replace(/[.\s]+$/, '')}.</p> : null}
         </div>
+        <Button variant="quiet" onClick={onDismiss}>
+          Dismiss
+        </Button>
       </div>
+    )
+  }
+  return (
+    <div role="status" className="px-4 py-2.5 flex items-center justify-between gap-4" data-testid="llm-notice">
+      <span className="inline-flex items-center gap-1.5 type-hint text-[var(--color-status-ok-soft)]">
+        <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3 flex-shrink-0">
+          <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+        </svg>
+        {note.text}
+      </span>
+      <Button variant="quiet" onClick={onDismiss}>
+        Dismiss
+      </Button>
     </div>
   )
 }
+
+/** Rename a token: one field, Save. */
+function RenameDialog({
+  account,
+  tool,
+  onClose,
+  onSave,
+}: {
+  account: LlmAccount
+  tool: LlmTool
+  onClose: () => void
+  /** Saves; resolves to an error message, or null. */
+  onSave: (label: string) => Promise<string | null>
+}): React.JSX.Element {
+  const [label, setLabel] = useState(account.label)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const id = useId()
+  const next = label.trim()
+  const submit = async (): Promise<void> => {
+    if (!next || busy) return
+    if (next === account.label) return onClose()
+    setBusy(true)
+    const err = await onSave(next)
+    setBusy(false)
+    if (err) setError(err)
+    else onClose()
+  }
+  return (
+    <AccessSheet title={`Rename “${account.label}”`} onClose={onClose} busy={busy} testId="llm-rename-dialog">
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submit()
+        }}
+      >
+        <Field label="Name" htmlFor={id} hint={`Shown here and in every ${tool.display} Token menu on this server.`}>
+          <Input id={id} autoFocus className={DIALOG_FIELD} aria-label="New label" value={label} onChange={(e) => setLabel(e.target.value)} />
+        </Field>
+        {error ? (
+          <Callout tone="error" role="alert" className="type-hint space-y-0.5">
+            <p className="font-medium">Couldn’t rename it. The name is unchanged; try again.</p>
+            <p>The server said: {error.replace(/[.\s]+$/, '')}.</p>
+          </Callout>
+        ) : null}
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="accent" size="md" disabled={!next || busy}>
+            {busy ? 'Saving…' : 'Save name'}
+          </Button>
+        </div>
+      </form>
+    </AccessSheet>
+  )
+}
+
+/** A question before a change: the dialog it opens. */
+type Ask =
+  | { kind: 'switch'; tool: LlmTool; to: LlmAccount }
+  | { kind: 'remove'; tool: LlmTool; account: LlmAccount }
+  | { kind: 'no-default'; tool: LlmTool; account: LlmAccount }
+  | { kind: 'rename'; tool: LlmTool; account: LlmAccount }
 
 export function AgentAccountsColumn(): React.JSX.Element {
   // The window's server, resolved at call time: every read and every
   // gesture on this page goes to that server's daemon, never to this
   // computer's unless this computer is the window's server. The store
   // drops the list and reloads on a server switch; this subscription
-  // re-renders the label and clears this server's leftover sheet/error.
+  // re-renders the label and clears this server's leftover sheet/notes.
   const scope = primaryScope()
   const hostKey = useConnectHostStore((s) => activeHostKey(s.activeHost))
   const entry = useLlmAccountsStore((s) => s.entries[scope.id])
   const [sheet, setSheet] = useState<LoginSheetStart | null>(null)
-  const [keyDialog, setKeyDialog] = useState<{ tool: string; toolLabel: string } | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
+  const [ask, setAsk] = useState<Ask | null>(null)
+  const [note, setNote] = useState<Note | null>(null)
 
   useEffect(() => watchLlmAccounts(scope), [scope])
   // Usage v2: every login's limits for the bars (Owner/Admin; a Member's
@@ -569,8 +525,8 @@ export function AgentAccountsColumn(): React.JSX.Element {
   )
   useEffect(() => {
     setSheet(null)
-    setKeyDialog(null)
-    setError(null)
+    setAsk(null)
+    setNote(null)
   }, [hostKey])
   // A sign-in asked for from outside Settings (the setup checklist): once
   // the list is here, open the sheet for that tool, or for the first of
@@ -599,192 +555,310 @@ export function AgentAccountsColumn(): React.JSX.Element {
     })
   }, [scope, hostKey])
 
-  const switchToNextToken = useCallback(
-    async (tool: LlmTool, docNow: LlmAccountsDoc) => {
-      const to = nextCandidate(docNow, tool)
-      if (!to) {
-        setError('There is no other signed-in subscription for that tool.')
-        return
+  /** Run a change; say what it did, or what failed, in that provider's card. */
+  const change = useCallback(
+    async (tool: string, p: Promise<unknown>, ok: string, what: string): Promise<string | null> => {
+      try {
+        await p
+        setNote({ tool, kind: 'ok', text: ok })
+        return null
+      } catch (e) {
+        const detail = errorText(e)
+        setNote({ tool, kind: 'error', what, detail })
+        return detail
       }
-      const from = tool.accounts.find((a) => a.id === tool.activeId) ?? null
-      const { title, message } = switchConfirmText(tool, from, to)
-      if (!(await useConfirmDialogStore.getState().confirm({ title, message, confirmLabel: 'Switch' }))) return
-      // The exact token the dialog named (not the daemon's own "next").
-      switchLogin(scope, to.id).catch((e: unknown) => setError(errorText(e)))
     },
-    [scope],
+    [],
   )
+
+  const askSwitchToNext = useCallback((tool: LlmTool, docNow: LlmAccountsDoc) => {
+    const to = nextCandidate(docNow, tool)
+    if (!to) {
+      setNote({
+        tool: tool.tool,
+        kind: 'error',
+        what: `There’s no other signed-in ${tool.display} subscription to move to.`,
+        next: 'Sign one in again, or add one with Add a token.',
+      })
+      return
+    }
+    // The exact token the dialog names (not the daemon's own "next").
+    setAsk({ kind: 'switch', tool, to })
+  }, [])
+
+  const actionsFor = (tool: LlmTool): RowActions => ({
+    onMakeDefault: (a) => setAsk({ kind: 'switch', tool, to: a }),
+    onLoginAgain: (a) => setSheet({ kind: 'relogin', tool: tool.tool, toolLabel: tool.display, accountId: a.id, label: a.label }),
+    onRename: (a) => setAsk({ kind: 'rename', tool, account: a }),
+    onRemove: (a) => setAsk({ kind: 'remove', tool, account: a }),
+    onNoDefault: (a) => setAsk({ kind: 'no-default', tool, account: a }),
+  })
+
+  const onSheetDone = useCallback((r: LoginSheetResult) => {
+    const display = LOGIN_TOOL_ROWS.find((t) => t.id === r.tool)?.label ?? r.tool
+    setNote({
+      tool: r.tool,
+      kind: 'ok',
+      text:
+        r.method === 'key'
+          ? `${display} API token “${r.label}” was added.`
+          : r.method === 'relogin'
+            ? `“${r.label}” is signed in again.`
+            : `${display} “${r.label}” is signed in and saved.`,
+    })
+  }, [])
 
   const doc = entry?.doc ?? null
   const byTool = new Map((doc?.tools ?? []).map((t) => [t.tool, t]))
+  const supportedRows = LOGIN_TOOL_ROWS.filter((r) => byTool.get(r.id)?.supported === true)
+  const notYet = LOGIN_TOOL_ROWS.filter((r) => byTool.get(r.id)?.supported !== true).map((r) => r.label)
+  const total = supportedRows.reduce((n, r) => n + (byTool.get(r.id)?.accounts.length ?? 0), 0)
+  const server = isWebClient() ? 'this server' : scope.label
+
+  const addButton = (
+    <Button variant="accent" onClick={() => setSheet({ kind: 'new' })} disabled={!doc || supportedRows.length === 0}>
+      Add a token
+    </Button>
+  )
+
+  const body = (() => {
+    if (!entry) {
+      return (
+        <SettingsLoadState kind="loading" title="Loading tokens…" testId="llm-accounts-loading">
+          Reading the subscriptions and API tokens saved on {server}.
+        </SettingsLoadState>
+      )
+    }
+    if (!doc) {
+      return (
+        <SettingsLoadState
+          kind="error"
+          title={`Couldn’t load the tokens on ${server}`}
+          detail={entry.reason}
+          action={<Button onClick={() => void useLlmAccountsStore.getState().load(scope)}>Try again</Button>}
+          testId="llm-accounts-error"
+        >
+          {entry.reason ? 'Try again in a moment. Your tokens and the server default haven’t changed.' : entry.error}
+        </SettingsLoadState>
+      )
+    }
+    if (supportedRows.length > 0 && total === 0) {
+      return (
+        <SettingsLoadState
+          kind="empty"
+          title="No tokens on this server yet"
+          action={addButton}
+          testId="llm-accounts-empty"
+        >
+          Add a subscription or an API token for {listWords(supportedRows.map((r) => r.label))} so your agents can sign in.
+        </SettingsLoadState>
+      )
+    }
+    return (
+      <div className="space-y-6" data-settings-id="agents.add-login">
+        {supportedRows.map((row) => {
+          const tool = byTool.get(row.id)!
+          const canSignIn = tool.subscription === true
+          const canKey = tool.apiKeys === true
+          // "Use next token" cycles the server default's subscriptions only:
+          // no API tokens, nothing set for a workspace or chat.
+          const cyclable = tool.accounts.filter((a) => a.state === 'signed_in' && a.kind !== 'api_key' && !isPinned(a))
+          const activeAcc = tool.accounts.find((a) => a.id === tool.activeId)
+          const keptLive =
+            activeAcc?.kind === 'api_key' && tool.liveAccountId ? tool.accounts.find((a) => a.id === tool.liveAccountId) : undefined
+          const hint = [
+            canSignIn && canKey ? 'Sign in with a subscription, or paste an API token.' : canSignIn ? 'Sign in with a subscription.' : 'API tokens only.',
+            tool.accounts.length > 0 && !activeAcc ? 'No server default yet: chats set to Server default get no token from K2.' : null,
+            keptLive ? `“${keptLive.label}” is still signed in to ${row.label} itself.` : null,
+          ]
+            .filter(Boolean)
+            .join(' ')
+          const toolNote = note?.tool === row.id ? note : null
+          return (
+            <SettingsGroup key={row.id} title={row.label} hint={hint} card testId={`llm-tool-${row.id}`}>
+              {toolNote ? <NoteRow note={toolNote} onDismiss={() => setNote(null)} /> : null}
+              {tool.accounts.length === 0 ? (
+                <SettingRow
+                  label={`No ${row.label} token yet`}
+                  hint={canSignIn ? `Sign in with a ${row.label} subscription, or paste an API token.` : `Paste a ${row.label} API token.`}
+                  testId={`llm-empty-${row.id}`}
+                >
+                  <Button aria-label={`Add a ${row.label} token`} onClick={() => setSheet({ kind: 'new', tool: row.id })}>
+                    Add
+                  </Button>
+                </SettingRow>
+              ) : null}
+              {tool.accounts.map((a) => (
+                <AccountRow
+                  key={a.id}
+                  account={a}
+                  tool={tool}
+                  doc={doc}
+                  limits={findLimitsLogin(limitsDoc, a.id)}
+                  onRefreshLimits={limitsDoc ? refreshLimits : undefined}
+                  actions={actionsFor(tool)}
+                />
+              ))}
+              {cyclable.length >= 2 ? (
+                <SettingRow
+                  label="Hit a usage limit?"
+                  hint={`Move the server default to the next signed-in ${row.label} subscription. K2 never switches on its own.`}
+                >
+                  <Button
+                    disabled={!doc.canChangeDefault}
+                    title={doc.canChangeDefault ? `Switch ${row.label} to its next signed-in token` : (doc.changeDefaultReason ?? ADMIN_SWITCH_REASON)}
+                    onClick={() => askSwitchToNext(tool, doc)}
+                  >
+                    Use next token
+                  </Button>
+                </SettingRow>
+              ) : null}
+            </SettingsGroup>
+          )
+        })}
+        {notYet.length > 0 ? (
+          <p className={SETTING_ROW_HINT} data-testid="llm-not-yet">
+            {listWords(notYet)} can’t use saved tokens yet.
+          </p>
+        ) : null}
+      </div>
+    )
+  })()
 
   return (
-    <div className="w-full" data-settings-id="agents.accounts">
-      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Subs / Tokens</h2>
-      {/* Hosted web is one server and its primary scope reads "This
-          computer", so the line is desktop-only. */}
-      {!isWebClient() && (
-        <p className="type-hint text-[var(--color-text-muted)] mb-1" data-testid="llm-server">
-          Server: {scope.label}
-        </p>
-      )}
-      <p className="type-hint text-[var(--color-text-muted)] mb-4 leading-relaxed" data-testid="llm-switch-note">
-        {SWITCH_NOTE}
-      </p>
+    <div className="w-full space-y-6 pb-6" data-settings-id="agents.accounts">
+      <header className="flex items-start justify-between gap-6">
+        <div className="flex-1 min-w-0">
+          <h2 className="type-title text-[var(--color-text-primary)]">Subs / Tokens</h2>
+          <p className={SETTING_ROW_HINT} data-testid="llm-switch-note">
+            {PAGE_INTRO} {SWITCH_NOTE}
+          </p>
+          {/* Hosted web is one server and its primary scope reads "This
+              computer", so the line is desktop-only. */}
+          {!isWebClient() && (
+            <p className={SETTING_ROW_HINT} data-testid="llm-server">
+              Server: {scope.label}
+            </p>
+          )}
+        </div>
+        {doc && total > 0 ? <div className="flex-shrink-0 pt-0.5">{addButton}</div> : null}
+      </header>
+
       {doc && !doc.canChangeDefault && (
-        <p className="type-hint text-[var(--color-text-muted)] mb-3" data-testid="llm-default-admin-only">
-          {doc.changeDefaultReason ?? ADMIN_SWITCH_REASON}
-        </p>
+        <Callout tone="info" className="type-hint">
+          <p data-testid="llm-default-admin-only">{doc.changeDefaultReason ?? ADMIN_SWITCH_REASON}</p>
+        </Callout>
       )}
       {doc?.airgap && (
-        <p className="type-hint text-[var(--color-text-muted)] mb-3">
-          Air-gap mode is on: adding subscriptions and refreshing tokens are off. Switching between saved tokens still works.
-        </p>
+        <Callout tone="info" className="type-hint" data-testid="llm-airgap">
+          Air-gap mode is on: you can’t add subscriptions or refresh sign-ins. Switching between saved tokens still works.
+        </Callout>
       )}
       {(doc?.keychainRepairs ?? []).map((r) => (
-        <div
-          key={`${r.service}\u0000${r.account}`}
-          className="border border-amber-500/60 p-2 mb-3"
-          role="alert"
-          data-testid="llm-keychain-repair"
-        >
-          <p className="type-hint text-amber-400 leading-relaxed mb-1">
-            macOS asks for your password every time Claude reads its keychain item “{r.service}” ({r.holds}). An
-            earlier K2 update changed who may read it. Run this once in Terminal on this Mac and enter your login
-            password:
+        <Callout key={`${r.service}\u0000${r.account}`} tone="warn" role="alert" className="type-hint space-y-1.5" data-testid="llm-keychain-repair">
+          <p className="leading-relaxed">
+            macOS asks for your password every time Claude reads its saved sign-in “{r.service}” ({r.holds}), because an
+            earlier K2 update changed who may read it. Run this once in Terminal on this Mac and enter your Mac password:
           </p>
-          <code className="block type-hint font-mono select-all break-all text-[var(--color-text-primary)]">
-            {r.command}
-          </code>
-        </div>
+          <code className="block type-hint font-mono select-all break-all text-[var(--color-text-primary)]">{r.command}</code>
+        </Callout>
       ))}
-      {!entry && (
-        <p className="type-hint text-[var(--color-text-muted)] mb-3" data-testid="llm-accounts-loading">
-          Loading tokens…
-        </p>
-      )}
-      {entry?.error && (
-        <p className="type-hint text-red-400 mb-3" data-testid="llm-accounts-error">
-          {entry.error}
-        </p>
-      )}
-      {error && (
-        <p className="type-hint text-red-400 mb-3" role="alert">
-          {error}
-        </p>
-      )}
-      {doc && (
-        <div className="border border-[var(--color-border)]" data-settings-id="agents.add-login">
-          {LOGIN_TOOL_ROWS.map((row, i) => {
-            const tool = byTool.get(row.id)
-            const supported = tool?.supported === true
-            const canSignIn = supported && tool?.subscription === true
-            const canKey = supported && tool?.apiKeys === true
-            // "Use next token" cycles the server default's subscriptions only:
-            // no API tokens, nothing set for a workspace or chat.
-            const cyclable = (tool?.accounts ?? []).filter(
-              (a) => a.state === 'signed_in' && a.kind !== 'api_key' && !isPinned(a),
-            )
-            const activeAcc = tool?.accounts.find((a) => a.id === tool.activeId)
-            const keptLive =
-              activeAcc?.kind === 'api_key' && tool?.liveAccountId
-                ? tool.accounts.find((a) => a.id === tool.liveAccountId)
-                : undefined
-            return (
-              <div
-                key={row.id}
-                data-testid={`llm-tool-${row.id}`}
-                className={i === LOGIN_TOOL_ROWS.length - 1 ? '' : 'border-b border-[var(--color-border)]'}
-              >
-                <div className="flex items-center justify-between gap-3 px-3 py-2.5">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <AgentIcon agent={row.agentIcon} size={14} />
-                    <div className="type-row text-[var(--color-text-secondary)] truncate">{row.label}</div>
-                  </div>
-                  {supported ? (
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {canSignIn && (
-                        <Button
-                          className={ACTION_FOCUS}
-                          disabled={doc?.airgap === true}
-                          title={`Add a ${row.label} subscription`}
-                          onClick={() => setSheet({ kind: 'add', tool: row.id, toolLabel: row.label })}
-                        >
-                          + Add subscription
-                        </Button>
-                      )}
-                      {canKey && (
-                        <Button
-                          className={ACTION_FOCUS}
-                          title={`Add a ${row.label} API token`}
-                          onClick={() => setKeyDialog({ tool: row.id, toolLabel: row.label })}
-                        >
-                          + Add API token
-                        </Button>
-                      )}
-                    </div>
-                  ) : (
-                    <span className="type-hint text-[var(--color-text-muted)]">Not available yet</span>
-                  )}
-                </div>
-                {supported && tool && tool.accounts.length === 0 && (
-                  <div className="px-3 pb-2 type-hint text-[var(--color-text-muted)]">
-                    {canSignIn ? 'No subscription on this server yet.' : 'No API token on this server yet.'}
-                  </div>
-                )}
-                {keptLive && (
-                  <div className="px-3 pb-2 type-hint text-[var(--color-text-muted)]" data-testid={`llm-kept-live-${row.id}`}>
-                    Subscription still signed in for {row.label}: {tokenName(row.label, keptLive)}
-                  </div>
-                )}
-                {supported &&
-                  tool?.accounts.map((a) => (
-                    <AccountRow
-                      key={a.id}
-                      account={a}
-                      tool={tool}
-                      doc={doc}
-                      limits={findLimitsLogin(limitsDoc, a.id)}
-                      onRefreshLimits={limitsDoc ? refreshLimits : undefined}
-                      onError={setError}
-                      onLoginAgain={(acc) =>
-                        setSheet({ kind: 'relogin', tool: row.id, toolLabel: row.label, accountId: acc.id, label: acc.label })
-                      }
-                    />
-                  ))}
-                {supported && tool && cyclable.length >= 2 && (
-                  <div className="px-3 py-2 border-t border-[var(--color-border)] flex items-center justify-between gap-2">
-                    <span className="type-hint text-[var(--color-text-muted)]">
-                      Use this when a session hits its limit. Applies to chats on Server default. K2 never switches on its own.
-                    </span>
-                    <Button
-                      className={`flex-shrink-0 ${ACTION_FOCUS}`}
-                      disabled={!doc.canChangeDefault}
-                      title={
-                        doc.canChangeDefault
-                          ? `Switch ${row.label} to its next signed-in token`
-                          : (doc.changeDefaultReason ?? ADMIN_SWITCH_REASON)
-                      }
-                      onClick={() => void switchToNextToken(tool, doc)}
-                    >
-                      Use next token
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
-      {sheet && <LlmLoginSheet scope={scope} start={sheet} onClose={() => setSheet(null)} />}
-      {keyDialog && (
-        <ApiKeyDialog
-          scope={scope}
-          tool={keyDialog.tool}
-          toolLabel={keyDialog.toolLabel}
-          onClose={() => setKeyDialog(null)}
+      {doc && entry?.error ? (
+        <SettingsLoadState
+          kind="error"
+          title="Couldn’t refresh this list"
+          detail={entry.reason}
+          action={<Button onClick={() => void useLlmAccountsStore.getState().load(scope)}>Try again</Button>}
+          testId="llm-accounts-error"
+        >
+          {entry.reason ? 'It shows what K2 last read from this server.' : entry.error}
+        </SettingsLoadState>
+      ) : null}
+
+      {body}
+
+      {sheet && <LlmLoginSheet scope={scope} start={sheet} onClose={() => setSheet(null)} onDone={onSheetDone} />}
+      {ask?.kind === 'switch' ? (
+        (() => {
+          const from = ask.tool.accounts.find((a) => a.id === ask.tool.activeId) ?? null
+          const { title, message } = switchConfirmText(ask.tool, from, ask.to)
+          return (
+            <ConfirmSheet
+              title={title}
+              message={<span className="whitespace-pre-line">{message}</span>}
+              confirmLabel="Make default"
+              testId="llm-switch-confirm"
+              onCancel={() => setAsk(null)}
+              onConfirm={() => {
+                const { tool, to } = ask
+                setAsk(null)
+                void change(tool.tool, switchLogin(scope, to.id), `“${to.label}” is now the ${tool.display} server default.`, 'Couldn’t change the server default.')
+              }}
+            />
+          )
+        })()
+      ) : ask?.kind === 'remove' ? (
+        <ConfirmSheet
+          title={`Remove “${ask.account.label}”?`}
+          message={removeText(ask.tool, ask.account)}
+          confirmLabel="Remove"
+          destructive
+          testId="llm-remove-confirm"
+          onCancel={() => setAsk(null)}
+          onConfirm={() => {
+            const { tool, account } = ask
+            setAsk(null)
+            const clears = account.active && account.kind === 'api_key'
+            void change(tool.tool, removeLogin(scope, account.id, clears), `“${account.label}” was removed from this server.`, `Couldn’t remove “${account.label}”.`)
+          }}
         />
-      )}
+      ) : ask?.kind === 'no-default' ? (
+        <ConfirmSheet
+          title={`Stop using “${ask.account.label}” as the default?`}
+          message={`“${ask.account.label}” stays saved. ${noDefaultText(ask.tool)}`}
+          confirmLabel="Stop using as default"
+          testId="llm-no-default-confirm"
+          onCancel={() => setAsk(null)}
+          onConfirm={() => {
+            const { tool, account } = ask
+            setAsk(null)
+            void change(tool.tool, clearDefaultLogin(scope, tool.tool), `“${account.label}” is no longer the ${tool.display} server default.`, 'Couldn’t change the server default.')
+          }}
+        />
+      ) : ask?.kind === 'rename' ? (
+        <RenameDialog
+          account={ask.account}
+          tool={ask.tool}
+          onClose={() => setAsk(null)}
+          onSave={async (label) => {
+            const { tool, account } = ask
+            try {
+              await renameLogin(scope, account.id, label)
+              setNote({ tool: tool.tool, kind: 'ok', text: `“${account.label}” is now called “${label}”.` })
+              return null
+            } catch (e) {
+              return errorText(e)
+            }
+          }}
+        />
+      ) : null}
     </div>
   )
 }
+
+/** What removing a token does, in the confirm. */
+function removeText(tool: LlmTool, a: LlmAccount): string {
+  if (a.active && a.kind === 'api_key') {
+    return `It’s the ${tool.display} server default. ${noDefaultText(tool)} To use it again, paste the token again.`
+  }
+  return a.kind === 'api_key'
+    ? `K2 stops using this ${tool.display} API token on this server. To use it again, paste the token again.`
+    : `K2 stops using this ${tool.display} subscription on this server. You can sign it in again later with Add a token.`
+}
+
+/** "Claude, Codex and Grok". */
+function listWords(words: string[]): string {
+  if (words.length <= 1) return words.join('')
+  return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`
+}
+

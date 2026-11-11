@@ -43,7 +43,6 @@ vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: async () => {} }))
 import { AgentAccountsColumn } from './AgentAccountsColumn'
 import { __resetConnectHostStoreForTests, useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
-import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import {
   errorText,
   resetLlmAccountsForTests,
@@ -273,9 +272,9 @@ describe('Tokens column follows the window server', () => {
       { hostKey: REMOTE_KEY, route: 'llm/accounts/refresh', body: { usage: true } },
     ])
     // The page's gestures go to the remote too (after the confirm).
-    useConfirmDialogStore.setState({ confirm: async () => true })
     const spare = screen.getByTestId('llm-account-acc_remote_spare')
-    fireEvent.click(within(spare).getByRole('button', { name: 'Use this token' }))
+    fireEvent.click(within(spare).getByRole('button', { name: 'Make default' }))
+    fireEvent.click(within(screen.getByTestId('llm-switch-confirm')).getByRole('button', { name: 'Make default' }))
     await waitFor(() =>
       expect(h.posts.filter((p) => p.route !== 'llm/accounts/refresh')).toEqual([
         { hostKey: REMOTE_KEY, route: 'llm/accounts/switch', body: { id: 'acc_remote_spare' } },

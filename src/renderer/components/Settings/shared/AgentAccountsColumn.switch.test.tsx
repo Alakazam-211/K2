@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 //
-// Settings → LLMs: switching the server default (field bug 2026-10-14).
-// The confirm names from → to and warns (never refuses) when the target is
-// used up; the default row says since when; each row says how old its
-// usage is and when the last check failed; "Sign in again" on every token
-// that isn't the default; a token that is signing in can't be switched to;
-// opening the page re-reads usage. Daemon calls are mocked; an unexpected
-// route throws.
+// Settings → Subs / Tokens: switching the server default (field bug
+// 2026-10-14). The confirm (the shared dialog) names from → to and warns
+// (never refuses) when the target is used up; the default row says since
+// when; each row says how old its usage is and when the last check failed;
+// "Sign in again" on every token that isn't the default; a token that is
+// signing in can't be switched to; opening the page re-reads usage. Daemon
+// calls are mocked; an unexpected route throws.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react'
@@ -40,7 +40,6 @@ import {
   resetLlmAccountsForTests,
   type LlmAccount,
 } from '@/stores/llm-accounts'
-import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 
 const NOW_S = Math.floor(Date.now() / 1000)
 const IN_TWO_DAYS = new Date((NOW_S + 2 * 86400) * 1000).toISOString()
@@ -100,17 +99,12 @@ function doc(): Record<string, unknown> {
   }
 }
 
-const confirmSpy = vi.fn(async (_o: { title: string; message: string; confirmLabel?: string }) => true)
-
 beforeEach(() => {
   resetLlmAccountsForTests()
   logins = []
   docExtra = {}
   h.daemonCliGet.mockReset()
   h.daemonCliPost.mockReset()
-  confirmSpy.mockReset()
-  confirmSpy.mockImplementation(async () => true)
-  useConfirmDialogStore.setState({ confirm: confirmSpy })
   h.daemonCliGet.mockImplementation(async (route: string) => {
     if (route === 'llm/accounts/list') return doc()
     throw new Error(`unexpected GET ${route}`)
@@ -129,38 +123,42 @@ async function renderColumn(): Promise<void> {
   await screen.findByTestId('llm-account-acc_rakzm')
 }
 
+const makeDefault = (id: string): HTMLButtonElement =>
+  within(screen.getByTestId(`llm-account-${id}`)).getByRole('button', { name: 'Make default' }) as HTMLButtonElement
+
+const confirmButton = (name: string): HTMLElement => within(screen.getByTestId('llm-switch-confirm')).getByRole('button', { name })
+
 describe('switching the server default', () => {
   it('asks first, naming from → to; Cancel sends nothing', async () => {
-    confirmSpy.mockImplementation(async () => false)
     await renderColumn()
-    fireEvent.click(within(screen.getByTestId('llm-account-acc_afsrow')).getByRole('button', { name: 'Use this token' }))
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1))
-    const opts = confirmSpy.mock.calls[0][0]
-    expect(opts.title).toBe('Switch the Claude server default?')
-    expect(opts.message).toContain('From: Claude · Max · rAKZM')
-    expect(opts.message).toContain('To: Claude · Max · afsrow')
-    expect(opts.message).not.toContain('Warning')
-    expect(opts.confirmLabel).toBe('Switch')
+    fireEvent.click(makeDefault('acc_afsrow'))
+    const dialog = screen.getByRole('dialog', { name: 'Make “afsrow” the Claude server default?' })
+    expect(dialog.textContent).toContain('From: Claude · Max · rAKZM')
+    expect(dialog.textContent).toContain('To: Claude · Max · afsrow')
+    expect(dialog.textContent).not.toContain('Warning')
+    expect(confirmButton('Make default')).toBeTruthy()
+    fireEvent.click(confirmButton('Cancel'))
+    expect(screen.queryByTestId('llm-switch-confirm')).toBeNull()
     await Promise.resolve()
     expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/switch', expect.anything())
   })
 
   it('warns, but still switches, when the target is at 100%', async () => {
     await renderColumn()
-    fireEvent.click(within(screen.getByTestId('llm-account-acc_lumon')).getByRole('button', { name: 'Use this token' }))
+    fireEvent.click(makeDefault('acc_lumon'))
+    expect(screen.getByTestId('llm-switch-confirm').textContent).toMatch(/Warning: lumon is at 100% of its Weekly limit until /)
+    fireEvent.click(confirmButton('Make default'))
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_lumon' }))
-    const msg = confirmSpy.mock.calls[0][0].message
-    expect(msg).toMatch(/Warning: lumon is at 100% of its Weekly limit until /)
   })
 
   it('a token that is signing in cannot be switched to', async () => {
     logins = [{ loginId: 'l9', accountId: 'acc_afsrow', tool: 'claude', label: 'afsrow', state: 'waiting_for_browser', done: false }]
     await renderColumn()
-    const btn = within(screen.getByTestId('llm-account-acc_afsrow')).getByRole('button', { name: 'Use this token' }) as HTMLButtonElement
+    const btn = makeDefault('acc_afsrow')
     expect(btn.disabled).toBe(true)
     expect(btn.title).toBe(SIGNING_IN_SWITCH_REASON)
     fireEvent.click(btn)
-    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('llm-switch-confirm')).toBeNull()
     expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/switch', expect.anything())
   })
 
@@ -176,11 +174,12 @@ describe('switching the server default', () => {
       throw new Error(`unexpected POST ${route}`)
     })
     await renderColumn()
-    fireEvent.click(within(screen.getByTestId('llm-account-acc_afsrow')).getByRole('button', { name: 'Use this token' }))
-    expect(await screen.findByText(hint)).toBeTruthy()
+    fireEvent.click(makeDefault('acc_afsrow'))
+    fireEvent.click(confirmButton('Make default'))
+    expect((await screen.findByTestId('llm-row-error')).textContent).toContain(hint.replace(/\.$/, ''))
     // Still usable: another switch asks again.
-    fireEvent.click(within(screen.getByTestId('llm-account-acc_lumon')).getByRole('button', { name: 'Use this token' }))
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(2))
+    fireEvent.click(makeDefault('acc_lumon'))
+    fireEvent.click(confirmButton('Make default'))
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_lumon' }))
   })
 })
@@ -192,7 +191,7 @@ describe('the server default is Admin and above (Rosson 2026-10-20)', () => {
     docExtra = { canChangeDefault: false, changeDefaultReason: REASON }
     await renderColumn()
     expect(screen.getByTestId('llm-default-admin-only').textContent).toBe(REASON)
-    const use = within(screen.getByTestId('llm-account-acc_afsrow')).getByRole('button', { name: 'Use this token' }) as HTMLButtonElement
+    const use = makeDefault('acc_afsrow')
     expect(use.disabled).toBe(true)
     expect(use.title).toBe(REASON)
     fireEvent.click(use)
@@ -201,7 +200,7 @@ describe('the server default is Admin and above (Rosson 2026-10-20)', () => {
     expect(next.title).toBe(REASON)
     fireEvent.click(next)
     await Promise.resolve()
-    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('llm-switch-confirm')).toBeNull()
     expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/switch', expect.anything())
   })
 
@@ -209,8 +208,7 @@ describe('the server default is Admin and above (Rosson 2026-10-20)', () => {
     docExtra = { canChangeDefault: true, changeDefaultReason: null }
     await renderColumn()
     expect(screen.queryByTestId('llm-default-admin-only')).toBeNull()
-    const use = within(screen.getByTestId('llm-account-acc_afsrow')).getByRole('button', { name: 'Use this token' }) as HTMLButtonElement
-    expect(use.disabled).toBe(false)
+    expect(makeDefault('acc_afsrow').disabled).toBe(false)
     expect((screen.getByRole('button', { name: 'Use next token' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -224,16 +222,19 @@ describe('the server default is Admin and above (Rosson 2026-10-20)', () => {
 })
 
 describe('what each row says', () => {
-  it('the server default says since when and how to sign it in again', async () => {
+  it('the server default says since when and, in its menu, how to sign it in again', async () => {
     await renderColumn()
-    const since = screen.getByTestId('llm-default-since-acc_rakzm').textContent ?? ''
+    const since = screen.getByTestId('llm-facts-acc_rakzm').textContent ?? ''
     expect(since.startsWith('Server default since ')).toBe(true)
     expect(since.length).toBeGreaterThan('Server default since '.length)
-    expect(screen.getByTestId('llm-relogin-hint-acc_rakzm').textContent).toBe(ACTIVE_RELOGIN_HINT)
     const row = screen.getByTestId('llm-account-acc_rakzm')
     expect(within(row).queryByRole('button', { name: 'Sign in again' })).toBeNull()
-    expect(within(row).queryByRole('button', { name: 'Use this token' })).toBeNull()
-    expect(screen.queryByTestId('llm-default-since-acc_afsrow')).toBeNull()
+    expect(within(row).queryByRole('button', { name: 'Make default' })).toBeNull()
+    expect(screen.queryByTestId('llm-facts-acc_afsrow')).toBeNull()
+    fireEvent.click(within(row).getByRole('button', { name: 'More actions for rAKZM' }))
+    const relogin = screen.getByRole('menuitem', { name: /^Sign in again/ })
+    expect(relogin.getAttribute('aria-disabled')).toBe('true')
+    expect(relogin.textContent).toContain(ACTIVE_RELOGIN_HINT)
   })
 
   it('each row says how old its usage is, and a failed check says so', async () => {
@@ -248,13 +249,15 @@ describe('what each row says', () => {
   it('Sign in again is on every subscription that is not the default and opens the sign-in', async () => {
     await renderColumn()
     const row = screen.getByTestId('llm-account-acc_afsrow')
-    fireEvent.click(within(row).getByRole('button', { name: 'Sign in again' }))
-    expect(screen.getByRole('dialog', { name: 'Sign afsrow in again' })).toBeTruthy()
+    fireEvent.click(within(row).getByRole('button', { name: 'More actions for afsrow' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Sign in again/ }))
+    expect(screen.getByRole('dialog', { name: 'Sign “afsrow” in again' })).toBeTruthy()
     fireEvent.click(screen.getByTestId('llm-login-start'))
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/login', { id: 'acc_afsrow', mode: 'this_computer' }),
     )
-    expect(within(screen.getByTestId('llm-account-acc_lumon')).getByRole('button', { name: 'Sign in again' })).toBeTruthy()
+    fireEvent.click(within(screen.getByTestId('llm-account-acc_lumon')).getByRole('button', { name: 'More actions for lumon' }))
+    expect(screen.getByRole('menuitem', { name: /^Sign in again/ }).getAttribute('aria-disabled')).toBeNull()
   })
 
   it('opening the page re-reads usage on that server', async () => {

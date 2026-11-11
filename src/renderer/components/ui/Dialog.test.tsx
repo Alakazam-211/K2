@@ -69,6 +69,20 @@ describe('DialogFrame onCancel', () => {
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
 
+  it('cancelOnPressOutside false: a press outside does nothing; Esc still cancels', () => {
+    const onCancel = vi.fn()
+    render(
+      <>
+        <button type="button" data-testid="page">Page</button>
+        <DialogFrame onCancel={onCancel} cancelOnPressOutside={false}>Body</DialogFrame>
+      </>,
+    )
+    fireEvent.pointerDown(screen.getByTestId('page'))
+    expect(onCancel).not.toHaveBeenCalled()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
   it('a press inside the frame, or in a menu it portals, does not cancel', () => {
     const onCancel = vi.fn()
     render(<One onCancel={onCancel} />)

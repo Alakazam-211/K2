@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 //
+// The Add a token sheet: choose a provider and how, sign in or paste an API
+// token, then a done or failed step that says what happened and what next.
+//
 // 0.46.3 S1: the sign-in link is never cut. The sheet shows the vendor host,
 // a Show full link toggle and a Copy link button; Open and Copy use exactly
 // the stored `login.url` (never text read back from the page). The device
@@ -13,6 +16,8 @@ const h = vi.hoisted(() => ({
   addLogin: vi.fn(),
   loginStatus: vi.fn(),
   cancelLogin: vi.fn(),
+  addApiKey: vi.fn(),
+  switchLogin: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: (url: string) => h.openUrl(url) }))
@@ -29,14 +34,14 @@ vi.mock('@/stores/llm-accounts', async (importOriginal) => {
     sendLoginInput: () => {
       throw new Error('unexpected sendLoginInput')
     },
-    switchLogin: () => {
-      throw new Error('unexpected switchLogin')
-    },
+    switchLogin: (...a: unknown[]) => h.switchLogin(...a),
+    addApiKey: (...a: unknown[]) => h.addApiKey(...a),
   }
 })
 
-import { LlmLoginSheet, signInHost } from './LlmLoginSheet'
+import { LlmLoginSheet, maskedTail, signInHost } from './LlmLoginSheet'
 import { primaryScope } from '@/kessel/server-scope'
+import { parseAccountsDoc, resetLlmAccountsForTests, useLlmAccountsStore } from '@/stores/llm-accounts'
 
 /** Claude's real-shaped sign-in URL (~460 chars). */
 const CLAUDE_URL =
@@ -74,6 +79,15 @@ beforeEach(() => {
   h.addLogin.mockReset()
   h.loginStatus.mockReset()
   h.cancelLogin.mockReset()
+  h.addApiKey.mockReset()
+  h.switchLogin.mockReset()
+  h.addApiKey.mockImplementation(async () => {
+    throw new Error('unexpected addApiKey')
+  })
+  h.switchLogin.mockImplementation(async () => {
+    throw new Error('unexpected switchLogin')
+  })
+  resetLlmAccountsForTests()
   h.loginStatus.mockImplementation(async () => {
     throw new Error('unexpected loginStatus (test did not set one)')
   })
@@ -193,5 +207,160 @@ describe('LlmLoginSheet sign-in link (S1)', () => {
     expect(h.openUrl).toHaveBeenLastCalledWith(next)
     fireEvent.click(screen.getByRole('button', { name: 'Copy link' }))
     await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(next))
+  })
+})
+
+/** The server's list: Claude (sign-in or key), Gemini (keys only), Cursor (not yet). */
+function seedDoc(over: Record<string, unknown> = {}): void {
+  const tool = (t: string, display: string, sub: boolean, keys: boolean, supported = true) => ({
+    tool: t, display, supported, subscription: sub, apiKeys: keys, activeId: null, liveAccountId: null, loginMethod: null, accounts: [], pins: [],
+  })
+  const doc = parseAccountsDoc({
+    tools: [tool('claude', 'Claude', true, true), tool('gemini', 'Gemini', false, true), tool('cursor', 'Cursor Agent', false, false, false)],
+    logins: [],
+    canChangeDefault: true,
+    ...over,
+  })
+  useLlmAccountsStore.setState({ entries: { [primaryScope().id]: { doc, error: null } } })
+}
+
+function openNew(onClose = vi.fn(), onDone = vi.fn()): { onClose: ReturnType<typeof vi.fn>; onDone: ReturnType<typeof vi.fn> } {
+  render(<LlmLoginSheet scope={primaryScope()} start={{ kind: 'new' }} onClose={onClose} onDone={onDone} />)
+  return { onClose, onDone }
+}
+
+describe('Add a token: choose, sign in or paste, then done or failed', () => {
+  it('lists only the providers K2 can save a token for; nothing can start until one is chosen and named', () => {
+    seedDoc()
+    openNew()
+    expect(screen.getByRole('dialog', { name: 'Add a token' })).toBeTruthy()
+    const radios = screen.getAllByRole('radio').filter((r) => r.getAttribute('name') === 'llm-provider')
+    expect(radios.map((r) => r.getAttribute('aria-label'))).toEqual([
+      'Claude: Sign in with a subscription, or paste an API token.',
+      'Gemini: API tokens only.',
+    ])
+    expect(screen.queryByTestId('llm-login-label')).toBeNull()
+    fireEvent.click(screen.getByRole('radio', { name: /^Claude/ }))
+    const start = screen.getByTestId('llm-login-start') as HTMLButtonElement
+    expect(start.disabled).toBe(true)
+    fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'work' } })
+    expect(start.disabled).toBe(false)
+    // Gemini has no sign-in: the key field, no "How" choice.
+    fireEvent.click(screen.getByRole('radio', { name: /^Gemini/ }))
+    expect(screen.queryByRole('radio', { name: 'Sign in with a subscription' })).toBeNull()
+    expect((screen.getByLabelText('API token') as HTMLInputElement).type).toBe('password')
+  })
+
+  it('sign-in success: says what is signed in and where, reports it once, Done closes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    seedDoc()
+    h.addLogin.mockImplementation(async () => ({ account: { id: 'acc_new' }, login: login({ label: 'work', code: null }) }))
+    h.loginStatus.mockImplementation(async () => login({ label: 'work', state: 'signed_in', done: true, offerMakeActive: false }))
+    const { onClose, onDone } = openNew()
+    fireEvent.click(screen.getByRole('radio', { name: /^Claude/ }))
+    fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'work' } })
+    fireEvent.click(screen.getByTestId('llm-login-start'))
+    await screen.findByRole('dialog', { name: 'Sign in to Claude' })
+    expect(h.addLogin).toHaveBeenCalledWith(primaryScope(), 'claude', 'work', 'this_computer')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    expect(screen.getByRole('dialog', { name: 'Signed in to Claude' })).toBeTruthy()
+    expect(screen.getByTestId('llm-login-done').textContent).toContain('Claude “work” is signed in and saved on')
+    expect(screen.getByTestId('llm-login-done').textContent).toContain('Workspaces and chats can pick it from their Token menu.')
+    expect(onDone).toHaveBeenCalledTimes(1)
+    expect(onDone).toHaveBeenCalledWith({ tool: 'claude', label: 'work', method: 'signin' })
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('sign-in failed: what failed, the server’s reason, Try again starts it again, or paste a key instead', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    seedDoc()
+    h.addLogin.mockImplementation(async () => ({ account: { id: 'acc_new' }, login: login({ label: 'work' }) }))
+    h.loginStatus.mockImplementation(async () => login({ label: 'work', state: 'failed', done: true, error: 'the sign-in did not finish' }))
+    const { onDone } = openNew()
+    fireEvent.click(screen.getByRole('radio', { name: /^Claude/ }))
+    fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'work' } })
+    fireEvent.click(screen.getByTestId('llm-login-start'))
+    await screen.findByTestId('llm-login-link')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    expect(screen.getByRole('dialog', { name: 'Sign-in didn’t finish' })).toBeTruthy()
+    const note = screen.getByTestId('dialog-error')
+    expect(note.textContent).toContain('K2 couldn’t sign in to Claude.')
+    expect(note.textContent).toContain('Try again, or paste an API token instead.')
+    expect(note.textContent).toContain('The server said: the sign-in did not finish.')
+    expect(onDone).not.toHaveBeenCalled()
+    // A failed new sign-in leaves nothing saved: Try again adds it again.
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(h.addLogin).toHaveBeenCalledTimes(2))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Paste an API token instead' }))
+    expect(screen.getByRole('dialog', { name: 'Add a token' })).toBeTruthy()
+    expect((screen.getByRole('radio', { name: 'Paste an API token' }) as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByTestId('llm-login-label') as HTMLInputElement).value).toBe('work')
+  })
+
+  it('paste-key success: a password field with Show; done shows only a masked tail', async () => {
+    seedDoc()
+    h.addApiKey.mockImplementation(async () => ({ account: { id: 'acc_k' } }))
+    const { onDone } = openNew()
+    fireEvent.click(screen.getByRole('radio', { name: /^Gemini/ }))
+    fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'ci' } })
+    const key = screen.getByLabelText('API token') as HTMLInputElement
+    expect(key.type).toBe('password')
+    fireEvent.click(screen.getByRole('button', { name: 'Show' }))
+    expect(key.type).toBe('text')
+    fireEvent.change(key, { target: { value: 'sample-key-0000-abcd' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add API token' }))
+    await screen.findByRole('dialog', { name: 'API token added' })
+    expect(h.addApiKey).toHaveBeenCalledWith(primaryScope(), 'gemini', 'ci', 'sample-key-0000-abcd')
+    expect(screen.getByTestId('llm-login-done').textContent).toContain('Gemini API token “ci” is saved on')
+    expect(screen.getByTestId('llm-key-tail').textContent).toContain('•••• abcd')
+    expect(document.body.innerHTML).not.toContain('sample-key-0000-abcd')
+    expect(onDone).toHaveBeenCalledWith({ tool: 'gemini', label: 'ci', method: 'key' })
+    expect(maskedTail('short')).toBeNull()
+  })
+
+  it('paste-key invalid: what failed, the server’s reason, the next step; the key is cleared and nothing is reported', async () => {
+    seedDoc()
+    h.addApiKey.mockImplementation(async () => {
+      throw new Error(JSON.stringify({ error: { code: 'invalid_key', hint: 'the API key must be 8–512 characters with no spaces' } }))
+    })
+    const { onDone } = openNew()
+    fireEvent.click(screen.getByRole('radio', { name: /^Gemini/ }))
+    fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'ci' } })
+    fireEvent.change(screen.getByLabelText('API token'), { target: { value: 'bad key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add API token' }))
+    const note = await screen.findByTestId('dialog-error')
+    expect(note.textContent).toContain('K2 couldn’t add the API token.')
+    expect(note.textContent).toContain('paste it again')
+    expect(note.textContent).toContain('The server said: the API key must be 8–512 characters with no spaces.')
+    expect((screen.getByLabelText('API token') as HTMLInputElement).value).toBe('')
+    expect(screen.getByRole('dialog', { name: 'Add a token' })).toBeTruthy()
+    expect(onDone).not.toHaveBeenCalled()
+  })
+
+  it('cancel: Cancel on the form closes; Cancel sign-in stops the running sign-in, then closes', async () => {
+    seedDoc()
+    const first = openNew()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(first.onClose).toHaveBeenCalledTimes(1)
+    cleanup()
+    h.addLogin.mockImplementation(async () => ({ account: { id: 'acc_new' }, login: login() }))
+    h.loginStatus.mockImplementation(async () => login())
+    h.cancelLogin.mockImplementation(async () => ({ login: login({ state: 'cancelled', done: true }) }))
+    const second = openNew()
+    fireEvent.click(screen.getByRole('radio', { name: /^Claude/ }))
+    fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'team' } })
+    fireEvent.click(screen.getByTestId('llm-login-start'))
+    await screen.findByTestId('llm-login-link')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel sign-in' }))
+    await waitFor(() => expect(second.onClose).toHaveBeenCalledTimes(1))
+    expect(h.cancelLogin).toHaveBeenCalledWith(primaryScope(), 'login_1')
   })
 })

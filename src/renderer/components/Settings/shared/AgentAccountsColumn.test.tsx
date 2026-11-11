@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// Settings → LLMs "Tokens" column + the sign-in sheet. Daemon calls are
-// mocked; routes and bodies are asserted exactly. Fail loud: an
+// Settings → Language Models → Subs / Tokens + the sign-in sheet. Daemon
+// calls are mocked; routes and bodies are asserted exactly. Fail loud: an
 // unexpected route throws.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -25,17 +25,17 @@ vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: (url: string) => h.openUr
 
 import {
   AgentAccountsColumn,
+  PAGE_INTRO,
   SWITCH_NOTE,
+  KEEP_OWN_NOTE,
   ACTIVE_REMOVE_REASON,
-  ACTIVE_RELOGIN_HINT,
   ADMIN_SWITCH_REASON,
-  SIGNING_IN_SWITCH_REASON,
   noDefaultText,
+  switchConfirmText,
 } from './AgentAccountsColumn'
 import { resetLlmAccountsForTests, parseAccountsDoc, errorText } from '@/stores/llm-accounts'
 import { resetUsageLimitsForTests } from '@/stores/usage-limits'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
-import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { AGENTS_MANIFEST } from '../sections/AgentsSection'
 import { LLM_TOKENS_MANIFEST, LlmTokensSection } from '../sections/LlmTokensSection'
 import { useLlmSignInRequestStore } from '@/stores/llm-sign-in-request'
@@ -144,8 +144,6 @@ beforeEach(() => {
   h.daemonCliPost.mockReset()
   h.openUrl.mockClear()
   h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) => routeGet(route, params))
-  // Switches ask first; tests that look at the dialog replace this.
-  useConfirmDialogStore.setState({ confirm: vi.fn(async () => true) })
   h.daemonCliPost.mockImplementation(async (route: string) => {
     if (route === 'llm/accounts/add' || route === 'llm/accounts/login') return { account: account({ id: 'acc_new' }), login: LOGIN }
     if (route.startsWith('llm/accounts/')) return {}
@@ -163,26 +161,43 @@ async function renderColumn(): Promise<void> {
   await screen.findByTestId('llm-account-acc_work')
 }
 
+/** Open a token's "…" menu and return the item whose label starts with `name`. */
+function menuItem(label: string, name: string): HTMLElement {
+  fireEvent.click(screen.getByRole('button', { name: `More actions for ${label}` }))
+  return screen.getByRole('menuitem', { name: new RegExp(`^${name}`) })
+}
+
+/** The open confirm dialog's button. */
+function confirmIn(testId: string, name: string): void {
+  fireEvent.click(within(screen.getByTestId(testId)).getByRole('button', { name }))
+}
+
 describe('Tokens column', () => {
-  it('renders the Subs / Tokens heading, plain token names, states, the Server default badge, usage and the switch note', async () => {
+  it('renders the page header, a card per provider, plain token names, states, the Server default tag and usage', async () => {
     await renderColumn()
     expect(screen.getByRole('heading', { name: 'Subs / Tokens' })).toBeTruthy()
-    expect(screen.getByTestId('llm-switch-note').textContent).toBe(SWITCH_NOTE)
+    expect(screen.getByTestId('llm-switch-note').textContent).toBe(`${PAGE_INTRO} ${SWITCH_NOTE}`)
     const work = screen.getByTestId('llm-account-acc_work')
-    expect(screen.getByTestId('llm-name-acc_work').textContent).toBe('Claude · Max · work')
-    expect(screen.getByTestId('llm-name-acc_home').textContent).toBe('Claude · home')
+    // The provider is the card's title: a row names the token, then says what it is.
+    expect(screen.getByTestId('llm-name-acc_work').textContent).toBe('work')
+    expect(screen.getByTestId('llm-kind-acc_work').textContent).toBe('Max subscription · person@example.test')
+    expect(screen.getByTestId('llm-name-acc_home').textContent).toBe('home')
+    expect(screen.getByTestId('llm-kind-acc_home').textContent).toBe('Subscription')
+    expect(within(screen.getByTestId('llm-tool-claude')).getByRole('heading', { name: 'Claude' })).toBeTruthy()
     expect(work.textContent).toContain('Server default')
-    expect(work.textContent).toContain('Signed in')
-    expect(work.textContent).toContain('person@example.test')
+    expect(screen.queryByTestId('llm-state-acc_work')).toBeNull()
     expect(screen.getByTestId('llm-usage-acc_work').textContent).toContain('Session 42%')
     expect(screen.getByTestId('llm-account-acc_home').textContent).not.toContain('Server default')
-    expect(screen.getByTestId('llm-account-acc_stale').textContent).toContain('Needs sign-in')
-    for (const t of ['cursor', 'pi', 'hermes']) {
-      expect(screen.getByTestId(`llm-tool-${t}`).textContent).toContain('Not available yet')
-    }
+    expect(screen.getByTestId('llm-state-acc_stale').textContent).toBe('Needs sign-in')
+    // Tools without tokens yet: one quiet line, no card each.
+    for (const t of ['cursor', 'pi', 'hermes']) expect(screen.queryByTestId(`llm-tool-${t}`)).toBeNull()
+    expect(screen.getByTestId('llm-not-yet').textContent).toBe('Cursor Agent, Hermes and Pi can’t use saved tokens yet.')
     expect(document.body.textContent).not.toContain('Coming soon')
-    expect(screen.getAllByRole('button', { name: '+ Add subscription' })).toHaveLength(3)
-    expect(screen.getAllByRole('button', { name: '+ Add API token' })).toHaveLength(4)
+    // One primary action; an empty provider offers its own Add.
+    const add = screen.getByRole('button', { name: 'Add a token' })
+    expect(add.className).toContain('bg-[var(--color-accent-fill)]')
+    for (const p of ['Codex', 'Grok', 'Gemini']) expect(screen.getByRole('button', { name: `Add a ${p} token` })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Add a Claude token' })).toBeNull()
     expect(h.daemonCliGet).toHaveBeenCalledWith('llm/accounts/list')
     const column = document.querySelector('[data-settings-id="agents.accounts"]')!.textContent ?? ''
     expect(column).not.toMatch(/\blogins?\b|wallet|\bpool\b|pinned|Make active/i)
@@ -204,36 +219,55 @@ describe('Tokens column', () => {
     expect(screen.queryByTestId('llm-outside-acc_home')).toBeNull()
   })
 
-  it('Use this token posts switch with the id', async () => {
+  it('Make default asks in the shared dialog, then posts switch with the id and says so', async () => {
     await renderColumn()
     const row = screen.getByTestId('llm-account-acc_home')
-    fireEvent.click(within(row).getByRole('button', { name: 'Use this token' }))
+    fireEvent.click(within(row).getByRole('button', { name: 'Make default' }))
+    const dialog = screen.getByRole('dialog', { name: 'Make “home” the Claude server default?' })
+    expect(dialog.textContent).toContain('From: Claude · Max · work')
+    expect(dialog.textContent).toContain(KEEP_OWN_NOTE)
+    // Cancel has the focus: Enter never switches by accident.
+    expect(document.activeElement?.textContent).toBe('Cancel')
+    confirmIn('llm-switch-confirm', 'Make default')
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_home' }))
+    expect((await screen.findByTestId('llm-notice')).textContent).toContain('“home” is now the Claude server default.')
+  })
+
+  it('Cancel in the switch dialog sends nothing', async () => {
+    await renderColumn()
+    fireEvent.click(within(screen.getByTestId('llm-account-acc_home')).getByRole('button', { name: 'Make default' }))
+    confirmIn('llm-switch-confirm', 'Cancel')
+    expect(screen.queryByTestId('llm-switch-confirm')).toBeNull()
+    expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/switch', expect.anything())
   })
 
   it('Use next token confirms the exact next token, then switches to it', async () => {
     await renderColumn()
     fireEvent.click(screen.getByRole('button', { name: 'Use next token' }))
+    const dialog = screen.getByTestId('llm-switch-confirm')
+    expect(dialog.textContent).toContain('From: Claude · Max · work')
+    expect(dialog.textContent).toContain('To: Claude · home')
+    confirmIn('llm-switch-confirm', 'Make default')
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_home' }))
-    const opts = (useConfirmDialogStore.getState().confirm as ReturnType<typeof vi.fn>).mock.calls[0][0]
-    expect(opts.message).toContain('From: Claude · Max · work')
-    expect(opts.message).toContain('To: Claude · home')
     expect(document.body.textContent).toContain('K2 never switches on its own')
   })
 
-  it('Remove asks, then posts remove; it is disabled on the server default', async () => {
-    useConfirmDialogStore.setState({ confirm: vi.fn(async () => true) })
+  it('Remove is in the row menu, asks first (quiet, destructive), then posts remove; it is off on the server default', async () => {
     await renderColumn()
-    const activeRemove = Array.from(screen.getByTestId('llm-account-acc_work').querySelectorAll('button')).find(
-      (b) => b.textContent === 'Remove',
-    )!
-    expect((activeRemove as HTMLButtonElement).disabled).toBe(true)
-    expect(activeRemove.getAttribute('title')).toBe(ACTIVE_REMOVE_REASON)
-    const idleRemove = Array.from(screen.getByTestId('llm-account-acc_home').querySelectorAll('button')).find(
-      (b) => b.textContent === 'Remove',
-    )!
-    fireEvent.click(idleRemove)
+    const activeRemove = menuItem('work', 'Remove')
+    expect(activeRemove.getAttribute('aria-disabled')).toBe('true')
+    expect(activeRemove.textContent).toContain(ACTIVE_REMOVE_REASON)
+    fireEvent.click(activeRemove)
+    expect(screen.queryByTestId('llm-remove-confirm')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    fireEvent.click(menuItem('home', 'Remove'))
+    const dialog = screen.getByRole('dialog', { name: 'Remove “home”?' })
+    expect(dialog.textContent).toContain('K2 stops using this Claude subscription on this server.')
+    expect(within(dialog).getByRole('button', { name: 'Remove' }).className).toContain('bg-[var(--color-danger-muted)]')
+    expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/remove', expect.anything())
+    confirmIn('llm-remove-confirm', 'Remove')
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/remove', { id: 'acc_home' }))
+    expect((await screen.findByTestId('llm-notice')).textContent).toContain('“home” was removed from this server.')
   })
 
   it('the server default API token: No default and Remove (with clearDefault) after a confirm; Admin and above only', async () => {
@@ -244,20 +278,20 @@ describe('Tokens column', () => {
       tools[0] = { ...tools[0], accounts: [{ ...KEY, active: true }], activeId: 'acc_key', liveAccountId: null }
       return { ...d, canChangeDefault, changeDefaultReason: canChangeDefault ? null : ADMIN_SWITCH_REASON }
     }
-    const confirmFn = vi.fn(async () => true)
-    useConfirmDialogStore.setState({ confirm: confirmFn })
     h.daemonCliGet.mockImplementation(async (route: string) => (route === 'llm/accounts/list' ? keyDoc(true) : routeGet(route)))
     render(<AgentAccountsColumn />)
-    const row = await screen.findByTestId('llm-account-acc_key')
-    const remove = within(row).getByRole('button', { name: 'Remove' }) as HTMLButtonElement
-    expect(remove.disabled).toBe(false)
+    await screen.findByTestId('llm-account-acc_key')
+    const remove = menuItem('metered', 'Remove')
+    expect(remove.getAttribute('aria-disabled')).toBeNull()
     fireEvent.click(remove)
+    expect(screen.getByTestId('llm-remove-confirm').textContent).toContain('Claude then has no server default')
+    confirmIn('llm-remove-confirm', 'Remove')
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/remove', { id: 'acc_key', clearDefault: true }),
     )
-    const removeAsk = (confirmFn.mock.calls[0] as unknown as [{ message: string }])[0]
-    expect(removeAsk.message).toContain('Claude then has no server default')
-    fireEvent.click(within(row).getByRole('button', { name: 'No default' }))
+    fireEvent.click(menuItem('metered', 'Stop using as default'))
+    expect(screen.getByTestId('llm-no-default-confirm').textContent).toContain('“metered” stays saved.')
+    confirmIn('llm-no-default-confirm', 'Stop using as default')
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/clear-default', { tool: 'claude' }))
     expect(noDefaultText({ display: 'Claude', activeId: 'acc_key', liveAccountId: 'acc_work', accounts: [WORK as never] })).toContain(
       'still signed in to Claude itself',
@@ -267,54 +301,74 @@ describe('Tokens column', () => {
     resetLlmAccountsForTests()
     h.daemonCliGet.mockImplementation(async (route: string) => (route === 'llm/accounts/list' ? keyDoc(false) : routeGet(route)))
     render(<AgentAccountsColumn />)
-    const memberRow = await screen.findByTestId('llm-account-acc_key')
-    for (const name of ['Remove', 'No default']) {
-      const b = within(memberRow).getByRole('button', { name }) as HTMLButtonElement
-      expect(b.disabled).toBe(true)
-      expect(b.getAttribute('title')).toBe(ADMIN_SWITCH_REASON)
+    await screen.findByTestId('llm-account-acc_key')
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for metered' }))
+    for (const name of [/^Remove/, /^Stop using as default/]) {
+      const item = screen.getByRole('menuitem', { name })
+      expect(item.getAttribute('aria-disabled')).toBe('true')
+      expect(item.textContent).toContain(ADMIN_SWITCH_REASON)
     }
   })
 
-  it('Rename posts the new label on Enter', async () => {
+  it('Rename opens a dialog, posts the new label on Enter and says so', async () => {
     await renderColumn()
-    const row = screen.getByTestId('llm-account-acc_home')
-    fireEvent.click(Array.from(row.querySelectorAll('button')).find((b) => b.textContent === 'Rename')!)
+    fireEvent.click(menuItem('home', 'Rename'))
+    expect(screen.getByRole('dialog', { name: 'Rename “home”' })).toBeTruthy()
     const input = screen.getByLabelText('New label')
     fireEvent.change(input, { target: { value: 'personal' } })
-    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.submit(input.closest('form')!)
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/rename', { id: 'acc_home', label: 'personal' }),
     )
+    expect((await screen.findByTestId('llm-notice')).textContent).toContain('“home” is now called “personal”.')
+    expect(screen.queryByTestId('llm-rename-dialog')).toBeNull()
   })
 
-  it('tile actions are real buttons (bordered chips, not clickable text); Remove is the destructive style', async () => {
+  it('a failed rename keeps the dialog open with the server’s reason', async () => {
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'llm/accounts/rename') throw new Error(JSON.stringify({ error: { code: 'invalid_label', hint: 'that name is taken' } }))
+      return {}
+    })
+    await renderColumn()
+    fireEvent.click(menuItem('home', 'Rename'))
+    fireEvent.change(screen.getByLabelText('New label'), { target: { value: 'work' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }))
+    const alert = await within(screen.getByTestId('llm-rename-dialog')).findByRole('alert')
+    expect(alert.textContent).toContain('Couldn’t rename it.')
+    expect(alert.textContent).toContain('The server said: that name is taken.')
+  })
+
+  it('row actions are the shared buttons with keyboard focus; the rest sit in the row menu', async () => {
     await renderColumn()
     const row = screen.getByTestId('llm-account-acc_home')
-    const names = ['Use this token', 'Rename', 'Remove']
-    for (const name of names) {
+    for (const name of ['Make default', 'More actions for home']) {
       const btn = within(row).getByRole('button', { name }) as HTMLButtonElement
       expect(btn.type).toBe('button')
-      expect(btn.className).toContain('border')
-      expect(btn.className).toContain('rounded-[var(--radius-field)]')
-      expect(btn.className).toContain('focus-visible:outline')
-    }
-    expect(within(row).getByRole('button', { name: 'Remove' }).className).toContain('bg-[var(--color-danger-muted)]')
-    expect(within(row).getByRole('button', { name: 'Use this token' }).className).toContain('bg-[var(--color-accent-fill)]')
-    const claude = screen.getByTestId('llm-tool-claude')
-    for (const name of ['+ Add subscription', '+ Add API token']) {
-      const btn = within(claude).getByRole('button', { name })
+      expect(btn.className).toContain('k2-focus')
       expect(btn.className).toContain('rounded-[var(--radius-field)]')
     }
+    // The row's button is quiet: the page's one accent is Add a token.
+    expect(within(row).getByRole('button', { name: 'Make default' }).className).not.toContain('bg-[var(--color-accent-fill)]')
+    expect(within(screen.getByTestId('llm-account-acc_stale')).getByRole('button', { name: 'Sign in again' })).toBeTruthy()
+    fireEvent.click(within(row).getByRole('button', { name: 'More actions for home' }))
+    const items = screen.getAllByRole('menuitem').map((m) => m.getAttribute('data-menu-item'))
+    expect(items).toEqual(['rename', 'relogin', 'remove'])
     expect(screen.getByRole('button', { name: 'Use next token' }).className).toContain('rounded-[var(--radius-field)]')
   })
 
-  it('a daemon refusal shows its hint', async () => {
+  it('a daemon refusal says what failed and the server’s hint, in that provider’s card', async () => {
     h.daemonCliPost.mockImplementation(async () => {
       throw new Error(JSON.stringify({ error: { code: 'busy', hint: 'another change is in progress' } }))
     })
     await renderColumn()
-    fireEvent.click(screen.getByTestId('llm-account-acc_home').querySelector('button')!)
-    expect((await screen.findByRole('alert')).textContent).toBe('another change is in progress')
+    fireEvent.click(within(screen.getByTestId('llm-account-acc_home')).getByRole('button', { name: 'Make default' }))
+    confirmIn('llm-switch-confirm', 'Make default')
+    const alert = await within(screen.getByTestId('llm-tool-claude')).findByTestId('llm-row-error')
+    expect(alert.getAttribute('role')).toBe('alert')
+    expect(alert.textContent).toContain('Couldn’t change the server default. Nothing changed; try again.')
+    expect(alert.textContent).toContain('The server said: another change is in progress.')
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByTestId('llm-row-error')).toBeNull()
   })
 
   it('the search manifest has the Tokens entries on Settings → Language Models → Subs / Tokens, not the old credentials row', () => {
@@ -336,7 +390,7 @@ describe('Tokens column', () => {
     render(<LlmTokensSection />)
     await screen.findByTestId('llm-account-acc_work')
     const page = document.querySelector('[data-llm-tokens-section]') as HTMLElement
-    expect(page.className).toBe('max-w-3xl')
+    expect(page.className).toBe('max-w-[52rem]')
     expect(page.children.length).toBe(1)
     expect(page.firstElementChild?.getAttribute('data-settings-id')).toBe('agents.accounts')
     expect(within(page).getByRole('heading', { name: 'Subs / Tokens' })).toBeTruthy()
@@ -416,25 +470,31 @@ describe('time until each token refreshes', () => {
 })
 
 describe('Workspace/chat tokens and API tokens', () => {
-  it('Gemini offers only an API token', async () => {
+  it('Gemini offers only an API token: its Add opens the sheet straight on the key field', async () => {
     await renderColumn()
     const gem = screen.getByTestId('llm-tool-gemini')
-    expect(within(gem).queryByRole('button', { name: '+ Add subscription' })).toBeNull()
-    expect(within(gem).getByRole('button', { name: '+ Add API token' })).toBeTruthy()
-    expect(gem.textContent).toContain('No API token on this server yet.')
+    expect(gem.textContent).toContain('API tokens only.')
+    expect(screen.getByTestId('llm-empty-gemini').textContent).toContain('Paste a Gemini API token.')
+    fireEvent.click(within(gem).getByRole('button', { name: 'Add a Gemini token' }))
+    const sheet = screen.getByTestId('llm-login-sheet')
+    expect((within(sheet).getByRole('radio', { name: /^Gemini/ }) as HTMLInputElement).checked).toBe(true)
+    expect(within(sheet).queryByRole('radio', { name: 'Sign in with a subscription' })).toBeNull()
+    expect((screen.getByLabelText('API token') as HTMLInputElement).type).toBe('password')
   })
 
-  it('Add API token posts tool, label and key; the key is never rendered after submit', async () => {
+  it('Add a token → provider → Paste an API token posts tool, label and key; the key is never shown again', async () => {
     await renderColumn()
-    const claude = screen.getByTestId('llm-tool-claude')
-    fireEvent.click(within(claude).getByRole('button', { name: '+ Add API token' }))
-    const dialog = screen.getByTestId('llm-apikey-dialog')
-    expect(dialog.textContent).toContain('Billed per token by the provider.')
+    fireEvent.click(screen.getByRole('button', { name: 'Add a token' }))
+    const sheet = screen.getByTestId('llm-login-sheet')
+    fireEvent.click(within(sheet).getByRole('radio', { name: /^Claude/ }))
+    fireEvent.click(within(sheet).getByRole('radio', { name: 'Paste an API token' }))
     const keyInput = screen.getByLabelText('API token') as HTMLInputElement
     expect(keyInput.type).toBe('password')
-    fireEvent.change(screen.getByLabelText('API token label'), { target: { value: 'metered' } })
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Show' }))
+    expect(keyInput.type).toBe('text')
+    fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'metered' } })
     fireEvent.change(keyInput, { target: { value: 'sk-test-SECRET-123456' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Add API token' }))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Add API token' }))
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/add-key', {
         tool: 'claude',
@@ -442,48 +502,62 @@ describe('Workspace/chat tokens and API tokens', () => {
         key: 'sk-test-SECRET-123456',
       }),
     )
-    await waitFor(() => expect(screen.queryByTestId('llm-apikey-dialog')).toBeNull())
+    expect(await screen.findByRole('dialog', { name: 'API token added' })).toBeTruthy()
+    expect(screen.getByTestId('llm-key-tail').textContent).toContain('•••• 3456')
     expect(document.body.innerHTML).not.toContain('sk-test-SECRET-123456')
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.queryByTestId('llm-login-sheet')).toBeNull()
+    expect(within(screen.getByTestId('llm-tool-claude')).getByTestId('llm-notice').textContent).toContain(
+      'Claude API token “metered” was added.',
+    )
   })
 
-  it('a key refusal keeps the dialog open with the hint and the key cleared', async () => {
-    h.daemonCliPost.mockImplementation(async () => {
-      throw new Error(JSON.stringify({ error: { code: 'invalid_label', hint: 'invalid label: the API key must be 8–512 characters with no spaces' } }))
+  it('a key refusal keeps the sheet open: what failed, the hint, the next step, and the key cleared', async () => {
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'llm/accounts/add-key') {
+        throw new Error(JSON.stringify({ error: { code: 'invalid_label', hint: 'invalid label: the API key must be 8–512 characters with no spaces' } }))
+      }
+      return {}
     })
     await renderColumn()
-    fireEvent.click(within(screen.getByTestId('llm-tool-codex')).getByRole('button', { name: '+ Add API token' }))
-    fireEvent.change(screen.getByLabelText('API token label'), { target: { value: 'k' } })
+    fireEvent.click(within(screen.getByTestId('llm-tool-codex')).getByRole('button', { name: 'Add a Codex token' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Paste an API token' }))
+    fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'k' } })
     fireEvent.change(screen.getByLabelText('API token'), { target: { value: 'short key' } })
-    fireEvent.click(within(screen.getByTestId('llm-apikey-dialog')).getByRole('button', { name: 'Add API token' }))
-    expect((await screen.findByRole('alert')).textContent).toContain('8–512 characters')
+    fireEvent.click(screen.getByRole('button', { name: 'Add API token' }))
+    const alert = await screen.findByTestId('dialog-error')
+    expect(alert.textContent).toContain('K2 couldn’t add the API token.')
+    expect(alert.textContent).toContain('8–512 characters')
     expect((screen.getByLabelText('API token') as HTMLInputElement).value).toBe('')
   })
 
-  it('API token rows read "API token · <label> · billed per token"', async () => {
+  it('API token rows say what they are, with no usage bars', async () => {
     await renderColumn()
-    expect(screen.getByTestId('llm-name-acc_key').textContent).toBe('API token · metered · billed per token')
+    expect(screen.getByTestId('llm-name-acc_key').textContent).toBe('metered')
+    expect(screen.getByTestId('llm-kind-acc_key').textContent).toBe('API token · billed per token')
     expect(screen.queryByTestId('llm-usage-acc_key')).toBeNull()
   })
 
   it('a token set for a workspace shows where, is in use, and refuses server-default actions with the reason', async () => {
     await renderColumn()
-    expect(screen.getByTestId('llm-pinned-acc_pinned').textContent).toBe('Used by: research')
-    expect(screen.getByTestId('llm-inuse-acc_pinned').textContent).toBe('In use by a chat right now')
+    expect(screen.getByTestId('llm-facts-acc_pinned').textContent).toBe('Used by research · In use by a chat right now')
     const row = screen.getByTestId('llm-account-acc_pinned')
-    const make = within(row).getByRole('button', { name: 'Use this token' }) as HTMLButtonElement
+    const make = within(row).getByRole('button', { name: 'Make default' }) as HTMLButtonElement
     expect(make.disabled).toBe(true)
     expect(make.title).toContain("can't also be the server default")
-    const remove = within(row).getByRole('button', { name: 'Remove' }) as HTMLButtonElement
-    expect(remove.disabled).toBe(true)
-    expect(remove.title).toContain('Set those back to Server default first')
     fireEvent.click(make)
+    expect(screen.queryByTestId('llm-switch-confirm')).toBeNull()
+    const remove = menuItem('team', 'Remove')
+    expect(remove.getAttribute('aria-disabled')).toBe('true')
+    expect(remove.textContent).toContain('Set those back to Server default first')
     expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_pinned' })
   })
 
-  it('the switch note says workspaces and chats with their own token keep it', async () => {
-    await renderColumn()
-    expect(SWITCH_NOTE).toContain('every chat that uses Server default')
-    expect(SWITCH_NOTE).toContain('Workspaces and chats set to their own token keep it')
+  it('the switch confirm says workspaces and chats with their own token keep it', () => {
+    const d = parseAccountsDoc(doc())
+    const out = switchConfirmText(d.tools[0], d.tools[0].accounts[0], d.tools[0].accounts[1])
+    expect(SWITCH_NOTE).toContain('every chat set to Server default')
+    expect(out.message).toContain('Workspaces and chats that picked their own token keep it')
   })
 })
 
@@ -491,14 +565,16 @@ describe('Sign-in sheet', () => {
   it('a sign-in asked for from outside Settings opens the sheet for that tool once the list loads', async () => {
     act(() => useLlmSignInRequestStore.getState().request({ tool: 'codex', toolLabel: 'Codex' }))
     await renderColumn()
-    expect(await screen.findByRole('dialog', { name: 'Add a Codex subscription' })).toBeTruthy()
+    const sheet = await screen.findByRole('dialog', { name: 'Add a token' })
+    expect(within(sheet).getByText('Codex runs its own sign-in on the server. K2 never sees your password.')).toBeTruthy()
     expect(useLlmSignInRequestStore.getState().pending).toBeNull()
   })
 
   it('a request for a tool that cannot sign in falls back to the first of Claude, Codex and Grok that can', async () => {
     act(() => useLlmSignInRequestStore.getState().request({ tool: 'gemini', toolLabel: 'Gemini' }))
     await renderColumn()
-    expect(await screen.findByRole('dialog', { name: 'Add a Claude subscription' })).toBeTruthy()
+    const sheet = await screen.findByRole('dialog', { name: 'Add a token' })
+    expect(within(sheet).getByText('Claude runs its own sign-in on the server. K2 never sees your password.')).toBeTruthy()
   })
 
   it('in air-gap mode a request opens no sheet', async () => {
@@ -511,15 +587,18 @@ describe('Sign-in sheet', () => {
     expect(screen.queryByTestId('llm-login-sheet')).toBeNull()
   })
 
-  it('Add posts tool, label and mode, then offers Open sign-in page, Copy code and Paste code', async () => {
+  it('Add a token → Claude → sign in posts tool, label and mode, then offers Open sign-in page, Copy code and Paste code', async () => {
     const writeText = vi.fn(async () => {})
     Object.assign(navigator, { clipboard: { writeText } })
     await renderColumn()
-    fireEvent.click(screen.getAllByRole('button', { name: '+ Add subscription' })[0])
+    fireEvent.click(screen.getByRole('button', { name: 'Add a token' }))
     const sheet = screen.getByTestId('llm-login-sheet')
-    expect(screen.getByRole('dialog', { name: 'Add a Claude subscription' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'Add a token' })).toBeTruthy()
+    // Nothing chosen yet: no way to start.
+    expect((screen.getByTestId('llm-login-start') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(within(sheet).getByRole('radio', { name: /^Claude/ }))
     fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'team' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Another device' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Another device' }))
     fireEvent.click(screen.getByTestId('llm-login-start'))
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/add', { tool: 'claude', label: 'team', mode: 'other_device' }),
@@ -537,30 +616,34 @@ describe('Sign-in sheet', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'Show terminal' }))
     expect(screen.getByTestId('llm-login-terminal').textContent).toContain('Paste code here if prompted')
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel sign-in' }))
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/login/cancel', { loginId: 'login_1' }))
+    await waitFor(() => expect(screen.queryByTestId('llm-login-sheet')).toBeNull())
   })
 
-  it('polls login/status, shows the live-swap banner, and offers to make the new subscription the server default', async () => {
+  it('polls login/status, shows the live-swap banner, then says what is signed in and offers to make it the server default', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     let polls = 0
+    const banner = 'Signing in temporarily switches this tool for every session on this server.'
     h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) => {
       if (route !== 'llm/accounts/login/status') return routeGet(route, params)
       polls++
+      const finished = polls >= 2
       return {
         login: {
           ...LOGIN,
+          label: 'old',
           method: 'live_swap',
-          banner: 'Signing in temporarily switches this tool for every session on this server.',
-          state: 'signed_in',
-          done: true,
-          offerMakeActive: true,
+          banner,
+          state: finished ? 'signed_in' : 'waiting_for_browser',
+          done: finished,
+          offerMakeActive: finished,
         },
       }
     })
     await renderColumn()
     fireEvent.click(within(screen.getByTestId('llm-account-acc_stale')).getByRole('button', { name: 'Sign in again' }))
-    expect(screen.getByRole('dialog', { name: 'Sign old in again' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'Sign “old” in again' })).toBeTruthy()
     fireEvent.click(screen.getByTestId('llm-login-start'))
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/login', { id: 'acc_stale', mode: 'this_computer' }),
@@ -568,12 +651,19 @@ describe('Sign-in sheet', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1600)
     })
-    expect(polls).toBeGreaterThanOrEqual(1)
+    expect(polls).toBe(1)
     expect(screen.getByTestId('llm-login-banner').textContent).toContain('every session on this server')
-    expect(screen.getByText('Make the new subscription the server default?')).toBeTruthy()
-    fireEvent.click(within(screen.getByTestId('llm-login-sheet')).getByRole('button', { name: 'Use this token' }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    expect(screen.getByRole('dialog', { name: 'Signed in to Claude' })).toBeTruthy()
+    expect(screen.getByTestId('llm-login-done').textContent).toContain('Claude “old” is signed in and saved on')
+    expect(screen.getByText('Make it the Claude server default?')).toBeTruthy()
+    fireEvent.click(within(screen.getByTestId('llm-login-sheet')).getByRole('button', { name: 'Make it the default' }))
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_new' }))
-    expect(await screen.findByText('The new subscription is now the server default.')).toBeTruthy()
+    expect((await screen.findByTestId('llm-login-made-default')).textContent).toBe('It’s now the Claude server default.')
+    // The page says so too, in Claude's card.
+    expect(within(screen.getByTestId('llm-tool-claude')).getByTestId('llm-notice').textContent).toContain('“old” is signed in again.')
     // Done: polling stops.
     const after = polls
     await act(async () => {
@@ -600,7 +690,8 @@ describe('Sign-in sheet', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1600)
     })
-    expect(screen.queryByText('Make the new subscription the server default?')).toBeNull()
+    expect(screen.queryByText('Make it the Claude server default?')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Done' })).toBeTruthy()
     expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/switch', expect.anything())
   })
 })
@@ -765,13 +856,13 @@ describe('Usage v2 limit bars from /cli/usage/limits (Owner / Admin)', () => {
     await waitFor(() => expect(screen.getByTestId('llm-usage-state-acc_home')).toBeTruthy())
     expect(screen.getByTestId('llm-usage-state-acc_home').textContent).toBe('Sign-in expired. Sign in again to see its limits.')
     expect(screen.getByTestId('llm-usage-age-acc_home').textContent).toContain('Usage checked 3 h ago · next check 30m')
-    fireEvent.click(screen.getByTestId('llm-usage-refresh-acc_home'))
+    fireEvent.click(menuItem('home', 'Check usage now'))
     await waitFor(() =>
       expect(h.daemonCliPost).toHaveBeenCalledWith('usage/limits/refresh', { accountId: 'acc_home' }),
     )
   })
 
-  it("a Member's 403 leaves each row on its wallet reading and offers no per-login Refresh", async () => {
+  it("a Member's 403 leaves each row on its wallet reading and offers no per-login check", async () => {
     h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) => {
       if (route === 'usage/limits') throw new DaemonHttpError('Usage is visible to the server Owner and Admins', 403, 'admin_only')
       return routeGet(route, params)
@@ -779,6 +870,7 @@ describe('Usage v2 limit bars from /cli/usage/limits (Owner / Admin)', () => {
     await renderColumn()
     await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith('usage/limits'))
     expect(screen.getByTestId('llm-usage-acc_work').textContent).toContain('Session 42%')
-    expect(screen.queryByTestId('llm-usage-refresh-acc_work')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for work' }))
+    expect(screen.queryByRole('menuitem', { name: /^Check usage now/ })).toBeNull()
   })
 })

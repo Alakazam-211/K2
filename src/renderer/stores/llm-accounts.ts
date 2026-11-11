@@ -147,6 +147,10 @@ export interface LlmAccountsDoc {
 export interface AccountsEntry {
   doc: LlmAccountsDoc | null
   error: string | null
+  /** The server's own reason for a failed load, for the page to show
+   *  quietly under its own words; null when `error` already says it all
+   *  (an older server, a role refusal) or nothing failed. */
+  reason?: string | null
 }
 
 /** Tools with a wallet in this version (Gemini: API keys only). */
@@ -246,6 +250,14 @@ export function parseAccountsDoc(raw: unknown): LlmAccountsDoc {
   }
 }
 
+/** The server's reason for a failed load, or null when `loadErrorText`
+ *  already explains it in its own words. */
+export function loadErrorReason(e: unknown): string | null {
+  const raw = rawMessage(e)
+  if (NO_WALLET.test(raw) || ROLE_REFUSED.test(raw)) return null
+  return errorText(e)
+}
+
 /** A load failure as a person reads it, naming the server (hosted web
  *  is one server, and its primary scope's label reads "This computer"). */
 export function loadErrorText(scope: ServerScope, e: unknown): string {
@@ -308,7 +320,7 @@ export const useLlmAccountsStore = create<LlmAccountsStore>((set) => ({
       try {
         const doc = parseAccountsDoc(await daemonCliGet<unknown>(scope, 'llm/accounts/list'))
         if (epoch !== epochOf(key)) return
-        set((s) => ({ entries: { ...s.entries, [key]: { doc, error: null } } }))
+        set((s) => ({ entries: { ...s.entries, [key]: { doc, error: null, reason: null } } }))
       } catch (e) {
         // The window moved to another server mid-request: that server's
         // own load (after the switch) fills the entry.
@@ -316,7 +328,10 @@ export const useLlmAccountsStore = create<LlmAccountsStore>((set) => ({
         // Keep the last list from THIS server (the entry is dropped on a
         // switch, so it is never another server's) and say what failed.
         set((s) => ({
-          entries: { ...s.entries, [key]: { doc: s.entries[key]?.doc ?? null, error: loadErrorText(scope, e) } },
+          entries: {
+            ...s.entries,
+            [key]: { doc: s.entries[key]?.doc ?? null, error: loadErrorText(scope, e), reason: loadErrorReason(e) },
+          },
         }))
       } finally {
         if (epoch === epochOf(key)) loadInflight.delete(key)
@@ -531,7 +546,7 @@ export function pinBlockReason(tool: LlmTool, a: LlmAccount): string | null {
 }
 
 export const PINNED_SWITCH_REASON =
-  "This token is set for a workspace or chat, so it can't also be the server default (a subscription can't be live in two places). Set those back to Server default first."
+  "A workspace or chat uses this token, so it can't also be the server default. Set those back to Server default first."
 
 export const CLAUDE_PIN_NOTE = "This chat's Claude history will stay with this subscription."
 

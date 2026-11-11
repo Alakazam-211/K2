@@ -97,6 +97,7 @@ import { onActiveHostChange, useConnectHostStore } from './stores/connect-host'
 import { isWebClient } from './lib/is-web'
 // Style System P3 — terminal color bridge (style store → KesselConfig).
 import { KesselConfigProvider } from './kessel/config-context'
+import { defaultKesselConfig, terminalFontStack } from './kessel/config'
 import { useStyleStore } from './stores/style'
 import { toKesselColors } from './lib/style-resolve'
 import { getPalette } from './styles.generated'
@@ -276,10 +277,15 @@ if (typeof window !== 'undefined') {
 function StyledKesselProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const styleId = useStyleStore((s) => s.styleId)
   const resolvedPaletteId = useStyleStore((s) => s.resolvedPaletteId)
+  // Settings → Terminal → Font: the default font keeps the default config.
+  const terminalFont = useSettingsStore((s) => s.terminal?.fontFamily)
   const overrides = useMemo(() => {
     const palette = getPalette(styleId, resolvedPaletteId)
-    return palette ? { colors: toKesselColors(palette.terminal) } : undefined
-  }, [styleId, resolvedPaletteId])
+    const family = terminalFontStack(terminalFont)
+    const font = family === defaultKesselConfig.font.family ? undefined : { family }
+    if (!palette && !font) return undefined
+    return { ...(palette ? { colors: toKesselColors(palette.terminal) } : {}), ...(font ? { font } : {}) }
+  }, [styleId, resolvedPaletteId, terminalFont])
   return <KesselConfigProvider overrides={overrides}>{children}</KesselConfigProvider>
 }
 

@@ -3689,7 +3689,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         }
         return
       }
-      const natural = naturalTextEditingSequence(e)
+      // Settings → Terminal → Mac text shortcuts (on unless turned off).
+      const natural = useSettingsStore.getState().terminal?.naturalTextEditing === false ? null : naturalTextEditingSequence(e)
       if (natural !== null) {
         e.preventDefault()
         commitScrollPx(0)

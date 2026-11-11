@@ -211,6 +211,19 @@ export type KesselConfigOverrides = {
   [K in keyof KesselConfig]?: Partial<KesselConfig[K]>
 }
 
+/** The default terminal font, as Settings → Terminal names it. */
+export const TERMINAL_DEFAULT_FONT = 'MesloLGM Nerd Font'
+
+/** The CSS font stack for the font picked in Settings → Terminal: that font
+ *  first, then the default stack, so a font that isn't installed falls back
+ *  to the usual one. The default font (or none) is the default stack itself. */
+export function terminalFontStack(name: string | null | undefined): string {
+  const clean = (name ?? '').replace(/['"\\;{}]/g, '').trim()
+  const base = defaultKesselConfig.font.family
+  if (!clean || clean === TERMINAL_DEFAULT_FONT) return base
+  return `'${clean}', ${base}`
+}
+
 /** Merge a user override on top of `defaultKesselConfig`. Shallow-
  *  deep-merge: only top-level keys are deep-merged; nested objects
  *  replace wholesale if the caller specifies them. (A full recursive

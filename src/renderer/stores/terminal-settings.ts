@@ -108,6 +108,8 @@ interface TerminalSettingsState {
   incrementFontSize: () => void
   decrementFontSize: () => void
   resetFontSize: () => void
+  /** Settings → Terminal: the same size ⌘+ and ⌘- change, clamped. */
+  setFontSize: (size: number) => void
   setLinkClickMode: (mode: LinkClickMode) => void
   setOpenLinksInSplitPane: (enabled: boolean) => void
   setShortcutLayout: (layout: ShortcutModifierLayout) => void
@@ -204,6 +206,11 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
 
       resetFontSize: () => {
         set({ fontSize: TERMINAL_FONT_SIZE_DEFAULT })
+      },
+
+      setFontSize: (size: number) => {
+        if (!Number.isFinite(size)) return
+        set({ fontSize: Math.min(TERMINAL_FONT_SIZE_MAX, Math.max(TERMINAL_FONT_SIZE_MIN, Math.round(size))) })
       },
 
       setLinkClickMode: (mode: LinkClickMode) => {

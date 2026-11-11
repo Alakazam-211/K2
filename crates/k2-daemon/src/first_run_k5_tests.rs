@@ -150,8 +150,10 @@ fn the_k5_route_makes_the_seat_workspace_harness_pinned_chat_cards_and_grants() 
     // Its own cards switch, and every K5 starter switch (the owner holds all).
     assert!(k2_core::workspace::settings::agents_can_request_permissions(&id), "Let this agent ask for permission");
     let granted: Vec<&str> = out["permissions"]["granted"].as_array().expect("granted").iter().map(|g| g.as_str().expect("id")).collect();
-    assert_eq!(granted, K5_STARTER_PERMISSIONS.to_vec());
-    for a in K5_STARTER_PERMISSIONS {
+    let mut want = K5_STARTER_PERMISSIONS.to_vec();
+    want.push("chat.refresh");
+    assert_eq!(granted, want, "the list, then the chat_refresh toggle beside it");
+    for a in &want {
         assert!(on(&id, a), "{a} on for K5");
     }
     // The launch with its first-start hello.
@@ -345,7 +347,7 @@ fn k5s_pinned_chat_hires_the_chief_of_staff_with_only_what_k5_holds() {
     // Only what K5 holds: chat.refresh stays a card ask.
     assert!(!on(&cos, "chat.refresh"));
     assert_eq!(out["permissions"]["left"], json!([{ "action": "chat.refresh", "reason": "hirer_lacks" }]));
-    for a in CHIEF_OF_STAFF_STARTER_PERMISSIONS.iter().filter(|a| **a != "chat.refresh") {
+    for a in CHIEF_OF_STAFF_STARTER_PERMISSIONS {
         assert!(on(&cos, a), "{a} passed on");
     }
     assert!(!on(&cos, "organization.manage") && !on(&cos, "gardens.manage"), "nothing beyond its set");
@@ -375,6 +377,18 @@ fn k5s_pinned_chat_hires_the_chief_of_staff_with_only_what_k5_holds() {
     let r = handle_chief_of_staff(&cos_body(), &k5_session(&k5));
     assert_eq!((r.status, code(&r).as_str()), ("409 Conflict", "chief_of_staff_exists"));
     assert!(std::path::Path::new(&k5_path).is_dir());
+}
+
+#[test]
+fn a_k5_folder_already_there_is_409_folder_exists_not_a_crash() {
+    let _e = env(true, &["codex"]);
+    let root = k2_core::hire::root::hire_root().expect("root");
+    std::fs::create_dir_all(root.join("k5")).expect("someone's folder");
+    let r = post(K5_PATH, json!({ "tool": "codex" }), &Actor::owner_token());
+    assert_eq!((r.status, code(&r).as_str()), ("409 Conflict", "folder_exists"), "{}", r.body);
+    assert!(json_of(&r)["error"]["hint"].as_str().expect("hint").contains("another handle"));
+    let r = post(K5_PATH, json!({ "tool": "codex", "handle": "k5b" }), &Actor::owner_token());
+    assert_eq!(r.status, "200 OK", "another handle works: {}", r.body);
 }
 
 #[test]

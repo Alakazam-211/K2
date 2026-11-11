@@ -472,10 +472,18 @@ fn handle_k5(body: &[u8], actor: &Actor) -> CliResponse {
     let mut req = k2_core::hire::template::ApplyRequest::new("k5");
     req.name = Some(name.clone());
     req.handle = Some(handle);
-    req.path = Some(path);
     req.tool = Some(tool.clone());
     let report = match k2_core::hire::template::apply(&req, &caller) {
         Ok(r) => r,
+        // `<hire root>/<handle>` is already there and isn't a K5 the
+        // template made: K5's folder is taken, so another handle.
+        Err(e) if e.code == "folder_exists" => {
+            return error(
+                "409 Conflict",
+                "folder_exists",
+                format!("{path} is already there and isn't K5's: pick another handle (k2 setup k5 --handle <h>)"),
+            )
+        }
         Err(e) => return hire_error(&e),
     };
     {
@@ -488,7 +496,7 @@ fn handle_k5(body: &[u8], actor: &Actor) -> CliResponse {
     let target = crate::first_run_grants::Target { id: report.workspace_id.clone(), path: report.path.clone(), handle: report.handle.clone() };
     after_make(&report);
     let cards = crate::first_run_grants::cards_on(&target, &grantor);
-    let granted = crate::first_run_grants::grant_set(k2_core::hire::starter_permissions::K5_STARTER_PERMISSIONS, &target, &grantor);
+    let granted = crate::first_run_grants::grant_set(&crate::first_run_grants::with_extras(k2_core::hire::starter_permissions::K5_STARTER_PERMISSIONS), &target, &grantor);
     audit("first-run-k5", &created_by, format!("ok {} {tool} granted={}", report.handle, granted.granted.join(",")));
     emit_changed(None);
     crate::v1_hire::emit_hire_watches();
@@ -611,13 +619,15 @@ pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller
     let mut req = k2_core::hire::template::ApplyRequest::new("chief-of-staff");
     req.name = Some(name);
     req.handle = Some(handle);
-    req.path = Some(path);
     req.tool = Some(tool.clone());
     req.params.insert("about".into(), about);
     req.params.insert("k5".into(), k5_handle.clone());
     req.params.insert("person".into(), seat_person());
     let report = match k2_core::hire::template::apply(&req, &caller) {
         Ok(r) => r,
+        Err(e) if e.code == "folder_exists" => {
+            return error("409 Conflict", "folder_exists", format!("{path} is already there: ask your person for another name"))
+        }
         Err(e) => return hire_error(&e),
     };
     {
@@ -631,8 +641,11 @@ pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller
     let target = crate::first_run_grants::Target { id: report.workspace_id.clone(), path: report.path.clone(), handle: report.handle.clone() };
     let grantor = crate::first_run_grants::Grantor::Agent { workspace_id: k5.workspace_id.clone() };
     let cards = crate::first_run_grants::cards_on(&target, &grantor);
-    let granted =
-        crate::first_run_grants::grant_set(k2_core::hire::starter_permissions::CHIEF_OF_STAFF_STARTER_PERMISSIONS, &target, &grantor);
+    let granted = crate::first_run_grants::grant_set(
+        &crate::first_run_grants::with_extras(k2_core::hire::starter_permissions::CHIEF_OF_STAFF_STARTER_PERMISSIONS),
+        &target,
+        &grantor,
+    );
     // K5 and its hire can message each other: the seat route is the
     // authority for this one connection (as a person's add would be).
     let connected = k2_core::connections::connections_for_actor(&k5.path, "add", Some(&report.handle), None, true);

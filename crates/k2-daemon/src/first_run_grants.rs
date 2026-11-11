@@ -172,6 +172,16 @@ fn grant_switch(by: &Grantor, t: &Target, switch: &str) -> Result<(), String> {
     }
 }
 
+/// A starter list plus the standing toggles Rosson's sets name that have
+/// no V1 action id (`EXTRA_STANDING_TOGGLES`: `chat.refresh`'s twin,
+/// "Can refresh its own pinned chat"). They are granted beside the list,
+/// under the same rules, so the lists stay V1 standing ids only.
+pub(crate) fn with_extras(set: &[&'static str]) -> Vec<&'static str> {
+    let mut out = set.to_vec();
+    out.extend(k2_core::hire::starter_permissions::EXTRA_STANDING_TOGGLES.iter().map(|(a, _)| *a));
+    out
+}
+
 /// Grant `set` (starter action ids) to `t`, following the module's rules.
 pub(crate) fn grant_set(set: &[&str], t: &Target, by: &Grantor) -> Granted {
     let mut out = Granted::default();
@@ -204,6 +214,35 @@ pub(crate) fn cards_on(t: &Target, by: &Grantor) -> Result<(), String> {
             write_on(t, "permission_cards", &actor)?;
             audit(&actor, format!("ok {} permission_cards=true (starter set)", t.handle));
             Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use k2_core::hire::starter_permissions::{CHIEF_OF_STAFF_STARTER_PERMISSIONS, EXTRA_STANDING_TOGGLES, K5_STARTER_PERMISSIONS};
+    use k2_core::permission::catalog::{Floor, Grant};
+
+    /// Both starter lists are standing V1 actions in the real catalog
+    /// (the agent-templates loader checks the same), each with the floor
+    /// the module's Owner rule assumes; the one extra is a one-time action
+    /// whose standing twin is a toggle, granted beside the lists.
+    #[test]
+    fn the_starter_lists_are_standing_v1_actions_with_their_floors() {
+        for id in K5_STARTER_PERMISSIONS.iter().chain(CHIEF_OF_STAFF_STARTER_PERMISSIONS) {
+            assert!(crate::permission::walls::V1_ACTIONS.contains(id), "{id} is not a V1 action");
+            let r = crate::permission::actions::find(id).unwrap_or_else(|| panic!("{id} is not registered"));
+            assert_eq!(r.spec.grant, Grant::Standing, "{id} must be standing");
+            assert_eq!(
+                r.spec.floor == Floor::Owner,
+                k2_core::hire::starter_permissions::owner_floor(id),
+                "{id}: the Owner-floor rule matches the catalog"
+            );
+        }
+        for (action, toggle) in EXTRA_STANDING_TOGGLES {
+            let r = crate::permission::actions::find(action).unwrap_or_else(|| panic!("{action}"));
+            assert_eq!(r.spec.grant, Grant::OneTime, "{action} is one-time; its twin {toggle} is granted instead");
+            assert!(!K5_STARTER_PERMISSIONS.contains(action) && !CHIEF_OF_STAFF_STARTER_PERMISSIONS.contains(action));
         }
     }
 }

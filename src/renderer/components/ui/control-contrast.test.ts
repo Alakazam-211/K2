@@ -207,6 +207,23 @@ describe('Keyboard focus', () => {
     )
   })
 
+  it('in Terminal a focused text field (Input, SearchField) draws the cut buttons\' 2px ring, not just a border recolour', () => {
+    const body = rule(
+      globals,
+      'html[data-style="terminal"] input[data-k2-chamfer]:not([type="checkbox"], [type="radio"], [type="range"]):focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)',
+    )
+    // 1px border + 1px inset shadow on the sides, a 2px band on each cut.
+    expect(body).toContain('--k2-ch-bw: 2px')
+    expect(body).toContain('--k2-ch-edge: var(--color-accent-text)')
+    expect(body).toContain('border-color: var(--color-accent-text)')
+    expect(body).toContain('box-shadow: inset 0 0 0 1px var(--color-accent-text)')
+    // The corner bands read their width from --k2-ch-bw.
+    expect(globals).toContain('--k2-ch-w: var(--k2-ch-bw, 1px)')
+    // Both shared fields are cut inputs, so both get it.
+    expect(readFileSync(join(__dirname, 'Input.tsx'), 'utf8')).toContain('data-k2-chamfer="control"')
+    expect(readFileSync(join(__dirname, 'SearchField.tsx'), 'utf8')).toContain('data-k2-chamfer="control"')
+  })
+
   it('rows and tabs that opt in with data-k2-focus ring inside, in the theme\'s shape', () => {
     const sel = '[data-k2-focus]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)::after'
     const round = rule(globals, sel)

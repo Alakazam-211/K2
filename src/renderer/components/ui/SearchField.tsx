@@ -18,7 +18,7 @@ export interface SearchFieldProps extends React.InputHTMLAttributes<HTMLInputEle
  *  filters: a see-through fill over a live blur, the bright rim, the control
  *  edge at 3:1), a full pill; in Terminal it is the plain field with the
  *  control cut, and keyboard focus draws the 2px accent ring the cut buttons
- *  have (the wrapper draws it: an <input> has no pseudo-elements).
+ *  have (globals.css: the Terminal text-field focus rule).
  *
  *  `className` sizes the field's box (e.g. `w-full`, `flex-1`); every other
  *  prop goes to the <input>, so refs, key handlers and autofocus work as on a

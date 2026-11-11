@@ -120,8 +120,4 @@ describe('SearchField', () => {
     expect(field().parentElement!.className).toContain('w-full')
   })
 
-  it('Terminal draws a 2px accent ring around a focused search field (the wrapper, since an input has no ::after)', () => {
-    const globals = readFileSync(join(repo, 'src', 'renderer', 'globals.css'), 'utf8')
-    expect(globals).toMatch(/html\[data-style="terminal"\] \[data-k2-search-field\]:has\(> input:focus-visible\):not\(\[data-zen-root\] \*, \[data-k2-thread-zen\] \*\)::after,\s*html\[data-style="terminal"\] \[data-k2-focus\]:focus-visible[^{]*\{[^}]*--k2-ch-fr: 2px;[^}]*background: var\(--color-accent-text\);/)
-  })
 })

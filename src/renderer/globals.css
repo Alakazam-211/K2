@@ -1251,6 +1251,18 @@ html[data-style="terminal"] :where(input[data-k2-chamfer]:not([data-zen-root] *,
   background-origin: border-box;
 }
 html[data-style="terminal"] :where(input[data-k2-chamfer]:focus:not([data-zen-root] *, [data-k2-thread-zen] *)) { --k2-ch-edge: var(--color-accent); }
+/* Keyboard focus on a text field (<Input>, <SearchField>, any cut text input):
+   the 2px accent ring the cut buttons draw, following the cut. An <input> has
+   no pseudo-elements, so the ring is its own 1px border plus a 1px inset shadow
+   along the sides, and a 2px band on each cut (--k2-ch-bw widens the corner
+   gradients above). The accent as text, so it reads at 3:1 on every ground. */
+html[data-style="terminal"] input[data-k2-chamfer]:not([type="checkbox"], [type="radio"], [type="range"]):focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  --k2-ch-bw: 2px;
+  --k2-ch-edge: var(--color-accent-text);
+  border-color: var(--color-accent-text);
+  box-shadow: inset 0 0 0 1px var(--color-accent-text);
+  outline: none;
+}
 /* A box-shadow can't follow a cut (it never paints under the box, leaving a
    light notch at each corner), so floating surfaces carry a drop-shadow on a
    wrapper and the chamfered box inside drops its box-shadow. */
@@ -1313,16 +1325,6 @@ html:not([data-style="terminal"]) :is(.k2-focus, .k2-checkbox, .k2-radio):focus-
   border-radius: var(--radius-selector);
   box-shadow: inset 0 0 0 2px var(--color-accent-text);
 }
-/* A focused search field (<SearchField>) in Terminal: the same 2px cut ring.
-   An <input> has no ::after, so the field's wrapper draws it over the edge. */
-html[data-style="terminal"] [data-k2-search-field]:has(> input:focus-visible):not([data-zen-root] *, [data-k2-thread-zen] *)::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-}
-html[data-style="terminal"] [data-k2-search-field]:has(> input:focus-visible):not([data-zen-root] *, [data-k2-thread-zen] *)::after,
 html[data-style="terminal"] [data-k2-focus]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)::after {
   --k2-ch-cut: var(--chamfer-control);
   --k2-ch-fr: 2px;

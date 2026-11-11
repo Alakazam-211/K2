@@ -602,6 +602,8 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, call
     keepalive.tick().await; // the immediate first tick
     let mut heard = Instant::now();
     let mut linger = false;
+    // Did this side send a Close the client is still to answer?
+    let mut closing = false;
     loop {
         tokio::select! {
             biased;
@@ -613,6 +615,7 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, call
                 }
                 Some(Out::Close(c)) => {
                     finish(&mut write, &c).await;
+                    closing = true;
                     break;
                 }
                 // The worker ended without a frame (the client left).
@@ -642,6 +645,7 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, call
                             log_debug!("[docs/live] socket {id}: client frames piling up; cutting off");
                             let c = Closed::k2(CloseReason::CutOff, "too_many_frames", "frames arrived faster than the doc could take them");
                             finish(&mut write, &c).await;
+                            closing = true;
                             break;
                         }
                     }
@@ -679,6 +683,9 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, call
     // Dropping the inbox tells the worker the socket is gone: it leaves.
     drop(in_tx);
     sockets().lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+    if closing {
+        await_close_reply(&mut read).await;
+    }
     if linger {
         // The rest of the oversized frame is still arriving: read and drop
         // it (a few seconds at most), so the close isn't lost to a reset
@@ -707,6 +714,31 @@ fn code_normal() -> u16 {
 /// daemon serves next.
 fn restart() -> Closed {
     Closed { ws_code: wire::code::RESTART, ..Closed::new(CloseReason::Network) }
+}
+
+/// How long a socket that sent its Close waits for the client's.
+const CLOSE_REPLY_WAIT: Duration = Duration::from_secs(2);
+
+/// The closing handshake's second half (RFC 6455 §7.1.1): after its Close the
+/// server reads until the client's Close, then drops the connection. Dropping
+/// it with a client frame still unread (a Pong to the last keepalive, an edit
+/// in flight) makes the kernel answer with a reset instead of a FIN, and a
+/// reset can take the client's unread bytes with it: the client gets the
+/// `closed` frame but loses the Close behind it, and with it the close code
+/// (4010, 4003...). Frames read here are dropped; a client that never
+/// answers is let go after [`CLOSE_REPLY_WAIT`].
+async fn await_close_reply<S>(read: &mut S)
+where
+    S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    let _ = tokio::time::timeout(CLOSE_REPLY_WAIT, async {
+        while let Some(Ok(m)) = read.next().await {
+            if matches!(m, Message::Close(_)) {
+                break;
+            }
+        }
+    })
+    .await;
 }
 
 /// The last frame (none for `network`: "never in a frame") and the close.

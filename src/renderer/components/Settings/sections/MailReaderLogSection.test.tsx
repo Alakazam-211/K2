@@ -55,6 +55,17 @@ describe('Email Reader Log', () => {
     expect(b).toContain('refused')
   })
 
+  it('an empty window says so in the shared empty state, and Show everyone clears the filters', async () => {
+    h.answer = { ok: true, count: 0, rows: [] }
+    render(<MailReaderLogSection />)
+    expect((await screen.findByTestId('reader-log-empty')).textContent).toContain('in the last 7 days')
+    fireEvent.change(screen.getByTestId('reader-log-inbox'), { target: { value: 'pat@x.example' } })
+    fireEvent.click(screen.getByTestId('reader-log-apply'))
+    await waitFor(() => expect(screen.getByTestId('reader-log-empty').textContent).toContain('Nothing matches these filters'))
+    fireEvent.click(screen.getByTestId('reader-log-clear'))
+    await waitFor(() => expect(h.gets.at(-1)?.params).toEqual({ inbox: undefined, actor: undefined, since: '7d', limit: 200 }))
+  })
+
   it('filters by inbox and who', async () => {
     render(<MailReaderLogSection />)
     await screen.findByTestId('reader-log-row-7')
@@ -68,6 +79,7 @@ describe('Email Reader Log', () => {
     h.fail = new Error('requires owner/admin')
     render(<MailReaderLogSection />)
     expect((await screen.findByTestId('reader-log-error')).textContent).toBe('requires owner/admin')
+    expect(screen.getByTestId('reader-log-error-state').getAttribute('data-load-state')).toBe('error')
     expect(screen.queryByTestId('reader-log-row-7')).toBeNull()
   })
 

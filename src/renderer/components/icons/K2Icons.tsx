@@ -21,6 +21,11 @@
 //   Settings, Link, Globe
 //     Lucide 1.58 `settings`, `link`, `globe`, unedited (round caps and
 //     joins: they are curves).
+//   Mail (folders and message actions, OA6)
+//     Lucide 1.58 `inbox`, `send`, `file-text`, `archive`, `octagon-alert`,
+//     `folder`, `folder-input`, `star`, `square-pen`, `mail-open`,
+//     `download`, `x`, squared; `reply`, `reply-all`, `forward`, `flag`,
+//     `paperclip`, `refresh-cw` keep round caps (their strokes are curves).
 //   Gardens
 //     Not here: K2's own brush ensō, `ZenIcon` (components/Zen/ZenIcon.tsx).
 //
@@ -726,6 +731,198 @@ export function PopInIcon(props: K2IconProps = {}): React.JSX.Element {
       <path d="M10 9v5h5" />
       <path d="M10 14L21 3" />
       <path d="M18 13v8H3V6h8" />
+    </svg>
+  )
+}
+
+// ── Mail (the Mail page's folders and message actions, OA6) ─────────────
+// Lucide glyphs, squared like the rest (square caps, mitred joins, no corner
+// radius); true curves (reply arrows, the paperclip, refresh) keep round caps.
+
+/** The Inbox folder: Lucide `inbox`, squared. */
+export function InboxIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('inbox', props)}>
+      <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+      <path d="M5.5 4 2 12v8h20v-8L18.5 4Z" />
+    </svg>
+  )
+}
+
+/** The Sent folder: Lucide `send`, squared (Feather's paper plane). */
+export function SendIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('send', props)}>
+      <path d="M22 2 15 22l-4-9-9-4Z" />
+      <path d="M22 2 11 13" />
+    </svg>
+  )
+}
+
+/** The Drafts folder: Lucide `file-text`, squared. */
+export function DraftsIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('file-text', props)}>
+      <path d="M14 2H4v20h16V8Z" />
+      <path d="M14 2v6h6" />
+      <path d="M10 9H8" />
+      <path d="M16 13H8" />
+      <path d="M16 17H8" />
+    </svg>
+  )
+}
+
+/** The Archive folder and action: Lucide `archive`, squared. */
+export function ArchiveIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('archive', props)}>
+      <rect width="20" height="5" x="2" y="3" />
+      <path d="M4 8v13h16V8" />
+      <path d="M10 12h4" />
+    </svg>
+  )
+}
+
+/** The Spam (junk) folder: Lucide `octagon-alert`, squared. */
+export function SpamIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('octagon-alert', props)}>
+      <path d="M8 2h8l6 6v8l-6 6H8l-6-6V8Z" />
+      <path d="M12 8v4" />
+      <path d="M12 16h.01" />
+    </svg>
+  )
+}
+
+/** A folder of your own: Lucide `folder`, squared. */
+export function FolderIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('folder', props)}>
+      <path d="M22 20V6H12l-2-3H2v17Z" />
+    </svg>
+  )
+}
+
+/** Move to a folder: Lucide `folder-input`, squared. */
+export function FolderMoveIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('folder-input', props)}>
+      <path d="M2 9V3h8l2 3h10v14H2v-3" />
+      <path d="M2 13h10" />
+      <path d="M9 16l3-3-3-3" />
+    </svg>
+  )
+}
+
+/** Reply: Lucide `reply` (the arrow's tail is an arc, so caps stay round). */
+export function ReplyIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('reply', props, 'round')}>
+      <path d="M9 17l-5-5 5-5" />
+      <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+    </svg>
+  )
+}
+
+/** Reply to everyone: Lucide `reply-all`. */
+export function ReplyAllIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('reply-all', props, 'round')}>
+      <path d="M7 17l-5-5 5-5" />
+      <path d="M12 17l-5-5 5-5" />
+      <path d="M22 18v-2a4 4 0 0 0-4-4H7" />
+    </svg>
+  )
+}
+
+/** Forward: Lucide `forward`. */
+export function ForwardIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('forward', props, 'round')}>
+      <path d="M15 17l5-5-5-5" />
+      <path d="M4 18v-2a4 4 0 0 1 4-4h12" />
+    </svg>
+  )
+}
+
+/** Star a message: Lucide `star` (Feather's five points), mitred; `filled`
+ *  paints it in for a starred message. */
+export function StarIcon({ filled = false, ...props }: K2IconProps & { filled?: boolean }): React.JSX.Element {
+  return (
+    <svg {...iconProps(filled ? 'star-filled' : 'star', props)} fill={filled ? 'currentColor' : 'none'}>
+      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01Z" />
+    </svg>
+  )
+}
+
+/** Flag: Lucide `flag` (a waving cloth, round). */
+export function FlagIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('flag', props, 'round')}>
+      <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+      <path d="M4 22v-7" />
+    </svg>
+  )
+}
+
+/** An attachment: Lucide `paperclip` (curves, round). */
+export function PaperclipIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('paperclip', props, 'round')}>
+      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  )
+}
+
+/** Refresh: Lucide `refresh-cw` (two arcs, round). */
+export function RefreshIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('refresh-cw', props, 'round')}>
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+      <path d="M8 16H3v5" />
+    </svg>
+  )
+}
+
+/** A new message: Lucide `square-pen`, squared. */
+export function ComposeIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('square-pen', props)}>
+      <path d="M12 3H3v18h18v-9" />
+      <path d="M18.5 2.5l3 3L12 15l-4 1 1-4Z" />
+    </svg>
+  )
+}
+
+/** Mark read: Lucide `mail-open`, squared. (Mark unread draws `MailIcon`.) */
+export function MailOpenIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('mail-open', props)}>
+      <path d="M2 10v12h20V10L12 2Z" />
+      <path d="M22 10l-10 6-10-6" />
+    </svg>
+  )
+}
+
+/** Download an attachment: Lucide `download`, squared. */
+export function DownloadIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('download', props)}>
+      <path d="M21 15v6H3v-6" />
+      <path d="M7 10l5 5 5-5" />
+      <path d="M12 15V3" />
+    </svg>
+  )
+}
+
+/** Close: Lucide `x`, squared. */
+export function CloseIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('x', props)}>
+      <path d="M18 6 6 18" />
+      <path d="M6 6l12 12" />
     </svg>
   )
 }

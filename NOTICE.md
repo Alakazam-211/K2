@@ -47,8 +47,9 @@ LiteLLM's `model_prices_and_context_window.json`.
 ## Third-party: Lucide icons (ISC)
 
 The top bar's icons, the tab Pin / Unpin, the Design tab palette, the
-Design note tiles' edit, send and delete, and the
-Workspace drawer's phone push toggle (icon style A3) are Lucide icons,
+Design note tiles' edit, send and delete, the
+Workspace drawer's phone push toggle (icon style A3) and the Mail page's
+folder and message-action icons are Lucide icons,
 copied in as SVG paths.
 Home, Agents, Projects, Tickets, Wiki, Server, Admin profile, Run, Drawer,
 the stopwatch clock, the Keep awake mug, Help, Pin, Unpin, the palette, the
@@ -59,7 +60,7 @@ is K2's own (`ZenIcon`), not Lucide.
 
 | | |
 |--|--|
-| **What** | SVG paths in `src/renderer/components/icons/K2Icons.tsx`, from `lucide-static@1.58.0/icons/` (`house`, `bot`, `layout-dashboard`, `ticket`, `library`, `settings`, `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`, `circle-help`, `pin`, `pin-off`, `palette`, `smartphone`, `pencil`, `trash-2`, `arrow-up`) |
+| **What** | SVG paths in `src/renderer/components/icons/K2Icons.tsx`, from `lucide-static@1.58.0/icons/` (`house`, `bot`, `layout-dashboard`, `ticket`, `library`, `settings`, `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`, `circle-help`, `pin`, `pin-off`, `palette`, `smartphone`, `pencil`, `trash-2`, `arrow-up`; for Mail `inbox`, `send`, `file-text`, `archive`, `octagon-alert`, `folder`, `folder-input`, `reply`, `reply-all`, `forward`, `star`, `flag`, `paperclip`, `refresh-cw`, `square-pen`, `mail-open`, `download`, `x`) |
 | **Upstream** | [Lucide](https://github.com/lucide-icons/lucide) |
 | **License** | **ISC** (Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.) — full text below |
 | **K2 code** | Is **MIT**. The ISC icons do **not** relicense the product. |

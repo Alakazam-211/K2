@@ -171,9 +171,16 @@ export function OverflowMenu({ items, label, triggerProps, className, renderTrig
                       close()
                       item.onSelect()
                     }}
+                    // The highlighted row takes the menu's shape: the shared
+                    // list-row ring (`data-k2-focus`, the readable accent),
+                    // cut in Terminal on a flush row, round in Glass on a row
+                    // inset from the menu's rounded edge. The inset and the
+                    // row's corner follow the menu's radius, so Terminal's
+                    // square tokens keep its rows flush and square.
+                    data-k2-focus=""
                     className={cx(
-                      'no-drag w-full px-3 py-1.5 text-left type-control transition-colors',
-                      'focus:outline-none focus-visible:bg-[var(--color-wash-1)] focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)]',
+                      'no-drag relative w-[calc(100%_-_var(--radius-box)/2)] mx-[calc(var(--radius-box)/4)] rounded-[var(--radius-selector)] px-3 py-1.5 text-left type-control transition-colors',
+                      'focus:outline-none focus-visible:bg-[var(--color-wash-1)]',
                       item.disabled
                         ? 'text-[var(--color-text-muted)] cursor-not-allowed'
                         : cx(

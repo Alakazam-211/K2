@@ -308,7 +308,10 @@ describe('Keyboard focus', () => {
     expect(rule(globals, '.k2-switch:focus-visible')).toContain('outline: 2px solid var(--color-accent-text)')
     expect(rule(globals, '.k2-segment:focus-visible')).toContain('outline: 2px solid var(--color-accent-text)')
     expect(rule(generated, '[data-style="glass"] .k2-slider:focus-visible:not([data-zen-root] *)::-webkit-slider-thumb')).toContain('0 0 0 2px var(--color-accent-text)')
-    expect(readFileSync(join(__dirname, 'OverflowMenu.tsx'), 'utf8')).toContain('focus-visible:outline-[var(--color-accent-text)]')
+    // Menu rows take the shared list-row ring (`data-k2-focus`: the readable
+    // accent, cut in Terminal, round elsewhere) in place of a square outline.
+    expect(readFileSync(join(__dirname, 'OverflowMenu.tsx'), 'utf8')).toMatch(/data-menu-item=\{item\.id\}[\s\S]*?data-k2-focus=""/)
+    expect(rule(globals, '[data-k2-focus]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)::after')).toContain('inset 0 0 0 2px var(--color-accent-text)')
     expect(readFileSync(join(repo, 'src/renderer/components/Settings/controls/SettingControls.tsx'), 'utf8')).toContain(
       'focus:outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent-text)]',
     )

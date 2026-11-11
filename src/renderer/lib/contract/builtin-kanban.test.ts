@@ -29,7 +29,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 // jsdom (vitest's own DOM) has no type package here: the little this file
 // uses, typed by hand.
@@ -1044,6 +1044,15 @@ describe('k2:kanban@5: the Thread is K2’s own Conversation in its column', () 
 
 const SCOUT = 'scout::local'
 const nowSec = (): number => Math.floor(Date.now() / 1000)
+// One clock per test: every message a test builds is stamped from the same
+// second. The panel keys a message on its whole doc, so pushing the same
+// messages again must give the same created_at, even when the wall clock
+// ticks between two pushes (a busy full run). Otherwise every message is
+// drawn again and "no rebuild" checks fail.
+let testNow = nowSec()
+beforeEach(() => {
+  testNow = nowSec()
+})
 
 interface ViewItem {
   seq: number
@@ -1060,7 +1069,7 @@ function textItem(seq: number, body: string, o: { mine?: boolean; from?: string;
       kind: 'text',
       from: o.from ?? (o.mine ? 'Rosson' : SCOUT),
       to: null,
-      created_at: nowSec() - (o.ago ?? 0),
+      created_at: testNow - (o.ago ?? 0),
       body,
       via: o.mine ? 'compose' : null,
       choice: null,

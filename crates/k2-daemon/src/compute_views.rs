@@ -1270,26 +1270,9 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
         let conn = db.lock();
         if let Some(rec) = k2_core::ci_tests::recorded(&conn, &j.id) {
             let marks = k2_core::ci_tests::marks_of_job(&conn, &j.id);
-            if let Some(failing) = v["result"]["tests"]["failing"].as_array_mut() {
-                for f in failing.iter_mut() {
-                    let name = f["name"].as_str().unwrap_or_default().to_string();
-                    let id = match f["classname"].as_str() {
-                        Some(c) => format!("{c}::{name}"),
-                        None => name,
-                    };
-                    if let Some(m) = marks.get(&id) {
-                        f["mark"] = m.clone().into();
-                    }
-                }
+            if let Some(result) = v.get_mut("result") {
+                with_test_history(result, &rec, &marks);
             }
-            v["result"]["testHistory"] = serde_json::json!({
-                "state": rec.state,
-                "flaky": rec.flaky,
-                "quarantined": rec.quarantined,
-                "new": rec.new_failures,
-                "retried": rec.retried,
-                "note": rec.note,
-            });
         }
     }
     // CE-7: `get --json` prints the result object: the wait rides there too
@@ -1299,6 +1282,39 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
         v["result"]["stall"] = s;
     }
     Ok(v)
+}
+
+/// T1: mark each failing test of a job's result with its history mark and
+/// add the record's counts (`testHistory`). `get_mut` on the way down,
+/// never `v[..]`: indexing a null `tests` mutably would turn it into an
+/// object the CLI then misreads.
+pub(crate) fn with_test_history(result: &mut serde_json::Value, rec: &k2_core::ci_tests::Recorded, marks: &std::collections::BTreeMap<String, String>) {
+    let failing = result.get_mut("tests").and_then(|t| t.get_mut("failing")).and_then(|f| f.as_array_mut());
+    if let Some(failing) = failing {
+        for f in failing.iter_mut() {
+            let name = f.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
+            let id = match f.get("classname").and_then(|c| c.as_str()) {
+                Some(c) => format!("{c}::{name}"),
+                None => name,
+            };
+            if let (Some(m), Some(obj)) = (marks.get(&id), f.as_object_mut()) {
+                obj.insert("mark".into(), m.clone().into());
+            }
+        }
+    }
+    if let Some(obj) = result.as_object_mut() {
+        obj.insert(
+            "testHistory".into(),
+            serde_json::json!({
+                "state": rec.state,
+                "flaky": rec.flaky,
+                "quarantined": rec.quarantined,
+                "new": rec.new_failures,
+                "retried": rec.retried,
+                "note": rec.note,
+            }),
+        );
+    }
 }
 
 /// The job has left the queue; a queued-only cancel (`ifState: queued`,
@@ -1535,5 +1551,34 @@ pub(crate) fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> 
                 "cancel": if sent { "asked the node (only if it hasn't started)" } else { "asked when the node reconnects" },
                 "note": format!("it ends cancelled, or keeps running if it just started (job_started); k2 compute get {short}")}))
         }
+    }
+}
+
+#[cfg(test)]
+mod test_history_tests {
+    use super::with_test_history;
+    use k2_core::ci_tests::Recorded;
+    use serde_json::json;
+
+    /// T1: marks land on the failing tests by `classname::name`; a result
+    /// with no tests keeps `tests: null` (never turned into an object).
+    #[test]
+    fn marks_and_counts_ride_the_result_and_null_tests_stay_null() {
+        let rec = Recorded { state: "done".into(), failed: 2, flaky: 1, new_failures: 1, ..Default::default() };
+        let marks = [("k2-core::a".to_string(), "flaky".to_string()), ("b".to_string(), "new".to_string())].into_iter().collect();
+        let mut r = json!({"tests": {"failing": [
+            {"name": "a", "classname": "k2-core", "kind": "failure"},
+            {"name": "b", "kind": "failure"},
+            {"name": "c", "classname": "k2-core", "kind": "failure"}]}});
+        with_test_history(&mut r, &rec, &marks);
+        assert_eq!(r["tests"]["failing"][0]["mark"], "flaky");
+        assert_eq!(r["tests"]["failing"][1]["mark"], "new");
+        assert!(r["tests"]["failing"][2].get("mark").is_none(), "no record, no mark");
+        assert_eq!(r["testHistory"]["flaky"], 1);
+        assert_eq!(r["testHistory"]["new"], 1);
+        let mut none = json!({"tests": null});
+        with_test_history(&mut none, &Recorded { state: "none".into(), ..Default::default() }, &Default::default());
+        assert!(none["tests"].is_null(), "{none}");
+        assert_eq!(none["testHistory"]["state"], "none");
     }
 }

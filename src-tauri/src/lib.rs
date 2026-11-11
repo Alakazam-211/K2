@@ -15,6 +15,8 @@ static RELAUNCH_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 mod agent_hooks;
 // The call's own window (pop out).
 mod call_window;
+// What the main window's close button does (keep the server, or quit).
+mod close_button;
 mod commands;
 mod tray;
 // Editor discovery ("Open in …") lives in k2-client. Re-exported so
@@ -1290,14 +1292,10 @@ pub fn run() {
                             return;
                         }
                         tauri::WindowEvent::CloseRequested { api, .. } => {
-                        // Red close-button behavior is controlled by
-                        // the "Keep server running when the window is
-                        // closed" preference:
-                        //
-                        //   ON  → hide the window. The app process stays.
-                        //         The daemon stays. The menu-bar helper
-                        //         is a separate LaunchAgent and stays.
-                        //   OFF → unload the daemon plist, then exit.
+                        // Red close-button behavior: `close_button::action` decides from
+                        // the "Keep server running when the window is closed" setting
+                        // (ON hides the window, OFF quits; macOS also stops the daemon).
+                        // The menu-bar helper is a separate LaunchAgent and stays either way.
                         //
                         // Cmd+Q is not this path. It lands in
                         // RunEvent::ExitRequested, which exits the app
@@ -1308,13 +1306,16 @@ pub fn run() {
                         // works even while the daemon is down.
                         let keep_running =
                             k2_client::app_settings_view::load().keep_daemon_on_quit;
-                        if keep_running {
-                            window::save_window_state(&app_handle);
-                            api.prevent_close();
-                            let _ = win_for_hide.hide();
-                            log_debug!("[window] Close intercepted — keeping server alive per settings");
-                            return;
-                        }
+                        let stop_daemon = match close_button::action(keep_running, cfg!(target_os = "macos")) {
+                            close_button::CloseAction::Hide => {
+                                window::save_window_state(&app_handle);
+                                api.prevent_close();
+                                let _ = win_for_hide.hide();
+                                log_debug!("[window] Close intercepted — keeping server alive per settings");
+                                return;
+                            }
+                            close_button::CloseAction::Quit { stop_daemon } => stop_daemon,
+                        };
                         // Toggle OFF — user wants red-dot to take
                         // everything down: an explicit daemon STOP, which
                         // ends its agents (k2-ptyd P83, Q9). Daemon-first:
@@ -1324,22 +1325,24 @@ pub fn run() {
                         // intent and unload the plist here, so launchd
                         // stops respawning it. Then fall through to the
                         // normal cleanup + destroy path below.
-                        #[cfg(target_os = "macos")]
-                        {
-                            let asked = crate::daemon_client::DaemonClient::try_connect()
-                                .and_then(|c| c.cli_post_query("/cli/daemon/stop", &[]))
-                                .is_ok();
-                            if !asked {
-                                let plist = k2_client::wake::DaemonPlist::canonical(
-                                    std::path::PathBuf::from("/unused"),
-                                );
-                                if let Some(path) = plist.plist_path() {
-                                    if path.exists() {
-                                        let _ = k2_client::wake::write_stop_intent(
-                                            &k2_client::paths::k2_home(),
-                                            "app",
-                                        );
-                                        let _ = k2_client::wake::launchctl_unload(&path);
+                        if stop_daemon {
+                            #[cfg(target_os = "macos")]
+                            {
+                                let asked = crate::daemon_client::DaemonClient::try_connect()
+                                    .and_then(|c| c.cli_post_query("/cli/daemon/stop", &[]))
+                                    .is_ok();
+                                if !asked {
+                                    let plist = k2_client::wake::DaemonPlist::canonical(
+                                        std::path::PathBuf::from("/unused"),
+                                    );
+                                    if let Some(path) = plist.plist_path() {
+                                        if path.exists() {
+                                            let _ = k2_client::wake::write_stop_intent(
+                                                &k2_client::paths::k2_home(),
+                                                "app",
+                                            );
+                                            let _ = k2_client::wake::launchctl_unload(&path);
+                                        }
                                     }
                                 }
                             }

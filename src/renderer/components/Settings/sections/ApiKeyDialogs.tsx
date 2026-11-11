@@ -8,7 +8,7 @@ import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { currentShortcutOs } from '@/lib/shortcut-label'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { Button, Callout, Checkbox, Input, Radio, Spinner, Surface } from '@/components/ui'
-import { SETTING_ROW_LABEL, SettingDropdown } from '../controls/SettingControls'
+import { SETTING_LIST_ROW_HOVER, SETTING_ROW_LABEL, SettingDropdown } from '../controls/SettingControls'
 import { AccessSheet, CopyLine, DIALOG_FIELD, DIALOG_LABEL, DIALOG_MUTED, Field } from './AccessDialogs'
 import {
   ceilingFormFromLimits,
@@ -87,7 +87,7 @@ function ShowAllRow({ list, total, noun }: { list: { hidden: number; all: boolea
       type="button"
       data-k2-focus=""
       aria-expanded={list.all}
-      className="relative block w-full text-left px-3 py-2 type-row text-[var(--color-accent-text)] hover:bg-[var(--color-wash-1)] no-drag cursor-pointer"
+      className={`relative block w-full text-left px-3 py-2 type-row text-[var(--color-accent-text)] no-drag cursor-pointer ${SETTING_LIST_ROW_HOVER}`}
       onClick={() => list.setAll(!list.all)}
     >
       {list.all ? 'Show fewer' : `Show all ${total} ${noun}`}
@@ -227,7 +227,7 @@ function Choice({
   hint?: React.ReactNode
 }): React.JSX.Element {
   return (
-    <label className="flex items-start gap-2.5 px-3 py-2 cursor-pointer transition-colors hover:bg-[var(--color-wash-1)]">
+    <label className={`flex items-start gap-2.5 px-3 py-2 cursor-pointer ${SETTING_LIST_ROW_HOVER}`}>
       <span className="mt-0.5 flex">{control}</span>
       <span className="min-w-0">
         <span className={`block ${SETTING_ROW_LABEL}`}>{label}</span>

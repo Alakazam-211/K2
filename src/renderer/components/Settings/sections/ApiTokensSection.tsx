@@ -39,7 +39,7 @@ import {
 import { primaryScope } from '@/kessel/server-scope'
 import { Button, Callout, OverflowMenu, Spinner, Tag, type OverflowMenuItem } from '@/components/ui'
 import { isAirgap } from '@/lib/airgap'
-import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
 import { ConfirmSheet } from './AccessDialogs'
 import { AppAccessDialog, CreateKeyDialog, type CreatedKey } from './ApiKeyDialogs'
@@ -413,7 +413,7 @@ function KeyRow({
 
   return (
     <div
-      className={`px-4 py-3 ${state === 'revoked' ? '' : 'transition-colors hover:bg-[var(--color-wash-1)]'}`}
+      className={`px-4 py-3 ${state === 'revoked' ? '' : SETTING_LIST_ROW_HOVER}`}
       data-testid={`api-key-row-${k.id}`}
       title={`Key ID: ${k.id}`}
     >

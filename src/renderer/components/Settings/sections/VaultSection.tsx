@@ -30,7 +30,7 @@ import { daemonErrorText } from '@/lib/daemon-error'
 import { siteLabel } from '@/components/SessionView/SecretCard'
 import { vaultApi, type VaultPreset, type VaultRequest, type VaultSecret, type VaultStatus } from './vault-api'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
-import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { shortDay, takeRequestedVaultTab } from './handoff-api'
 import { IncomingList, SentList } from './HandoffLists'
@@ -149,7 +149,7 @@ export function SecretRow({
     ...(secret.expiresAt && !expired ? [`until ${shortDay(secret.expiresAt) || whenWords(secret.expiresAt)}`] : []),
   ].join(' · ')
   return (
-    <div className="px-4 py-3 transition-colors hover:bg-[var(--color-wash-1)]" data-testid="vault-secret-row" data-secret={secret.name}>
+    <div className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid="vault-secret-row" data-secret={secret.name}>
       <div className="flex items-center justify-between gap-6">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 min-w-0">

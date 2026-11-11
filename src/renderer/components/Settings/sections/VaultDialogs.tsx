@@ -15,7 +15,7 @@
 //   copied to the clipboard, and are gone once the check step starts.
 
 import React, { useEffect, useId, useRef, useState } from 'react'
-import { Button, Callout, Input, Radio, Spinner, Surface } from '@/components/ui'
+import { Button, Callout, Input, Radio, Spinner, Surface, Textarea } from '@/components/ui'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { useProjectsStore } from '@/stores/projects'
 import { siteLabel } from '@/components/SessionView/SecretCard'
@@ -38,9 +38,6 @@ import {
   whenWords,
   withCurrent,
 } from './vault-copy'
-
-const TEXTAREA =
-  'k2-focus no-drag w-full border border-[var(--color-control-edge)] rounded-[var(--radius-field-multiline)] [box-shadow:var(--ring-field)] bg-[var(--color-bg)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] type-control font-mono px-2 py-1 outline-none focus:border-[var(--color-accent)]'
 
 /** A dropdown with its label above and a hint under it. */
 function Pick({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }): React.JSX.Element {
@@ -116,7 +113,7 @@ export function ValueField({
   if (multiline) {
     return (
       <div className="space-y-2">
-        <textarea
+        <Textarea
           id={id}
           ref={fieldRef as React.RefObject<HTMLTextAreaElement | null>}
           autoComplete="off"
@@ -124,9 +121,8 @@ export function ValueField({
           aria-label={label}
           placeholder="Paste the whole key, BEGIN and END lines included"
           rows={5}
-          data-k2-chamfer="control"
           onChange={(e) => onPresence(e.currentTarget.value !== '')}
-          className={TEXTAREA}
+          className="font-mono"
           style={{ WebkitTextSecurity: shown ? 'none' : 'disc' } as React.CSSProperties}
           data-testid="vault-value-multiline"
         />

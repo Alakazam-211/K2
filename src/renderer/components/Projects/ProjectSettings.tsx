@@ -118,6 +118,8 @@ import { moveDashboardId, orderedDashboards } from './project-tabs'
 import {
   AVATAR_ROUND,
   SETTING_FIELD_WIDTH,
+  SETTING_LIST_ROW_BAND,
+  SETTING_LIST_ROW_HOVER,
   SETTING_ROW_HINT,
   SaveError,
   SaveNote,
@@ -939,7 +941,7 @@ function AgentsSection({
                   onClick={() => void addMember(w.id, w.name)}
                   className={cx(
                     'group relative w-full flex items-center gap-4 px-4 py-2.5 text-left no-drag cursor-pointer outline-none transition-colors disabled:cursor-wait',
-                    i === highlight ? 'bg-[var(--color-wash-1)]' : 'hover:bg-[var(--color-wash-1)]',
+                    i === highlight ? SETTING_LIST_ROW_BAND : SETTING_LIST_ROW_HOVER,
                   )}
                 >
                   <span className="flex-1 min-w-0">
@@ -1988,8 +1990,8 @@ export default function ProjectSettings(): React.JSX.Element {
           isSelected
             ? 'bg-[var(--color-accent)]/15'
             : isKeyboardHighlighted
-              ? 'bg-[var(--color-wash-1)]'
-              : 'hover:bg-[var(--color-wash-1)]',
+              ? SETTING_LIST_ROW_BAND
+              : SETTING_LIST_ROW_HOVER,
         )}
       >
         {isSelected && (

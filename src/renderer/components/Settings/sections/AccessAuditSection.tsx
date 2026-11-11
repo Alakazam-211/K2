@@ -9,6 +9,7 @@ import { useServerSupports } from '@/lib/server-capabilities'
 import { Button, Callout, SearchField, Segmented } from '@/components/ui'
 import type { SettingEntry } from '../searchManifest'
 import {
+  SETTING_LIST_ROW_HOVER,
   SETTING_ROW_HINT,
   SettingDropdown,
   SettingsGroup,
@@ -119,7 +120,7 @@ function RecordRow({
         aria-expanded={open}
         aria-controls={rowId}
         onClick={onToggle}
-        className="group relative w-full grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-start gap-x-3 px-4 py-3 text-left no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-bg-hover)]"
+        className={`group relative w-full grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-start gap-x-3 px-4 py-3 text-left no-drag cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
       >
         <span aria-hidden="true" className={`mt-1.5 inline-block h-2 w-2 rounded-[var(--radius-status)] ${dot}`} />
         <span className="min-w-0">

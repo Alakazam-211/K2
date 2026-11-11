@@ -1733,12 +1733,14 @@ fn parse_secs(x: &str) -> Option<i64> {
 /// owner-only switch with its own setup (devices, the `k2appx` unit):
 /// config never enters it or leaves it, now or on approve.
 /// 0.46.11 field report: `--db-raw on` for an App that will run in a
-/// container is refused up front (approving it would change nothing: a
-/// container has no database door yet, `reach`), in the call and again
-/// when a held one is approved.
+/// container is refused up front, in the call and again when a held one
+/// is approved: it is the raw connection to a private App database, which
+/// K2 doesn't make yet, so approving it would change nothing. Since
+/// 0.46.12 (S21) the answer points at the database door instead, which
+/// needs no widening.
 fn db_door_guard(app: &AppRow, ops: &[Op], after: &appcfg::State) -> R<()> {
     if ops.iter().any(|o| matches!(o, Op::DbRaw(true))) && super::reach::container_isolation(&after.isolation) {
-        return Err(no(super::reach::codes::DB_DOOR_MISSING, 409, super::reach::container_no_db(&app.app_id)));
+        return Err(no(super::reach::codes::DB_DOOR_MISSING, 409, super::reach::db_raw_refusal(&app.app_id)));
     }
     Ok(())
 }

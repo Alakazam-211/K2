@@ -202,6 +202,11 @@ pub fn remember_checked(deployment: &str, version: Value) {
     checked().lock().unwrap_or_else(|e| e.into_inner()).insert(deployment.to_string(), version);
 }
 
+/// What [`remember_checked`] kept for a deployment, left in place.
+pub fn checked_of(deployment: &str) -> Option<Value> {
+    checked().lock().unwrap_or_else(|e| e.into_inner()).get(deployment).cloned()
+}
+
 /// Take what [`remember_checked`] kept for a deployment.
 pub fn take_checked(deployment: &str) -> Option<Value> {
     checked().lock().unwrap_or_else(|e| e.into_inner()).remove(deployment)
@@ -363,9 +368,25 @@ pub fn secret_items(env: Vec<(String, String)>, files: Vec<(String, Vec<u8>)>) -
     (out, dropped)
 }
 
-/// S21 (not built yet): box database URLs pointed at the door.
+/// With a database door (S21): every granted env secret that is a box
+/// Postgres URL (`pg_choice::in_wall_dsn`) becomes its in-wall form, the
+/// door at `127.0.0.1:5432` with `sslmode=disable`; inside the wall no
+/// other port answers. The door routes by database name, so the in-wall
+/// URL is the same on every cluster. Returns the env and the names it
+/// moved (names only, for the App's log).
 pub fn in_wall_db_env(env: Vec<(String, String)>) -> (Vec<(String, String)>, Vec<String>) {
-    (env, Vec::new())
+    let mut moved = Vec::new();
+    let out = env
+        .into_iter()
+        .map(|(k, v)| match super::pg_choice::in_wall_dsn(&v) {
+            Some(w) if w != v => {
+                moved.push(k.clone());
+                (k, w)
+            }
+            _ => (k, v),
+        })
+        .collect();
+    (out, moved)
 }
 
 /// The App's memory cap on the wire (MiB). `None` = no per-App cap (L1,
@@ -666,6 +687,7 @@ pub fn remove_app(app: &str, purge: bool) -> Result<Value> {
     let v = call(&Request::RemoveApp { app: app.into(), data: purge }, None, Duration::from_secs(1200))?;
     remove_gateway_rule(app);
     super::box_service_routes::forget_live(app);
+    super::db_door::forget_live(app);
     super::egress_proxy::stop(app);
     Ok(v)
 }
@@ -791,10 +813,28 @@ impl GuardedEngine {
                 super::gateway::close(app.as_str(), Some(&spec.service_id), true);
             }
         };
+        // S21: the App's database door rides its proxy port, when the engine
+        // that prepared this deployment renders it (`db-door`).
+        let px_planned = k2_root_proto::apps::proxy_port_for_gateway(gw);
+        let db_port = super::db_door::door_port_for(px_planned, checked_of(&spec.deployment_id).as_ref());
         let g = crate::vault::publish_env::granted(&spec.service_id, &spec.workspace_id, &p.workdir);
-        let (secrets, dropped) = secret_items(g.env, g.files);
+        let env_secrets = match db_port {
+            Some(_) => {
+                let (env, moved) = in_wall_db_env(g.env);
+                if !moved.is_empty() {
+                    log_line(spec, &format!("{word}: box database URLs point at the database door (127.0.0.1:5432 in the wall): {}", moved.join(", ")));
+                }
+                env
+            }
+            None => g.env,
+        };
+        let (secrets, dropped) = secret_items(env_secrets, g.files);
         if !dropped.is_empty() {
             log_line(spec, &format!("{word}: granted secrets not delivered (names the wall refuses): {}", dropped.join(", ")));
+        }
+        match db_port {
+            Some(d) => log_line(spec, &format!("{word}: database door on 127.0.0.1:{} in the wall (host {d}; k2 app doctor {})", wire::IN_WALL_DB_PORT, spec.app_id)),
+            None => log_line(spec, &format!("{word}: no database door (this box's App engine predates it: k2 app engine install)")),
         }
         let base = match wall {
             Wall::Guarded => base_image_for(std::env::consts::ARCH),
@@ -818,8 +858,7 @@ impl GuardedEngine {
             pass_hex: Some(wire::hex_encode(pass.as_bytes())),
             io: k2_root_proto::apps::IoMax::from_column(spec.io_max_json.as_deref()),
             box_forwards,
-            // Lane 3 (S21) fills the App's database door.
-            db_port: None,
+            db_port,
         };
         if let Err(w) = wire::check_start(&s) {
             close_new_link();
@@ -827,7 +866,7 @@ impl GuardedEngine {
         }
         // S15: the App's egress proxy listens before the App starts, so a
         // request at boot finds it (same slot offset as the gateway port).
-        let px_planned = k2_root_proto::apps::proxy_port_for_gateway(gw);
+        // It is the database door's listener too (S21).
         match ensure_proxy(app.as_str(), px_planned) {
             Ok(px) => log_line(spec, &format!("{word}: egress proxy on 127.0.0.1:{px} (k2 app egress {})", spec.app_id)),
             Err(e) => log_line(spec, &format!("{word}: egress proxy not listening ({e}); the App has no egress until it is")),
@@ -849,6 +888,7 @@ impl GuardedEngine {
         };
         let unit = v["unit"].as_str().unwrap_or_default().to_string();
         super::box_service_routes::record_live(app.as_str(), &v);
+        super::db_door::record_live(app.as_str(), &v);
         log_line(
             spec,
             &format!("{word} container {unit} started on 127.0.0.1:{port}{}; its output: k2 app logs {}", match app_port {
@@ -977,6 +1017,7 @@ impl RuntimeEngine for GuardedEngine {
             let Ok(port) = u16::try_from(port) else { continue };
             let gw = i["gwPort"].as_u64().and_then(|g| u16::try_from(g).ok());
             super::box_service_routes::record_live(app, &i);
+            super::db_door::record_live(app, &i);
             if let Some(gw) = gw {
                 // After a daemon restart the rule may point at an old inode.
                 let _ = install_gateway_rule(app, gw);

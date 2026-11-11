@@ -524,6 +524,11 @@ impl Engine {
         let slot = self.slot_of(&app)?;
         let gw = gateway_port(slot).ok_or((codes::NO_SLOT, "slot outside the gateway range".into()))?;
         let px = proxy_port(slot).ok_or((codes::NO_SLOT, "slot outside the proxy range".into()))?;
+        // The database door is this App's own proxy port (S21), where the
+        // daemon's door checks the role and database: never another App's.
+        if !k2_root_proto::engine::db_port_is_own(s.db_port, px) {
+            return Err(bad("start: db port (the database door is the App's own proxy port)"));
+        }
         let seed_dir = self.seeds().join(&s.seed);
         if !seed_dir.is_dir() {
             return Err((codes::NOT_FOUND, "Seed not on the engine".into()));

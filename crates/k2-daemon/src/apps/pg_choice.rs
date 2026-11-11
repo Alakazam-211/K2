@@ -561,31 +561,43 @@ pub fn install_plan_live(app: &str, workspace: &str, range: Option<&str>, pick: 
 
 // ── walled Apps (PA15) ────────────────────────────────────────────────
 
-/// PA15, the contract for when the walled App's database door lands (S21;
-/// `db_port` is `None` until then, `guarded.rs`): a walled App always dials
-/// `127.0.0.1:5432` inside its wall, and the door's host port is its
-/// database's cluster port (`cluster::for_db`). A database switch changes
-/// the door (the App is re-hosted with the new `db_port`), never the
-/// App's DSN. Answers `(in-wall DSN, door host port)`; `None` for a URL
-/// that isn't Postgres or a port outside K2's band.
-pub fn walled_door(dsn: &str, cluster_port: u16) -> Option<(String, u16)> {
-    if !k2_root_proto::engine::db_port_ok(cluster_port) {
+/// PA15 with the door built (S21, `db_door`): a walled App always dials
+/// `127.0.0.1:5432` inside its wall, and the door picks the cluster by the
+/// database's name (K2's records), so a database on another major or a
+/// named cluster changes nothing in the App's URL. This is the in-wall
+/// form of a box-Postgres URL: host `127.0.0.1:5432`, `sslmode=disable`
+/// (no TLS inside the wall; `sslnegotiation` dropped). `None` for anything
+/// that isn't one: not Postgres, a host that isn't this box's loopback, a
+/// port outside K2's band, several hosts or a socket path. The user,
+/// password, database and other parameters stay as they are.
+pub fn in_wall_dsn(dsn: &str) -> Option<String> {
+    let (scheme, rest) = dsn.split_once("://").filter(|(s, _)| *s == "postgres" || *s == "postgresql")?;
+    let rest = rest.split('#').next().unwrap_or("");
+    let (pre, query) = rest.split_once('?').unwrap_or((rest, ""));
+    // The userinfo ends at the last `@` before the query; the host at the
+    // first `/` after it.
+    let at = pre.rfind('@').map(|i| i + 1).unwrap_or(0);
+    let end = pre[at..].find('/').map(|i| at + i).unwrap_or(pre.len());
+    let (userinfo, hostport, path) = (&pre[..at], &pre[at..end], &pre[end..]);
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) if !h.ends_with(':') && (h.starts_with('[') || !h.contains(':')) => (h, p.parse::<u16>().ok()?),
+        _ => (hostport, 5432),
+    };
+    if !matches!(host, "127.0.0.1" | "localhost" | "[::1]") || !k2_root_proto::pg_major::in_band(port) {
         return None;
     }
-    let (scheme, rest) = dsn.split_once("://").filter(|(s, _)| *s == "postgres" || *s == "postgresql")?;
-    let (authority, tail) = rest.split_once('/')?;
-    let (userinfo, _hostport) = match authority.rsplit_once('@') {
-        Some((u, h)) => (Some(u), h),
-        None => (None, authority),
-    };
-    let at = userinfo.map(|u| format!("{u}@")).unwrap_or_default();
-    Some((format!("{scheme}://{at}127.0.0.1:{}/{tail}", k2_root_proto::engine::IN_WALL_DB_PORT), cluster_port))
-}
-
-/// S21 (not built yet): the in-wall form of a box-Postgres URL.
-pub fn in_wall_dsn(dsn: &str) -> Option<String> {
-    let _ = dsn;
-    None
+    let mut params: Vec<&str> = Vec::new();
+    for kv in query.split('&').filter(|s| !s.is_empty()) {
+        let k = kv.split('=').next().unwrap_or("");
+        match k {
+            // libpq may take the host from the query: not a URL K2 rewrites.
+            "host" | "hostaddr" | "port" => return None,
+            "sslmode" | "sslnegotiation" => {}
+            _ => params.push(kv),
+        }
+    }
+    params.push("sslmode=disable");
+    Some(format!("{scheme}://{userinfo}127.0.0.1:{}{path}?{}", k2_root_proto::engine::IN_WALL_DB_PORT, params.join("&")))
 }
 
 // ── status (PA17) ─────────────────────────────────────────────────────

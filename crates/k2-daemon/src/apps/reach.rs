@@ -15,14 +15,18 @@
 //!   port) until the next start. Now every database change re-sends the
 //!   rule of each running App whose list moved ([`refresh_running`]): the
 //!   door opens at once, without a re-host.
-//! - **No door (containers, guarded or open).** A container has its own
-//!   loopback; K2 forwards only the gateway link, the egress proxy and box
-//!   services into it. Its database door (`-T 5432:<cluster port>`,
-//!   `StartSpec::db_port`, S21) isn't built: `db_port` is always `None`.
-//!   No approval or re-host opens it, so K2 says so up front
-//!   ([`container_no_db`]): `--db-raw on` and a Postgres box service are
-//!   refused for a container App, and a database grant or a `DATABASE_URL`
-//!   for one answers with the same words.
+//! - **The door (containers, guarded or open; 0.46.12, S21).** A container
+//!   has its own loopback; K2 forwards the gateway link, the egress proxy,
+//!   box services and its database door into it (`db_door`: the App's
+//!   `127.0.0.1:5432` reaches the daemon on its own proxy port, which
+//!   checks the role and database per connection). So a grant or revoke
+//!   counts at the next connection with no rule to re-send (a revoke cuts
+//!   open sessions too), and a container's nft rule names no cluster port
+//!   at all. What the door still can't serve keeps K2's up-front words
+//!   (`app_db_door_missing`): an App engine that predates the door
+//!   ([`engine_no_door`]), and `--db-raw on` (the raw connection to a
+//!   private App database, which K2 doesn't make yet, [`db_raw_refusal`]).
+//!   A Postgres box service is never one: the door is the way in.
 //!
 //! What only a start delivers: a secret (a `DATABASE_URL` among them)
 //! reaches an App when it starts. A grant to a running App answers "Takes
@@ -39,7 +43,8 @@ use k2_core::deploy::store::{self, AppRow};
 use serde_json::{json, Value as J};
 
 pub mod codes {
-    /// A container App asked for something only a database door gives.
+    /// A container App asked for something its database door can't give
+    /// (an engine without the door, or a raw private-database connection).
     pub const DB_DOOR_MISSING: &str = "app_db_door_missing";
 }
 
@@ -48,16 +53,7 @@ pub fn rehost_line(app: &str) -> String {
     format!("Takes effect after a re-host: k2 app rehost {app}")
 }
 
-/// Why a container App can't reach box Postgres (S21 isn't built).
-pub fn container_no_db(app: &str) -> String {
-    format!(
-        "guarded container Apps can't reach box Postgres yet: {app} runs in a container, where nothing answers on \
-         127.0.0.1:5432 (its database door isn't built), and no approval or re-host changes that. Use a process App \
-         (the owner turns it on: k2 app exception {app} on) or SQLite"
-    )
-}
-
-/// S21 (not built yet): the words the door's answers will use.
+/// How a container App reaches box Postgres (S21).
 pub fn door_line(app: &str) -> String {
     format!(
         "{app} reaches its workspace's databases (and ones granted to it) through its database door: 127.0.0.1:5432 inside its \
@@ -65,6 +61,8 @@ pub fn door_line(app: &str) -> String {
     )
 }
 
+/// The door can't serve this container App: this box's App engine
+/// predates it.
 pub fn engine_no_door(app: &str) -> String {
     format!(
         "{app} runs in a container, and this box's App engine predates the database door, so nothing answers on 127.0.0.1:5432 \
@@ -72,6 +70,8 @@ pub fn engine_no_door(app: &str) -> String {
     )
 }
 
+/// `--db-raw on` for a container App: refused up front, approving it would
+/// change nothing.
 pub fn db_raw_refusal(app: &str) -> String {
     format!(
         "--db-raw is the raw connection to an App's private database, which K2 doesn't make yet, so approving it would change \
@@ -80,6 +80,8 @@ pub fn db_raw_refusal(app: &str) -> String {
     )
 }
 
+/// The door is there for a container App: its running deployment has
+/// one, or this box's engine renders it at the next start.
 pub fn door_serves(app: &str) -> bool {
     super::db_door::live_door(app).is_some() || super::db_door::engine_ready()
 }
@@ -140,9 +142,13 @@ fn per_app_db() -> bool {
 }
 
 /// The ports the App's rule should hold now: its approved box services'
-/// host ports, and (per-App table) its database ports.
+/// host ports, and (per-App table) its database ports. A container App's
+/// database door is the daemon's (it dials the cluster), so its rule names
+/// no cluster port: pasta never needs one.
 pub(crate) fn wanted(app: &str, per_app_db: bool) -> (Vec<u16>, Option<Vec<u16>>) {
-    (super::box_service_routes::allowed_ports(app), per_app_db.then(|| super::pg_choice::door_ports(app)))
+    let container = app_row(app).as_ref().is_some_and(in_container);
+    let db = per_app_db.then(|| if container { Vec::new() } else { super::pg_choice::door_ports(app) });
+    (super::box_service_routes::allowed_ports(app), db)
 }
 
 /// What the running App's rule lacks, and what it holds that it no
@@ -231,10 +237,12 @@ fn tell_agent(app: &AppRow, text: &str) {
 
 /// After a database change (`k2 db grant|revoke|create|drop`): re-send
 /// the running Apps' rules and say what it meant for each in the answer
-/// (`apps`). A container App is told it has no door; a rule that didn't
-/// load says to re-host. Both reach the App's agent too.
+/// (`apps`); a rule that didn't load says to re-host. Then the database
+/// door: open sessions whose grant went are cut now (Postgres would keep
+/// them), and said. Failures and cuts reach the App's agent too.
 pub(crate) fn after_db_change(v: &mut J) {
-    let notes: Vec<J> = refresh_running().iter().map(note_for).collect();
+    let mut notes: Vec<J> = refresh_running().iter().map(note_for).collect();
+    notes.extend(door_cut_notes(&super::db_door::recheck_open()));
     if !notes.is_empty() {
         v["apps"] = json!(notes);
     }
@@ -243,17 +251,41 @@ pub(crate) fn after_db_change(v: &mut J) {
 fn note_for(r: &Refreshed) -> J {
     let a = r.app.as_str();
     let row = app_row(a);
-    let container = row.as_ref().is_some_and(in_container);
-    let text = match (&r.result, container, r.opened.is_empty()) {
-        (Err(e), _, _) => format!("App {a}: its door to this box's Postgres didn't reload ({e}). {}", rehost_line(a)),
-        (Ok(()), true, false) => format!("App {a}: {}", container_no_db(a)),
-        (Ok(()), false, false) => format!("App {a}: its door to Postgres port(s) {} opened now (no re-host needed)", ports(&r.opened)),
-        (Ok(()), _, true) => format!("App {a}: Postgres port(s) {} shut now", ports(&r.closed)),
+    let text = match (&r.result, r.opened.is_empty()) {
+        (Err(e), _) => format!("App {a}: its door to this box's Postgres didn't reload ({e}). {}", rehost_line(a)),
+        (Ok(()), false) => format!("App {a}: its door to Postgres port(s) {} opened now (no re-host needed)", ports(&r.opened)),
+        (Ok(()), true) => format!("App {a}: Postgres port(s) {} shut now", ports(&r.closed)),
     };
-    if let (Some(row), true) = (&row, r.result.is_err() || (container && !r.opened.is_empty())) {
+    if let (Some(row), true) = (&row, r.result.is_err()) {
         tell_agent(row, &text);
     }
     json!({ "app": a, "opened": r.opened, "closed": r.closed, "applied": r.result.is_ok(), "note": text })
+}
+
+/// One note per App whose open door sessions were cut.
+fn door_cut_notes(cuts: &[super::db_door::Cut]) -> Vec<J> {
+    let mut by_app: Vec<(String, Vec<String>)> = Vec::new();
+    for c in cuts {
+        let what = format!("{} as {}", c.database, c.role);
+        match by_app.iter_mut().find(|(a, _)| *a == c.app) {
+            Some((_, w)) => w.push(what),
+            None => by_app.push((c.app.clone(), vec![what])),
+        }
+    }
+    by_app
+        .into_iter()
+        .map(|(a, what)| {
+            let text = format!(
+                "App {a}: {} open database session(s) cut now ({}): it may no longer use them, and new connections are refused",
+                what.len(),
+                what.join(", ")
+            );
+            if let Some(row) = app_row(&a) {
+                tell_agent(&row, &text);
+            }
+            json!({ "app": a, "doorCut": what.len(), "note": text })
+        })
+        .collect()
 }
 
 // ── a secret granted to an App ───────────────────────────────────────
@@ -305,8 +337,8 @@ pub(crate) fn after_service_grant(service_id: &str, env_name: Option<&str>) -> O
     let db_url = env_name == Some(crate::vault::publish_env::DATABASE_URL);
     // The rule first: the URL may name another database's cluster.
     let rule = refresh_one(&a);
-    if db_url && in_container(&app) {
-        let t = format!("App {a}: {}", container_no_db(&a));
+    if db_url && in_container(&app) && !door_serves(&a) {
+        let t = format!("App {a}: {}", engine_no_door(&a));
         tell_agent(&app, &t);
         return Some(json!({ "app": a, "rehost": "no_door", "note": t }));
     }
@@ -383,13 +415,47 @@ pub(crate) fn doctor_json(app: &AppRow) -> J {
             ),
         }));
     }
-    if in_container(app) && wants_postgres(app) {
-        findings.push(json!({ "id": "database_door_missing", "detail": container_no_db(a) }));
+    if in_container(app) {
+        let ready = super::db_door::engine_ready();
+        match super::db_door::live_door(a) {
+            // Running without a door, or an engine that won't render one.
+            None if wants_postgres(app) && (applied.is_some() || !ready) => {
+                let detail = if ready {
+                    format!("{a}'s running deployment has no database door (it started before this box's App engine had one). {line}")
+                } else {
+                    engine_no_door(a)
+                };
+                findings.push(json!({ "id": "database_door_missing", "detail": detail }));
+            }
+            // The door is there: does it admit the database the App's
+            // DATABASE_URL names?
+            Some(_) => {
+                if let super::pg_choice::DbOf::Known(r) = super::pg_choice::db_of(app) {
+                    if !super::db_door::admitted(a).iter().any(|d| d.database == r.name) {
+                        findings.push(json!({
+                            "id": "database_not_admitted",
+                            "detail": format!(
+                                "{a}'s DATABASE_URL names {}, which its database door refuses: its workspace doesn't own it and wasn't \
+                                 granted it (k2 db grant <its workspace> --db {} --level read|write)",
+                                r.name, r.name
+                            ),
+                        }));
+                    }
+                }
+            }
+            None => {}
+        }
     }
     json!({
         "ok": findings.is_empty(),
         "running": applied.is_some(),
         "rule": applied.as_ref().map(|(r, _)| json!({ "gwPort": r.gw, "boxPorts": r.box_ports, "dbPorts": r.db_ports })),
+        "dbDoor": super::db_door::live_door(a).map(|p| json!({
+            "hostPort": p,
+            "inWallPort": k2_root_proto::engine::IN_WALL_DB_PORT,
+            "openSessions": super::db_door::open_sessions(a),
+            "databases": super::db_door::admitted(a).iter().map(|d| d.database.clone()).collect::<Vec<_>>(),
+        })),
         "findings": findings,
     })
 }

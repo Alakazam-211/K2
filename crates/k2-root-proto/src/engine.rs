@@ -823,9 +823,16 @@ pub struct StartSpec {
     /// a forward to a shut door (refused at once, never a stall).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub box_forwards: Vec<BoxForward>,
-    /// The App's database door on host loopback (lane 3, S21): forwarded
-    /// to [`IN_WALL_DB_PORT`] in the wall, like the gateway link. Inside
-    /// [`crate::apps::DB_PORTS`] (the range the nft table admits).
+    /// The App's database door on host loopback (S21,
+    /// prd-app-database-integrations-v1 S1): forwarded to
+    /// [`IN_WALL_DB_PORT`] in the wall, like the gateway link. It is the
+    /// App's own egress proxy port ([`proxy_port`] of its slot): the
+    /// daemon's listener there tells a Postgres startup from an HTTP proxy
+    /// request by its first byte, and the per-App nft rule already admits
+    /// that port to that App's cgroup only. Never a cluster port: the door
+    /// checks the role and database before it dials one. The engine
+    /// refuses any other port ([`db_port_ok`], then [`db_port_is_own`]
+    /// once it knows the slot). Announced as [`FEATURE_DB_DOOR`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub db_port: Option<u16>,
 }
@@ -859,7 +866,13 @@ pub const FEATURE_BOX_FORWARD: &str = "box-forward";
 pub const FEATURE_RELAXED: &str = "relaxed";
 pub const FEATURE_BUILD: &str = "build";
 pub const FEATURE_DB_FORWARD: &str = "db-forward";
-pub const ENGINE_FEATURES: &[&str] = &[FEATURE_BOX_FORWARD, FEATURE_RELAXED, FEATURE_BUILD, FEATURE_DB_FORWARD];
+/// 0.46.12 (prd-app-database-integrations-v1 S1): `dbPort` is the App's
+/// own proxy port, where the daemon's database door answers. An engine
+/// without it took only a cluster port in the band (never used: the
+/// daemon always sent `None`), so the daemon sends `dbPort` only to an
+/// engine that lists this.
+pub const FEATURE_DB_DOOR: &str = "db-door";
+pub const ENGINE_FEATURES: &[&str] = &[FEATURE_BOX_FORWARD, FEATURE_RELAXED, FEATURE_BUILD, FEATURE_DB_FORWARD, FEATURE_DB_DOOR];
 
 /// A box forward's port inside the wall: an App port shape (≥ 1024, not
 /// 8730, not K2's range), never the App's own port, never the database
@@ -868,17 +881,18 @@ pub fn box_forward_ok(f: &BoxForward, app_port: u16) -> bool {
     app_port_ok(f.app_port) && f.app_port != app_port && f.app_port != IN_WALL_DB_PORT && crate::apps::box_port_ok(f.host_port)
 }
 
-/// A database door port on host loopback: inside the range the nft table
-/// admits for every App ([`crate::apps::DB_PORTS`]).
+/// A database door port on host loopback: in the proxy range (the door
+/// is the App's own proxy listener, [`StartSpec::db_port`]), never K2's
+/// Postgres band: a forward straight to a cluster would skip the door's
+/// role and database check.
 pub fn db_port_ok(p: u16) -> bool {
-    (crate::apps::DB_PORTS.lo..=crate::apps::DB_PORTS.hi).contains(&p)
+    (crate::apps::PROXY_PORTS.lo..=crate::apps::PROXY_PORTS.hi).contains(&p)
 }
 
-/// S1 (not built yet): the engine's "this App's own door" check.
-pub const FEATURE_DB_DOOR: &str = "db-door";
+/// The engine's check once it knows the App's slot: the door is this
+/// App's own proxy port, never another App's.
 pub fn db_port_is_own(db_port: Option<u16>, px_port: u16) -> bool {
-    let _ = (db_port, px_port);
-    true
+    db_port.is_none_or(|d| d == px_port)
 }
 
 /// The pass folder inside the container, read-only.

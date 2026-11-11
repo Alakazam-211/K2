@@ -424,15 +424,17 @@ fn request(who: &Who, body: &[u8]) -> R<J> {
     let app = app_for(who, s(&v, "app"))?;
     let name = s(&v, "name").ok_or_else(|| no(dcodes::BAD_REQUEST, 400, "name the service (like sew-api)"))?;
     let host_port = port_field(&v, "hostPort")?;
-    // A container App asking for Postgres: say why no door exists for it
-    // (0.46.11 field report), not only "never a box service".
+    // A container App asking for Postgres: say where its way in is
+    // (0.46.11 field report; the door since 0.46.12), not only "never a
+    // box service".
     if let Some(p) = host_port.filter(|p| k2_root_proto::pg_major::in_band(*p)) {
         if super::reach::in_container(&app) {
-            return Err(no(
-                codes::BOX_SERVICE_REFUSED,
-                403,
-                format!("port {p} can never be a box service: it is Postgres (5432-5449). And {}", super::reach::container_no_db(&app.app_id)),
-            ));
+            let how = if super::reach::door_serves(&app.app_id) {
+                super::reach::door_line(&app.app_id)
+            } else {
+                super::reach::engine_no_door(&app.app_id)
+            };
+            return Err(no(codes::BOX_SERVICE_REFUSED, 403, format!("port {p} can never be a box service: it is Postgres (5432-5449). {how}")));
         }
     }
     let want = resolve(name, host_port, port_field(&v, "appPort")?, s(&v, "proto"))?;

@@ -38,6 +38,12 @@
 //! Keys never pass here (a CONNECT tunnel can't inject into TLS): outbound
 //! third-party keys go through the vault key proxy (AR16/AR44). Its seam
 //! into this policy is [`check_for_key_proxy`].
+//!
+//! The same listener is the App's database door (S21, `db_door`): pasta
+//! forwards the container's `127.0.0.1:5432` here too, and a connection
+//! whose first byte is a Postgres length prefix (`0x00`) or a TLS record
+//! goes to the door instead of the proxy (an HTTP request starts with a
+//! letter).
 
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -539,6 +545,15 @@ fn start_listener(app: &str, port: u16) -> Result<(), String> {
                         // R37: the old daemon drains these before it exits.
                         let guard = crate::handoff::app_conn_guard();
                         tokio::spawn(async move {
+                            // S21: the same listener is the App's database
+                            // door (pasta's `-T 5432:<this port>`); a
+                            // Postgres startup goes there. A door session
+                            // doesn't hold a hand-off's drain (`db_door`).
+                            if super::db_door::is_door(&c).await {
+                                drop(guard);
+                                super::db_door::serve(c, app, stop).await;
+                                return;
+                            }
                             serve(c, app, lis, stop).await;
                             drop(guard);
                         });
@@ -591,7 +606,8 @@ fn retry_while_predecessor_drains(app: &str, port: u16) {
     });
 }
 
-/// Close `app`'s listener and every tunnel it holds (stop, uninstall).
+/// Close `app`'s listener and every tunnel it holds (stop, uninstall),
+/// its database door's sessions with it (they watch the same signal).
 pub fn stop(app: &str) {
     if let Some(l) = listeners().lock().unwrap_or_else(|e| e.into_inner()).remove(app) {
         let _ = l.stop.send(true);

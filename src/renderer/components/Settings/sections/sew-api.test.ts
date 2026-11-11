@@ -53,10 +53,10 @@ describe('errors', () => {
   })
 
   it('owner_only and a bare 403 read as the no-permission line', () => {
-    expect(sewErrorMessage(new DaemonHttpError('x', 403, 'owner_only'))).toBe('Only the box owner or an admin can manage Chat / Voice Hosting.')
-    expect(sewErrorMessage(new DaemonHttpError('x', 403, null))).toBe('Only the box owner or an admin can manage Chat / Voice Hosting.')
+    expect(sewErrorMessage(new DaemonHttpError('x', 403, 'owner_only'))).toBe('Only the server owner or an admin can manage chat and voice.')
+    expect(sewErrorMessage(new DaemonHttpError('x', 403, null))).toBe('Only the server owner or an admin can manage chat and voice.')
     expect(sewErrorMessage(new DaemonHttpError('Another Sew action', 409, 'lifecycle_in_progress'))).toBe(
-      'Another Chat / Voice Hosting action is running. Wait for it to finish.',
+      'Another chat and voice change is still running. Wait for it to finish',
     )
     expect(sewErrorInfo('plain')).toEqual({ code: null, status: null, message: 'plain' })
   })
@@ -86,11 +86,18 @@ describe('tables match the daemon', () => {
       expect(info.title.length, name).toBeGreaterThan(3)
       expect(info.fix.length, name).toBeGreaterThan(3)
       expect(['error', 'warn']).toContain(info.severity)
+      // Plain words first: a command is quiet secondary text, never the fix.
+      expect(info.fix, name).not.toMatch(/k2 hostchat/)
     }
   })
 
-  it('an unknown alarm renders verbatim with the status hint', () => {
-    expect(alarmInfo('brand_new')).toEqual({ severity: 'warn', title: 'brand_new', fix: 'Run k2 hostchat status for details.' })
+  it('an unknown alarm keeps its name as the title, with the status command quietly', () => {
+    expect(alarmInfo('brand_new')).toEqual({
+      severity: 'warn',
+      title: 'brand_new',
+      fix: 'K2 has no description for this one yet. The server’s chat status says more.',
+      command: 'k2 hostchat status',
+    })
   })
 
   it('the enable steps are the enable machine’s, in order', () => {
@@ -104,9 +111,9 @@ describe('tables match the daemon', () => {
   })
 
   it('the wizard label per state', () => {
-    expect(enableLabel('not-installed')).toBe('Enable Chat / Voice Hosting')
-    expect(enableLabel('error')).toBe('Resume')
-    for (const s of ['disabled', 'stopped', 'removed']) expect(enableLabel(s)).toBe('Re-enable')
+    expect(enableLabel('not-installed')).toBe('Set up chat and voice')
+    expect(enableLabel('error')).toBe('Resume setup')
+    for (const s of ['disabled', 'stopped', 'removed']) expect(enableLabel(s)).toBe('Turn back on')
     for (const s of ['running', 'degraded', 'installing', 'upgrading']) expect(enableLabel(s)).toBeNull()
   })
 })

@@ -1,4 +1,4 @@
-// Settings → Cores → Chat Hosting (Sew S32, K27).
+// Settings → Cores → Chat / Voice (Sew S32, K27).
 //
 // The owner (or an admin, or anyone the daemon says may manage Sew) runs
 // the Sew server on this box with no terminal. The daemon owns every
@@ -6,44 +6,60 @@
 // grant hook. This page renders `GET /cli/sew/status` and sends gestures:
 //
 // - Reads: status (and `sew_changed` → refetch, debounced 250 ms), the
-//   preflight while the wizard shows, the backup list and App Spaces when
-//   their panels open. Polling only while installing / upgrading (2 s) and
-//   while a backup job runs (2 s); view refreshes, cleared on unmount.
+//   preflight while setup shows, the backup list and App Spaces when their
+//   tabs open. Polling only while installing / upgrading (2 s) and while a
+//   backup job runs (2 s); view refreshes, cleared on unmount.
 // - Who may do what comes from `status.you` (daemon-computed), never from
-//   guessing a role. Person-only steps (reveal the recovery key, purge, open
+//   guessing a role. Person-only steps (show the recovery key, purge, open
 //   Sew as owner) take a vault person confirm first.
-// - `supported: false` (a Mac or Windows daemon) → the banner over sample
-//   data, every control off, and no call after the one status read.
+// - `supported: false` (a Mac or Windows daemon) → the shared Linux note
+//   over sample data, every control off, and no call after the one status
+//   read. A reply without `supported` / `state` is a failed read.
 // - Secrets: the recovery key lives in this component's state only, the
 //   handoff code in a local variable until the browser opens. Never a
 //   store, a toast, a log line or a URL query.
 // - Never `fetchProjects()`.
+//
+// Layout: the Settings reference page (header, one tab strip, card groups
+// of rows). Agents, Approvals and Deliveries wait on S30 / S31 and have no
+// tab until their routes exist (TODO(S30, S31, K28): `GET
+// /cli/sew/admin/agents` + grant/set/revoke, `GET /cli/sew/approvals` +
+// approve/deny, `GET /cli/sew/admin/deliveries` + set/reset).
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { Button, Callout, Checkbox, Radio } from '@/components/ui'
+import { Button, Callout, Checkbox, Input, Radio, Toggle } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { isWebClient } from '@/lib/is-web'
 import { onSewChanged } from '@/stores/session-events'
-import { useConfirmDialogStore } from '@/stores/confirm-dialog'
-import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore } from '@/stores/window-mode'
 import type { SettingEntry } from '../searchManifest'
+import {
+  SETTING_LIST_ROW_HOVER,
+  SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
+  SaveNote,
+  SettingRow,
+  SettingsGroup,
+  SettingsLoadState,
+  useSaveStatus,
+} from '../controls/SettingControls'
+import { AccessSheet, DIALOG_FIELD, DIALOG_LABEL, DIALOG_MUTED, FailedNote } from './AccessDialogs'
+import { LinuxOnlyNote } from './LinuxOnlyNote'
 import {
   SAMPLE_APP_SPACES,
   SAMPLE_BACKUPS,
   SAMPLE_PREFLIGHT,
   SAMPLE_STATUS,
-  SEW_CLI,
   SEW_ENABLE_STEPS,
   SEW_FIXABLE_CHECKS,
-  downloadNote,
-  SEW_MAC_BANNER,
+  SEW_NO_PERMISSION,
   SEW_PREFLIGHT_LABELS,
   alarmInfo,
   bindSewAppSpace,
   confirmSecretId,
   disableSew,
+  downloadNote,
   enableLabel,
   enableSew,
   fetchSewAppSpaces,
@@ -52,6 +68,7 @@ import {
   fetchSewPreflight,
   fetchSewStatus,
   isNotBuilt,
+  isSewStatus,
   mintOwnerHandoff,
   ownerHandoffUrl,
   purgeSew,
@@ -64,54 +81,47 @@ import {
   setSewShip,
   sewErrorInfo,
   sewErrorMessage,
-  sewStateChip,
   unbindSewAppSpace,
   uninstallSew,
   upgradeSew,
   youOf,
   type ShipKind,
-  type SewBoxBackup,
   type SewAlarmAction,
   type SewAppSpace,
   type SewBackup,
+  type SewBoxBackup,
   type SewPreflightCheck,
   type SewStatus,
 } from './sew-api'
-import { OnceSecret, SewStatusChip, TypeToConfirm, muted, secondary, typedMatches, usePersonConfirm } from './sew-ui'
+import { OnceSecret, StatusDot, SewStatusChip, TypeToConfirm, typedMatches, useAsk, usePersonConfirm } from './sew-ui'
 import { RecordingPanel } from './SewRecordingPanel'
-import { SewAgentsPanelStub, SewApprovalsPanelStub, SewDeliveriesPanelStub } from './SewStubs'
-import { useSplitPage } from '../controls/split-page'
 
 export const SEW_MANIFEST: SettingEntry[] = [
   { id: 'sew.status', section: 'sew', label: 'Chat / Voice', description: 'The chat and voice server on this box, powered by Sew: status and alarms', keywords: ['sew', 'chat', 'voice', 'slack', 'sidecar', 'core', 'hosting', 'hostchat', 'status'] },
-  { id: 'sew.enable', section: 'sew', label: 'Enable Chat / Voice Hosting', description: 'Preflight and install chat and voice hosting (Linux)', keywords: ['sew', 'chat', 'enable', 'install', 'preflight', 'voice'] },
-  { id: 'sew.upgrade', section: 'sew', label: 'Upgrade Sew', description: 'Upgrade or roll back the Sew server', keywords: ['sew', 'chat', 'upgrade', 'rollback', 'version'] },
-  { id: 'sew.recovery-key', section: 'sew', label: 'Sew recovery key', description: 'Reveal the recovery key K2 keeps in the vault (person confirm)', keywords: ['sew', 'chat', 'recovery', 'key', 'master key'] },
-  { id: 'sew.backup', section: 'sew', label: 'Chat and voice backups', description: 'Back up now and see the bundles', keywords: ['sew', 'chat', 'backup', 'restore', 'drill'] },
-  { id: 'sew.offbox', section: 'sew', label: 'Off-box copies', description: 'Backup destination and keyring mirror off this machine', keywords: ['sew', 'chat', 'offbox', 'off-box', 'mirror', 'ship', 'backup'] },
-  { id: 'sew.public-url', section: 'sew', label: 'Sew public URL', description: "Where Sew's web app lives (setup links)", keywords: ['sew', 'chat', 'public url', 'host', 'setup link'] },
-  { id: 'sew.open-as-owner', section: 'sew', label: 'Open Sew as owner', description: "Open Sew's web app as its install owner (person confirm)", keywords: ['sew', 'chat', 'owner', 'handoff', 'open', 'app url'] },
-  { id: 'sew.app-spaces', section: 'sew', label: 'App Spaces', description: "Each App's Sew Spaces; members come from App user grants", keywords: ['sew', 'chat', 'space', 'app', 'members', 'hearth'] },
+  { id: 'sew.enable', section: 'sew', label: 'Set up chat and voice', description: 'Check this server and set up chat and voice (Linux servers)', keywords: ['sew', 'chat', 'enable', 'install', 'preflight', 'voice', 'set up'] },
+  { id: 'sew.upgrade', section: 'sew', label: 'Update Sew', description: 'Update or roll back the chat server', keywords: ['sew', 'chat', 'upgrade', 'update', 'rollback', 'version'] },
+  { id: 'sew.recovery-key', section: 'sew', label: 'Chat recovery key', description: 'Show the recovery key K2 keeps in the vault (after you confirm it’s you)', keywords: ['sew', 'chat', 'recovery', 'key', 'master key'] },
+  { id: 'sew.backup', section: 'sew', label: 'Chat and voice backups', description: 'Back up now and see the saved backups', keywords: ['sew', 'chat', 'backup', 'restore', 'drill'] },
+  { id: 'sew.offbox', section: 'sew', label: 'Off-box copies', description: 'Where chat backups and keys are copied off this server', keywords: ['sew', 'chat', 'offbox', 'off-box', 'mirror', 'ship', 'backup'] },
+  { id: 'sew.public-url', section: 'sew', label: 'Chat web address', description: 'Where people open chat in a browser (setup links use it)', keywords: ['sew', 'chat', 'public url', 'host', 'setup link', 'web address'] },
+  { id: 'sew.open-as-owner', section: 'sew', label: 'Open chat as owner', description: 'Open the chat web app as its owner (after you confirm it’s you)', keywords: ['sew', 'chat', 'owner', 'handoff', 'open', 'app url'] },
+  { id: 'sew.app-spaces', section: 'sew', label: 'App Spaces', description: "Each App's chat Spaces; members come from App user grants", keywords: ['sew', 'chat', 'space', 'app', 'members', 'hearth'] },
   { id: 'sew.recording', section: 'sew', label: 'Recording in Apps', description: "Who may record in each App's calls, its server's transcript reads, the no-recording lock", keywords: ['sew', 'chat', 'voice', 'recording', 'record', 'transcript', 'consent', 'cui', 'fci'] },
-  { id: 'sew.uninstall', section: 'sew', label: 'Disable or uninstall Chat / Voice Hosting', description: 'Disable, uninstall or purge chat and voice hosting', keywords: ['sew', 'chat', 'disable', 'uninstall', 'purge', 'delete'] },
+  { id: 'sew.uninstall', section: 'sew', label: 'Turn off or uninstall chat and voice', description: 'Turn off, uninstall or delete chat and voice', keywords: ['sew', 'chat', 'disable', 'uninstall', 'purge', 'delete', 'turn off'] },
 ]
 
-type Selection =
-  | 'server'
-  | 'alarms'
-  | 'backups'
-  | 'offbox'
-  | 'public-url'
-  | 'app-spaces'
-  | 'recording'
-  | 'agents'
-  | 'approvals'
-  | 'deliveries'
+type Tab = 'overview' | 'backups' | 'app-spaces' | 'recording'
+const TABS: Tab[] = ['overview', 'backups', 'app-spaces', 'recording']
+const TAB_LABEL: Record<Tab, string> = { overview: 'Overview', backups: 'Backups and keys', 'app-spaces': 'App Spaces', recording: 'Recording' }
+const TAB_SETTINGS_ID: Record<Tab, string> = { overview: 'sew.status', backups: 'sew.backup', 'app-spaces': 'sew.app-spaces', recording: 'sew.recording' }
 
 const POLL_MS = 2000
 const EVENT_DEBOUNCE_MS = 250
 const RECOVERY_WARNING =
-  "This key plus a backup bundle plus the keyring mirror can read every message. K2 keeps it in the vault (sew-recovery-key), so the vault's own recovery key and backups cover it; keep any copy you make as safe."
+  'Anyone with this key, a backup and the key copy can read every message. Keep any copy you make as safe as the vault itself.'
+
+/** A page-level result under the header (an action's outcome). */
+type Notice = { tone: 'ok' | 'error'; text: string; detail?: string }
 
 function isLive(state: string): boolean {
   return state === 'running' || state === 'degraded' || state === 'stopped'
@@ -121,21 +131,56 @@ function isBusyState(state: string): boolean {
   return state === 'installing' || state === 'upgrading'
 }
 
-function mib(n: number | null | undefined): string {
-  return typeof n === 'number' ? `${Math.round(n / 2 ** 20)} MiB` : '?'
+function mb(n: number | null | undefined): string {
+  return typeof n === 'number' ? `${Math.round(n / 2 ** 20).toLocaleString()} MB` : 'unknown'
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
+/** A daemon time (ISO or unix seconds) as local date and time. */
+function when(v: string | number | null | undefined): string {
+  if (v === null || v === undefined || v === '') return ''
+  const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v)
+  return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+function sentence(s: string): string {
+  const t = s.trim()
+  return t ? t[0].toUpperCase() + t.slice(1) : t
+}
+
+const VALUE = 'type-row text-[var(--color-text-primary)]'
+
+const STATE_HINT: Record<string, string> = {
+  running: 'Chat and calls are working.',
+  degraded: 'Working, but something needs attention.',
+  stopped: 'Chat is down. K2 keeps trying to bring it back.',
+  error: 'Setup stopped on a problem. Resume it below.',
+  disabled: 'Turned off. Messages and files are kept.',
+  installing: 'K2 is setting it up. This takes a few minutes.',
+  upgrading: 'Sew is updating. Chat is unavailable for a moment.',
+  removed: 'Uninstalled. Messages, files and keys are kept.',
+}
+
+const OWNER_TEXT: Record<string, string> = { set: 'Set up', pending: 'Setting up…', blocked: 'Failed: try again from User Access', none: 'Not yet' }
+
+/** Copy a quiet technical value (an id, a command). */
+function CopyButton({ value, label }: { value: string; label: string }): React.JSX.Element {
+  const [state, setState] = useState<'idle' | 'done' | 'failed'>('idle')
   return (
-    <div className="flex items-start gap-3 py-1 type-row">
-      <span className={`w-36 flex-shrink-0 ${muted}`}>{label}</span>
-      <span className="flex-1 min-w-0 text-[var(--color-text-primary)] break-words">{children}</span>
-    </div>
+    <Button
+      variant="quiet"
+      aria-label={label}
+      onClick={() => {
+        const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+        if (!clip) return setState('failed')
+        clip.writeText(value).then(
+          () => setState('done'),
+          () => setState('failed'),
+        )
+      }}
+    >
+      {state === 'done' ? 'Copied' : state === 'failed' ? 'Select it to copy' : 'Copy'}
+    </Button>
   )
-}
-
-function Title({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return <h3 className="type-heading text-[var(--color-text-primary)]">{children}</h3>
 }
 
 interface PanelProps {
@@ -143,12 +188,144 @@ interface PanelProps {
   sample: boolean
   canMutate: boolean
   reload: () => Promise<void>
-  select: (s: Selection) => void
+  go: (tab: Tab, anchor?: string) => void
+  notify: (n: Notice) => void
 }
 
-// ── Server panel ──────────────────────────────────────────────────────────
+// ── Overview: status, attention, setup, updates, web app, turn off ───────
 
-function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.JSX.Element {
+function StatusGroup({ status }: PanelProps): React.JSX.Element {
+  const notInstalled = status.state === 'not-installed'
+  const db = status.units?.sewDb
+  const sew = status.units?.sew
+  const unitsUp = db?.active === 'active' && sew?.active === 'active'
+  return (
+    <div className="space-y-3">
+      <SettingsGroup
+        title="Status"
+        card
+        settingId="sew.status"
+        testId="sew-status"
+        state={
+          notInstalled ? (
+            <SettingsLoadState kind="empty" title="Chat and voice isn’t set up yet" testId="sew-not-installed">
+              This server doesn’t run team chat or voice calls yet. Set it up below; it takes a few minutes.
+            </SettingsLoadState>
+          ) : undefined
+        }
+      >
+        <SettingRow label="Chat and voice" hint={STATE_HINT[status.state]}>
+          <SewStatusChip state={status.state} />
+        </SettingRow>
+        <SettingRow label="Version" hint={status.upgradeAvailable && status.pinnedVersion ? `Sew ${status.pinnedVersion} is available. Update it below.` : undefined}>
+          <span className={VALUE}>{status.installedVersion ? `Sew ${status.installedVersion}` : 'Not reported'}</span>
+        </SettingRow>
+        <SettingRow label="Sign-in" hint="Chosen at setup. Changing it means deleting chat data and setting it up again.">
+          <span className={VALUE}>{status.identityProvider === 'standalone' ? 'Sew’s own accounts' : 'K2 accounts'}</span>
+        </SettingRow>
+        <SettingRow label="You as owner in chat" hint="K2 makes the server owner chat’s owner too.">
+          <span className={VALUE}>{OWNER_TEXT[status.owner ?? 'none'] ?? 'Not yet'}</span>
+        </SettingRow>
+        {db || sew ? (
+          <SettingRow label="Services" hint={sew?.memoryMax ? `Chat uses ${mb(sew.memoryCurrent)} of its ${mb(sew.memoryMax)} memory limit.` : undefined}>
+            <span className={VALUE}>
+              {unitsUp ? 'Database and chat running' : `Database ${db?.active ?? 'unknown'}, chat ${sew?.active ?? 'unknown'}`}
+            </span>
+          </SettingRow>
+        ) : null}
+        {status.installId ? (
+          <SettingRow label="Install ID" hint={<span className="font-mono break-all">{status.installId}</span>}>
+            <CopyButton value={status.installId} label="Copy the install ID" />
+          </SettingRow>
+        ) : null}
+      </SettingsGroup>
+      {status.consistent === false ? (
+        <Callout tone="warn" className="type-hint space-y-0.5">
+          <p className="font-medium">The server and K2 disagree about whether chat is running.</p>
+          <p>K2 checks again on its own. If this stays, restart the server.</p>
+          {status.note || status.lastError ? <p>The server said: {(status.note ?? status.lastError ?? '').replace(/[.\s]+$/, '')}.</p> : null}
+        </Callout>
+      ) : null}
+      {status.lastError && (status.state === 'error' || status.state === 'stopped') ? (
+        <Callout tone="error" className="type-hint space-y-0.5">
+          <p className="font-medium">{status.state === 'error' ? 'Setup stopped on a problem.' : 'Chat stopped on a problem.'}</p>
+          <p>The server said: {status.lastError.replace(/[.\s]+$/, '')}.</p>
+        </Callout>
+      ) : null}
+    </div>
+  )
+}
+
+const ACTION: Record<SewAlarmAction, { label: string; tab: Tab; anchor: string }> = {
+  backup: { label: 'Go to backups', tab: 'backups', anchor: 'sew.backup' },
+  offbox: { label: 'Go to off-box copies', tab: 'backups', anchor: 'sew.offbox' },
+  'recovery-key': { label: 'Go to the recovery key', tab: 'backups', anchor: 'sew.recovery-key' },
+  'public-url': { label: 'Set the web address', tab: 'overview', anchor: 'sew.public-url' },
+}
+
+function AttentionGroup({ status, go }: PanelProps): React.JSX.Element | null {
+  const alarms = status.alarms ?? []
+  const warnings = status.warnings ?? []
+  if (alarms.length === 0 && warnings.length === 0) return null
+  const offboxOnly = alarms.length > 0 && alarms.every((a) => a === 'keys_mirror_stale' || a === 'k2_backup_offbox_none')
+  return (
+    <SettingsGroup
+      title="Needs attention"
+      card
+      testId="sew-alarms"
+      hint={offboxOnly ? 'Every K2 server shows Degraded until its chat backups and keys have copies off the server.' : undefined}
+    >
+      {alarms.map((a) => {
+        const info = alarmInfo(a)
+        const act = info.action ? ACTION[info.action] : null
+        return (
+          <SettingRow
+            key={a}
+            testId={`sew-alarm-${a}`}
+            label={
+              <span className="flex items-center gap-2">
+                <StatusDot color={info.severity === 'error' ? 'var(--color-status-error-soft)' : 'var(--color-status-warn)'} />
+                {info.title}
+              </span>
+            }
+            hint={
+              <>
+                {info.fix}
+                {info.command ? <span className="block mt-1 font-mono text-[var(--color-text-muted)] break-all">{info.command}</span> : null}
+              </>
+            }
+          >
+            {act ? <Button onClick={() => go(act.tab, act.anchor)}>{act.label}</Button> : info.command ? <CopyButton value={info.command} label={`Copy the command for ${info.title}`} /> : null}
+          </SettingRow>
+        )
+      })}
+      {warnings.map((w) => (
+        <SettingRow
+          key={w.code}
+          testId={`sew-warning-${w.code}`}
+          label={
+            <span className="flex items-center gap-2">
+              <StatusDot color="var(--color-status-warn)" />
+              {sentence(w.message)}
+            </span>
+          }
+          hint={w.fix ? <span className="font-mono break-all">{w.fix}</span> : undefined}
+        >
+          {(() => {
+            const act = w.code === 'public_url_unset' ? ACTION['public-url'] : w.alarm && alarmInfo(w.alarm).action ? ACTION[alarmInfo(w.alarm).action as SewAlarmAction] : null
+            if (act) return <Button onClick={() => go(act.tab, act.anchor)}>{act.label}</Button>
+            return w.fix ? <CopyButton value={w.fix} label="Copy the command" /> : null
+          })()}
+        </SettingRow>
+      ))}
+    </SettingsGroup>
+  )
+}
+
+const CHECK_DOT: Record<string, string> = { fail: 'var(--color-status-error-soft)', warn: 'var(--color-status-warn)' }
+const CHECK_WORD: Record<string, string> = { fail: 'Needs fixing', warn: 'Works, could be better' }
+
+function SetupGroup({ status, sample, canMutate, reload }: PanelProps): React.JSX.Element {
   const [checks, setChecks] = useState<SewPreflightCheck[] | null>(sample ? SAMPLE_PREFLIGHT : null)
   const [preflightError, setPreflightError] = useState<string | null>(null)
   const [identity, setIdentity] = useState<'k2' | 'standalone'>('k2')
@@ -162,9 +339,10 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const released = status.released !== false
-  // Re-run preflight judges the typed path (not a stale closure).
+  // Check again judges the typed path (not a stale closure).
   const tarballRef = useRef('')
   tarballRef.current = tarball
+  const ids = { voice: useId(), ip: useId(), media: useId(), tar: useId(), rec: useId() }
 
   const runPreflight = useCallback(async () => {
     if (sample || !released) return
@@ -183,12 +361,13 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
 
   const failing = (checks ?? []).filter((c) => c.status === 'fail')
   const blocking = failing.filter((c) => !SEW_FIXABLE_CHECKS.includes(c.id))
-  // A typed path stays visible (and is sent) even after the preflight it
-  // fixed stops failing: Enable must never drop it silently.
+  // A typed path stays visible (and is sent) even after the check it fixed
+  // stops failing: setup must never drop it silently.
   const showSource = advanced || tarball.trim() !== '' || failing.some((c) => c.id === 'source')
   const showRecovery = advanced || recoveryFile.trim() !== '' || failing.some((c) => c.id === 'existing_data')
-  const label = enableLabel(status.state) ?? 'Enable Chat / Voice Hosting'
+  const label = enableLabel(status.state) ?? 'Set up chat and voice'
   const disabled = !canMutate || !released || busy || checks === null || blocking.length > 0
+  const fresh = status.state === 'not-installed'
 
   const enable = async (): Promise<void> => {
     setBusy(true)
@@ -211,95 +390,130 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
     }
   }
 
+  const field = (id: string, lbl: string, value: string, set: (v: string) => void, placeholder: string, mono = true): React.JSX.Element => (
+    <div>
+      <label htmlFor={id} className={DIALOG_LABEL}>
+        {lbl}
+      </label>
+      <Input id={id} aria-label={lbl} value={value} disabled={!canMutate} placeholder={placeholder} onChange={(e) => set(e.target.value)} className={`${DIALOG_FIELD} ${mono ? 'font-mono' : ''}`} />
+    </div>
+  )
+
   return (
-    <div className="space-y-3 border border-[var(--color-border)] p-3" data-settings-id="sew.enable" data-testid="sew-enable-wizard">
-      {status.state === 'not-installed' ? (
-        <p className={`type-hint ${secondary}`}>
-          Chat / Voice Hosting gives this box team chat and voice calls, powered by Sew, Alakazam&apos;s team chat. It runs beside K2, with its own
-          database and encrypted storage.
-        </p>
+    <div className="space-y-5" data-settings-id="sew.enable" data-testid="sew-enable-wizard">
+      {!released ? (
+        <Callout tone="warn" className="type-hint">
+          {status.notice ?? 'This version of K2 doesn’t name a Sew release yet, so chat can’t be set up. Update K2, then try again.'}
+        </Callout>
       ) : null}
-      {!released ? <Callout tone="warn">{status.notice ?? 'This K2 build pins no published Sew release yet.'}</Callout> : null}
-      <div className="space-y-1">
-        <div className="flex items-center gap-2">
-          <span className="type-name text-[var(--color-text-primary)]">Preflight</span>
+      <SettingsGroup
+        title="Server checks"
+        hint="K2 checks this server before setup. Anything marked Needs fixing has to be fixed first."
+        card
+        action={
           <Button disabled={sample || !released} onClick={() => void runPreflight()}>
-            Re-run preflight
+            Check again
           </Button>
-        </div>
-        {preflightError ? <Callout tone="error">{preflightError}</Callout> : null}
-        {checks === null && !preflightError ? <p className={`type-hint ${muted}`}>Checking…</p> : null}
-        <ul className="space-y-0.5" data-testid="sew-preflight">
+        }
+        state={
+          preflightError ? (
+            <SettingsLoadState kind="error" title="Couldn’t check this server" detail={preflightError} action={<Button onClick={() => void runPreflight()}>Try again</Button>}>
+              Setup stays off until the checks run. Try again in a moment.
+            </SettingsLoadState>
+          ) : checks === null ? (
+            <SettingsLoadState kind="loading" title="Checking this server…" />
+          ) : checks.length === 0 ? (
+            <SettingsLoadState kind="empty" title="No checks reported">
+              The server didn’t list any checks. Setup can go ahead.
+            </SettingsLoadState>
+          ) : undefined
+        }
+      >
+        <div data-testid="sew-preflight" className="divide-y divide-[var(--color-border)]">
           {(checks ?? []).map((c) => (
-            <li key={c.id} className="type-hint flex gap-2" data-testid={`sew-check-${c.id}`} data-status={c.status}>
-              <span
-                aria-label={c.status}
-                className={
-                  c.status === 'fail'
-                    ? 'text-[var(--color-status-error-soft)]'
-                    : c.status === 'warn'
-                      ? 'text-[var(--color-status-warn)]'
-                      : 'text-[var(--color-status-ok)]'
+            <div key={c.id} data-testid={`sew-check-${c.id}`} data-status={c.status}>
+              <SettingRow
+                label={
+                  <span className="flex items-center gap-2">
+                    <StatusDot color={CHECK_DOT[c.status] ?? 'var(--color-status-ok)'} />
+                    {SEW_PREFLIGHT_LABELS[c.id] ?? sentence(c.id.replace(/_/g, ' '))}
+                  </span>
+                }
+                hint={
+                  c.detail || c.hint ? (
+                    <>
+                      {c.detail ? sentence(c.detail) : null}
+                      {c.hint ? <span className="block mt-1 font-mono text-[var(--color-text-muted)] break-all">{c.hint}</span> : null}
+                    </>
+                  ) : undefined
                 }
               >
-                {c.status === 'fail' ? '✕' : c.status === 'warn' ? '!' : '✓'}
-              </span>
-              <span className="text-[var(--color-text-primary)]">{SEW_PREFLIGHT_LABELS[c.id] ?? c.id}</span>
-              <span className={muted}>{c.detail}</span>
-              {c.hint ? <code className={`font-mono ${secondary}`}>{c.hint}</code> : null}
-            </li>
+                <span className="type-hint text-[var(--color-text-secondary)]">{CHECK_WORD[c.status] ?? 'Ready'}</span>
+              </SettingRow>
+            </div>
           ))}
-        </ul>
-      </div>
+        </div>
+      </SettingsGroup>
 
-      <fieldset className="space-y-1" disabled={!canMutate}>
-        <legend className="type-name text-[var(--color-text-primary)]">Identity</legend>
-        <label className={`flex items-center gap-2 type-hint ${secondary}`}>
-          <Radio name="sew-identity" checked={identity === 'k2'} onChange={() => setIdentity('k2')} aria-label="K2 logins" />
-          K2 logins (people sign in with their K2 account)
-        </label>
-        <label className={`flex items-center gap-2 type-hint ${secondary}`}>
-          <Radio
-            name="sew-identity"
-            checked={identity === 'standalone'}
-            onChange={() => setIdentity('standalone')}
-            aria-label="Sew's own logins"
-          />
-          Sew&apos;s own logins (setup links)
-        </label>
-        <p className={`type-hint ${muted}`}>Fixed for the life of this install. Changing it later means purge, then enable.</p>
-      </fieldset>
-
-      <fieldset className="space-y-1" disabled={!canMutate}>
-        <label className={`flex items-center gap-2 type-row ${secondary}`}>
-          <Checkbox checked={voiceOn} onChange={(e) => setVoiceOn(e.target.checked)} aria-label="Also set up voice" />
-          Also set up voice
-        </label>
-        {voiceOn ? (
-          <div className="pl-5 space-y-1">
-            <input aria-label="Voice URL" placeholder="wss://voice.<box>.k2.dev (default)" value={voiceUrl} onChange={(e) => setVoiceUrl(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-row font-mono" />
-            <input aria-label="Node IP" placeholder="node IP (optional)" value={nodeIp} onChange={(e) => setNodeIp(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
-            <input aria-label="Voice tarball path" placeholder="/path/to/sew-media.tar.gz (only for a box without internet)" value={mediaTarball} onChange={(e) => setMediaTarball(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
+      <SettingsGroup title={fresh ? 'Set up chat and voice' : 'Turn chat and voice back on'} card hint={fresh ? 'Team chat and voice calls for this server, powered by Sew. It runs beside K2 with its own database and encrypted storage.' : 'Messages, files and keys were kept. Turning it back on brings them back.'}>
+        {fresh ? (
+          <SettingRow label="Sign-in" hint="How people sign in to chat. You can’t change it later without deleting chat data." stack>
+            <fieldset className="space-y-2" disabled={!canMutate}>
+              <legend className="sr-only">Sign-in</legend>
+              <label className="flex items-start gap-2 cursor-pointer">
+                <Radio name="sew-identity" className="mt-0.5" checked={identity === 'k2'} onChange={() => setIdentity('k2')} aria-label="K2 accounts" />
+                <span>
+                  <span className={SETTING_ROW_LABEL}>K2 accounts</span>
+                  <span className={`block ${SETTING_ROW_HINT}`}>People sign in with the account they use for K2.</span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 cursor-pointer">
+                <Radio name="sew-identity" className="mt-0.5" checked={identity === 'standalone'} onChange={() => setIdentity('standalone')} aria-label="Sew’s own accounts" />
+                <span>
+                  <span className={SETTING_ROW_LABEL}>Sew’s own accounts</span>
+                  <span className={`block ${SETTING_ROW_HINT}`}>People get a setup link from chat and make an account there.</span>
+                </span>
+              </label>
+            </fieldset>
+          </SettingRow>
+        ) : null}
+        <SettingRow label="Voice calls" hint="Also set up calls. Leave off for chat only; you can add voice later." below={
+          voiceOn ? (
+            <div className="space-y-3 max-w-md">
+              {field(ids.voice, 'Voice address', voiceUrl, setVoiceUrl, 'wss://voice.example.k2.dev (leave empty for the default)')}
+              {field(ids.ip, 'Server IP address (optional)', nodeIp, setNodeIp, '203.0.113.10')}
+              {field(ids.media, 'Voice download file (only without internet)', mediaTarball, setMediaTarball, '/path/to/sew-media.tar.gz')}
+            </div>
+          ) : undefined
+        }>
+          <Toggle checked={voiceOn} disabled={!canMutate} onChange={setVoiceOn} aria-label="Also set up voice calls" />
+        </SettingRow>
+        <SettingRow
+          label="Install from files"
+          hint="For a server without internet, or to bring back chat data from another server."
+          below={
+            showSource || showRecovery ? (
+              <div className="space-y-3 max-w-md">
+                {showSource ? field(ids.tar, 'Sew release file', tarball, setTarball, '/path/to/sew.tar.gz') : null}
+                {showRecovery ? field(ids.rec, 'Recovery key file', recoveryFile, setRecoveryFile, '/path/to/recovery-key') : null}
+              </div>
+            ) : undefined
+          }
+        >
+          <Button variant="quiet" aria-expanded={advanced} onClick={() => setAdvanced((v) => !v)}>
+            {advanced ? 'Hide' : 'Show'}
+          </Button>
+        </SettingRow>
+        <div className="px-4 py-3 space-y-3">
+          {error ? <FailedNote what="Couldn’t start setup." detail={error} next="Nothing was changed. Fix what the server says, then try again." /> : null}
+          <div className="flex items-center justify-between gap-4">
+            <p className={SETTING_ROW_HINT}>{blocking.length > 0 ? 'Fix the checks marked Needs fixing first.' : 'K2 shows each step as it goes.'}</p>
+            <Button variant="accent" disabled={disabled} onClick={() => void enable()}>
+              {busy ? 'Starting…' : label}
+            </Button>
           </div>
-        ) : null}
-      </fieldset>
-
-      <div className="space-y-1">
-        <button type="button" className={`type-hint underline ${muted}`} onClick={() => setAdvanced((v) => !v)}>
-          {advanced ? 'Hide advanced' : 'Advanced'}
-        </button>
-        {showSource ? (
-          <input aria-label="Release tarball path" placeholder="/absolute/path/to/sew.tar.gz (only for a box without internet)" value={tarball} disabled={!canMutate} onChange={(e) => setTarball(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
-        ) : null}
-        {showRecovery ? (
-          <input aria-label="Recovery key file" placeholder="/absolute/path/to/recovery-key" value={recoveryFile} disabled={!canMutate} onChange={(e) => setRecoveryFile(e.target.value)} className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
-        ) : null}
-      </div>
-
-      {error ? <Callout tone="error">{error}</Callout> : null}
-      <Button variant="accent" disabled={disabled} onClick={() => void enable()}>
-        {busy ? 'Starting…' : label}
-      </Button>
+        </div>
+      </SettingsGroup>
     </div>
   )
 }
@@ -309,127 +523,222 @@ function Progress({ status }: { status: SewStatus }): React.JSX.Element | null {
   if (!p || (status.state !== 'installing' && status.state !== 'error')) return null
   const note = downloadNote(p.download)
   return (
-    <ol className="space-y-0.5" data-testid="sew-progress">
-      {SEW_ENABLE_STEPS.map((s) => {
-        const done = Boolean(p.steps?.[s.id])
-        const current = p.current === s.id
-        const failed = current && status.state === 'error'
-        return (
-          <li key={s.id} className="type-hint flex gap-2" data-testid={`sew-step-${s.id}`} data-step={failed ? 'failed' : done ? 'done' : current ? 'current' : 'todo'}>
-            <span className={failed ? 'text-[var(--color-status-error-soft)]' : done ? 'text-[var(--color-status-ok)]' : muted}>
-              {failed ? '✕' : done ? '✓' : current ? '…' : '·'}
-            </span>
-            <span className={current ? 'text-[var(--color-text-primary)]' : secondary}>{s.label}</span>
-            {s.id === 'stage' && note ? (
-              <span className={muted} data-testid="sew-download">
-                {note}
+    <SettingsGroup title={status.state === 'error' ? 'Setup steps' : 'Setting up'} hint={status.state === 'error' ? 'Resume picks up at the step that stopped.' : 'This page updates as each step finishes.'} card>
+      <ol data-testid="sew-progress" className="divide-y divide-[var(--color-border)]">
+        {SEW_ENABLE_STEPS.map((s) => {
+          const done = Boolean(p.steps?.[s.id])
+          const current = p.current === s.id
+          const failed = current && status.state === 'error'
+          const color = failed ? 'var(--color-status-error-soft)' : done ? 'var(--color-status-ok)' : current ? 'var(--color-status-working)' : 'var(--color-text-muted)'
+          return (
+            <li key={s.id} className="flex items-center justify-between gap-6 px-4 py-2" data-testid={`sew-step-${s.id}`} data-step={failed ? 'failed' : done ? 'done' : current ? 'current' : 'todo'}>
+              <span className="flex items-center gap-2 min-w-0">
+                <StatusDot color={color} />
+                <span className={current || done ? SETTING_ROW_LABEL : 'type-row text-[var(--color-text-secondary)]'}>{s.label}</span>
+                {s.id === 'stage' && note ? (
+                  <span className="type-hint text-[var(--color-text-muted)]" data-testid="sew-download">
+                    {note}
+                  </span>
+                ) : null}
               </span>
-            ) : null}
-          </li>
-        )
-      })}
-    </ol>
+              <span className="type-hint text-[var(--color-text-secondary)] flex-shrink-0">{failed ? 'Stopped' : done ? 'Done' : current ? 'Working…' : 'Waiting'}</span>
+            </li>
+          )
+        })}
+      </ol>
+    </SettingsGroup>
   )
 }
 
-function RecoveryKey({ status, sample, reload }: PanelProps): React.JSX.Element | null {
-  const you = youOf(status)
-  const { confirm, ui } = usePersonConfirm()
-  const [key, setKey] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const viewerReadOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
-  if (status.state === 'not-installed') return null
-  const can = !sample && !viewerReadOnly && you.canRecoveryKey
+function UpdatesGroup({ status, canMutate, reload, notify }: PanelProps): React.JSX.Element | null {
+  const { ask, sheet } = useAsk()
+  const [error, setError] = useState<{ what: string; detail: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const result = status.upgradeProgress?.result ?? null
+  const showRollback = result === 'done' || Boolean(status.previousVersion)
+  if (!status.upgradeAvailable && result !== 'rolled_back' && !showRollback) return null
 
-  const reveal = async (): Promise<void> => {
-    setError(null)
-    const ok = await useConfirmDialogStore.getState().confirm({
-      title: 'Reveal the recovery key?',
-      message: RECOVERY_WARNING,
-      confirmLabel: 'Reveal',
-    })
+  const act = async (kind: 'upgrade' | 'rollback'): Promise<void> => {
+    const ok = await ask(
+      kind === 'upgrade'
+        ? {
+            title: `Update Sew to ${status.pinnedVersion ?? 'the newest version'}?`,
+            message: 'Sew backs up first, then updates. Chat is unavailable for a moment. If anything fails, Sew goes back to this version on its own.',
+            confirmLabel: 'Update',
+          }
+        : {
+            title: 'Roll Sew back?',
+            message: 'Sew goes back to the version before the last update, with its data from the backup taken before that update. Messages since then are lost.',
+            confirmLabel: 'Roll back',
+            destructive: true,
+          },
+    )
     if (!ok) return
+    setBusy(true)
+    setError(null)
     try {
-      const token = await confirm('sew-recovery-key', confirmSecretId('sew-recovery-key', status.installId), 'reveal the Sew recovery key')
-      if (!token) return
-      const r = await revealRecoveryKey(token)
-      setKey(r.recoveryKey)
+      if (kind === 'upgrade') await upgradeSew()
+      else await rollbackSew()
+      notify({ tone: 'ok', text: kind === 'upgrade' ? 'Sew is updating. This page shows when it’s done.' : 'Sew is rolling back. This page shows when it’s done.' })
+      await reload()
     } catch (e) {
-      const info = sewErrorInfo(e)
-      setError(info.status === 403 && info.code === 'owner_only' ? 'Only the box owner or an admin can reveal the key, after a confirm.' : sewErrorMessage(e))
+      setError({ what: kind === 'upgrade' ? 'Couldn’t start the update.' : 'Couldn’t roll back.', detail: sewErrorMessage(e) })
+    } finally {
+      setBusy(false)
     }
   }
 
   return (
-    <div className="space-y-2" data-settings-id="sew.recovery-key">
-      <div className="type-name text-[var(--color-text-primary)]">Keys</div>
-      {status.recoveryKeyInVault ? (
-        <div className="type-row text-[var(--color-text-secondary)]" data-testid="sew-recovery-in-vault">
-          The recovery key is in the K2 vault as {status.recoveryKeyVaultName ?? 'sew-recovery-key'} (Settings → Vault → K2&rsquo;s own secrets). You don&rsquo;t need to copy it.
-        </div>
-      ) : status.recoveryKeySaved === false && isLive(status.state) ? (
-        <Callout tone="warn">The recovery key is not in the vault yet. K2 copies it on its own (at start, or when you reveal it).</Callout>
+    <div className="space-y-3" data-settings-id="sew.upgrade">
+      <SettingsGroup title="Updates" card>
+        {status.upgradeAvailable ? (
+          <SettingRow label={`Sew ${status.pinnedVersion} is available`} hint={`You run ${status.onDiskVersion ?? status.installedVersion ?? 'an older version'}. Sew backs up before it updates.`}>
+            <Button variant="accent" disabled={!canMutate || busy} onClick={() => void act('upgrade')}>
+              Upgrade to {status.pinnedVersion}
+            </Button>
+          </SettingRow>
+        ) : null}
+        {showRollback ? (
+          <SettingRow label="Go back to the previous version" hint="Restores the backup taken before the last update. Messages since then are lost.">
+            <Button variant="danger-quiet" disabled={!canMutate || busy} onClick={() => void act('rollback')}>
+              Roll back…
+            </Button>
+          </SettingRow>
+        ) : null}
+      </SettingsGroup>
+      {result === 'rolled_back' ? (
+        <Callout tone="warn" className="type-hint space-y-0.5">
+          <p className="font-medium">The last update didn’t finish, so Sew went back to the version before.</p>
+          {status.lastError ? <p>The update rolled back: {status.lastError.replace(/[.\s]+$/, '')}.</p> : null}
+        </Callout>
       ) : null}
-      {key !== null ? (
-        <OnceSecret
-          heading="Sew's recovery key. It stays in the K2 vault; copy it only if you want one outside K2."
-          warning={RECOVERY_WARNING}
-          secret={key}
-          needsAck={false}
-          onDone={() => {
-            setKey(null)
-            void reload()
-          }}
-        />
-      ) : (
-        <>
-          {ui}
-          <Button disabled={!can} onClick={() => void reveal()} title={can ? undefined : 'A person who may see the key does this, with a confirm.'}>
-            Reveal recovery key
-          </Button>
-        </>
-      )}
-      {error ? <Callout tone="error">{error}</Callout> : null}
+      {error ? <FailedNote what={error.what} detail={error.detail} next="Nothing changed. Try again in a moment." /> : null}
+      {sheet}
     </div>
   )
 }
 
-function OpenAsOwner({ status, sample, canMutate, reload }: PanelProps): React.JSX.Element | null {
-  const you = youOf(status)
-  const { confirm, ui } = usePersonConfirm()
+/** A URL row: the value and Edit; editing opens a field under the row. */
+function UrlRow({
+  label,
+  hint,
+  value,
+  ariaLabel,
+  placeholder,
+  canMutate,
+  requireHttps,
+  allowClear,
+  settingId,
+  onSave,
+}: {
+  label: string
+  hint: string
+  value: string | null
+  ariaLabel: string
+  placeholder: string
+  canMutate: boolean
+  requireHttps: boolean
+  allowClear: boolean
+  settingId?: string
+  onSave: (url: string) => Promise<void>
+}): React.JSX.Element {
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(status.appUrl ?? '')
-  const [error, setError] = useState<string | null>(null)
+  const [draft, setDraft] = useState(value ?? '')
   const [busy, setBusy] = useState(false)
-  const viewerReadOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
-  if (status.state !== 'running' && status.state !== 'degraded') return null
+  const [error, setError] = useState<string | null>(null)
+  const save = useSaveStatus()
+  const id = useId()
+  const bad = requireHttps && draft.trim() !== '' && !draft.trim().startsWith('https://')
 
-  const appUrl = status.appUrl ?? null
-  const web = isWebClient()
-  const reason = web
-    ? 'Open from the K2 desktop app.'
-    : !appUrl
-      ? "Set Sew's app URL first."
-      : status.owner !== 'set'
-        ? 'Sew is still setting you up as owner.'
-        : !you.canOpenAsOwner
-          ? 'Only the box owner opens Sew as its owner.'
-          : null
-  const canOpen = !sample && !viewerReadOnly && reason === null
-
-  const saveUrl = async (url: string): Promise<void> => {
+  const run = async (url: string): Promise<void> => {
     setBusy(true)
     setError(null)
     try {
-      await setSewAppUrl(url)
+      await onSave(url)
       setEditing(false)
-      await reload()
+      save.saved()
     } catch (e) {
       setError(sewErrorMessage(e))
     } finally {
       setBusy(false)
     }
   }
+
+  return (
+    <SettingRow
+      label={label}
+      hint={
+        <>
+          {hint}
+          {!editing ? <span className="block mt-1 font-mono text-[var(--color-text-primary)] break-all">{value ?? 'Not set'}</span> : null}
+        </>
+      }
+      settingId={settingId}
+      below={
+        editing || error ? (
+          <div className="space-y-2">
+            {editing ? (
+              <form
+                className="flex flex-wrap items-center gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  if (!bad && draft.trim()) void run(draft)
+                }}
+              >
+                <label htmlFor={id} className="sr-only">
+                  {ariaLabel}
+                </label>
+                <Input id={id} aria-label={ariaLabel} autoFocus value={draft} placeholder={placeholder} onChange={(e) => setDraft(e.target.value)} className="flex-1 min-w-[14rem] font-mono" />
+                <Button type="submit" variant="accent" disabled={busy || bad || !draft.trim()}>
+                  {busy ? 'Saving…' : 'Save'}
+                </Button>
+                <Button variant="ghost" disabled={busy} onClick={() => { setEditing(false); setError(null) }}>
+                  Cancel
+                </Button>
+              </form>
+            ) : null}
+            {bad ? <p className="type-hint text-[var(--color-status-error-soft)]">Use an address that starts with https://.</p> : null}
+            {error ? <FailedNote what={`Couldn’t save the ${label.toLowerCase()}.`} detail={error} next="The old address still applies. Check it, then try again." /> : null}
+          </div>
+        ) : undefined
+      }
+    >
+      <SaveNote state={save.state} />
+      {!editing ? (
+        <>
+          {allowClear && value ? (
+            <Button variant="quiet" disabled={!canMutate || busy} onClick={() => void run('')}>
+              Clear
+            </Button>
+          ) : null}
+          <Button disabled={!canMutate} onClick={() => { setDraft(value ?? ''); setEditing(true) }}>
+            {value ? 'Edit' : 'Set'}
+          </Button>
+        </>
+      ) : null}
+    </SettingRow>
+  )
+}
+
+function WebAppGroup({ status, sample, canMutate, reload }: PanelProps): React.JSX.Element | null {
+  const you = youOf(status)
+  const { confirm, ui } = usePersonConfirm()
+  const [error, setError] = useState<string | null>(null)
+  const viewerReadOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
+  if (status.state !== 'running' && status.state !== 'degraded') return null
+
+  const appUrl = status.appUrl ?? null
+  const web = isWebClient()
+  const reason = web
+    ? 'Open it from the K2 desktop app.'
+    : !appUrl
+      ? 'Set the owner sign-in address first.'
+      : status.owner !== 'set'
+        ? 'Chat is still setting you up as owner.'
+        : !you.canOpenAsOwner
+          ? 'Only the server owner opens chat as its owner.'
+          : null
+  const canOpen = !sample && !viewerReadOnly && reason === null
 
   const open = async (): Promise<void> => {
     if (!appUrl) return
@@ -443,11 +752,11 @@ function OpenAsOwner({ status, sample, canMutate, reload }: PanelProps): React.J
       const info = sewErrorInfo(e)
       setError(
         info.code === 'owner_only'
-          ? 'Only the box owner can do this, from the K2 desktop app.'
+          ? 'Only the server owner can do this, from the K2 desktop app'
           : info.code === 'owner_not_ready'
-            ? 'Sew is still setting you up as owner.'
+            ? 'Chat is still setting you up as owner'
             : info.status === 429
-              ? 'Too many attempts. Wait a minute.'
+              ? 'Too many tries. Wait a minute'
               : sewErrorMessage(e),
       )
       return
@@ -455,112 +764,57 @@ function OpenAsOwner({ status, sample, canMutate, reload }: PanelProps): React.J
     try {
       await openUrl(ownerHandoffUrl(appUrl, code))
     } catch {
-      useToastStore.getState().addToast('Could not open your browser.', 'error')
+      setError('Your browser didn’t open')
     } finally {
       code = null
     }
   }
 
   return (
-    <div className="space-y-2" data-settings-id="sew.open-as-owner">
-      <div className="type-name text-[var(--color-text-primary)]">Open Sew as owner</div>
-      <Row label="App URL">
-        {editing ? (
-          <span className="flex flex-wrap items-center gap-2">
-            <input aria-label="Sew app URL" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="https://hearth.<box>.k2.dev" className="flex-1 min-w-[12rem] border border-[var(--color-border)] bg-transparent px-2 py-1 type-row font-mono" />
-            <Button disabled={busy || !canMutate} onClick={() => void saveUrl(draft)}>
-              Save
-            </Button>
-            <Button variant="ghost" onClick={() => setEditing(false)}>
-              Cancel
-            </Button>
-          </span>
-        ) : (
-          <span className="flex flex-wrap items-center gap-2">
-            {/* A long URL breaks rather than running off a narrow pane. */}
-            <span className="font-mono min-w-0 max-w-full break-all">{appUrl ?? 'Not set'}</span>
-            <Button disabled={!canMutate} onClick={() => { setDraft(appUrl ?? ''); setEditing(true) }}>
-              Edit
-            </Button>
-            {appUrl ? (
-              <Button disabled={!canMutate || busy} onClick={() => void saveUrl('')}>
-                Clear
-              </Button>
-            ) : null}
-          </span>
-        )}
-      </Row>
-      {ui}
-      <Button variant="accent" disabled={!canOpen} onClick={() => void open()} title={reason ?? undefined}>
-        Open Sew as owner
-      </Button>
-      {reason ? <p className={`type-hint ${muted}`}>{reason}</p> : null}
-      {error ? <Callout tone="error">{error}</Callout> : null}
-    </div>
-  )
-}
-
-function Upgrade({ status, canMutate, reload }: PanelProps): React.JSX.Element | null {
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const result = status.upgradeProgress?.result ?? null
-  const showRollback = result === 'done' || Boolean(status.previousVersion)
-  if (!status.upgradeAvailable && result !== 'rolled_back' && !showRollback) return null
-
-  const act = async (kind: 'upgrade' | 'rollback'): Promise<void> => {
-    const ok = await useConfirmDialogStore.getState().confirm(
-      kind === 'upgrade'
-        ? {
-            title: `Upgrade Sew to ${status.pinnedVersion ?? 'the pinned version'}?`,
-            message:
-              'Sew backs up first, then swaps the binary and migrates. Sew is briefly unavailable. If anything fails, Sew rolls back on its own.',
-            confirmLabel: 'Upgrade',
-          }
-        : {
-            title: 'Roll Sew back?',
-            message: 'Sew goes back to the previous version and its data. Anything newer than the pre-upgrade backup is lost.',
-            confirmLabel: 'Roll back',
-            destructive: true,
-          },
-    )
-    if (!ok) return
-    setBusy(true)
-    setError(null)
-    try {
-      if (kind === 'upgrade') await upgradeSew()
-      else await rollbackSew()
-      await reload()
-    } catch (e) {
-      setError(sewErrorMessage(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="space-y-2" data-settings-id="sew.upgrade">
-      {status.upgradeAvailable ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="type-hint text-[var(--color-text-primary)]">
-            Sew {status.pinnedVersion} is available (you run {status.onDiskVersion ?? status.installedVersion}).
-          </span>
-          <Button variant="accent" disabled={!canMutate || busy} onClick={() => void act('upgrade')}>
-            Upgrade to {status.pinnedVersion}
+    <div className="space-y-3">
+      <SettingsGroup title="Web app" card hint="Where people open chat in a browser.">
+        <UrlRow
+          label="Web address"
+          hint="Where people reach chat. Setup links use it."
+          value={status.publicUrl ?? null}
+          ariaLabel="Chat web address"
+          placeholder="https://chat.example.k2.dev"
+          canMutate={canMutate}
+          requireHttps
+          allowClear={false}
+          settingId="sew.public-url"
+          onSave={async (url) => {
+            await setSewPublicUrl(url)
+            await reload()
+          }}
+        />
+        <UrlRow
+          label="Owner sign-in address"
+          hint="Open as owner signs you in here."
+          value={appUrl}
+          ariaLabel="Owner sign-in address"
+          placeholder="https://chat.example.k2.dev"
+          canMutate={canMutate}
+          requireHttps={false}
+          allowClear
+          onSave={async (url) => {
+            await setSewAppUrl(url)
+            await reload()
+          }}
+        />
+        <SettingRow label="Open chat as owner" hint={reason ?? 'Opens chat in your browser, signed in as its owner, after you confirm it’s you.'} settingId="sew.open-as-owner">
+          <Button disabled={!canOpen} onClick={() => void open()}>
+            Open as owner
           </Button>
-        </div>
-      ) : null}
-      {result === 'rolled_back' ? <Callout tone="warn">The upgrade rolled back: {status.lastError ?? 'see k2 hostchat status'}</Callout> : null}
-      {showRollback ? (
-        <Button disabled={!canMutate || busy} onClick={() => void act('rollback')}>
-          Roll back
-        </Button>
-      ) : null}
-      {error ? <Callout tone="error">{error}</Callout> : null}
+        </SettingRow>
+      </SettingsGroup>
+      {error ? <FailedNote what="Couldn’t open chat as owner." detail={error} next="Try again. If it keeps failing, sign in to chat in your browser." /> : null}
+      {ui}
     </div>
   )
 }
 
-function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JSX.Element | null {
+function UninstallSheet({ status, canMutate, onClose, onDone }: { status: SewStatus; canMutate: boolean; onClose: () => void; onDone: (n: Notice) => void }): React.JSX.Element {
   const you = youOf(status)
   const { confirm, ui } = usePersonConfirm()
   const [dropGrants, setDropGrants] = useState(false)
@@ -569,16 +823,101 @@ function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JS
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  if (status.state === 'not-installed') return null
   const expectHost = status.purgeConfirmHostname ?? ''
-  const canPurge = !sample && canMutate && you.canPurge
+  const canPurge = canMutate && you.canPurge
+  const ready = canMutate && !busy && (!purge || (canPurge && typedMatches(typed, expectHost)))
+
+  const run = async (): Promise<void> => {
+    if (!ready) return
+    setBusy(true)
+    setError(null)
+    try {
+      if (purge) {
+        const token = await confirm('sew-purge', confirmSecretId('sew-purge', status.installId), 'purge all chat and voice data')
+        if (!token) return
+        const r = await purgeSew({ confirmHostname: typed.trim(), keepBackups, dropGrants, confirmToken: token })
+        onDone({ tone: 'ok', text: 'Chat and voice are uninstalled, and their messages, files and keys are deleted.', detail: r.warning })
+      } else {
+        await uninstallSew(dropGrants)
+        onDone({ tone: 'ok', text: 'Chat and voice are uninstalled. Messages, files and keys are kept; set it up again to bring them back.' })
+      }
+    } catch (e) {
+      setError(sewErrorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <AccessSheet
+        title="Uninstall chat and voice?"
+        intro="Chat and calls stop for everyone, and Sew is removed from this server."
+        onClose={onClose}
+        busy={busy}
+        testId="sew-uninstall-dialog"
+        footer={
+          <>
+            <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
+              Cancel
+            </Button>
+            <Button variant="danger-muted" size="md" disabled={!ready} onClick={() => void run()}>
+              {busy ? 'Uninstalling…' : purge ? 'Uninstall and delete data' : 'Uninstall'}
+            </Button>
+          </>
+        }
+      >
+        <p className={DIALOG_MUTED}>Messages, files and keys stay on this server unless you delete them here. Setting chat up again brings them back.</p>
+        <label className="flex items-start gap-2 cursor-pointer">
+          <Checkbox className="mt-0.5" checked={dropGrants} disabled={!canMutate || busy} onChange={(e) => setDropGrants(e.target.checked)} aria-label="Also remove everyone's chat and voice access" />
+          <span>
+            <span className={SETTING_ROW_LABEL}>Also remove everyone’s chat and voice access</span>
+            <span className={`block ${DIALOG_MUTED}`}>People and agents lose their chat access in User Access too.</span>
+          </span>
+        </label>
+        <label className={`flex items-start gap-2 ${canPurge ? 'cursor-pointer' : ''}`}>
+          <Checkbox className="mt-0.5" checked={purge} disabled={!canPurge || busy} onChange={(e) => setPurge(e.target.checked)} aria-label="Also delete all chat and voice data" />
+          <span>
+            <span className={SETTING_ROW_LABEL}>Also delete all chat and voice data</span>
+            <span className={`block ${DIALOG_MUTED}`}>{you.canPurge ? 'Every message, file and key on this server. This can’t be undone.' : 'Only the server owner can delete chat data.'}</span>
+          </span>
+        </label>
+        {purge ? (
+          <div className="space-y-3 pl-6">
+            <Callout tone="warn" className="type-hint leading-relaxed">
+              This also deletes the recovery key in the K2 vault. Backups kept off this server can’t be read without it, so show and copy it first
+              (Backups and keys) if you want to keep them readable. K2 doesn’t delete copies kept elsewhere.
+            </Callout>
+            <TypeToConfirm label={`Type ${expectHost} to confirm`} expect={expectHost} value={typed} onChange={setTyped} disabled={!canPurge || busy} />
+            <label className="flex items-start gap-2 cursor-pointer">
+              <Checkbox className="mt-0.5" checked={keepBackups} disabled={busy} onChange={(e) => setKeepBackups(e.target.checked)} aria-label="Keep backup bundles" />
+              <span>
+                <span className={SETTING_ROW_LABEL}>Keep the backups on this server</span>
+                <span className={`block ${DIALOG_MUTED}`}>They can’t be read without the recovery key.</span>
+              </span>
+            </label>
+          </div>
+        ) : null}
+        {error ? <FailedNote what="Couldn’t uninstall chat and voice." detail={error} next="Nothing was removed. Try again in a moment." /> : null}
+      </AccessSheet>
+      {ui}
+    </>
+  )
+}
+
+function TurnOffGroup({ status, canMutate, reload, notify }: PanelProps): React.JSX.Element | null {
+  const { ask, sheet } = useAsk()
+  const [uninstalling, setUninstalling] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  if (status.state === 'not-installed') return null
   const canDisable = ['running', 'degraded', 'stopped', 'error'].includes(status.state)
 
   const disable = async (): Promise<void> => {
-    const ok = await useConfirmDialogStore.getState().confirm({
-      title: 'Disable Chat / Voice Hosting?',
-      message: "Chat and voice go down for everyone. Agents' k2 chat calls fail. New chat access is refused. Data is kept.",
-      confirmLabel: 'Disable',
+    const ok = await ask({
+      title: 'Turn off chat and voice?',
+      message: 'Chat and calls stop for everyone, and agents can’t post. Messages, files and keys are kept, and Turn back on brings everything back.',
+      confirmLabel: 'Turn off',
       destructive: true,
     })
     if (!ok) return
@@ -586,53 +925,7 @@ function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JS
     setError(null)
     try {
       await disableSew()
-      await reload()
-    } catch (e) {
-      setError(sewErrorMessage(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const uninstall = async (): Promise<void> => {
-    if (purge) {
-      if (!typedMatches(typed, expectHost)) return
-      const ok = await useConfirmDialogStore.getState().confirm({
-        title: 'Delete all chat and voice data?',
-        message:
-          'Every message, file and key on this box is deleted, including the recovery key in the K2 vault (sew-recovery-key). Off-box backups cannot be read without it: reveal and copy it first if you want to keep them readable. K2 does not delete off-box copies.',
-        confirmLabel: 'Delete everything',
-        destructive: true,
-      })
-      if (!ok) return
-      setBusy(true)
-      setError(null)
-      try {
-        const token = await confirm('sew-purge', confirmSecretId('sew-purge', status.installId), 'purge all chat and voice data')
-        if (!token) return
-        const r = await purgeSew({ confirmHostname: typed.trim(), keepBackups, dropGrants, confirmToken: token })
-        useToastStore.getState().addToast(r.warning ?? 'Chat and voice data deleted.', 'warning')
-        setTyped('')
-        setPurge(false)
-        await reload()
-      } catch (e) {
-        setError(sewErrorMessage(e))
-      } finally {
-        setBusy(false)
-      }
-      return
-    }
-    const ok = await useConfirmDialogStore.getState().confirm({
-      title: 'Uninstall Chat / Voice Hosting?',
-      message: 'Chat / Voice Hosting is removed. Data, the install id and the master key stay. Enable brings it back.',
-      confirmLabel: 'Uninstall',
-      destructive: true,
-    })
-    if (!ok) return
-    setBusy(true)
-    setError(null)
-    try {
-      await uninstallSew(dropGrants)
+      notify({ tone: 'ok', text: 'Chat and voice are off. Messages, files and keys are kept.' })
       await reload()
     } catch (e) {
       setError(sewErrorMessage(e))
@@ -642,159 +935,60 @@ function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JS
   }
 
   return (
-    <div className="space-y-2 border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] p-3" data-settings-id="sew.uninstall">
-      <div className="type-name text-[var(--color-status-error-soft)]">Danger zone</div>
-      {canDisable ? (
-        <Button disabled={!canMutate || busy} onClick={() => void disable()}>
-          Disable Chat / Voice Hosting
-        </Button>
+    <div className="space-y-3" data-settings-id="sew.uninstall">
+      <SettingsGroup title="Turn off or uninstall" card testId="sew-danger">
+        {canDisable ? (
+          <SettingRow label="Turn off chat and voice" hint="Stops chat and calls for everyone until you turn them back on. Nothing is deleted.">
+            <Button variant="danger-quiet" disabled={!canMutate || busy} onClick={() => void disable()}>
+              Turn off…
+            </Button>
+          </SettingRow>
+        ) : null}
+        <SettingRow label="Uninstall" hint="Removes Sew from this server. You choose whether to keep its data.">
+          <Button variant="danger-quiet" disabled={!canMutate || busy} onClick={() => setUninstalling(true)}>
+            Uninstall…
+          </Button>
+        </SettingRow>
+      </SettingsGroup>
+      {error ? <FailedNote what="Couldn’t turn off chat and voice." detail={error} next="Chat is still running. Try again in a moment." /> : null}
+      {sheet}
+      {uninstalling ? (
+        <UninstallSheet
+          status={status}
+          canMutate={canMutate}
+          onClose={() => setUninstalling(false)}
+          onDone={(n) => {
+            setUninstalling(false)
+            notify(n)
+            void reload()
+          }}
+        />
       ) : null}
-      <label className={`flex items-center gap-2 type-hint ${secondary}`}>
-        <Checkbox checked={dropGrants} disabled={!canMutate} onChange={(e) => setDropGrants(e.target.checked)} aria-label="Also remove everyone's chat and voice access" />
-        Also remove everyone&apos;s chat and voice access
-      </label>
-      <label className={`flex items-center gap-2 type-hint ${secondary}`}>
-        <Checkbox checked={purge} disabled={!canPurge} onChange={(e) => setPurge(e.target.checked)} aria-label="Also delete all chat and voice data" />
-        Also delete all chat and voice data {you.canPurge ? '' : '(the box owner only)'}
-      </label>
-      {purge ? (
-        <div className="space-y-1 pl-5">
-          <TypeToConfirm label={`Type ${expectHost} to confirm`} expect={expectHost} value={typed} onChange={setTyped} disabled={!canPurge} />
-          <label className={`flex items-center gap-2 type-hint ${secondary}`}>
-            <Checkbox checked={keepBackups} onChange={(e) => setKeepBackups(e.target.checked)} aria-label="Keep backup bundles" />
-            Keep backup bundles
-          </label>
-        </div>
-      ) : null}
-      {ui}
-      <Button
-        variant="danger"
-        disabled={!canMutate || busy || (purge && (!canPurge || !typedMatches(typed, expectHost)))}
-        onClick={() => void uninstall()}
-      >
-        {purge ? 'Uninstall and delete data' : 'Uninstall Chat / Voice Hosting'}
-      </Button>
-      {error ? <Callout tone="error">{error}</Callout> : null}
     </div>
   )
 }
 
-function ServerPanel(props: PanelProps): React.JSX.Element {
-  const { status, select } = props
-  const wizard = enableLabel(status.state) !== null
-  const alarms = status.alarms ?? []
-  const db = status.units?.sewDb
-  const sew = status.units?.sew
+function OverviewPanel(props: PanelProps): React.JSX.Element {
+  const { status } = props
+  const setup = enableLabel(status.state) !== null
   return (
-    <div className="max-w-2xl space-y-4" data-settings-id="sew.status">
-      <div className="flex items-center gap-2">
-        <Title>Chat / Voice</Title>
-        <SewStatusChip state={status.state} />
-      </div>
-      {status.state !== 'not-installed' ? (
-        <div>
-          <Row label="Sew version">
-            {status.installedVersion ?? '—'}
-            {status.pinnedVersion && status.pinnedVersion !== status.installedVersion ? ` (pinned ${status.pinnedVersion})` : ''}
-          </Row>
-          <Row label="Install id">
-            <span className="font-mono">{status.installId ?? '—'}</span>
-          </Row>
-          <Row label="Logins">{status.identityProvider === 'standalone' ? "Sew's own logins" : 'K2 logins'}</Row>
-          <Row label="Owner in Sew">
-            {status.owner === 'set' ? 'Set' : status.owner === 'pending' ? 'Setting up…' : status.owner === 'blocked' ? 'Blocked (retry in User Access sync)' : '—'}
-          </Row>
-          {db || sew ? (
-            <Row label="Services">
-              sew-db {db?.active ?? '?'} · sew {sew?.active ?? '?'} · {mib(sew?.memoryCurrent)} / {mib(sew?.memoryMax)}
-            </Row>
-          ) : null}
-        </div>
-      ) : null}
-      {status.consistent === false ? <Callout tone="warn">systemd and K2 disagree: {status.note ?? status.lastError ?? 'run k2 hostchat status'}</Callout> : null}
-      {status.lastError && (status.state === 'error' || status.state === 'stopped') ? <Callout tone="error">{status.lastError}</Callout> : null}
-      {(status.warnings ?? []).length > 0 ? (
-        <ul className="space-y-1" data-testid="sew-warnings">
-          {(status.warnings ?? []).map((w) => (
-            <li key={w.code} className={`type-hint ${secondary}`}>
-              {w.message}
-              {w.fix ? <code className="ml-1 font-mono">{w.fix}</code> : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {alarms.length > 0 ? (
-        <div className="space-y-1">
-          {alarms.slice(0, 3).map((a) => (
-            <p key={a} className={`type-hint ${secondary}`}>
-              <span className="text-[var(--color-status-warn)]">●</span> {alarmInfo(a).title}
-            </p>
-          ))}
-          <button type="button" className={`type-hint underline ${muted}`} onClick={() => select('alarms')}>
-            All alarms ({alarms.length})
-          </button>
-        </div>
-      ) : null}
-      {wizard ? <EnableWizard {...props} /> : null}
+    <div className="space-y-6">
+      <StatusGroup {...props} />
+      <AttentionGroup {...props} />
+      {setup ? <SetupGroup {...props} /> : null}
       <Progress status={status} />
-      <Upgrade {...props} />
-      <RecoveryKey {...props} />
-      <OpenAsOwner {...props} />
-      <DangerZone {...props} />
+      <UpdatesGroup {...props} />
+      <WebAppGroup {...props} />
+      <TurnOffGroup {...props} />
     </div>
   )
 }
 
-// ── Alarms ────────────────────────────────────────────────────────────────
+// ── Backups and keys ──────────────────────────────────────────────────────
 
-const ACTION_LABEL: Record<SewAlarmAction, string> = {
-  backup: 'Go to Backups',
-  offbox: 'Go to Off-box copies',
-  'recovery-key': 'Reveal recovery key',
-  'public-url': 'Go to Public URL',
-}
-const ACTION_TARGET: Record<SewAlarmAction, Selection> = {
-  backup: 'backups',
-  offbox: 'offbox',
-  'recovery-key': 'server',
-  'public-url': 'public-url',
-}
+const KIND_LABEL: Record<string, string> = { scheduled: 'Nightly', manual: 'Made by hand', 'pre-upgrade': 'Before an update' }
 
-function AlarmsPanel({ status, select }: PanelProps): React.JSX.Element {
-  const alarms = status.alarms ?? []
-  const offboxOnly = alarms.length > 0 && alarms.every((a) => a === 'keys_mirror_stale' || a === 'k2_backup_offbox_none')
-  return (
-    <div className="max-w-2xl space-y-3">
-      <Title>Alarms</Title>
-      {alarms.length === 0 ? <p className={`type-hint ${muted}`}>No alarms.</p> : null}
-      {offboxOnly ? (
-        <p className={`type-hint ${secondary}`}>Every K2 box shows Degraded until its chat and voice backups have off-box copies. Set them under Off-box copies.</p>
-      ) : null}
-      <ul className="space-y-2">
-        {alarms.map((a) => {
-          const info = alarmInfo(a)
-          return (
-            <li key={a} className="border border-[var(--color-border)] p-2 space-y-1" data-testid={`sew-alarm-${a}`}>
-              <div className="flex items-center gap-2 type-row">
-                <span className={info.severity === 'error' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-status-warn)]'}>●</span>
-                <span className="text-[var(--color-text-primary)]">{info.title}</span>
-                <code className={`ml-auto type-hint font-mono ${muted}`}>{a}</code>
-              </div>
-              <p className={`type-hint ${secondary}`}>{info.fix}</p>
-              {info.action ? (
-                <Button onClick={() => select(ACTION_TARGET[info.action as SewAlarmAction])}>{ACTION_LABEL[info.action]}</Button>
-              ) : null}
-            </li>
-          )
-        })}
-      </ul>
-    </div>
-  )
-}
-
-// ── Backups ───────────────────────────────────────────────────────────────
-
-function BackupsPanel({ status, sample, canMutate, reload }: PanelProps): React.JSX.Element {
+function BackupsGroup({ status, sample, canMutate, reload, notify }: PanelProps): React.JSX.Element {
   const [list, setList] = useState<SewBackup[] | null>(sample ? SAMPLE_BACKUPS : null)
   const [listError, setListError] = useState<string | null>(null)
   const [job, setJob] = useState<string | null>(null)
@@ -828,8 +1022,8 @@ function BackupsPanel({ status, sample, canMutate, reload }: PanelProps): React.
           if (j.state === 'succeeded' || j.state === 'dead') {
             setJob(null)
             setRunning(false)
-            if (j.state === 'dead') setError(j.last_error ?? 'The backup failed.')
-            else useToastStore.getState().addToast('Chat and voice backup done.', 'success')
+            if (j.state === 'dead') setError(j.last_error ?? 'the backup job gave up')
+            else notify({ tone: 'ok', text: 'Backup done. It’s at the top of Saved backups.' })
             await Promise.all([reload(), loadList()])
           }
         })
@@ -841,7 +1035,7 @@ function BackupsPanel({ status, sample, canMutate, reload }: PanelProps): React.
       stop = true
       window.clearInterval(t)
     }
-  }, [job, reload, loadList])
+  }, [job, reload, loadList, notify])
 
   const backupNow = async (): Promise<void> => {
     setRunning(true)
@@ -850,7 +1044,7 @@ function BackupsPanel({ status, sample, canMutate, reload }: PanelProps): React.
       const r = await runSewBackup()
       if (r.backup) {
         setRunning(false)
-        useToastStore.getState().addToast('Chat and voice backup done.', 'success')
+        notify({ tone: 'ok', text: 'Backup done. It’s at the top of Saved backups.' })
         await Promise.all([reload(), loadList()])
       } else {
         setJob(r.jobId)
@@ -862,66 +1056,86 @@ function BackupsPanel({ status, sample, canMutate, reload }: PanelProps): React.
   }
 
   const live = status.state === 'running' || status.state === 'degraded'
+  const ship = b?.ship
+  const shipText =
+    ship?.kind === 'dir'
+      ? `To ${ship.path ?? 'a folder'}`
+      : ship?.kind === 'box-backup'
+        ? ship.boxBackup?.ok
+          ? 'With this server’s own backup'
+          : `This server’s own backup: ${ship.boxBackup?.reason ?? 'K2 can’t see it yet'}`
+        : 'Not yet'
+  const rows = [...(list ?? [])].sort((x, y) => (x.created_at < y.created_at ? 1 : -1))
+
   return (
-    <div className="max-w-2xl space-y-3" data-settings-id="sew.backup">
-      <Title>Backups</Title>
-      <div>
-        <Row label="Last backup">{b?.lastOkAt ? `${b.lastOkAt}${b.lastId ? ` · ${b.lastId}` : ''}` : <span className="text-[var(--color-status-warn)]">Never</span>}</Row>
-        <Row label="Copied off this machine">
-          {b?.ship?.kind === 'dir' ? (
-            <>
-              <span className="font-mono">{b.ship.path}</span>
-              {b.ship.lastShippedId ? ` · last ${b.ship.lastShippedId}` : ''}
-              {b.ship.lastError ? <span className="text-[var(--color-status-error-soft)]"> · {b.ship.lastError}</span> : null}
-            </>
-          ) : b?.ship?.kind === 'box-backup' ? (
-            <span className={b.ship.boxBackup?.ok ? '' : 'text-[var(--color-status-warn)]'} data-testid="sew-ship-box-backup">
-              {b.ship.boxBackup?.ok ? "This box's own backup (k2-backup)" : `This box's own backup: ${b.ship.boxBackup?.reason ?? 'K2 can\'t see it yet'}`}
+    <div className="space-y-6">
+      <div className="space-y-3">
+        <SettingsGroup
+          title="Backups"
+          card
+          settingId="sew.backup"
+          hint="The server backs chat up every night. Back up now before a big change."
+          action={
+            <Button variant="accent" disabled={!canMutate || !live || running} onClick={() => void backupNow()}>
+              {running ? 'Backing up…' : 'Back up now'}
+            </Button>
+          }
+        >
+          <SettingRow label="Last backup">
+            <span className={b?.lastOkAt ? VALUE : 'type-row text-[var(--color-status-warn-text)]'}>{b?.lastOkAt ? when(b.lastOkAt) : 'Never'}</span>
+          </SettingRow>
+          <SettingRow label="Copied off this server" hint={ship?.lastError ? `The last copy failed: ${ship.lastError}` : undefined}>
+            <span className={ship?.kind === 'dir' || ship?.boxBackup?.ok ? VALUE : 'type-row text-[var(--color-status-warn-text)]'} data-testid="sew-ship-box-backup">
+              {shipText}
             </span>
-          ) : (
-            <span className="text-[var(--color-status-warn)]">Not set</span>
-          )}
-        </Row>
-        <Row label="Last restore drill">
-          {d?.lastOkAt ? (d.lastOk === false ? `Failed: ${d.lastError ?? ''}` : `Passed · ${d.lastOkAt}`) : 'Not reported yet'}
-        </Row>
+          </SettingRow>
+          <SettingRow label="Last restore test" hint="Each night the server checks that a backup can be restored.">
+            <span className={VALUE}>{d?.lastOkAt ? (d.lastOk === false ? `Failed: ${d.lastError ?? 'no reason given'}` : `Passed ${when(d.lastOkAt)}`) : 'Not reported yet'}</span>
+          </SettingRow>
+        </SettingsGroup>
+        {error ? <FailedNote what="Couldn’t back up chat and voice." detail={error} next="Your earlier backups are untouched. Try again in a moment." /> : null}
       </div>
-      <Button variant="accent" disabled={!canMutate || !live || running} onClick={() => void backupNow()}>
-        {running ? 'Backing up…' : 'Back up now'}
-      </Button>
-      {error ? <Callout tone="error">{error}</Callout> : null}
-      {listError ? <Callout tone="error">{listError}</Callout> : null}
-      <table className="w-full type-hint" data-testid="sew-backups">
-        <thead>
-          <tr className={muted}>
-            <th className="text-left font-normal">Id</th>
-            <th className="text-left font-normal">Kind</th>
-            <th className="text-left font-normal">Time</th>
-            <th className="text-right font-normal">Size</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(list ?? []).map((x) => (
-            <tr key={x.id} className="text-[var(--color-text-primary)]">
-              <td className="font-mono">{x.id}</td>
-              <td>{x.kind}</td>
-              <td>{x.created_at}</td>
-              <td className="text-right">{mib(x.bytes)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className={`type-hint ${muted}`}>
-        To restore one (it replaces ALL chat and voice data): <code className="font-mono">{SEW_CLI} restore &lt;id&gt; --confirm</code>
-      </p>
+
+      <SettingsGroup
+        title="Saved backups"
+        card
+        hint="Restoring one replaces all chat data, so an admin does it from a terminal on the server."
+        testId="sew-backups"
+        state={
+          listError ? (
+            <SettingsLoadState kind="error" title="Couldn’t load the saved backups" detail={listError} action={<Button onClick={() => void loadList()}>Try again</Button>}>
+              The backups themselves are safe; this page just couldn’t list them.
+            </SettingsLoadState>
+          ) : list === null ? (
+            <SettingsLoadState kind="loading" title="Loading saved backups…" />
+          ) : rows.length === 0 ? (
+            <SettingsLoadState kind="empty" title="No backups yet">
+              Back up now makes the first one. After that the server backs up every night.
+            </SettingsLoadState>
+          ) : undefined
+        }
+      >
+        {rows.map((x) => (
+          <div key={x.id} className="flex items-center justify-between gap-6 px-4 py-3">
+            <div className="min-w-0">
+              <p className={SETTING_ROW_LABEL}>{when(x.created_at)}</p>
+              <p className={SETTING_ROW_HINT}>
+                {KIND_LABEL[x.kind] ?? sentence(x.kind)} · {mb(x.bytes)}
+              </p>
+            </div>
+            <span className="type-hint font-mono text-[var(--color-text-muted)] flex-shrink-0" title="Backup name">
+              {x.id}
+            </span>
+          </div>
+        ))}
+      </SettingsGroup>
     </div>
   )
 }
 
-// ── Off-box copies ────────────────────────────────────────────────────────
-
 function OffboxBlock({
   title,
+  hint,
   noun,
   current,
   disabled,
@@ -929,131 +1143,213 @@ function OffboxBlock({
   boxBackup,
 }: {
   title: string
-  noun: string
+  hint: string
+  noun: 'Backups' | 'Keys'
   current: { kind: string; path: string | null }
   disabled: boolean
-  onSave: (kind: ShipKind, path: string) => Promise<void>
+  onSave: (kind: ShipKind, path: string) => Promise<boolean>
   /** The backup destination only: offer the box's own backup (0.46.9). */
   boxBackup?: SewBoxBackup | null | false
 }): React.JSX.Element {
-  const [kind, setKind] = useState<ShipKind>(
-    current.kind === 'dir' ? 'dir' : current.kind === 'box-backup' && boxBackup !== false ? 'box-backup' : 'none',
-  )
+  const [kind, setKind] = useState<ShipKind>(current.kind === 'dir' ? 'dir' : current.kind === 'box-backup' && boxBackup !== false ? 'box-backup' : 'none')
   const [path, setPath] = useState(current.path ?? '')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
+  const pathId = useId()
   const pathBad = kind === 'dir' && !path.trim().startsWith('/')
-  const save = async (): Promise<void> => {
+  const name = `${noun.toLowerCase()}-kind`
+  const changed = kind !== (current.kind === 'dir' || current.kind === 'box-backup' ? current.kind : 'none') || (kind === 'dir' && path.trim() !== (current.path ?? ''))
+
+  const run = async (): Promise<void> => {
     setBusy(true)
     setError(null)
     try {
-      await onSave(kind, path)
+      if (await onSave(kind, path)) save.saved()
     } catch (e) {
       setError(sewErrorMessage(e))
     } finally {
       setBusy(false)
     }
   }
-  const slug = noun.replace(/\s+/g, '-')
+
+  const option = (k: ShipKind, label: string, sub: string, aria: string): React.JSX.Element => (
+    <label className={`flex items-start gap-3 px-4 py-3 ${disabled ? '' : 'cursor-pointer'}`}>
+      <Radio name={name} className="mt-0.5" checked={kind === k} disabled={disabled} onChange={() => setKind(k)} aria-label={aria} />
+      <span className="min-w-0">
+        <span className={SETTING_ROW_LABEL}>{label}</span>
+        <span className={`block ${SETTING_ROW_HINT}`}>{sub}</span>
+      </span>
+    </label>
+  )
+
   return (
-    <fieldset className="space-y-1 border border-[var(--color-border)] p-3" disabled={disabled}>
-      <legend className="type-name text-[var(--color-text-primary)] px-1">{title}</legend>
-      <label className={`flex items-center gap-2 type-hint ${secondary}`}>
-        <Radio name={`${slug}-kind`} checked={kind === 'none'} onChange={() => setKind('none')} aria-label={`${title}: none`} />
-        None ({noun} stay on this machine)
-      </label>
-      <label className={`flex items-center gap-2 type-hint ${secondary}`}>
-        <Radio name={`${slug}-kind`} checked={kind === 'dir'} onChange={() => setKind('dir')} aria-label={`${title}: a folder on another disk`} />
-        A folder on another disk
-      </label>
-      {boxBackup !== false ? (
-        <label className={`flex items-center gap-2 type-hint ${secondary}`}>
-          <Radio
-            name={`${slug}-kind`}
-            checked={kind === 'box-backup'}
-            onChange={() => setKind('box-backup')}
-            aria-label={`${title}: this box's own backup`}
-          />
-          This box&apos;s own backup (k2-backup takes them off the box; the owner only)
-        </label>
-      ) : null}
+    <SettingsGroup title={title} hint={hint} card>
+      {option('none', 'Only on this server', `A disk loss takes the ${noun.toLowerCase()} too.`, `${noun}: only on this server`)}
+      {option('dir', 'A folder on another disk', 'A mounted disk or network share this server can write to.', `${noun}: a folder on another disk`)}
+      {boxBackup !== false
+        ? option('box-backup', 'With this server’s own backup', 'The server’s nightly backup takes them off the server. The owner chooses this.', `${noun}: with this server's own backup`)
+        : null}
       {kind === 'box-backup' && current.kind === 'box-backup' && boxBackup ? (
-        <p className={`type-hint ${boxBackup.ok ? secondary : 'text-[var(--color-status-warn)]'}`}>
-          {boxBackup.ok ? 'K2 sees the box backup carry them.' : `K2 can't see it yet: ${boxBackup.reason ?? 'no evidence'}`}
+        <p className={`px-4 py-3 type-hint ${boxBackup.ok ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-status-warn-text)]'}`}>
+          {boxBackup.ok ? 'K2 sees the server’s backup take them off the server.' : `K2 can’t see it yet: ${boxBackup.reason ?? 'no sign of it'}`}
         </p>
       ) : null}
-      <label className={`flex items-center gap-2 type-hint ${muted}`}>
-        <Radio name={`${slug}-kind`} disabled aria-label={`${title}: Alakazam escrow`} />
-        Alakazam escrow (coming later)
-      </label>
       {kind === 'dir' ? (
-        <input aria-label={`${title} path`} value={path} onChange={(e) => setPath(e.target.value)} placeholder="/mnt/offbox/sew" className="w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
+        <div className="px-4 py-3">
+          <label htmlFor={pathId} className={DIALOG_LABEL}>
+            Folder
+          </label>
+          <Input id={pathId} aria-label={`${noun} folder`} value={path} disabled={disabled} placeholder="/mnt/offsite/chat" onChange={(e) => setPath(e.target.value)} className="w-full max-w-md font-mono" />
+          {pathBad && path ? <p className="type-hint text-[var(--color-status-error-soft)] mt-1">Use a full path that starts with /.</p> : null}
+        </div>
       ) : null}
-      {pathBad && path ? <p className="type-hint text-[var(--color-status-error-soft)]">Use an absolute path.</p> : null}
-      {error ? <Callout tone="error">{error}</Callout> : null}
-      <Button variant="accent" disabled={busy || pathBad} onClick={() => void save()}>
-        Save
-      </Button>
-    </fieldset>
+      <div className="px-4 py-3 space-y-2">
+        {error ? <FailedNote what={`Couldn’t save where ${noun.toLowerCase()} go.`} detail={error} next="Nothing changed. Check the folder, then try again." /> : null}
+        <div className="flex items-center justify-end gap-3">
+          <SaveNote state={save.state} />
+          <Button variant="accent" disabled={disabled || busy || pathBad || !changed} onClick={() => void run()}>
+            {busy ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
+      </div>
+    </SettingsGroup>
   )
 }
 
-function OffboxPanel({ status, canMutate, reload }: PanelProps): React.JSX.Element {
+function OffboxGroups({ status, canMutate, reload }: PanelProps): React.JSX.Element {
+  const { ask, sheet } = useAsk()
   const ship = status.backup?.ship ?? { kind: 'none', path: null }
   const mirror = status.mirror ?? { kind: 'none', path: null }
   return (
-    <div className="max-w-2xl space-y-3" data-settings-id="sew.offbox">
-      <Title>Off-box copies</Title>
-      <p className={`type-hint ${secondary}`}>
-        Backups hold encrypted data. The keyring mirror holds the keys that open it. Keep them on a different machine from this box. The
-        recovery key is in the K2 vault, so back the vault up off this box too (k2 vault backup &lt;dir&gt;).
-      </p>
+    <div className="space-y-6" data-settings-id="sew.offbox">
       <OffboxBlock
-        title="Backup destination"
-        noun="backups"
+        title="Where backups go"
+        hint="Backups hold the encrypted chat data. Keep a copy on a different machine from this server."
+        noun="Backups"
         current={{ kind: ship.kind, path: ship.path ?? null }}
         boxBackup={ship.boxBackup ?? null}
         disabled={!canMutate}
         onSave={async (kind, path) => {
           await setSewShip(kind, path)
           await reload()
+          return true
         }}
       />
       <OffboxBlock
-        title="Keyring mirror"
-        noun="keys"
+        title="Where keys go"
+        hint="The keys open the backups. Keep them off this server too, apart from the backups."
+        noun="Keys"
         current={mirror}
         boxBackup={false}
         disabled={!canMutate}
         onSave={async (kind, path) => {
-          if (kind === 'box-backup') return
-          const ok = await useConfirmDialogStore.getState().confirm({
-            title: 'Change the keyring mirror?',
-            message: 'Sew restarts to apply this. Sessions reconnect on their own.',
+          if (kind === 'box-backup') return false
+          const ok = await ask({
+            title: 'Change where keys go?',
+            message: 'Sew restarts to apply this. Chat and calls reconnect on their own within a few seconds.',
             confirmLabel: 'Save and restart',
           })
-          if (!ok) return
+          if (!ok) return false
           await setSewMirror(kind, path)
           await reload()
+          return true
         }}
       />
+      {sheet}
     </div>
   )
 }
 
-// ── Public URL ────────────────────────────────────────────────────────────
-
-function PublicUrlPanel({ status, canMutate, reload }: PanelProps): React.JSX.Element {
-  const [draft, setDraft] = useState(status.publicUrl ?? '')
+function RecoveryKeyGroup({ status, sample }: PanelProps): React.JSX.Element | null {
+  const you = youOf(status)
+  const { confirm, ui } = usePersonConfirm()
+  const { ask, sheet } = useAsk()
+  const [key, setKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const viewerReadOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
+  if (status.state === 'not-installed') return null
+  const can = !sample && !viewerReadOnly && you.canRecoveryKey
+
+  const reveal = async (): Promise<void> => {
+    setError(null)
+    const ok = await ask({ title: 'Show the recovery key?', message: RECOVERY_WARNING, confirmLabel: 'Continue' })
+    if (!ok) return
+    try {
+      const token = await confirm('sew-recovery-key', confirmSecretId('sew-recovery-key', status.installId), 'reveal the Sew recovery key')
+      if (!token) return
+      const r = await revealRecoveryKey(token)
+      setKey(r.recoveryKey)
+    } catch (e) {
+      const info = sewErrorInfo(e)
+      setError(info.status === 403 && info.code === 'owner_only' ? 'Only the server owner or an admin can see the key, after confirming it’s them' : sewErrorMessage(e))
+    }
+  }
+
+  const inVault = status.recoveryKeyInVault
+  return (
+    <div className="space-y-3" data-settings-id="sew.recovery-key">
+      <SettingsGroup title="Recovery key" card hint="With a backup and the key copy, this key reads every message. Without it, backups can’t be opened.">
+        <SettingRow
+          label="Recovery key"
+          hint={
+            <span data-testid={inVault ? 'sew-recovery-in-vault' : undefined}>
+              {inVault
+                ? 'It’s in the K2 vault (Vault → K2’s own secrets), so the vault’s own backups cover it. You don’t need to copy it.'
+                : can
+                  ? 'Show it with a confirm that it’s you.'
+                  : 'The server owner or an admin can show it, after confirming it’s them.'}
+            </span>
+          }
+        >
+          <Button disabled={!can} onClick={() => void reveal()}>
+            Show recovery key
+          </Button>
+        </SettingRow>
+      </SettingsGroup>
+      {!inVault && status.recoveryKeySaved === false && isLive(status.state) ? (
+        <Callout tone="warn" className="type-hint">
+          The recovery key isn’t in the vault yet. K2 copies it there on its own, at start or when you show it.
+        </Callout>
+      ) : null}
+      {error ? <FailedNote what="Couldn’t show the recovery key." detail={error} next="Nothing changed. Try again." /> : null}
+      {sheet}
+      {ui}
+      {key !== null ? (
+        <OnceSecret title="Chat recovery key" note="It stays in the K2 vault. Copy it only if you want a copy outside K2." warning={RECOVERY_WARNING} secret={key} onDone={() => setKey(null)} />
+      ) : null}
+    </div>
+  )
+}
+
+function BackupsPanel(props: PanelProps): React.JSX.Element {
+  return (
+    <div className="space-y-6">
+      <BackupsGroup {...props} />
+      <OffboxGroups {...props} />
+      <RecoveryKeyGroup {...props} />
+    </div>
+  )
+}
+
+// ── App Spaces (K31) ──────────────────────────────────────────────────────
+
+function BindSheet({ onClose, onBound }: { onClose: () => void; onBound: (s: { app: string; spaceId: string }) => void }): React.JSX.Element {
+  const [app, setApp] = useState('')
+  const [spaceId, setSpaceId] = useState('')
   const [busy, setBusy] = useState(false)
-  const warn = (status.warnings ?? []).find((w) => w.code === 'public_url_unset')
-  const save = async (): Promise<void> => {
+  const [error, setError] = useState<string | null>(null)
+  const formId = useId()
+  const appId = useId()
+  const spaceFieldId = useId()
+  const ready = !!app.trim() && !!spaceId.trim() && !busy
+  const run = async (): Promise<void> => {
+    if (!ready) return
     setBusy(true)
     setError(null)
     try {
-      await setSewPublicUrl(draft)
-      await reload()
+      await bindSewAppSpace(app, spaceId)
+      onBound({ app: app.trim(), spaceId: spaceId.trim() })
     } catch (e) {
       setError(sewErrorMessage(e))
     } finally {
@@ -1061,36 +1357,111 @@ function PublicUrlPanel({ status, canMutate, reload }: PanelProps): React.JSX.El
     }
   }
   return (
-    <div className="max-w-2xl space-y-3" data-settings-id="sew.public-url">
-      <Title>Public URL</Title>
-      <p className={`type-hint ${secondary}`}>
-        Where people reach Sew&apos;s web app (an App such as Hearth on this box&apos;s k2.dev name or a bound domain). Sew builds setup
-        links from it. Sew&apos;s own API stays on this box only.
-      </p>
-      <Row label="Now">{status.publicUrl ?? 'Not set'}</Row>
-      {warn ? <Callout tone="warn">{warn.message}</Callout> : null}
-      <div className="flex flex-wrap items-center gap-2">
-        <input aria-label="Sew public URL" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="https://hearth.<box>.k2.dev" disabled={!canMutate} className="flex-1 min-w-[14rem] border border-[var(--color-border)] bg-transparent px-2 py-1 type-row font-mono" />
-        <Button variant="accent" disabled={!canMutate || busy || !draft.trim().startsWith('https://')} onClick={() => void save()}>
-          Save
-        </Button>
-      </div>
-      {error ? <Callout tone="error">{error}</Callout> : null}
-    </div>
+    <AccessSheet
+      title="Bind a Space to an App"
+      intro="The App’s people join the Space through their App user grants."
+      onClose={onClose}
+      busy={busy}
+      testId="sew-bind-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} variant="accent" size="md" disabled={!ready}>
+            {busy ? 'Binding…' : 'Bind'}
+          </Button>
+        </>
+      }
+    >
+      <form
+        id={formId}
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void run()
+        }}
+      >
+        <div>
+          <label htmlFor={appId} className={DIALOG_LABEL}>
+            App
+          </label>
+          <Input id={appId} aria-label="App id" autoFocus value={app} placeholder="hearth" onChange={(e) => setApp(e.target.value)} className={`${DIALOG_FIELD} font-mono`} />
+          <p className={`${DIALOG_MUTED} mt-1`}>The App’s short name, as Settings → Apps shows it.</p>
+        </div>
+        <div>
+          <label htmlFor={spaceFieldId} className={DIALOG_LABEL}>
+            Space ID
+          </label>
+          <Input id={spaceFieldId} aria-label="Space id" value={spaceId} placeholder="spc_…" onChange={(e) => setSpaceId(e.target.value)} className={`${DIALOG_FIELD} font-mono`} />
+          <p className={`${DIALOG_MUTED} mt-1`}>From the Space’s settings in chat.</p>
+        </div>
+        {error ? <FailedNote what="Couldn’t bind the Space." detail={error} next="Check the App and Space ID, then try again." /> : null}
+      </form>
+    </AccessSheet>
   )
 }
 
-// ── App Spaces (K31) ──────────────────────────────────────────────────────
+function UnbindSheet({ space, onClose, onDone }: { space: SewAppSpace; onClose: () => void; onDone: (removed: boolean) => void }): React.JSX.Element {
+  const [remove, setRemove] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const run = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      await unbindSewAppSpace(space.app, space.spaceId, remove)
+      onDone(remove)
+    } catch (e) {
+      setError(sewErrorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <AccessSheet
+      title={`Unbind ${space.app}’s Space?`}
+      intro="The App stops adding people to this Space. The Space and its messages stay in chat."
+      onClose={onClose}
+      busy={busy}
+      testId="sew-unbind-choice"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
+            Cancel
+          </Button>
+          <Button variant="danger-muted" size="md" disabled={busy} onClick={() => void run()}>
+            {busy ? 'Unbinding…' : 'Unbind'}
+          </Button>
+        </>
+      }
+    >
+      <div role="radiogroup" aria-label="Who stays in the Space" className="space-y-3">
+        <label className="flex items-start gap-2 cursor-pointer">
+          <Radio name="sew-unbind" className="mt-0.5" checked={!remove} onChange={() => setRemove(false)} aria-label="Keep everyone" />
+          <span>
+            <span className={SETTING_ROW_LABEL}>Keep everyone</span>
+            <span className={`block ${DIALOG_MUTED}`}>Everyone stays in the Space. You can bind it again later.</span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 cursor-pointer">
+          <Radio name="sew-unbind" className="mt-0.5" checked={remove} onChange={() => setRemove(true)} aria-label="Remove the people K2 added" />
+          <span>
+            <span className={SETTING_ROW_LABEL}>Remove the people K2 added</span>
+            <span className={`block ${DIALOG_MUTED}`}>People someone added by hand always stay.</span>
+          </span>
+        </label>
+      </div>
+      {error ? <FailedNote what="Couldn’t unbind the Space." detail={error} next="Nothing changed. Try again in a moment." /> : null}
+    </AccessSheet>
+  )
+}
 
-function AppSpacesPanel({ sample, canMutate }: PanelProps): React.JSX.Element {
+function AppSpacesPanel({ sample, canMutate, notify }: PanelProps): React.JSX.Element {
   const [spaces, setSpaces] = useState<SewAppSpace[] | null>(sample ? SAMPLE_APP_SPACES : null)
   const [notBuilt, setNotBuilt] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [app, setApp] = useState('')
-  const [spaceId, setSpaceId] = useState('')
-  const [busy, setBusy] = useState(false)
-  // `app/space` whose unbind choice is open (S32 Q3: keep or remove).
-  const [unbinding, setUnbinding] = useState<string | null>(null)
+  const [dialog, setDialog] = useState<{ kind: 'bind' } | { kind: 'unbind'; space: SewAppSpace } | null>(null)
 
   const load = useCallback(async () => {
     if (sample) return
@@ -1107,98 +1478,102 @@ function AppSpacesPanel({ sample, canMutate }: PanelProps): React.JSX.Element {
     void load()
   }, [load])
 
-  const act = async (fn: () => Promise<unknown>): Promise<void> => {
-    setBusy(true)
-    setError(null)
-    try {
-      await fn()
-      await load()
-    } catch (e) {
-      setError(sewErrorMessage(e))
-    } finally {
-      setBusy(false)
-    }
-  }
+  const people = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
 
   return (
-    <div className="max-w-2xl space-y-3" data-settings-id="sew.app-spaces">
-      <Title>App Spaces</Title>
-      <p className={`type-hint ${secondary}`}>Members come only from each App&apos;s user grants; Admin Access never adds anyone.</p>
-      <p className={`type-hint ${muted}`}>
-        Unbinding keeps everyone by default. You can instead remove the members K2 added; people added by hand always stay.
-      </p>
-      {notBuilt ? <p className={`type-hint ${muted}`}>This server does not report App Spaces yet.</p> : null}
-      {error ? <Callout tone="error">{error}</Callout> : null}
-      <ul className="space-y-1" data-testid="sew-app-spaces">
+    <div className="space-y-3" data-settings-id="sew.app-spaces">
+      <SettingsGroup
+        title="App Spaces"
+        card
+        hint="Each App’s chat Spaces. Members come only from each App’s user grants; Admin Access never adds anyone."
+        action={
+          canMutate && !notBuilt ? (
+            <Button variant="accent" onClick={() => setDialog({ kind: 'bind' })}>
+              Bind a Space
+            </Button>
+          ) : undefined
+        }
+        testId="sew-app-spaces"
+        state={
+          notBuilt ? (
+            <SettingsLoadState kind="empty" title="This server doesn’t report App Spaces yet">
+              Update Sew from the Overview tab to manage App Spaces here.
+            </SettingsLoadState>
+          ) : error ? (
+            <SettingsLoadState kind="error" title="Couldn’t load App Spaces" detail={error} action={<Button onClick={() => void load()}>Try again</Button>}>
+              The Spaces themselves are fine; this page just couldn’t list them.
+            </SettingsLoadState>
+          ) : spaces === null ? (
+            <SettingsLoadState kind="loading" title="Loading App Spaces…" />
+          ) : spaces.length === 0 ? (
+            <SettingsLoadState kind="empty" title="No App Spaces yet">
+              Bind a Space to an App, and the App’s people join it through their user grants.
+            </SettingsLoadState>
+          ) : undefined
+        }
+      >
         {(spaces ?? []).map((s) => (
-          <li key={`${s.app}/${s.spaceId}`} className="flex items-center gap-2 type-hint">
-            <span className="font-mono text-[var(--color-text-primary)]">{s.app}</span>
-            <span className={`font-mono ${muted}`}>{s.spaceId}</span>
-            <span className={secondary}>
-              {s.members.added} in · {s.members.pending} pending · {s.members.held} held
-            </span>
-            {canMutate && unbinding !== `${s.app}/${s.spaceId}` ? (
-              <Button className="ml-auto" disabled={busy} onClick={() => setUnbinding(`${s.app}/${s.spaceId}`)}>
-                Unbind
+          <div key={`${s.app}/${s.spaceId}`} data-testid="sew-app-space" className={`flex items-center justify-between gap-6 px-4 py-3 ${SETTING_LIST_ROW_HOVER}`}>
+            <div className="min-w-0">
+              <p className={SETTING_ROW_LABEL}>{s.app}</p>
+              <p className={SETTING_ROW_HINT}>
+                {people(s.members.added, 'member', 'members')} · {s.members.pending} waiting · {s.members.held} held
+              </p>
+              <p className="type-hint font-mono text-[var(--color-text-muted)] break-all">Space {s.spaceId}</p>
+            </div>
+            {canMutate ? (
+              <Button variant="danger-quiet" className="flex-shrink-0" aria-label={`Unbind ${s.app}’s Space ${s.spaceId}`} onClick={() => setDialog({ kind: 'unbind', space: s })}>
+                Unbind…
               </Button>
             ) : null}
-            {canMutate && unbinding === `${s.app}/${s.spaceId}` ? (
-              <span className="ml-auto flex flex-wrap items-center gap-2" data-testid="sew-unbind-choice">
-                <Button disabled={busy} onClick={() => void act(() => unbindSewAppSpace(s.app, s.spaceId, false)).then(() => setUnbinding(null))}>
-                  Unbind, keep members
-                </Button>
-                <Button disabled={busy} onClick={() => void act(() => unbindSewAppSpace(s.app, s.spaceId, true)).then(() => setUnbinding(null))}>
-                  Unbind and remove members K2 added
-                </Button>
-                <Button disabled={busy} onClick={() => setUnbinding(null)}>
-                  Cancel
-                </Button>
-              </span>
-            ) : null}
-          </li>
+          </div>
         ))}
-      </ul>
-      {spaces !== null && spaces.length === 0 ? <p className={`type-hint ${muted}`}>No App Spaces bound yet.</p> : null}
-      {canMutate && !notBuilt ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <input aria-label="App id" placeholder="app id (e.g. hearth)" value={app} onChange={(e) => setApp(e.target.value)} className="border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
-          <input aria-label="Space id" placeholder="Sew Space id" value={spaceId} onChange={(e) => setSpaceId(e.target.value)} className="border border-[var(--color-border)] bg-transparent px-2 py-1 type-control font-mono" />
-          <Button disabled={busy || !app.trim() || !spaceId.trim()} onClick={() => void act(() => bindSewAppSpace(app, spaceId))}>
-            Bind
-          </Button>
-        </div>
+      </SettingsGroup>
+      {dialog?.kind === 'bind' ? (
+        <BindSheet
+          onClose={() => setDialog(null)}
+          onBound={(b) => {
+            setDialog(null)
+            notify({ tone: 'ok', text: `Bound ${b.app}’s Space. Its people join as their grants allow.` })
+            void load()
+          }}
+        />
+      ) : null}
+      {dialog?.kind === 'unbind' ? (
+        <UnbindSheet
+          space={dialog.space}
+          onClose={() => setDialog(null)}
+          onDone={(removed) => {
+            const app = dialog.space.app
+            setDialog(null)
+            notify({ tone: 'ok', text: removed ? `Unbound ${app}’s Space and removed the people K2 added.` : `Unbound ${app}’s Space. Everyone stays in it.` })
+            void load()
+          }}
+        />
       ) : null}
     </div>
   )
 }
 
-// ── the section root (master-detail) ──────────────────────────────────────
-
-const NAV: { id: Selection; label: string; liveOnly: boolean }[] = [
-  { id: 'alarms', label: 'Alarms', liveOnly: true },
-  { id: 'backups', label: 'Backups', liveOnly: true },
-  { id: 'offbox', label: 'Off-box copies', liveOnly: true },
-  { id: 'public-url', label: 'Public URL', liveOnly: true },
-  { id: 'app-spaces', label: 'App Spaces', liveOnly: true },
-  { id: 'recording', label: 'Recording', liveOnly: true },
-  { id: 'agents', label: 'Agents', liveOnly: false },
-  { id: 'approvals', label: 'Approvals', liveOnly: false },
-  { id: 'deliveries', label: 'Deliveries', liveOnly: false },
-]
+// ── the section root ──────────────────────────────────────────────────────
 
 export function SewSection(): React.JSX.Element {
   const viewerReadOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
   const [status, setStatus] = useState<SewStatus | null>(null)
   const [loadError, setLoadError] = useState<{ forbidden: boolean; message: string } | null>(null)
-  const [selection, setSelection] = useState<Selection>('server')
-  // Narrow (a small window, the app zoomed in): the list goes on top.
-  const [setPageEl, stacked] = useSplitPage()
+  const [tab, setTab] = useState<Tab>('overview')
+  const [anchor, setAnchor] = useState<string | null>(null)
+  const [notice, setNotice] = useState<Notice | null>(null)
   const mounted = useRef(true)
 
   const load = useCallback(async () => {
     try {
-      const s = await fetchSewStatus(true)
+      const s: unknown = await fetchSewStatus(true)
       if (!mounted.current) return
+      if (!isSewStatus(s)) {
+        setLoadError({ forbidden: false, message: 'the reply had no status in it' })
+        return
+      }
       setStatus(s)
       setLoadError(null)
     } catch (e) {
@@ -1244,104 +1619,134 @@ export function SewSection(): React.JSX.Element {
     return () => window.clearInterval(t)
   }, [busyState, load])
 
-  if (loadError && status === null) {
-    if (loadError.forbidden) {
-      return <p className={`p-6 type-row ${muted}`} data-testid="sew-forbidden">Only the box owner or an admin can manage Chat / Voice Hosting.</p>
-    }
-    return (
-      <div className="p-6 space-y-2">
-        <Callout tone="error">Could not read the status of Chat / Voice Hosting: {loadError.message}</Callout>
-        <Button onClick={() => void load()}>Retry</Button>
-      </div>
-    )
-  }
-  if (status === null) return <p className={`p-6 type-row ${muted}`}>Loading…</p>
+  // A jump from an alarm lands on its group.
+  useEffect(() => {
+    if (!anchor) return
+    const el = document.querySelector(`[data-settings-id="${anchor}"]`)
+    el?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
+    setAnchor(null)
+  }, [anchor, tab])
 
-  const sample = !status.supported
-  const view: SewStatus = sample ? SAMPLE_STATUS : status
-  const canMutate = !sample && !viewerReadOnly && youOf(status).canManage
-  const live = sample || isLive(view.state)
-  const props: PanelProps = { status: view, sample, canMutate, reload: load, select: setSelection }
-  const chip = sewStateChip(view.state)
-  const alarmCount = (view.alarms ?? []).length
+  const go = useCallback((t: Tab, a?: string) => {
+    setTab(t)
+    setAnchor(a ?? null)
+  }, [])
+  const notify = useCallback((n: Notice) => setNotice(n), [])
 
-  return (
-    <div className="flex flex-col h-full min-h-0">
-      {sample ? (
-        <div data-testid="sew-sample-banner" className="flex-shrink-0 px-4 py-2 type-hint tracking-wide text-center text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_18%,transparent)] border-b border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)]">
-          {SEW_MAC_BANNER}
-        </div>
-      ) : null}
-      <div
-        ref={setPageEl}
-        data-sew-layout={stacked ? 'stacked' : 'split'}
-        className={stacked ? 'flex flex-col flex-1 min-h-0 overflow-y-auto overflow-x-hidden' : 'flex flex-1 min-h-0'}
-      >
-        <div
-          className={
-            stacked
-              ? 'flex-shrink-0 border-b border-[var(--color-border)] flex flex-col'
-              : 'w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0'
-          }
-        >
-          <button
-            type="button"
-            onClick={() => setSelection('server')}
-            className={`text-left px-3 py-2.5 border-b border-[var(--color-border)] no-drag cursor-pointer ${selection === 'server' ? 'bg-[var(--color-accent)]/10' : 'hover:bg-[var(--color-bg-hover)]'}`}
-          >
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0" style={{ backgroundColor: chip.color }} />
-              <span className="type-name text-[var(--color-text-primary)]">Chat / Voice Hosting</span>
-              <span className="flex-1" />
-              <span className={`type-hint ${muted}`}>{view.installedVersion ? `Sew v${view.installedVersion}` : ''}</span>
-            </div>
-            <p className={`type-hint mt-0.5 truncate ${muted}`}>
-              <span data-testid="sew-card-state">{chip.label}</span>
-              {alarmCount > 0 ? ` · ${alarmCount} alarm${alarmCount === 1 ? '' : 's'}` : ''}
-            </p>
-          </button>
-          {NAV.map((n) => {
-            const enabled = !n.liveOnly || live
-            return (
-              <button
-                key={n.id}
-                type="button"
-                disabled={!enabled}
-                onClick={() => setSelection(n.id)}
-                className={`flex items-center gap-2 text-left px-3 py-2 type-control no-drag ${
-                  !enabled
-                    ? `${muted} cursor-not-allowed`
-                    : selection === n.id
-                      ? 'bg-[var(--color-accent)]/10 text-[var(--color-text-primary)] cursor-pointer'
-                      : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] cursor-pointer'
-                }`}
-              >
-                {n.label}
-                {n.id === 'alarms' && alarmCount > 0 ? (
-                  <span className="type-hint px-1.5 py-0.5 text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)]">
-                    {alarmCount}
-                  </span>
-                ) : null}
-              </button>
-            )
-          })}
-        </div>
-        <div className={stacked ? 'min-w-0 p-6' : 'flex-1 min-w-0 overflow-y-auto p-6 min-h-0'}>
-          {!youOf(status).canManage && !sample ? (
-            <p className={`type-hint mb-3 ${muted}`}>You can see Chat / Voice Hosting. Only the box owner, an admin or an agent with Manage Chat / Voice Hosting changes it.</p>
-          ) : null}
-          {selection === 'server' ? <ServerPanel {...props} /> : null}
-          {selection === 'alarms' ? <AlarmsPanel {...props} /> : null}
-          {selection === 'backups' ? <BackupsPanel {...props} /> : null}
-          {selection === 'offbox' ? <OffboxPanel {...props} /> : null}
-          {selection === 'public-url' ? <PublicUrlPanel {...props} /> : null}
-          {selection === 'app-spaces' ? <AppSpacesPanel {...props} /> : null}
-          {selection === 'recording' ? <RecordingPanel sample={sample} canMutate={canMutate} isOwner={youOf(status).isOwner} /> : null}
-          {selection === 'agents' ? <SewAgentsPanelStub /> : null}
-          {selection === 'approvals' ? <SewApprovalsPanelStub /> : null}
-          {selection === 'deliveries' ? <SewDeliveriesPanelStub /> : null}
-        </div>
+  const sample = status !== null && !status.supported
+  const view: SewStatus | null = status === null ? null : sample ? SAMPLE_STATUS : status
+  const live = view !== null && (sample || isLive(view.state))
+  const tabs = live ? TABS : (['overview'] as Tab[])
+  const shown: Tab = tabs.includes(tab) ? tab : 'overview'
+
+  const header = (
+    <header className="min-w-0">
+      <h2 className="type-title text-[var(--color-text-primary)]">Chat / Voice</h2>
+      <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed max-w-[75ch]">
+        Team chat and voice calls for the people and Apps on this server, powered by Sew. K2 sets it up, keeps it healthy and backs it up.
+      </p>
+    </header>
+  )
+
+  const frame = (body: React.ReactNode): React.JSX.Element => (
+    <div className="h-full min-h-0 overflow-y-auto">
+      <div className="p-6">
+        <div className="w-full max-w-[52rem] space-y-5 pb-6">{body}</div>
       </div>
     </div>
   )
+
+  if (status === null || view === null) {
+    if (loadError?.forbidden) {
+      return frame(
+        <>
+          {header}
+          <SettingsLoadState kind="empty" title="You can’t manage chat and voice" testId="sew-forbidden">
+            {SEW_NO_PERMISSION}
+          </SettingsLoadState>
+        </>,
+      )
+    }
+    if (loadError) {
+      return frame(
+        <>
+          {header}
+          <SettingsLoadState kind="error" title="Couldn’t read chat and voice status" detail={loadError.message} action={<Button onClick={() => void load()}>Try again</Button>} testId="sew-load-error">
+            Chat itself isn’t affected; this page just couldn’t ask the server how it is.
+          </SettingsLoadState>
+        </>,
+      )
+    }
+    return frame(
+      <>
+        {header}
+        <SettingsLoadState kind="loading" title="Reading chat and voice status…" testId="sew-loading">
+          Asking the server how chat and calls are doing.
+        </SettingsLoadState>
+      </>,
+    )
+  }
+
+  const canMutate = !sample && !viewerReadOnly && youOf(status).canManage
+  const props: PanelProps = { status: view, sample, canMutate, reload: load, go, notify }
+  const alarmCount = (view.alarms ?? []).length
+
+  return frame(
+    <>
+      {header}
+      {sample ? <LinuxOnlyNote what="Chat and voice" /> : null}
+      {!sample && !youOf(status).canManage ? (
+        <p className="type-hint text-[var(--color-text-secondary)]" data-testid="sew-read-only">
+          You can see these settings. Only the server owner, an admin or an agent allowed to manage chat can change them.
+        </p>
+      ) : null}
+      {loadError ? (
+        <Callout tone="error" role="alert" className="type-hint">
+          Couldn’t refresh the status, so this may be out of date. The server said: {loadError.message.replace(/[.\s]+$/, '')}.
+        </Callout>
+      ) : null}
+      {notice ? (
+        <Callout tone={notice.tone} role={notice.tone === 'error' ? 'alert' : 'status'} className="flex items-start justify-between gap-4" data-testid="sew-notice">
+          <span className="type-hint space-y-0.5">
+            <span className="block font-medium">{notice.text}</span>
+            {notice.detail ? <span className="block">{notice.detail}</span> : null}
+          </span>
+          <Button variant="quiet" className="flex-shrink-0" onClick={() => setNotice(null)}>
+            Dismiss
+          </Button>
+        </Callout>
+      ) : null}
+
+      <div role="tablist" aria-label="Chat / Voice" className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] w-full">
+        {tabs.map((t) => {
+          const active = shown === t
+          return (
+            <button
+              key={t}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(t)}
+              data-settings-id={TAB_SETTINGS_ID[t]}
+              data-k2-focus=""
+              className={`relative px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px outline-none ${
+                active ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]' : 'border-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+              }`}
+            >
+              {TAB_LABEL[t]}
+              {t === 'overview' && alarmCount > 0 ? <span className="sr-only">{`, ${alarmCount} alarm${alarmCount === 1 ? '' : 's'}`}</span> : null}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="pt-1" role="tabpanel" aria-label={TAB_LABEL[shown]}>
+        {shown === 'overview' ? <OverviewPanel {...props} /> : null}
+        {shown === 'backups' ? <BackupsPanel {...props} /> : null}
+        {shown === 'app-spaces' ? <AppSpacesPanel {...props} /> : null}
+        {shown === 'recording' ? <RecordingPanel sample={sample} canMutate={canMutate} isOwner={youOf(status).isOwner} /> : null}
+      </div>
+    </>,
+  )
 }
+

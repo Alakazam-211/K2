@@ -56,7 +56,6 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Settings/sections/FanoutConfirmModal.tsx': 'Settings is open: Browser tabs are hidden',
   'components/Settings/sections/HeartbeatsSection.tsx': 'Settings is open: Browser tabs are hidden',
   'components/Settings/sections/ComputeServersParts.tsx': 'Settings is open: Browser tabs are hidden (Compute\'s revoke and owner confirms are inline panels)',
-  'components/Settings/sections/sew-ui.tsx':'Settings is open: Browser tabs are hidden (an inline shown-once secret box)',
   'components/Projects/ProjectsPage.tsx': 'Projects page: the room is hidden',
   'components/Projects/ProjectChatPanel.tsx': 'Projects page: the room is hidden',
   'components/FileViewerPane/BoardFilePane.tsx': 'the chip and sheets stay in the pane, beside a Browser column, never over it',

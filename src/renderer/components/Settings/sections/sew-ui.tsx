@@ -1,29 +1,34 @@
-// Small parts local to Settings → Chat Hosting (Sew S32 K27): the status
-// chip, a type-back confirm, the shown-once secret box, and the person
-// confirm (vault) for the person-only steps. Kept local on purpose: the mail
-// page has its own copies and S32 does not refactor it.
+// Small parts local to Settings → Chat / Voice (Sew S32 K27): the status
+// dot and word, a type-back field, the shown-once recovery key, the person
+// confirm (vault) for the person-only steps, and a confirm-first question.
+// Every question and step opens in the Settings dialog frame
+// (AccessDialogs), so this page asks the way the rest of Settings does.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Checkbox } from '@/components/ui'
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { Button, Input, Surface } from '@/components/ui'
+import { AccessSheet, ConfirmSheet, CopyLine, DIALOG_FIELD, DIALOG_LABEL, DIALOG_MUTED } from './AccessDialogs'
 import { finishSewConfirm, sewStateChip, startSewConfirm, type SewConfirmAction } from './sew-api'
 
 export const muted = 'text-[var(--color-text-muted)]'
 export const secondary = 'text-[var(--color-text-secondary)]'
 
+/** A round status dot (dots and badges are the only round marks in Terminal). */
+export function StatusDot({ color, className = '' }: { color: string; className?: string }): React.JSX.Element {
+  return <span aria-hidden="true" className={`inline-block w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0 ${className}`} style={{ backgroundColor: color }} />
+}
+
+/** The server's state as a dot and a plain word. */
 export function SewStatusChip({ state }: { state: string }): React.JSX.Element {
   const { label, color } = sewStateChip(state)
   return (
-    <span
-      data-testid="sew-state-chip"
-      className="type-badge px-1.5 py-0.5 uppercase tracking-wide"
-      style={{ color, backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)` }}
-    >
-      {label}
+    <span className="inline-flex items-center gap-2 type-row text-[var(--color-text-primary)]">
+      <StatusDot color={color} />
+      <span data-testid="sew-state-chip">{label}</span>
     </span>
   )
 }
 
-/** The button stays disabled until the typed text equals `expect` exactly
+/** The confirm stays off until the typed text equals `expect` exactly
  *  (trimmed, case-sensitive). */
 export function TypeToConfirm({
   expect,
@@ -38,18 +43,14 @@ export function TypeToConfirm({
   disabled?: boolean
   label: string
 }): React.JSX.Element {
+  const id = useId()
   return (
-    <label className={`block type-hint ${muted}`}>
-      {label}
-      <input
-        aria-label={label}
-        value={value}
-        disabled={disabled}
-        placeholder={expect}
-        onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full font-mono border border-[var(--color-border)] bg-transparent px-2 py-1 type-control text-[var(--color-text-primary)]"
-      />
-    </label>
+    <div>
+      <label htmlFor={id} className={DIALOG_LABEL}>
+        {label}
+      </label>
+      <Input id={id} aria-label={label} value={value} disabled={disabled} placeholder={expect} autoComplete="off" spellCheck={false} onChange={(e) => onChange(e.target.value)} className={`${DIALOG_FIELD} font-mono`} />
+    </div>
   )
 }
 
@@ -59,26 +60,11 @@ export function typedMatches(typed: string, expect: string): boolean {
 
 const ONCE_SECRET_MS = 5 * 60 * 1000
 
-/** Shown-once secret: the value lives in the PARENT's component state only
- *  and the parent drops it on `onDone`. Done needs the checkbox unless
- *  `needsAck` is false (a secret K2 already keeps, like Sew's recovery key
- *  in the vault). The box clears itself after 5 minutes. Never logged,
- *  toasted or stored. */
-export function OnceSecret({
-  heading,
-  secret,
-  warning,
-  onDone,
-  needsAck = true,
-}: {
-  heading: string
-  secret: string
-  warning: string
-  onDone: () => void
-  needsAck?: boolean
-}): React.JSX.Element {
-  const [stored, setStored] = useState(!needsAck)
-  const [copied, setCopied] = useState(false)
+/** The recovery key, shown once in a dialog: the value lives in the
+ *  PARENT's component state only and the parent drops it on `onDone`.
+ *  The dialog closes itself after 5 minutes. Never logged, toasted or
+ *  stored. */
+export function OnceSecret({ title, note, secret, warning, onDone }: { title: string; note: string; secret: string; warning: string; onDone: () => void }): React.JSX.Element {
   const doneRef = useRef(onDone)
   doneRef.current = onDone
   useEffect(() => {
@@ -86,42 +72,27 @@ export function OnceSecret({
     return () => window.clearTimeout(t)
   }, [])
   return (
-    <div role="dialog" aria-label={heading} className="border border-[var(--color-border)] p-3 space-y-2" data-testid="sew-once-secret">
-      <p className="type-name text-[var(--color-text-primary)]">{heading}</p>
-      <p className={`type-hint ${secondary}`}>{warning}</p>
-      <div className="flex items-center gap-2">
-        <code data-testid="sew-once-secret-value" className="select-all font-mono type-hint break-all text-[var(--color-text-primary)]">
-          {secret}
-        </code>
-        <Button
-          onClick={() => {
-            void navigator.clipboard?.writeText(secret).then(
-              () => setCopied(true),
-              () => setCopied(false),
-            )
-          }}
-        >
-          {copied ? 'Copied' : 'Copy'}
+    <AccessSheet
+      title={title}
+      intro={note}
+      onClose={onDone}
+      testId="sew-once-secret"
+      footer={
+        <Button variant="accent" size="md" onClick={onDone} autoFocus>
+          Done
         </Button>
-      </div>
-      {needsAck ? (
-        <label className={`flex items-center gap-2 type-hint ${secondary}`}>
-          <Checkbox checked={stored} onChange={(e) => setStored(e.target.checked)} aria-label="I stored it off this machine" />
-          I stored it off this machine
-        </label>
-      ) : null}
-      <Button variant="accent" disabled={!stored} onClick={onDone}>
-        Done
-      </Button>
-    </div>
+      }
+    >
+      <Surface chamfer material="tile">
+        <CopyLine label="Recovery key" value={secret} testId="sew-once-secret-value" />
+      </Surface>
+      <p className={DIALOG_MUTED}>{warning}</p>
+      <p className={DIALOG_MUTED}>Closing this hides the key again. You can show it again here at any time.</p>
+    </AccessSheet>
   )
 }
 
-type ConfirmStep =
-  | { step: 'idle' }
-  | { step: 'starting' }
-  | { step: 'mac' }
-  | { step: 'password'; method: string }
+type ConfirmStep = { step: 'idle' } | { step: 'starting' } | { step: 'mac' } | { step: 'password'; method: string }
 
 interface Pending {
   action: SewConfirmAction
@@ -132,8 +103,9 @@ interface Pending {
 }
 
 /** A person confirm for one step (vault `confirm/start` + `finish`):
- *  Touch ID / the Mac login sheet, else the Connect or vault password.
- *  `confirm()` resolves the one-use 60 s token, or null when cancelled. */
+ *  Touch ID / the Mac login sheet, else the Connect or vault password, in
+ *  a "Confirm it's you" dialog. `confirm()` resolves the one-use 60 s
+ *  token, or null when cancelled. */
 export function usePersonConfirm(): {
   confirm: (action: SewConfirmAction, secretId: string | undefined, label: string) => Promise<string | null>
   ui: React.JSX.Element | null
@@ -142,6 +114,8 @@ export function usePersonConfirm(): {
   const [hasPw, setHasPw] = useState(false)
   const pending = useRef<Pending | null>(null)
   const pwRef = useRef<HTMLInputElement>(null)
+  const formId = useId()
+  const pwId = useId()
 
   useEffect(
     () => () => {
@@ -173,7 +147,7 @@ export function usePersonConfirm(): {
               setState({ step: 'password', method: pw })
               return
             }
-            throw new Error('No way to confirm here yet. Set a vault password from a terminal outside K2: k2 vault confirm-password set.')
+            throw new Error('This server has no way to confirm it’s you yet. Set a vault password from a terminal outside K2 first')
           } catch (e) {
             setState({ step: 'idle' })
             pending.current = null
@@ -210,40 +184,86 @@ export function usePersonConfirm(): {
   }
 
   let ui: React.JSX.Element | null = null
-  if (state.step === 'starting') ui = <p className={`type-hint ${muted}`}>Asking for your confirm…</p>
-  if (state.step === 'mac') ui = <p className={`type-hint ${muted}`}>Confirm on your Mac.</p>
+  if (state.step === 'mac') {
+    ui = (
+      <AccessSheet title="Confirm it’s you" onClose={cancel} testId="sew-person-confirm-mac" footer={<Button variant="ghost" size="md" onClick={cancel}>Cancel</Button>}>
+        <p className={DIALOG_MUTED}>Confirm on your Mac with Touch ID or your login password.</p>
+      </AccessSheet>
+    )
+  }
   if (state.step === 'password') {
     const method = state.method
+    const what = method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'
     ui = (
-      <form
-        className="flex flex-col gap-1.5 max-w-sm"
-        data-testid="sew-person-confirm"
-        onSubmit={(e) => {
-          e.preventDefault()
-          void submit(method)
-        }}
+      <AccessSheet
+        title="Confirm it’s you"
+        intro={`K2 asks for ${method === 'connect-password' ? 'your K2 Connect password' : 'your vault password'} before this step.`}
+        onClose={cancel}
+        testId="sew-person-confirm"
+        footer={
+          <>
+            <Button variant="ghost" size="md" onClick={cancel}>
+              Cancel
+            </Button>
+            <Button type="submit" form={formId} variant="accent" size="md" disabled={!hasPw}>
+              Confirm
+            </Button>
+          </>
+        }
       >
-        <label className={`type-hint ${muted}`}>
-          {method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
-          <input
+        <form
+          id={formId}
+          onSubmit={(e) => {
+            e.preventDefault()
+            void submit(method)
+          }}
+        >
+          <label htmlFor={pwId} className={DIALOG_LABEL}>
+            {what}
+          </label>
+          <Input
+            id={pwId}
             ref={pwRef}
             type="password"
+            autoFocus
             autoComplete="current-password"
             aria-label="Confirm password"
             onChange={(e) => setHasPw(e.currentTarget.value !== '')}
-            className="mt-1 w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control"
+            className={DIALOG_FIELD}
           />
-        </label>
-        <div className="flex gap-1.5">
-          <Button type="submit" variant="accent" disabled={!hasPw}>
-            Confirm
-          </Button>
-          <Button type="button" variant="ghost" onClick={cancel}>
-            Cancel
-          </Button>
-        </div>
-      </form>
+        </form>
+      </AccessSheet>
     )
   }
   return { confirm, ui }
+}
+
+export interface AskOptions {
+  title: string
+  message: React.ReactNode
+  confirmLabel: string
+  destructive?: boolean
+}
+
+/** A confirm-first question in the Settings dialog frame: `ask()` resolves
+ *  true on the confirm button, false on Cancel / Esc. Cancel has the focus. */
+export function useAsk(): { ask: (o: AskOptions) => Promise<boolean>; sheet: React.JSX.Element | null } {
+  const [open, setOpen] = useState<(AskOptions & { resolve: (ok: boolean) => void }) | null>(null)
+  const ask = useCallback((o: AskOptions) => new Promise<boolean>((resolve) => setOpen({ ...o, resolve })), [])
+  const end = (ok: boolean): void => {
+    open?.resolve(ok)
+    setOpen(null)
+  }
+  const sheet = open ? (
+    <ConfirmSheet
+      title={open.title}
+      message={open.message}
+      confirmLabel={open.confirmLabel}
+      destructive={open.destructive}
+      onConfirm={() => end(true)}
+      onCancel={() => end(false)}
+      testId="sew-ask"
+    />
+  ) : null
+  return { ask, sheet }
 }

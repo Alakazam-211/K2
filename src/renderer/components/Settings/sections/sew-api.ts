@@ -15,9 +15,6 @@ import { primaryScope } from '@/kessel/server-scope'
 /** Every CLI hint names the noun through this (one-line rename). */
 export const SEW_CLI = 'k2 hostchat'
 
-/** The daemon reports `supported: false` (macOS, Windows): the page shows
- *  this banner over sample data and never mutates. */
-export const SEW_MAC_BANNER = 'CHAT HOSTING (SEW) ONLY RUNS ON LINUX DEPLOYMENTS. THIS PAGE IS JUST HERE FOR EXAMPLE PURPOSES.'
 
 // ── wire types ────────────────────────────────────────────────────────────
 
@@ -221,14 +218,23 @@ export function sewErrorInfo(e: unknown): SewErrorInfo {
   return { code, status, message }
 }
 
+/** The no-permission line, everywhere the page says it. */
+export const SEW_NO_PERMISSION = 'Only the server owner or an admin can manage chat and voice.'
+
 /** What a person reads for a failed Sew call. */
 export function sewErrorMessage(e: unknown): string {
   const info = sewErrorInfo(e)
-  if (info.code === 'owner_only' || (info.status === 403 && !info.code)) {
-    return 'Only the box owner or an admin can manage Chat / Voice Hosting.'
-  }
-  if (info.code === 'lifecycle_in_progress') return 'Another Chat / Voice Hosting action is running. Wait for it to finish.'
+  if (info.code === 'owner_only' || (info.status === 403 && !info.code)) return SEW_NO_PERMISSION
+  if (info.code === 'lifecycle_in_progress') return 'Another chat and voice change is still running. Wait for it to finish'
   return info.message
+}
+
+/** A status reply the page can render: the daemon always sends a boolean
+ *  `supported` and a string `state` (`supervisor::status_body`); anything
+ *  else is treated as a failed read, never as a Mac. */
+export function isSewStatus(v: unknown): v is SewStatus {
+  const r = v && typeof v === 'object' ? (v as Record<string, unknown>) : null
+  return !!r && typeof r.supported === 'boolean' && typeof r.state === 'string' && r.state !== ''
 }
 
 /** A route the daemon doesn't have yet (older daemon / S30–S31 not built). */
@@ -241,36 +247,36 @@ export function isNotBuilt(e: unknown): boolean {
 
 /** The enable machine's steps, in `supervisor::enable_steps` order. */
 export const SEW_ENABLE_STEPS: { id: string; label: string }[] = [
-  { id: 'postgres', label: 'Install PostgreSQL' },
-  { id: 'master-key', label: 'Create master key' },
-  { id: 'stage', label: 'Download Sew (pinned release)' },
-  { id: 'install-bin', label: 'Install binary' },
-  { id: 'install', label: 'Install Sew' },
-  { id: 'enable-units', label: 'Enable services' },
-  { id: 'db', label: 'Start database' },
-  { id: 'migrate', label: 'Prepare database' },
+  { id: 'postgres', label: 'Install the database' },
+  { id: 'master-key', label: 'Create the encryption key' },
+  { id: 'stage', label: 'Download Sew' },
+  { id: 'install-bin', label: 'Install the Sew program' },
+  { id: 'install', label: 'Set up Sew' },
+  { id: 'enable-units', label: 'Turn on its services' },
+  { id: 'db', label: 'Start the database' },
+  { id: 'migrate', label: 'Prepare the database' },
   { id: 'start', label: 'Start Sew' },
-  { id: 'token', label: 'Connect to Sew' },
-  { id: 'health', label: 'Health check' },
-  { id: 'link', label: 'Link to K2' },
+  { id: 'token', label: 'Connect K2 to Sew' },
+  { id: 'health', label: 'Check that it answers' },
+  { id: 'link', label: 'Finish linking to K2' },
 ]
 
 export const SEW_PREFLIGHT_LABELS: Record<string, string> = {
   os: 'Operating system',
-  arch: 'CPU architecture',
-  systemd: 'systemd',
-  postgres: 'PostgreSQL',
-  helper: 'K2 root helper',
-  pin: 'Pinned release',
-  source: 'Release source',
+  arch: 'Processor',
+  systemd: 'Service manager',
+  postgres: 'Database (PostgreSQL)',
+  helper: 'K2’s system helper',
+  pin: 'Sew release',
+  source: 'Where Sew comes from',
   ram: 'Memory',
   disk: 'Disk space',
-  port: 'Sew port',
-  binary: 'Sew binary',
-  existing_data: 'Existing Sew data',
-  daemon_port: 'K2 daemon port',
+  port: 'Sew’s network port',
+  binary: 'Sew program',
+  existing_data: 'Chat data already on this server',
+  daemon_port: 'K2’s network port',
   vault: 'K2 vault',
-  voice_ports: 'Voice ports',
+  voice_ports: 'Voice call ports',
 }
 
 /** Checks the inputs can fix: enable stays possible while they fail. */
@@ -293,51 +299,55 @@ export type SewAlarmAction = 'backup' | 'offbox' | 'recovery-key' | 'public-url'
 export interface SewAlarmInfo {
   severity: 'error' | 'warn'
   title: string
+  /** What it means and what to do, in plain words. */
   fix: string
+  /** The command a server admin runs for it, shown quietly with Copy. */
+  command?: string
   action?: SewAlarmAction
 }
 
 const cli = (verb: string): string => `${SEW_CLI} ${verb}`
+const DOCTOR = 'An admin can run the chat health check on the server; it says what to do.'
 
 /** Every alarm Sew and K2 report (S29 §8.3 table, `supervisor::k2_alarms`,
  *  `voice::status`, `sew_wire::BACKUP_ALARMS`). Unknown alarms render
  *  verbatim via {@link alarmInfo}. */
 export const SEW_ALARMS: Record<string, SewAlarmInfo> = {
-  db_down: { severity: 'error', title: "Sew's database is down", fix: 'Sew cannot reach its Postgres. Check sew-db.service.' },
-  jobs_dead: { severity: 'warn', title: 'Background jobs failed', fix: `Some Sew jobs gave up. Run ${cli('doctor')}.` },
-  keys_provider_down: { severity: 'error', title: 'Sew cannot read its master key', fix: `Sew cannot decrypt anything. Run ${cli('doctor')}.` },
-  keys_current_month_missing: { severity: 'error', title: "This month's key is missing", fix: `New messages cannot be stored. Run ${cli('doctor')}.` },
-  keys_mirror_stale: { severity: 'warn', title: 'Keys are not copied off this machine', fix: 'Set a keyring mirror on another disk.', action: 'offbox' },
-  keys_shred_pending: { severity: 'warn', title: 'Key deletion is pending', fix: 'Sew will finish it. Nothing to do unless this stays.' },
-  keys_resurrected: { severity: 'error', title: 'A deleted key came back', fix: `A restored keyring holds a shredded key. Run ${cli('doctor')}.` },
-  keys_rewrap_stalled: { severity: 'warn', title: 'Key rotation stalled', fix: `Run ${cli('rotate-master')} again, then ${cli('doctor')}.` },
-  search_lagging: { severity: 'warn', title: 'Search is behind', fix: 'New messages may not show in search yet.' },
-  backup_stale: { severity: 'warn', title: 'No backup in 36 hours', fix: 'Back up now and check the backup timer.', action: 'backup' },
-  backup_failed: { severity: 'error', title: 'The last backup failed', fix: 'Back up now to see the error.', action: 'backup' },
-  drill_failed: { severity: 'error', title: 'The last restore drill failed', fix: `A backup could not be restored. Run ${cli('doctor')}.` },
-  drill_stale: { severity: 'warn', title: 'No restore drill in 8 days', fix: 'Check sew-drill.timer.' },
-  k2_mgmt_unreachable: { severity: 'error', title: 'K2 cannot reach Sew', fix: `The services run but K2 cannot talk to them. Run ${cli('doctor')}.` },
-  k2_recovery_key_not_saved: { severity: 'warn', title: 'Recovery key not in the vault yet', fix: 'K2 copies it into the vault on its own (at start, or when you reveal it). If this stays, check that the vault is open.', action: 'recovery-key' },
-  k2_master_key_due: { severity: 'warn', title: 'Master key is due for rotation', fix: `Run ${cli('rotate-master')}.` },
-  k2_vault_key_mismatch: { severity: 'error', title: "K2's key does not match Sew's", fix: `Do not change anything. Run ${cli('doctor')}.` },
-  k2_helper_pin_mismatch: { severity: 'warn', title: 'Sew helper is out of date', fix: 'Update K2 on this box, then upgrade Sew.' },
-  k2_jwks_url_drift: { severity: 'error', title: 'Sew cannot verify K2 logins', fix: `K2's port changed. Run ${cli('doctor')} to fix it.` },
-  k2_owner_blocked: { severity: 'warn', title: 'Owner setup failed', fix: 'Retry owner setup from User Access sync.' },
-  k2_backup_offbox_none: { severity: 'warn', title: 'Backups stay on this machine', fix: 'Set a backup destination on another disk.', action: 'offbox' },
-  k2_backup_not_shipped: { severity: 'warn', title: 'The last backup was not copied off', fix: 'Check the backup destination.', action: 'offbox' },
-  k2_upgrade_rollback_failed: { severity: 'error', title: 'Upgrade failed and could not roll back', fix: 'A person must act on the box. See /usr/local/lib/sew/upgrade-state.json.' },
-  k2_turn_cert_missing: { severity: 'error', title: 'Voice has no TURN certificate', fix: `Run ${cli('media renew')}.` },
-  k2_turn_cert_expired: { severity: 'error', title: "Voice's TURN certificate expired", fix: `Run ${cli('media renew')}.` },
-  k2_turn_cert_expiring: { severity: 'warn', title: "Voice's TURN certificate expires soon", fix: `K2 renews it on its own; run ${cli('media renew')} to do it now.` },
-  k2_turn_tls_mismatch: { severity: 'error', title: 'Voice serves the wrong certificate', fix: `Run ${cli('media renew')}, then ${cli('doctor')}.` },
-  k2_voice_probe_failed: { severity: 'warn', title: 'A call test from outside failed', fix: `Check the box firewall for the voice ports, then ${cli('media probe')}.` },
-  voice_engine_down: { severity: 'error', title: 'The voice engine is down', fix: `Run ${cli('media status')}.` },
-  voice_not_installed: { severity: 'warn', title: 'Voice is not installed', fix: `Run ${cli('media install')}.` },
+  db_down: { severity: 'error', title: 'Chat’s database is down', fix: 'Sew can’t reach its database, so chat can’t load or save messages. Restart the server’s chat database.' },
+  jobs_dead: { severity: 'warn', title: 'Some background jobs failed', fix: `Sew gave up on some background work. ${DOCTOR}`, command: cli('doctor') },
+  keys_provider_down: { severity: 'error', title: 'Sew can’t read its encryption key', fix: `Sew can’t open any message until it can. ${DOCTOR}`, command: cli('doctor') },
+  keys_current_month_missing: { severity: 'error', title: 'This month’s encryption key is missing', fix: `New messages can’t be saved. ${DOCTOR}`, command: cli('doctor') },
+  keys_mirror_stale: { severity: 'warn', title: 'Keys aren’t copied off this server', fix: 'Choose where the keys go under Backups and keys.', action: 'offbox' },
+  keys_shred_pending: { severity: 'warn', title: 'A key is still being deleted', fix: 'Sew finishes this on its own. Nothing to do unless it stays.' },
+  keys_resurrected: { severity: 'error', title: 'A deleted key came back', fix: `A restored copy of the keys holds a key that was deleted. ${DOCTOR}`, command: cli('doctor') },
+  keys_rewrap_stalled: { severity: 'warn', title: 'Changing the encryption key stalled', fix: 'An admin starts the key change again on the server, then runs the chat health check.', command: cli('rotate-master') },
+  search_lagging: { severity: 'warn', title: 'Search is behind', fix: 'New messages may not show up in search yet. It catches up on its own.' },
+  backup_stale: { severity: 'warn', title: 'No backup in 36 hours', fix: 'Back up now, and check that the server’s backup timer runs.', action: 'backup' },
+  backup_failed: { severity: 'error', title: 'The last backup failed', fix: 'Back up now to see what went wrong.', action: 'backup' },
+  drill_failed: { severity: 'error', title: 'The last restore test failed', fix: `A backup couldn’t be restored in the test. ${DOCTOR}`, command: cli('doctor') },
+  drill_stale: { severity: 'warn', title: 'No restore test in 8 days', fix: 'The server tests a backup every day. Check that its restore-test timer runs.' },
+  k2_mgmt_unreachable: { severity: 'error', title: 'K2 can’t reach Sew', fix: `Sew’s services run, but K2 can’t talk to them. ${DOCTOR}`, command: cli('doctor') },
+  k2_recovery_key_not_saved: { severity: 'warn', title: 'Recovery key isn’t in the vault yet', fix: 'K2 copies it into the vault on its own, at start or when you show it. If this stays, check that the vault is open.', action: 'recovery-key' },
+  k2_master_key_due: { severity: 'warn', title: 'Time to change the encryption key', fix: 'An admin changes it from a terminal on the server.', command: cli('rotate-master') },
+  k2_vault_key_mismatch: { severity: 'error', title: 'K2’s key doesn’t match Sew’s', fix: `Don’t change anything yet. ${DOCTOR}`, command: cli('doctor') },
+  k2_helper_pin_mismatch: { severity: 'warn', title: 'K2’s system helper is out of date', fix: 'Update K2 on this server, then update Sew.' },
+  k2_jwks_url_drift: { severity: 'error', title: 'Sew can’t check K2 sign-ins', fix: `K2’s network port changed. ${DOCTOR}`, command: cli('doctor') },
+  k2_owner_blocked: { severity: 'warn', title: 'Setting you up as owner failed', fix: 'Try again from User Access, where it syncs people to chat.' },
+  k2_backup_offbox_none: { severity: 'warn', title: 'Backups stay on this server', fix: 'Choose where backups go under Backups and keys, so a disk loss doesn’t take them too.', action: 'offbox' },
+  k2_backup_not_shipped: { severity: 'warn', title: 'The last backup wasn’t copied off', fix: 'Check where backups go under Backups and keys.', action: 'offbox' },
+  k2_upgrade_rollback_failed: { severity: 'error', title: 'An update failed and couldn’t go back', fix: 'Someone has to fix this on the server itself. The update’s record says what happened.', command: 'cat /usr/local/lib/sew/upgrade-state.json' },
+  k2_turn_cert_missing: { severity: 'error', title: 'Voice calls have no certificate', fix: 'Calls can’t connect securely. An admin renews it on the server.', command: cli('media renew') },
+  k2_turn_cert_expired: { severity: 'error', title: 'The voice certificate expired', fix: 'Calls can’t connect securely. An admin renews it on the server.', command: cli('media renew') },
+  k2_turn_cert_expiring: { severity: 'warn', title: 'The voice certificate expires soon', fix: 'K2 renews it on its own. An admin can renew it now on the server.', command: cli('media renew') },
+  k2_turn_tls_mismatch: { severity: 'error', title: 'Voice uses the wrong certificate', fix: 'An admin renews it on the server, then runs the chat health check.', command: cli('media renew') },
+  k2_voice_probe_failed: { severity: 'warn', title: 'A test call from outside failed', fix: 'Check that the server’s firewall lets the voice ports through, then test again.', command: cli('media probe') },
+  voice_engine_down: { severity: 'error', title: 'Voice calls are down', fix: 'The voice service stopped. An admin checks it on the server.', command: cli('media status') },
+  voice_not_installed: { severity: 'warn', title: 'Voice calls aren’t installed', fix: 'Chat works; calls don’t yet. An admin installs voice on the server.', command: cli('media install') },
 }
 
-/** Info for any alarm string; unknown ones render verbatim. */
+/** Info for any alarm string; unknown ones keep their name as the title. */
 export function alarmInfo(alarm: string): SewAlarmInfo {
-  return SEW_ALARMS[alarm] ?? { severity: 'warn', title: alarm, fix: `Run ${cli('status')} for details.` }
+  return SEW_ALARMS[alarm] ?? { severity: 'warn', title: alarm, fix: 'K2 has no description for this one yet. The server’s chat status says more.', command: cli('status') }
 }
 
 /** Status chip label + color token per state. */
@@ -346,7 +356,7 @@ export function sewStateChip(state: string): { label: string; color: string } {
     case 'not-installed':
       return { label: 'Not installed', color: 'var(--color-text-muted)' }
     case 'installing':
-      return { label: 'Installing…', color: 'var(--color-status-working)' }
+      return { label: 'Setting up…', color: 'var(--color-status-working)' }
     case 'running':
       return { label: 'Running', color: 'var(--color-status-ok)' }
     case 'degraded':
@@ -358,9 +368,9 @@ export function sewStateChip(state: string): { label: string; color: string } {
     case 'disabled':
       return { label: 'Disabled', color: 'var(--color-text-muted)' }
     case 'upgrading':
-      return { label: 'Upgrading…', color: 'var(--color-status-working)' }
+      return { label: 'Updating…', color: 'var(--color-status-working)' }
     case 'removed':
-      return { label: 'Removed (data kept)', color: 'var(--color-text-muted)' }
+      return { label: 'Uninstalled, data kept', color: 'var(--color-text-muted)' }
     default:
       return { label: state, color: 'var(--color-text-muted)' }
   }
@@ -370,13 +380,13 @@ export function sewStateChip(state: string): { label: string; color: string } {
 export function enableLabel(state: string): string | null {
   switch (state) {
     case 'not-installed':
-      return 'Enable Chat / Voice Hosting'
+      return 'Set up chat and voice'
     case 'error':
-      return 'Resume'
+      return 'Resume setup'
     case 'disabled':
     case 'stopped':
     case 'removed':
-      return 'Re-enable'
+      return 'Turn back on'
     default:
       return null
   }

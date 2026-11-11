@@ -11,8 +11,10 @@
 // the owner only) the person confirms and the same change goes again. The
 // per-Space CUI/FCI lock is the owner's, in person. Never `fetchProjects()`.
 
-import React, { useCallback, useEffect, useState } from 'react'
-import { Button, Callout, Segmented, Toggle } from '@/components/ui'
+import React, { useCallback, useEffect, useId, useState } from 'react'
+import { Button, Input, Segmented, Toggle } from '@/components/ui'
+import { SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { FailedNote } from './AccessDialogs'
 import { httpCodeOf, httpDetailsOf } from '@/lib/daemon-http-error'
 import {
   fetchAppRecording,
@@ -28,7 +30,7 @@ import {
   type SewConfirmAction,
   type SewRecordingPolicies,
 } from './sew-api'
-import { muted, secondary, usePersonConfirm } from './sew-ui'
+import { usePersonConfirm } from './sew-ui'
 
 export const RECORDING_UNAVAILABLE = "This server's chat can't record in Apps yet"
 
@@ -132,73 +134,86 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
   const unavailable = sample || (policies !== null && !policies.flags.appRecording)
 
   return (
-    <div className="max-w-2xl space-y-4" data-settings-id="sew.recording">
-      <h3 className="type-heading text-[var(--color-text-primary)]">Recording</h3>
+    <div className="space-y-6" data-settings-id="sew.recording">
       {ui}
-      {notBuilt ? <p className={`type-hint ${muted}`}>This server does not report recording settings yet.</p> : null}
-      {error ? <Callout tone="error">{error}</Callout> : null}
-      {unavailable ? (
-        <p className={`type-row ${secondary}`} data-testid="sew-recording-unavailable">
-          {RECORDING_UNAVAILABLE}. It needs Sew 0.9.0 (Upgrade on the Chat / Voice Hosting page).
-        </p>
+      {error ? <FailedNote what="Couldn’t change the recording settings." detail={error} next="Nothing changed. Try again in a moment." /> : null}
+      {notBuilt ? (
+        <SettingsLoadState kind="empty" title="This server doesn’t report recording settings yet">
+          Update Sew from the Overview tab to set recording in Apps here.
+        </SettingsLoadState>
+      ) : unavailable ? (
+        <SettingsLoadState kind="empty" title={RECORDING_UNAVAILABLE} testId="sew-recording-unavailable">
+          Recording in App calls needs Sew 0.9.0 or newer. Update Sew from the Overview tab.
+        </SettingsLoadState>
+      ) : policies === null && !error ? (
+        <SettingsLoadState kind="loading" title="Loading recording settings…" />
       ) : null}
       {!unavailable && policies ? (
         <>
-          <p className={`type-hint ${secondary}`}>
-            Everything starts off. Each person in a call still answers their own consent notice, and is never recorded after saying no.
-          </p>
-          <section className="space-y-1" data-testid="sew-recording-policies">
-            <h4 className="type-name text-[var(--color-text-primary)]">This server&apos;s policies</h4>
-            <table className="w-full type-hint">
-              <thead>
-                <tr className={muted}>
-                  <th className="text-left font-normal">Policy</th>
-                  <th className="text-left font-normal">Asked for</th>
-                  <th className="text-left font-normal">Sew shows</th>
-                  <th className="text-left font-normal" />
-                </tr>
-              </thead>
-              <tbody>
-                {policies.policies.map((p) => (
-                  <tr key={p.key} data-testid="sew-recording-policy">
-                    <td className="font-mono text-[var(--color-text-primary)]">{p.key}</td>
-                    <td>{policyValue(p.want)}</td>
-                    <td>{policyValue(p.seen)}</td>
-                    <td className={muted}>{p.want === null ? '' : p.delivered ? 'Delivered' : 'Sending to Sew'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className={`type-hint ${muted}`}>
-              The owner or an admin changes these in person: <code className="font-mono">k2 hostchat recording policy set KEY VALUE</code>.
-            </p>
-          </section>
-          <section className="space-y-3">
-            <h4 className="type-name text-[var(--color-text-primary)]">Apps</h4>
-            {apps.length === 0 && Object.keys(rowErrors).length === 0 ? <p className={`type-hint ${muted}`}>No App uses this server&apos;s chat yet.</p> : null}
-            {Object.entries(rowErrors).map(([id, msg]) => (
-              <p key={id} className={`type-hint ${muted}`}>
-                <span className="font-mono">{id}</span>: {msg}
-              </p>
+          <SettingsGroup
+            title="This server’s rules"
+            card
+            hint="Everything starts off. Each person in a call still answers their own consent notice, and is never recorded after saying no. The owner or an admin changes these from a terminal on the server."
+            testId="sew-recording-policies"
+          >
+            {policies.policies.map((p) => (
+              <div key={p.key} data-testid="sew-recording-policy">
+                <SettingRow
+                  label={policyLabel(p.key)}
+                  hint={<span className="font-mono text-[var(--color-text-muted)]">{p.key}</span>}
+                >
+                  <span className="type-hint text-[var(--color-text-secondary)] text-right">
+                    {p.want === null ? `Chat shows ${policyValue(p.seen)}` : `Set to ${policyValue(p.want)} · ${p.delivered ? 'Delivered' : 'Sending to chat…'}`}
+                  </span>
+                </SettingRow>
+              </div>
             ))}
-            {apps.map((a) => (
-              <AppRow
-                key={a.app.serviceId}
-                a={a}
-                busy={busy}
-                canMutate={canMutate}
-                isOwner={isOwner}
-                days={days[a.app.serviceId] ?? ''}
-                setDays={(v) => setDays((d) => ({ ...d, [a.app.serviceId]: v }))}
-                change={change}
-                lock={lock}
-              />
-            ))}
-          </section>
+          </SettingsGroup>
+          {apps.length === 0 && Object.keys(rowErrors).length === 0 ? (
+            <SettingsGroup
+              title="Apps"
+              card
+              state={
+                <SettingsLoadState kind="empty" title="No App uses this server’s chat yet">
+                  Apps that use chat show up here with their recording settings.
+                </SettingsLoadState>
+              }
+            />
+          ) : null}
+          {Object.entries(rowErrors).map(([id, msg]) => (
+            <SettingsGroup
+              key={id}
+              title={id}
+              card
+              state={
+                <SettingsLoadState kind="error" title={`Couldn’t load ${id}’s recording settings`} detail={msg} action={<Button onClick={() => void load()}>Try again</Button>} />
+              }
+            />
+          ))}
+          {apps.map((a) => (
+            <AppRow
+              key={a.app.serviceId}
+              a={a}
+              busy={busy}
+              canMutate={canMutate}
+              isOwner={isOwner}
+              days={days[a.app.serviceId] ?? ''}
+              setDays={(v) => setDays((d) => ({ ...d, [a.app.serviceId]: v }))}
+              change={change}
+              lock={lock}
+            />
+          ))}
         </>
       ) : null}
     </div>
   )
+}
+
+/** `recording.audio_max_days` → "Audio max days". */
+function policyLabel(key: string): string {
+  const last = key.split('.').pop() ?? key
+  const words = last.replace(/[_-]+/g, ' ').trim()
+  return words ? words[0].toUpperCase() + words.slice(1) : key
 }
 
 function AppRow({
@@ -220,96 +235,113 @@ function AppRow({
   change: (a: AppRecordingView, c: AppRecordingChange, owner: boolean) => Promise<void>
   lock: (spaceId: string, on: boolean) => Promise<void>
 }): React.JSX.Element {
-  const kept = a.audioMaxDays !== null ? `${a.audioMaxDays} days` : a.orgAudioMaxDays !== null ? `The server's limit (${a.orgAudioMaxDays} days)` : "The server's limit"
+  const kept = a.audioMaxDays !== null ? `${a.audioMaxDays} days` : a.orgAudioMaxDays !== null ? `The server’s limit (${a.orgAudioMaxDays} days)` : 'The server’s limit'
   const daysN = Number(days)
   const daysOk = /^\d+$/.test(days) && daysN >= 1 && daysN <= 3650 && (a.orgAudioMaxDays === null || daysN <= a.orgAudioMaxDays)
+  const daysId = useId()
   return (
-    <div className="space-y-2 border-t border-[var(--color-border)] pt-2" data-testid="sew-recording-app">
-      <div className="flex items-center gap-2">
-        <span className="type-name text-[var(--color-text-primary)]">{a.app.name}</span>
-        <span className={`font-mono type-hint ${muted}`}>{a.app.serviceId}</span>
-        <span className="flex-1" />
-        {a.homeClient ? null : (
-          <span className={`type-hint ${muted}`} data-testid="sew-recording-delivered">
-            {a.delivered ? 'Delivered' : 'Sending to Sew'}
-          </span>
-        )}
-      </div>
-      {a.homeClient ? (
-        <p className={`type-hint ${muted}`}>Not for the home client: it sees every Space a person is in, so it takes no recording settings.</p>
-      ) : (
-        <>
-          <div className="flex flex-wrap items-center gap-2 type-row">
-            <span className={`w-48 ${secondary}`}>Who may start a recording</span>
-            <Segmented<Level>
-              aria-label={`Who may start a recording in ${a.app.name}`}
-              value={(LEVELS as readonly string[]).includes(a.startLevel) ? (a.startLevel as Level) : 'none'}
-              onChange={(l) => void change(a, { startLevel: l }, false)}
-              options={LEVELS.map((l) => ({ value: l, label: LEVEL_LABEL[l] }))}
-              disabled={!canMutate || busy}
-            />
-          </div>
-          <OwnerSwitch
-            label="Record every call with two or more people"
-            on={a.required}
-            busy={busy}
-            canMutate={canMutate}
-            isOwner={isOwner}
-            onChange={(v) => void change(a, { required: v }, v)}
+    <div data-testid="sew-recording-app">
+      <SettingsGroup
+        title={a.app.name}
+        card
+        hint={a.homeClient ? undefined : a.app.serviceId !== a.app.name ? `App ${a.app.serviceId}` : undefined}
+        action={
+          a.homeClient ? undefined : (
+            <span className="type-hint text-[var(--color-text-secondary)]" data-testid="sew-recording-delivered">
+              {a.delivered ? 'Delivered' : 'Sending to Sew'}
+            </span>
+          )
+        }
+        state={
+          a.homeClient ? (
+            <SettingsLoadState kind="empty" title="Not for the home client">
+              It sees every Space a person is in, so it takes no recording settings.
+            </SettingsLoadState>
+          ) : undefined
+        }
+      >
+        <SettingRow label="Who may start a recording" hint="Everyone in the call is asked first." stack>
+          <Segmented<Level>
+            aria-label={`Who may start a recording in ${a.app.name}`}
+            value={(LEVELS as readonly string[]).includes(a.startLevel) ? (a.startLevel as Level) : 'none'}
+            onChange={(l) => void change(a, { startLevel: l }, false)}
+            options={LEVELS.map((l) => ({ value: l, label: LEVEL_LABEL[l] }))}
+            disabled={!canMutate || busy}
           />
-          <OwnerSwitch
-            label="Let the App's server read transcripts"
-            on={a.serverRead}
-            busy={busy}
-            canMutate={canMutate}
-            isOwner={isOwner}
-            onChange={(v) => void change(a, { serverRead: v }, v)}
-          />
-          <div className="flex flex-wrap items-center gap-2 type-row">
-            <span className={`w-48 ${secondary}`}>Audio kept</span>
-            <span className="text-[var(--color-text-primary)]">{kept}</span>
-            {canMutate ? (
-              <>
-                <input
+        </SettingRow>
+        <OwnerSwitch
+          label="Record every call with two or more people"
+          on={a.required}
+          busy={busy}
+          canMutate={canMutate}
+          isOwner={isOwner}
+          onChange={(v) => void change(a, { required: v }, v)}
+        />
+        <OwnerSwitch
+          label="Let the App's server read transcripts"
+          on={a.serverRead}
+          busy={busy}
+          canMutate={canMutate}
+          isOwner={isOwner}
+          onChange={(v) => void change(a, { serverRead: v }, v)}
+        />
+        <SettingRow
+          label="Audio kept"
+          hint={kept}
+          below={
+            canMutate ? (
+              <form
+                className="flex flex-wrap items-center gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  if (daysOk && !busy) void change(a, { audioMaxDays: daysN }, false).then(() => setDays(''))
+                }}
+              >
+                <label htmlFor={daysId} className="sr-only">
+                  Days to keep audio in {a.app.name}
+                </label>
+                <Input
+                  id={daysId}
                   aria-label={`Days to keep audio in ${a.app.name}`}
                   inputMode="numeric"
-                  placeholder="days"
+                  placeholder="Days"
                   value={days}
                   onChange={(e) => setDays(e.target.value.trim())}
-                  className="w-20 border border-[var(--color-border)] bg-transparent px-2 py-0.5 type-control font-mono"
+                  className="w-24"
                 />
-                <Button disabled={busy || !daysOk} onClick={() => void change(a, { audioMaxDays: daysN }, false).then(() => setDays(''))}>
+                <Button type="submit" disabled={busy || !daysOk}>
                   Save
                 </Button>
                 {a.audioMaxDays !== null ? (
-                  <Button disabled={busy} onClick={() => void change(a, { audioMaxDays: null }, false)}>
+                  <Button variant="quiet" disabled={busy} onClick={() => void change(a, { audioMaxDays: null }, false)}>
                     Use the server&apos;s limit
                   </Button>
                 ) : null}
-              </>
-            ) : null}
+              </form>
+            ) : undefined
+          }
+        >
+          <span />
+        </SettingRow>
+        {a.spaces.map((s) => (
+          <div key={s.spaceId} data-testid="sew-recording-space">
+            <SettingRow
+              label={`Space ${s.spaceId}`}
+              hint={
+                s.locked
+                  ? 'Locked: no recording (controlled information)'
+                  : `Starts: ${s.startLevel ? LEVEL_LABEL[s.startLevel as Level] ?? s.startLevel : 'the App’s rule'} · Every call: ${s.required === null ? 'the App’s rule' : s.required ? 'on' : 'off'}`
+              }
+            >
+              {isOwner && canMutate ? (
+                <Button variant={s.locked ? 'default' : 'quiet'} disabled={busy} onClick={() => void lock(s.spaceId, !s.locked)}>
+                  {s.locked ? 'Lift the lock' : 'Lock against recording'}
+                </Button>
+              ) : null}
+            </SettingRow>
           </div>
-          {a.spaces.length > 0 ? (
-            <ul className="space-y-1">
-              {a.spaces.map((s) => (
-                <li key={s.spaceId} className="flex flex-wrap items-center gap-2 type-hint" data-testid="sew-recording-space">
-                  <span className={`font-mono ${muted}`}>Space {s.spaceId}</span>
-                  <span className={secondary}>
-                    {s.locked
-                      ? 'Locked: no recording (CUI/FCI)'
-                      : `starts: ${s.startLevel ?? "the App's rule"} · required: ${s.required === null ? "the App's rule" : s.required ? 'on' : 'off'}`}
-                  </span>
-                  {isOwner && canMutate ? (
-                    <Button className="ml-auto" disabled={busy} onClick={() => void lock(s.spaceId, !s.locked)}>
-                      {s.locked ? 'Lift the lock' : 'Lock against recording'}
-                    </Button>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </>
-      )}
+        ))}
+      </SettingsGroup>
     </div>
   )
 }
@@ -333,10 +365,8 @@ function OwnerSwitch({
 }): React.JSX.Element {
   const may = canMutate && (on || isOwner)
   return (
-    <div className="flex flex-wrap items-center gap-2 type-row">
-      <span className={`w-48 ${secondary}`}>{label}</span>
+    <SettingRow label={label.replace("App's", 'App’s')} hint={!on && !isOwner ? 'Only the owner turns this on' : undefined}>
       <Toggle aria-label={label} checked={on} disabled={!may || busy} onChange={onChange} size="sm" />
-      {!on && !isOwner ? <span className={`type-hint ${muted}`}>Only the owner turns this on</span> : null}
-    </div>
+    </SettingRow>
   )
 }

@@ -10,7 +10,7 @@
 
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 
 type Json = Record<string, unknown>
 
@@ -121,10 +121,13 @@ vi.mock('@/stores/session-events', async (orig) => ({
 }))
 
 import { SewSection } from './SewSection'
-import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 
-const OFFBOX_NOTE = 'Every K2 box shows Degraded until its chat and voice backups have off-box copies. Set them under Off-box copies.'
-const chip = (): string => screen.getByTestId('sew-card-state').textContent ?? ''
+const OFFBOX_NOTE = 'Every K2 server shows Degraded until its chat backups and keys have copies off the server.'
+/** The status word; not installed shows its card instead. */
+const chip = (): string => (screen.queryByTestId('sew-not-installed') ? 'Not installed' : (screen.getAllByTestId('sew-state-chip')[0].textContent ?? ''))
+const tab = (name: string): void => {
+  fireEvent.click(screen.getByRole('tab', { name: new RegExp(`^${name}`) }))
+}
 
 async function tick(ms: number): Promise<void> {
   await act(async () => {
@@ -134,7 +137,6 @@ async function tick(ms: number): Promise<void> {
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: false })
-  useConfirmDialogStore.setState({ confirm: async () => true })
 })
 
 afterEach(() => {
@@ -149,30 +151,32 @@ describe('Chat Hosting flow against a fake supervisor', () => {
     expect(chip()).toBe('Not installed')
     expect(screen.getByTestId('sew-check-os').dataset.status).toBe('pass')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Enable Chat / Voice Hosting' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Set up chat and voice' }))
     await tick(10)
-    expect(chip()).toBe('Installing…')
+    expect(chip()).toBe('Setting up…')
     expect(screen.getByTestId('sew-step-master-key').dataset.step).toBe('done')
 
     // One step per 2 s poll until the machine finishes.
-    for (let i = 0; i < fake.STEPS.length && chip() === 'Installing…'; i++) await tick(2000)
+    for (let i = 0; i < fake.STEPS.length && chip() === 'Setting up…'; i++) await tick(2000)
     expect(chip()).toBe('Degraded')
     expect(fake.s.done).toEqual(fake.STEPS)
     const polls = fake.s.calls.filter((c) => c === 'GET sew/status').length
     await tick(10_000)
     expect(fake.s.calls.filter((c) => c === 'GET sew/status').length).toBe(polls)
 
-    fireEvent.click(screen.getByRole('button', { name: /^Alarms/ }))
     // The recovery key is in the vault from the enable: no alarm, no ask.
     expect(screen.queryByTestId('sew-alarm-k2_recovery_key_not_saved')).toBeNull()
     expect(screen.getByTestId('sew-alarm-k2_backup_offbox_none')).toBeTruthy()
     expect(screen.getByText(OFFBOX_NOTE)).toBeTruthy()
     expect(document.body.textContent).not.toContain('Save your recovery key')
 
-    // Revealing it is still there (person confirm), with nothing to tick.
-    fireEvent.click(screen.getByTestId('sew-card-state'))
-    expect(screen.getByTestId('sew-recovery-in-vault').textContent).toContain('sew-recovery-key')
-    fireEvent.click(screen.getByRole('button', { name: 'Reveal recovery key' }))
+    // Showing it is still there (person confirm), with nothing to tick.
+    tab('Backups and keys')
+    await tick(10)
+    expect(screen.getByTestId('sew-recovery-in-vault').textContent).toContain('in the K2 vault')
+    fireEvent.click(screen.getByRole('button', { name: 'Show recovery key' }))
+    await tick(10)
+    fireEvent.click(within(screen.getByTestId('sew-ask')).getByRole('button', { name: 'Continue' }))
     await tick(10)
     expect(screen.getByTestId('sew-once-secret-value').textContent).toBe('FLOW-RECOVERY-KEY')
     expect(screen.queryByLabelText('I stored it off this machine')).toBeNull()
@@ -181,15 +185,17 @@ describe('Chat Hosting flow against a fake supervisor', () => {
     expect(screen.queryByTestId('sew-once-secret')).toBeNull()
     expect(document.body.innerHTML).not.toContain('FLOW-RECOVERY-KEY')
 
-    fireEvent.click(screen.getByRole('button', { name: /^Alarms/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Go to Off-box copies' }))
-    fireEvent.click(screen.getByLabelText('Backup destination: a folder on another disk'))
-    fireEvent.change(screen.getByLabelText('Backup destination path'), { target: { value: '/mnt/offbox/sew' } })
+    tab('Overview')
+    fireEvent.click(screen.getByRole('button', { name: 'Go to off-box copies' }))
+    await tick(10)
+    fireEvent.click(screen.getByLabelText('Backups: a folder on another disk'))
+    fireEvent.change(screen.getByLabelText('Backups folder'), { target: { value: '/mnt/offbox/sew' } })
     fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
     await tick(10)
+    expect(screen.getByText('Saved')).toBeTruthy()
+    tab('Overview')
     expect(chip()).toBe('Running')
-    fireEvent.click(screen.getByRole('button', { name: 'Alarms' }))
-    expect(screen.getByText('No alarms.')).toBeTruthy()
+    expect(screen.queryByTestId('sew-alarms')).toBeNull()
 
     expect(fake.s.calls.filter((c) => c.startsWith('POST'))).toEqual([
       'POST sew/server/enable',

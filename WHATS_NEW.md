@@ -3,7 +3,10 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.12 — Inbox fixes
+## 0.46.12 — Inbox fixes, and Themes
+
+### Look and feel
+- **Styles is now Themes.** Settings → Themes is the same page with a clearer name. Glass's dark gold palette is now called **Dusk**; your choice is kept.
 
 ### Fixes
 - **Agents can read their inbox again in every session.** When several sessions started at the same moment, some (sidecars or main agents) could lose their private connection to K2, and `k2 inbox read` answered "the K2 daemon gave no usable answer". Each session now gets its connection, and the `k2` command falls back to the normal one if it ever can't reach it.

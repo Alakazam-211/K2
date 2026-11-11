@@ -60,11 +60,16 @@ export interface NotifySuppression {
 
 export interface NotifyLogItem {
   id: string
-  to: string[]
+  /** The sender's id. */
+  sender?: string
+  to?: string[]
+  recipients?: number
   status: string
   origin: string
+  app?: string | null
   purpose?: string | null
-  from?: string
+  /** Empty for K2's own messages (resets, codes): the daemon doesn't keep it. */
+  subject?: string
   error?: string | null
   createdAt: number
 }
@@ -74,11 +79,15 @@ export const RESUME_CONFIRM_ACTION = 'email-resume'
 /** The routes on one server (Settings passes the server it shows). */
 export function emailNotifyApiOn(scope: ServerScope) {
   return {
-    status: () => daemonCliGet<NotifyStatus>(scope, 'notifications/email'),
+    status: async (): Promise<NotifyStatus> => readNotifyStatus(await daemonCliGet<unknown>(scope, 'notifications/email')),
     agents: async (): Promise<NotifyAgent[]> => {
       const r = await daemonCliGet<{ agents?: NotifyAgent[] }>(scope, 'notifications/email/agents')
       return Array.isArray(r?.agents) ? r.agents : []
     },
+    /** Retire a sender (hosted: its account too); its address is held for
+     *  `reservedDays`. */
+    removeSender: (sender: NotifySender) =>
+      daemonCliPost<{ ok: boolean; removed: string; address: string; reservedDays?: number }>(scope, 'notifications/email/sender/rm', { sender: sender.id }),
     agentOff: (workspace: string) => daemonCliPost<{ ok: boolean }>(scope, 'notifications/email/agent/off', { workspace }),
     suppressions: async (address?: string): Promise<NotifySuppression[]> => {
       const q = address && address.trim() ? { address: address.trim(), limit: 100 } : { limit: 100 }
@@ -116,25 +125,180 @@ export function pickMethod(methods: string[]): string | null {
   return methods.find((m) => m === 'local-auth') ?? null
 }
 
+/** The status answer had no list of senders: never sent by a daemon that
+ *  has this route (it always lists them), so the page says it couldn't
+ *  read the answer rather than crash on it. */
+export class NotifyUnreadableError extends Error {
+  constructor() {
+    super('the answer had no list of senders')
+    this.name = 'NotifyUnreadableError'
+  }
+}
+
+function isSender(v: unknown): v is NotifySender {
+  return !!v && typeof v === 'object' && typeof (v as NotifySender).id === 'string' && typeof (v as NotifySender).address === 'string'
+}
+
+/** `GET /cli/notifications/email`, checked: the senders must be a list;
+ *  every other field falls back to a safe value when missing. */
+export function readNotifyStatus(raw: unknown): NotifyStatus {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<NotifyStatus>
+  if (!Array.isArray(r.senders)) throw new NotifyUnreadableError()
+  const days = r.settings && typeof r.settings.logRetentionDays === 'number' ? r.settings.logRetentionDays : null
+  return {
+    ok: r.ok !== false,
+    boxSwitch: r.boxSwitch === 'off' ? 'off' : 'on',
+    hostedMail: r.hostedMail === true,
+    airgap: r.airgap === true,
+    systemSender: isSender(r.systemSender) ? { ...r.systemSender, paused: r.systemSender.paused ?? null } : null,
+    senders: r.senders.filter(isSender).map((x) => ({ ...x, paused: x.paused ?? null, envelope: x.envelope ?? null })),
+    relays: Array.isArray(r.relays) ? r.relays : [],
+    settings: { logRetentionDays: days ?? 30, ownerEmail: r.settings?.ownerEmail ?? null },
+  }
+}
+
+/** Why the page couldn't load, sorted for its load state. */
+export type NotifyLoadProblem =
+  | { kind: 'not-allowed'; detail: string }
+  | { kind: 'old-server'; detail: string }
+  | { kind: 'unreadable'; detail: string }
+  | { kind: 'failed'; detail: string }
+
+export function notifyLoadProblem(e: unknown): NotifyLoadProblem {
+  const detail = notifyErrorMessage(e)
+  if (e instanceof NotifyUnreadableError) return { kind: 'unreadable', detail }
+  const status = (e as { status?: unknown } | null)?.status
+  const code = (e as { code?: unknown } | null)?.code
+  if (status === 403 && code !== 'wrong_credential') return { kind: 'not-allowed', detail }
+  if (status === 404) return { kind: 'old-server', detail }
+  return { kind: 'failed', detail }
+}
+
 /** Why a sender was paused, in words. */
 export function pauseText(p: NotifySenderPause): string {
   const sent = p.rate?.sent ?? 0
-  if (p.reason === 'complaints') return `${p.rate?.complaints ?? 0} of ${sent} recipients reported spam in 24 h`
-  return `${p.rate?.hardBounces ?? 0} of ${sent} recipients hard-bounced in 24 h`
+  if (p.reason === 'complaints') return `${p.rate?.complaints ?? 0} of its ${sent} emails in a day were reported as spam`
+  return `${p.rate?.hardBounces ?? 0} of its ${sent} emails in a day bounced`
 }
 
-/** Who owns a sender, in words. */
-export function ownerText(s: NotifySender): string {
-  if (s.owner === 'system') return 'System sender'
-  if (s.app) return `App ${s.app}`
-  return 'Unassigned'
+/** Who a sender sends for, in words (an App by the name it sends as). */
+export function ownerText(s: Pick<NotifySender, 'owner' | 'app' | 'fromName'>): string {
+  if (s.owner === 'system') return 'K2’s own email'
+  if (s.app) return s.fromName ? `The ${s.fromName} App` : 'An App'
+  return 'Not used by an App'
 }
 
-/** A suppression's reach, in words. */
-export function suppressionScopeText(x: NotifySuppression): string {
-  if (x.scope === 'box') return 'every sender'
-  if (x.scope === 'sender') return `sender ${x.scopeRef ?? '?'}`
-  return `App ${x.scopeRef ?? '?'}`
+/** A sender's state, in words, with a tag tone. */
+export function senderStateText(state: string): { text: string; tone: 'ok' | 'warn' | 'muted' } {
+  switch (state) {
+    case 'ready':
+      return { text: 'Ready', tone: 'ok' }
+    case 'needs_dmarc':
+      return { text: 'Needs a DNS record', tone: 'warn' }
+    case 'needs_test':
+      return { text: 'Needs a test email', tone: 'warn' }
+    case 'off':
+      return { text: 'Off', tone: 'muted' }
+    case 'retired':
+      return { text: 'Removed', tone: 'muted' }
+    default:
+      return { text: state.replace(/_/g, ' '), tone: 'warn' }
+  }
+}
+
+/** How a sender's mail leaves the server. */
+export function pathText(path: string): string {
+  return path === 'relay' ? 'through a mail relay' : 'from this server’s own mail'
+}
+
+/** Why an address is on the list. */
+export function suppressionReasonText(reason: string): string {
+  switch (reason) {
+    case 'hard_bounce':
+      return 'Bounced as undeliverable'
+    case 'complaint':
+      return 'Reported as spam'
+    case 'unsubscribe':
+      return 'Unsubscribed'
+    case 'manual':
+      return 'Added by hand'
+    default:
+      return reason.replace(/_/g, ' ')
+  }
+}
+
+/** A suppression's reach, in words: senders by address, Apps by the name
+ *  their sender uses. */
+export function suppressionScopeText(x: NotifySuppression, senders: NotifySender[] = []): string {
+  if (x.scope === 'box') return 'Stopped for every sender'
+  if (x.scope === 'sender') {
+    const s = senders.find((y) => y.id === x.scopeRef)
+    return s ? `Stopped for ${s.address}` : 'Stopped for one sender'
+  }
+  const s = senders.find((y) => y.app && y.app === x.scopeRef)
+  return s?.fromName ? `Stopped for the ${s.fromName} App` : 'Stopped for one App'
+}
+
+const PURPOSES: Record<string, string> = {
+  owner_reset: 'Password reset',
+  email_code: 'Sign-in code',
+  password_changed: 'Password changed notice',
+  relay_test: 'Test email',
+  sender_test: 'Test email',
+}
+
+/** What an email in the log was: its subject, or for K2's own messages
+ *  (which keep no subject) what they were for. */
+export function logWhatText(r: Pick<NotifyLogItem, 'subject' | 'purpose' | 'origin'>): string {
+  if (r.subject && r.subject.trim()) return r.subject.trim()
+  if (r.purpose) return PURPOSES[r.purpose] ?? r.purpose.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
+  if (r.origin === 'agent') return 'Agent notice'
+  if (r.origin === 'app') return 'App email'
+  return 'Email from K2'
+}
+
+/** A log row's status, in words, with a tag tone. */
+export function logStatusText(status: string): { text: string; tone: 'ok' | 'warn' | 'danger' | 'muted' } {
+  switch (status) {
+    case 'submitted':
+      return { text: 'Sent', tone: 'ok' }
+    case 'queued':
+    case 'scheduled':
+      return { text: status === 'queued' ? 'Waiting' : 'Scheduled', tone: 'muted' }
+    case 'held':
+      return { text: 'Held', tone: 'warn' }
+    case 'failed':
+      return { text: 'Failed', tone: 'danger' }
+    case 'refused':
+      return { text: 'Not sent', tone: 'danger' }
+    case 'cancelled':
+      return { text: 'Cancelled', tone: 'muted' }
+    default:
+      return { text: status.replace(/_/g, ' '), tone: 'muted' }
+  }
+}
+
+const LOG_ERRORS: Record<string, string> = {
+  email_paused: 'its sender is paused',
+  all_suppressed: 'every address is on the stop list',
+  rate_limited: 'too many emails at once',
+  email_off: 'email is turned off on this server',
+  airgap: 'air-gap is on',
+  failed: 'the mail server didn’t take it',
+}
+
+/** Why a send didn't go, in words (the daemon's code otherwise). */
+export function logErrorText(code: string): string {
+  return LOG_ERRORS[code] ?? code.replace(/_/g, ' ')
+}
+
+/** "off by user:alex" → "Turned off by alex". */
+export function offReasonText(reason: string | null): string {
+  if (!reason) return 'Off'
+  const m = /^off by (.+)$/.exec(reason.trim())
+  if (!m) return reason
+  const by = m[1] === 'its agent' ? 'its agent' : m[1].replace(/^user:/, '').replace(/^connect:/, '')
+  return `Turned off by ${by === 'owner' ? 'the owner' : by}`
 }
 
 /** `{"error":{"code","hint"}}` → a line for the page. */

@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 import TopBar from '../TopBar/TopBar'
 import type { TopBarRemoteServer } from '../TopBar/TopBarTitle'
 import IconRail from '../Sidebar/IconRail'
@@ -6,6 +6,7 @@ import { Surface } from '../ui'
 import { useSidebarDisplayWidth, useSidebarStore } from '../../stores/sidebar'
 import { usePanelsStore } from '../../stores/panels'
 import AnimatedDrawer from './AnimatedDrawer'
+import { useSidebarFloorMotion } from './sidebar-floor-motion'
 
 interface LayoutProps {
   /** Content for the primary sidebar (projects list) — shown when expanded */
@@ -39,6 +40,9 @@ export default function Layout({
 }: LayoutProps): React.JSX.Element {
   // The saved width, raised to the setup checklist's floor while it shows.
   const sidebarWidth = useSidebarDisplayWidth()
+  // Moves to and from that floor with the list's fold (not at boot or on a drag).
+  const sidebarRef = useRef<HTMLDivElement>(null)
+  useSidebarFloorMotion(sidebarRef, sidebarWidth)
   const isCollapsed = useSidebarStore((s) => s.isCollapsed)
 
   const leftPanelOpen = usePanelsStore((s) => s.leftPanelOpen)
@@ -65,6 +69,7 @@ export default function Layout({
                 transparent; this wrapper is the chrome container Glass
                 will paint with material. */}
             <Surface
+              ref={sidebarRef}
               role2="surface" material="tile"
               bordered={false}
               data-nav-tile=""

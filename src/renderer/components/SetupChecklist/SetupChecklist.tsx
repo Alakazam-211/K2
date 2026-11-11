@@ -50,6 +50,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { openFirstRunTarget } from '@/lib/first-run-openers'
 import { useSidebarStore } from '@/stores/sidebar'
 import { useReducedMotion } from '@/hooks/useReducedMotion'
+import { slowMotionTiming } from '@/lib/motion-timing'
 import {
   rowsLeft,
   showsCollapsed,
@@ -322,24 +323,19 @@ export function SetupChecklist({ className }: { className?: string }): React.JSX
  *  folds into the other. */
 type SlotParts = 'list' | 'button' | 'both'
 
-/** The fold's length and curve: the Style's slow motion tokens (300ms
- *  linear in Terminal, 320ms with Glass's soft ease-out). */
-function foldTiming(): { duration: number; easing: string } {
-  const css = getComputedStyle(document.documentElement)
-  const duration = cssTimeMs(css.getPropertyValue('--motion-duration-slow')) ?? FOLD_FALLBACK_MS
-  const easing = css.getPropertyValue('--motion-ease-standard').trim() || 'ease-out'
-  return { duration, easing }
-}
-
-const FOLD_FALLBACK_MS = 300
-
-/** A CSS time (`320ms`, `0.3s`) in ms; null when it isn't one. */
-function cssTimeMs(raw: string): number | null {
-  const m = /^\s*([\d.]+)\s*(ms|s)\s*$/.exec(raw)
-  if (!m) return null
-  const n = Number(m[1])
-  if (!Number.isFinite(n)) return null
-  return m[2] === 's' ? n * 1000 : n
+/** An element's height with its sidebar's own motion skipped to the end:
+ *  the sidebar's animations are seeked to their end, measured, and put
+ *  back in the same task, so nothing is painted in between. */
+function atRestHeight(el: HTMLElement): number {
+  const tile = el.closest<HTMLElement>('[data-nav-tile]')
+  const held = typeof tile?.getAnimations === 'function' ? tile.getAnimations().map((a) => [a, a.currentTime] as const) : []
+  for (const [a] of held) {
+    const end = a.effect?.getComputedTiming().endTime
+    if (typeof end === 'number') a.currentTime = end
+  }
+  const h = el.offsetHeight
+  for (const [a, t] of held) a.currentTime = t
+  return h
 }
 
 /** The setup list or its Get started button, in the list's place.
@@ -415,10 +411,12 @@ function GetStartedSlot({
     if (!list || !slot) return
     stopFold()
     const showing = openRef.current
-    // The parts' own heights, read with no fold on them.
-    const listTo = showing ? list.offsetHeight : 0
+    // The parts' own heights, read with no fold on them, and the list's at
+    // the sidebar's final width: the sidebar may be widening to its floor
+    // with this fold (`useSidebarFloorMotion`), and rows wrap less there.
+    const listTo = showing ? atRestHeight(list) : 0
     const buttonTo = showing ? 0 : slot.offsetHeight
-    const { duration, easing } = foldTiming()
+    const { duration, easing } = slowMotionTiming()
     const timing: KeyframeAnimationOptions = { duration, easing, fill: 'forwards' }
     list.style.overflow = 'hidden'
     slot.style.overflow = 'hidden'

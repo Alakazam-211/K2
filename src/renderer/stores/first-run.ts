@@ -188,6 +188,13 @@ export function useSetupChecklistShowing(): boolean {
   return useFirstRunStore((s) => checklistShowingIn(s.entries))
 }
 
+/** Whether the window's server has answered with its checklist yet (false
+ *  at boot and right after a server switch). The sidebar's floor only
+ *  moves for a list already known, so nothing animates at boot. */
+export function useFirstRunKnown(): boolean {
+  return useFirstRunStore((s) => !!s.entries[primaryScope().id]?.doc)
+}
+
 /** Setup isn't finished: the switch is on and the daemon hasn't marked the
  *  list finished (every step done or skipped), whether the list is open or
  *  hidden as its "Get started" button. Until then the nav doesn't collapse:

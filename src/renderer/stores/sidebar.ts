@@ -51,6 +51,16 @@ export function nextSavedSidebarWidth(saved: number, requested: number, checklis
   return next
 }
 
+/** A drag on the sidebar's resize edge is under way (the floor never
+ *  animates during one). Set by ResizeHandle. */
+let resizing = false
+export function setSidebarResizing(on: boolean): void {
+  resizing = on
+}
+export function isSidebarResizing(): boolean {
+  return resizing
+}
+
 /** The sidebar's drawn width for this window. */
 export function useSidebarDisplayWidth(): number {
   const saved = useSidebarStore((s) => s.width)

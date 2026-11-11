@@ -71,6 +71,15 @@
   overflow: hidden;
 }
 
+/* Menu separators (ContextMenu, OverflowMenu): --color-border all but
+   vanishes on a raised or frosted menu (about 1.1:1), so the line between a
+   menu's groups takes the divider pulled a quarter of the way to the control
+   edge: about 2:1 or better on the menu in every Glass palette (Obsidian
+   2.1:1 raised, 2.4:1 frosted). Each separator reads the variable inline. */
+[data-style="glass"] [data-menu-separator]:not([data-zen-root] *) {
+  --k2-menu-separator: color-mix(in srgb, var(--color-divider) 75%, var(--color-control-edge));
+}
+
 /* ── Veil: the light glass recipe ───────────────────────────────────────
    Every glass object carries the rim: everything Frost (the top-bar
    capsules, pills, round buttons, search fields, the Thread's floating

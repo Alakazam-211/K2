@@ -125,7 +125,7 @@ export function OverflowMenu({ items, label, triggerProps, className }: Overflow
               {items.map((item, i) => (
                 <div key={item.id}>
                   {item.group && i > 0 && (
-                    <div role="separator" className="my-1 border-t border-[var(--color-border)]" />
+                    <div role="separator" data-menu-separator="" className="my-1 border-t border-[var(--k2-menu-separator,var(--color-border))]" />
                   )}
                   <button
                     type="button"

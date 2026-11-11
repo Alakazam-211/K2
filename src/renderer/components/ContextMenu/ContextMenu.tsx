@@ -27,13 +27,15 @@ function isFocusable(item: ContextMenuItemDef): boolean {
   return isSelectableItem(item) || (Boolean(item.submenu) && item.enabled !== false)
 }
 
-/** A separator, heading or note: not a button. */
+/** A separator, heading or note: not a button. A style can restyle the
+ *  separator line through --k2-menu-separator (Glass does). */
 function StaticRow({ item, index }: { item: ContextMenuItemDef; index: number }): React.JSX.Element | null {
   if (item.type === 'separator') {
     return (
       <div
         key={item.id || `sep-${index}`}
-        style={{ height: 1, margin: '4px 8px', background: 'var(--color-border)' }}
+        data-menu-separator=""
+        style={{ height: 1, margin: '4px 8px', background: 'var(--k2-menu-separator, var(--color-border))' }}
       />
     )
   }

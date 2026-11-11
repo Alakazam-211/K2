@@ -1,9 +1,15 @@
 import { useSidebarStore } from '@/stores/sidebar'
+import { useSetupChecklistShowing } from '@/stores/first-run'
 
-/** Collapse or open the workspaces nav. Lives at the bottom of the nav. */
-export function SidebarCollapseButton(): React.JSX.Element {
+/** Collapse or open the workspaces nav. Lives at the bottom of the nav
+ *  (collapse) and on the rails (open). The collapse side is hidden while
+ *  the setup checklist shows, since the nav holds it until the intro is
+ *  done; a nav already collapsed stays so, and the rail still opens it. */
+export function SidebarCollapseButton(): React.JSX.Element | null {
   const collapsed = useSidebarStore((s) => s.isCollapsed)
   const toggle = useSidebarStore((s) => s.toggle)
+  const checklistShowing = useSetupChecklistShowing()
+  if (checklistShowing && !collapsed) return null
   return (
     <button
       type="button"

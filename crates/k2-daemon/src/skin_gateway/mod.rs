@@ -546,22 +546,28 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
     // `k2_skin_ui` there (maybe planted by a sibling site) is ignored.
     let cookie = extract_cookie(&head, cookie_name(secure));
 
-    if never_proxy(&path) {
-        write_json(&gw, &mut stream, "403 Forbidden", GATEWAY_FORBIDDEN_JSON).await;
-        return Ok(());
-    }
-
     // CSRF / cross-site WebSocket hijack guard. Every state-changing
     // request (any method but GET/HEAD — including /login, /logout and
     // the password routes) and every WebSocket upgrade must come from this
-    // app's own origin. Runs before the session lookup and before any
-    // upstream connect, so a refused request never reaches the daemon.
+    // app's own origin. Runs before any routing (the never-proxy list
+    // included), the session lookup and any upstream connect, so a refused
+    // request never reaches the daemon and a cross-origin one always gets
+    // the one `cross_origin_refused` code, whatever path it named.
     // Rule and rationale: [`check_request_origin`].
     if needs_origin_check(&method, upgrade) {
         if let Err(_why) = check_request_origin(&head) {
             write_json(&gw, &mut stream, "403 Forbidden", CROSS_ORIGIN_REFUSED_JSON).await;
             return Ok(());
         }
+    }
+
+    // Never through the browser helper, from any origin. This includes
+    // App-facing sockets that take only the App's own pass (Sew's
+    // `/cli/sew/app/recordings/events`): the generated socket table lists
+    // them for both doors, but a guest's session pass must never reach them.
+    if never_proxy(&path) {
+        write_json(&gw, &mut stream, "403 Forbidden", GATEWAY_FORBIDDEN_JSON).await;
+        return Ok(());
     }
 
     if upgrade {
@@ -2791,6 +2797,13 @@ mod tests {
         let helper = start_helper(stub.port).await;
         let cookie = login(helper).await;
         let up = "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n";
+        // The App-pass-only recording feed is in the shared socket table
+        // but never served by the helper; it must stay walked here.
+        assert!(
+            WS_ALLOWLIST.iter().any(|(p, _)| *p == "/cli/sew/app/recordings/events" && never_proxy(p)),
+            "the recording feed is App-facing and never through the helper"
+        );
+        let mut served = 0;
         for (p, param) in WS_ALLOWLIST {
             let target = format!("{p}?{param}=room");
             for bad in [
@@ -2808,6 +2821,15 @@ mod tests {
             let before = stub.seen().len();
             let r = send(helper, "GET", &target, &format!("Host: {APP}\r\n{cookie}{up}{SAME}"), "")
                 .await;
+            if never_proxy(p) {
+                // An App-pass-only socket: refused from the App's own
+                // origin too, before any upstream dial.
+                assert_eq!(r.status, 403, "{p} same origin is still never proxied: {}", r.body);
+                assert_eq!(r.body, GATEWAY_FORBIDDEN_JSON, "{p}");
+                assert_eq!(stub.seen().len(), before, "{p} must not dial upstream");
+                continue;
+            }
+            served += 1;
             assert_eq!(r.status, 101, "{p} same origin: {}", r.head);
             assert!(
                 !r.head.to_ascii_lowercase().contains("access-control-"),
@@ -2817,6 +2839,7 @@ mod tests {
             assert!(r.head.contains("Sec-WebSocket-Accept: stub"), "{}", r.head);
             assert_eq!(stub.seen().len(), before + 1, "{p} dialled once");
         }
+        assert!(served >= 6, "the helper served only {served} sockets");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

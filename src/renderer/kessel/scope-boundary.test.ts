@@ -143,6 +143,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.11 vault send: the confirm for an agent's standing send grant is
   // about the window's own server's vault (Settings), like the vault rows.
   'components/Settings/sections/HandoffSendAllow.tsx',
+  // 0.46.11 Mail tab: whether the window's own server has mail decides
+  // whether its own top bar shows the tab (like the other page tabs).
+  'components/Mail/mail-tab.ts',
   'components/Settings/sections/AdminAccessDialogs.tsx',
   'components/Settings/sections/AdminAccessPanel.tsx',
   'components/Settings/sections/ApiTokensSection.tsx',

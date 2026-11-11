@@ -207,7 +207,7 @@ describe('S4: Thread compose files become attachments', () => {
     renderBar({ scope: scopeOf('box.example', true, ON), isPrimary: false, ws: remoteWs })
     await pick(['/Users/me/Desktop/shot.png'])
     await waitFor(() => expect(chipNames()).toEqual(['shot.png']))
-    expect(h.executeRemoteDrop.mock.calls[0][3]).toEqual({ workspacePath: remoteWs })
+    expect(h.executeRemoteDrop.mock.calls[0][3]).toEqual({ workspacePath: remoteWs, attachesFiles: true })
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     })
@@ -301,5 +301,51 @@ describe('path text in the draft', () => {
     })
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('')
     expect(useToastStore.getState().toasts.map((t) => t.message)).toEqual([CONTROL_CHAR_REFUSAL])
+  })
+})
+
+// Attaching a file never types its name into a shell, so a name with a
+// control character attaches; only the text insert of it is refused.
+describe('a name with a line break: attached as a file, never inserted as text', () => {
+  const ODD = `${WS}/.k2/downloads/notes\nrm -rf ~.md`
+
+  function routedDrop(): Promise<void> {
+    // What the drop router sends for this name (external-drop-router.test.ts).
+    const bar = document.querySelector('[data-compose-bar]') as HTMLElement
+    return act(async () => {
+      bar.dispatchEvent(
+        new CustomEvent('k2so:compose-insert', {
+          detail: { data: '', paths: [ODD], uploaded: true, refusal: CONTROL_CHAR_REFUSAL },
+        }),
+      )
+    })
+  }
+
+  beforeEach(() => {
+    useToastStore.setState({ toasts: [] })
+  })
+
+  it('a Thread box attaches the routed drop: a chip, no text, no toast', async () => {
+    renderBar({ scope: scopeOf('local', false, ON) })
+    await routedDrop()
+    await waitFor(() => expect(chipNames()).toEqual(['notes\nrm -rf ~.md']))
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('')
+    expect(useToastStore.getState().toasts).toEqual([])
+  })
+
+  it('a text box (no Thread attachments): the same drop inserts nothing and shows the refusal', async () => {
+    renderBar({ scope: scopeOf('local', false, []) })
+    await routedDrop()
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('')
+    expect(useToastStore.getState().toasts.map((t) => [t.message, t.type])).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
+  })
+
+  it('a Thread box picks it from this computer: uploaded as an attachment, not refused', async () => {
+    h.executeRemoteDrop.mockImplementation(uploadsTo(`${WS}/.k2/downloads`))
+    renderBar({ scope: scopeOf('local', false, ON) })
+    await pick(['/Users/me/Desktop/a\rb.md'])
+    await waitFor(() => expect(chipNames()).toEqual(['a\rb.md']))
+    expect(h.executeRemoteDrop.mock.calls[0][3]).toEqual({ workspacePath: WS, attachesFiles: true })
+    expect(useToastStore.getState().toasts).toEqual([])
   })
 })

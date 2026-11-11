@@ -79,7 +79,7 @@ describe('resolveThreadComposeFiles', () => {
     expect(scope).toBe(LOCAL)
     expect(local).toEqual(['/Users/me/Desktop/notes.pdf', '/tmp/shot.png'])
     expect(target).toEqual({ kind: 'terminal' })
-    expect(ctx).toEqual({ workspacePath: WS })
+    expect(ctx).toEqual({ workspacePath: WS, attachesFiles: true })
     expect(got?.map((f) => f.path)).toEqual([
       `${WS}/.k2/downloads/notes.pdf`,
       `${WS}/src/a.rs`,

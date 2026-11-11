@@ -111,7 +111,8 @@ export async function resolveThreadComposeFiles(
   // Loaded on use: the upload path pulls in the transfer stores, and this
   // module is also read by the light Thread post helper (`overlayThread`).
   const { executeBrowserFileDrop, executeRemoteDrop } = await import('@/lib/handle-remote-drop')
-  const ctx = { workspacePath: input.workspacePath || undefined }
+  // Attached as files, never typed: any name uploads.
+  const ctx = { workspacePath: input.workspacePath || undefined, attachesFiles: true }
   if (input.paths && input.paths.length > 0) {
     const paths = input.paths
     // This computer is the Thread's server: a file already in the

@@ -39,6 +39,7 @@ import {
   filesFromDataTransfer,
   hitTestExternalDrop,
   routeExternalDrop,
+  type ComposeInsertDetail,
   mountExternalDropRouter,
   FILE_TREE_EXTERNAL_DROP_EVENT,
 } from './external-drop-router'
@@ -623,11 +624,16 @@ describe('routeExternalDrop — the text a terminal or draft gets', () => {
     expect(toasts()).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
   })
 
-  it('a name with a line break on a compose bar: a toast, and no insert', async () => {
+  it('a name with a line break on a compose bar: no text, the paths and the refusal for the box to use', async () => {
     const bar = surfaceNode({ composeBar: '', sessionId: 's-1', workspacePath: '/ws' })
     await routeExternalDrop(primaryScope(), ['/tmp/a\rb.txt'], { x: 3, y: 3 }, surfaceDoc(bar))
-    expect(bar._events).toHaveLength(0)
-    expect(toasts()).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
+    expect(bar._events).toHaveLength(1)
+    const ev = bar._events[0] as CustomEvent<ComposeInsertDetail>
+    expect(ev.type).toBe('k2so:compose-insert')
+    // A Thread box attaches the file; a text box shows the refusal (the
+    // bar's own tests cover both). The router itself says nothing.
+    expect(ev.detail).toEqual({ data: '', paths: ['/tmp/a\rb.txt'], uploaded: false, refusal: CONTROL_CHAR_REFUSAL })
+    expect(toasts()).toEqual([])
   })
 
   it('Windows paths: a v2 terminal (PowerShell) gets single quotes', async () => {

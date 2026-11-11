@@ -353,6 +353,10 @@ export interface ComposeInsertDetail {
   data: string
   paths?: string[]
   uploaded?: boolean
+  /** The paths can't go into the draft as text (`data` is empty): a box
+   *  that attaches `paths` as files still does; one that inserts text
+   *  shows this instead. */
+  refusal?: string
 }
 
 /** Insert path text into the compose draft (TerminalComposeBar listens). */
@@ -361,25 +365,36 @@ function injectIntoCompose(
   payload: string,
   paths?: string[] | null,
   uploaded?: boolean,
+  refusal?: string,
 ): void {
   const detail: ComposeInsertDetail = { data: payload }
   if (paths && paths.length > 0) {
     detail.paths = [...paths]
     detail.uploaded = uploaded === true
   }
+  if (refusal) detail.refusal = refusal
   target.element.dispatchEvent(new CustomEvent('k2so:compose-insert', { detail }))
 }
 
 /** A compose payload builder that also keeps the server paths it built
- *  from (an upload's answer). */
-function composePayloadCapture(): { build: (remote: string[]) => string | null; paths: () => string[] | null } {
+ *  from (an upload's answer) and the text refusal, if any: the box decides
+ *  (a Thread box attaches the paths, a text box shows the refusal). */
+function composePayloadCapture(): {
+  build: (remote: string[]) => string
+  paths: () => string[] | null
+  refusal: () => string | undefined
+} {
   let got: string[] | null = null
+  let refusal: string | undefined
   return {
     build: (remote) => {
       got = [...remote]
-      return dropTextOrToast(buildComposeDropPayload(remote))
+      const r = buildComposeDropPayload(remote)
+      refusal = r.ok ? undefined : r.refusal
+      return r.ok ? r.text : ''
     },
     paths: () => got,
+    refusal: () => refusal,
   }
 }
 
@@ -486,20 +501,22 @@ export async function routeExternalDrop(
     }
     case 'compose': {
       // Same remote upload destination as terminal (workspace `.k2/downloads`),
-      // but insert the host path into the message draft, not the PTY.
+      // but insert the host path into the message draft, not the PTY. A
+      // name that can't go in as text still reaches the box with its
+      // refusal: a Thread box attaches it as a file.
       if (isRemote) {
         const cap = composePayloadCapture()
         const payload = await executeRemoteDrop(
           scope,
           paths,
           { kind: 'terminal' },
-          { workspacePath: target.workspacePath || undefined },
+          { workspacePath: target.workspacePath || undefined, attachesFiles: true },
           cap.build,
         )
-        if (payload) injectIntoCompose(target, payload, cap.paths(), true)
+        if (payload !== null) injectIntoCompose(target, payload, cap.paths(), true, cap.refusal())
       } else {
-        const payload = dropTextOrToast(buildComposeDropPayload(paths))
-        if (payload !== null) injectIntoCompose(target, payload, paths, false)
+        const r = buildComposeDropPayload(paths)
+        injectIntoCompose(target, r.ok ? r.text : '', paths, false, r.ok ? undefined : r.refusal)
       }
       return
     }
@@ -593,10 +610,10 @@ export async function routeBrowserFileDrop(
         scope,
         files,
         { kind: 'terminal' },
-        { workspacePath: target.workspacePath || undefined },
+        { workspacePath: target.workspacePath || undefined, attachesFiles: true },
         cap.build,
       )
-      if (payload) injectIntoCompose(target, payload, cap.paths(), true)
+      if (payload !== null) injectIntoCompose(target, payload, cap.paths(), true, cap.refusal())
       return
     }
     case 'folder': {

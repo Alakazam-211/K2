@@ -372,6 +372,20 @@ describe('names with a control character', () => {
     expect(toastLog).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
   })
 
+  it('a drop whose paths may be attached as files (a Thread box) still uploads', async () => {
+    const buildPayload = vi.fn((paths: string[]) => paths.join(' '))
+    const payload = await executeRemoteDrop(primaryScope(),
+      ['/local/notes\nrm -rf ~'],
+      { kind: 'terminal' },
+      { workspacePath: '/ws', attachesFiles: true },
+      buildPayload,
+    )
+    expect(uploadMock).toHaveBeenCalledWith('/local/notes\nrm -rf ~', '/ws/.k2/downloads')
+    expect(buildPayload).toHaveBeenCalledWith(['/ws/.k2/downloads/notes\nrm -rf ~'])
+    expect(payload).toBe('/ws/.k2/downloads/notes\nrm -rf ~')
+    expect(toastLog.some(([m]) => m === CONTROL_CHAR_REFUSAL)).toBe(false)
+  })
+
   it('a builder that refuses after upload gives null, not text', async () => {
     const payload = await executeRemoteDrop(primaryScope(),
       ['/local/a.txt'],

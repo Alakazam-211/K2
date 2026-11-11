@@ -569,6 +569,11 @@ export function TerminalComposeBar({
         void addThreadFiles({ paths: detail.paths, onServer: detail.uploaded === true })
         return
       }
+      // Attached files take any name; typed text can't take every one.
+      if (detail?.refusal) {
+        useToastStore.getState().addToast(detail.refusal, 'warning')
+        return
+      }
       const data = detail?.data
       if (data) insertPathsText(data)
     }

@@ -224,7 +224,7 @@ describe('routeBrowserFileDrop image surface', () => {
     expect(dropMocks.executeBrowserFileDrop).toHaveBeenCalledWith(
       [file],
       { kind: 'terminal' },
-      { workspacePath: '/ws' },
+      { workspacePath: '/ws', attachesFiles: true },
       expect.any(Function),
     )
     expect(bar._events).toHaveLength(1)

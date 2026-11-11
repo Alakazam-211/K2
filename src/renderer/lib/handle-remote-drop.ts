@@ -36,8 +36,9 @@ import { CONTROL_CHAR_REFUSAL, hasControlChar } from './drop-payload'
  *  them (it has already said why). */
 export type DropPayloadBuilder = (remotePaths: string[]) => string | null
 
-/** A drop that will be pasted as text, of a name that can't be: refuse it
- *  before any bytes move (the builder would refuse the uploaded path). */
+/** A drop that will only be pasted as text, of a name that can't be:
+ *  refuse it before any bytes move (the builder would refuse the uploaded
+ *  path). Not for `attachesFiles` drops. */
 function refuseBeforeUpload(inject: boolean, names: string[]): boolean {
   if (!inject || !names.some(hasControlChar)) return false
   useToastStore.getState().addToast(CONTROL_CHAR_REFUSAL, 'warning')
@@ -63,6 +64,11 @@ export interface DropContext {
    * The "Save to…" picker for the `miss` case. Defaults to the real
    * RemoteFolderPicker store; injectable so tests don't touch zustand. */
   openPicker?: () => Promise<string | null>
+  /**
+   * The uploaded paths may be attached as files (a Thread box), not only
+   * typed as text, so a name a shell can't take still uploads. The
+   * builder's own refusal still keeps it out of any text. */
+  attachesFiles?: boolean
 }
 
 /**
@@ -164,7 +170,7 @@ export async function executeRemoteDrop(
   if (!localPaths || localPaths.length === 0) return null
 
   const dest = resolveDropDestination(target, ctx)
-  if (refuseBeforeUpload(dest.inject && !!buildPayload, localPaths.map((p) => p.split(/[/\\]/).pop() || p))) return null
+  if (refuseBeforeUpload(dest.inject && !!buildPayload && !ctx.attachesFiles, localPaths.map((p) => p.split(/[/\\]/).pop() || p))) return null
 
   // Resolve the destination directory. A `miss` (or a terminal with no
   // workspace anchor) has no synchronous destination → open the "Save
@@ -267,7 +273,7 @@ export async function executeBrowserFileDrop(
   if (!files || files.length === 0) return null
 
   const dest = resolveDropDestination(target, ctx)
-  if (refuseBeforeUpload(dest.inject && !!buildPayload, files.map((f) => f.name))) return null
+  if (refuseBeforeUpload(dest.inject && !!buildPayload && !ctx.attachesFiles, files.map((f) => f.name))) return null
   let destDir = dest.destDir
   if (destDir === null) {
     const open = ctx.openPicker ?? useRemoteFolderPickerStore.getState().open

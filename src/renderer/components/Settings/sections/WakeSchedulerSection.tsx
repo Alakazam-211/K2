@@ -16,7 +16,8 @@ import {
   type HeartbeatDeliveryTarget,
 } from '@/lib/heartbeat-delivery'
 import { primaryScope } from '@/kessel/server-scope'
-import { spanLabel } from '@/lib/heartbeat-wait'
+import { describeHeartbeatStatus, spanLabel } from '@/lib/heartbeat-wait'
+import { localWhen } from '../shared/local-time'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
 import { BetaTag, Button, Segmented, Toggle } from '@/components/ui'
@@ -60,7 +61,7 @@ interface WakeStatusInfo {
 function wakePlatformNote(platform: string | undefined): string {
   switch (platform) {
     case 'macos':
-      return 'The first time you turn this on, macOS asks once for an admin password to install a small helper. With the lid closed: on power it is best effort; on battery it is not supported, and the Mac may go back to sleep within a minute.'
+      return 'The first time, macOS asks once for an admin password to add a small helper. With the lid closed, it wakes only while plugged in.'
     case 'linux':
       return 'Uses the wake alarm permission the K2 package sets up. Without it, K2 shows the one command to run.'
     case 'windows':
@@ -70,13 +71,9 @@ function wakePlatformNote(platform: string | undefined): string {
   }
 }
 
+/** Every time on this page reads the same way ("Nov 10, 5:39 PM"). */
 function formatClock(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso
-  const sameDay = d.toDateString() === new Date().toDateString()
-  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
+  return iso ? localWhen(iso) : ''
 }
 
 /** Row shape returned by `k2so_heartbeat_fires_list_all` — most recent
@@ -215,20 +212,26 @@ const CONTENT_WIDTH = 'max-w-[52rem]'
 /** A list reply from the daemon or the in-process command. Anything else
  *  (null, an error envelope, an object) is a failed read, not an empty list:
  *  the page shows its error card instead of crashing on `.length`. */
+/** A reply K2 couldn't read (the wrong shape). The page says so in its own
+ *  words; there is no server reason to show. */
+class UnreadableReply extends Error {}
+
 export function listReply<T>(raw: unknown): T[] {
   if (Array.isArray(raw)) return raw as T[]
-  throw new Error('the reply wasn’t a list')
+  throw new UnreadableReply('K2 couldn’t read the list')
 }
 
 /** The scheduler status is an object; anything else is a failed read. */
 function statusReply(raw: unknown): SchedulerStatus {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as SchedulerStatus
-  throw new Error('the reply wasn’t a status')
+  throw new UnreadableReply('K2 couldn’t read the status')
 }
 
+/** The server's own reason, or '' when there is none to show. */
 function errorText(err: unknown): string {
+  if (err instanceof UnreadableReply) return ''
   const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
-  return raw.trim()
+  return raw.trim().replace(/[.\s]+$/, '')
 }
 
 type Tone = 'ok' | 'late' | 'problem' | 'skip'
@@ -274,6 +277,28 @@ export function describeDecision(decision: string): { text: string; tone: Tone }
   return { text: decision.replace(/_/g, ' '), tone: 'skip' }
 }
 
+/** A run's reason in plain words, with the next step where there is one.
+ *  The scheduler's own words stay in the opened run. */
+export function explainRun(fire: { decision: string; reason: string | null }): { text: string; next?: string; missingFile?: boolean } | null {
+  const reason = (fire.reason ?? '').trim()
+  const hours = /(\d+)\s*h(?:ours?)?\s+late/i.exec(reason)?.[1]
+  const late = hours ? `${hours} ${hours === '1' ? 'hour' : 'hours'} late` : 'late'
+  const slept = /slept|sleep|asleep/i.test(reason)
+  if (fire.decision === 'wakeup_file_missing' || /WAKEUP\.md (not found|missing)|wakeup file is missing/i.test(reason))
+    return { text: 'Its instructions file is missing.', next: 'Edit its instructions to add them.', missingFile: true }
+  if (fire.decision === 'skipped_empty' || /WAKEUP\.md is empty/i.test(reason))
+    return { text: 'Its instructions file is empty.', next: 'Edit its instructions to add some.', missingFile: true }
+  if (fire.decision === 'fired_catchup')
+    return { text: `Ran ${late}${slept ? ' because the computer was asleep' : ''}.` }
+  if (fire.decision === 'skipped_missed')
+    return { text: `Skipped: it was due while the computer ${slept ? 'was asleep' : 'was off'} and is more than 12 hours late.`, next: 'It runs again at its next time.' }
+  if (/session exited|exited before/i.test(reason))
+    return { text: 'Failed: the agent’s chat closed before it answered.', next: 'It tries again at its next time. If it keeps failing, open its chat to see why.' }
+  if (fire.decision === 'skipped_busy')
+    return { text: reason ? `Skipped: ${reason.replace(/[.\s]+$/, '')}.` : 'Skipped: the agent was busy.', next: 'It runs again at its next time.' }
+  return null
+}
+
 const DOT: Record<Tone, string> = {
   ok: 'bg-[var(--color-status-ok)]',
   late: 'bg-[var(--color-status-warn)]',
@@ -287,19 +312,65 @@ function Dot({ tone }: { tone: Tone }): React.JSX.Element {
 
 /** What a row says after its last change: paused / resumed for a moment,
  *  or why the change didn't take. */
-type RowNote = { kind: 'saved' | 'error'; text: string }
+type RowNote = { kind: 'saved' | 'error'; text: string; reason?: string }
 
-function FireRow({ fire, open, onToggle }: { fire: SystemFireRow; open: boolean; onToggle: () => void }): React.JSX.Element {
+/** A change that didn't take: what failed, the next step, then the
+ *  server's reason quietly. */
+function failNote(what: string, err: unknown): RowNote {
+  const reason = errorText(err)
+  return { kind: 'error', text: `${what}. Nothing changed; try again in a moment.`, ...(reason ? { reason } : {}) }
+}
+
+/** Paused by a person reads one way everywhere on this page. */
+export const PAUSED_TEXT = 'Paused. It won’t run until you turn it back on.'
+
+const PAUSED_BY_K2: Record<string, string> = {
+  failures: 'Paused by K2 after failing several times. See Recent runs, then turn it back on.',
+  wakeup_missing: 'Paused by K2: its instructions file is missing. Edit its instructions, then turn it back on.',
+  wakeup_empty: 'Paused by K2: its instructions file is empty. Edit its instructions, then turn it back on.',
+}
+
+/** The row's status line when this page words it itself: paused by a
+ *  person, paused by K2 for a known reason, or the next run in the page's
+ *  time format. null = the shared formatter's line (a wait or a problem). */
+function rowStatus(row: SystemHeartbeatRow): { text: string; tone: 'next' | 'paused' | 'problem' } | null {
+  if (!row.enabled) {
+    const why = row.waitReason?.startsWith('disabled:') ? row.waitReason.slice('disabled:'.length) : row.disabledReason
+    if (!why || why === 'user') return why === 'user' && row.waitDetail ? null : { text: PAUSED_TEXT, tone: 'paused' }
+    return PAUSED_BY_K2[why] ? { text: PAUSED_BY_K2[why]!, tone: 'problem' } : null
+  }
+  const st = describeHeartbeatStatus(row, { now: Date.now(), nextFire: true })
+  if (st?.tone === 'next' && row.nextFireAt) return { text: `Next run: ${localWhen(row.nextFireAt)}`, tone: 'next' }
+  return null
+}
+
+function NoteReason({ reason }: { reason?: string }): React.JSX.Element | null {
+  if (!reason) return null
+  return <span className="block text-[var(--color-text-secondary)]">The server said: {reason}.</span>
+}
+
+function FireRow({
+  fire,
+  open,
+  onToggle,
+  onEdit,
+}: {
+  fire: SystemFireRow
+  open: boolean
+  onToggle: () => void
+  /** Opens the heartbeat's instructions, when it still exists. */
+  onEdit?: () => void
+}): React.JSX.Element {
   const d = describeDecision(fire.decision)
+  const why = explainRun(fire)
   const actor = heartbeatHistoryActorLine(fire)
-  const when = new Date(fire.firedAt)
-  const fields: Array<[string, string | null | undefined]> = [
-    ['When', Number.isNaN(when.getTime()) ? fire.firedAt : when.toLocaleString()],
-    ['Result', fire.decision],
-    ['Reason', fire.reason],
-    ['Took', fire.durationMs != null ? `${(fire.durationMs / 1000).toFixed(1)} s` : null],
-    ['How', fire.mode],
-    ['Who', actor || null],
+  const headline = why?.text ?? d.text
+  const fields: Array<{ label: string; value: string | null | undefined; raw?: boolean }> = [
+    { label: 'When', value: formatClock(fire.firedAt) },
+    { label: 'Result', value: why ? `${d.text}. ${why.text}` : d.text },
+    { label: 'Took', value: fire.durationMs != null ? `${(fire.durationMs / 1000).toFixed(1)} seconds` : null },
+    { label: 'Started by', value: actor || null },
+    { label: 'Log line', value: [fire.decision, fire.reason].filter(Boolean).join(': '), raw: true },
   ]
   const detailId = `heartbeat-run-${fire.id}`
   return (
@@ -319,11 +390,9 @@ function FireRow({ fire, open, onToggle }: { fire: SystemFireRow; open: boolean;
             <span className="text-[var(--color-text-secondary)]"> in {fire.projectName}</span>
           </span>
           <span className={`block type-hint mt-0.5 ${d.tone === 'problem' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-secondary)]'}`}>
-            {d.text}
+            {headline}
           </span>
-          {fire.reason && !open && (
-            <span className="block type-hint text-[var(--color-text-secondary)] mt-0.5 truncate">{fire.reason}</span>
-          )}
+          {why?.next && <span className="block type-hint text-[var(--color-text-secondary)] mt-0.5">{why.next}</span>}
         </span>
         <span className="type-hint text-[var(--color-text-secondary)] tabular-nums whitespace-nowrap">{formatClock(fire.firedAt)}</span>
         <span aria-hidden="true" className={`type-row text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)] transition-transform ${open ? 'rotate-90' : ''}`}>
@@ -331,16 +400,19 @@ function FireRow({ fire, open, onToggle }: { fire: SystemFireRow; open: boolean;
         </span>
       </button>
       {open && (
-        <dl id={detailId} className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-4 gap-y-1 px-4 pb-3 pl-9">
-          {fields
-            .filter(([, v]) => v != null && v !== '')
-            .map(([k, v]) => (
-              <React.Fragment key={k}>
-                <dt className="type-hint text-[var(--color-text-secondary)]">{k}</dt>
-                <dd className={`type-hint text-[var(--color-text-primary)] break-words ${k === 'Result' ? 'font-mono' : ''}`}>{v}</dd>
-              </React.Fragment>
-            ))}
-        </dl>
+        <div id={detailId} className="px-4 pb-3 pl-9 space-y-2" data-fire-details="">
+          <dl className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-4 gap-y-1">
+            {fields
+              .filter((f) => f.value != null && f.value !== '')
+              .map((f) => (
+                <React.Fragment key={f.label}>
+                  <dt className="type-hint text-[var(--color-text-secondary)]">{f.label}</dt>
+                  <dd className={`type-hint break-words ${f.raw ? 'font-mono text-[var(--color-text-muted)]' : 'text-[var(--color-text-primary)]'}`}>{f.value}</dd>
+                </React.Fragment>
+              ))}
+          </dl>
+          {why?.missingFile && onEdit && <Button onClick={onEdit}>Edit instructions</Button>}
+        </div>
       )}
     </li>
   )
@@ -371,6 +443,14 @@ export function WakeSchedulerSection(): React.JSX.Element {
   const [wakeNote, setWakeNote] = useState<RowNote | null>(null)
   const [rowNotes, setRowNotes] = useState<Record<string, RowNote>>({})
   const noteTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  // Each heartbeat row, so the one that just changed can be brought into
+  // view with its result.
+  const rowEls = useRef<Record<string, HTMLDivElement | null>>({})
+  const [noteFor, setNoteFor] = useState<{ id: string; n: number } | null>(null)
+  useEffect(() => {
+    if (!noteFor) return
+    rowEls.current[noteFor.id]?.scrollIntoView?.({ block: 'nearest' })
+  }, [noteFor])
 
   useEffect(() => () => Object.values(noteTimers.current).forEach(clearTimeout), [])
 
@@ -384,6 +464,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
     })
     // A confirmation fades; an error stays until the next try.
     if (note?.kind === 'saved') noteTimers.current[id] = setTimeout(() => noteRow(id, null), 6000)
+    if (note) setNoteFor((f) => ({ id, n: (f?.n ?? 0) + 1 }))
   }, [])
 
   const refreshStatus = useCallback(async () => {
@@ -406,16 +487,13 @@ export function WakeSchedulerSection(): React.JSX.Element {
           message?: string
         }>(primaryScope(), 'heartbeat/wake', { enabled, onBattery })
         if (resp?.success === false) {
-          setWakeNote({ kind: 'error', text: `Wake stays off. ${resp.message ?? 'The server didn’t say why.'}` })
+          setWakeNote({ kind: 'error', text: 'Wake stays off. Try again; if it keeps failing, check the reason below.', reason: (resp.message ?? '').trim().replace(/[.\s]+$/, '') || undefined })
         } else {
           setWakeNote({ kind: 'saved', text: 'Saved' })
         }
         await refreshStatus()
       } catch (err) {
-        setWakeNote({
-          kind: 'error',
-          text: `Couldn’t change wake: ${errorText(err).replace(/[.\s]+$/, '') || 'no answer from this server'}. Nothing changed; try again.`,
-        })
+        setWakeNote(failNote('Couldn’t change wake', err))
       } finally {
         setWakeSaving(false)
       }
@@ -478,7 +556,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
           setFiresError(null)
         }
       } catch (err) {
-        if (!cancelled) setFiresError(errorText(err) || 'no answer from this server')
+        if (!cancelled) setFiresError(errorText(err))
       }
     }
     void tick()
@@ -499,7 +577,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
           setStatusError(null)
         }
       } catch (err) {
-        if (!cancelled) setStatusError(errorText(err) || 'no answer from this server')
+        if (!cancelled) setStatusError(errorText(err))
       }
     }
     void tick()
@@ -521,16 +599,10 @@ export function WakeSchedulerSection(): React.JSX.Element {
           name: row.name,
           enabled: next,
         })
-        noteRow(row.id, {
-          kind: 'saved',
-          text: next ? 'Resumed. It runs on its schedule again.' : 'Paused. It won’t run until you turn it back on.',
-        })
+        noteRow(row.id, { kind: 'saved', text: 'Saved' })
       } catch (err) {
         setHeartbeats((rows) => rows && rows.map((r) => (r.id === row.id ? { ...r, enabled: !next } : r)))
-        noteRow(row.id, {
-          kind: 'error',
-          text: `Couldn’t ${next ? 'resume' : 'pause'} it: ${errorText(err).replace(/[.\s]+$/, '') || 'no answer from this server'}. Nothing changed; try again.`,
-        })
+        noteRow(row.id, failNote(`Couldn’t ${next ? 'resume' : 'pause'} ${row.name}`, err))
       }
     },
     [noteRow],
@@ -544,13 +616,10 @@ export function WakeSchedulerSection(): React.JSX.Element {
       try {
         // Writes go to the same host the rows came from (0.40.48).
         await setHeartbeatSession(row.projectPath, row.name, next)
-        noteRow(row.id, { kind: 'saved', text: 'Saved. The next run goes there.' })
+        noteRow(row.id, { kind: 'saved', text: 'Saved' })
       } catch (err) {
         setHeartbeats((rows) => rows && rows.map((r) => (r.id === row.id ? row : r)))
-        noteRow(row.id, {
-          kind: 'error',
-          text: `Couldn’t change where it runs: ${errorText(err).replace(/[.\s]+$/, '') || 'no answer from this server'}. Nothing changed; try again.`,
-        })
+        noteRow(row.id, failNote(`Couldn’t change where ${row.name} runs`, err))
       }
     },
     [noteRow],
@@ -597,21 +666,27 @@ export function WakeSchedulerSection(): React.JSX.Element {
     )
   }
 
+  /** The heartbeat a run belongs to, to open its instructions. */
+  const editFor = (fire: SystemFireRow): (() => void) | undefined => {
+    const row = (heartbeats ?? []).find((r) => r.projectId === fire.projectId && r.name === fire.scheduleName)
+    return row ? () => setEditingHeartbeat(row) : undefined
+  }
+
   const tickerDown = tickerDownMessage(schedulerStatus)
   const lastCheck = schedulerStatus?.ticker?.lastTickAt ?? schedulerStatus?.lastDaemonTickAt ?? schedulerStatus?.lastTickAt ?? null
 
   // ── How heartbeats run: status, wake, battery ──────────────────────
   const statusState =
     schedulerStatus === null ? (
-      statusError ? (
+      statusError !== null ? (
         <SettingsLoadState
           kind="error"
-          title="K2 couldn’t read the scheduler"
-          detail={statusError}
+          title="The scheduler’s status couldn’t load"
+          detail={statusError || null}
           action={<Button onClick={() => setStatusAttempt((n) => n + 1)}>Try again</Button>}
           testId="heartbeats-status-error"
         >
-          Whether heartbeats are being checked is unknown right now. Your heartbeats are unchanged.
+          K2 couldn’t tell whether heartbeats are being checked. Your heartbeats are unchanged. Try again in a moment.
         </SettingsLoadState>
       ) : (
         <SettingsLoadState kind="loading" title="Checking the scheduler…" testId="heartbeats-status-loading" />
@@ -685,6 +760,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
               {wakeNote?.kind === 'error' && (
                 <p role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1 max-w-[75ch]">
                   {wakeNote.text}
+                  <NoteReason reason={wakeNote.reason} />
                 </p>
               )}
             </div>
@@ -712,7 +788,8 @@ export function WakeSchedulerSection(): React.JSX.Element {
           <div className="min-w-0 flex-1">
             <p className={SETTING_ROW_LABEL}>Also on battery</p>
             <p className={SETTING_ROW_HINT}>
-              Without this, K2 wakes the computer only while it is plugged in. Never below {wake.batteryFloorPercent ?? 20}% battery.
+              Wake it on battery too, with the lid open, and never below {wake.batteryFloorPercent ?? 20}%. Off: only while it is
+              plugged in.
             </p>
           </div>
           <Toggle
@@ -738,7 +815,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
     >
       {heartbeatsError.oldHost
         ? 'Update K2 on the server, then try again.'
-        : 'K2 couldn’t read the heartbeats on this server. They still run on their schedules; try again in a moment.'}
+        : 'K2 couldn’t read the list of heartbeats on this server. They still run on their schedules. Try again in a moment.'}
     </SettingsLoadState>
   ) : heartbeats === null && heartbeatsLoading ? (
     <SettingsLoadState kind="loading" title="Loading your heartbeats…" testId="heartbeats-list-loading" />
@@ -752,15 +829,23 @@ export function WakeSchedulerSection(): React.JSX.Element {
     <SettingsGroup
       card
       title="Your heartbeats"
-      hint="Every heartbeat in every workspace. Pause one to stop it running until you turn it back on."
+      hint="Every heartbeat in every workspace. Runs in picks the chat it wakes; Edit instructions changes what it tells the agent; the switch pauses it."
       state={listState}
       testId="heartbeats-list"
     >
       {(heartbeats ?? []).map((row) => {
         const target = deriveDeliveryTarget(row)
         const rowNote = rowNotes[row.id]
+        const status = rowStatus(row)
         return (
-          <div key={row.id} className="px-4 py-3" data-testid={`heartbeat-row-${row.id}`}>
+          <div
+            key={row.id}
+            ref={(el) => {
+              rowEls.current[row.id] = el
+            }}
+            className="px-4 py-3 scroll-my-6"
+            data-testid={`heartbeat-row-${row.id}`}
+          >
             <div className="flex items-start justify-between gap-6">
               <div className="min-w-0 flex-1">
                 <p className="type-row text-[var(--color-text-primary)] truncate">
@@ -768,27 +853,30 @@ export function WakeSchedulerSection(): React.JSX.Element {
                   <span className="text-[var(--color-text-secondary)]"> in {row.projectName}</span>
                 </p>
                 <p className={SETTING_ROW_HINT}>{describeHeartbeatSpec(row.specJson, row.frequency)}</p>
-                {/* Heartbeat S4 (HB31): next run or the daemon's wait reason. */}
-                {/* Paused by a person reads plainly; paused by K2 keeps the
-                    formatter's reason. */}
-                {!row.enabled && !row.disabledReason && !row.waitDetail && (!row.waitReason || row.waitReason === 'disabled:user') ? (
-                  <p className="type-hint text-[var(--color-text-secondary)] mt-0.5">Paused. Turn it on to resume.</p>
+                {/* Paused by a person, or the next run, read in this page's
+                    words and time format; anything else (a wait, a problem)
+                    keeps the shared formatter's line. */}
+                {status ? (
+                  <p
+                    className={`type-hint mt-0.5 ${status.tone === 'problem' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-secondary)]'}`}
+                    data-heartbeat-status={status.tone}
+                  >
+                    {status.text}
+                  </p>
                 ) : (
                   <HeartbeatStatusLine row={row} nextFire={nextFire} nextPrefix="Next run: " className="type-hint mt-0.5" />
                 )}
-                {rowNote && (
-                  <p
-                    role={rowNote.kind === 'error' ? 'alert' : 'status'}
-                    data-row-note={rowNote.kind}
-                    className={`type-hint mt-1 max-w-[75ch] ${rowNote.kind === 'error' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-status-ok-soft)]'}`}
-                  >
+                {rowNote?.kind === 'error' && (
+                  <p role="alert" data-row-note="error" className="type-hint mt-1 max-w-[75ch] text-[var(--color-status-error-soft)]">
                     {rowNote.text}
+                    <NoteReason reason={rowNote.reason} />
                   </p>
                 )}
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <HeartbeatSessionPicker
                   variant="field"
+                  prefix="Runs in"
                   ariaLabel={`Where ${row.name} runs`}
                   projectPath={row.projectPath}
                   projectId={row.projectId}
@@ -807,9 +895,22 @@ export function WakeSchedulerSection(): React.JSX.Element {
                 >
                   Open chat
                 </Button>
-                <Button onClick={() => setEditingHeartbeat(row)} title={`Edit ${row.wakeupPath}`} aria-label={`Edit the wakeup for ${row.name}`}>
-                  Edit wakeup
+                <Button
+                  onClick={() => setEditingHeartbeat(row)}
+                  title="Edit what it tells the agent each time it runs"
+                  aria-label={`Edit the instructions for ${row.name}`}
+                >
+                  Edit instructions
                 </Button>
+                {rowNote && (
+                  <span
+                    role={rowNote.kind === 'saved' ? 'status' : undefined}
+                    data-row-note={rowNote.kind === 'saved' ? 'saved' : undefined}
+                    className={`type-hint whitespace-nowrap ${rowNote.kind === 'error' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-status-ok-soft)]'}`}
+                  >
+                    {rowNote.kind === 'error' ? 'Not saved' : rowNote.text}
+                  </span>
+                )}
                 <Toggle
                   size="sm"
                   checked={row.enabled}
@@ -830,15 +931,15 @@ export function WakeSchedulerSection(): React.JSX.Element {
   const problemCount = (fires ?? []).filter((f) => describeDecision(f.decision).tone === 'problem').length
   const firesState =
     fires === null ? (
-      firesError ? (
+      firesError !== null ? (
         <SettingsLoadState
           kind="error"
           title="Recent runs couldn’t load"
-          detail={firesError}
+          detail={firesError || null}
           action={<Button onClick={() => setFiresAttempt((n) => n + 1)}>Try again</Button>}
           testId="heartbeats-runs-error"
         >
-          K2 couldn’t read what the scheduler did. Your heartbeats still run; try again in a moment.
+          K2 couldn’t read the list of recent runs. Your heartbeats still run. Try again in a moment.
         </SettingsLoadState>
       ) : (
         <SettingsLoadState kind="loading" title="Loading recent runs…" testId="heartbeats-runs-loading" />
@@ -881,17 +982,23 @@ export function WakeSchedulerSection(): React.JSX.Element {
       ) : (
         <ul className="max-h-[32rem] overflow-y-auto divide-y divide-[var(--color-border)]" data-testid="heartbeats-runs-rows">
           {shown.map((fire) => (
-            <FireRow key={fire.id} fire={fire} open={openFire === fire.id} onToggle={() => setOpenFire((id) => (id === fire.id ? null : fire.id))} />
+            <FireRow
+              key={fire.id}
+              fire={fire}
+              open={openFire === fire.id}
+              onToggle={() => setOpenFire((id) => (id === fire.id ? null : fire.id))}
+              onEdit={editFor(fire)}
+            />
           ))}
         </ul>
       )}
       <div className="px-4 py-2.5">
-        {firesError ? (
+        {firesError !== null ? (
           <p role="alert" className="type-hint text-[var(--color-text-primary)] flex items-center gap-2">
             <span aria-hidden="true" className="inline-block h-2 w-2 rounded-[var(--radius-status)] bg-[var(--color-status-error)]" />
             <span>
               Stopped updating; showing the last runs K2 read.{' '}
-              <span className="text-[var(--color-text-secondary)]">The server said: {firesError.replace(/[.\s]+$/, '')}.</span>
+              {firesError && <span className="text-[var(--color-text-secondary)]">The server said: {firesError}.</span>}
             </span>
           </p>
         ) : (

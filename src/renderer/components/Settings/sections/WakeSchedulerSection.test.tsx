@@ -44,7 +44,7 @@ vi.mock('@/lib/heartbeat-delivery', () => ({
   setHeartbeatSession: vi.fn(async () => undefined),
 }))
 
-import { WakeSchedulerSection, describeDecision, listReply } from './WakeSchedulerSection'
+import { PAUSED_TEXT, WakeSchedulerSection, describeDecision, explainRun, listReply } from './WakeSchedulerSection'
 
 const ROW = {
   id: 'hb1',
@@ -104,6 +104,24 @@ describe('listReply / describeDecision', () => {
     expect(describeDecision('skipped_busy')).toEqual({ text: 'Skipped: the agent was busy', tone: 'skip' })
     expect(describeDecision('skipped_new_thing').text).toBe('Skipped: new thing')
   })
+
+  it('explains a run’s reason in plain words with the next step, never the raw text', () => {
+    expect(explainRun({ decision: 'error', reason: 'WAKEUP.md not found at .k2/heartbeats/nightly-build/WAKEUP.md' })).toEqual({
+      text: 'Its instructions file is missing.',
+      next: 'Edit its instructions to add them.',
+      missingFile: true,
+    })
+    expect(explainRun({ decision: 'fired_catchup', reason: 'missed at 09:00 while the computer slept; fired 7h late' })?.text).toBe(
+      'Ran 7 hours late because the computer was asleep.',
+    )
+    expect(explainRun({ decision: 'error', reason: 'the agent session exited before it answered' })?.text).toBe(
+      'Failed: the agent’s chat closed before it answered.',
+    )
+    expect(explainRun({ decision: 'skipped_missed', reason: 'due while the computer slept; 14 hours late, so K2 skipped it' })?.next).toBe(
+      'It runs again at its next time.',
+    )
+    expect(explainRun({ decision: 'fired', reason: null })).toBeNull()
+  })
 })
 
 describe('WakeSchedulerSection', () => {
@@ -111,13 +129,27 @@ describe('WakeSchedulerSection', () => {
     render(<WakeSchedulerSection />)
     await waitFor(() => expect(screen.getByText('Your heartbeats couldn’t load')).toBeTruthy())
     expect(screen.getByText('Recent runs couldn’t load')).toBeTruthy()
-    expect(screen.getByText('K2 couldn’t read the scheduler')).toBeTruthy()
-    expect(screen.getAllByText('The server said: the reply wasn’t a list.').length).toBe(2)
+    expect(screen.getByText('The scheduler’s status couldn’t load')).toBeTruthy()
+    // The page says what it couldn't read in its own words; a reply of the
+    // wrong shape is never passed off as the server's reason.
+    expect(screen.getByText(/couldn’t read the list of heartbeats on this server/)).toBeTruthy()
+    expect(screen.queryByText(/The server said/)).toBeNull()
+    expect(screen.queryByText(/reply wasn’t a list/)).toBeNull()
     expect(screen.queryByText('Something went wrong')).toBeNull()
 
     h.invokes.k2so_heartbeat_list_all = [ROW]
     fireEvent.click(screen.getAllByRole('button', { name: 'Try again' })[1])
     await waitFor(() => expect(screen.getByTestId('heartbeat-row-hb1')).toBeTruthy())
+  })
+
+  it('row buttons say what they do', async () => {
+    h.invokes.k2so_heartbeat_list_all = [ROW]
+    h.invokes.k2so_heartbeat_fires_list_all = []
+    h.routes['heartbeat/scheduler-status'] = STATUS
+    render(<WakeSchedulerSection />)
+    const edit = await screen.findByRole('button', { name: 'Edit the instructions for nightly-build' })
+    expect(edit.textContent).toBe('Edit instructions')
+    expect(screen.queryByText('Edit wakeup')).toBeNull()
   })
 
   it('an empty list says how to add one', async () => {
@@ -137,13 +169,18 @@ describe('WakeSchedulerSection', () => {
     render(<WakeSchedulerSection />)
     const sw = await screen.findByRole('switch', { name: 'Run nightly-build in atlas' })
     fireEvent.click(sw)
-    await waitFor(() => expect(screen.getByText('Paused. It won’t run until you turn it back on.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Saved')).toBeTruthy())
+    // One wording for paused, and no stray state word.
+    expect(screen.getByText(PAUSED_TEXT)).toBeTruthy()
+    expect(screen.getByTestId('heartbeat-row-hb1').textContent).not.toMatch(/\bdisabled\b/)
     expect(h.posts[0]).toEqual(['heartbeat/enable', { project: ROW.projectPath, name: 'nightly-build', enabled: false }])
     expect(sw.getAttribute('aria-checked')).toBe('false')
 
     h.enableFails = 'heartbeat is locked'
     fireEvent.click(sw)
-    await waitFor(() => expect(screen.getByText('Couldn’t resume it: heartbeat is locked. Nothing changed; try again.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Not saved')).toBeTruthy())
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toBe('Couldn’t resume nightly-build. Nothing changed; try again in a moment.The server said: heartbeat is locked.')
     expect(sw.getAttribute('aria-checked')).toBe('false')
   })
 
@@ -156,10 +193,16 @@ describe('WakeSchedulerSection', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Problems (1)' }))
     const rows = container.querySelectorAll('[data-fire-row]')
     expect(rows.length).toBe(1)
-    expect(rows[0]?.textContent).toContain('Failed')
+    expect(rows[0]?.textContent).toContain('Its instructions file is missing.')
+    expect(rows[0]?.textContent).toContain('Edit its instructions to add them.')
+    expect(rows[0]?.textContent).not.toContain('WAKEUP.md')
     const toggle = rows[0]?.querySelector('button') as HTMLButtonElement
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getByText('WAKEUP.md not found')).toBeTruthy()
+    // The scheduler's own words only in the opened run, labelled.
+    const details = container.querySelector('[data-fire-details]') as HTMLElement
+    expect(details.textContent).toContain('Log line')
+    expect(details.textContent).toContain('error: WAKEUP.md not found')
+    expect(screen.getAllByRole('button', { name: 'Edit instructions' }).length).toBeGreaterThan(0)
   })
 })

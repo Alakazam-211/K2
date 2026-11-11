@@ -59,6 +59,9 @@ interface HeartbeatSessionPickerProps {
   variant?: 'inline' | 'field'
   /** Names the trigger for screen readers (e.g. with the heartbeat's name). */
   ariaLabel?: string
+  /** Says what the trigger chooses, before the choice ("Runs in: Own
+   *  session"). Shown quietly on the trigger; field variant only. */
+  prefix?: string
 }
 
 export function HeartbeatSessionPicker({
@@ -68,6 +71,7 @@ export function HeartbeatSessionPicker({
   onSelect,
   variant = 'inline',
   ariaLabel = 'Heartbeat wakeup destination',
+  prefix,
 }: HeartbeatSessionPickerProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   // null = not fetched yet (distinct from an empty workspace).
@@ -227,6 +231,7 @@ export function HeartbeatSessionPicker({
 
   const triggerBody = (
     <>
+      {prefix && variant === 'field' && <span className="text-[var(--color-text-secondary)] flex-shrink-0">{prefix}:</span>}
       <span className="truncate max-w-[24ch]">{label}</span>
       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="flex-shrink-0">
         <path d={open ? 'M18 15l-6-6-6 6' : 'M6 9l6 6 6-6'} />

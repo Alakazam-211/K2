@@ -48,8 +48,18 @@ export async function fetchReaderLog(scope: ServerScope, f: ReaderLogFilters): P
     since: f.since || undefined,
     limit: f.limit ?? READER_LOG_DEFAULT_LIMIT,
   })
-  if (!Array.isArray(r?.rows)) throw new Error('the reader log answered without rows')
-  return r.rows
+  if (!r || typeof r !== 'object' || !Array.isArray(r.rows)) throw new ReaderLogUnreadableError()
+  return r.rows.filter((x): x is ReaderLogRow => !!x && typeof x === 'object' && typeof (x as ReaderLogRow).action === 'string')
+}
+
+/** The answer had no list of rows: never sent by a daemon with this route
+ *  (it always answers `{ok, count, rows}`), so the page says it couldn't
+ *  read the answer rather than show an empty log or crash. */
+export class ReaderLogUnreadableError extends Error {
+  constructor() {
+    super('the answer had no list of rows')
+    this.name = 'ReaderLogUnreadableError'
+  }
 }
 
 const ACTION_LABELS: Record<string, string> = {
@@ -85,11 +95,48 @@ export function readerActionLabel(action: string): string {
   return ACTION_LABELS[action] ?? action
 }
 
+/** The action as the middle of a sentence ("alex opened a message in …"),
+ *  and whether it came through an agent tab. */
+export function readerActionPhrase(action: string): { phrase: string; agentTab: boolean } {
+  const label = ACTION_LABELS[action]
+  if (!label) return { phrase: `did “${action}”`, agentTab: false }
+  const agentTab = label.endsWith(' (agent tab)')
+  const base = agentTab ? label.slice(0, -' (agent tab)'.length) : label
+  return { phrase: base.charAt(0).toLowerCase() + base.slice(1), agentTab }
+}
+
+/** Who, by name: `user:pat` → "pat"; the owner token in words. */
+export function readerActorName(actor: string): string {
+  if (actor === 'owner-token') return 'The owner token'
+  return actor.startsWith('user:') ? actor.slice(5) : actor
+}
+
 /** "pat (admin)" from `user:pat` / "Owner token". */
 export function readerActorLabel(row: Pick<ReaderLogRow, 'actor' | 'actorRole'>): string {
   if (row.actor === 'owner-token') return 'Owner token'
-  const name = row.actor.startsWith('user:') ? row.actor.slice(5) : row.actor
+  const name = readerActorName(row.actor)
   return row.actorRole ? `${name} (${row.actorRole})` : name
+}
+
+/** A role in words: "Owner", "Admin", "Member". */
+export function readerRoleText(role: string): string {
+  return role ? role.charAt(0).toUpperCase() + role.slice(1) : ''
+}
+
+/** Whose mailbox, in words. */
+export function readerMailboxText(row: Pick<ReaderLogRow, 'kind' | 'own' | 'source'>): string {
+  const whose = row.kind === 'person' ? (row.own ? 'Their own mailbox' : 'Someone else’s mailbox') : 'An agent’s mailbox'
+  return row.source === 'linked' ? `${whose}, a linked account` : `${whose} on this server`
+}
+
+/** Where the request came from: the daemon writes "<door> <ip>". */
+export function readerFromText(hint: string | null | undefined): string {
+  const h = (hint ?? '').trim()
+  if (!h) return 'Not recorded'
+  const [door, ip] = h.split(/\s+/, 2)
+  const where = door === 'loopback' ? 'This computer' : door === 'lan' ? 'The local network' : door === 'tunnel' ? 'The internet, through the tunnel' : null
+  if (!where) return h
+  return ip && ip !== '-' ? `${where} (${ip})` : where
 }
 
 export function readerLogTime(unix: number): string {

@@ -1,26 +1,32 @@
 // Settings → Cores → Email Reader Log (prd-ocmail-admin-in-k2-v1 OA2): who
 // opened, listed or changed which mailbox, when, from where, and why when
-// they gave a reason. Thin table over GET /cli/mail/reader/log; the daemon
+// they gave a reason. A list over GET /cli/mail/reader/log; the daemon
 // writes every row before the mail is touched and decides what each viewer
 // may see. Never shows message content (the log has none).
 //
-// The Settings page anatomy (as Usage): a heading and its hint, the filters
-// as a toolbar, then the log in one tile (a cut card in Terminal) or the
-// shared load state in its place while it loads, after a failed read, or
-// when nothing matches.
+// The Settings page anatomy (as Access Audit): a heading and its hint, the
+// filters in one row (mailbox, who, how far back), then the reads in one
+// card, each a sentence that opens to every detail; the shared load state
+// in the card's place while it loads, after a failed read, or when nothing
+// matches.
 
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { primaryScope } from '@/kessel/server-scope'
 import { useConnectHostStore } from '@/stores/connect-host'
-import { Button, Input, Surface, Tag } from '@/components/ui'
+import { Button, SearchField, Tag } from '@/components/ui'
 import type { SettingEntry } from '../searchManifest'
-import { SETTING_ROW_HINT, SettingDropdown, SettingsLoadState } from '../controls/SettingControls'
+import { SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT, SettingDropdown, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { localWhen, localWhenFull } from '../shared/local-time'
 import {
+  READER_LOG_DEFAULT_LIMIT,
   READER_LOG_SINCE_CHOICES,
+  ReaderLogUnreadableError,
   fetchReaderLog,
-  readerActionLabel,
-  readerActorLabel,
-  readerLogTime,
+  readerActionPhrase,
+  readerActorName,
+  readerFromText,
+  readerMailboxText,
+  readerRoleText,
   type ReaderLogRow,
 } from './mail-reader-log-api'
 
@@ -34,174 +40,270 @@ export const MAIL_READER_LOG_MANIFEST: SettingEntry[] = [
   },
 ]
 
-/** One log row's columns, shared by the head and every row so they line up. */
-const ROW_GRID =
-  'grid grid-cols-[minmax(9rem,11rem)_minmax(7rem,9rem)_minmax(10rem,1.2fr)_minmax(12rem,1.6fr)_6.5rem_minmax(8rem,1fr)_minmax(6rem,8rem)] items-start gap-x-4 px-4'
+const CONTENT_WIDTH = 'max-w-[52rem]'
+const EVERYONE = ''
+const FULL_ADDRESS = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+type View = { kind: 'loading' } | { kind: 'rows'; rows: ReaderLogRow[] } | { kind: 'error'; detail: string; unreadable: boolean }
+
+function ReadRow({ r, open, onToggle }: { r: ReaderLogRow; open: boolean; onToggle: () => void }): React.JSX.Element {
+  const refused = r.outcome !== 'ok'
+  const { phrase, agentTab } = readerActionPhrase(r.action)
+  const name = readerActorName(r.actor)
+  // Listing inboxes isn't "in" one mailbox: the address goes to the hint.
+  const listing = r.action === 'reader/inboxes' || r.action === 'inboxes'
+  const rowId = `reader-log-details-${r.id}`
+  const fields: { label: string; value: React.ReactNode }[] = [
+    { label: 'When', value: localWhenFull(r.at * 1000) },
+    { label: 'Who', value: r.actorRole && r.actor !== 'owner-token' ? `${name}, ${readerRoleText(r.actorRole)}` : name },
+    { label: 'Mailbox', value: `${r.address || '—'} · ${readerMailboxText(r)}` },
+    { label: 'Through', value: agentTab ? 'An agent tab’s Inbox' : 'The Mail page' },
+    {
+      label: 'Outcome',
+      value: refused ? `Refused: K2 didn’t open the mail${typeof r.status === 'number' ? ` (code ${r.status})` : ''}` : 'Allowed',
+    },
+    { label: 'Reason given', value: r.reason || 'None given' },
+    { label: 'From', value: readerFromText(r.ipHint) },
+  ]
+  return (
+    <li data-testid={`reader-log-row-${r.id}`} data-refused={refused ? 'true' : undefined}>
+      <button
+        type="button"
+        data-k2-focus=""
+        aria-expanded={open}
+        aria-controls={rowId}
+        onClick={onToggle}
+        className={`group w-full grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-start gap-x-3 px-4 py-3 text-left no-drag cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
+      >
+        <span
+          aria-hidden="true"
+          className={`mt-1.5 inline-block h-2 w-2 rounded-[var(--radius-status)] ${refused ? 'bg-[var(--color-status-error)]' : 'bg-[var(--color-status-ok)]'}`}
+        />
+        <span className="min-w-0">
+          <span className="block type-row text-[var(--color-text-primary)] break-words">
+            <span className="type-name">{name}</span> {phrase}
+            {r.address && !listing ? (
+              <>
+                {' in '}
+                <span className="type-name">{r.address}</span>
+              </>
+            ) : null}
+            {refused && <Tag data-case="as-written" tone="danger" className="ml-2 align-middle">Refused</Tag>}
+          </span>
+          <span className="block type-hint text-[var(--color-text-secondary)] mt-0.5 break-words">
+            {listing && r.address ? `Including ${r.address} · ` : ''}
+            {readerMailboxText(r)}
+            {agentTab ? ' · From an agent tab' : ''}
+            {r.reason ? ` · “${r.reason}”` : ''}
+          </span>
+        </span>
+        <span className="type-hint text-[var(--color-text-secondary)] tabular-nums whitespace-nowrap" title={new Date(r.at * 1000).toUTCString()}>
+          {localWhen(r.at * 1000)}
+        </span>
+        <span aria-hidden="true" className={`type-row text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)] transition-transform ${open ? 'rotate-90' : ''}`}>
+          ›
+        </span>
+      </button>
+      {open && (
+        <dl id={rowId} className="grid grid-cols-[9rem_minmax(0,1fr)] gap-x-4 gap-y-1 px-4 pb-3 pl-9" data-testid={`reader-log-details-${r.id}`}>
+          {fields.map((f) => (
+            <React.Fragment key={f.label}>
+              <dt className="type-hint text-[var(--color-text-secondary)]">{f.label}</dt>
+              <dd className="type-hint text-[var(--color-text-primary)] break-words">{f.value}</dd>
+            </React.Fragment>
+          ))}
+        </dl>
+      )}
+    </li>
+  )
+}
 
 export function MailReaderLogSection(): React.JSX.Element {
   const hostKey = useConnectHostStore((s) => (s.activeHost === 'local' ? 'local' : s.activeHost.id))
-  const [inbox, setInbox] = useState('')
-  const [actor, setActor] = useState('')
+  const [mailbox, setMailbox] = useState('')
+  const [actor, setActor] = useState(EVERYONE)
   const [since, setSince] = useState('7d')
-  const [applied, setApplied] = useState({ inbox: '', actor: '' })
-  const [rows, setRows] = useState<ReaderLogRow[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  /** A full address typed in the mailbox field also narrows the server's
+   *  read, so older reads of that mailbox come back too. */
+  const [inbox, setInbox] = useState('')
+  const [view, setView] = useState<View>({ kind: 'loading' })
+  const [busy, setBusy] = useState(false)
+  const [openRow, setOpenRow] = useState<number | null>(null)
+  /** Everyone seen in the log so far, for the Who menu. */
+  const [seen, setSeen] = useState<string[]>([])
+
+  useEffect(() => {
+    const q = mailbox.trim().toLowerCase()
+    const next = FULL_ADDRESS.test(q) ? q : ''
+    const t = setTimeout(() => setInbox(next), 400)
+    return () => clearTimeout(t)
+  }, [mailbox])
 
   const load = useCallback(async () => {
-    setLoading(true)
+    setBusy(true)
     try {
-      const r = await fetchReaderLog(primaryScope(), { inbox: applied.inbox, actor: applied.actor, since })
-      setRows(r)
-      setError(null)
+      const rows = await fetchReaderLog(primaryScope(), { inbox, actor, since })
+      setView({ kind: 'rows', rows })
+      setSeen((prev) => {
+        const next = new Set(prev)
+        for (const r of rows) next.add(r.actor)
+        return next.size === prev.length ? prev : [...next]
+      })
     } catch (e) {
-      setRows(null)
-      setError(e instanceof Error ? e.message : String(e))
+      setView({
+        kind: 'error',
+        detail: e instanceof Error ? e.message : String(e),
+        unreadable: e instanceof ReaderLogUnreadableError,
+      })
     } finally {
-      setLoading(false)
+      setBusy(false)
     }
     // hostKey: a host switch reloads this server's log.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applied, since, hostKey])
+  }, [inbox, actor, since, hostKey])
 
   useEffect(() => {
     void load()
   }, [load])
 
-  const filtered = applied.inbox.trim() !== '' || applied.actor.trim() !== ''
-  const sinceLabel = since ? `the ${READER_LOG_SINCE_CHOICES.find((c) => c.value === since)?.label.toLowerCase() ?? since}` : 'the log'
+  const q = mailbox.trim().toLowerCase()
+  const all = view.kind === 'rows' ? view.rows : []
+  const rows = useMemo(() => (q ? all.filter((r) => r.address.toLowerCase().includes(q)) : all), [all, q])
+  const narrowed = q !== '' || actor !== EVERYONE
+  const sinceText = since ? (READER_LOG_SINCE_CHOICES.find((c) => c.value === since)?.label.toLowerCase() ?? since) : 'everything kept'
+  const windowText = since ? `in the ${sinceText}` : 'in everything kept'
+  const who = actor ? readerActorName(actor) : ''
+  const clear = (): void => {
+    setMailbox('')
+    setInbox('')
+    setActor(EVERYONE)
+    setOpenRow(null)
+  }
+
+  const whoOptions = useMemo(() => {
+    const names = [...new Set([...seen, ...(actor ? [actor] : [])])].sort((a, b) => readerActorName(a).localeCompare(readerActorName(b)))
+    return [{ value: EVERYONE, label: 'Everyone' }, ...names.map((a) => ({ value: a, label: readerActorName(a) }))]
+  }, [seen, actor])
+
+  const tryAgain = (
+    <Button onClick={() => void load()} disabled={busy}>
+      {busy ? 'Trying…' : 'Try again'}
+    </Button>
+  )
+
+  const state =
+    view.kind === 'loading' ? (
+      <SettingsLoadState kind="loading" title="Loading mailbox reads…" testId="reader-log-loading">
+        Who opened which mailbox, newest first.
+      </SettingsLoadState>
+    ) : view.kind === 'error' ? (
+      <SettingsLoadState
+        kind="error"
+        title="The reader log couldn’t load"
+        detail={view.unreadable ? null : view.detail}
+        action={tryAgain}
+        testId="reader-log-error-state"
+      >
+        <span data-testid="reader-log-error">
+          {view.unreadable
+            ? 'This server sent an answer K2 couldn’t read, so there’s nothing to show yet. Try again; if it keeps happening, update K2 on that server.'
+            : 'K2 couldn’t read this server’s mailbox log, so there’s nothing to show yet. Nothing in it is lost; try again in a moment.'}
+        </span>
+      </SettingsLoadState>
+    ) : all.length === 0 && !narrowed ? (
+      <SettingsLoadState
+        kind="empty"
+        title={since ? `No mailbox reads ${windowText}` : 'No mailbox reads yet'}
+        action={since !== '' ? <Button onClick={() => setSince('')}>Show everything kept</Button> : undefined}
+        testId="reader-log-empty"
+      >
+        Each time someone opens, lists or changes a mailbox, it shows here.
+      </SettingsLoadState>
+    ) : undefined
 
   return (
-    <div className="flex flex-col gap-4 max-w-[96rem]" data-testid="mail-reader-log">
-      <div>
-        <div className="flex items-center justify-between gap-4 min-h-[1.5rem]">
-          <h3 className="type-heading text-[var(--color-text-primary)]">Email Reader Log</h3>
-          <Button variant="quiet" data-testid="reader-log-refresh" disabled={loading} onClick={() => void load()}>
-            {loading && rows ? 'Refreshing…' : 'Refresh'}
-          </Button>
-        </div>
+    <div data-settings-id="email-reader-log" data-testid="mail-reader-log" className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`}>
+      <header className="min-w-0" data-settings-id="email-reader-log.log">
+        <h2 className="type-title text-[var(--color-text-primary)]">Email Reader Log</h2>
         <p className={SETTING_ROW_HINT}>
-          Every open, list and change of a mailbox by a person (the Mail page, or an agent tab’s Inbox) is written here before the
-          mail is touched. The mailbox’s person isn’t notified. No message content is kept.
+          Each time someone opens, lists or changes a mailbox, from the Mail page or an agent tab, it’s written here first. The
+          mailbox’s owner isn’t told, and no message content is kept.
         </p>
-      </div>
-      <form
-        role="search"
-        aria-label="Filter the log"
-        className="flex flex-wrap items-center gap-2"
-        onSubmit={(e) => {
-          e.preventDefault()
-          setApplied({ inbox, actor })
-        }}
-      >
-        <Input
+      </header>
+
+      <div role="search" aria-label="Filter the log" className="flex flex-wrap items-center gap-2" data-testid="reader-log-filters">
+        <SearchField
           data-testid="reader-log-inbox"
-          aria-label="Inbox address"
-          className="w-56"
-          placeholder="Inbox address"
-          value={inbox}
-          onChange={(e) => setInbox(e.target.value)}
+          aria-label="Filter by mailbox"
+          className="w-60"
+          placeholder="Filter by mailbox"
+          value={mailbox}
+          onChange={(e) => {
+            setMailbox(e.target.value)
+            setOpenRow(null)
+          }}
         />
-        <Input
-          data-testid="reader-log-actor"
-          aria-label="Who"
-          className="w-56"
-          placeholder="Who (user:name or owner-token)"
-          value={actor}
-          onChange={(e) => setActor(e.target.value)}
-        />
-        <SettingDropdown ariaLabel="Since" value={since} onChange={setSince} options={READER_LOG_SINCE_CHOICES} />
-        <Button type="submit" variant="default" data-testid="reader-log-apply">
-          Filter
-        </Button>
-        {filtered && (
-          <Button
-            variant="quiet"
-            data-testid="reader-log-clear"
-            onClick={() => {
-              setInbox('')
-              setActor('')
-              setApplied({ inbox: '', actor: '' })
-            }}
-          >
-            Show everyone
+        <span className="flex items-center gap-2">
+          <span className="type-hint text-[var(--color-text-secondary)]">Who</span>
+          <SettingDropdown ariaLabel="Who" value={actor} onChange={(v) => setActor(v)} options={whoOptions} menuAlign="left" triggerData={{ 'data-testid': 'reader-log-actor' }} />
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="type-hint text-[var(--color-text-secondary)]">When</span>
+          <SettingDropdown ariaLabel="When" value={since} onChange={(v) => setSince(v)} options={READER_LOG_SINCE_CHOICES} menuAlign="left" triggerData={{ 'data-testid': 'reader-log-since' }} />
+        </span>
+      </div>
+
+      <SettingsGroup
+        card
+        title="Mailbox reads"
+        hint={
+          narrowed
+            ? rows.length === 0
+              ? 'Nothing matches these filters.'
+              : `${rows.length === 1 ? 'One read' : `${rows.length} reads`}${q ? ` of mailboxes matching “${mailbox.trim()}”` : ''}${who ? ` by ${who}` : ''}, newest first.`
+            : 'Newest first. Open a read for every detail.'
+        }
+        action={
+          <Button onClick={() => void load()} disabled={busy} data-testid="reader-log-refresh">
+            {busy && view.kind === 'rows' ? 'Refreshing…' : 'Refresh'}
           </Button>
-        )}
-      </form>
-      {error ? (
-        <SettingsLoadState
-          kind="error"
-          title="The reader log couldn’t load"
-          action={
-            <Button className="flex-shrink-0" onClick={() => void load()}>
-              Try again
-            </Button>
-          }
-          testId="reader-log-error-state"
-        >
-          <span data-testid="reader-log-error">{error}</span>
-        </SettingsLoadState>
-      ) : !rows ? (
-        <SettingsLoadState kind="loading" title="Loading the log…" testId="reader-log-loading">
-          Who opened which mailbox, newest first.
-        </SettingsLoadState>
-      ) : rows.length === 0 ? (
-        <SettingsLoadState kind="empty" title="No mailbox access in this window" testId="reader-log-empty">
-          {filtered ? 'Nothing matches these filters' : 'No one opened, listed or changed a mailbox'} in {sinceLabel}.
-        </SettingsLoadState>
-      ) : (
-        <Surface chamfer material="tile" className="overflow-hidden" data-testid="reader-log-table">
-          <div className="overflow-x-auto">
-            <div role="table" aria-label="Email Reader Log" className="min-w-[60rem]">
-              <div role="row" className={`${ROW_GRID} py-2 border-b border-[var(--color-border)] type-hint text-[var(--color-text-muted)]`}>
-                {['Time', 'Who', 'What', 'Inbox', 'Outcome', 'Reason', 'From'].map((c) => (
-                  <span key={c} role="columnheader">
-                    {c}
-                  </span>
-                ))}
-              </div>
-              <div role="rowgroup" className="divide-y divide-[var(--color-border)]">
-                {rows.map((r) => (
-                  <div key={r.id} role="row" data-testid={`reader-log-row-${r.id}`} className={`${ROW_GRID} py-2.5 type-row`}>
-                    <span role="cell" className="tabular-nums text-[var(--color-text-secondary)]">
-                      {readerLogTime(r.at)}
-                    </span>
-                    <span role="cell" className="text-[var(--color-text-primary)] break-words">
-                      {readerActorLabel(r)}
-                    </span>
-                    <span role="cell" className="text-[var(--color-text-primary)]">
-                      {readerActionLabel(r.action)}
-                    </span>
-                    <span role="cell" className="min-w-0">
-                      <span className="block truncate text-[var(--color-text-primary)]" title={r.address}>
-                        {r.address}
-                      </span>
-                      <span className="block type-hint text-[var(--color-text-muted)]">
-                        {r.kind === 'person' ? (r.own ? 'their own' : 'a person’s') : 'agent'} · {r.source}
-                      </span>
-                    </span>
-                    <span role="cell">
-                      <Tag
-                        tone={r.outcome === 'ok' ? 'ok' : 'danger'}
-                        data-case="as-written"
-                        title={typeof r.status === 'number' ? `HTTP ${r.status}` : undefined}
-                      >
-                        {r.outcome === 'ok' ? 'allowed' : 'refused'}
-                      </Tag>
-                    </span>
-                    <span role="cell" className={r.reason ? 'text-[var(--color-text-primary)] break-words' : 'text-[var(--color-text-muted)]'}>
-                      {r.reason || '—'}
-                    </span>
-                    <span role="cell" className="type-hint text-[var(--color-text-muted)] break-words">
-                      {r.ipHint || '—'}
-                    </span>
-                  </div>
-                ))}
-              </div>
+        }
+        state={state}
+        testId="reader-log-table"
+      >
+        {rows.length === 0 ? (
+          <div className="px-4 py-6 flex items-center justify-between gap-6" data-testid="reader-log-no-match">
+            <div className="min-w-0">
+              <p className="type-row text-[var(--color-text-primary)]">Nothing matches</p>
+              <p className={SETTING_ROW_HINT}>
+                No reads {q ? `of a mailbox matching “${mailbox.trim()}” ` : ''}
+                {who ? `by ${who} ` : ''}
+                {windowText}.
+              </p>
             </div>
+            <Button onClick={clear} data-testid="reader-log-clear">
+              Show everyone
+            </Button>
           </div>
-        </Surface>
-      )}
+        ) : (
+          <ul className="divide-y divide-[var(--color-border)]" data-testid="reader-log-rows">
+            {rows.map((r) => (
+              <ReadRow key={r.id} r={r} open={openRow === r.id} onToggle={() => setOpenRow((k) => (k === r.id ? null : r.id))} />
+            ))}
+          </ul>
+        )}
+        <div className="px-4 py-2.5 flex items-center justify-between gap-4">
+          <span className="type-hint text-[var(--color-text-secondary)]" data-testid="reader-log-count">
+            Showing {rows.length} of the newest {all.length === 1 ? "read" : `${all.length} reads`} {windowText}
+            {all.length >= READER_LOG_DEFAULT_LIMIT ? `; K2 reads at most ${READER_LOG_DEFAULT_LIMIT} at a time` : ''}
+          </span>
+          {narrowed && rows.length > 0 && (
+            <Button variant="quiet" onClick={clear}>
+              Show everyone
+            </Button>
+          )}
+        </div>
+      </SettingsGroup>
     </div>
   )
 }

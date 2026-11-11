@@ -7358,7 +7358,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
    * - Active project (path match) → append to in-view `tabs` (no active-tab steal).
    * - Background snapshot for that layout key → append there.
    * - Else merge into `workspaceLayouts` + persist so next open of that
-   *   workspace restores the audit tab (Ledger sales pilot: never Julie strip).
+   *   workspace restores the audit tab (never the strip of whichever workspace is active).
    */
   function placeApiAdoptedTab(tab: Tab, eventPath: string): void {
     const project = findProjectForPathIn(deps.projectsPathIndex(), eventPath)
@@ -7580,8 +7580,8 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     console.warn(
       `[tabs] api-session adoption — agent=${agentName} backend=${backend} path=${event.workspace_path || ''}`,
     )
-    // Ledger sales pilot: park under the project for event.workspace_path —
-    // never append into an unrelated focused workspace (e.g. Julie while
+    // API-adopted tabs park under the project for event.workspace_path —
+    // never append into an unrelated focused workspace (e.g. the one the person is looking at while
     // sales host-session spawns).
     placeApiAdoptedTab(tab, event.workspace_path || '')
     return true

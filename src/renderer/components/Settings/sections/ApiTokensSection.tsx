@@ -221,7 +221,7 @@ export function ApiTokensSection(): React.JSX.Element {
         <p className="type-hint text-[var(--color-text-muted)]">Loading keys…</p>
       ) : keys.length === 0 ? (
         <p className="type-hint text-[var(--color-text-muted)]">
-          No API keys yet. Create one to allow external apps (e.g. Scout) to call host-sessions on
+          No API keys yet. Create one to allow external apps to call host-sessions on
           granted workspaces.
         </p>
       ) : (
@@ -714,7 +714,7 @@ function CreateKeyModal({
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               className="mt-1 w-full px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-              placeholder="e.g. scout-sales"
+              placeholder="e.g. sales-bot"
             />
           </label>
           <div className="space-y-1">

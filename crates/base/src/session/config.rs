@@ -211,6 +211,25 @@ pub struct Config {
     /// draws one fresh ID, reused from then on. Default true.
     pub reuse_agent_clients: bool,
 
+    /// Reuse a person's writer per device (v0.14.0, `docs/design/person-writer-reuse-r0.md`):
+    /// a join with a device key ([`super::JoinOptions::device`]) by a person or an App guest
+    /// takes a free writer of that person on that device, or takes its own writer back on a
+    /// reconnect ([`super::JoinOptions::reclaim`]), instead of minting one per connection. A
+    /// writer is free only after its connection was released ([`super::Session::release`]: the
+    /// client holds nothing unsent and is done with it) or, for a connection without client
+    /// state ([`super::JoinOptions::device_stateless`]), after any end; every other end parks
+    /// it for its own lease. Every op is made by the session itself, so a reused writer's line
+    /// continues from the doc's own state. Without a device key, or off: a fresh writer per
+    /// connection, as before. Default false.
+    pub reuse_person_writers: bool,
+
+    /// How long a parked person writer (one whose connection ended without a release) stays
+    /// reserved for its own lease before another connection of the same person and device
+    /// may take it, in ms. 0: never (the default; a parked writer goes back only to its own
+    /// reclaim). A connection whose reclaim comes after that is told the version its lease
+    /// ended at ([`super::Joined::prev_ended`]).
+    pub person_writer_park_ms: u64,
+
     /// The file write-back's sampled check (v0.9.7): the disk replica is kept in step by
     /// applying the changes since the last write-back; every sync compares its state vector
     /// with the live doc's (O(clients)), and one in this many also its deletions and texts
@@ -376,6 +395,8 @@ impl Config {
             position_check_every,
             writeback_check_every,
             reuse_agent_clients,
+            reuse_person_writers,
+            person_writer_park_ms,
             blame_check_every,
             blame_check_large_at,
             blame_check_every_large,
@@ -459,6 +480,8 @@ impl Config {
             ("position_check_every", u64::from(*position_check_every)),
             ("writeback_check_every", u64::from(*writeback_check_every)),
             ("reuse_agent_clients", u64::from(*reuse_agent_clients)),
+            ("reuse_person_writers", u64::from(*reuse_person_writers)),
+            ("person_writer_park_ms", *person_writer_park_ms),
             ("blame_check_every", u64::from(*blame_check_every)),
             ("blame_check_large_at", *blame_check_large_at),
             (
@@ -561,6 +584,8 @@ impl Default for Config {
             edit_check_scale_units: crate::doc::DEFAULT_EDIT_CHECK_SCALE_UNITS,
             position_check_every: crate::doc::DEFAULT_POSITION_CHECK_EVERY,
             reuse_agent_clients: true,
+            reuse_person_writers: false,
+            person_writer_park_ms: 0,
             writeback_check_every: 100,
             blame_check_every: DEFAULT_BLAME_CHECK_EVERY,
             blame_check_large_at: DEFAULT_BLAME_CHECK_LARGE_AT,

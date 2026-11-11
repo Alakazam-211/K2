@@ -1,6 +1,6 @@
 {
   "name": "k2-mpc-client",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "license": "MIT OR Apache-2.0",
   "description": "Live text editing over the kit's hunk channel, as a library: a text replica, the kit's rebase rules, the wire and transport contract, Re-apply, and presence and marks as data. No DOM; the host draws its own editor (HOST.md).",
   "private": true,

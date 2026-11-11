@@ -145,6 +145,29 @@ pub fn write_base_sides(base: &str, ours: &str, theirs: &str) -> (Vec<Hunk>, Vec
     outside_sides(base, ours, theirs)
 }
 
+/// `write --base`'s conflict when the pack refuses its clean merge's text
+/// ([`crate::session::Pack::check_merged`]): one region spanning every line either
+/// side changed from `base` (as if each of ours' hunks clashed with each of theirs'), on the
+/// texts as [`merge3`] reports a conflict. When one side changed nothing, the whole text.
+pub fn refused_merge(base: &str, ours: &str, theirs: &str) -> Conflict {
+    let cb = closed(base);
+    let (mut a, mut b) = write_base_sides(base, ours, theirs);
+    if a.is_empty() || b.is_empty() {
+        let whole = |t: &str| Hunk {
+            start: 0,
+            end: cb.len(),
+            insert: closed(t).into_owned(),
+        };
+        (a, b) = (vec![whole(ours)], vec![whole(theirs)]);
+    }
+    let clash: Vec<(usize, usize)> = (0..a.len())
+        .flat_map(|i| (0..b.len()).map(move |j| (i, j)))
+        .collect();
+    let mut cs = conflicts(&cb, &a, &b, &clash);
+    debug_assert_eq!(cs.len(), 1, "every pair clashes: one region");
+    on_open_texts(cs.remove(0), base, ours, theirs)
+}
+
 /// A conflict found on the [`closed`] texts, on the texts themselves: a range that reached
 /// the closing "\n" of an open base ends at the base's end, and a side's text there loses
 /// the "\n" its own text doesn't have. Line numbers don't change (closing adds no line), so

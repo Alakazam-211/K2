@@ -12,6 +12,11 @@
 //! store as any other, and refuses the rewrite before anything changes (`NewerData`, the
 //! table named): reported, and the store opened again after it. Its delete isn't refused, and
 //! it can't erase rows of a table it doesn't know.
+//!
+//! v0.14.0's producer (`K2MB_N1_PERSONS`) also leaves person-device writers (`client_kinds`
+//! kind 2), listed in `persons-<store>`: a build of either side never hands one of a.md's to
+//! its own joins here (a person's, an agent's), and its rewrite keeps them (the kit's
+//! `n1_persons_after` takes keep.md's back after this).
 use std::sync::Arc;
 
 use k2_mpc_base::session::{
@@ -45,13 +50,20 @@ fn main() {
         let s = mgr
             .open(Arc::new(TextFilePack::new("markdown", 1 << 20)), &key, None)
             .expect("the doc opens");
-        let c = s
+        let pj = s
             .join(
                 Participant::new("p", "P", "#111111", ParticipantKind::Person, "cli"),
                 Stay::Held,
             )
-            .unwrap()
-            .conn;
+            .unwrap();
+        let c = pj.conn;
+        // the producer's person-device writers of a.md (v0.14.0), if it wrote any
+        let persons: Vec<u64> = std::fs::read_to_string(format!("persons-{file}"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.starts_with("a.md "))
+            .map(|l| l.split(' ').nth(2).unwrap().parse().unwrap())
+            .collect();
         // the producer (job-patched): wrote "two", reverted it, then reverted that revert,
         // which put "two" back with provenance rows and a record with roots
         let r = s.read(c).unwrap();
@@ -87,6 +99,44 @@ fn main() {
         s.replace_text(j.conn, TextFilePack::ROOT, "one\nthree\nfour\n")
             .unwrap();
         println!("{file}: agent bot joined as client {} and wrote", j.client);
+        assert!(
+            !persons.contains(&pj.client) && !persons.contains(&j.client),
+            "{file}: a person-device writer was handed out ({} or {} in {persons:?})",
+            pj.client,
+            j.client
+        );
+        if !persons.is_empty() {
+            println!("{file}: none of a.md's {} person-device writers handed out", persons.len());
+            // the changes those writers landed (keep.md: one each, released and parked) read
+            // here exactly, attributed to their person
+            let keep = DocKey {
+                space: "ws".into(),
+                path: "keep.md".into(),
+            };
+            let k = mgr
+                .open(Arc::new(TextFilePack::new("markdown", 1 << 20)), &keep, None)
+                .expect("keep.md opens");
+            let kc = k
+                .join(
+                    Participant::new("q", "Q", "#333333", ParticipantKind::Person, "cli"),
+                    Stay::Held,
+                )
+                .unwrap()
+                .conn;
+            let kt = k.read(kc).unwrap().text_by_root.remove(0).1;
+            assert_eq!(
+                kt, "keep\nfree\nparked\n",
+                "{file}: keep.md as the other build's person-device writers left it"
+            );
+            let kb = k.blame(kc, TextFilePack::ROOT, None).unwrap();
+            let authors: Vec<&str> = kb.lines.iter().map(|l| l.author.as_str()).collect();
+            assert_eq!(
+                &authors[1..],
+                ["p", "p"],
+                "{file}: keep.md's person-device lines are the person's"
+            );
+            println!("{file}: keep.md read as written under person-device writers, blamed to p");
+        }
         mgr.release().unwrap();
         drop((s, mgr));
         let check = store.check_rewritable();

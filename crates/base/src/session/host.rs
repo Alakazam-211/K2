@@ -126,6 +126,18 @@ pub trait Host: Send + Sync {
         let _ = file;
         None
     }
+
+    /// Tier 0: the conflict copy's file name for the file `file_name`, made at `at_ms` (host
+    /// clock, ms since the Unix epoch), holding `who`'s content (the replaced version's author
+    /// name, or the lease holder's), e.g. `notes (Ada's version).md`: the words are the
+    /// host's. Default `None`: the pack's name ([`crate::session::BlobPack::conflict_copy_name`]),
+    /// whose default is [`crate::session::conflict_copy_name`]. A name that is empty, `.`,
+    /// `..` or has a path separator is passed over for the pack's; an existing file is never
+    /// overwritten (the kit adds ` 2`, ` 3`...). Called with the session locked: quick, no I/O.
+    fn conflict_copy_name(&self, file_name: &str, at_ms: u64, who: &str) -> Option<String> {
+        let _ = (file_name, at_ms, who);
+        None
+    }
 }
 
 /// The right a refused call needed.

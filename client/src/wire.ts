@@ -281,8 +281,20 @@ export interface Welcome {
   version: number;
   /** The root's text: on a first connect, or when resuming was impossible. Absent on a resume. */
   text?: string;
-  /** This connection's client ID (`Joined.client`): new on every connection. */
+  /** This connection's client ID (`Joined.client`): new on every connection, or the client's
+   * own writer again when `kept`. */
   client: number;
+  /** This connection's writer lease (`Joined.lease`, kit v0.14.0; a decimal string, as the
+   * token is 64 bits): the client names it on its next reconnect (`ConnectOptions.lease`).
+   * Absent from a host without writer leases. */
+  lease?: string;
+  /** The reconnect took the client's own writer back (`Joined.kept`): `client` is its previous
+   * one, and nothing of its previous connection lands after this welcome. */
+  kept?: boolean;
+  /** A reconnect that didn't keep its writer: the version its previous lease ended at, when the
+   * host knows it (`Joined.prev_ended`). Changes under that writer after it are another
+   * connection's. */
+  prevEnded?: number;
   /** This participant as the roster names them (pid, or handle for an App viewer). */
   self: Handle;
   rights: Rights;
@@ -323,7 +335,11 @@ export type ClientFrame =
   | { type: "claim"; req: number; root: string; keys: string[]; ttl_ms?: number; note?: string; hold?: boolean }
   /** Release this participant's claim, or all of them here with no `claim`
    * (`Session::release_claim`). Answered by `released` or `presence_refused`. */
-  | { type: "release"; req: number; claim?: string };
+  | { type: "release"; req: number; claim?: string }
+  /** The client holds nothing unsent and is done with its writer (kit v0.14.0, a host with
+   * writer leases; `LiveText.bye`): the host releases the connection (`Session::release`) and
+   * closes it. No reply. */
+  | { type: "bye" };
 
 /** Frames the host sends. */
 export type ServerFrame =
@@ -428,6 +444,13 @@ export interface ConnectOptions {
    * root, on this host; otherwise it ignores `prev` silently (WIRE.md, Reconnecting).
    */
   prev?: number;
+  /**
+   * The writer lease of this client's previous connection (the last welcome's `lease`, kit
+   * v0.14.0), sent with `prev` (the `lease` query parameter). A host with writer leases gives
+   * the client that writer back when the lease is still its (`welcome.kept`), closing the old
+   * connection first; it never closes a connection on `prev` alone.
+   */
+  lease?: string;
   signal: AbortSignal;
 }
 

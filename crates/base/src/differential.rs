@@ -423,6 +423,67 @@ pub fn with_group_mutant<R>(mutant: GroupMutant, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// A fault planted in the kit's use of [`crate::session::Pack::check_merged`], so the tests
+/// that should catch it (`tests/check_merged.rs`) can show they do. Installed per thread by
+/// [`with_check_merged_mutant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckMergedMutant {
+    /// The call is skipped: every merge is taken as if the pack accepted it.
+    Skipped,
+}
+
+thread_local! {
+    static CHECK_MERGED_MUTANT: std::cell::Cell<Option<CheckMergedMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The merged-text check's fault planted on this thread, if any.
+pub fn check_merged_mutant() -> Option<CheckMergedMutant> {
+    CHECK_MERGED_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` panics.
+pub fn with_check_merged_mutant<R>(mutant: CheckMergedMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<CheckMergedMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            CHECK_MERGED_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(CHECK_MERGED_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault planted in tier 0's handling of an outside save, so the tests that should catch it
+/// (`tests/tier0.rs`, the stale-after-kit-write rows) can show they do. Installed per thread by
+/// [`with_tier0_mutant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier0Mutant {
+    /// "stale-after-kit-write ignored": an outside save over a version the kit wrote, with no
+    /// lease held, is taken whole, the old way (the kit's write left only in history).
+    StaleAfterKitWriteIgnored,
+}
+
+thread_local! {
+    static TIER0_MUTANT: std::cell::Cell<Option<Tier0Mutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// Tier 0's fault planted on this thread, if any.
+pub fn tier0_mutant() -> Option<Tier0Mutant> {
+    TIER0_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` panics.
+pub fn with_tier0_mutant<R>(mutant: Tier0Mutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<Tier0Mutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            TIER0_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(TIER0_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
 /// A fault planted in a merge, so the tests that should catch it can show they do. Installed per
 /// thread by [`with_merge_mutant`]. Two families share it:
 /// - `write --base`'s text merge (v0.9.8), caught by the trace classes ((i) and (ii) below;
@@ -777,6 +838,17 @@ pub enum ClientMutant {
     /// `store::tests::an_open_removes_the_client_kinds_of_docs_an_older_kit_deleted` and
     /// tools/n1's `n1_kinds_after_delete`).
     NoOrphanSweep,
+    /// Person-writer reuse ignores the writers present connections hold, so a second tab of
+    /// the same person and device shares the first one's (caught by `tests/person_writers.rs`'s
+    /// `r1_two_tabs`, R9).
+    ReusePersonHeld,
+    /// Person-writer reuse takes a parked writer (its connection ended without a release) for
+    /// another connection's plain join, with no expiry (caught by `tests/person_writers.rs`'s
+    /// `r3_crash_with_pending_edits`, R11).
+    ReuseParked,
+    /// A reclaim of a writer a present connection holds hands it over without closing that
+    /// connection (caught by `tests/person_writers.rs`'s `r2_reconnect_half_open`, R13).
+    HandoverWithoutClose,
 }
 
 thread_local! {

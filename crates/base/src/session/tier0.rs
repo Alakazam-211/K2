@@ -182,6 +182,30 @@ impl AnchorRules for PackRules<'_> {
     }
 }
 
+/// Whether the kit put `v`'s content in the file: a participant's write, a restore, a merge,
+/// or a first version made from bytes (not read from the file). An outside save
+/// (`External`) and a first version read from the file (`Import`, via `disk`) are the file's
+/// own. Reads only persisted fields (the version's reason, via and author), so it holds
+/// across a restart.
+fn kit_wrote(v: &BlobVersion) -> bool {
+    match v.reason {
+        BlobReason::External => false,
+        BlobReason::Import => v.via != "disk",
+        BlobReason::Write | BlobReason::Restore | BlobReason::Merged => v.author != EXTERNAL_PID,
+    }
+}
+
+/// The planted fault [`crate::differential::Tier0Mutant::StaleAfterKitWriteIgnored`].
+fn stale_after_kit_write_ignored() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::tier0_mutant()
+        == Some(crate::differential::Tier0Mutant::StaleAfterKitWriteIgnored)
+    {
+        return true;
+    }
+    false
+}
+
 /// Tier 0 for any file: no merge, the default conflict-copy name.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AnyFile;
@@ -1015,6 +1039,9 @@ impl BlobSession {
                     client: 0,
                     version: st.vid,
                     replaced: None,
+                    lease: None,
+                    kept: false,
+                    prev_ended: None,
                 });
             }
         }
@@ -1036,6 +1063,9 @@ impl BlobSession {
             client: 0,
             version: st.vid,
             replaced: None,
+            lease: None,
+            kept: false,
+            prev_ended: None,
         })
     }
 
@@ -2961,7 +2991,16 @@ impl BlobSession {
                 .unwrap_or("file")
                 .to_owned(),
         );
-        let conflict = holder.is_some() || st.cur.blob != base;
+        // the file holds a version the kit wrote (an agent's write, a restore, a merge): an
+        // app that opened the file before that write may be saving over it, and nothing says
+        // which. Its save keeps both, never replaces the kit's write silently. Decided from
+        // the current version's persisted reason and via (`kit_wrote`), so a restart between
+        // the write and the save changes nothing
+        let stale_over_kit = holder.is_none()
+            && st.cur.blob == base
+            && kit_wrote(&st.cur)
+            && !stale_after_kit_write_ignored();
+        let conflict = holder.is_some() || st.cur.blob != base || stale_over_kit;
         let mut theirs = BlobVersion::new(
             info.id,
             info.size,
@@ -2998,7 +3037,14 @@ impl BlobSession {
             return Ok(DiskCheck::Ingested { version: vid });
         }
         let (kept, ours) = (st.vid, st.cur.clone());
-        if let Some(out) = self.try_merge(st, &store, base, &ours, &theirs, &sync, stat, now)? {
+        // no merge over a kit write: the base would be the kit's own version, and a merge from
+        // it takes the save whole (what the app started from is unknown)
+        let merged = if stale_over_kit {
+            None
+        } else {
+            self.try_merge(st, &store, base, &ours, &theirs, &sync, stat, now)?
+        };
+        if let Some(out) = merged {
             return Ok(out);
         }
         // keep both: the save is current; what it replaced is a version and a copy
@@ -3142,10 +3188,21 @@ impl BlobSession {
                 }
             }
         };
-        let mut name = self.pack.conflict_copy_name(file_name, now, who);
-        if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
-            name = conflict_copy_name(file_name, now, who);
-        }
+        // the host's name first, then the pack's, then the kit's; a name with a path
+        // separator, or `.`/`..`, is passed over
+        let usable =
+            |n: &String| !(n.is_empty() || n == "." || n == ".." || n.contains(['/', '\\']));
+        let name = match self.host.conflict_copy_name(file_name, now, who) {
+            Some(n) if usable(&n) => n,
+            _ => {
+                let n = self.pack.conflict_copy_name(file_name, now, who);
+                if usable(&n) {
+                    n
+                } else {
+                    conflict_copy_name(file_name, now, who)
+                }
+            }
+        };
         let (stem, ext) = split_ext(&name);
         let mut chosen = None;
         for n in 1..=99 {

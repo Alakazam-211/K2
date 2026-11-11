@@ -11,8 +11,8 @@ engine update itself. Nothing here decodes bytes from a client (`untrusted-wire`
 
 | Type | Who provides it | What it is |
 |---|---|---|
-| `Host` | host | `rights(who, key)`, `now_ms()`, `on_event(&AuditEvent)`; tier 0: `conflict_dir(file)` (default: beside the file) |
-| `Pack` | each file type | `schema()`, `decode(bytes)`, `encode(content, codec)`, `normalize_input(root, text)`, `verbs()` (its own edit verbs, default none), `writes_bom(root, codec)` (default: from `encode`; [Writing a BOM file](#writing-a-bom-file)) |
+| `Host` | host | `rights(who, key)`, `now_ms()`, `on_event(&AuditEvent)`; tier 0: `conflict_dir(file)` (default: beside the file), `conflict_copy_name(file_name, at_ms, who)` (default `None`: the pack's name) |
+| `Pack` | each file type | `schema()`, `decode(bytes)`, `encode(content, codec)`, `normalize_input(root, text)`, `verbs()` (its own edit verbs, default none), `writes_bom(root, codec)` (default: from `encode`; [Writing a BOM file](#writing-a-bom-file)), `check_merged(root, text)` (default: every text passes; see "A merge the pack refuses" under Outside edits) |
 | `TextFilePack` | kit | a plain-text pack in one line: `TextFilePack::new("markdown", 4 << 20)` (root `source`) |
 | `SessionManager` | kit | one per store: `open`, `open_file`, `get`, `loaded_keys`, `rekey`, `tick`, `poll_disk`, `expire_idle`, `unload_idle`, `recheck_rights`, `delete_doc`, `delete_space`, `stats`, `release`; tier 0: `with_blob_store`, `open_blob`, `open_blob_file`, `get_blob`, `promote_blob_file`, `promote_blob` ([Tier 0 → text](#tier-0--text-v092)) |
 | `Session` | kit | one per loaded doc (`Arc<Session>`, `Send + Sync`) |
@@ -170,6 +170,43 @@ store; pass it on every open. Never make a new secret for a store that has nativ
 - Every change is logged with `author = pid`, the connection's client ID, `at_ms`, `via` and
   `on_behalf_of`. Blame reads the client ID→pid mapping, so all of a pid's connections
   attribute to that pid.
+
+### Person-writer reuse (v0.14.0)
+
+Off by default (`Config::reuse_person_writers`). Every client ID stays in the doc's state for
+good, so a fresh one per connection grows a long-lived doc with every tab and reconnect. With
+the flag on, a person's (or App guest's) join with a **device key**
+(`JoinOptions::device(key)`) takes one of that person's writers on that device instead
+(`docs/design/person-writer-reuse-r0.md`):
+
+- **Never two live holders.** A writer held by a present connection is never handed out; a
+  second tab of the device takes another free one, or a fresh one.
+- **A writer is free** after `Session::release(conn)` (the client's `bye`: it holds nothing
+  unsent and is done with the writer), or after any end of a `JoinOptions::device_stateless`
+  connection (a command-line verb). **Any other end parks it** (a dropped socket, idle, a kick,
+  lost rights, a host close, an unload, a crash): only the client's own reclaim takes it back,
+  or, with `Config::person_writer_park_ms` (0, never, by default), any join of that device
+  after that long.
+- **Reconnect:** `Joined::lease` goes to the client; its reconnect names it
+  (`JoinOptions::reclaim`). When the lease is still the writer's, the join takes it back
+  (`Joined::kept`), closing a connection that still holds it first, under the session lock
+  (`Joined::replaced`). Otherwise it closes nothing and says when that lease ended
+  (`Joined::prev_ended`). With a device key a bare `prev` closes nothing.
+- **No forked line.** Every op is made by the session's own doc at the writer's next clock, and
+  leaves the session only after its change is durable; clients send hunks, never ops. Own
+  replicas (`Participant::own_replica`) never take part; agents keep their own reuse.
+- **The device key is not a security boundary.** It only chooses among the authenticated
+  person's own free writers; the host may take it from the client and scopes it to the person
+  by the pid it stamps. The kit stores a keyed tag of it (under the doc's hash key: a purge
+  rotates it, and each person and device draws one new writer after a purge).
+- **Attribution is unchanged:** the writer's owner row is the person's pid; author, `via` and
+  `on_behalf_of` are per change.
+- **Rows:** `client_kinds` kind 2 (`PersonWriterRow`), no format bump, and only for a writer
+  that a connection with edit rights held (a viewer's writer gets one when it gains them; rows
+  stay for good). They ride in
+  transactions the session opens anyway (a change's commit, the session's close); a join and a
+  leave open none. An older kit (v0.10.2 on) never reuses or hands out such an ID and copies the
+  rows on a rewrite (`tools/n1` `node-both`).
 
 ### On-behalf edits and approvals (K-ID-10, K-ID-11)
 
@@ -1123,9 +1160,29 @@ the size, mtime or inode changed (a rename-save changes the inode):
     widened to whole lines (`outside_merge_sides`), then every line either side deleted is
     gone and every line either side wrote lands whole. At one point, pure insertions go
     before replacements, and the live side first within each. A change made identically
-    on both sides is taken once. It is never refused and makes no conflict copy (those are
-    tier 0's). Two sides' lines are never spliced into one (a text diff of a multi-line
-    change, merged at the character, could: `p12:63ed:95`).
+    on both sides is taken once. It makes no conflict copy (those are tier 0's), and the
+    save is never refused: only the pack can turn the merge down (below). Two sides' lines
+    are never spliced into one (a text diff of a multi-line change, merged at the
+    character, could: `p12:63ed:95`).
+  - **A merge the pack refuses** (`Pack::check_merged`): some formats' lines depend on each
+    other (JSON's commas and brackets), so two valid texts can merge, clean or kept-both, into
+    one that isn't. A pack can check a merged text; the kit asks it of every outside save's
+    merge and every clean `write --base` merge of a text doc, and acts only when the merge
+    fails the check and both merged texts (the file's new text and the live text; for `write
+    --base`, the writer's text and the live text) pass it. A text that already failed is the
+    writer's own, and is merged as before. On a refusal:
+    - **outside save:** the save is **taken whole**, as a merge onto the live text with no
+      change of its own (`merge3_keep_both(live, file, live)`), so the file and the doc hold
+      what the person saved. The live text it replaces is in the "before external edit"
+      version (cut whenever the doc moved since the last version, as for any outside edit),
+      and the removal notes ("When an outside save removes someone's text") tell each author
+      what went and which version holds it. Nothing is lost, and the file stays valid.
+    - **`write --base`:** a conflict (`WriteOutcome::Conflicts`, exit 1), nothing applied:
+      one region over every line either side changed since the base
+      (`text::merge::refused_merge`). The writer re-reads and writes again.
+
+    The default check passes every text, so a pack that doesn't implement it merges as
+    before. Structured docs and tier 0 don't ask it.
   - Before v0.9.5 the save was made on the **disk replica** (the doc as the file held it)
     and the CRDT update merged in. A change that moved no byte puts the text back on new
     elements, so a replica synced before it held the old ones. The save's deletes then
@@ -2203,9 +2260,17 @@ when its size, mtime or inode changed (the synced stat is stored, so reopening a
   (`via: "disk"`, `External`, the file's mtime) → `Ingested { version }`,
   `AuditEvent::ExternalEdit { seq: version }`.
 - **Desktop apps ignore leases.** An outside save is a **conflict** when it lands while
-  anyone holds the lease, or while the doc has a version the file doesn't have yet (a
-  write-back pending or failed). Then:
-  - **tier 0.5:** if the pack `can_merge()` and base, ours and theirs are each at most
+  anyone holds the lease, while the doc has a version the file doesn't have yet (a
+  write-back pending or failed), or when the file holds a version **the kit wrote** (a
+  participant's write, a restore, a merge, or a first version made from bytes): an app that
+  opened the file before that write can't be told from one that opened it after, so its save
+  never replaces the kit's write silently. "The kit wrote it" is read from the current
+  version's stored reason and `via` (anything but `External`, or an `Import` read from the
+  file), so a restart between the write and the save changes nothing. A save of exactly the
+  file's content is still nothing, and a save over an outside save (or over the first version
+  read from the file) is still a plain new version. Then:
+  - **tier 0.5:** (not over a kit write with no lease held: the base would be the kit's own
+    version, and a merge from it would take the save whole) if the pack `can_merge()` and base, ours and theirs are each at most
     `blob_merge_max_bytes` (32 MiB), `merge3_bytes(base, ours, theirs)` is asked. `Merged(b)`
     records the save (`External`) and the merge (`Merged`, by `kit:merge`), writes the merge
     back, and returns `DiskCheck::Merged { version }` (`AuditEvent::BlobMerged`);
@@ -2213,7 +2278,9 @@ when its size, mtime or inode changed (the synced stat is stored, so reopening a
     it replaced stays a version **and** is written to a **conflict copy** (K-A11Y-5):
     `name (conflict <who> YYYY-MM-DD HHMMSS).ext` (UTC, host clock; `who` is the replaced
     version's author name, or the lease holder's when the kit wrote it; never over an existing
-    file: ` 2`, ` 3`... is added; `BlobPack::conflict_copy_name` may rename it). It goes in
+    file: ` 2`, ` 3`... is added; `Host::conflict_copy_name` may rename it, then
+    `BlobPack::conflict_copy_name`: the first usable name wins, and a name that is empty,
+    `.`, `..` or has a path separator is passed over). It goes in
     the folder `Host::conflict_dir(real file path)` returns (the kit creates it; a host keeps
     it out of version control), or beside the file when that is `None` (the default). The
     copy is recorded on the save's version (`conflict_copy`) as its **path relative to the

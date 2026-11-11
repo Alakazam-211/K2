@@ -3,6 +3,33 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.14.0 (kit tag v0.14.0)
+
+The client for kit v0.14.0's person-writer reuse (`Config::reuse_person_writers`, off by
+default): a host that reuses a person's writer per device. With a host without writer leases
+(no `welcome.lease`) the client behaves exactly as 0.13.2.
+
+- **`welcome` gains `lease`, `kept` and `prevEnded`** (`wire.ts` `Welcome`), and
+  `ConnectOptions` gains `lease`: the host's editor sends the last welcome's `lease` with `prev`
+  on every reconnect (`connect({resume: live.version, prev: live.client, lease: live.lease})`).
+  `LiveOptions.lease` and `LiveText.lease` carry it.
+- **`LiveText.reconnected(welcome)` reads them.** With `kept` (the host gave the client its writer
+  back, closing the old connection first), the `since` reply settles the edit in flight for
+  good: not listed, it goes to `onRejected` (`MPC-E000`) with no `asOf` and no lost-change watch,
+  and an undo or redo unanswered on the old connection isn't marked lost. Without `kept`, on a
+  host with leases, every watch on the old writer is capped at `prevEnded` (`asOf.until`): a
+  change under that writer after it is another connection's, never the lost change; without
+  `prevEnded`, `presence` says `unknown` and `onLanded` concludes nothing. The edit in flight is
+  recognised under its old writer only up to that version.
+- **`LiveText.bye()` and the `bye` frame (new):** sent when the page goes and the client holds
+  nothing unsent (nothing in flight or queued, no undo or redo unanswered, no `since` or
+  snapshot out, no lost change watched under this writer); the host releases the connection
+  (`Session::release`) and closes it, so the person's next connection on this device may take
+  the writer. Returns whether it was sent, and drops the lease.
+- **No "client IDs are never reused" assumption is left:** `presence`'s rule says when an ID
+  can go to another connection and how the client's watches stay right.
+- Tests: `test/writer-lease.test.ts`.
+
 ## 0.13.2 (kit tag v0.12.0)
 
 The client for kit v0.12.0. The client's code, tests and wire contract are as in 0.13.1: no

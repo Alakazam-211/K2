@@ -73,8 +73,11 @@ export interface Rejection {
    * ID of the connection it went out on, and whether an undo or redo was unanswered on that
    * connection when it went (its change would carry the same ID: a kit v0.10.1 host says which
    * is which with `ChangeEvent.kind`; an older one can't). `presence` and `onLanded` read them.
+   * `until` (kit v0.14.0, a host with writer leases): that writer went to a later lease of it
+   * after the change's own ended, so only its changes at or before `until` can be this one;
+   * `null`: when is unknown, so nothing after the refusal is concluded.
    */
-  asOf?: { version: number; client: number | undefined; undoInFlight: boolean };
+  asOf?: { version: number; client: number | undefined; undoInFlight: boolean; until?: number | null };
 }
 
 /**
@@ -185,6 +188,9 @@ export interface LiveOptions {
   client?: number;
   /** This connection's participant handle, to tell its own roster entry apart. */
   self?: Handle;
+  /** This connection's writer lease (`welcome.lease`, kit v0.14.0): named on the next
+   * reconnect (`ConnectOptions.lease`) so the host can give this client its writer back. */
+  lease?: string;
   /** The clock for the caret's re-send throttle (default: the system's). */
   timers?: LiveTimers;
   /** The throttle's window (default `CARET_RESEND_MS`). */
@@ -285,6 +291,14 @@ export class LiveText {
   private settled = new Set<number>();
   private watching = 0;
   private clientId: number | undefined;
+  /** This connection's writer lease (`welcome.lease`); dropped by `bye`. */
+  private leaseId: string | undefined;
+  /** The in-flight edit's op when a reconnect kept its writer (`welcome.kept`): the `since`
+   * reply settles it for good (the host closed the old connection before the welcome). */
+  private keptFor: number | null = null;
+  /** Writers this client lost to a later lease (a reconnect that didn't keep its writer, on a
+   * host with leases): the version its own lease ended at, or `null` when unknown. */
+  private capOf = new Map<number, number | null>();
   private readonly selfHandle: Handle | undefined;
   /** The server's changes, with the client ID each came from (own acks included) and its
    * `kind` when the host sent one (kit v0.10.1; own acks have none). */
@@ -366,6 +380,7 @@ export class LiveText {
   ) {
     this.root = opts.root ?? "source";
     this.clientId = opts.client;
+    this.leaseId = opts.lease;
     this.selfHandle = opts.self;
     this.timers = opts.timers ?? defaultTimers;
     this.resendMs = opts.caretResendMs ?? CARET_RESEND_MS;
@@ -463,6 +478,31 @@ export class LiveText {
     return this.clientId;
   }
 
+  /** This connection's writer lease (`LiveOptions.lease`, `welcome.lease`), for the next
+   * reconnect (`ConnectOptions.lease`); `undefined` from a host without leases, and after
+   * `bye`. */
+  get lease(): string | undefined {
+    return this.leaseId;
+  }
+
+  /**
+   * Say goodbye to the host before the page goes (kit v0.14.0, a host with writer leases): sends
+   * `bye`, which tells the host this client holds nothing unsent and is done with its writer, so
+   * the person's next connection on this device may take it (`Session::release`). Sent only when
+   * that is true: nothing in flight or queued, no undo or redo unanswered, no `since` or snapshot
+   * out, and no lost change watched under this writer. Returns whether it was sent; when not, the
+   * host's close parks the writer for this client's own reconnect. After it the lease is dropped:
+   * a later connect (a page restored from the back-forward cache) is a new connection.
+   */
+  bye(): boolean {
+    if (this.dead || this.leaseId === undefined || this.offline) return false;
+    if (this.pending > 0 || this.undoOps.size > 0 || this.sinceOp !== null || this.snapshotOp !== null) return false;
+    if (this.clientId !== undefined && this.lost.get(this.clientId)?.state === "open") return false;
+    this.t.send({ type: "bye" });
+    this.leaseId = undefined;
+    return true;
+  }
+
   /**
    * Ask the server to undo this participant's last change. Its text arrives as a `change`
    * (never filtered out: it isn't the edit an `ack` answers); then `onUndo` with the steps
@@ -513,11 +553,24 @@ export class LiveText {
    * whose reply settles the edit in flight (listed: applied; not listed: `onRejected`,
    * `MPC-E000`, its text kept). Frames sent while disconnected were dropped, never replayed.
    */
-  reconnected(w: { client: number; version?: number; text?: string }): void {
+  reconnected(w: { client: number; version?: number; text?: string; lease?: string; kept?: boolean; prevEnded?: number }): void {
     if (this.dead) return;
     this.offline = false;
-    // an undo or redo unanswered on the old connection may still land under its ID
-    if (this.undoOps.size > 0 && this.clientId !== undefined) this.undoLostOn.add(this.clientId);
+    const old = this.clientId;
+    const kept = w.kept === true && old !== undefined && w.client === old;
+    if (kept) {
+      // the host closed the old connection before this welcome: nothing of it lands after, so
+      // the `since` reply settles the edit in flight for good, and an undo or redo unanswered
+      // there either is in that reply or never applied
+      this.keptFor = this.inflight?.op ?? null;
+    } else {
+      // an undo or redo unanswered on the old connection may still land under its ID
+      if (this.undoOps.size > 0 && old !== undefined) this.undoLostOn.add(old);
+      // a host with leases may give that writer to a later lease: only its changes up to the
+      // version this client's own lease ended at can be this client's (unknown: nothing)
+      if (w.lease !== undefined && old !== undefined && old !== w.client) this.capWatches(old, w.prevEnded ?? null);
+    }
+    this.leaseId = w.lease;
     this.clientId = w.client;
     this.cursorSent = null;
     this.undoOps.clear(); // their replies went with the old socket
@@ -548,6 +601,17 @@ export class LiveText {
     this.offline = true;
   }
 
+  /** Changes under `client` after `until` are a later lease's (`null`: from when is unknown):
+   * this client's watches on it count none of them. */
+  private capWatches(client: number, until: number | null): void {
+    this.capOf.set(client, until);
+    for (const l of this.lost.values()) {
+      const a = l.rejection.asOf;
+      if (a && a.client === client) a.until = until;
+    }
+    for (const r of this._rejected) if (r.asOf && r.asOf.client === client) r.asOf.until = until;
+  }
+
   /**
    * Whether a rejected change whose reply was lost (`asOf`) has landed, by the server's own
    * record, not by its text. The changes that count are those from the client ID it went out
@@ -562,22 +626,30 @@ export class LiveText {
    * concluded). When one has no `kind` (an older kit), as before kinds: `present` when there is
    * any such change, `unknown` instead when an undo or redo was unanswered on that connection
    * (its change would carry the same ID, and nothing tells the two apart); `absent` when there
-   * is none. Client IDs are never reused on a doc (the kit draws 53 random bits and skips any
-   * the doc has used; an ID that joined and never wrote could come again after an unload, at
-   * odds of 2^-53, which is accepted).
+   * is none. A writer's ID can go to another connection of the same person (kit v0.14.0, a host
+   * with writer leases), but only after its holder said `bye` (nothing watched under it) or
+   * after its lease ended: a reconnect that didn't keep its writer caps this client's watches
+   * on it at the version its lease ended (`asOf.until`; `unknown` when the host didn't say).
+   * Without leases a host hands each connection a fresh ID (53 random bits, never one the doc
+   * has used; an ID that joined and never wrote could come again after an unload, at odds of
+   * 2^-53, which is accepted).
    */
   presence(id: number): Presence {
     const r = this._rejected.find((x) => x.id === id) ?? [...this.lost.values()].find((l) => l.rejection.id === id)?.rejection;
     const a = r?.asOf;
     if (!a || a.client === undefined) return "unknown";
     if (a.version < this.historyFrom) return "unknown";
-    return this.landing(a.version, a.client, a.undoInFlight);
+    return this.landing(a.version, a.client, a.undoInFlight, a.until);
   }
 
   /** `presence`'s verdict from the history (its reach checked by the caller): the changes from
    * `client` after `version`, by their kinds. */
-  private landing(version: number, client: number, undoInFlight: boolean): Presence {
-    const ks = this.history.filter((h) => h.version > version && h.client === client).map((h) => this.kindOf(h.kind));
+  private landing(version: number, client: number, undoInFlight: boolean, until?: number | null): Presence {
+    // the writer went to a later lease at an unknown version: nothing after the refusal is its
+    if (until === null) return "unknown";
+    const ks = this.history
+      .filter((h) => h.version > version && (until === undefined || h.version <= until) && h.client === client)
+      .map((h) => this.kindOf(h.kind));
     if (ks.length === 0) return "absent";
     // an older kit (no kind on one of them): the rule before kinds, exactly
     if (ks.includes("none")) return undoInFlight ? "unknown" : "present";
@@ -1194,6 +1266,9 @@ export class LiveText {
 
   private refuseInflight(e: Entry, error: ErrorReport): void {
     this.inflight = null;
+    // a kept reconnect's `since` settles this edit for good (read once)
+    const definitive = this.keptFor !== null && this.keptFor === e.op;
+    this.keptFor = null;
     this.settled.add(e.op!);
     if (this.stash?.op === e.op) this.stash = null;
     if (error.id === ERR.BASE_EXPIRED) {
@@ -1207,9 +1282,10 @@ export class LiveText {
     } else {
       // not foreseen (a rate limit, a bad hunk, a conflict the client didn't see): take it out
       const rej = this.rejection(e, error);
-      if (error.id === ERR.NOT_APPLIED) {
+      if (error.id === ERR.NOT_APPLIED && !definitive) {
         const client = e.sentClient;
         rej.asOf = { version: this._version, client, undoInFlight: client !== undefined && this.undoLostOn.has(client) };
+        if (client !== undefined && this.capOf.has(client)) rej.asOf.until = this.capOf.get(client);
         if (client !== undefined) {
           this.lost.set(client, { rejection: rej, state: "open" });
           if (this.lost.size > WATCH_MAX) this.lost.delete(this.lost.keys().next().value!);
@@ -1262,7 +1338,11 @@ export class LiveText {
     // kit sends no kind (`kindOf`: none), and is read by client ID and hunks as before kinds
     const k = this.kindOf(ev.kind);
     if (k !== "edit" && k !== "none") return false;
-    const ids = [e.sentClient, this.clientId].filter((c): c is number => c !== undefined);
+    // the ID it went out on counts only up to the end of its lease, when a later one took it
+    const sent = e.sentClient;
+    const cap = sent === undefined ? undefined : this.capOf.get(sent);
+    const sentCounts = sent !== undefined && (!this.capOf.has(sent) || (cap !== null && cap !== undefined && ev.version <= cap));
+    const ids = [sentCounts ? sent : undefined, this.clientId].filter((c): c is number => c !== undefined);
     if (ids.length > 0 && !ids.includes(ev.client)) return false;
     const hs = coalesce(ev.hunks);
     return hs.length === e.hunks.length && hs.every((h, i) => sameHunk(h, e.hunks[i]));
@@ -1305,10 +1385,12 @@ export class LiveText {
     if (!l) return;
     const a = l.rejection.asOf!;
     if (ev.version <= a.version) return;
+    // a later lease of that writer: never the lost change
+    if (a.until === null || (a.until !== undefined && ev.version > a.until)) return;
     const k = this.kindOf(ev.kind);
     if (k === "none") {
       if (a.undoInFlight) return;
-    } else if (k !== "edit" || a.version < this.historyFrom || this.landing(a.version, ev.client, a.undoInFlight) !== "present") {
+    } else if (k !== "edit" || a.version < this.historyFrom || this.landing(a.version, ev.client, a.undoInFlight, a.until) !== "present") {
       return;
     }
     this.lost.delete(ev.client);

@@ -1092,12 +1092,28 @@ impl DocStore {
     /// entry), and store `versions`, in **one** durable transaction. Returns the positions. An
     /// entry whose client ID has no owner row gets one here, so a change and its row land
     /// together; a row already there stays (a participant purge may have renamed it).
+    /// Test-only: sessions commit through [`Self::commit_changes_with`].
+    #[cfg(test)]
     pub(crate) fn commit_changes(
         &self,
         id: DocId,
         entries: &[super::LogEntry],
         changes: &[NewChange],
         versions: &[Version],
+    ) -> Result<Vec<Seq>, StoreError> {
+        self.commit_changes_with(id, entries, changes, versions, &[])
+    }
+
+    /// [`Self::commit_changes`], with person-writer rows written in the same transaction
+    /// (person-writer reuse: a lease's row lands with its first change, and rows changed since
+    /// with any later one).
+    pub(crate) fn commit_changes_with(
+        &self,
+        id: DocId,
+        entries: &[super::LogEntry],
+        changes: &[NewChange],
+        versions: &[Version],
+        writers: &[(crate::doc::ClientId, String, super::PersonWriterRow)],
     ) -> Result<Vec<Seq>, StoreError> {
         debug_assert_eq!(entries.len(), changes.len());
         // profile scopes (test-only, perf_kit): nothing in a host's build
@@ -1117,6 +1133,7 @@ impl DocStore {
                 }
             }
         }
+        super::put_person_writers_in(&w, id, writers)?;
         {
             prof!("store.put_changes");
             put_changes(&w, id, &seqs, changes)?;

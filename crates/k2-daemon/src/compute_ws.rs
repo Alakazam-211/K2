@@ -614,59 +614,8 @@ async fn run_session(
     let worker_route = route;
     let worker = tokio::task::spawn_blocking(move || frame_worker(worker_node, worker_route, conn_id, work_rx));
 
-    let mut ping = tokio::time::interval(Duration::from_secs(frames::PING_SECS));
-    ping.tick().await;
-    let mut seq_out: u64 = 0;
-    let mut seq_in: u64 = 0;
-    let why: &str;
-    loop {
-        tokio::select! {
-            _ = ping.tick() => {
-                if sink.send(Message::Ping(Vec::new())).await.is_err() { why = "ping_failed"; break; }
-            }
-            out = rx.recv() => {
-                match out {
-                    Some(Out::Frame(f)) => {
-                        let text = match frames::seal(&key, Direction::ControllerToNode, &session, seq_out, &f) {
-                            Ok(t) => t,
-                            Err(e) => { log_debug!("[compute] seal {}: {e}", f.kind()); continue; }
-                        };
-                        seq_out += 1;
-                        bytes_out.fetch_add(text.len() as u64, Ordering::Relaxed);
-                        let revoked = matches!(*f, Frame::Revoked(_));
-                        if sink.send(Message::Text(text)).await.is_err() { why = "send_failed"; break; }
-                        if revoked {
-                            tokio::time::sleep(Duration::from_millis(200)).await;
-                            why = "revoked";
-                            break;
-                        }
-                    }
-                    Some(Out::Close) | None => { why = "replaced"; break; }
-                }
-            }
-            msg = source.next() => {
-                let Some(Ok(msg)) = msg else { why = "node_closed"; break; };
-                match msg {
-                    Message::Text(t) => {
-                        bytes_in.fetch_add(t.len() as u64, Ordering::Relaxed);
-                        match frames::open(&node_spki, Direction::NodeToController, &session, seq_in, &t) {
-                            Ok(f) => {
-                                seq_in += 1;
-                                if work_tx.send(f).is_err() { why = "worker_gone"; break; }
-                            }
-                            Err(e) => {
-                                log_debug!("[compute] node {node_id}: {e}");
-                                why = "protocol_error";
-                                break;
-                            }
-                        }
-                    }
-                    Message::Close(_) => { why = "node_closed"; break; }
-                    _ => {}
-                }
-            }
-        }
-    }
+    let keys = SessionKeys { key, session, node_spki, node_id: node_id.clone() };
+    let why = pump(&mut sink, &mut source, &mut rx, &work_tx, &keys, &bytes_in, &bytes_out, Duration::from_secs(frames::PING_SECS)).await;
     let _ = sink.send(Message::Close(None)).await;
     drop(work_tx);
     let _ = worker.await;
@@ -689,6 +638,85 @@ async fn run_session(
         k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"compute": "node_offline"}));
     }
     notify_change();
+}
+
+/// What a session seals and opens with.
+struct SessionKeys {
+    key: SigningKey,
+    session: String,
+    node_spki: Vec<u8>,
+    node_id: String,
+}
+
+/// One node session's socket: frames out of `rx` (sealed, sequenced),
+/// a ping every `ping_every`, and every frame in (opened, in order) to
+/// the frame worker through `work_tx`. Returns why it ended.
+#[allow(clippy::too_many_arguments)]
+async fn pump<Si, St>(
+    sink: &mut Si,
+    source: &mut St,
+    rx: &mut mpsc::UnboundedReceiver<Out>,
+    work_tx: &std::sync::mpsc::Sender<Frame>,
+    keys: &SessionKeys,
+    bytes_in: &AtomicU64,
+    bytes_out: &AtomicU64,
+    ping_every: Duration,
+) -> &'static str
+where
+    Si: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+    St: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    let SessionKeys { key, session, node_spki, node_id } = keys;
+    let mut ping = tokio::time::interval(ping_every);
+    ping.tick().await;
+    let mut seq_out: u64 = 0;
+    let mut seq_in: u64 = 0;
+    loop {
+        tokio::select! {
+            _ = ping.tick() => {
+                if sink.send(Message::Ping(Vec::new())).await.is_err() { return "ping_failed"; }
+            }
+            out = rx.recv() => {
+                match out {
+                    Some(Out::Frame(f)) => {
+                        let text = match frames::seal(key, Direction::ControllerToNode, session, seq_out, &f) {
+                            Ok(t) => t,
+                            Err(e) => { log_debug!("[compute] seal {}: {e}", f.kind()); continue; }
+                        };
+                        seq_out += 1;
+                        bytes_out.fetch_add(text.len() as u64, Ordering::Relaxed);
+                        let revoked = matches!(*f, Frame::Revoked(_));
+                        if sink.send(Message::Text(text)).await.is_err() { return "send_failed"; }
+                        if revoked {
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            return "revoked";
+                        }
+                    }
+                    Some(Out::Close) | None => return "replaced",
+                }
+            }
+            msg = source.next() => {
+                let Some(Ok(msg)) = msg else { return "node_closed"; };
+                match msg {
+                    Message::Text(t) => {
+                        bytes_in.fetch_add(t.len() as u64, Ordering::Relaxed);
+                        match frames::open(node_spki, Direction::NodeToController, session, seq_in, &t) {
+                            Ok(f) => {
+                                seq_in += 1;
+                                if work_tx.send(f).is_err() { return "worker_gone"; }
+                            }
+                            Err(e) => {
+                                log_debug!("[compute] node {node_id}: {e}");
+                                return "protocol_error";
+                            }
+                        }
+                    }
+                    Message::Close(_) => return "node_closed",
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 // ── frames from a node ───────────────────────────────────────────────
@@ -3282,6 +3310,178 @@ mod tests {
             }
             assert!(with_bg(|m| !m.contains_key(&key)), "round {round}: the finished pull is gone once reported");
             assert!(with_pulls(|m| m.values().all(|p| p.dst != key)), "round {round}: no transfer left open");
+        }
+    }
+
+    // ── GH#80: artifacts from a relay node ──────────────────────────
+
+    /// A node offer with `features` (the rest is a plain idle Linux node).
+    fn offer_with(features: &[&str]) -> Offer {
+        Offer {
+            share: None,
+            revision: 1,
+            control: frames::Control::Active,
+            control_by: None,
+            control_at: None,
+            availability: frames::Availability { ok: true, reasons: vec![] },
+            caps: frames::Caps { cpu_millis: 8000, mem_bytes: 8 << 30, disk_budget_bytes: 100 << 30, hard: true, gpus: 0 },
+            free: frames::Free { cpu_millis: 8000, mem_bytes: 8 << 30, disk_free_bytes: 500 << 30, gpus: 0 },
+            slots: vec![],
+            running: 0,
+            parallel_max: 1,
+            refusal: None,
+            labels: [("os".to_string(), "linux".to_string())].into(),
+            tools: BTreeMap::new(),
+            protocol: 6,
+            boot_id: "b".into(),
+            ledger_id: "l".into(),
+            node_version: "0.46.8".into(),
+            features: features.iter().map(|f| f.to_string()).collect(),
+            host: None,
+            pkg: None,
+        }
+    }
+
+    /// A live session for `node_id` on the relay without a socket (no
+    /// offer handler, no placement): what this server sends comes out of
+    /// the receiver.
+    fn relay_conn(node_id: &str, features: &[&str]) -> mpsc::UnboundedReceiver<Out> {
+        let (tx, rx) = mpsc::unbounded_channel::<Out>();
+        with_engine(|e| {
+            e.next_conn += 1;
+            let conn_id = e.next_conn;
+            e.conns.insert(
+                node_id.to_string(),
+                Conn {
+                    conn_id,
+                    tx,
+                    route: "relay",
+                    offer: Some(offer_with(features)),
+                    statement: None,
+                    bytes_in: Arc::new(AtomicU64::new(0)),
+                    bytes_out: Arc::new(AtomicU64::new(0)),
+                },
+            );
+        });
+        rx
+    }
+
+    /// The next frame this server sends the fake node that `pick` takes.
+    fn next_sent<T>(rx: &mut mpsc::UnboundedReceiver<Out>, mut pick: impl FnMut(&Frame) -> Option<T>) -> T {
+        let t0 = Instant::now();
+        loop {
+            match rx.try_recv() {
+                Ok(Out::Frame(f)) => {
+                    if let Some(t) = pick(&f) {
+                        return t;
+                    }
+                }
+                Ok(Out::Close) => panic!("the session was closed"),
+                Err(_) => {
+                    assert!(t0.elapsed() < Duration::from_secs(10), "no such frame within 10 s");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+    }
+
+    fn chunk(request_id: &str, seq: u32, data: &[u8], last: bool, info: &ArtifactInfo) -> Frame {
+        Frame::ArtifactChunk(ArtifactChunk { request_id: request_id.into(), seq, data: crypto::b64(data), last, total_bytes: info.bytes, sha256: info.sha256.clone() })
+    }
+
+    /// GH#80: over a slow relay a file arrives slower than its fixed
+    /// deadline allowed (60 s + 1 s per MB assumed about 1 MB/s). A pull
+    /// that keeps getting bytes is not cut off; only one that stops
+    /// moving for its whole timeout fails.
+    #[test]
+    fn a_slow_pull_that_keeps_moving_is_not_cut_off() {
+        let _db = k2_core::db::scoped_for_test();
+        let j = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            job_on(&conn, "slowslow0123456789abcdef01234567", "n-slow")
+        };
+        let body: Vec<u8> = (0..6 * 1024u32).map(|i| (i % 251) as u8).collect();
+        let info = ArtifactInfo { name: "dist/app.tar.gz".into(), sha256: crypto::sha256_hex(&body), bytes: body.len() as u64 };
+        let _ = std::fs::remove_dir_all(artifact_cache_path(&j.id, j.generation, &info.sha256).parent().unwrap());
+        let mut rx = relay_conn("n-slow", &[results::FEATURE_ARTIFACTS]);
+        let (job, inf) = (j.clone(), info.clone());
+        let pull = std::thread::spawn(move || fetch_artifact(&job, &inf, false, Duration::from_secs(2)));
+        let get = next_sent(&mut rx, |f| match f {
+            Frame::ArtifactGet(g) => Some(g.clone()),
+            _ => None,
+        });
+        // Six pieces, one every 0.7 s: 4.2 s in all, twice the timeout,
+        // but never 2 s without a byte.
+        let t0 = Instant::now();
+        for (i, piece) in body.chunks(1024).enumerate() {
+            std::thread::sleep(Duration::from_millis(700));
+            test_frame("n-slow", chunk(&get.request_id, i as u32, piece, i == 5, &info));
+        }
+        let r = pull.join().expect("the pull thread");
+        assert!(t0.elapsed() > Duration::from_secs(2), "the transfer took longer than the timeout");
+        let path = r.unwrap_or_else(|(c, h)| panic!("a moving pull failed: {c}: {h}"));
+        assert_eq!(std::fs::read(&path).expect("cached"), body);
+        test_detach("n-slow");
+    }
+
+    /// GH#80: the server keeps reading a node's frames while its own
+    /// frames to the node wait (a node, or a relay hop, slow to read).
+    /// Before, one `select!` did both: a write that waited stopped every
+    /// read, the node's sends backed up behind it (rwnd-limited, its
+    /// artifact stuck at 0 bytes on the server).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_session_keeps_reading_while_its_writes_wait() {
+        use tokio_tungstenite::tungstenite::protocol::Role;
+        let (a, b) = tokio::io::duplex(64 * 1024);
+        let server_ws = tokio_tungstenite::WebSocketStream::from_raw_socket(a, Role::Server, None).await;
+        let node_ws = tokio_tungstenite::WebSocketStream::from_raw_socket(b, Role::Client, None).await;
+        let node_key = SigningKey::generate().unwrap();
+        let session = "gh80-session".to_string();
+        let keys = SessionKeys { key: SigningKey::generate().unwrap(), session: session.clone(), node_spki: node_key.spki_der().to_vec(), node_id: "n-reads-nothing".into() };
+        // 16 big frames for the node, which never reads them: far more
+        // than the pipe holds.
+        let (tx, mut rx) = mpsc::unbounded_channel::<Out>();
+        for seq in 0..16u32 {
+            let t = Transfer { job_id: "j".into(), generation: 1, kind: TransferKind::Dirty, seq, data: "A".repeat(200 * 1024), last: false, total_bytes: 0, sha256: String::new() };
+            tx.send(Out::Frame(Box::new(Frame::Transfer(t)))).unwrap();
+        }
+        let (work_tx, work_rx) = std::sync::mpsc::channel::<Frame>();
+        let (bytes_in, bytes_out) = (AtomicU64::new(0), AtomicU64::new(0));
+        let (mut sink, mut source) = server_ws.split();
+        const SENT: u32 = 24;
+        let (mut node_sink, _node_source) = node_ws.split();
+        let node = async move {
+            for seq in 0..SENT {
+                let f = Frame::ArtifactChunk(ArtifactChunk {
+                    request_id: "r".into(),
+                    seq,
+                    data: crypto::b64(&vec![7u8; frames::TRANSFER_CHUNK]),
+                    last: false,
+                    total_bytes: 0,
+                    sha256: String::new(),
+                });
+                let text = frames::seal(&node_key, Direction::NodeToController, &session, u64::from(seq), &f).unwrap();
+                node_sink.send(Message::Text(text)).await.expect("node send");
+            }
+            std::future::pending::<()>().await
+        };
+        let counted = tokio::task::spawn_blocking(move || {
+            let mut n = 0;
+            while n < SENT {
+                match work_rx.recv_timeout(Duration::from_secs(15)) {
+                    Ok(Frame::ArtifactChunk(_)) => n += 1,
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+            n
+        });
+        let server = pump(&mut sink, &mut source, &mut rx, &work_tx, &keys, &bytes_in, &bytes_out, Duration::from_secs(3600));
+        tokio::select! {
+            why = server => panic!("the session ended early: {why}"),
+            _ = node => unreachable!("the node never stops on its own"),
+            n = counted => assert_eq!(n.unwrap(), SENT, "every frame the node sent was read while the server's own writes waited"),
         }
     }
 }

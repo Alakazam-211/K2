@@ -39,6 +39,10 @@
 //! before anything is made: no such group is 400 `unknown_focus_group` and
 //! nothing is made. The Chief of Staff joins K5's group when it's left out.
 //!
+//! **Text.** `?format=text` on any of them: on a 200, the plain lines
+//! `k2 setup` prints (`k2_core::first_run_text`), so the CLI needs no
+//! python3; refusals stay JSON either way.
+//!
 //! **Frames.** `first_run_changed` to that person's sockets on hide, show,
 //! skip, dismiss and finish; to everyone when K5 or the Chief of Staff is
 //! made (with `projects_changed`).
@@ -167,9 +171,19 @@ fn action_for(path: &str, body: &[u8]) -> Result<Option<Action>, CliResponse> {
     })
 }
 
+/// `format=text` in a request's query: answer `k2 setup`'s plain lines.
+pub fn wants_text(query: &str) -> bool {
+    query.split('&').any(|kv| kv == "format=text")
+}
+
 /// Handle one `/cli/first-run/*` request for `actor` (the dispatcher's
-/// person arm already resolved the credential).
+/// person arm already resolved the credential), as JSON.
 pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor) -> CliResponse {
+    handle_as(is_post, path, body, actor, false)
+}
+
+/// [`handle`], answering a 200 as `k2 setup`'s plain lines when `text`.
+pub fn handle_as(is_post: bool, path: &str, body: &[u8], actor: &Actor, text: bool) -> CliResponse {
     if !is_route(path) {
         return CliResponse::not_found();
     }
@@ -195,7 +209,7 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor) -> CliRespo
         if !matches!(viewer, Viewer::OwnerToken | Viewer::Login(k2_core::connect_users::Role::Admin | k2_core::connect_users::Role::Owner)) {
             return error("403 Forbidden", "role_required", "making K5 needs the owner, an Owner or an Admin login");
         }
-        return if path == K5_PATH { handle_k5(body, actor) } else { handle_cos_start(actor) };
+        return if path == K5_PATH { handle_k5(body, actor, text) } else { handle_cos_start(actor) };
     }
     let action = match action_for(path, body) {
         Ok(a) => a,
@@ -234,6 +248,9 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor) -> CliRespo
     };
     if action.is_some() || status.newly_finished {
         emit_changed(Some(person));
+    }
+    if text {
+        return CliResponse::ok_text(k2_core::first_run_text::render_text(&status));
     }
     match serde_json::to_string(&status) {
         Ok(body) => CliResponse::ok_json(body),
@@ -478,13 +495,33 @@ fn audit(event: &str, actor: &str, outcome: String) {
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(event, actor, outcome, "first-run", "-", "cli"));
 }
 
-/// The answer both making routes send.
+/// The answer both making routes send: JSON, or `k2 setup`'s lines when
+/// `text` names which agent was made.
 fn made(
     report: &k2_core::hire::template::ApplyReport,
     focus_group: Option<String>,
     granted: &crate::first_run_grants::Granted,
     cards: &Result<(), String>,
+    text: Option<k2_core::first_run_text::Made>,
 ) -> CliResponse {
+    if let Some(kind) = text {
+        let left: Vec<(String, String)> = granted
+            .left
+            .iter()
+            .map(|l| {
+                let field = |k: &str| l.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+                (field("action"), field("reason"))
+            })
+            .collect();
+        return CliResponse::ok_text(k2_core::first_run_text::render_made_text(
+            kind,
+            &report.name,
+            &report.handle,
+            &report.path,
+            &granted.granted,
+            &left,
+        ));
+    }
     let body = json!({
         "ok": true,
         "workspaceId": report.workspace_id,
@@ -505,7 +542,7 @@ fn made(
 /// from the `k5` template, seat it, put it in the focus group, set the
 /// harness, pinned chat and cards switch, grant the starter set the creator
 /// can give, then launch it with its hello.
-fn handle_k5(body: &[u8], actor: &Actor) -> CliResponse {
+fn handle_k5(body: &[u8], actor: &Actor, text: bool) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
         Err(r) => return r,
@@ -594,7 +631,7 @@ fn handle_k5(body: &[u8], actor: &Actor) -> CliResponse {
     emit_changed(None);
     crate::v1_hire::emit_hire_watches();
     launch(report.path.clone(), report.handle.clone(), &tool, report.hello.clone(), from, crate::hire_routes::Sender::from_hire_caller(&caller, None));
-    made(&report, group, &granted, &cards)
+    made(&report, group, &granted, &cards, text.then_some(k2_core::first_run_text::Made::K5))
 }
 
 /// Pinned chat on, for any new agent the first-run routes make (the
@@ -643,6 +680,12 @@ fn handle_cos_start(actor: &Actor) -> CliResponse {
 /// to K5, the events and the launch with its hello. It joins `focusGroup`,
 /// or K5's own focus group when that's left out.
 pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller) -> CliResponse {
+    handle_chief_of_staff_as(body, caller, false)
+}
+
+/// [`handle_chief_of_staff`], answering a 200 as `k2 setup`'s plain lines
+/// when `text`.
+pub fn handle_chief_of_staff_as(body: &[u8], caller: &crate::sidecar_routes::Caller, text: bool) -> CliResponse {
     use crate::sidecar_routes::Caller;
     if !k2_core::app_settings::load().k5_first_run {
         return k5_off();
@@ -763,7 +806,7 @@ pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller
     emit_changed(None);
     crate::v1_hire::emit_hire_watches();
     launch(report.path.clone(), report.handle.clone(), &tool, report.hello.clone(), k5_handle, crate::hire_routes::Sender::from_hire_caller(&caller, None));
-    made(&report, group, &granted, &cards)
+    made(&report, group, &granted, &cards, text.then_some(k2_core::first_run_text::Made::ChiefOfStaff))
 }
 
 #[cfg(test)]
@@ -872,6 +915,33 @@ mod tests {
         let r = handle(false, STATUS_PATH, b"", &Actor::owner_token());
         let v: Value = serde_json::from_str(&r.body).expect("json");
         assert_eq!(v["hidden"], json!(false), "anna's hide is anna's");
+    }
+
+    /// `?format=text`: `k2 setup`'s plain lines on a 200, a skip's too;
+    /// refusals stay JSON.
+    #[test]
+    fn first_run_format_text_answers_plain_lines() {
+        assert!(wants_text("token=t&format=text") && wants_text("format=text"));
+        assert!(!wants_text("token=t&format=json") && !wants_text("token=format=text") && !wants_text(""));
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        let _git = first_run::dev_tools_for_test(first_run::DevTools::AppleMissing { installing: false });
+        let r = handle_as(false, STATUS_PATH, b"", &Actor::owner_token(), true);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(r.content_type, "text/plain; charset=utf-8");
+        assert_eq!(
+            r.body,
+            "Setup: 0 of 6 done\n  [ ] Install developer tools (The Apple tools include git, which workspaces need: k2 git-tools install)\n  [ ] Sign in to an AI tool\n  [ ] Make your first agent\n  [ ] Link your subdomain\n  [ ] Connect your phone (Away from home, your phone needs your subdomain first.)\n  [ ] Make your own sign-in\nThe app does not show setup lists on this server yet.\n"
+        );
+        let r = handle_as(true, SKIP_PATH, br#"{"row": "dev_tools"}"#, &Actor::owner_token(), true);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert!(r.body.contains("\n  [-] Install developer tools ("), "{}", r.body);
+        let r = handle_as(true, SKIP_PATH, br#"{"row":"nope"}"#, &Actor::owner_token(), true);
+        assert_eq!((r.status, r.content_type), ("400 Bad Request", "application/json"));
+        assert!(r.body.contains("unknown_row"), "{}", r.body);
+        let r = handle_as(false, STATUS_PATH, b"", &Actor::login("ghost"), true);
+        assert_eq!((r.status, r.content_type), ("403 Forbidden", "application/json"));
+        assert!(r.body.contains("first_run_person_only"), "{}", r.body);
     }
 
     fn rows_of(r: &CliResponse) -> Vec<Value> {

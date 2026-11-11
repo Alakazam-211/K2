@@ -443,7 +443,7 @@ fn the_wire_shape_is_the_contracts() {
 
 fn upgraded(seed: &str) -> Connection {
     let conn = Connection::open(":memory:").expect("open");
-    crate::db::run_migrations_through(&conn, Some("0286_compute_key_chain")).expect("0.46.11");
+    crate::db::run_migrations_through(&conn, Some("0288_mail_linked_by")).expect("0.46.11");
     crate::db::seed_audit_sentinels(&conn).expect("sentinels");
     conn.execute_batch(seed).expect("seed");
     crate::db::run_migrations(&conn).expect("upgrade");

@@ -1111,7 +1111,7 @@ export function SkinAccessSection(): React.JSX.Element {
       {lead}
       <span className="min-w-0 flex-1">
         <span className="block type-name text-[var(--color-text-primary)] truncate">{name}</span>
-        <span className="flex items-center gap-1.5 type-hint text-[var(--color-text-secondary)] min-w-0">{detail}</span>
+        <span className="flex items-start gap-1.5 type-hint text-[var(--color-text-secondary)] min-w-0 [&>[data-status-dot]]:mt-1">{detail}</span>
       </span>
     </button>
   )
@@ -1135,7 +1135,7 @@ export function SkinAccessSection(): React.JSX.Element {
                 'This server',
                 <RailGlyph kind="server" />,
                 'This server',
-                'Turn Apps on, checks and disk use',
+                'Switch, checks and disk use',
                 () => select('server'),
               )}
               {railRow(
@@ -1170,7 +1170,7 @@ export function SkinAccessSection(): React.JSX.Element {
                       app.name,
                       <>
                         <StatusDot tone={st.tone} />
-                        <span className="truncate">
+                        <span className="min-w-0">
                           {PUBLISH_STATUS.has(app.status) ? st.words : 'Not started'}
                           {app.expose === 'local' ? ' · only on this server' : ''}
                         </span>

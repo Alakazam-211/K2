@@ -250,6 +250,14 @@ mod tests {
         ("app_login_settings", "login form settings"),
         ("app_pairing_config", "pairing settings"),
         ("app_profile_settings", "profile settings"),
+        // Sew 0.9.0 recording (0.46.11). The CUI/FCI lock never enters a
+        // pass resolve: no K2 pass, cap or room changes with it (voice:record
+        // comes from role room lines, which are watched). It only narrows the
+        // Space row the sweep sends Sew (recording_start_level none, required
+        // false; `tool_hook::recording::locked_body`), and a lock write kicks
+        // that sweep (`recording_set_lock`). Sew refuses the start. A walk on
+        // it would re-resolve every pass and find nothing changed.
+        ("app_recording_locks", "the CUI/FCI lock: narrows the Space row sent to Sew, which refuses the start; no pass resolve reads it"),
         ("app_push_config", "push settings"),
         ("app_push_devices", "push devices"),
         ("app_test_guests", "marks test guests"),
@@ -293,6 +301,9 @@ mod tests {
         ("tool_chat_avatars", "toward Sew"),
         ("tool_chat_members", "toward Sew"),
         ("tool_outbox", "toward Sew"),
+        ("tool_recording_feed", "an App's recording feed cursor toward Sew; the read gate is server_read in tool_sew_settings"),
+        ("tool_recording_policy", "toward Sew: the org recording policies asked for and seen"),
+        ("tool_recording_rollout", "toward Sew: the cap rollout's ledger; its grandfather step's role lines are the access write"),
         ("tool_sew_policy", "toward Sew"),
         ("tool_sew_settings", "toward Sew"),
         ("tool_target_features", "toward Sew"),

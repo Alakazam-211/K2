@@ -244,8 +244,11 @@ describe('SetupChecklist', () => {
       </>,
     )
     const btn = await screen.findByTestId('setup-get-started')
-    expect(btn.textContent).toBe(GET_STARTED_TEXT)
-    expect(screen.getByRole('button', { name: GET_STARTED_LABEL })).toBe(btn)
+    // "Get started", then the count left (shown where the slot is wide
+    // enough; the accessible name always has it).
+    expect(btn.textContent).toBe(`${GET_STARTED_TEXT}· 4 left`)
+    expect(screen.getByTestId('setup-get-started-left').className).toContain('@min-[11.5rem]:inline')
+    expect(screen.getByRole('button', { name: `${GET_STARTED_LABEL}, 4 left` })).toBe(btn)
     expect(btn.querySelector('[data-k2-icon="checklist"]')).toBeTruthy()
     expect(checklist()).toBeNull()
     expect(screen.queryByTestId('setup-rail')).toBeNull()
@@ -274,6 +277,27 @@ describe('SetupChecklist', () => {
     // It sits in the sidebar's flow at the list's spot, not floating.
     const slot = btn.closest('[data-setup-checklist-collapsed]')!
     expect(slot.className).not.toMatch(/\b(absolute|fixed)\b/)
+  })
+
+  it('the bubble names what it opens: the list is headed Get started, with its count', async () => {
+    h.daemonCliGet.mockResolvedValue(body({ hidden: true }))
+    h.daemonCliPost.mockResolvedValue(body())
+    render(<SetupChecklist />)
+    fireEvent.click(await screen.findByTestId('setup-get-started'))
+    const head = await screen.findByRole('heading', { name: GET_STARTED_TEXT })
+    expect(head.id).toBe('setup-checklist-title')
+    expect(screen.getByTestId('setup-left').textContent).toBe('4 left')
+    expect(screen.getByRole('button', { name: 'Hide the setup list' })).toBeTruthy()
+  })
+
+  it('one step left: the bubble says 1 left', async () => {
+    h.daemonCliGet.mockResolvedValue(
+      body({ hidden: true, rows: body().rows.map((r) => ({ ...r, state: r.id === 'tunnel' ? 'todo' : 'done' })) }),
+    )
+    render(<SetupChecklist />)
+    const btn = await screen.findByTestId('setup-get-started')
+    expect(screen.getByTestId('setup-get-started-left').textContent).toBe('· 1 left')
+    expect(btn.getAttribute('aria-label')).toBe(`${GET_STARTED_LABEL}, 1 left`)
   })
 
   it('the bubble POSTs show and the full list comes back', async () => {
@@ -464,7 +488,7 @@ describe('SetupChecklistRailButton', () => {
     expect(btn.textContent).toBe('4')
     expect(btn.querySelector('[data-k2-icon="checklist"]')).toBeTruthy()
     expect(screen.getByTestId('setup-rail-count').textContent).toBe('4')
-    expect(btn.getAttribute('aria-label')).toBe('Setup checklist: 4 left')
+    expect(btn.getAttribute('aria-label')).toBe('Get started: 4 left')
     fireEvent.click(btn)
     expect(expand).toHaveBeenCalledTimes(1)
   })

@@ -77,7 +77,6 @@ export const SETUP_NOTE_COPY: Record<FirstRunNote, string> = {
   needs_k5: NEEDS_K5_NOTE,
 }
 
-export const CHECKLIST_TITLE = 'Setup checklist'
 
 /** A row's state, for screen readers (the mark draws it) and, for a
  *  skipped row, on screen too. */
@@ -90,9 +89,13 @@ export const ALL_DONE_TEXT = 'All done'
 /** A read or a gesture failed; the last list stays. */
 export const CHECKLIST_ERROR_TEXT = 'Couldn’t update the checklist.'
 
-/** The hidden list's bubble: its label, and its accessible name. */
+/** The hidden list's bubble: its label, and its accessible name (followed
+ *  by the count left). */
 export const GET_STARTED_TEXT = 'Get started'
 export const GET_STARTED_LABEL = 'Get started: show the setup list'
+/** The list's head: the bubble's own words, so the bubble names what it
+ *  opens. */
+export const CHECKLIST_TITLE = GET_STARTED_TEXT
 
 /** How long "You're set up" stays before the list goes. */
 const SET_UP_MS = 4000
@@ -106,6 +109,8 @@ export function useSetupChecklistRows(): {
   error: string | null
   finished: boolean
   collapsed: boolean
+  /** Steps still to do while hidden (the bubble's count). */
+  collapsedLeft: number
 } {
   const scope = primaryScope()
   useEffect(() => watchFirstRun(scope), [scope])
@@ -116,10 +121,11 @@ export function useSetupChecklistRows(): {
     error: entry?.error ?? null,
     finished: !!doc && doc.enabled && !doc.hidden && doc.finished,
     collapsed: showsCollapsed(doc),
+    collapsedLeft: doc && showsCollapsed(doc) ? rowsLeft(doc.rows) : 0,
   }
 }
 
-function leftText(n: number): string {
+export function leftText(n: number): string {
   return n === 1 ? '1 left' : `${n} left`
 }
 
@@ -284,7 +290,7 @@ function useSetUpMoment(rows: FirstRunRow[] | null, finished: boolean): boolean 
 
 /** The checklist, for a sidebar. Renders nothing when there's nothing to do. */
 export function SetupChecklist({ className }: { className?: string }): React.JSX.Element | null {
-  const { rows, error, finished, collapsed } = useSetupChecklistRows()
+  const { rows, error, finished, collapsed, collapsedLeft } = useSetupChecklistRows()
   const setUpMoment = useSetUpMoment(rows, finished)
   if (setUpMoment) {
     return (
@@ -299,7 +305,7 @@ export function SetupChecklist({ className }: { className?: string }): React.JSX
       </section>
     )
   }
-  if (collapsed) return <GetStartedBubble error={error} className={className} />
+  if (collapsed) return <GetStartedBubble left={collapsedLeft} error={error} className={className} />
   if (!rows) return null
   const left = rowsLeft(rows)
   const current = currentRowId(rows)
@@ -322,7 +328,7 @@ export function SetupChecklist({ className }: { className?: string }): React.JSX
           type="button"
           data-k2-focus=""
           className={QUIET_ACTION_CLASS}
-          aria-label="Hide the setup checklist"
+          aria-label="Hide the setup list"
           data-testid="setup-hide"
           onClick={() => void useFirstRunStore.getState().hide()}
         >
@@ -370,24 +376,33 @@ export function SetupChecklist({ className }: { className?: string }): React.JSX
  *  Button (the accent fill, the on-accent label and icon, the primary's
  *  hover and focus ring), in the theme's control shape: cut in Terminal,
  *  the field radius (a pill) in Glass. Compact, at the sidebar's content
- *  edge in the list's slot, so it sits in the nav's flow, not over it. */
-function GetStartedBubble({ error, className }: { error: string | null; className?: string }): React.JSX.Element {
+ *  edge in the list's slot, so it sits in the nav's flow, not over it.
+ *
+ *  With steps left it says how many ("Get started · 4 left") where the slot
+ *  is wide enough (a container query: from 11.5rem, a sidebar of about
+ *  210px); the accessible name always carries the count. */
+function GetStartedBubble({ left, error, className }: { left: number; error: string | null; className?: string }): React.JSX.Element {
   return (
     <section
       data-setup-checklist-collapsed=""
-      className={cx('flex flex-col gap-1 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0', className)}
+      className={cx('@container flex flex-col gap-1 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0', className)}
     >
       <Button
         variant="accent"
         data-testid="setup-get-started"
-        aria-label={GET_STARTED_LABEL}
-        className="self-start flex-shrink-0 inline-flex items-center gap-1.5 font-medium"
+        aria-label={left > 0 ? `${GET_STARTED_LABEL}, ${leftText(left)}` : GET_STARTED_LABEL}
+        className="self-start flex-shrink-0 inline-flex items-center gap-1.5 font-medium [--k2-ch-bw:1px]"
         onClick={() => void useFirstRunStore.getState().show()}
       >
         <span aria-hidden="true" className="flex">
           <ChecklistIcon size={12} />
         </span>
         {GET_STARTED_TEXT}
+        {left > 0 && (
+          <span aria-hidden="true" className="hidden @min-[11.5rem]:inline font-normal tabular-nums" data-testid="setup-get-started-left">
+            · {leftText(left)}
+          </span>
+        )}
       </Button>
       {error && (
         <p role="alert" className="m-0 type-hint text-[var(--color-text-secondary)]" title={error} data-testid="setup-error">

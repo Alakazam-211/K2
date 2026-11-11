@@ -125,6 +125,7 @@
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.4);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
+  --color-accent-fill-hover: color-mix(in srgb, var(--color-accent-fill) 78%, black);
   --color-chart-1: #3987e5;
   --color-chart-2: #d95926;
   --color-chart-3: #199e70;
@@ -517,6 +518,7 @@
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.28);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.42);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
+  --color-accent-fill-hover: color-mix(in srgb, var(--color-accent-fill) 78%, black);
   --color-chart-1: #3987e5;
   --color-chart-2: #d95926;
   --color-chart-3: #199e70;
@@ -612,6 +614,7 @@
   --color-scrollbar-thumb-strong: rgba(60, 60, 67, 0.34);
   --color-scrollbar-thumb-strong-hover: rgba(60, 60, 67, 0.5);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 78%, black);
+  --color-accent-fill-hover: color-mix(in srgb, var(--color-accent-fill) 78%, black);
   --color-chart-1: #2a78d6;
   --color-chart-2: #c8531f;
   --color-chart-3: #13865d;
@@ -2096,6 +2099,7 @@
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.4);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
+  --color-accent-fill-hover: color-mix(in srgb, var(--color-accent-fill) 78%, black);
   --color-chart-1: #3987e5;
   --color-chart-2: #d95926;
   --color-chart-3: #199e70;
@@ -2180,6 +2184,7 @@
   --color-scrollbar-thumb-strong: rgba(40, 32, 16, 0.30);
   --color-scrollbar-thumb-strong-hover: rgba(40, 32, 16, 0.45);
   --color-accent-fill: var(--color-accent);
+  --color-accent-fill-hover: color-mix(in srgb, var(--color-accent-fill) 78%, black);
   --color-chart-1: #2a78d6;
   --color-chart-2: #c8531f;
   --color-chart-3: #13865d;

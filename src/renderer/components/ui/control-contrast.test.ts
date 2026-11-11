@@ -106,6 +106,24 @@ describe('Filled accent controls', () => {
     }
   })
 
+  it.each(LOOKS)('hovering the accent Button visibly changes the fill (1.3:1) and the label still reads at 4.5:1 (%s %s)', (style, id) => {
+    const p = palette(style, id)
+    const fill = resolve(style, id, 'var(--color-accent-fill)')
+    const hover = resolve(style, id, p['accent-fill-hover'])
+    const label = hex(p['on-accent'])
+    expect(contrast(fill, hover), `${id} rest against hover`).toBeGreaterThanOrEqual(1.3)
+    expect(contrast(label, hover), `${id} label on hover`).toBeGreaterThanOrEqual(4.5)
+    // Press goes a little further than hover, the same way.
+    const press = hover.map((c) => c * 0.9) as Rgb
+    expect(contrast(label, press), `${id} label on press`).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('the accent Button hovers and presses on the hover slot', () => {
+    const cls = /\n  accent:\s*'([^']+)'/.exec(readFileSync(join(__dirname, 'Button.tsx'), 'utf8'))![1]
+    expect(cls).toContain('hover:bg-[var(--color-accent-fill-hover)] hover:border-[var(--color-accent-fill-hover)]')
+    expect(cls).toContain('active:bg-[color-mix(in_srgb,var(--color-accent-fill-hover)_90%,black)]')
+  })
+
   it('the Button, the selected segment and Glass\'s segment thumb paint the fill', () => {
     expect(readFileSync(join(__dirname, 'Button.tsx'), 'utf8')).toContain("'bg-[var(--color-accent-fill)] border border-[var(--color-accent-fill)] text-[var(--color-on-accent)]")
     expect(rule(globals, '.k2-segment-thumb')).toContain('background: var(--color-accent-fill)')

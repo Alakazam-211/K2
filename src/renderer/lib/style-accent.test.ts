@@ -6,6 +6,7 @@ import { STYLES, getStyle } from '@/styles.generated'
 import {
   ACCENT_VARS,
   accentFillFor,
+  accentFillHoverFor,
   accentFillHex,
   accentTextFor,
   accentVarsFor,
@@ -153,6 +154,33 @@ describe('the Yellow palettes', () => {
 
 describe('the accent as a fill under its label', () => {
   const samples = ['#3b82f6', '#0a84ff', '#3366cc', '#ff00aa', '#e11d48', '#16a34a', '#9333ea', '#0891b2', '#f97316', '#ffc700', '#ffffff', '#000000']
+
+  it.each(samples)('%s: hovering the fill is a visible step (1.3:1) and its label still reads at 4.5:1', (c) => {
+    for (const [style, id, scheme] of [['terminal', 'charcoal', 'dark'], ['glass', 'veil', 'light']] as const) {
+      const vars = accentVarsFor(c, palette(style, id), scheme)
+      const hover = vars['--color-accent-fill-hover']
+      expect(contrast(hover, vars['--color-accent-fill']), `${c} on ${id}`).toBeGreaterThanOrEqual(1.3)
+      expect(contrast(hover, vars['--color-on-accent']), `${c} label on ${id}`).toBeGreaterThanOrEqual(4.5)
+    }
+    // Yellow's own colours (dark ink on gold) too.
+    const y = accentVarsFor('yellow', palette('glass', 'veil'), 'light')
+    expect(contrast(y['--color-accent-fill-hover'], y['--color-accent-fill'])).toBeGreaterThanOrEqual(1.3)
+    expect(contrast(y['--color-accent-fill-hover'], y['--color-on-accent'])).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('moves the hover away from the label: deeper under white, lighter under dark ink', () => {
+    expect(luminance(accentFillHoverFor('#2563eb', '#ffffff'))).toBeLessThan(luminance('#2563eb'))
+    expect(luminance(accentFillHoverFor('#ffc700', '#1a1400'))).toBeGreaterThan(luminance('#ffc700'))
+  })
+
+  it('with no room away from the label, steps toward it while the label still reads', () => {
+    const black = accentFillHoverFor('#000000', '#ffffff')
+    expect(luminance(black)).toBeGreaterThan(0)
+    expect(contrast(black, '#ffffff')).toBeGreaterThanOrEqual(4.5)
+    const white = accentFillHoverFor('#ffffff', '#141414')
+    expect(luminance(white)).toBeLessThan(1)
+    expect(contrast(white, '#141414')).toBeGreaterThanOrEqual(4.5)
+  })
 
   it.each(samples)('%s carries its label at 4.5:1 or better, on dark and light palettes', (c) => {
     for (const [style, id, scheme] of [['terminal', 'charcoal', 'dark'], ['glass', 'veil', 'light']] as const) {

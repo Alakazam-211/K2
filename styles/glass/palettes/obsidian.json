@@ -85,6 +85,11 @@
       "$type": "color",
       "$description": "The accent as a fill under on-accent text (filled buttons, the selected segment, count badges): deep enough that the label clears 4.5:1, including at a 90% hover. Icons, rings and switches keep accent."
     },
+    "accent-fill-hover": {
+      "$value": "color-mix(in srgb, var(--color-accent-fill) 78%, black)",
+      "$type": "color",
+      "$description": "Hover on a filled accent control (the accent Button): the fill deepened to 78%, at least 1.3:1 from the resting fill so the change shows, and the white label reads better on it, not worse. A custom accent derives its own (lib/style-accent)."
+    },
     "chart-1": {
       "$value": "#3987e5",
       "$type": "color",

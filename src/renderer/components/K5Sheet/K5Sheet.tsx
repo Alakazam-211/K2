@@ -179,6 +179,11 @@ function useServerDefaultTool(): string | null {
   return useMemo(() => resolveAgentCommand(presets, defaultAgent)?.command ?? defaultAgent ?? null, [presets, defaultAgent])
 }
 
+/** Step 1 shows the Focus group picker: focus groups on, and one or more. */
+function useShowsFocusGroups(): boolean {
+  return useFocusGroupsStore((s) => s.focusGroupsEnabled && s.focusGroups.length > 0)
+}
+
 export default function K5Sheet(): React.JSX.Element | null {
   const isOpen = useK5SheetStore((s) => s.isOpen)
   if (!isOpen) return null
@@ -188,7 +193,9 @@ export default function K5Sheet(): React.JSX.Element | null {
 /** The frame every state shares: the step (when there is one), the title
  *  and its line pinned beside the ×, the body, which scrolls, and the sheet
  *  one height across steps and states (a min-height that holds the tallest
- *  usual state, a refusal, so the buttons stay put), and
+ *  usual state, a refusal, so the buttons stay put; taller with the Focus
+ *  group picker, which step 1 then holds with a long path and both
+ *  problems shown), and
  *  the footer: an optional status line, then the buttons. With `onSubmit`
  *  the body and footer are one form, so Enter answers it. */
 function K5Frame({
@@ -216,6 +223,7 @@ function K5Frame({
 }): React.JSX.Element {
   const titleId = useId()
   const introId = useId()
+  const tall = useShowsFocusGroups()
   const inner = (
     <>
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-1 space-y-4" data-testid="k5-body">
@@ -240,7 +248,7 @@ function K5Frame({
         aria-describedby={intro ? introId : undefined}
         aria-busy={busy || undefined}
         data-testid="k5-sheet"
-        className="w-[min(36rem,calc(100vw-2.5rem))] min-h-[min(22.25rem,calc(100vh-2.5rem))] max-h-[calc(100vh-2.5rem)] flex flex-col"
+        className={`w-[min(36rem,calc(100vw-2.5rem))] ${tall ? 'min-h-[min(24.25rem,calc(100vh-2.5rem))]' : 'min-h-[min(22.25rem,calc(100vh-2.5rem))]'} max-h-[calc(100vh-2.5rem)] flex flex-col`}
       >
         <div className="flex-shrink-0 px-5 pt-5 pb-4 pr-10">
           {step ? (
@@ -316,10 +324,9 @@ function K5SheetBody(): React.JSX.Element {
   const accounts = useLlmAccountsStore((s) => s.entries[scope.id]?.doc)
   const tools = useMemo(() => signedInK5Tools(accounts), [accounts])
   const serverDefault = useServerDefaultTool()
-  const focusGroupsEnabled = useFocusGroupsStore((s) => s.focusGroupsEnabled)
   const focusGroups = useFocusGroupsStore((s) => s.focusGroups)
   const activeFocusGroupId = useFocusGroupsStore((s) => s.activeFocusGroupId)
-  const showGroups = focusGroupsEnabled && focusGroups.length > 0
+  const showGroups = useShowsFocusGroups()
 
   const [step, setStep] = useState<1 | 2>(1)
   const [name, setName] = useState('')

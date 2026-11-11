@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   codecFromAnnexB,
+  DECODE_BACKLOG,
   decodeSupport,
   isVp8Keyframe,
   KEYFRAME_REASK_MS,
@@ -100,6 +101,48 @@ describe('VideoSink', () => {
     expect(d.state).toBe('closed')
     expect(log.slice(4)).toEqual(['ack:3', 'key?'])
     warn.mockRestore()
+  })
+
+  it('z3mbpZ: a decoder that holds frames never starves the window: acks on hand-off, once each', () => {
+    const codecs = fakeWebCodecs()
+    const { sink, log } = sinkWith(codecs)
+    sink.push(h264(1, true))
+    const d = codecs.decoders[0]
+    d.decodeQueueSize = 0
+    sink.push(h264(2, false))
+    sink.push(h264(3, false))
+    sink.push(h264(4, false))
+    // Nothing output yet (the decoder holds them), but the window is free.
+    expect(log).toEqual(['ack:2', 'ack:3', 'ack:4'])
+    d.emit(1)
+    d.emit(2)
+    d.emit(3)
+    d.emit(4)
+    // Frame 1 was pushed before the queue size was known: acked on output.
+    expect(log).toEqual(['ack:2', 'ack:3', 'ack:4', 'draw:1:4x8', 'ack:1', 'draw:2:4x8', 'draw:3:4x8', 'draw:4:4x8'])
+  })
+
+  it('a backed-up decoder (queue over DECODE_BACKLOG) acks on output, so slow decode still slows the stream', () => {
+    const codecs = fakeWebCodecs()
+    const { sink, log } = sinkWith(codecs)
+    sink.push(h264(1, true))
+    const d = codecs.decoders[0]
+    d.decodeQueueSize = DECODE_BACKLOG + 1
+    sink.push(h264(2, false))
+    expect(log).toEqual([])
+    d.emit(1)
+    d.emit(2)
+    expect(log).toEqual(['draw:1:4x8', 'ack:1', 'draw:2:4x8', 'ack:2'])
+  })
+
+  it('an H.264 keyframe reaches the decoder with the low-latency VUI in its SPS', () => {
+    const hex = (s: string): number[] => s.match(/../g)!.map((b) => parseInt(b, 16))
+    const real = new Uint8Array([0, 0, 0, 1, ...hex('27640c20ac568084091ea540'), 0, 0, 0, 1, ...hex('28ee3cb0'), 0, 0, 0, 1, 0x25, 0xb8, 0x04])
+    const codecs = fakeWebCodecs()
+    const { sink } = sinkWith(codecs)
+    sink.push(h264(1, true, real))
+    const chunk = codecs.decoders[0].chunks[0]
+    expect(chunk.bytes).toBeGreaterThan(real.length)
   })
 
   it('acks a frame the decoder skipped when a later one comes out', () => {

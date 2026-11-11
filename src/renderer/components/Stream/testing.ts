@@ -115,6 +115,9 @@ export class FakeVideoDecoder implements VideoDecoderLike {
   state = 'unconfigured'
   configs: VideoDecoderConfigLike[] = []
   chunks: { type: string; timestamp: number; bytes: number }[] = []
+  /** WebCodecs' queue of chunks not yet at the codec. Unset (undefined): the
+   *  sink acks on output, as with a decoder that doesn't report it. */
+  decodeQueueSize?: number
   constructor(readonly init: VideoDecoderInitLike) {}
   configure(c: VideoDecoderConfigLike): void {
     this.state = 'configured'

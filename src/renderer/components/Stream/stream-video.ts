@@ -11,8 +11,10 @@
 //  - `VideoSink`: one per socket. Configures on the first keyframe (H.264:
 //    the codec string from its SPS; VP8: `vp8`), decodes every frame in
 //    order (a delta can't be skipped), draws each output unless the view is
-//    held, and acks each seq once it is drawn or dropped, so the daemon's
-//    ack window keeps moving. A delta with no keyframe before it is dropped
+//    held, and acks each seq once the decoder takes it (or, while chunks
+//    pile up for the codec, once it is drawn or dropped), so the daemon's
+//    ack window keeps moving even when the decoder holds frames. An H.264
+//    keyframe's SPS gets the no-reorder VUI first (`h264-vui.ts`). A delta with no keyframe before it is dropped
 //    (never decoded into garbage) and a keyframe asked for (`needKeyframe`,
 //    again after `KEYFRAME_REASK_MS` if none came: the daemon drops asks
 //    inside its throttle); a decoder error does the same, and three in a
@@ -21,6 +23,7 @@
 // Pure apart from `browserWebCodecs()` (which reads the globals when
 // called): the seams are injected, and tests use `testing.ts`'s fake.
 
+import { withLowLatencyVui } from './h264-vui'
 import type { DecodeSupport, VideoCodec } from './stream-wire'
 
 /** The parts of a WebCodecs `VideoFrame` we use. */
@@ -38,6 +41,8 @@ export interface VideoDecoderConfigLike {
 
 export interface VideoDecoderLike {
   readonly state: string
+  /** Chunks waiting for the codec (WebCodecs); absent in some fakes. */
+  readonly decodeQueueSize?: number
   configure(config: VideoDecoderConfigLike): void
   decode(chunk: unknown): void
   close(): void
@@ -208,7 +213,15 @@ interface Queued {
   seq: number
   widthPx: number
   heightPx: number
+  /** Acked when handed to the decoder (it wasn't backed up). */
+  acked: boolean
 }
+
+/** A frame is acked when the decoder takes it, unless this many chunks
+ *  already wait for the codec; then on output. A decoder may hold decoded
+ *  frames before output (no VUI reorder limit); acking only on output then
+ *  starves the daemon's window of 3 (z3mbpZ 11-10: 2–4 fps of 55). */
+export const DECODE_BACKLOG = 2
 
 export class VideoSink {
   private decoder: VideoDecoderLike | null = null
@@ -258,12 +271,32 @@ export class VideoSink {
     }
     const dec = this.decoder
     if (!dec) return
-    this.queue.push({ seq: p.seq, widthPx: p.widthPx, heightPx: p.heightPx })
+    const backlog = dec.decodeQueueSize
+    const q: Queued = { seq: p.seq, widthPx: p.widthPx, heightPx: p.heightPx, acked: false }
+    this.queue.push(q)
+    // An H.264 keyframe's SPS gets the no-reorder VUI, so the decoder outputs
+    // each frame at once (h264-vui.ts).
+    const data = p.key && p.codec === 'h264' ? withLowLatencyVui(p.data) : p.data
     try {
-      dec.decode(this.opts.codecs.createChunk({ type: p.key ? 'key' : 'delta', timestamp: p.seq, data: p.data }))
+      dec.decode(this.opts.codecs.createChunk({ type: p.key ? 'key' : 'delta', timestamp: p.seq, data }))
     } catch (err) {
       this.onError(err)
+      return
     }
+    // The decoder has it: free the daemon's window now, unless chunks are
+    // piling up for the codec (then the ack waits for the output, so a slow
+    // decoder still slows the stream). A decoder that doesn't report its
+    // queue (a fake) keeps acking on output.
+    if (backlog !== undefined && backlog <= DECODE_BACKLOG && !q.acked) {
+      q.acked = true
+      this.opts.ack(q.seq)
+    }
+  }
+
+  private ackOnce(q: Queued): void {
+    if (q.acked) return
+    q.acked = true
+    this.opts.ack(q.seq)
   }
 
   /** Stop decoding. `ackQueued`: the socket stays open (the daemon switched
@@ -271,13 +304,13 @@ export class VideoSink {
   close(ackQueued = false): void {
     this.closed = true
     const queued = this.queue.splice(0)
-    if (ackQueued) for (const q of queued) this.opts.ack(q.seq)
+    if (ackQueued) for (const q of queued) this.ackOnce(q)
     this.closeDecoder()
   }
 
   private openDecoder(codec: string): void {
     // Whatever the old decoder still held is lost with it.
-    for (const q of this.queue.splice(0)) this.opts.ack(q.seq)
+    for (const q of this.queue.splice(0)) this.ackOnce(q)
     this.closeDecoder()
     let dec: VideoDecoderLike | null = null
     dec = this.opts.codecs.createDecoder({
@@ -315,7 +348,7 @@ export class VideoSink {
       // Outputs come in decode order; anything older was dropped.
       while (this.queue.length > 0 && this.queue[0].seq !== f.timestamp) {
         const lost = this.queue.shift()
-        if (lost) this.opts.ack(lost.seq)
+        if (lost) this.ackOnce(lost)
       }
       const q = this.queue.shift()
       if (!q) {
@@ -324,7 +357,7 @@ export class VideoSink {
       }
       this.errors = 0
       if (!this.closed && !this.opts.held()) this.opts.draw(f, q.widthPx, q.heightPx)
-      this.opts.ack(q.seq)
+      this.ackOnce(q)
     } finally {
       f.close()
     }
@@ -334,7 +367,7 @@ export class VideoSink {
     this.errors += 1
     console.warn('[stream] video decode error:', err)
     // What the decoder held is lost: ack it so the window frees.
-    for (const q of this.queue.splice(0)) this.opts.ack(q.seq)
+    for (const q of this.queue.splice(0)) this.ackOnce(q)
     this.closeDecoder()
     this.needKey = true
     if (this.errors >= MAX_DECODE_ERRORS) {

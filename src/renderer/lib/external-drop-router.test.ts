@@ -2,9 +2,11 @@
 // DOM-dependent route execution is covered by handle-remote-drop tests +
 // planLocalExternalDrop; this file pins the routing priority table.
 //
-// mountExternalDropRouter is tested with a webview-scoped listen mock so
-// multi-window never regresses to process-global event.listen Any, and so
-// we never use getCurrentWindow().listen (Window target misses drag-*).
+// mountExternalDropRouter is tested with a fake Tauri event bus that keeps
+// each listener's target kind and delivers like Tauri 2.12 does, so
+// multi-window never regresses to process-global event.listen Any, and the
+// listener target is one every drag-* emit path reaches (GH #82: a Webview
+// target misses the emit Tauri uses once the window holds a Browser tab).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -12,11 +14,53 @@ const webviewListenMock = vi.fn()
 const webviewUnlistenMock = vi.fn()
 const isWebClientMock = vi.fn(() => false)
 
+/** Every listener the router registered, with the target kind its
+ *  `listen` puts on it (`getCurrentWebview` → Webview,
+ *  `getCurrentWebviewWindow` → WebviewWindow). */
+type TauriListener = { kind: 'Webview' | 'WebviewWindow'; event: string; handler: (e: { payload: unknown }) => void }
+const tauriListeners = vi.hoisted(() => [] as Array<{ kind: 'Webview' | 'WebviewWindow'; event: string; handler: (e: { payload: unknown }) => void }>)
+
 vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
     // Return value of the spy is the listen Promise (so tests can delay resolve).
-    listen: (...args: unknown[]) => webviewListenMock(...args),
+    listen: (event: string, handler: TauriListener['handler']) => {
+      tauriListeners.push({ kind: 'Webview', event, handler })
+      return webviewListenMock(event, handler)
+    },
   }),
+}))
+vi.mock('@tauri-apps/api/webviewWindow', () => ({
+  getCurrentWebviewWindow: () => ({
+    listen: (event: string, handler: TauriListener['handler']) => {
+      tauriListeners.push({ kind: 'WebviewWindow', event, handler })
+      return webviewListenMock(event, handler)
+    },
+  }),
+}))
+
+/** Tauri 2.12 `Window::emit_to_window` (manager/window.rs): how a drag-*
+ *  event for the window's own webview is sent when the window ALSO holds a
+ *  child webview (a Browser tab). Only Window / WebviewWindow targets match. */
+function emitToWindow(event: string, payload: unknown): number {
+  const hit = tauriListeners.filter((l) => l.event === event && l.kind === 'WebviewWindow')
+  for (const l of hit) l.handler({ payload })
+  return hit.length
+}
+
+/** Tauri 2.12 `emit_to(EventTarget::labeled(..))`: a window with only its
+ *  own webview. Every target kind with the label matches. */
+function emitToAnyLabel(event: string, payload: unknown): number {
+  const hit = tauriListeners.filter((l) => l.event === event)
+  for (const l of hit) l.handler({ payload })
+  return hit.length
+}
+
+const uploadToRemoteMock = vi.hoisted(() =>
+  vi.fn(async (_scope: unknown, local: string, destDir: string) => `${destDir}/${local.split('/').pop()}`),
+)
+vi.mock('./upload-to-remote', () => ({
+  uploadToRemote: (...args: [unknown, string, string]) => uploadToRemoteMock(...args),
+  uploadBrowserFile: vi.fn(),
 }))
 
 const terminalWriteMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined))
@@ -41,8 +85,11 @@ import {
   routeExternalDrop,
   type ComposeInsertDetail,
   mountExternalDropRouter,
+  dropPointToCss,
+  LOCAL_MISS_MESSAGE,
   FILE_TREE_EXTERNAL_DROP_EVENT,
 } from './external-drop-router'
+import { __clearRemoteDropFlightsForTests } from './handle-remote-drop'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { COMPOSE_BAR_SELECTOR, COMPOSE_DROP_SURFACE_SELECTOR } from './compose-surface-drop'
 import { CONTROL_CHAR_REFUSAL, bracketPaste } from './drop-payload'
@@ -305,24 +352,22 @@ describe('mountExternalDropRouter (desktop)', () => {
     webviewListenMock.mockReset()
     webviewUnlistenMock.mockReset()
     webviewListenMock.mockResolvedValue(webviewUnlistenMock)
+    tauriListeners.length = 0
   })
 
   afterEach(() => {
     isWebClientMock.mockReturnValue(false)
   })
 
-  it('subscribes via getCurrentWebview().listen, not process-global or Window', async () => {
+  it('subscribes via getCurrentWebviewWindow().listen, not process-global, Window or Webview', async () => {
     const unmount = mountExternalDropRouter()
-    // Dynamic import of @tauri-apps/api/webview resolves on next microtask.
+    // Dynamic import of @tauri-apps/api/webviewWindow resolves on next microtask.
     await vi.waitFor(() => {
-      expect(webviewListenMock).toHaveBeenCalled()
+      expect(tauriListeners.map((l) => l.event)).toEqual(['tauri://drag-drop', 'tauri://drag-over', 'tauri://drag-leave'])
     })
-    expect(webviewListenMock).toHaveBeenCalledWith(
-      'tauri://drag-drop',
-      expect.any(Function),
-    )
+    expect(tauriListeners.map((l) => l.kind)).toEqual(['WebviewWindow', 'WebviewWindow', 'WebviewWindow'])
     unmount()
-    expect(webviewUnlistenMock).toHaveBeenCalled()
+    expect(webviewUnlistenMock).toHaveBeenCalledTimes(3)
   })
 
   it('teardown before listen resolves does not leave a live handler', async () => {
@@ -649,5 +694,124 @@ describe('routeExternalDrop — the text a terminal or draft gets', () => {
     expect(terminalWriteMock).toHaveBeenCalledTimes(1)
     expect(terminalWriteMock.mock.calls[0][1]).toBe('term-1')
     expect(terminalWriteMock.mock.calls[0][2]).toBe(bracketPaste('"C:\\Users\\a\\Screen Shot.png" '))
+  })
+})
+
+// ── GH #82: an OS drop always does something ──────────────────────────
+
+describe('mountExternalDropRouter — an OS drop reaches the router and is never silent (GH #82)', () => {
+  const REMOTE = { id: 'h1', label: 'Box', hostname: 'box.example.test', port: 443 }
+  const toasts = () => useToastStore.getState().toasts.map((t) => [t.message, t.type])
+
+  let unmount: () => void = () => {}
+
+  beforeEach(async () => {
+    isWebClientMock.mockReturnValue(false)
+    webviewListenMock.mockReset()
+    webviewListenMock.mockResolvedValue(vi.fn())
+    tauriListeners.length = 0
+    uploadToRemoteMock.mockClear()
+    __clearRemoteDropFlightsForTests()
+    useToastStore.setState({ toasts: [] })
+    useConnectHostStore.setState({ activeHost: 'local' })
+    unmount = mountExternalDropRouter()
+    await vi.waitFor(() => {
+      expect(tauriListeners.some((l) => l.event === 'tauri://drag-leave')).toBe(true)
+    })
+  })
+
+  afterEach(() => {
+    unmount()
+    vi.unstubAllGlobals()
+    useConnectHostStore.setState({ activeHost: 'local' })
+  })
+
+  it("a drop on a remote server's terminal uploads and pastes the path, with a Browser tab open in the window", async () => {
+    useConnectHostStore.setState({ activeHost: REMOTE as never })
+    const grid = surfaceNode({})
+    const term = surfaceNode({ terminalId: 'pty-1', terminalKind: 'v2', workspacePath: '/srv/ws' }, [grid])
+    vi.stubGlobal('document', surfaceDoc(grid))
+
+    // The window holds a Browser child webview, so Tauri sends the main
+    // webview's drop with emit_to_window: the router must still get it.
+    expect(emitToWindow('tauri://drag-drop', { paths: ['/Users/me/notes.txt'], position: { x: 3, y: 3 } })).toBe(1)
+
+    await vi.waitFor(() => {
+      expect(term._events).toHaveLength(1)
+    })
+    expect(uploadToRemoteMock).toHaveBeenCalledTimes(1)
+    expect(uploadToRemoteMock.mock.calls[0][1]).toBe('/Users/me/notes.txt')
+    expect(uploadToRemoteMock.mock.calls[0][2]).toBe('/srv/ws/.k2/downloads')
+    expect((term._events[0] as CustomEvent<{ data: string }>).detail.data).toBe('/srv/ws/.k2/downloads/notes.txt ')
+    expect(toasts()).toEqual([['Uploaded file to the host', 'success']])
+  })
+
+  it('a window with only its own webview still delivers the drop exactly once', async () => {
+    useConnectHostStore.setState({ activeHost: REMOTE as never })
+    const grid = surfaceNode({})
+    const term = surfaceNode({ terminalId: 'pty-1', terminalKind: 'v2', workspacePath: '/srv/ws' }, [grid])
+    vi.stubGlobal('document', surfaceDoc(grid))
+
+    expect(emitToAnyLabel('tauri://drag-drop', { paths: ['/Users/me/a.txt'], position: { x: 3, y: 3 } })).toBe(1)
+    await vi.waitFor(() => {
+      expect(term._events).toHaveLength(1)
+    })
+    expect(uploadToRemoteMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('Windows: the physical drop position is hit-tested in CSS pixels', async () => {
+    vi.stubGlobal('navigator', { platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' })
+    vi.stubGlobal('window', { devicePixelRatio: 1.5 })
+    const points: Array<[number, number]> = []
+    vi.stubGlobal('document', {
+      elementFromPoint: (x: number, y: number) => {
+        points.push([x, y])
+        return null
+      },
+      querySelectorAll: () => [],
+    })
+
+    emitToAnyLabel('tauri://drag-drop', { paths: ['C:\\Users\\me\\a.txt'], position: { x: 300, y: 150 } })
+    await vi.waitFor(() => {
+      expect(points.length).toBeGreaterThan(0)
+    })
+    for (const p of points) expect(p).toEqual([200, 100])
+  })
+
+  it('a drop whose routing throws shows an error toast instead of vanishing', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('document', {
+      elementFromPoint: () => {
+        throw new Error('hit-test exploded')
+      },
+      querySelectorAll: () => [],
+    })
+
+    emitToAnyLabel('tauri://drag-drop', { paths: ['/Users/me/a.txt'], position: { x: 3, y: 3 } })
+    await vi.waitFor(() => {
+      expect(toasts()).toEqual([['The drop failed: hit-test exploded', 'error']])
+    })
+    expect(errors).toHaveBeenCalledWith('[external-drop-router] drop failed', expect.any(Error))
+    errors.mockRestore()
+  })
+
+  it('a drop on this computer that lands on nothing says so', async () => {
+    vi.stubGlobal('document', surfaceDoc(surfaceNode({})))
+    emitToAnyLabel('tauri://drag-drop', { paths: ['/Users/me/a.txt'], position: { x: 3, y: 3 } })
+    await vi.waitFor(() => {
+      expect(toasts()).toEqual([[LOCAL_MISS_MESSAGE, 'info']])
+    })
+  })
+})
+
+describe('dropPointToCss', () => {
+  it('Windows reports physical pixels: divide by the device pixel ratio', () => {
+    expect(dropPointToCss({ x: 300, y: 150 }, 'windows', 1.5)).toEqual({ x: 200, y: 100 })
+    expect(dropPointToCss({ x: 300, y: 150 }, 'windows', 1)).toEqual({ x: 300, y: 150 })
+  })
+
+  it('macOS reports points and Linux GTK logical pixels: unchanged on a 2x screen', () => {
+    expect(dropPointToCss({ x: 300, y: 150 }, 'mac', 2)).toEqual({ x: 300, y: 150 })
+    expect(dropPointToCss({ x: 300, y: 150 }, 'linux', 2)).toEqual({ x: 300, y: 150 })
   })
 })

@@ -120,6 +120,48 @@ describe('DataSection', () => {
     expect(screen.getByTestId('db-notice').textContent).toContain('Removed billing’s access to ws_atlas.')
   })
 
+  it('a permission refusal keeps the dialog open, names who can, and offers no retry', async () => {
+    routes()
+    post.mockRejectedValueOnce(new Error(JSON.stringify({ ok: false, error: { code: 'forbidden', hint: 'only the owning workspace may grant on ws_atlas' } })))
+    render(<DataSection />)
+    fireEvent.click(await screen.findByTestId('db-row'))
+    fireEvent.click(await screen.findByTestId('db-grant-open'))
+    const dialog = await screen.findByTestId('db-grant-dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Workspace' }))
+    fireEvent.click(await screen.findByText('notes'))
+    fireEvent.click(screen.getByTestId('db-grant-submit'))
+    const err = await screen.findByTestId('dialog-error')
+    expect(err.textContent).toContain('Only the workspace’s owner can change access to ws_atlas.')
+    expect(err.textContent).not.toMatch(/try again/i)
+    expect(screen.getByTestId('db-grant-dialog')).toBeTruthy()
+    expect(screen.queryByTestId('db-grant-submit')).toBeNull()
+    expect(within(screen.getByTestId('db-grant-dialog')).getByRole('button', { name: 'Close' })).toBeTruthy()
+  })
+
+  it('a refused access change on a row says who can and keeps the old value', async () => {
+    routes()
+    post.mockRejectedValueOnce(new Error(JSON.stringify({ ok: false, error: { code: 'forbidden', hint: 'not yours' } })))
+    render(<DataSection />)
+    fireEvent.click(await screen.findByTestId('db-row'))
+    const sw = await screen.findByRole('switch', { name: 'billing can manage access' })
+    fireEvent.click(sw)
+    expect((await screen.findByTestId('db-grant-refused')).textContent).toBe('Only the workspace’s owner can change access to ws_atlas. Nothing changed.')
+    expect(screen.getByRole('switch', { name: 'billing can manage access' }).getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('not set up: Set up, and Postgres missing from the server is said in words', async () => {
+    routes({ 'db/status': { ...STATUS, state: 'not-installed', installedMajor: null, listen: null } })
+    post.mockRejectedValueOnce(new Error(JSON.stringify({ ok: false, error: { code: 'not_baked', hint: 'Postgres sidecar is not baked on this box. Re-run provision-k2-server.sh --bake --with-db' } })))
+    render(<DataSection />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Server' }))
+    const btn = await screen.findByTestId('db-turn-on')
+    expect(btn.textContent).toBe('Set up')
+    fireEvent.click(btn)
+    const note = await screen.findByTestId('db-notice')
+    expect(note.textContent).toContain('Postgres isn’t installed on this server')
+    expect(note.textContent).not.toContain('provision-k2-server')
+  })
+
   it('turning the server off confirms that data is kept', async () => {
     routes()
     post.mockResolvedValueOnce({ ok: true, state: 'disabled' } as never)

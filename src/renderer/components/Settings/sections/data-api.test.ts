@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
 
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliPost: vi.fn(),
@@ -23,6 +24,8 @@ import {
   sqlErrorInfo,
   sqlErrorMessage,
   parseSqlStatus,
+  sqlRefused,
+  sqlNotBaked,
   parseSqlDatabases,
   sqlStateWord,
   dbVersionWord,
@@ -55,6 +58,26 @@ describe('checked replies', () => {
     expect(rows[0].name).toBe('d1')
     expect(rows[0].owner).toEqual({ projectId: 'p1', workspace: null, level: 'write', canManage: true })
     expect(rows[0].grants).toEqual([{ projectId: 'p2', workspace: null, level: 'write', canManage: false }])
+  })
+
+  it('a permission refusal and a missing Postgres are told apart from a passing fault', () => {
+    const err = (code: string): Error => new Error(JSON.stringify({ ok: false, error: { code, hint: 'h' } }))
+    expect(sqlRefused(err('forbidden'))).toBe(true)
+    expect(sqlRefused(err('owner_only'))).toBe(true)
+    expect(sqlRefused(err('engine'))).toBe(false)
+    expect(sqlRefused(new Error('socket hang up'))).toBe(false)
+    expect(sqlNotBaked(err('not_baked'))).toBe(true)
+    expect(sqlNotBaked(err('engine'))).toBe(false)
+  })
+
+  it('reads the code daemon-cli carries on its error (the real path for the db routes)', () => {
+    // daemon-cli unpacks {ok:false, error:{code, hint}}: the hint becomes the
+    // message and the code rides on the error, so the message is not JSON.
+    const http = new DaemonHttpError('Postgres sidecar is not baked on this box.', 409, 'not_baked')
+    expect(sqlErrorInfo(http)).toEqual({ code: 'not_baked', hint: 'Postgres sidecar is not baked on this box.' })
+    expect(sqlNotBaked(http)).toBe(true)
+    expect(sqlRefused(new DaemonHttpError('only the owner', 403, 'forbidden'))).toBe(true)
+    expect(sqlRefused(new DaemonHttpError('database is locked', 500, null))).toBe(false)
   })
 
   it('states, versions and live moves read as plain words', () => {

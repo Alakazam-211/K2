@@ -87,6 +87,14 @@ export interface SqlDatabase {
 }
 
 export function sqlErrorInfo(err: unknown): { code?: string; hint?: string } {
+  // daemon-cli's DaemonHttpError already unpacked `{ok:false, error:{code,
+  // hint}}` (the db routes' shape): the code rides on the error, the hint
+  // is its message. Read that first; the JSON-in-message path is for
+  // callers that throw the raw body.
+  const carried = err as { code?: unknown; message?: unknown } | null
+  if (carried && typeof carried === 'object' && typeof carried.code === 'string' && carried.code !== '') {
+    return { code: carried.code, hint: typeof carried.message === 'string' && carried.message !== '' ? carried.message : undefined }
+  }
   const msg = err instanceof Error ? err.message : String(err)
   try {
     const parsed = JSON.parse(msg)
@@ -107,6 +115,21 @@ export function sqlErrorMessage(err: unknown): string {
   const { hint } = sqlErrorInfo(err)
   if (hint) return hint
   return err instanceof Error ? err.message : String(err)
+}
+
+/** The daemon refused on permission, not on a passing fault: the db routes
+ *  answer 403 with `forbidden` (sql::ops OpsError::Forbidden, e.g. a grant
+ *  by a workspace that doesn't own or manage the database) or `owner_only`
+ *  (sql_routes::owner_only_response). Trying again won't help. */
+export function sqlRefused(err: unknown): boolean {
+  const { code } = sqlErrorInfo(err)
+  return code === 'forbidden' || code === 'owner_only'
+}
+
+/** Enable refused because Postgres isn't on this server (sql::supervisor
+ *  EnableError::NotBaked: enable never installs it). */
+export function sqlNotBaked(err: unknown): boolean {
+  return sqlErrorInfo(err).code === 'not_baked'
 }
 
 export function dbTypeLabel(row: Pick<SqlDatabase, 'type' | 'documents'>): string {

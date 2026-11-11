@@ -34,7 +34,7 @@ import {
 } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { AccessSheet, DIALOG_LABEL, DIALOG_MUTED, FailedNote } from './AccessDialogs'
-import { HealthWord, StatusDot } from './ConnectionsParts'
+import { HealthWord, StatusDot, type HealthTone } from './ConnectionsParts'
 import { LinuxOnlyNote } from './LinuxOnlyNote'
 import {
   SAMPLE_DATABASES,
@@ -50,6 +50,8 @@ import {
   grantSqlAccess,
   revokeSqlAccess,
   sqlErrorMessage,
+  sqlNotBaked,
+  sqlRefused,
   sqlStateWord,
   abortLiveMove,
   fetchLiveStatus,
@@ -123,6 +125,32 @@ function participantName(p: Pick<SqlParticipant, 'workspace' | 'projectId'>, nam
   return p.workspace ?? names.get(p.projectId) ?? 'A removed workspace'
 }
 
+/** A status as a dot and a word, as on Email Hosting: the word carries it,
+ *  colour only on a problem. */
+function StatusWord({ tone, children }: { tone: HealthTone; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <span className="inline-flex items-center gap-1.5 type-hint whitespace-nowrap" data-status-word={tone}>
+      <StatusDot tone={tone} />
+      <HealthWord tone={tone}>{children}</HealthWord>
+    </span>
+  )
+}
+
+/** A database's catalog status in a word. */
+function dbStatusWord(status: string): { word: string; tone: HealthTone } {
+  switch (status) {
+    case 'active':
+      return { word: 'Ready', tone: 'ok' }
+    case 'test':
+      return { word: 'Test copy', tone: 'neutral' }
+    case 'creating':
+    case 'restoring':
+      return { word: status === 'creating' ? 'Creating' : 'Restoring', tone: 'warn' }
+    default:
+      return { word: status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Unknown', tone: 'neutral' }
+  }
+}
+
 /** A short value (an address) with Copy beside it. */
 function CopyValue({ value, label }: { value: string; label: string }): React.JSX.Element {
   const [copy, setCopy] = useState<'idle' | 'done' | 'failed'>('idle')
@@ -148,7 +176,8 @@ function CopyValue({ value, label }: { value: string; label: string }): React.JS
 
 /** A confirm-first action in the shared dialog frame. Cancel has the focus;
  *  the action runs in place, and a failure stays in the dialog with the
- *  server's reason so the person can try again or cancel. */
+ *  server's reason so the person can try again or cancel. A permission
+ *  refusal says who can do it instead and offers no retry. */
 function ActionSheet({
   title,
   message,
@@ -157,6 +186,7 @@ function ActionSheet({
   destructive = false,
   failWhat,
   failNext,
+  refusedWhat,
   run,
   onDone,
   onClose,
@@ -169,6 +199,8 @@ function ActionSheet({
   destructive?: boolean
   failWhat: string
   failNext: string
+  /** What to say when the server refuses on permission ("Only …"). */
+  refusedWhat: string
   run: () => Promise<unknown>
   onDone: () => void
   onClose: () => void
@@ -176,6 +208,7 @@ function ActionSheet({
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [refused, setRefused] = useState(false)
   const go = async (): Promise<void> => {
     setBusy(true)
     setError(null)
@@ -183,6 +216,7 @@ function ActionSheet({
       await run()
       onDone()
     } catch (e) {
+      setRefused(sqlRefused(e))
       setError(sqlErrorMessage(e))
     } finally {
       setBusy(false)
@@ -197,16 +231,18 @@ function ActionSheet({
       footer={
         <>
           <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
-            Cancel
+            {refused ? 'Close' : 'Cancel'}
           </Button>
-          <Button variant={destructive ? 'danger-muted' : 'accent'} size="md" onClick={() => void go()} disabled={busy}>
-            {busy ? busyLabel : error ? 'Try again' : confirmLabel}
-          </Button>
+          {refused ? null : (
+            <Button variant={destructive ? 'danger-muted' : 'accent'} size="md" onClick={() => void go()} disabled={busy} aria-busy={busy || undefined}>
+              {busy ? busyLabel : error ? 'Try again' : confirmLabel}
+            </Button>
+          )}
         </>
       }
     >
       <p className={DIALOG_MUTED}>{message}</p>
-      {error ? <FailedNote what={failWhat} detail={error} next={failNext} /> : null}
+      {error ? <FailedNote what={refused ? refusedWhat : failWhat} detail={error} next={refused ? 'Nothing changed.' : failNext} /> : null}
     </AccessSheet>
   )
 }
@@ -298,10 +334,7 @@ function LiveMovesGroup({
               }
               hint={
                 <>
-                  <span className="inline-flex items-center gap-1.5">
-                    <StatusDot tone={tone} />
-                    <HealthWord tone={tone}>{word}</HealthWord>
-                  </span>{' '}
+                  <StatusWord tone={tone}>{word}</StatusWord>{' '}
                   {livePlainLine(r)}
                   {r.lastError ? <span className={`block ${SETTING_SERVER_REASON}`}>The server said: {r.lastError.replace(/[.\s]+$/, '')}.</span> : null}
                 </>
@@ -347,6 +380,7 @@ function LiveMovesGroup({
           busyLabel="Switching…"
           failWhat={`Couldn’t switch ${ask.db}.`}
           failNext={`It’s still on Postgres ${ask.from} and working. Try again in a moment.`}
+          refusedWhat={`Only the server’s owner or an admin can switch ${ask.db}.`}
           run={() => switchLiveMove(ask.db)}
           onDone={() => {
             setAsk(null)
@@ -366,6 +400,7 @@ function LiveMovesGroup({
           busyLabel="Stopping…"
           failWhat="Couldn’t stop the move."
           failNext="The move is still running. Try again in a moment."
+          refusedWhat={`Only the server’s owner or an admin can stop moving ${ask.db}.`}
           run={() => abortLiveMove(ask.db)}
           onDone={() => {
             setAsk(null)
@@ -384,6 +419,7 @@ function LiveMovesGroup({
           busyLabel="Restarting…"
           failWhat={`Couldn’t restart Postgres ${ask.major}.`}
           failNext="Nothing changed. Try again in a moment."
+          refusedWhat={`Only the server’s owner or an admin can restart Postgres ${ask.major}.`}
           run={() => prepareLiveMoves(ask.major)}
           onDone={() => {
             setAsk(null)
@@ -422,16 +458,29 @@ function ServerTab({
     if (sample) return
     setBusy(true)
     setNotice(null)
+    const what = notInstalled ? 'set up' : 'turn on'
     try {
       await enableSqlServer()
-      setNotice({ tone: 'ok', text: 'The database server is on. Agents and apps can use their databases again.' })
+      setNotice({
+        tone: 'ok',
+        text: notInstalled
+          ? 'The database server is set up and running. Each workspace can now have its own database.'
+          : 'The database server is on. Agents and apps can use their databases again.',
+      })
       onChanged()
     } catch (e) {
-      setNotice({ tone: 'error', text: 'Couldn’t turn on the database server. Nothing changed; try again.', detail: sqlErrorMessage(e) })
+      if (sqlNotBaked(e)) {
+        // The daemon's hint is a setup command; say it in words instead.
+        setNotice({ tone: 'error', text: 'Postgres isn’t installed on this server, so there’s nothing to start yet. Install it with the server’s setup (the database option), then come back and choose Set up.' })
+      } else if (sqlRefused(e)) {
+        setNotice({ tone: 'error', text: `Only the server’s owner or an admin can ${what} the database server.` })
+      } else {
+        setNotice({ tone: 'error', text: `Couldn’t ${what} the database server. Nothing changed; try again in a moment.`, detail: sqlErrorMessage(e) })
+      }
     } finally {
       setBusy(false)
     }
-  }, [onChanged, sample, setNotice])
+  }, [notInstalled, onChanged, sample, setNotice])
 
   if (notInstalled || off) {
     return (
@@ -445,13 +494,13 @@ function ServerTab({
             testId={notInstalled ? 'db-not-installed' : 'db-off'}
             title={notInstalled ? 'The database server isn’t set up' : 'The database server is off'}
             action={
-              <Button variant="accent" disabled={!canMutate || busy} onClick={() => void turnOn()}>
-                {busy ? 'Turning on…' : 'Turn on'}
+              <Button variant="accent" disabled={!canMutate || busy} aria-busy={busy || undefined} onClick={() => void turnOn()} data-testid="db-turn-on">
+                {notInstalled ? (busy ? 'Setting up…' : 'Set up') : busy ? 'Turning on…' : 'Turn on'}
               </Button>
             }
           >
             {notInstalled
-              ? 'Turning it on starts Postgres here, so each workspace can have its own database. Postgres has to be installed on this server first; the server’s setup does that.'
+              ? 'Setting it up starts the Postgres that came with this server, so each workspace can have its own database. If the server was set up without Postgres, K2 says so and nothing changes.'
               : 'Your databases and their data are kept. Turn it on to use them again.'}
           </SettingsLoadState>
         }
@@ -473,9 +522,8 @@ function ServerTab({
             ) : undefined
           }
         >
-          <span className="flex items-center gap-2 type-row" data-testid="db-state">
-            <StatusDot tone={tone} />
-            <HealthWord tone={tone}>{word}</HealthWord>
+          <span data-testid="db-state">
+            <StatusWord tone={tone}>{word}</StatusWord>
           </span>
         </SettingRow>
         {clusters.length > 1 ? (
@@ -518,6 +566,7 @@ function ServerTab({
           busyLabel="Turning off…"
           failWhat="Couldn’t turn off the database server."
           failNext="It’s still running. Try again in a moment."
+          refusedWhat="Only the server’s owner or an admin can turn the database server off."
           run={() => disableSqlServer()}
           onDone={() => {
             setAskOff(false)
@@ -547,6 +596,7 @@ function CreateDatabaseDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const formId = useId()
+  const [refused, setRefused] = useState(false)
   const owners = useMemo(() => new Set(databases.map((d) => d.ownerProjectId)), [databases])
   const options = useMemo(
     () => projects.map((p) => ({ value: p.id, label: p.name || p.path, badge: owners.has(p.id) ? 'Has one' : undefined })),
@@ -561,6 +611,7 @@ function CreateDatabaseDialog({
       const res = await createSqlDatabase(ws)
       onCreated(ws, res?.name ?? null)
     } catch (e) {
+      setRefused(sqlRefused(e))
       setError(sqlErrorMessage(e))
     } finally {
       setBusy(false)
@@ -577,11 +628,13 @@ function CreateDatabaseDialog({
       footer={
         <>
           <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
+            {refused ? 'Close' : 'Cancel'}
           </Button>
-          <Button type="submit" form={formId} variant="accent" size="md" disabled={!ws || busy} data-testid="db-create-submit">
-            {busy ? 'Creating…' : 'Create database'}
-          </Button>
+          {refused ? null : (
+            <Button type="submit" form={formId} variant="accent" size="md" disabled={!ws || busy} aria-busy={busy || undefined} data-testid="db-create-submit">
+              {busy ? 'Creating…' : 'Create database'}
+            </Button>
+          )}
         </>
       }
     >
@@ -603,13 +656,20 @@ function CreateDatabaseDialog({
             onChange={(v) => {
               setWs(v)
               setError(null)
+              setRefused(false)
             }}
             menuAlign="left"
             fullWidth
           />
           <p className={`${DIALOG_MUTED} mt-1`}>The database belongs to this workspace. Its agents can read and change everything in it.</p>
         </div>
-        {error ? <FailedNote what="Couldn’t create the database." detail={error} next="Nothing was created. Try again, or choose another workspace." /> : null}
+        {error ? (
+          refused ? (
+            <FailedNote what="Only the server’s owner or an admin can create databases." detail={error} next="Nothing was created." />
+          ) : (
+            <FailedNote what="Couldn’t create the database." detail={error} next="Nothing was created. Try again, or choose another workspace." />
+          )
+        ) : null}
       </form>
     </AccessSheet>
   )
@@ -629,6 +689,7 @@ function GiveAccessDialog({
   const [level, setLevel] = useState<SqlLevel>('read')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [refused, setRefused] = useState(false)
   const formId = useId()
   const taken = useMemo(() => new Set([db.ownerProjectId, ...db.grants.map((g) => g.projectId)]), [db])
   const options = useMemo(() => projects.filter((p) => !taken.has(p.id)).map((p) => ({ value: p.id, label: p.name || p.path })), [projects, taken])
@@ -641,6 +702,7 @@ function GiveAccessDialog({
       await grantSqlAccess({ project: ws, db: db.id, level })
       onGiven({ projectId: ws, workspace: projects.find((p) => p.id === ws)?.name ?? null, level, canManage: false })
     } catch (e) {
+      setRefused(sqlRefused(e))
       setError(sqlErrorMessage(e))
     } finally {
       setBusy(false)
@@ -657,11 +719,13 @@ function GiveAccessDialog({
       footer={
         <>
           <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
+            {refused ? 'Close' : 'Cancel'}
           </Button>
-          <Button type="submit" form={formId} variant="accent" size="md" disabled={!ws || busy}>
-            {busy ? 'Giving access…' : 'Give access'}
-          </Button>
+          {refused ? null : (
+            <Button type="submit" form={formId} variant="accent" size="md" disabled={!ws || busy} aria-busy={busy || undefined} data-testid="db-grant-submit">
+              {busy ? 'Giving access…' : 'Give access'}
+            </Button>
+          )}
         </>
       }
     >
@@ -693,7 +757,13 @@ function GiveAccessDialog({
           <p className={DIALOG_LABEL}>What it can do</p>
           <SettingDropdown ariaLabel="What it can do" value={level} options={LEVEL_OPTIONS} onChange={(v) => setLevel(v as SqlLevel)} menuAlign="left" fullWidth />
         </div>
-        {error ? <FailedNote what="Couldn’t give access." detail={error} next="Nothing changed. Try again in a moment." /> : null}
+        {error ? (
+          refused ? (
+            <FailedNote what={`Only the workspace’s owner can change access to ${db.name}.`} detail={error} next="Nothing changed." />
+          ) : (
+            <FailedNote what="Couldn’t give access." detail={error} next="Nothing changed. Try again in a moment." />
+          )
+        ) : null}
       </form>
     </AccessSheet>
   )
@@ -716,10 +786,12 @@ function GrantRow({
 }): React.JSX.Element {
   const save = useSaveStatus()
   const [busy, setBusy] = useState(false)
+  const [refused, setRefused] = useState(false)
 
   const change = async (level: SqlLevel, canManage: boolean): Promise<void> => {
     if (busy) return
     setBusy(true)
+    setRefused(false)
     const before = db.grants
     patchDb(db.id, (row) => ({ ...row, grants: row.grants.map((g) => (g.projectId === grant.projectId ? { ...g, level, canManage } : g)) }))
     try {
@@ -727,7 +799,12 @@ function GrantRow({
       save.saved()
     } catch (e) {
       patchDb(db.id, (row) => ({ ...row, grants: before }))
-      save.failed(new Error(sqlErrorMessage(e)))
+      if (sqlRefused(e)) {
+        save.reset()
+        setRefused(true)
+      } else {
+        save.failed(new Error(sqlErrorMessage(e)))
+      }
     } finally {
       setBusy(false)
     }
@@ -743,6 +820,11 @@ function GrantRow({
           {can}
           {grant.canManage ? ', and give other workspaces access.' : '.'}
           <SaveError state={save.state} />
+          {refused ? (
+            <p role="alert" data-testid="db-grant-refused" className="type-hint text-[var(--color-status-error-soft)] mt-1 leading-relaxed max-w-[75ch]">
+              Only the workspace’s owner can change access to {db.name}. Nothing changed.
+            </p>
+          ) : null}
         </>
       }
     >
@@ -784,6 +866,7 @@ function RoleGroup({
 }): React.JSX.Element {
   const [draft, setDraft] = useState(db.bindRole ?? '')
   const [busy, setBusy] = useState(false)
+  const [refused, setRefused] = useState(false)
   const save = useSaveStatus()
   const inputId = useId()
 
@@ -796,6 +879,7 @@ function RoleGroup({
     const role = draft.trim()
     if (!role || busy) return
     setBusy(true)
+    setRefused(false)
     const before = db.bindRole
     patchDb(db.id, (row) => ({ ...row, bindRole: role }))
     try {
@@ -805,7 +889,12 @@ function RoleGroup({
     } catch (e) {
       patchDb(db.id, (row) => ({ ...row, bindRole: before }))
       setDraft(before ?? '')
-      save.failed(new Error(sqlErrorMessage(e)))
+      if (sqlRefused(e)) {
+        save.reset()
+        setRefused(true)
+      } else {
+        save.failed(new Error(sqlErrorMessage(e)))
+      }
     } finally {
       setBusy(false)
     }
@@ -819,6 +908,11 @@ function RoleGroup({
           <>
             The Postgres role the owner workspace’s agents use. Leave it as it is unless an app needs its own role.
             <SaveError state={save.state} />
+            {refused ? (
+              <p role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1 leading-relaxed max-w-[75ch]">
+                Only the server’s owner or an admin can change the sign-in role. Nothing changed.
+              </p>
+            ) : null}
           </>
         }
       >
@@ -866,13 +960,25 @@ function DatabaseDetail({
 
   return (
     <div className="space-y-5" data-testid="db-detail">
-      <Button variant="quiet" onClick={onBack} data-testid="db-back">
-        &larr; All databases
-      </Button>
-      <header className="min-w-0">
-        <h3 className="type-heading text-[var(--color-text-primary)] font-mono truncate">{db.name}</h3>
+      <div className="space-y-2">
+        <button
+          type="button"
+          data-k2-focus=""
+          onClick={onBack}
+          className="relative inline-flex items-center gap-1 type-hint text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer outline-none no-drag"
+          data-testid="db-back"
+        >
+          <svg aria-hidden="true" viewBox="0 0 16 16" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={1.75}>
+            <path d="M10 3.5 5.5 8 10 12.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          All databases
+        </button>
+        <div className="flex items-center gap-3 min-w-0">
+          <h3 className="type-heading text-[var(--color-text-primary)] truncate">{db.name}</h3>
+          <StatusWord tone={dbStatusWord(db.status).tone}>{dbStatusWord(db.status).word}</StatusWord>
+        </div>
         <p className={SETTING_ROW_HINT}>{facts}.</p>
-      </header>
+      </div>
 
       <SettingsGroup
         card
@@ -929,6 +1035,7 @@ function DatabaseDetail({
           busyLabel="Removing…"
           failWhat="Couldn’t remove access."
           failNext="They still have access. Try again in a moment."
+          refusedWhat={`Only the workspace’s owner can change access to ${db.name}.`}
           run={() => revokeSqlAccess({ project: dialog.grant.projectId, db: db.id })}
           onDone={() => {
             const gone = dialog.grant
@@ -1010,14 +1117,17 @@ function DatabaseList({
             data-k2-focus=""
             onClick={() => onOpen(d.id)}
             aria-label={`Open ${d.name}`}
-            className={`w-full text-left px-4 py-3 flex items-center justify-between gap-6 cursor-pointer outline-none no-drag ${SETTING_LIST_ROW_HOVER}`}
+            className={`relative w-full text-left px-4 py-3 flex items-center justify-between gap-6 cursor-pointer outline-none no-drag ${SETTING_LIST_ROW_HOVER}`}
           >
             <span className="min-w-0">
-              <span className="block type-row font-mono text-[var(--color-text-primary)] truncate">{d.name}</span>
-              <span className={`block ${SETTING_ROW_HINT}`}>{facts}</span>
+              <span className="block type-name text-[var(--color-text-primary)] truncate">{d.name}</span>
+              <span className="block type-hint text-[var(--color-text-muted)] mt-0.5 truncate">{facts}</span>
             </span>
-            <span aria-hidden="true" className="type-row text-[var(--color-text-secondary)] flex-shrink-0">
-              &rsaquo;
+            <span className="flex items-center gap-3 flex-shrink-0">
+              <StatusWord tone={dbStatusWord(d.status).tone}>{dbStatusWord(d.status).word}</StatusWord>
+              <svg aria-hidden="true" viewBox="0 0 16 16" className="w-3.5 h-3.5 text-[var(--color-text-secondary)]" fill="none" stroke="currentColor" strokeWidth={1.75}>
+                <path d="M6 3.5 10.5 8 6 12.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </span>
           </button>
         )

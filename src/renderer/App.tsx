@@ -95,12 +95,9 @@ import { prewarmDaemonWs } from './kessel/daemon-ws'
 import { subscribeToActiveState, refreshActiveSnapshot } from './stores/session-events'
 import { onActiveHostChange, useConnectHostStore } from './stores/connect-host'
 import { isWebClient } from './lib/is-web'
-// Style System P3 — terminal color bridge (style store → KesselConfig).
-import { KesselConfigProvider } from './kessel/config-context'
-import { defaultKesselConfig, terminalFontStack } from './kessel/config'
-import { useStyleStore } from './stores/style'
-import { toKesselColors } from './lib/style-resolve'
-import { getPalette } from './styles.generated'
+// Style System P3 — terminal color bridge (style store → KesselConfig),
+// plus Settings → Terminal → Font.
+import { StyledKesselProvider } from './lib/styled-kessel-provider'
 import { primaryScope } from '@/kessel/server-scope'
 import { SETTINGS_OVERLAY_Z } from '@/lib/overlay-layers'
 import { SendFeedbackHost } from './components/SendFeedback/SendFeedbackButton'
@@ -260,33 +257,6 @@ function applyK2SOZoom(): void {
 
 if (typeof window !== 'undefined') {
   window.__k2ApplyPageTitle = applyK2SOZoom
-}
-
-/** Style System P3 — the terminal color bridge. Derives the active
- *  palette's terminal colors (ANSI-16 + fg/bg/cursor/selection) from the
- *  style store and mounts the (previously never-mounted)
- *  KesselConfigProvider above the ENTIRE app tree, so every
- *  TerminalPane — main layout, focus mode, pinned-chat retainer kept
- *  alive under the Settings overlay — reads them via useKesselConfig().
- *  A palette switch changes `overrides` identity → the provider
- *  re-merges → the painter effects (which depend on config.colors.*)
- *  re-run on live terminals. The charcoal default's terminal block is
- *  value-identical to defaultKesselConfig.colors, so default boots
- *  render exactly as before. Runtime OSC-4 from TUIs still wins (it
- *  layers over the config palette downstream). */
-function StyledKesselProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const styleId = useStyleStore((s) => s.styleId)
-  const resolvedPaletteId = useStyleStore((s) => s.resolvedPaletteId)
-  // Settings → Terminal → Font: the default font keeps the default config.
-  const terminalFont = useSettingsStore((s) => s.terminal?.fontFamily)
-  const overrides = useMemo(() => {
-    const palette = getPalette(styleId, resolvedPaletteId)
-    const family = terminalFontStack(terminalFont)
-    const font = family === defaultKesselConfig.font.family ? undefined : { family }
-    if (!palette && !font) return undefined
-    return { ...(palette ? { colors: toKesselColors(palette.terminal) } : {}), ...(font ? { font } : {}) }
-  }, [styleId, resolvedPaletteId, terminalFont])
-  return <KesselConfigProvider overrides={overrides}>{children}</KesselConfigProvider>
 }
 
 function BootSplash(): React.JSX.Element {

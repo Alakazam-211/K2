@@ -186,7 +186,7 @@ describe('window corner source locks', () => {
     expect(resizeBlock).not.toMatch(/inset|lastTrafficInset|--inset-window/)
 
     const app = readFileSync(resolve(root, 'src/renderer/App.tsx'), 'utf8')
-    const title = app.slice(app.indexOf('setTitle(title)'), app.indexOf('StyledKesselProvider'))
+    const title = app.slice(app.indexOf('setTitle(title)'), app.indexOf('function BootSplash'))
     expect(title).toContain('reapplyWindowCorners()')
     expect(title).not.toMatch(/inset/)
 

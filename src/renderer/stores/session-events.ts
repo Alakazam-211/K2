@@ -263,9 +263,11 @@ export interface ReviewChangedEvent {
 }
 
 /** APP-LEVEL — mail state changed (server, domain, an approval asked for or
- *  decided). Refetch signal only. Consumer: Settings → Email
- *  (`onMailChanged`). `reason` is `server-state-changed` |
- *  `domain-status-changed` | `send-approval-requested` | `send-decided`. */
+ *  decided, a linked inbox added or removed). Refetch signal only.
+ *  Consumers: Settings → Email (`onMailChanged`) and the Mail tab (`mail-tab.ts`). `reason` is
+ *  `server-state-changed` | `domain-status-changed` |
+ *  `send-approval-requested` | `send-decided` | `inboxes-changed` (a linked
+ *  inbox added or removed). */
 export interface MailChangedEvent {
   kind: 'mail_changed'
   reason: string

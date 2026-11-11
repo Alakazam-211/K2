@@ -1420,6 +1420,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/mail/reader/message", Member),
     get("/cli/mail/reader/messages", Member),
     post("/cli/mail/reader/move", Member),
+    // Does this server have mail (hosting on, any linked inbox)? Local
+    // state only; the client's Mail tab follows it.
+    get("/cli/mail/reader/presence", Member),
     post("/cli/mail/reader/reply", Member),
     post("/cli/mail/reader/send", Member),
     get("/cli/mail/reader/thread", Member),

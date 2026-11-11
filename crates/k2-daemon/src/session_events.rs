@@ -800,10 +800,13 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "mail_changed", "reason": string }` with
     /// `reason` = the legacy hook name minus its `mail:` prefix —
     /// one of `server-state-changed` | `domain-status-changed` |
-    /// `send-approval-requested` | `send-decided`. Refetch signal
-    /// only, no payload (never message content on the bus). Consumer:
-    /// `EmailHostingSection.tsx` through `onMailChanged` (0.43.2; before
-    /// that no client listened).
+    /// `send-approval-requested` | `send-decided`, plus
+    /// `inboxes-changed` (a linked inbox added or removed; emitted
+    /// directly by `mail::reader_presence::inboxes_changed`, no hook).
+    /// Refetch signal only, no payload (never message content on the
+    /// bus). Consumers: `EmailHostingSection.tsx` through
+    /// `onMailChanged` (0.43.2; before that no client listened) and the
+    /// Mail tab (`mail-tab.ts`, re-reads `/cli/mail/reader/presence`).
     MailChanged { reason: String },
 
     /// Sew on K2 (S29 K14) — the Sew server on this box or its voice

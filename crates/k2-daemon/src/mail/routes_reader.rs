@@ -56,6 +56,7 @@ pub const READ_ROUTES: &[&str] = &[
     "/cli/mail/reader/log",
     "/cli/mail/reader/message",
     "/cli/mail/reader/messages",
+    "/cli/mail/reader/presence",
     "/cli/mail/reader/thread",
 ];
 
@@ -160,6 +161,7 @@ pub fn dispatch(
             "/cli/mail/reader/thread" => handle_thread(params),
             "/cli/mail/reader/attachment" => handle_attachment(params),
             "/cli/mail/reader/log" => handle_log(params),
+            crate::mail::reader_presence::ROUTE => crate::mail::reader_presence::handle(),
             _ => CliResponse::not_found(),
         };
     }
@@ -180,7 +182,7 @@ pub fn dispatch(
 /// One inbox on this server, as the reader knows it. Never carries a
 /// credential, username, host or server URL out of this module.
 #[derive(Debug, Clone)]
-struct ReaderInbox {
+pub(super) struct ReaderInbox {
     source: Source,
     inbox_id: String,
     address: String,
@@ -202,7 +204,7 @@ struct ReaderInbox {
 }
 
 impl ReaderInbox {
-    fn own(&self, viewer_person: Option<&str>) -> bool {
+    pub(super) fn own(&self, viewer_person: Option<&str>) -> bool {
         self.person_kind
             && self.person.is_some()
             && viewer_person.is_some_and(|me| Some(me) == self.person.as_deref())
@@ -241,7 +243,7 @@ fn linked_provider(kind: &str, provider: Option<&str>, host: &str) -> &'static s
 
 /// Every inbox on the server: active hosted addresses and every linked
 /// inbox, ordered by workspace then address.
-fn catalog() -> Vec<ReaderInbox> {
+pub(super) fn catalog() -> Vec<ReaderInbox> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let mut out: Vec<ReaderInbox> = Vec::new();

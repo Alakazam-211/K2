@@ -187,6 +187,9 @@ pub mod routes_oauth_config;
 /// The mail reader (prd-ocmail-admin-in-k2-v1 OA1–OA9): a person's tool for
 /// opening this server's inboxes, peek only, every access logged.
 pub mod routes_reader;
+/// `GET /cli/mail/reader/presence`: does this server have mail (hosting on,
+/// any linked inbox), so the client shows the Mail tab only then.
+pub mod reader_presence;
 pub mod routes_send;
 pub mod routes_server;
 pub mod schedule;

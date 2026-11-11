@@ -1435,6 +1435,8 @@ pub fn add_inbox(
         let _ = secrets.delete(&vault_key(&id));
         return Err(ExtError::Engine(format!("insert external inbox: {e}")));
     }
+    // The client's Mail tab shows once the server has any linked inbox.
+    crate::mail::reader_presence::inboxes_changed();
     k2_core::log_debug!(
         "[mail/external] connected inbox {} (host {}) bound to workspace {}",
         candidate.email_address,
@@ -1573,6 +1575,7 @@ pub fn add_oauth_inbox(
         let _ = secrets.delete(&crate::mail::oauth::oauth_vault_key(&id));
         return Err(ExtError::Engine(format!("insert oauth inbox: {e}")));
     }
+    crate::mail::reader_presence::inboxes_changed();
     k2_core::log_debug!(
         "[mail/external] linked oauth inbox {} (provider {}, kind {}) bound to workspace {}",
         email_address,
@@ -1766,6 +1769,9 @@ pub fn remove_inbox_with(
         rusqlite::params![row.id],
     )
     .map_err(|e| ExtError::Engine(format!("delete external inbox: {e}")))?;
+    drop(conn);
+    // The last one gone hides the client's Mail tab (unless hosting is on).
+    crate::mail::reader_presence::inboxes_changed();
     let mut out = serde_json::json!({
         "ok": true,
         "address": row.email_address,

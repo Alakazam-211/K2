@@ -127,6 +127,35 @@ describe('Hints', () => {
   })
 })
 
+describe('SettingRow stack', () => {
+  it('puts the control under the label and hint, left-aligned, then the row below', () => {
+    render(
+      <SettingsGroup title="Group" card>
+        <SettingRow label="Opens in" hint="Where it opens." testId="row" below={<p>Below</p>} stack>
+          <button>Choice</button>
+        </SettingRow>
+      </SettingsGroup>,
+    )
+    const row = screen.getByTestId('row')
+    const parts = Array.from(row.children).map((el) => el.textContent)
+    expect(parts).toEqual(['Opens in', 'Where it opens.', 'Choice', 'Below'])
+    const slot = row.querySelector('[data-setting-row-control="stack"]') as HTMLElement
+    expect(slot.className).not.toContain('justify-between')
+    expect(slot.className).toContain('flex-wrap')
+    expect(row.className).toContain('px-4')
+  })
+
+  it('a stacked field keeps the shared field width', () => {
+    render(
+      <SettingRow label="Name" hint="Shown to others." testId="row" field stack>
+        <input aria-label="Name" />
+      </SettingRow>,
+    )
+    const slot = screen.getByTestId('row').querySelector('[data-setting-row-control="stack"]') as HTMLElement
+    expect(slot.className).toContain('w-60')
+  })
+})
+
 describe('SettingDropdown Esc (0.46.3)', () => {
   it('Esc closes only the open menu: the Settings panel listener never sees it', () => {
     // Stands in for Settings.tsx: a bubble-phase window listener that

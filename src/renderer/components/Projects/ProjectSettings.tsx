@@ -119,7 +119,6 @@ import {
   AVATAR_ROUND,
   SETTING_FIELD_WIDTH,
   SETTING_ROW_HINT,
-  SETTING_ROW_LABEL,
   SaveError,
   SaveNote,
   SettingDropdown,
@@ -1021,8 +1020,9 @@ function DefaultViewRow({
   detail: ProjectGroupShow
   caps: ProjectSettingsCaps
   edit: GroupEdit
-  /** In the narrow General column the choices go under the label, so the
-   *  hint keeps its width instead of wrapping beside them. */
+  /** In the narrow General column the choices go under the label (a
+   *  stacked row), so the hint keeps its width instead of wrapping beside
+   *  them. */
   narrow?: boolean
 }): React.JSX.Element {
   const value = projectDefaultView(detail)
@@ -1086,24 +1086,9 @@ function DefaultViewRow({
     </>
   )
 
-  // Narrow: label and hint, then the choices under them (with "Saving…" /
-  // "Saved" beside them), then a lock reason or an error.
-  if (narrow) {
-    return (
-      <div className="px-4 py-3" data-settings-id="project-groups.default-view" data-testid="project-default-view-row">
-        <div className={SETTING_ROW_LABEL}>Agents open in</div>
-        <div className={SETTING_ROW_HINT}>{DEFAULT_VIEW_HINT}</div>
-        <div className="mt-2 flex items-center gap-2">
-          {control}
-          {notes}
-        </div>
-        {below && <div className="mt-2">{below}</div>}
-      </div>
-    )
-  }
-  // A card row: label and hint left, the control on the shared right
-  // edge with "Saving…" / "Saved" beside it; a lock reason or an error
-  // takes its own line under the row.
+  // A card row: label and hint, the choices on the shared right edge, or
+  // under the hint in the narrow column (stacked), with "Saving…" / "Saved"
+  // beside them; a lock reason or an error takes its own line under the row.
   return (
     <SettingRow
       label="Agents open in"
@@ -1111,9 +1096,10 @@ function DefaultViewRow({
       settingId="project-groups.default-view"
       testId="project-default-view-row"
       below={below}
+      stack={narrow}
     >
-      {notes}
-      {control}
+      {narrow ? control : notes}
+      {narrow ? notes : control}
     </SettingRow>
   )
 }

@@ -63,6 +63,7 @@ export function SettingRow({
   columns = false,
   testId,
   field = false,
+  stack = false,
 }: {
   label: React.ReactNode
   /** Under the label, in the hint role. */
@@ -82,8 +83,28 @@ export function SettingRow({
   testId?: string
   /** A text field or dropdown: the control takes the shared field width. */
   field?: boolean
+  /** The control goes under the label and hint, left-aligned, instead of on
+   *  the right edge: for a control too wide to sit beside its hint (a set of
+   *  choices in a narrow column). A field keeps the shared field width; any
+   *  other control lays out across the row with notes beside it. */
+  stack?: boolean
 }): React.JSX.Element {
   const inCard = useContext(SettingsCardContext)
+  if (stack) {
+    return (
+      <div className={inCard ? 'px-4 py-3' : 'py-2 border-b border-[var(--color-border)]'} data-settings-id={settingId} data-testid={testId}>
+        <div className={SETTING_ROW_LABEL}>{label}</div>
+        {hint && <div className={SETTING_ROW_HINT}>{hint}</div>}
+        <div
+          data-setting-row-control="stack"
+          className={field ? `mt-2 ${SETTING_FIELD_WIDTH} max-w-full` : 'mt-2 flex flex-wrap items-center gap-2'}
+        >
+          {children}
+        </div>
+        {below && <div className="mt-2">{below}</div>}
+      </div>
+    )
+  }
   if (columns) {
     return (
       <div

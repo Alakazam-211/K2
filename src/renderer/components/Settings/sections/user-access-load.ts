@@ -13,6 +13,9 @@
 //   late, after a save's re-read, is dropped);
 // - while the window's server is reconnecting, a read waits and retries by
 //   itself once it's back, instead of failing with "request skipped";
+// - the people list's own details (locks, app access, …) load part by part
+//   on the daemon; the ones that didn't are in `userDetails`, and their
+//   fields stay unknown on the rows (never read as "no");
 // - App names: a workspace that fails is counted, the rest still list.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -26,6 +29,7 @@ import {
   parseGrants,
   parsePeople,
   parseRoles,
+  parseUserDetailErrors,
   type AppOption,
   type GrantRow,
   type PersonRow,
@@ -45,8 +49,13 @@ export type Part<T> = {
 
 export type AppsData = { apps: AppOption[]; missed: number; reason: string | null }
 
+/** The users list's parts that didn't load on the daemon (part → reason),
+ *  from the newest people read; empty when everything loaded. */
+export type UserDetailErrors = Record<string, string>
+
 export type AccessData = {
   users: Part<PersonRow[]>
+  userDetails: UserDetailErrors
   grants: Part<GrantRow[]>
   roles: Part<RoleRow[]>
   apps: Part<AppsData>
@@ -61,8 +70,19 @@ function errorName(e: unknown): string | null {
   return e instanceof Error ? e.name : null
 }
 
-const READERS: { [K in PartName]: () => Promise<NonNullable<AccessData[K]['data']>> } = {
-  users: async () => parsePeople(await daemonCliGet<unknown>(primaryScope(), 'skin/users')),
+type PeopleRead = { people: PersonRow[]; details: UserDetailErrors }
+type ReadValue = {
+  users: PeopleRead
+  grants: GrantRow[]
+  roles: RoleRow[]
+  apps: AppsData
+}
+
+const READERS: { [K in PartName]: () => Promise<ReadValue[K]> } = {
+  users: async () => {
+    const raw = await daemonCliGet<unknown>(primaryScope(), 'skin/users')
+    return { people: parsePeople(raw), details: parseUserDetailErrors(raw) }
+  },
   grants: async () => parseGrants(await daemonCliGet<unknown>(primaryScope(), 'skin/grants')),
   roles: async () => parseRoles(await daemonCliGet<unknown>(primaryScope(), 'skin/roles')),
   apps: () => fetchAppsSettled(daemonErrorText),
@@ -78,7 +98,7 @@ export function useAccessData(wantApps: boolean): AccessData & {
   reload: (part: PartName) => Promise<void>
   refresh: () => Promise<void>
 } {
-  const [data, setData] = useState<AccessData>(() => ({ users: idle(), grants: idle(), roles: idle(), apps: idle() }))
+  const [data, setData] = useState<AccessData>(() => ({ users: idle(), userDetails: {}, grants: idle(), roles: idle(), apps: idle() }))
   const seq = useRef<Record<PartName, number>>({ users: 0, grants: 0, roles: 0, apps: 0 })
   const live = useRef(true)
   const [waiting, setWaiting] = useState<Set<PartName>>(() => new Set())
@@ -90,7 +110,13 @@ export function useAccessData(wantApps: boolean): AccessData & {
     for (let attempt = 0; ; attempt++) {
       try {
         const value = await READERS[part]()
-        if (current()) setData((d) => ({ ...d, [part]: { status: 'ready', data: value, error: null, waiting: false } }))
+        if (!current()) return
+        if (part === 'users') {
+          const { people, details } = value as PeopleRead
+          setData((d) => ({ ...d, users: { status: 'ready', data: people, error: null, waiting: false }, userDetails: details }))
+        } else {
+          setData((d) => ({ ...d, [part]: { status: 'ready', data: value, error: null, waiting: false } }))
+        }
         return
       } catch (e) {
         if (!current()) return

@@ -44,12 +44,13 @@ import {
   parsePeople,
   reachWords,
   takePersonHandoff,
+  userDetailsLine,
   type AppOption,
   type GrantRow,
   type PersonRow,
   type RoleRow,
 } from './user-access-api'
-import { useAccessData, type AppsData, type Part, type PartName } from './user-access-load'
+import { useAccessData, type AppsData, type Part, type PartName, type UserDetailErrors } from './user-access-load'
 
 export { parsePeople }
 export type { PersonRow }
@@ -248,6 +249,27 @@ function PartFailed({
   )
 }
 
+/**
+ * One quiet line when some of the people list's details didn't load on the
+ * server (locks, app access, …), naming them, with Try again. Those details
+ * show as unknown on the rows meanwhile, never as "no".
+ */
+function UserDetailsNote({ details, onRetry }: { details: UserDetailErrors; onRetry: () => void }): React.JSX.Element | null {
+  const line = userDetailsLine(details)
+  if (!line) return null
+  const why = Object.entries(details)
+    .map(([part, reason]) => (reason ? `${part}: ${reason}` : part))
+    .join('\n')
+  return (
+    <p role="status" data-testid="people-details-note" className="flex flex-wrap items-center gap-x-3 gap-y-1 type-hint text-[var(--color-text-secondary)]">
+      <span title={why}>{line}</span>
+      <Button variant="quiet" size="sm" onClick={onRetry}>
+        Try again
+      </Button>
+    </p>
+  )
+}
+
 export function PeopleSection(): React.JSX.Element {
   const [selection, setSelection] = useState<Selection>(() => takePersonHandoff() ?? 'everyone')
   const [view, setView] = useState<View>('people')
@@ -263,7 +285,7 @@ export function PeopleSection(): React.JSX.Element {
   const [added, setAdded] = useState<AddedUser | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
-  const { users, grants, roles, apps, reload, refresh } = useAccessData(needApps || view === 'apps' || adding)
+  const { users, userDetails, grants, roles, apps, reload, refresh } = useAccessData(needApps || view === 'apps' || adding)
 
   useEffect(() => {
     let live = true
@@ -365,6 +387,7 @@ export function PeopleSection(): React.JSX.Element {
             <PersonDetail
               key={person.username}
               person={person}
+              userDetails={userDetails}
               grants={grants}
               roles={roles}
               apps={apps}
@@ -383,6 +406,7 @@ export function PeopleSection(): React.JSX.Element {
             <Everyone
               people={people}
               users={users}
+              userDetails={userDetails}
               grants={grants}
               roles={roles}
               apps={apps}
@@ -510,6 +534,7 @@ function EveryoneHeader({ isOwner, onAdd, waiting = false }: { isOwner: boolean;
 function Everyone({
   people,
   users,
+  userDetails,
   grants,
   roles,
   apps,
@@ -524,6 +549,7 @@ function Everyone({
 }: {
   people: PersonRow[]
   users: Part<PersonRow[]>
+  userDetails: UserDetailErrors
   grants: Part<GrantRow[]>
   roles: Part<RoleRow[]>
   apps: Part<AppsData>
@@ -576,6 +602,7 @@ function Everyone({
       <PartFailed part={users} title="Couldn’t refresh the list" onRetry={() => void reload('users')}>
         This is the list as it was. Changes since then may be missing.
       </PartFailed>
+      <UserDetailsNote details={userDetails} onRetry={() => void reload('users')} />
       <PartFailed part={grants} title="Couldn’t load which Apps each person can use" onRetry={() => void reload('grants')}>
         The people are listed; their Apps show once this loads.
       </PartFailed>
@@ -786,6 +813,7 @@ const TAB_LABEL: Record<Tab, string> = { access: 'What they can use', account: '
 
 function PersonDetail({
   person,
+  userDetails,
   grants,
   roles,
   apps,
@@ -798,6 +826,7 @@ function PersonDetail({
   onRemoved,
 }: {
   person: PersonRow
+  userDetails: UserDetailErrors
   grants: Part<GrantRow[]>
   roles: Part<RoleRow[]>
   apps: Part<AppsData>
@@ -871,6 +900,7 @@ function PersonDetail({
           {notice}
         </p>
       ) : null}
+      <UserDetailsNote details={userDetails} onRetry={() => void reload('users')} />
 
       {tab === 'access' ? (
         <>
@@ -1339,6 +1369,18 @@ function AccountTab({
               below={<SaveError state={writes.at('unlock')} />}
             >
               <Button variant="accent" disabled={!canReset || writes.busy === 'unlock'} onClick={() => void unlock()}>
+                Unlock
+              </Button>
+            </SettingRow>
+          ) : person.lockedUntil === undefined && !unlocked ? (
+            // The locks didn't load: say so, never "not locked". Unlock is
+            // safe either way (it says when they weren't locked).
+            <SettingRow
+              label="Locked out?"
+              hint="K2 couldn’t read whether they’re locked out right now. Unlock them if they can’t sign in."
+              below={<SaveError state={writes.at('unlock')} />}
+            >
+              <Button disabled={!canReset || writes.busy === 'unlock'} onClick={() => void unlock()} data-testid="person-lock-unknown">
                 Unlock
               </Button>
             </SettingRow>

@@ -22,18 +22,23 @@ export type PersonRow = {
   defaultRooms: string[]
   defaultRoomHandles: string[]
   email: string | null
-  /** An agent tie (agent-app-users R2): the workspace handle it holds them to. */
-  tiedTo: string | null
-  /** Tied, and given more than that workspace: the extra waits for their own password. */
-  pendingReset: boolean
+  /** An agent tie (agent-app-users R2): the workspace handle it holds them
+   *  to. Unknown (undefined) when the users list couldn't read the ties. */
+  tiedTo?: string | null
+  /** Tied, and given more than that workspace: the extra waits for their own
+   *  password. Unknown when the ties didn't load. */
+  pendingReset?: boolean
   /** Why the tie exists: created | password | email | invite | app_key | app_reset. */
   tiedReasons: string[]
-  /** Why an owner reset won't mail the stored email (any tie, or unconfirmed). */
-  storedEmailRefused: string | null
-  /** The login is locked (wrong passwords) until then, epoch seconds. */
-  lockedUntil: number | null
-  /** A box login (signs in to K2 itself): only the owner resets it (0.46.6, the daemon's rule). */
-  boxLogin: boolean
+  /** Why an owner reset won't mail the stored email (any tie, or
+   *  unconfirmed). Unknown when that part didn't load. */
+  storedEmailRefused?: string | null
+  /** The login is locked (wrong passwords) until then, epoch seconds.
+   *  Unknown when the locks didn't load. */
+  lockedUntil?: number | null
+  /** A box login (signs in to K2 itself): only the owner resets it (0.46.6,
+   *  the daemon's rule). Unknown when that part didn't load. */
+  boxLogin?: boolean
 }
 
 export type RoomAccess = { handle: string; caps: string[] }
@@ -101,9 +106,46 @@ function parseStringList(raw: unknown): string[] {
   return raw.filter((c): c is string => typeof c === 'string' && Boolean(c.trim())).map((s) => s.trim())
 }
 
+/**
+ * The users list's parts that failed (`errors` on GET /cli/skin/users, the
+ * daemon's `USERS_PART_*`): part → the daemon's reason. A failed part's
+ * fields are left off the rows. Empty when everything loaded.
+ */
+export function parseUserDetailErrors(raw: unknown): Record<string, string> {
+  const errors = asRecord(asRecord(raw).errors)
+  const out: Record<string, string> = {}
+  for (const [part, why] of Object.entries(errors)) out[part] = typeof why === 'string' ? why : ''
+  return out
+}
+
+/** Each users-list part, in the words the page uses for it. */
+const USER_DETAIL_WORDS: Record<string, string> = {
+  apps: 'App names',
+  appGrants: 'app access',
+  locks: 'locks',
+  boxLogin: 'who signs in to K2',
+  ties: 'agent set-ups',
+  storedEmail: 'reset emails',
+  mustChange: 'password changes due',
+  profile: 'names and pictures',
+  testGuests: 'test guests',
+}
+
+/** One plain line naming the parts that didn't load, or null when none
+ *  failed: "Some details couldn't load: app access, locks." */
+export function userDetailsLine(errors: Record<string, string>): string | null {
+  const parts = Object.keys(errors)
+  if (parts.length === 0) return null
+  const words = [...new Set(parts.map((p) => USER_DETAIL_WORDS[p] ?? 'other details'))]
+  return `Some details couldn’t load: ${words.join(', ')}.`
+}
+
 export function parsePeople(raw: unknown): PersonRow[] {
   const list = asRecord(raw).users
   if (!Array.isArray(list)) return []
+  // A part that failed leaves its fields unknown (undefined), never "no".
+  const failed = parseUserDetailErrors(raw)
+  const known = (part: string): boolean => !(part in failed)
   return list.flatMap((row) => {
     const rec = asRecord(row)
     const username = asString(rec.username)
@@ -117,12 +159,12 @@ export function parsePeople(raw: unknown): PersonRow[] {
       defaultRooms: parseStringList(rec.defaultRooms ?? rec.default_rooms),
       defaultRoomHandles: parseStringList(rec.defaultRoomHandles ?? rec.default_room_handles),
       email: asString(rec.email),
-      tiedTo: asString(rec.tiedTo),
-      pendingReset: rec.pendingReset === true,
+      tiedTo: known('ties') ? asString(rec.tiedTo) : undefined,
+      pendingReset: known('ties') ? rec.pendingReset === true : undefined,
       tiedReasons: parseStringList(rec.tiedReasons),
-      storedEmailRefused: asString(rec.storedEmailRefused),
-      lockedUntil: typeof rec.lockedUntil === 'number' ? rec.lockedUntil : null,
-      boxLogin: rec.boxLogin === true,
+      storedEmailRefused: known('storedEmail') ? asString(rec.storedEmailRefused) : undefined,
+      lockedUntil: known('locks') ? (typeof rec.lockedUntil === 'number' ? rec.lockedUntil : null) : undefined,
+      boxLogin: known('boxLogin') ? rec.boxLogin === true : undefined,
     }]
   })
 }

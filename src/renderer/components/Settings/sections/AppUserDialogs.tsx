@@ -205,8 +205,10 @@ export function ResetLinkDialog({
   post: DaemonPost
 }): React.JSX.Element {
   // The stored email is offered only when nothing could have chosen it
-  // (no agent tie, and the daemon doesn't refuse it).
-  const storedOk = !person.tiedTo && !person.storedEmailRefused && person.email ? person.email : ''
+  // (no agent tie, and the daemon doesn't refuse it). Not when either is
+  // unknown (that part of the users list didn't load).
+  const storedOk =
+    person.tiedTo === null && person.storedEmailRefused === null && person.email ? person.email : ''
   const [mode, setMode] = useState<'link' | 'email'>('link')
   const [to, setTo] = useState(storedOk)
   const [from, setFrom] = useState('')

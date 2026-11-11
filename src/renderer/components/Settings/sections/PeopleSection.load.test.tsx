@@ -21,6 +21,7 @@ vi.mock('@/lib/daemon-cli', async () => {
 
 import { PeopleSection } from './PeopleSection'
 import { useAccessData } from './user-access-load'
+import { parsePeople, userDetailsLine } from './user-access-api'
 import { useConnectHostStore } from '@/stores/connect-host'
 
 const USERS = [
@@ -170,5 +171,68 @@ describe('useAccessData', () => {
     act(() => useConnectHostStore.setState({ recovery: { kind: 'connected' } }))
     await waitFor(() => expect(result.current.users.data?.map((p) => p.username)).toEqual(['ada']))
     expect(result.current.users.waiting).toBe(false)
+  })
+})
+
+describe('User Access: details that didn’t load on the server', () => {
+  // GET /cli/skin/users loads each detail on its own; a failed one is named
+  // in `errors` and its fields are left off the rows.
+  const PARTIAL = {
+    users: [
+      { id: 'p-ada', username: 'ada', fullName: 'Ada Lovelace', tiedTo: null, pendingReset: false, storedEmailRefused: null, boxLogin: false },
+      { id: 'p-bob', username: 'bob', tiedTo: null, pendingReset: false, storedEmailRefused: null, boxLogin: false },
+    ],
+    errors: { appGrants: 'database is locked', locks: 'database is locked' },
+  }
+
+  it('a failed part leaves its fields unknown, never false or null', () => {
+    const [ada] = parsePeople(PARTIAL)
+    expect(ada.lockedUntil).toBeUndefined()
+    expect(ada.boxLogin).toBe(false)
+    expect(ada.tiedTo).toBeNull()
+    const [all] = parsePeople({ users: [{ username: 'ada' }], errors: { ties: 'x', storedEmail: 'x', boxLogin: 'x' } })
+    expect(all.tiedTo).toBeUndefined()
+    expect(all.pendingReset).toBeUndefined()
+    expect(all.storedEmailRefused).toBeUndefined()
+    expect(all.boxLogin).toBeUndefined()
+    expect(all.lockedUntil).toBeNull()
+    // Nothing failed: the fields read as before.
+    const [plain] = parsePeople({ users: [{ username: 'ada' }] })
+    expect(plain).toMatchObject({ tiedTo: null, pendingReset: false, storedEmailRefused: null, lockedUntil: null, boxLogin: false })
+  })
+
+  it('names the parts in plain words', () => {
+    expect(userDetailsLine({})).toBeNull()
+    expect(userDetailsLine({ appGrants: 'x', locks: 'y' })).toBe('Some details couldn’t load: app access, locks.')
+    expect(userDetailsLine({ ties: 'x', someNewPart: 'y', otherNewPart: 'z' })).toBe('Some details couldn’t load: agent set-ups, other details.')
+  })
+
+  it('shows one quiet line with Try again; the list still shows, and the line goes once it loads', async () => {
+    let partial = true
+    serve({ 'skin/users': () => (partial ? PARTIAL : { users: PARTIAL.users.map((u) => ({ ...u, lockedUntil: null })) }) })
+    render(<PeopleSection />)
+    const note = await screen.findByTestId('people-details-note')
+    expect(note.textContent).toContain('Some details couldn’t load: app access, locks.')
+    expect(screen.getByRole('button', { name: 'Open ada' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Open bob' })).toBeTruthy()
+    // A quiet line, not the part-failed error block.
+    expect(screen.queryByTestId('people-part-error')).toBeNull()
+    const users = calls('skin/users')
+    partial = false
+    fireEvent.click(within(note).getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(screen.queryByTestId('people-details-note')).toBeNull())
+    expect(calls('skin/users')).toBe(users + 1)
+  })
+
+  it('an unknown lock never reads as unlocked: the Account tab says it couldn’t tell, with Unlock', async () => {
+    serve({ 'skin/users': PARTIAL })
+    render(<PeopleSection />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Open ada' }))
+    expect(screen.getByTestId('people-details-note').textContent).toContain('app access, locks')
+    fireEvent.click(screen.getByRole('tab', { name: 'Account' }))
+    const password = await screen.findByTestId('person-password')
+    expect(password.textContent).toContain('Locked out?')
+    expect(password.textContent).toContain('couldn’t read whether they’re locked out')
+    expect(within(password).getByTestId('person-lock-unknown').textContent).toBe('Unlock')
   })
 })

@@ -15,6 +15,12 @@ use serde::{Deserialize, Serialize};
 /// its digest changes, so the controller never sends one there).
 pub const FEATURE_ARTIFACTS: &str = "artifacts";
 
+/// Offer feature (GH#80): this node takes `artifact_get`'s `offset` and
+/// `window`, paces a pull by `artifact_ack` and stops on
+/// `artifact_cancel`. An older node sends the whole file at once, from
+/// the start, and can't be stopped; the controller never sends it those.
+pub const FEATURE_ARTIFACT_FLOW: &str = "artifact-flow";
+
 /// Offer feature (0.46.7, CE-4): every result carries
 /// [`Outputs::tools_used`], the versions the job's own PATH resolved to
 /// (and the receipt carries them too). An older node sends none; its

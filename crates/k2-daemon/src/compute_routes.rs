@@ -3920,7 +3920,9 @@ fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Va
     let info = o.artifacts.iter().find(|a| a.name == name).ok_or_else(|| {
         no("artifact_not_found", 404, format!("job {short} kept no artifact named '{name}' (k2 compute fetch {short} lists them)"))
     })?;
-    let timeout = Duration::from_secs(60 + info.bytes / (1 << 20));
+    // GH#80: no deadline for the whole file; the pull fails when the node
+    // goes quiet (a slow relay is slow, not stuck).
+    let timeout = compute_ws::PULL_IDLE;
     // `over_relay=1`: the caller means to pull a file over the relay cap
     // through the relay (up to the LAN cap). `wait=<s>`: don't hold the
     // request for the whole transfer; answer `pending` after that long

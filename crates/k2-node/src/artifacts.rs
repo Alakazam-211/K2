@@ -11,8 +11,11 @@
 //! Symlinks are never followed or kept: a job can't make the node read
 //! outside its own tree.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use k2_node_proto::crypto;
 use k2_node_proto::frames::{ArtifactChunk, ArtifactFailed, ArtifactGet, Frame, TRANSFER_CHUNK};
@@ -263,17 +266,180 @@ pub fn delete(root: &Path, job: &str, generation: u32, known: bool) -> bool {
     }
 }
 
+/// Most pulls one session paces at once (a controller asks for one file
+/// at a time per fetch; this only bounds a confused one).
+const MAX_FLOWS: usize = 64;
+
+/// GH#80 (`artifact-flow`): the pulls one session is sending, each paced
+/// by the controller's `artifact_ack`s and stopped by its
+/// `artifact_cancel`. The session's reader feeds it; [`answer`]'s
+/// blocking thread waits on it. Closed when the session ends.
+#[derive(Default)]
+pub struct Flows {
+    m: Mutex<FlowMap>,
+    cv: Condvar,
+}
+
+#[derive(Default)]
+struct FlowMap {
+    closed: bool,
+    reqs: HashMap<String, Flow>,
+}
+
+struct Flow {
+    /// The controller holds the file up to here.
+    next: u64,
+    cancelled: bool,
+    /// The last ack that moved `next` (or the start).
+    moved: Instant,
+}
+
+/// Why a paced pull stopped before its last chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    Cancelled,
+    SessionGone,
+    Stalled,
+    Busy,
+}
+
+impl Stop {
+    fn words(self) -> &'static str {
+        match self {
+            Stop::Cancelled => "cancelled by the server",
+            Stop::SessionGone => "session ended",
+            Stop::Stalled => "no ack from the server",
+            Stop::Busy => "too many pulls at once",
+        }
+    }
+}
+
+impl Flows {
+    fn lock(&self) -> std::sync::MutexGuard<'_, FlowMap> {
+        self.m.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Start pacing `id`, the controller holding the file up to `from`.
+    pub fn open(&self, id: &str, from: u64) -> Result<(), Stop> {
+        let mut m = self.lock();
+        if m.closed {
+            return Err(Stop::SessionGone);
+        }
+        if m.reqs.len() >= MAX_FLOWS && !m.reqs.contains_key(id) {
+            return Err(Stop::Busy);
+        }
+        m.reqs.insert(id.to_string(), Flow { next: from, cancelled: false, moved: Instant::now() });
+        Ok(())
+    }
+
+    /// `artifact_ack`: the controller holds `id` up to `next`.
+    pub fn ack(&self, id: &str, next: u64) {
+        let mut m = self.lock();
+        if let Some(f) = m.reqs.get_mut(id) {
+            if next > f.next {
+                f.next = next;
+                f.moved = Instant::now();
+            }
+        }
+        drop(m);
+        self.cv.notify_all();
+    }
+
+    /// `artifact_cancel`: stop sending `id`.
+    pub fn cancel(&self, id: &str) {
+        if let Some(f) = self.lock().reqs.get_mut(id) {
+            f.cancelled = true;
+        }
+        self.cv.notify_all();
+    }
+
+    /// The session ended: every paced pull stops.
+    pub fn close(&self) {
+        self.lock().closed = true;
+        self.cv.notify_all();
+    }
+
+    /// `id` is done (sent, failed or stopped).
+    pub fn done(&self, id: &str) {
+        self.lock().reqs.remove(id);
+    }
+
+    /// Block until the byte at `pos` may go: `pos < next + window`. Stops
+    /// on a cancel, the session's end, or `stall` with no ack moving.
+    pub fn wait_room(&self, id: &str, pos: u64, window: u64, stall: Duration) -> Result<(), Stop> {
+        let mut m = self.lock();
+        loop {
+            if m.closed {
+                return Err(Stop::SessionGone);
+            }
+            let Some(f) = m.reqs.get(id) else { return Err(Stop::Cancelled) };
+            if f.cancelled {
+                return Err(Stop::Cancelled);
+            }
+            if pos < f.next.saturating_add(window) {
+                return Ok(());
+            }
+            let quiet = f.moved.elapsed();
+            if quiet >= stall {
+                return Err(Stop::Stalled);
+            }
+            m = self.cv.wait_timeout(m, stall - quiet).map(|(g, _)| g).unwrap_or_else(|p| p.into_inner().0);
+        }
+    }
+}
+
+/// How one `artifact_get` went, for the node's log (one line per pull).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answered {
+    /// Where the pull started (a resumed pull: past 0).
+    pub offset: u64,
+    /// Bytes this pull put on the wire.
+    pub sent: u64,
+    /// The file's size (0 when the node never opened it).
+    pub total: u64,
+    /// `sent`, `failed <code>`, or why it stopped.
+    pub outcome: String,
+}
+
 /// Answer one `artifact_get`: stream chunks (or one `artifact_failed`)
 /// through `send`, which returns false once the session is gone. The
 /// chunks carry the hash the node reported; the controller checks the
 /// bytes it got against it. `known` is the attempt's reported artifacts
-/// (from the ledger). Blocking.
-pub fn answer(root: &Path, g: &ArtifactGet, known: Option<&[ArtifactInfo]>, send: &mut dyn FnMut(Frame) -> bool) {
+/// (from the ledger). A get with `window` is paced by `flows` (GH#80):
+/// at most `window` bytes past the controller's last ack, stopped by a
+/// cancel or `stall` without an ack. One with `offset` starts there.
+/// Blocking.
+pub fn answer(
+    root: &Path,
+    g: &ArtifactGet,
+    known: Option<&[ArtifactInfo]>,
+    send: &mut dyn FnMut(Frame) -> bool,
+    flows: Option<(&Flows, Duration)>,
+) -> Answered {
+    let offset = g.offset.unwrap_or(0);
+    let paced = g.window.zip(flows).map(|(w, (f, stall))| (w.max(TRANSFER_CHUNK as u64), f, stall));
+    let r = answer_inner(root, g, known, send, offset, paced);
+    if let Some((_, f, _)) = paced {
+        f.done(&g.request_id);
+    }
+    r
+}
+
+fn answer_inner(
+    root: &Path,
+    g: &ArtifactGet,
+    known: Option<&[ArtifactInfo]>,
+    send: &mut dyn FnMut(Frame) -> bool,
+    offset: u64,
+    paced: Option<(u64, &Flows, Duration)>,
+) -> Answered {
     let failed = |code: &str, message: String| Frame::ArtifactFailed(ArtifactFailed { request_id: g.request_id.clone(), code: code.into(), message });
+    let mut out = Answered { offset, sent: 0, total: 0, outcome: String::new() };
     macro_rules! fail {
         ($code:expr, $msg:expr) => {{
             send(failed($code, $msg));
-            return;
+            out.outcome = format!("failed {}", $code);
+            return out;
         }};
     }
     let Some(known) = known else {
@@ -294,13 +460,39 @@ pub fn answer(root: &Path, g: &ArtifactGet, known: Option<&[ArtifactInfo]>, send
         _ => fail!("artifact_gone", "the node no longer keeps it (artifacts are kept 7 days)".into()),
     };
     let total = f.metadata().map(|m| m.len()).unwrap_or(0);
+    out.total = total;
     if total != info.bytes {
         fail!("artifact_changed", "the kept file no longer matches its size".into());
     }
+    if offset > total {
+        fail!("artifact_offset", format!("byte {offset} is past the end of the file ({total} bytes)"));
+    }
+    if offset > 0 {
+        if let Err(e) = std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(offset)) {
+            fail!("artifact_unreadable", format!("seek: {e}"));
+        }
+    }
+    if let Some((_, flows, _)) = paced {
+        match flows.open(&g.request_id, offset) {
+            Ok(()) => {}
+            // Said, so the server doesn't wait out its timeout for nothing.
+            Err(Stop::Busy) => fail!("artifact_busy", "this node is sending too many files to this server at once; try again".into()),
+            Err(stop) => {
+                out.outcome = stop.words().to_string();
+                return out;
+            }
+        }
+    }
     let mut buf = vec![0u8; TRANSFER_CHUNK];
     let mut seq = 0u32;
-    let mut sent = 0u64;
+    let mut pos = offset;
     loop {
+        if let Some((window, flows, stall)) = paced {
+            if let Err(stop) = flows.wait_room(&g.request_id, pos, window, stall) {
+                out.outcome = stop.words().to_string();
+                return out;
+            }
+        }
         // Fill the buffer (a short read isn't the end of the file).
         let mut n = 0;
         while n < buf.len() {
@@ -310,8 +502,8 @@ pub fn answer(root: &Path, g: &ArtifactGet, known: Option<&[ArtifactInfo]>, send
                 Err(e) => fail!("artifact_unreadable", format!("read: {e}")),
             }
         }
-        sent += n as u64;
-        let last = sent >= total || n < buf.len();
+        pos += n as u64;
+        let last = pos >= total || n < buf.len();
         let ok = send(Frame::ArtifactChunk(ArtifactChunk {
             request_id: g.request_id.clone(),
             seq,
@@ -320,11 +512,25 @@ pub fn answer(root: &Path, g: &ArtifactGet, known: Option<&[ArtifactInfo]>, send
             total_bytes: total,
             sha256: info.sha256.clone(),
         }));
-        if !ok || last {
-            return;
+        if !ok {
+            out.outcome = Stop::SessionGone.words().to_string();
+            return out;
+        }
+        out.sent += n as u64;
+        if last {
+            out.outcome = "sent".into();
+            return out;
         }
         seq += 1;
     }
+}
+
+/// The node's one log line for a pull (GH#80): job, file, where it
+/// started, bytes sent and how it ended.
+pub fn log_line(g: &ArtifactGet, a: &Answered) -> String {
+    let from = if a.offset > 0 { format!(" from byte {}", a.offset) } else { String::new() };
+    let paced = if g.window.is_some() { "paced" } else { "unpaced" };
+    format!("artifact {} g{} {}{from}: sent {} of {} bytes ({paced}), {}", g.job_id, g.generation, g.name, a.sent, a.total, a.outcome)
 }
 
 #[cfg(test)]
@@ -394,13 +600,19 @@ mod tests {
         std::fs::create_dir_all(keep.join("out")).unwrap();
         std::fs::write(keep.join("out/a.bin"), &body).unwrap();
         let info = ArtifactInfo { name: "out/a.bin".into(), sha256: crypto::sha256_hex(&body), bytes: body.len() as u64 };
-        let g = |name: &str| ArtifactGet { request_id: "r".into(), job_id: "j1".into(), generation: 1, name: name.into() };
+        let g = |name: &str| ArtifactGet { request_id: "r".into(), job_id: "j1".into(), generation: 1, name: name.into(), offset: None, window: None };
         let run = |name: &str, known: Option<&[ArtifactInfo]>| {
             let mut frames = Vec::new();
-            answer(&layout.tenant(0).artifacts(), &g(name), known, &mut |f| {
-                frames.push(f);
-                true
-            });
+            answer(
+                &layout.tenant(0).artifacts(),
+                &g(name),
+                known,
+                &mut |f| {
+                    frames.push(f);
+                    true
+                },
+                None,
+            );
             frames
         };
         let frames = run("out/a.bin", Some(std::slice::from_ref(&info)));
@@ -426,6 +638,146 @@ mod tests {
         let e = ArtifactInfo { name: "out/e".into(), sha256: crypto::sha256_hex(b""), bytes: 0 };
         let fs = run("out/e", Some(std::slice::from_ref(&e)));
         assert!(matches!(&fs[..], [Frame::ArtifactChunk(c)] if c.last && c.data.is_empty()), "{fs:?}");
+    }
+
+    /// A kept file of `chunks` full chunks plus 10 bytes, its info, and the
+    /// artifacts root.
+    fn kept(tag: &str, chunks: usize) -> (PathBuf, ArtifactInfo, Vec<u8>) {
+        let d = crate::util::temp_dir(tag);
+        let root = Layout::new(d.join("home"), d.join("config")).tenant(0).artifacts();
+        let body: Vec<u8> = (0..TRANSFER_CHUNK * chunks + 10).map(|i| (i % 251) as u8).collect();
+        let keep = dir(&root, "j1", 1);
+        std::fs::create_dir_all(keep.join("out")).unwrap();
+        std::fs::write(keep.join("out/a.bin"), &body).unwrap();
+        let info = ArtifactInfo { name: "out/a.bin".into(), sha256: crypto::sha256_hex(&body), bytes: body.len() as u64 };
+        (root, info, body)
+    }
+
+    fn get(offset: Option<u64>, window: Option<u64>) -> ArtifactGet {
+        ArtifactGet { request_id: "r".into(), job_id: "j1".into(), generation: 1, name: "out/a.bin".into(), offset, window }
+    }
+
+    /// Run `answer` on its own thread (a paced one blocks); the chunks it
+    /// sends come out of the receiver.
+    fn spawn_answer(
+        root: PathBuf,
+        g: ArtifactGet,
+        info: ArtifactInfo,
+        flows: std::sync::Arc<Flows>,
+        stall: Duration,
+    ) -> (std::sync::mpsc::Receiver<Frame>, std::thread::JoinHandle<Answered>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let h = std::thread::spawn(move || answer(&root, &g, Some(std::slice::from_ref(&info)), &mut |f| tx.send(f).is_ok(), Some((&*flows, stall))));
+        (rx, h)
+    }
+
+    fn chunk_of(f: Frame) -> ArtifactChunk {
+        match f {
+            Frame::ArtifactChunk(c) => c,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// GH#80: with `window` the node sends no more than that past the
+    /// controller's last ack, goes on as acks come, and stops at a cancel.
+    /// Before, it queued the whole file at once and nothing could stop it:
+    /// every retry over a slow relay added another full copy ahead of the
+    /// next one.
+    #[test]
+    fn a_paced_pull_waits_for_acks_and_stops_on_cancel() {
+        let (root, info, body) = kept("artifacts-paced", 4);
+        let flows = std::sync::Arc::new(Flows::default());
+        let window = TRANSFER_CHUNK as u64;
+        let (rx, h) = spawn_answer(root, get(None, Some(window)), info, flows.clone(), Duration::from_secs(30));
+        let first = chunk_of(rx.recv_timeout(Duration::from_secs(5)).expect("the first chunk"));
+        assert_eq!((first.seq, first.last), (0, false));
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "nothing past the window before an ack");
+        flows.ack("r", window);
+        let second = chunk_of(rx.recv_timeout(Duration::from_secs(5)).expect("the next chunk after the ack"));
+        assert_eq!(second.seq, 1);
+        assert_eq!(crypto::unb64(&second.data).unwrap(), body[TRANSFER_CHUNK..2 * TRANSFER_CHUNK]);
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "and waits again");
+        flows.cancel("r");
+        let a = h.join().unwrap();
+        assert_eq!((a.sent, a.total, a.outcome.as_str()), (2 * TRANSFER_CHUNK as u64, body.len() as u64, "cancelled by the server"));
+        assert!(rx.try_recv().is_err(), "nothing after the cancel");
+        assert!(flows.lock().reqs.is_empty(), "the pull is forgotten");
+    }
+
+    /// GH#80: a paced pull acked all the way runs to its last chunk; one
+    /// the controller stops acking ends after the stall time; one whose
+    /// session ends stops at once.
+    #[test]
+    fn a_paced_pull_ends_sent_stalled_or_with_its_session() {
+        let (root, info, body) = kept("artifacts-paced-end", 2);
+        let flows = std::sync::Arc::new(Flows::default());
+        let (rx, h) = spawn_answer(root.clone(), get(None, Some(TRANSFER_CHUNK as u64)), info.clone(), flows.clone(), Duration::from_secs(30));
+        let mut got = Vec::new();
+        loop {
+            let c = chunk_of(rx.recv_timeout(Duration::from_secs(5)).expect("a chunk"));
+            got.extend(crypto::unb64(&c.data).unwrap());
+            flows.ack("r", got.len() as u64);
+            if c.last {
+                break;
+            }
+        }
+        assert_eq!(got, body);
+        let a = h.join().unwrap();
+        assert_eq!((a.sent, a.outcome.as_str()), (body.len() as u64, "sent"));
+
+        let (rx, h) = spawn_answer(root.clone(), get(None, Some(TRANSFER_CHUNK as u64)), info.clone(), flows.clone(), Duration::from_millis(300));
+        chunk_of(rx.recv_timeout(Duration::from_secs(5)).expect("the first chunk"));
+        let a = h.join().unwrap();
+        assert_eq!((a.sent, a.outcome.as_str()), (TRANSFER_CHUNK as u64, "no ack from the server"));
+
+        let (rx, h) = spawn_answer(root, get(None, Some(TRANSFER_CHUNK as u64)), info, flows.clone(), Duration::from_secs(30));
+        chunk_of(rx.recv_timeout(Duration::from_secs(5)).expect("the first chunk"));
+        flows.close();
+        assert_eq!(h.join().unwrap().outcome, "session ended");
+        assert_eq!(flows.open("other", 0), Err(Stop::SessionGone), "a closed session paces nothing new");
+    }
+
+    /// GH#80: `offset` resumes a pull: the bytes from there, `seq` from 0,
+    /// the last chunk marked; past the end is refused.
+    #[test]
+    fn a_pull_with_an_offset_sends_the_rest_only() {
+        let (root, info, body) = kept("artifacts-offset", 2);
+        let from = TRANSFER_CHUNK as u64 + 5;
+        let mut frames = Vec::new();
+        let a = answer(
+            &root,
+            &get(Some(from), None),
+            Some(std::slice::from_ref(&info)),
+            &mut |f| {
+                frames.push(f);
+                true
+            },
+            None,
+        );
+        let chunks: Vec<ArtifactChunk> = frames.into_iter().map(chunk_of).collect();
+        assert_eq!(chunks.iter().map(|c| c.seq).collect::<Vec<_>>(), vec![0, 1]);
+        assert!(chunks[1].last && !chunks[0].last);
+        let got: Vec<u8> = chunks.iter().flat_map(|c| crypto::unb64(&c.data).unwrap()).collect();
+        assert_eq!(got, body[from as usize..]);
+        assert_eq!((a.offset, a.sent, a.outcome.as_str()), (from, body.len() as u64 - from, "sent"));
+        assert_eq!(
+            log_line(&get(Some(from), None), &a),
+            format!("artifact j1 g1 out/a.bin from byte {from}: sent {} of {} bytes (unpaced), sent", a.sent, body.len())
+        );
+
+        let mut frames = Vec::new();
+        let a = answer(
+            &root,
+            &get(Some(body.len() as u64 + 1), None),
+            Some(std::slice::from_ref(&info)),
+            &mut |f| {
+                frames.push(f);
+                true
+            },
+            None,
+        );
+        assert!(matches!(&frames[..], [Frame::ArtifactFailed(f)] if f.code == "artifact_offset"), "{frames:?}");
+        assert_eq!(a.outcome, "failed artifact_offset");
     }
 
     /// V27: a fetched secret job's attempt is deleted, that attempt only,

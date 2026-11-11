@@ -486,6 +486,9 @@ pub const EASY_FEATURES: &[&str] = &[
     k2_node_proto::needs::FEATURE_TOOLCHAIN_BUDGET,
     k2_node_proto::env::FEATURE_CPU_HINTS,
     k2_node_proto::env::FEATURE_JOB_PORTS,
+    // GH#80 (0.46.11): artifact pulls paced by the controller's acks,
+    // resumable and cancellable. Any server that knows it may use it.
+    results::FEATURE_ARTIFACT_FLOW,
 ];
 
 /// What this node understands beyond protocol 1 (the offer says it).

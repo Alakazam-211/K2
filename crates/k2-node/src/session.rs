@@ -592,6 +592,9 @@ where
         }
     });
 
+    // Artifact pulls this session paces (GH#80); closed when it ends.
+    let flows = Arc::new(crate::artifacts::Flows::default());
+
     // Reader.
     let mut expected = 1u64; // Welcome was seq 0
     let mut serve = tenant.serve.subscribe();
@@ -729,13 +732,20 @@ where
                 });
             }
             Frame::ArtifactGet(g) => {
-                // Streamed from a blocking thread; the bounded queue paces it.
-                let (n, t) = (tenant.clone(), tx.clone());
+                // Streamed from a blocking thread. A get with `window`
+                // (GH#80, `artifact-flow`) is paced by the server's acks;
+                // an older server's by the bounded queue only.
+                let (n, t, fl) = (tenant.clone(), tx.clone(), flows.clone());
                 tokio::task::spawn_blocking(move || {
                     let known = n.ledger.lock().unwrap().get(&g.job_id, g.generation).ok().flatten().map(|r| r.outputs.map(|o| o.artifacts).unwrap_or_default());
-                    crate::artifacts::answer(&n.paths.artifacts(), &g, known.as_deref(), &mut |f| t.blocking_send(f).is_ok());
+                    let stall = Duration::from_secs(k2_node_proto::frames::ARTIFACT_ACK_STALL_SECS);
+                    let a = crate::artifacts::answer(&n.paths.artifacts(), &g, known.as_deref(), &mut |f| t.blocking_send(f).is_ok(), Some((&*fl, stall)));
+                    crate::nlog!("server slot {}: {}", n.slot, crate::artifacts::log_line(&g, &a));
                 });
             }
+            // GH#80 (`artifact-flow`): the server's pace and stop for a pull.
+            Frame::ArtifactAck(a) => flows.ack(&a.request_id, a.next),
+            Frame::ArtifactCancel(c) => flows.cancel(&c.request_id),
             // V27 (protocol 9): the controller holds every artifact of a
             // secret job's attempt; that server's own copy goes now. Only
             // its tenant's dir, only an attempt its ledger knows.
@@ -800,6 +810,7 @@ where
         }
     };
     tenant.hub.detach(epoch);
+    flows.close();
     tenant.protocol.store(0, std::sync::atomic::Ordering::SeqCst);
     shipper.abort();
     offers.abort();

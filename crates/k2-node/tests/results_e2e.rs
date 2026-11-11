@@ -58,7 +58,7 @@ async fn artifacts_and_junit_come_back_with_the_result() {
     assert!(sys.contains("[k2-node] tests: 1 passed, 1 failed, 0 errors, 1 skipped"), "{sys}");
 
     // Pull one back.
-    c.send(Frame::ArtifactGet(ArtifactGet { request_id: "q1".into(), job_id: "r1".into(), generation: 1, name: "out/junit.xml".into() }));
+    c.send(Frame::ArtifactGet(ArtifactGet { request_id: "q1".into(), job_id: "r1".into(), generation: 1, name: "out/junit.xml".into(), offset: None, window: None }));
     let got = c.until(|f| matches!(f, Frame::ArtifactChunk(a) if a.request_id == "q1" && a.last)).await;
     let mut bytes = Vec::new();
     for f in &got {
@@ -67,10 +67,37 @@ async fn artifacts_and_junit_come_back_with_the_result() {
         }
     }
     assert_eq!(String::from_utf8(bytes).unwrap(), JUNIT);
-    c.send(Frame::ArtifactGet(ArtifactGet { request_id: "q2".into(), job_id: "r1".into(), generation: 1, name: "../../state/node-key.pem".into() }));
+    c.send(Frame::ArtifactGet(ArtifactGet { request_id: "q2".into(), job_id: "r1".into(), generation: 1, name: "../../state/node-key.pem".into(), offset: None, window: None }));
     let got = c.until(|f| matches!(f, Frame::ArtifactFailed(a) if a.request_id == "q2")).await;
     let Some(Frame::ArtifactFailed(a)) = got.last() else { unreachable!() };
     assert_eq!(a.code, "artifact_not_found", "only names the job reported, never a path");
+
+    // GH#80 (`artifact-flow`): a paced get from byte 10 sends the rest;
+    // acks and cancels for pulls the node doesn't know are taken quietly
+    // (the session stays up and answers the next get).
+    let Some(Frame::Offer(first)) = offer.last() else { unreachable!() };
+    assert!(first.features.iter().any(|f| f == results::FEATURE_ARTIFACT_FLOW), "{:?}", first.features);
+    let paced = |id: &str, offset: u64| ArtifactGet {
+        request_id: id.into(),
+        job_id: "r1".into(),
+        generation: 1,
+        name: "out/junit.xml".into(),
+        offset: Some(offset),
+        window: Some(k2_node_proto::frames::ARTIFACT_WINDOW),
+    };
+    c.send(Frame::ArtifactAck(k2_node_proto::frames::ArtifactAck { request_id: "nobody".into(), next: 5 }));
+    c.send(Frame::ArtifactCancel(k2_node_proto::frames::ArtifactCancel { request_id: "nobody".into() }));
+    c.send(Frame::ArtifactGet(paced("q3", 10)));
+    let got = c.until(|f| matches!(f, Frame::ArtifactChunk(a) if a.request_id == "q3" && a.last)).await;
+    let bytes: Vec<u8> = got
+        .iter()
+        .filter_map(|f| match f {
+            Frame::ArtifactChunk(a) if a.request_id == "q3" => Some(crypto::unb64(&a.data).unwrap()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(bytes, JUNIT.as_bytes()[10..], "the rest of the file from byte 10");
     drop(n);
 }
 

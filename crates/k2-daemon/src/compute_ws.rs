@@ -616,7 +616,8 @@ async fn run_session(
 
     let keys = SessionKeys { key, session, node_spki, node_id: node_id.clone() };
     let why = pump(&mut sink, &mut source, &mut rx, &work_tx, &keys, &bytes_in, &bytes_out, Duration::from_secs(frames::PING_SECS)).await;
-    let _ = sink.send(Message::Close(None)).await;
+    // A peer that reads nothing must not hold this session open forever.
+    let _ = tokio::time::timeout(Duration::from_secs(2), sink.send(Message::Close(None))).await;
     drop(work_tx);
     let _ = worker.await;
     let removed = with_engine(|e| {
@@ -651,6 +652,12 @@ struct SessionKeys {
 /// One node session's socket: frames out of `rx` (sealed, sequenced),
 /// a ping every `ping_every`, and every frame in (opened, in order) to
 /// the frame worker through `work_tx`. Returns why it ended.
+///
+/// Writing and reading are two loops polled side by side (GH#80): a
+/// write that waits (a node, or a relay hop, slow to read what we send)
+/// never stops the reading. One `select!` doing both did: the node's
+/// frames then backed up behind our write, and an artifact it was
+/// sending sat at 0 bytes here.
 #[allow(clippy::too_many_arguments)]
 async fn pump<Si, St>(
     sink: &mut Si,
@@ -667,55 +674,65 @@ where
     St: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
     let SessionKeys { key, session, node_spki, node_id } = keys;
-    let mut ping = tokio::time::interval(ping_every);
-    ping.tick().await;
-    let mut seq_out: u64 = 0;
-    let mut seq_in: u64 = 0;
-    loop {
-        tokio::select! {
-            _ = ping.tick() => {
-                if sink.send(Message::Ping(Vec::new())).await.is_err() { return "ping_failed"; }
-            }
-            out = rx.recv() => {
-                match out {
-                    Some(Out::Frame(f)) => {
-                        let text = match frames::seal(key, Direction::ControllerToNode, session, seq_out, &f) {
-                            Ok(t) => t,
-                            Err(e) => { log_debug!("[compute] seal {}: {e}", f.kind()); continue; }
-                        };
-                        seq_out += 1;
-                        bytes_out.fetch_add(text.len() as u64, Ordering::Relaxed);
-                        let revoked = matches!(*f, Frame::Revoked(_));
-                        if sink.send(Message::Text(text)).await.is_err() { return "send_failed"; }
-                        if revoked {
-                            tokio::time::sleep(Duration::from_millis(200)).await;
-                            return "revoked";
-                        }
-                    }
-                    Some(Out::Close) | None => return "replaced",
+    let writer = async {
+        let mut ping = tokio::time::interval(ping_every);
+        ping.tick().await;
+        let mut seq_out: u64 = 0;
+        loop {
+            tokio::select! {
+                _ = ping.tick() => {
+                    if sink.send(Message::Ping(Vec::new())).await.is_err() { return "ping_failed"; }
                 }
-            }
-            msg = source.next() => {
-                let Some(Ok(msg)) = msg else { return "node_closed"; };
-                match msg {
-                    Message::Text(t) => {
-                        bytes_in.fetch_add(t.len() as u64, Ordering::Relaxed);
-                        match frames::open(node_spki, Direction::NodeToController, session, seq_in, &t) {
-                            Ok(f) => {
-                                seq_in += 1;
-                                if work_tx.send(f).is_err() { return "worker_gone"; }
-                            }
-                            Err(e) => {
-                                log_debug!("[compute] node {node_id}: {e}");
-                                return "protocol_error";
+                out = rx.recv() => {
+                    match out {
+                        Some(Out::Frame(f)) => {
+                            let text = match frames::seal(key, Direction::ControllerToNode, session, seq_out, &f) {
+                                Ok(t) => t,
+                                Err(e) => { log_debug!("[compute] seal {}: {e}", f.kind()); continue; }
+                            };
+                            seq_out += 1;
+                            bytes_out.fetch_add(text.len() as u64, Ordering::Relaxed);
+                            let revoked = matches!(*f, Frame::Revoked(_));
+                            if sink.send(Message::Text(text)).await.is_err() { return "send_failed"; }
+                            if revoked {
+                                tokio::time::sleep(Duration::from_millis(200)).await;
+                                return "revoked";
                             }
                         }
+                        Some(Out::Close) | None => return "replaced",
                     }
-                    Message::Close(_) => return "node_closed",
-                    _ => {}
                 }
             }
         }
+    };
+    let reader = async {
+        let mut seq_in: u64 = 0;
+        loop {
+            let Some(Ok(msg)) = source.next().await else { return "node_closed" };
+            match msg {
+                Message::Text(t) => {
+                    bytes_in.fetch_add(t.len() as u64, Ordering::Relaxed);
+                    match frames::open(node_spki, Direction::NodeToController, session, seq_in, &t) {
+                        Ok(f) => {
+                            seq_in += 1;
+                            if work_tx.send(f).is_err() {
+                                return "worker_gone";
+                            }
+                        }
+                        Err(e) => {
+                            log_debug!("[compute] node {node_id}: {e}");
+                            return "protocol_error";
+                        }
+                    }
+                }
+                Message::Close(_) => return "node_closed",
+                _ => {}
+            }
+        }
+    };
+    tokio::select! {
+        why = writer => why,
+        why = reader => why,
     }
 }
 
@@ -1689,8 +1706,6 @@ pub fn secret_artifacts_due(job: &store::JobRow, node: &store::NodeRow, offer: O
     (!arts.is_empty()).then_some(arts)
 }
 
-/// How long one secret job's artifact may take to come in (V27).
-const SECRET_FETCH_TIMEOUT: Duration = Duration::from_secs(1800);
 
 /// V27: fetch each of `arts` (hash-checked into this server's artifact
 /// cache, through the relay too: the job's own files), then send the node
@@ -1700,7 +1715,7 @@ const SECRET_FETCH_TIMEOUT: Duration = Duration::from_secs(1800);
 /// succeed.
 pub fn secret_artifacts_fetch_then_delete(job: &store::JobRow, arts: &[ArtifactInfo]) -> Result<usize, (String, String)> {
     for info in arts {
-        fetch_artifact(job, info, true, SECRET_FETCH_TIMEOUT).map_err(|(c, h)| (c, format!("{}: {h}", info.name)))?;
+        fetch_artifact(job, info, true, PULL_IDLE).map_err(|(c, h)| (c, format!("{}: {h}", info.name)))?;
     }
     if !send_to(&job.node_id, Frame::ArtifactDelete(frames::ArtifactDelete { job_id: job.id.clone(), generation: job.generation as u32 })) {
         return Err(("node_offline".into(), "the node went offline before the delete".into()));
@@ -1913,6 +1928,11 @@ fn on_receipt(node_id: &str, r: ReceiptFrame) {
 
 // ── artifacts out (§11.4) ────────────────────────────────────────────
 
+/// GH#80: a pull fails once the node has sent nothing for this long. Not
+/// a deadline for the whole file: over a slow relay a file may take far
+/// longer than any size-based guess, and is fine while bytes keep coming.
+pub const PULL_IDLE: Duration = Duration::from_secs(60);
+
 /// One artifact being pulled from a node into the controller's cache.
 struct Pull {
     node_id: String,
@@ -1922,8 +1942,13 @@ struct Pull {
     hasher: Option<crypto::Sha256Stream>,
     expect_sha: String,
     expect_bytes: u64,
+    /// Bytes of the file held (a resumed pull starts past 0).
     got: u64,
     next_seq: u32,
+    /// The node paces this pull by our acks (`artifact-flow`).
+    flow: bool,
+    /// When the last chunk came (or the request went).
+    moved: Instant,
     done: Option<Result<(), (String, String)>>,
 }
 
@@ -2013,38 +2038,46 @@ fn cache_holds(dst: &std::path::Path, info: &ArtifactInfo) -> bool {
     ok
 }
 
+/// End a pull. Its partial file stays or goes with how the pull ended
+/// ([`fetch_artifact`]'s cleanup), never here.
 fn finish_pull(p: &mut Pull, r: Result<(), (String, String)>) {
     p.file = None;
-    if r.is_err() {
-        let _ = std::fs::remove_file(&p.tmp);
-    }
     p.done = Some(r);
 }
 
 fn on_artifact_chunk(node_id: &str, c: ArtifactChunk) {
-    with_pulls(|m| {
-        let Some(p) = m.get_mut(&c.request_id).filter(|p| p.node_id == node_id && p.done.is_none()) else { return };
+    // The ack goes out after the pulls lock is let go.
+    let ack = with_pulls(|m| {
+        let p = m.get_mut(&c.request_id).filter(|p| p.node_id == node_id && p.done.is_none())?;
         let bad = |why: &str| Err(("artifact_transfer".to_string(), why.to_string()));
         if c.seq != p.next_seq || c.sha256 != p.expect_sha || c.total_bytes != p.expect_bytes {
-            return finish_pull(p, bad("chunk out of order or for another file"));
+            finish_pull(p, bad("chunk out of order or for another file"));
+            return None;
         }
-        let Ok(data) = crypto::unb64(&c.data) else { return finish_pull(p, bad("chunk isn't base64")) };
+        let Ok(data) = crypto::unb64(&c.data) else {
+            finish_pull(p, bad("chunk isn't base64"));
+            return None;
+        };
         if data.len() > frames::TRANSFER_CHUNK || p.got + data.len() as u64 > p.expect_bytes {
-            return finish_pull(p, bad("more bytes than the node reported"));
+            finish_pull(p, bad("more bytes than the node reported"));
+            return None;
         }
         let wrote = p.file.as_mut().map(|f| std::io::Write::write_all(f, &data));
         if !matches!(wrote, Some(Ok(()))) {
-            return finish_pull(p, Err(("local_write".into(), "can't write the controller's artifact cache".into())));
+            finish_pull(p, Err(("local_write".into(), "can't write the controller's artifact cache".into())));
+            return None;
         }
         if let Some(h) = p.hasher.as_mut() {
             h.update(&data);
         }
         p.got += data.len() as u64;
         p.next_seq += 1;
+        p.moved = Instant::now();
         if c.last {
             let sha = p.hasher.take().map(|h| h.finish_hex()).unwrap_or_default();
             if p.got != p.expect_bytes || !crypto::ct_eq(sha.as_bytes(), p.expect_sha.as_bytes()) {
-                return finish_pull(p, Err(("artifact_changed".into(), "the bytes don't match the hash the node reported".into())));
+                finish_pull(p, Err(("artifact_changed".into(), "the bytes don't match the hash the node reported".into())));
+                return None;
             }
             p.file = None;
             let r = std::fs::rename(&p.tmp, &p.dst).map_err(|e| ("local_write".to_string(), format!("cache: {e}")));
@@ -2052,8 +2085,14 @@ fn on_artifact_chunk(node_id: &str, c: ArtifactChunk) {
                 note_verified(&p.dst);
             }
             finish_pull(p, r);
+            return None;
         }
+        // GH#80: written, so the node may send the next window.
+        p.flow.then(|| Frame::ArtifactAck(frames::ArtifactAck { request_id: c.request_id.clone(), next: p.got }))
     });
+    if let Some(a) = ack {
+        send_to(node_id, a);
+    }
     notify_change();
 }
 
@@ -2068,10 +2107,56 @@ fn on_artifact_failed(node_id: &str, f: ArtifactFailed) {
     notify_change();
 }
 
+/// The node's live session, by id (a reconnect is a new one).
+fn conn_of(node_id: &str) -> Option<u64> {
+    with_engine(|e| e.conns.get(node_id).map(|c| c.conn_id))
+}
+
+/// `<cache dir>/.<sha256>.part`: one partial file per artifact, so a pull
+/// that stopped can continue from it (GH#80).
+fn part_path(dst: &std::path::Path) -> std::path::PathBuf {
+    let name = dst.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    dst.with_file_name(format!(".{name}.part"))
+}
+
+/// Open `part` to continue it: its bytes hashed, the file positioned at
+/// its end. `None` when there's nothing usable (missing, empty, as long
+/// as the file or longer, unreadable).
+fn resume_part(part: &std::path::Path, total: u64) -> Option<(std::fs::File, crypto::Sha256Stream, u64)> {
+    use std::io::Read;
+    let len = std::fs::metadata(part).ok()?.len();
+    if len == 0 || len >= total {
+        return None;
+    }
+    let mut h = crypto::Sha256Stream::default();
+    let mut f = std::fs::File::open(part).ok()?;
+    let mut buf = vec![0u8; 1 << 20];
+    let mut n_total = 0u64;
+    loop {
+        let n = f.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+        n_total += n as u64;
+    }
+    if n_total != len {
+        return None;
+    }
+    let w = std::fs::OpenOptions::new().append(true).open(part).ok()?;
+    Some((w, h, len))
+}
+
 /// Make sure the controller has `info` for this attempt, pulling it from
-/// the node when needed (blocking, up to `timeout`). `over_relay`: see
-/// [`artifact_pull_cap`]. `Err((code, hint))`.
-pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, over_relay: bool, timeout: Duration) -> Result<std::path::PathBuf, (String, String)> {
+/// the node when needed (blocking while bytes come; it fails after `idle`
+/// with none, GH#80). `over_relay`: see [`artifact_pull_cap`].
+/// `Err((code, hint))`.
+///
+/// A pull of this file already running is joined, not doubled. On a node
+/// with `artifact-flow` the node sends a window at a time against our
+/// acks, a pull that stops is cancelled there, and the next fetch
+/// continues from the bytes already here.
+pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, over_relay: bool, idle: Duration) -> Result<std::path::PathBuf, (String, String)> {
     let dst = artifact_cache_path(&job.id, job.generation, &info.sha256);
     if cache_holds(&dst, info) {
         return Ok(dst);
@@ -2080,17 +2165,33 @@ pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, over_relay: bool
     if !online {
         return Err(("node_offline".into(), "the job's node is offline; artifacts stay on it for 7 days, fetch again when it's back".into()));
     }
-    if !offer.is_some_and(|o| o.features.iter().any(|f| f == results::FEATURE_ARTIFACTS)) {
+    let has = |feat: &str| offer.as_ref().is_some_and(|o| o.features.iter().any(|f| f == feat));
+    if !has(results::FEATURE_ARTIFACTS) {
         return Err(("node_upgrade_required".into(), "that node's k2-node can't send artifacts; update it there (sudo k2-node setup)".into()));
     }
     if let Some(e) = pull_cap_refusal(route, over_relay, info.bytes) {
         return Err(e);
     }
+    let flow = has(results::FEATURE_ARTIFACT_FLOW);
+    // One pull per file: two would write the same partial file.
+    let running = with_pulls(|m| m.iter().find(|(_, p)| p.dst == dst && p.done.is_none()).map(|(id, _)| id.clone()));
+    if let Some(request_id) = running {
+        return join_pull(&request_id, job, info, &dst, idle);
+    }
     let dir = dst.parent().map(|d| d.to_path_buf()).unwrap_or_default();
     std::fs::create_dir_all(&dir).map_err(|e| ("local_write".to_string(), format!("cache dir: {e}")))?;
     let request_id = crypto::random_id().map_err(|e| ("internal".to_string(), e))?;
-    let tmp = dir.join(format!(".{request_id}.part"));
-    let file = std::fs::File::create(&tmp).map_err(|e| ("local_write".to_string(), format!("cache file: {e}")))?;
+    let tmp = part_path(&dst);
+    // Only a node that takes `offset` can continue a partial file.
+    let resumed = if flow { resume_part(&tmp, info.bytes) } else { None };
+    let (file, hasher, from) = match resumed {
+        Some(r) => r,
+        None => {
+            let f = std::fs::File::create(&tmp).map_err(|e| ("local_write".to_string(), format!("cache file: {e}")))?;
+            (f, crypto::Sha256Stream::default(), 0)
+        }
+    };
+    let conn_at = conn_of(&job.node_id);
     with_pulls(|m| {
         m.insert(
             request_id.clone(),
@@ -2099,38 +2200,90 @@ pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, over_relay: bool
                 tmp: tmp.clone(),
                 dst: dst.clone(),
                 file: Some(file),
-                hasher: Some(crypto::Sha256Stream::default()),
+                hasher: Some(hasher),
                 expect_sha: info.sha256.clone(),
                 expect_bytes: info.bytes,
-                got: 0,
+                got: from,
                 next_seq: 0,
+                flow,
+                moved: Instant::now(),
                 done: None,
             },
         )
     });
-    let sent = send_to(
-        &job.node_id,
-        Frame::ArtifactGet(ArtifactGet { request_id: request_id.clone(), job_id: job.id.clone(), generation: job.generation as u32, name: info.name.clone() }),
-    );
-    let deadline = Instant::now() + timeout;
-    let outcome = loop {
-        let seen = change_counter();
-        let done = with_pulls(|m| m.get(&request_id).and_then(|p| p.done.clone()));
-        if let Some(d) = done {
-            break d;
-        }
-        let now = Instant::now();
-        if !sent || now >= deadline {
-            break Err(("artifact_timeout".into(), "the node didn't send the file in time; try again".into()));
-        }
-        if !is_online(&job.node_id) {
-            break Err(("node_offline".into(), "the node went offline during the transfer; fetch again when it's back".into()));
-        }
-        wait_change(seen, (deadline - now).min(Duration::from_secs(1)));
+    let get = ArtifactGet {
+        request_id: request_id.clone(),
+        job_id: job.id.clone(),
+        generation: job.generation as u32,
+        name: info.name.clone(),
+        offset: (flow && from > 0).then_some(from),
+        window: flow.then_some(frames::ARTIFACT_WINDOW),
     };
-    with_pulls(|m| m.remove(&request_id));
-    let _ = std::fs::remove_file(&tmp);
-    outcome.map(|_| dst)
+    let sent = send_to(&job.node_id, Frame::ArtifactGet(get));
+    let outcome = if sent {
+        wait_pull(&request_id, &job.node_id, conn_at, flow, idle)
+    } else {
+        Err(("node_offline".into(), "the node went offline before the request went out; fetch again when it's back".into()))
+    };
+    let pull = with_pulls(|m| m.remove(&request_id));
+    let kept = pull.as_ref().map(|p| p.got).unwrap_or(0);
+    drop(pull);
+    // A pull that only stopped (the node quiet, or its session gone)
+    // keeps its bytes for the next fetch when the node can continue it.
+    let resumable = flow && matches!(&outcome, Err((c, _)) if c == "artifact_timeout" || c == "node_offline");
+    if outcome.is_err() && flow && conn_of(&job.node_id) == conn_at && conn_at.is_some() {
+        // Stop the node sending what nobody will read.
+        send_to(&job.node_id, Frame::ArtifactCancel(frames::ArtifactCancel { request_id: request_id.clone() }));
+    }
+    if !resumable {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    outcome.map(|_| dst).map_err(|(c, h)| {
+        if resumable && kept > 0 {
+            (c, format!("{h} ({} of {} MB are here; the next fetch continues from there)", kept >> 20, info.bytes >> 20))
+        } else {
+            (c, h)
+        }
+    })
+}
+
+/// Wait on pull `request_id` until it's done, the node goes quiet for
+/// `idle`, or its session (`conn_at`) ends.
+fn wait_pull(request_id: &str, node_id: &str, conn_at: Option<u64>, flow: bool, idle: Duration) -> Result<(), (String, String)> {
+    loop {
+        let seen = change_counter();
+        let Some((done, moved)) = with_pulls(|m| m.get(request_id).map(|p| (p.done.clone(), p.moved))) else {
+            return Err(("artifact_unavailable".into(), "the transfer ended; try again".into()));
+        };
+        if let Some(d) = done {
+            return d;
+        }
+        let quiet = moved.elapsed();
+        if quiet >= idle {
+            return Err(("artifact_timeout".into(), format!("the node sent nothing for {} s; try again", idle.as_secs())));
+        }
+        match conn_of(node_id) {
+            None => return Err(("node_offline".into(), "the node went offline during the transfer; fetch again when it's back".into())),
+            // A reconnect: the old session's pull won't come on the new one.
+            Some(c) if Some(c) != conn_at => {
+                let again = if flow { "fetch again" } else { "fetch again (it starts over: that node's k2-node can't continue a pull)" };
+                return Err(("node_offline".into(), format!("the node's connection dropped during the transfer; {again}")));
+            }
+            Some(_) => {}
+        }
+        wait_change(seen, (idle - quiet).min(Duration::from_secs(1)));
+    }
+}
+
+/// A second fetch of a file whose pull is running waits on that pull.
+fn join_pull(request_id: &str, job: &store::JobRow, info: &ArtifactInfo, dst: &std::path::Path, idle: Duration) -> Result<std::path::PathBuf, (String, String)> {
+    let (flow, conn_at) = (with_pulls(|m| m.get(request_id).is_some_and(|p| p.flow)), conn_of(&job.node_id));
+    match wait_pull(request_id, &job.node_id, conn_at, flow, idle) {
+        Ok(()) => Ok(dst.to_path_buf()),
+        // The pull ended under the fetch that started it: the file is here or not.
+        Err((c, _)) if c == "artifact_unavailable" && cache_holds(dst, info) => Ok(dst.to_path_buf()),
+        Err(e) => Err(e),
+    }
 }
 
 /// A background pull one fetch started and later fetches poll
@@ -2171,7 +2324,7 @@ pub fn fetch_artifact_wait(
     job: &store::JobRow,
     info: &ArtifactInfo,
     over_relay: bool,
-    timeout: Duration,
+    idle: Duration,
     wait: Duration,
 ) -> Result<Fetched, (String, String)> {
     let dst = artifact_cache_path(&job.id, job.generation, &info.sha256);
@@ -2194,7 +2347,7 @@ pub fn fetch_artifact_wait(
         // Even the cache check runs there: hashing 500 MB is slow too.
         let (job, info, key) = (job.clone(), info.clone(), dst.clone());
         std::thread::spawn(move || {
-            let r = fetch_artifact(&job, &info, over_relay, timeout);
+            let r = fetch_artifact(&job, &info, over_relay, idle);
             with_bg(|m| {
                 if let Some(b) = m.get_mut(&key) {
                     b.done = Some(r);
@@ -3483,5 +3636,124 @@ mod tests {
             _ = node => unreachable!("the node never stops on its own"),
             n = counted => assert_eq!(n.unwrap(), SENT, "every frame the node sent was read while the server's own writes waited"),
         }
+    }
+
+    fn flow_job(id: &str, node: &str, body: &[u8]) -> (store::JobRow, ArtifactInfo) {
+        let j = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            job_on(&conn, id, node)
+        };
+        let info = ArtifactInfo { name: "dist/app.tar.gz".into(), sha256: crypto::sha256_hex(body), bytes: body.len() as u64 };
+        let _ = std::fs::remove_dir_all(artifact_cache_path(&j.id, j.generation, &info.sha256).parent().unwrap());
+        (j, info)
+    }
+
+    /// GH#80, on a node with `artifact-flow`: the pull asks for a window,
+    /// acks every chunk it wrote, and when the node goes quiet it fails,
+    /// cancels the node's sending and keeps its bytes; the next fetch asks
+    /// from there and finishes the file.
+    #[test]
+    fn a_flow_pull_acks_cancels_when_it_stops_and_the_next_one_continues() {
+        let _db = k2_core::db::scoped_for_test();
+        let body: Vec<u8> = (0..3 * 1024u32).map(|i| (i % 253) as u8).collect();
+        let (j, info) = flow_job("flowflow0123456789abcdef01234567", "n-flow", &body);
+        let mut rx = relay_conn("n-flow", &[results::FEATURE_ARTIFACTS, results::FEATURE_ARTIFACT_FLOW]);
+        let (job, inf) = (j.clone(), info.clone());
+        let pull = std::thread::spawn(move || fetch_artifact(&job, &inf, false, Duration::from_secs(1)));
+        let get = next_sent(&mut rx, |f| match f {
+            Frame::ArtifactGet(g) => Some(g.clone()),
+            _ => None,
+        });
+        assert_eq!((get.offset, get.window), (None, Some(frames::ARTIFACT_WINDOW)), "a fresh pull, paced");
+        test_frame("n-flow", chunk(&get.request_id, 0, &body[..1024], false, &info));
+        let ack = next_sent(&mut rx, |f| match f {
+            Frame::ArtifactAck(a) => Some(a.clone()),
+            _ => None,
+        });
+        assert_eq!((ack.request_id.as_str(), ack.next), (get.request_id.as_str(), 1024));
+        // The node goes quiet: the pull fails, the node is told to stop.
+        let (code, hint) = pull.join().unwrap().expect_err("a quiet node fails the pull");
+        assert_eq!(code, "artifact_timeout", "{hint}");
+        let cancel = next_sent(&mut rx, |f| match f {
+            Frame::ArtifactCancel(c) => Some(c.clone()),
+            _ => None,
+        });
+        assert_eq!(cancel.request_id, get.request_id);
+        let dst = artifact_cache_path(&j.id, j.generation, &info.sha256);
+        assert_eq!(std::fs::read(part_path(&dst)).expect("the partial file stays"), body[..1024]);
+
+        // The next fetch continues at byte 1024 and finishes the file.
+        let (job, inf) = (j.clone(), info.clone());
+        let pull = std::thread::spawn(move || fetch_artifact(&job, &inf, false, Duration::from_secs(5)));
+        let get = next_sent(&mut rx, |f| match f {
+            Frame::ArtifactGet(g) => Some(g.clone()),
+            _ => None,
+        });
+        assert_eq!(get.offset, Some(1024), "continues where the last pull stopped");
+        test_frame("n-flow", chunk(&get.request_id, 0, &body[1024..2048], false, &info));
+        test_frame("n-flow", chunk(&get.request_id, 1, &body[2048..], true, &info));
+        let path = pull.join().unwrap().unwrap_or_else(|(c, h)| panic!("{c}: {h}"));
+        assert_eq!(std::fs::read(&path).unwrap(), body);
+        assert!(!part_path(&dst).exists(), "the partial file became the cached one");
+        let sent: Vec<Frame> = std::iter::from_fn(|| match rx.try_recv() {
+            Ok(Out::Frame(f)) => Some(*f),
+            _ => None,
+        })
+        .collect();
+        assert!(sent.iter().all(|f| !matches!(f, Frame::ArtifactCancel(_))), "a finished pull cancels nothing: {sent:?}");
+        test_detach("n-flow");
+    }
+
+    /// GH#80: a reconnect ends the pull at once (the old session's chunks
+    /// won't come on the new one) instead of waiting out its timeout; a
+    /// second fetch of a file being pulled joins that pull.
+    #[test]
+    fn a_reconnect_ends_the_pull_and_a_second_fetch_joins_a_running_one() {
+        let _db = k2_core::db::scoped_for_test();
+        let body: Vec<u8> = (0..2048u32).map(|i| (i % 249) as u8).collect();
+        let (j, info) = flow_job("dropdrop0123456789abcdef01234567", "n-drop", &body);
+        let mut rx = relay_conn("n-drop", &[results::FEATURE_ARTIFACTS, results::FEATURE_ARTIFACT_FLOW]);
+        let (job, inf) = (j.clone(), info.clone());
+        let t0 = Instant::now();
+        let pull = std::thread::spawn(move || fetch_artifact(&job, &inf, false, Duration::from_secs(30)));
+        let get = next_sent(&mut rx, |f| match f {
+            Frame::ArtifactGet(g) => Some(g.clone()),
+            _ => None,
+        });
+        test_frame("n-drop", chunk(&get.request_id, 0, &body[..1024], false, &info));
+        // The node's session drops and it comes back on a new one.
+        let mut rx2 = relay_conn("n-drop", &[results::FEATURE_ARTIFACTS, results::FEATURE_ARTIFACT_FLOW]);
+        let (code, hint) = pull.join().unwrap().expect_err("the pull ends with its session");
+        assert_eq!(code, "node_offline", "{hint}");
+        assert!(hint.contains("the next fetch continues"), "{hint}");
+        assert!(t0.elapsed() < Duration::from_secs(10), "not after its 30 s timeout: {:?}", t0.elapsed());
+
+        // Two fetches at once: one request to the node, both get the file.
+        let spawn = || {
+            let (job, inf) = (j.clone(), info.clone());
+            std::thread::spawn(move || fetch_artifact(&job, &inf, false, Duration::from_secs(10)))
+        };
+        let first = spawn();
+        let get = next_sent(&mut rx2, |f| match f {
+            Frame::ArtifactGet(g) => Some(g.clone()),
+            _ => None,
+        });
+        assert_eq!(get.offset, Some(1024));
+        let second = spawn();
+        std::thread::sleep(Duration::from_millis(300));
+        test_frame("n-drop", chunk(&get.request_id, 0, &body[1024..], true, &info));
+        for h in [first, second] {
+            let p = h.join().unwrap().unwrap_or_else(|(c, h)| panic!("{c}: {h}"));
+            assert_eq!(std::fs::read(p).unwrap(), body);
+        }
+        let more: Vec<Frame> = std::iter::from_fn(|| match rx2.try_recv() {
+            Ok(Out::Frame(f)) => Some(*f),
+            _ => None,
+        })
+        .collect();
+        assert!(more.iter().all(|f| !matches!(f, Frame::ArtifactGet(_))), "the second fetch sent no request of its own: {more:?}");
+        test_detach("n-drop");
+        drop(rx);
     }
 }

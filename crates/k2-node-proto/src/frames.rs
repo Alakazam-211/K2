@@ -143,6 +143,13 @@ pub const MAX_FRAME_BYTES: usize = 1 << 20;
 pub const MAX_LOG_CHUNK: usize = 64 * 1024;
 /// Largest raw payload per `transfer` frame (base64 grows it by a third).
 pub const TRANSFER_CHUNK: usize = 256 * 1024;
+/// `artifact-flow` (GH#80): the most bytes of one artifact a node has out
+/// past the controller's last `artifact_ack` (8 chunks). Over a slow relay
+/// the rest waits on the node, not in the pipe ahead of every other frame.
+pub const ARTIFACT_WINDOW: u64 = 8 * TRANSFER_CHUNK as u64;
+/// `artifact-flow`: a node stops sending one artifact after this long
+/// with no `artifact_ack` (the controller gave up or the pipe is stuck).
+pub const ARTIFACT_ACK_STALL_SECS: u64 = 120;
 /// WebSocket ping cadence (the Thread-sync lesson: quiet sockets get cut).
 pub const PING_SECS: u64 = 20;
 /// Offer cadence when nothing changed.
@@ -428,6 +435,13 @@ pub enum Frame {
     /// [`crate::ci::FEATURE_ARTIFACT_DELETE`]; older parsers reject unknown
     /// variants).
     ArtifactDelete(ArtifactDelete),
+    /// GH#80 (`artifact-flow`): the controller has written an artifact up
+    /// to this byte; the node may send up to `window` past it (only to
+    /// nodes offering [`crate::results::FEATURE_ARTIFACT_FLOW`]; older
+    /// parsers reject unknown variants).
+    ArtifactAck(ArtifactAck),
+    /// GH#80 (`artifact-flow`): stop sending this pull.
+    ArtifactCancel(ArtifactCancel),
     // node → controller
     Offer(Offer),
     JobsSnapshot(JobsSnapshot),
@@ -491,7 +505,9 @@ impl Frame {
             | Frame::PkgRequestDecide(_)
             | Frame::GitCred(_)
             | Frame::GitCredRefused(_)
-            | Frame::ArtifactDelete(_) => Direction::ControllerToNode,
+            | Frame::ArtifactDelete(_)
+            | Frame::ArtifactAck(_)
+            | Frame::ArtifactCancel(_) => Direction::ControllerToNode,
             Frame::Offer(_)
             | Frame::JobsSnapshot(_)
             | Frame::Need(_)
@@ -558,6 +574,8 @@ impl Frame {
             Frame::NodeStatement(_) => "node_statement",
             Frame::NodeRoster(_) => "node_roster",
             Frame::ArtifactDelete(_) => "artifact_delete",
+            Frame::ArtifactAck(_) => "artifact_ack",
+            Frame::ArtifactCancel(_) => "artifact_cancel",
         }
     }
 }
@@ -1390,6 +1408,30 @@ pub struct ArtifactGet {
     pub generation: u32,
     /// An [`crate::results::ArtifactInfo::name`] the node reported.
     pub name: String,
+    /// GH#80 (`artifact-flow`): start at this byte (a retry continues a
+    /// partial pull). Absent: from the start, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u64>,
+    /// GH#80 (`artifact-flow`): the most bytes the node may send past the
+    /// last [`ArtifactAck`]. Absent: the whole file at once, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<u64>,
+}
+
+/// `artifact_ack` (GH#80, `artifact-flow`): the controller holds the file
+/// up to byte `next` (from the start of the file, not the request).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactAck {
+    pub request_id: String,
+    pub next: u64,
+}
+
+/// `artifact_cancel` (GH#80, `artifact-flow`): the controller stopped
+/// this pull (it timed out, failed, or the session that asked is gone);
+/// the node stops sending it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactCancel {
+    pub request_id: String,
 }
 
 /// `artifact_delete` (protocol 9, V27): delete one attempt's kept
@@ -1687,6 +1729,31 @@ mod tests {
             receipt_v: None,
             gpu: None,
         }
+    }
+
+    /// GH#80: `artifact-flow` is additive. A get without `offset` and
+    /// `window` is the old wire form exactly (an older node parses it and
+    /// sends the whole file); an older controller's get parses here with
+    /// neither; the ack and cancel go controller → node only.
+    #[test]
+    fn artifact_flow_is_additive_for_older_peers() {
+        let old = ArtifactGet { request_id: "r".into(), job_id: "j".into(), generation: 1, name: "dist/a".into(), offset: None, window: None };
+        let text = serde_json::to_string(&Frame::ArtifactGet(old.clone())).unwrap();
+        assert_eq!(text, r#"{"t":"artifact_get","request_id":"r","job_id":"j","generation":1,"name":"dist/a"}"#);
+        let parsed: Frame = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed, Frame::ArtifactGet(old));
+        let new = ArtifactGet { request_id: "r".into(), job_id: "j".into(), generation: 1, name: "dist/a".into(), offset: Some(5), window: Some(ARTIFACT_WINDOW) };
+        let back: Frame = serde_json::from_str(&serde_json::to_string(&Frame::ArtifactGet(new.clone())).unwrap()).unwrap();
+        assert_eq!(back, Frame::ArtifactGet(new));
+        let key = SigningKey::generate().unwrap();
+        for f in [Frame::ArtifactAck(ArtifactAck { request_id: "r".into(), next: 7 }), Frame::ArtifactCancel(ArtifactCancel { request_id: "r".into() })] {
+            assert_eq!(f.direction(), Direction::ControllerToNode, "{}", f.kind());
+            let sealed = seal(&key, Direction::ControllerToNode, "s", 0, &f).unwrap();
+            assert_eq!(open(key.spki_der(), Direction::ControllerToNode, "s", 0, &sealed).unwrap(), f);
+            assert!(seal(&key, Direction::NodeToController, "s", 0, &f).is_err(), "never node → controller");
+        }
+        assert_eq!(Frame::ArtifactAck(ArtifactAck { request_id: "r".into(), next: 0 }).kind(), "artifact_ack");
+        assert_eq!(Frame::ArtifactCancel(ArtifactCancel { request_id: "r".into() }).kind(), "artifact_cancel");
     }
 
     /// Protocol 7 with older peers (prd-compute-self-serve-environments

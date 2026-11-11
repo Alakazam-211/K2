@@ -22,6 +22,7 @@
 //! - [`template`]: agent templates (prd-agent-templates-v1): built-in and
 //!   library types, `apply`, `.k2/agent/template.lock`. Every door's
 //!   `template` resolves through it.
+//! - [`starter_permissions`]: the K5 and Chief of Staff starter sets.
 //!
 //! Launch and first brief need the daemon's session machinery, so the
 //! daemon runs them after the durable steps commit.
@@ -36,6 +37,7 @@ pub mod links;
 pub mod plan;
 pub mod recipe;
 pub mod root;
+pub mod starter_permissions;
 pub mod steps;
 pub mod template;
 

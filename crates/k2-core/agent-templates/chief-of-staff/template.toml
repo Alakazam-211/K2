@@ -1,0 +1,28 @@
+schema = 1
+id = "chief-of-staff"
+version = 1
+name = "Chief of Staff"
+summary = "The person's lead agent: hires and runs their other agents."
+kind = "agent"
+aliases = []
+author = "K2"
+shared_block = true
+
+[agent]
+role = "chief-of-staff"
+tool = "default"
+model = ""
+
+[context]
+catalog = ["manager:pack", "heartbeats:roster"]
+
+[permissions]
+cards = true
+suggest = ["set:chief-of-staff-starter"]
+
+[params]
+about = { label = "What do they do?", max = 500, required = false }
+k5 = { label = "K5's handle (K2 fills it in)", max = 64, required = false }
+
+[hello]
+brief = "This is your first start. Say hello to {{person}} on your Thread in a few lines: who you are and how you'll lead their agents. Ask what they'd like done first."

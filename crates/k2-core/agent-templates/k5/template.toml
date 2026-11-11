@@ -1,0 +1,26 @@
+schema = 1
+id = "k5"
+version = 1
+name = "K5"
+summary = "K2's own agent: setup, settings and agent management."
+kind = "system"
+aliases = []
+author = "K2"
+shared_block = true
+
+[agent]
+role = "k5"
+tool = "default"
+model = ""
+
+[context]
+catalog = ["k5:pack", "users:roster", "heartbeats:roster"]
+
+[permissions]
+cards = true
+suggest = ["set:k5-starter"]
+
+[params]
+
+[hello]
+brief = "This is your first start. Say hello to {{person}} on your Thread in a few lines: who you are and what you're for. Then offer to hire their Chief of Staff, their own lead agent."

@@ -4,6 +4,7 @@
   "eventPrefix": "sew-voice://",
   "events": ["state", "participants", "speaking", "errors", "devices", "recording"],
   "commands": ["join", "leave", "mute", "devices", "set_device", "state", "consent", "withdraw_consent"],
+  "recordingCommands": ["start_recording", "stop_recording"],
   "states": {
     "idle": { "state": "idle" },
     "connecting": { "state": "connecting" },

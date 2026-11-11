@@ -102,6 +102,32 @@ recording_not_found · 422 not_in_voice (join the call first) · 422
 recording_not_active (it ended) · 409 consent_notice_changed (the notice
 changed after it was shown: show details.consent_prompt, with its new
 notice_version, and ask again) · 503 recording_unavailable (retry).
+In these rooms people are told, not asked (0.46.11): K2's notice is OK
+(records you) or Leave call, never "join without being recorded". Someone
+who doesn't answer within a minute is dropped (recording_consent_timeout).
+Record and Stop: POST /cli/voice/recording/start {"room": "room-1"} and
+POST /cli/voice/recording/stop {"recordingId": "77"}, a person's own login
+(a Voice & Chat only login: voice_chat_not_allowed); Sew decides who may.
+
+CALL TRANSCRIPTS (after a call; agents need "Read call transcripts", the
+owner's switch, off by default). Only this server's own rooms: an App's
+Spaces keep their own rule (k2 study app-recording).
+  k2 voice recordings [--room <room>]     ids, room, when, transcript ready
+  k2 voice transcript <id> [--after <line-id>]
+                                          the text, a page at a time
+  k2 voice transcripts [--room <room>]    who may read, who each room tells
+  k2 voice transcripts subscribe <room> <workspace>
+                                          a note in that agent's inbox when a
+                                          recording in <room> has its transcript
+  k2 voice transcripts unsubscribe <room> <workspace>
+  k2 voice transcripts reads [--recording <id>]   the read log (owner/Admin)
+Every read is logged (who, which recording, how many lines). While any
+agent holds the switch, each person's recording notice says:
+  "Agents on this server may read the transcript."
+Without the switch you get transcripts_read_off; ask once and wait:
+  k2 permission request voice.transcripts-read --why "review our calls"
+The bare owner token lists but never reads a transcript
+(owner_token_cannot_read): read it from an owner or Admin login.
 
 REFUSALS. room_full · room_closing · room_not_found · host_not_pro ·
 voice_unavailable (details.engine media_path_down = the voice lane is

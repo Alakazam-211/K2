@@ -22,6 +22,8 @@ import {
 } from '@/components/icons/K2Icons'
 import { micBlockedText, MIC_DENIED_LINE } from '@/lib/voice/voice-wire'
 import { policyBlockText } from '@/lib/voice/video-labels'
+import { recordingBadgeTitle, recordingButtons } from '@/lib/voice/recording-controls'
+import type { NativeParticipant } from '@/lib/voice/native-voice-engine'
 import type { VoiceCall } from '@/stores/voice-core'
 import type { VideoController } from '@/stores/video-core'
 
@@ -151,8 +153,15 @@ function CallButton({
 export interface CallControlsProps {
   variant: CallControlsVariant
   call: VoiceCall
-  /** The voice controller's actions (the app's, or a test's). */
-  actions: { setMuted(m: boolean): void; setDeafened(d: boolean): void; leave(): Promise<void> }
+  /** The voice controller's actions (the app's, or a test's). Record and
+   *  Stop are there with the native engine (Sew 0.9.0). */
+  actions: {
+    setMuted(m: boolean): void
+    setDeafened(d: boolean): void
+    leave(): Promise<void>
+    startRecording?(): Promise<void>
+    stopRecording?(): Promise<void>
+  }
   /** With video rooms on: the camera button. */
   video: VideoController | null
 }
@@ -220,11 +229,44 @@ function ScreenButton({ variant, video, busy }: { variant: CallControlsVariant; 
   )
 }
 
+/** The red "Recording" badge, the whole time a recording is on. */
+export function RecordingBadge({ call, variant }: { call: VoiceCall; variant: CallControlsVariant }): React.JSX.Element | null {
+  const r = call.recording
+  if (!r) return null
+  const starter = r.startedBy ? (call.participants.find((p) => p.memberId === r.startedBy)?.user ?? null) : null
+  return (
+    <span
+      data-testid={`call-${variant}-recording`}
+      role="status"
+      title={recordingBadgeTitle(r, starter)}
+      className="flex shrink-0 items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-status-error)]"
+      style={noDrag}
+    >
+      <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-[var(--color-status-error)]" />
+      Recording
+    </span>
+  )
+}
+
+/** The engine's people as the derived rule reads them. */
+function peopleOf(call: VoiceCall): NativeParticipant[] {
+  return call.participants.map((p) => ({
+    memberId: p.memberId ?? '',
+    isSelf: p.isSelf === true,
+    muted: p.muted,
+    deafened: false,
+    serverMuted: false,
+    serverDeafened: false,
+    speakDenied: false,
+  }))
+}
+
 export default function CallControls({ variant, call, actions, video }: CallControlsProps): React.JSX.Element {
   const busy = call.phase === 'joining'
   const locked = call.speakDenied ? micBlockedText('speak_denied', call.roomName) : call.serverMuted ? micBlockedText('server_muted', call.roomName) : null
   const micOff = call.muted || call.micDenied || call.deafened || locked !== null
   const size = variant !== 'topbar' ? 15 : undefined
+  const rec = recordingButtons({ perms: call.recordingPerms, recording: call.recording, people: peopleOf(call) })
   return (
     <div
       data-testid={`call-${variant}-controls`}
@@ -256,6 +298,17 @@ export default function CallControls({ variant, call, actions, video }: CallCont
       </CallButton>
       {video ? <CameraButton variant={variant} video={video} busy={busy} /> : null}
       {video ? <ScreenButton variant={variant} video={video} busy={busy} /> : null}
+      {rec.canRecord && actions.startRecording ? (
+        <CallButton variant={variant} label="Record" dead={busy} testId={`call-${variant}-record`} onPress={() => void actions.startRecording?.()}>
+          <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-full border-2 border-[var(--color-status-error)]" />
+        </CallButton>
+      ) : null}
+      {rec.canStop && actions.stopRecording ? (
+        <CallButton variant={variant} label="Stop recording" dead={busy} testId={`call-${variant}-stop-recording`} onPress={() => void actions.stopRecording?.()}>
+          <span aria-hidden className="inline-block h-2.5 w-2.5 bg-[var(--color-status-error)]" />
+        </CallButton>
+      ) : null}
+      <RecordingBadge call={call} variant={variant} />
       <CallButton variant={variant} label="Leave call" danger testId={`call-${variant}-leave`} onPress={() => void actions.leave()}>
         <PhoneOffIcon size={size} />
       </CallButton>

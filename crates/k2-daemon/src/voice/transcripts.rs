@@ -467,6 +467,7 @@ fn state_view(only: Option<&str>) -> Result<Value, CliResponse> {
     Ok(json!({
         "ok": true,
         "readers": readers.iter().map(|w| crate::compute_routes::ws_handle(w)).collect::<Vec<_>>(),
+        "readerIds": readers,
         "agentReaders": !readers.is_empty(),
         "noticeLine": (!readers.is_empty()).then_some(store::AGENT_READERS_LINE),
         "rooms": rooms,

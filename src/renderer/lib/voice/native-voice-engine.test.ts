@@ -75,8 +75,16 @@ describe("Sew's contract (native-voice-contract.json, held to the plugin's types
   })
 
   it('reads the recording event, and null once none is active', () => {
-    expect(parseRecording(contract.recording.pending)).toEqual({ recordingId: '77', myConsent: 'pending', recorderPresent: true })
-    expect(parseRecording(contract.recording.granted)).toEqual({ recordingId: '77', myConsent: 'granted', recorderPresent: true })
+    expect(parseRecording(contract.recording.pending)).toEqual({
+      recordingId: '77',
+      myConsent: 'pending',
+      recorderPresent: true,
+      trigger: 'manual',
+      required: false,
+      startedBy: null,
+      prompt: null,
+    })
+    expect(parseRecording(contract.recording.granted)).toMatchObject({ recordingId: '77', myConsent: 'granted', recorderPresent: true, startedBy: '7' })
     expect(parseRecording(contract.recording.stopped)).toBeNull()
   })
 
@@ -149,7 +157,15 @@ describe("Sew's 0.7.2 additions", () => {
       room: '48831765147549698',
     })
     expect(parseCallState(sew.state_snapshot.consent_required)).toMatchObject({ state: 'consent_required', noticeVersion: 3141 })
-    expect(parseRecording(sew.recording.held.recording)).toEqual({ recordingId: '48831765147549720', myConsent: 'pending', recorderPresent: false })
+    expect(parseRecording(sew.recording.held.recording)).toEqual({
+      recordingId: '48831765147549720',
+      myConsent: 'pending',
+      recorderPresent: false,
+      trigger: 'manual',
+      required: false,
+      startedBy: '1001',
+      prompt: { noticeVersion: 3141, startedByName: 'Alice', audioKeepDays: 30, required: false, appReaders: [], agentReaders: false, declineMode: 'join_unrecorded' },
+    })
     expect(parseRecording(sew.recording.granted)?.myConsent).toBe('granted')
     expect(parseRecording(sew.recording.withdrawn)?.myConsent).toBe('withdrawn')
     expect(parseRecording(sew.recording.stopped)).toBeNull()
@@ -206,6 +222,21 @@ describe('rejections', () => {
     const f = fakeBridge({}, { [`${PLUGIN_COMMAND_PREFIX}leave`]: 'sew-voice.leave not allowed' })
     const err = await new NativeVoiceEngine(f.bridge).leave().catch((e: unknown) => e)
     expect(err).toMatchObject({ code: 'failed', detail: 'sew-voice.leave not allowed' })
+  })
+
+  it("sends the person's answer and Record/Stop as the plugin's commands (Sew 0.9.0)", async () => {
+    const f = fakeBridge()
+    const e = new NativeVoiceEngine(f.bridge)
+    await e.consent(true, 3141)
+    await e.startRecording()
+    await e.stopRecording()
+    const sew = JSON.parse(readFileSync(resolve(__dirname, 'sew-native-voice-contract.json'), 'utf8'))
+    expect(f.calls).toEqual([
+      { command: `${PLUGIN_COMMAND_PREFIX}consent`, args: sew.recording.held.consent.args },
+      { command: `${PLUGIN_COMMAND_PREFIX}start_recording`, args: undefined },
+      { command: `${PLUGIN_COMMAND_PREFIX}stop_recording`, args: undefined },
+    ])
+    expect(contract.recordingCommands).toEqual(['start_recording', 'stop_recording'])
   })
 
   it('a join answer with no call id fails loudly', async () => {

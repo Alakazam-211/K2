@@ -6,6 +6,7 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { httpCodeOf, httpDetailsOf } from '@/lib/daemon-http-error'
 import type { ServerScope } from '@/kessel/server-scope'
+import type { RecordingPerms } from './recording-controls'
 import {
   parseJoinAnswer,
   parseVoiceRooms,
@@ -93,6 +94,14 @@ export async function leaveVoiceCall(scope: ServerScope, callId: string): Promis
  *  the room list shows it to everyone. */
 export async function sendVoiceSelfState(scope: ServerScope, callId: string, muted: boolean, deafened: boolean): Promise<void> {
   await daemonCliPost(scope, 'voice/session/state', { callId, body: { self_mute: muted, self_deaf: deafened } })
+}
+
+/** Sew 0.9.0: `POST /cli/voice/recording/controls {room}`, the person's own
+ *  permissions in a room, for Record and Stop (`recording-controls.ts`). */
+export async function fetchRecordingControls(scope: ServerScope, roomId: string): Promise<RecordingPerms> {
+  const v = (await daemonCliPost(scope, 'voice/recording/controls', { room: roomId })) as Record<string, unknown> | null
+  if (!v || typeof v !== 'object') throw new Error('voice/recording/controls: not an answer')
+  return { recordCalls: v.recordCalls === true, manageChannels: v.manageChannels === true, voiceChatOnly: v.voiceChatOnly === true }
 }
 
 /** Settings (§3.3, §4.5): `GET /cli/voice/status`. */

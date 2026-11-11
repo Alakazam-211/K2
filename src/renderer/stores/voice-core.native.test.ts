@@ -107,6 +107,7 @@ function setup(over: Partial<VoiceDeps> & { plugin?: Partial<Plugin> } = {}) {
     selfState: vi.fn(async () => {
       throw new Error('the engine sends self state itself')
     }),
+    recordingControls: vi.fn(async () => ({ recordCalls: true, manageChannels: false })),
   }
   const authFns: Array<(k: string, a: 'signin-required') => void> = []
   const openMicSettings = vi.fn(async () => true)
@@ -564,7 +565,7 @@ describe('live access: how a call ends', () => {
     credential_expired: 'The call to Standup ended: your sign-in to sewlab expired. Join again to continue.',
     recording_declined: "You left Standup: it's recorded, and you said no to being recorded.",
     recording_withdrawn: 'You left Standup: you stopped being recorded, and this room needs everyone recorded.',
-    recording_consent_timeout: "You left Standup: it's recorded, and no answer to the recording notice came in time.",
+    recording_consent_timeout: "You left the call because you didn't answer the recording notice.",
   }
   const ends = [...sewContract.ended.sew_reasons, ...sewContract.ended.fallbacks, ...sewContract.ended.recording_reasons]
 
@@ -578,7 +579,8 @@ describe('live access: how a call ends', () => {
     const s = await inCall()
     s.fire('state', payload)
     expect(s.ctl.store.getState().call).toBeNull()
-    expect(s.ctl.store.getState().notice).toMatchObject({ text: lines[reason as string], kind: 'error' })
+    // Not answering in time is a plain end (Rosson 2026-11-10), every other one an error.
+    expect(s.ctl.store.getState().notice).toMatchObject({ text: lines[reason as string], kind: reason === 'recording_consent_timeout' ? 'info' : 'error' })
   })
 
   it('a reason nobody has heard of still ends the call, in plain words', async () => {
@@ -596,49 +598,77 @@ describe('live access: how a call ends', () => {
   })
 })
 
-describe('recording consent (plugin 0.2.0+; the K2 app has no consent sheet yet)', () => {
+describe("recording in K2's own rooms (Sew 0.9.0): told, not asked", () => {
   const held = sewContract.recording.held
 
-  it('a join held for the notice is given up, with its line, and never answered', async () => {
+  it("a join held for the notice shows K2's notice and never joins as consenting", async () => {
     const s = setup({ plugin: { joinResult: { call_id: '' }, state: sewContract.state_snapshot.consent_required } })
     await s.ctl.join(SEW, room1)
+    s.fire('recording', held.recording)
+    await settle()
+    const c = s.ctl.store.getState().call
+    expect(c?.phase).toBe('joining')
+    expect(c?.recordingNotice).toMatchObject({ recordingId: held.recording.recording_id, ask: 'join', prompt: { noticeVersion: 3141, startedByName: 'Alice' } })
+    // No answer is never a yes: nothing is sent until the person answers.
+    expect(s.calls.map(([x]) => x)).not.toContain(`${P}consent`)
+    await s.ctl.answerRecordingNotice('ok')
+    expect(s.calls.filter(([x]) => x === `${P}consent`)).toEqual([[`${P}consent`, held.consent.args]])
+    expect(s.ctl.store.getState().call?.recordingNotice).toBeNull()
+  })
+
+  it("Don't join gives the held join up and sends no answer", async () => {
+    const s = setup({ plugin: { joinResult: { call_id: '' }, state: sewContract.state_snapshot.consent_required } })
+    await s.ctl.join(SEW, room1)
+    s.fire('recording', held.recording)
+    await s.ctl.answerRecordingNotice('leave')
     await settle()
     expect(s.ctl.store.getState().call).toBeNull()
-    expect(s.ctl.store.getState().notice).toMatchObject({
-      text: "Standup is being recorded. The K2 app can't answer recording notices yet, so you weren't joined.",
-      kind: 'error',
-    })
-    const sent = s.calls.map(([c]) => c)
+    const sent = s.calls.map(([x]) => x)
     expect(sent).toContain(`${P}leave`)
     expect(sent).not.toContain(`${P}consent`)
   })
 
-  it("the server's own refusal of a recorded room gets the same words", async () => {
-    const sew = { code: 'conflict', hint: 'answer the recording notice', details: { reason: 'recording_consent_required' } }
-    const s = setup({ plugin: { joinError: { code: 'conflict', detail: { hint: 'answer the recording notice', details: { sew } } } } })
-    await s.ctl.join(SEW, room1)
-    expect(s.ctl.store.getState().notice?.text).toBe("Standup is being recorded. The K2 app can't answer recording notices yet, so you weren't joined.")
+  it('a recording started mid-call: the call stays, the notice and the badge show, until the answer', async () => {
+    const s = await inCall()
+    s.fire('recording', held.recording)
+    let c = s.ctl.store.getState().call
+    expect(c?.phase).toBe('connected')
+    expect(c?.recording?.recordingId).toBe(held.recording.recording_id)
+    expect(c?.recordingNotice).toMatchObject({ ask: 'in_call' })
+    s.fire('recording', sewContract.recording.granted)
+    c = s.ctl.store.getState().call
+    expect(c?.recordingNotice).toBeNull()
+    expect(c?.recording?.myConsent).toBe('granted')
+    s.fire('recording', sewContract.recording.stopped)
+    expect(s.ctl.store.getState().call?.recording).toBeNull()
+    expect(s.toasts.join(' ')).not.toMatch(/can't answer recording notices/)
   })
 
-  it('a call that becomes held (a re-join after the notice changed) ends, and leaves', async () => {
+  it('a call that becomes held (the notice changed) stays and waits for the new answer', async () => {
     const s = await inCall()
     s.fire('state', held.state)
     await settle()
-    expect(s.ctl.store.getState().call).toBeNull()
-    expect(s.ctl.store.getState().notice?.text).toBe("The call to Standup ended: it's now recorded, and the K2 app can't answer recording notices yet.")
-    expect(s.calls.map(([c]) => c)).toContain(`${P}leave`)
+    expect(s.ctl.store.getState().call?.phase).toBe('joining')
+    expect(s.calls.map(([x]) => x)).not.toContain(`${P}leave`)
   })
 
-  it('a recording started mid-call: the call stays, one info line, unrecorded', async () => {
+  it('Record and Stop call the plugin, and the buttons read the room perms', async () => {
     const s = await inCall()
-    s.fire('recording', held.recording)
-    s.fire('recording', held.recording)
-    expect(s.ctl.store.getState().call?.phase).toBe('connected')
-    expect(s.toasts.filter((t) => t.includes('started recording'))).toEqual([
-      "Someone started recording Standup. You aren't recorded: the K2 app can't answer recording notices yet.",
-    ])
-    s.fire('recording', sewContract.recording.stopped)
-    expect(s.ctl.store.getState().call?.phase).toBe('connected')
+    await settle()
+    expect(s.api.recordingControls).toHaveBeenCalled()
+    expect(s.ctl.store.getState().call?.recordingPerms).toEqual({ recordCalls: true, manageChannels: false })
+    await s.ctl.startRecording()
+    await s.ctl.stopRecording()
+    const sent = s.calls.map(([x]) => x)
+    expect(sent).toContain(`${P}start_recording`)
+    expect(sent).toContain(`${P}stop_recording`)
+  })
+
+  it("a window without the app's engine says where to join (the server refused a recorded room)", async () => {
+    const sew = { code: 'conflict', hint: 'answer the recording notice', details: { reason: 'recording_consent_required' } }
+    const s = setup({ plugin: { joinError: { code: 'conflict', detail: { hint: 'answer the recording notice', details: { sew } } } } })
+    await s.ctl.join(SEW, room1)
+    expect(s.ctl.store.getState().notice?.text).toBe('Standup is being recorded. Join it from the K2 app, which shows the recording notice first.')
   })
 })
 

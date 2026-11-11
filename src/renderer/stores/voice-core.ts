@@ -28,7 +28,6 @@ import {
   joinErrorText,
   micBlockedText,
   nativeJoinErrorCode,
-  recordingStartedText,
   type VoiceJoinAnswer,
   type VoiceErrorCode,
   type VoiceRoom,
@@ -41,6 +40,7 @@ import {
   DEFAULT_DEVICE,
   NativeVoiceError,
   type NativeCallState,
+  type NativeConsentPrompt,
   type NativeDevices,
   type NativeEvents,
   type NativeLevel,
@@ -50,6 +50,7 @@ import {
   type NativeVoiceEngine,
 } from '@/lib/voice/native-voice-engine'
 import type { VoiceDevices } from '@/lib/voice/voice-engine'
+import type { RecordingPerms } from '@/lib/voice/recording-controls'
 
 /** §4.3: a 30 s check while the popover is open or a call runs. */
 export const VOICE_ROOMS_POLL_MS = 30_000
@@ -103,6 +104,21 @@ export interface VoiceCall {
   /** When media came up (the call timer). */
   connectedAt: number | null
   participants: EngineParticipant[]
+  /** Native, Sew 0.9.0: the room's active recording (the red badge), or null. */
+  recording: NativeRecording | null
+  /** K2's recording notice waiting for the person's answer ("OK" or leave).
+   *  Never answered by itself: no answer is never a yes. */
+  recordingNotice: RecordingNotice | null
+  /** The person's own Sew permissions in the room (Record and Stop), once read. */
+  recordingPerms: RecordingPerms | null
+}
+
+/** A notice on screen: the recording it is for, its slots, and where it was
+ *  met (a held join, or in the call). */
+export interface RecordingNotice {
+  recordingId: string
+  prompt: NativeConsentPrompt
+  ask: 'join' | 'in_call'
 }
 
 export interface VoicePrefs {
@@ -150,6 +166,8 @@ export interface VoiceDeps {
     join: (scope: ServerScope, roomId: string, opts: JoinOptions) => Promise<VoiceJoinAnswer>
     leave: (scope: ServerScope, callId: string) => Promise<void>
     selfState: (scope: ServerScope, callId: string, muted: boolean, deafened: boolean) => Promise<void>
+    /** Sew 0.9.0: the person's own permissions in a room (Record and Stop). */
+    recordingControls?: (scope: ServerScope, roomId: string) => Promise<RecordingPerms>
   }
   makeEngine: () => VoiceEngine
   toast: (text: string, kind: 'error' | 'info') => void
@@ -197,6 +215,12 @@ export interface VoiceController {
   loadDevices(): Promise<void>
   /** The person's click on "Open privacy settings". */
   openMicSettings(): Promise<void>
+  /** The answer to K2's recording notice: "OK" grants (with the notice's
+   *  version), "leave" leaves the call (or gives up the held join). */
+  answerRecordingNotice(answer: 'ok' | 'leave'): Promise<void>
+  /** Record and Stop, the person's own acts (Sew decides who may). */
+  startRecording(): Promise<void>
+  stopRecording(): Promise<void>
   /** Start the discovery and refresh timers; returns the stop. */
   start(): () => void
 }
@@ -237,7 +261,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   /** The engine's own list and levels; `participants` is drawn from them. */
   let nativePeople: NativeParticipant[] = []
   let nativeSpeaking = new Set<string>()
-  /** The recording this window already told the person about. */
+  /** The notice (recording and version) this window already put up. */
   let toldRecording: string | null = null
   /** Bumped per join/leave so a stale async step never touches a newer call. */
   let callGen = 0
@@ -575,6 +599,9 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         relayOnly: false,
         connectedAt: phase === 'connected' ? deps.now() : null,
         participants: [],
+        recording: null,
+        recordingNotice: null,
+        recordingPerms: null,
       },
     })
     drawNativeParticipants()
@@ -595,17 +622,18 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       engine = null
       clearNativeCall()
       store.setState({ call: null })
-      if (s.reason !== 'left') notice(callEndedText(s.reason, c.roomName, c.serverLabel, true), 'error')
+      // Not answering K2's recording notice in time (Sew drops the person): a plain end, not an error.
+      if (s.reason !== 'left') notice(callEndedText(s.reason, c.roomName, c.serverLabel, true), s.reason === 'recording_consent_timeout' ? 'info' : 'error')
       void refreshRooms(c.hostKey)
       return
     }
     if (s.state === 'consent_required') {
-      // A join held for the recording notice (plugin 0.2.0+). The K2 app has
-      // no consent sheet yet, and no answer is never a yes: give it up. This
-      // window's own join says why itself (joinNative).
+      // A join held for the recording notice: no mic, no media until the
+      // person answers K2's notice (the `recording` event carries it). No
+      // answer is never a yes, and Sew drops a silent person in K2's rooms.
       if (nativeJoining) return
       const held = store.getState().call
-      if (held) void endCall(callGen, 'recording_consent_required', { tellServer: true, toast: true })
+      if (held && held.phase !== 'joining') store.setState({ call: { ...held, phase: 'joining' } })
       return
     }
     const c = store.getState().call
@@ -615,7 +643,11 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     }
     followNativeRoom(s.room)
     const now = store.getState().call ?? c
-    if (s.state === 'connected') store.setState({ call: { ...now, phase: 'connected', connectedAt: now.connectedAt ?? deps.now() } })
+    if (s.state === 'connected') {
+      store.setState({ call: { ...now, phase: 'connected', connectedAt: now.connectedAt ?? deps.now() } })
+      // A held join that the person answered: now in the room, read what they may do.
+      if (!now.recordingPerms) void readRecordingPerms()
+    }
     else if (s.state === 'reconnecting') store.setState({ call: { ...now, phase: 'reconnecting' } })
     else if (now.phase !== 'joining') store.setState({ call: { ...now, phase: 'connecting' } })
   }
@@ -664,13 +696,87 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     else console.warn(`[voice] engine says: ${code}`)
   }
 
-  /** A recording in this person's call (plugin 0.2.0+). They stay unrecorded
-   *  (`pending`): the K2 app can't answer the notice yet. Say so once. */
+  /** The person's own Sew permissions in the call's room, for Record and
+   *  Stop (Sew 0.9.0's plugin has no `can_record` / `can_stop` until 0.9.2). */
+  const readRecordingPerms = async (): Promise<void> => {
+    const c = store.getState().call
+    const read = deps.api.recordingControls
+    if (!c || !read) return
+    const gen = callGen
+    try {
+      const perms = await read(deps.scopeFor(c.hostKey), c.roomId)
+      const now = store.getState().call
+      if (gen === callGen && now) store.setState({ call: { ...now, recordingPerms: perms } })
+    } catch (err) {
+      console.warn('[voice] reading the recording controls failed:', err)
+    }
+  }
+
+  /** The call's recording (plugin 0.2.0+): the badge while there is one, and
+   *  K2's notice while this person hasn't answered it. Joining or staying is
+   *  the person's answer, given on the notice: nothing here answers for them. */
   const onNativeRecording = (r: NativeRecording | null): void => {
     const c = store.getState().call
-    if (!r || !c || r.myConsent !== 'pending' || toldRecording === r.recordingId) return
-    toldRecording = r.recordingId
-    notice(recordingStartedText(c.roomName), 'info')
+    if (!c) return
+    const changed = (c.recording?.recordingId ?? null) !== (r?.recordingId ?? null)
+    let recordingNotice = c.recordingNotice
+    if (r && r.myConsent === 'pending' && r.prompt) {
+      const key = `${r.recordingId}:${r.prompt.noticeVersion}`
+      if (toldRecording !== key || !recordingNotice) {
+        toldRecording = key
+        recordingNotice = { recordingId: r.recordingId, prompt: r.prompt, ask: c.phase === 'joining' ? 'join' : 'in_call' }
+      }
+    } else if (!r || r.myConsent !== 'pending') {
+      recordingNotice = null
+    }
+    store.setState({ call: { ...c, recording: r, recordingNotice } })
+    if (changed) void readRecordingPerms()
+  }
+
+  const answerRecordingNotice = async (answer: 'ok' | 'leave'): Promise<void> => {
+    const c = store.getState().call
+    const n = native
+    if (!c?.recordingNotice) return
+    const shown = c.recordingNotice
+    store.setState({ call: { ...c, recordingNotice: null } })
+    if (answer === 'leave' || !n) {
+      await leave('left')
+      return
+    }
+    try {
+      await n.consent(true, shown.prompt.noticeVersion)
+    } catch (err) {
+      const e = err instanceof NativeVoiceError ? err : null
+      console.warn('[voice] recording answer failed:', err)
+      const now = store.getState().call
+      // Still in the call (or still held): ask again, never assume a yes.
+      if (now) store.setState({ call: { ...now, recordingNotice: shown } })
+      notice(e?.code === 'not_in_call' ? 'That call ended.' : "K2 couldn't send your answer to the recording notice. Try again, or leave the call.", 'error')
+    }
+  }
+
+  const recordingCommand = async (what: 'start' | 'stop'): Promise<void> => {
+    const n = native
+    if (!n || !store.getState().call) return
+    try {
+      if (what === 'start') await n.startRecording()
+      else await n.stopRecording()
+    } catch (err) {
+      const code = err instanceof NativeVoiceError ? err.code : 'failed'
+      console.warn(`[voice] ${what} recording failed:`, err)
+      notice(
+        code === 'recording_required'
+          ? 'This room records every call with more than one person, so its recording keeps going while two or more are here.'
+          : code === 'recording_active'
+            ? 'This call is already being recorded.'
+            : code === 'recording_disabled'
+              ? "Recording is off on this server."
+              : what === 'start'
+                ? "K2 couldn't start recording this call."
+                : "K2 couldn't stop the recording.",
+        'error',
+      )
+    }
   }
 
   const nativeEvents: NativeEvents = {
@@ -797,6 +903,9 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         relayOnly: false,
         connectedAt: null,
         participants: [],
+        recording: null,
+        recordingNotice: null,
+        recordingPerms: null,
       },
     })
     const target = deps.targetFor?.(hostKey) ?? null
@@ -831,11 +940,9 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         return
       }
       if (phase === 'consent_required') {
-        // Held for the recording notice: no answer is never a yes, and the K2
-        // app can't send one yet. Give the join up and say why.
-        failJoin(gen, 'recorded_room', room, label)
-        clearNativeCall()
-        await n.leave().catch((err: unknown) => console.warn('[voice] leave failed:', err))
+        // Held for the recording notice: the call waits for the person's
+        // answer to K2's notice (OK joins, recorded; "Don't join" gives up).
+        store.setState({ call: { ...c, callId: callId || null, phase: 'joining' } })
         void refreshRooms(hostKey)
         return
       }
@@ -850,6 +957,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       drawNativeParticipants()
       if (store.getState().call?.micDenied) notice(MIC_DENIED_LINE, 'error', true)
       void refreshRooms(hostKey)
+      void readRecordingPerms()
     } catch (err) {
       failNativeJoin(gen, err, room, label, hostKey)
     } finally {
@@ -884,6 +992,9 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         relayOnly: false,
         connectedAt: null,
         participants: [],
+        recording: null,
+        recordingNotice: null,
+        recordingPerms: null,
       },
     })
     const scope = deps.scopeFor(hostKey)
@@ -1059,6 +1170,9 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     engine: () => engine,
     loadDevices,
     openMicSettings,
+    answerRecordingNotice,
+    startRecording: () => recordingCommand('start'),
+    stopRecording: () => recordingCommand('stop'),
     start() {
       started = true
       void loadNativeEngine()

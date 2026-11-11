@@ -51,4 +51,6 @@ mod voice_chat_role_integration;
 mod voice_contract_fake_sew;
 #[cfg(unix)]
 mod voice_occupancy_fake_sew;
+#[cfg(unix)]
+mod voice_transcripts_fake_sew;
 mod workspace_msg_integration;

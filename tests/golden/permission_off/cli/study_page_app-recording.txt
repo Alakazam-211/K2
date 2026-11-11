@@ -75,9 +75,9 @@ SERVER POLICIES  k2 hostchat recording policy [set KEY VALUE]:
   recording.required (off|multi_person), recording.audio_max_days. The
   owner or an Admin, in person; recording.required the owner only.
 
-K5 ROOMS (this server's own voice rooms): k2 voice settings. Its "require
-recording" switch stays hidden in Settings and is refused
-(client_consent_missing) until K2's desktop app answers consent prompts.
+K5 ROOMS (this server's own voice rooms): k2 voice settings. There people
+are told, not asked: K2's notice is OK or leave. Agents read those rooms'
+transcripts on their own switch (k2 study voice-rooms), not server_read.
 
 THE RECORDINGS THEMSELVES (holds, exports, deleting one): Sew's own admin,
 which the owner opens with k2 hostchat open. Uninstalling an App never

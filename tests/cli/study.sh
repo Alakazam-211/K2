@@ -937,7 +937,7 @@ rec_out="$("$K2" study app-recording)"
 for needle in "ALL OFF BY DEFAULT" "Each person in a call answers their own notice" "k2 app recording <app> set" \
     "k2 permission request apps.recording app=<app> server-read=on" "OWNER ONLY" "An Admin's Allow doesn't count" \
     "recordings.list" "recordings.get" "recordings.transcript" "recordings.events" "recording_server_read_off" \
-    "k2 hostchat app-space recording-lock <space-id> on|off" "CUI or FCI" "client_consent_missing" "k2 hostchat open" \
+    "k2 hostchat app-space recording-lock <space-id> on|off" "CUI or FCI" "are told, not asked" "k2 hostchat open" \
     "Uninstalling an App never" "home_client_cannot_govern"; do
     assert_contains "app-recording names $needle" "$rec_out" "$needle"
 done
@@ -946,6 +946,20 @@ if [ "$rec_lines" -le 90 ]; then echo "  PASS: app-recording is bounded ($rec_li
 assert_contains "catalog: app-recording row" "$("$K2" study)" "  app-recording       Recording in an App's calls"
 assert_contains "usage lists app-recording" "$("$K2" study --help)" "app-transfers  app-recording"
 assert_contains "catalog --json: app-recording" "$("$K2" study --json)" '"id":"app-recording"'
+assert_absent "app-recording: K5 recording no longer waits" "$rec_out" "client_consent_missing"
+echo "== k2 study voice-rooms: Record, Stop and call transcripts (0.46.11) =="
+vr_out="$("$K2" study voice-rooms)"
+for needle in "people are told, not asked" "POST /cli/voice/recording/start" "voice_chat_not_allowed" "Read call transcripts" \
+    "k2 voice recordings [--room <room>]" "k2 voice transcript <id>" "k2 voice transcripts subscribe <room> <workspace>" \
+    "Every read is logged" "Agents on this server may read the transcript." "transcripts_read_off" \
+    "k2 permission request voice.transcripts-read" "owner_token_cannot_read"; do
+    assert_contains "voice-rooms names $needle" "$vr_out" "$needle"
+done
+vt_schema="$("$K2" --schema)"
+for needle in '"name": "voice recordings"' '"name": "voice transcript"' '"name": "voice transcripts"' "k2 voice transcripts [list] [--room <room>] | subscribe <room> <workspace>"; do
+    assert_contains "schema names $needle" "$vt_schema" "$needle"
+done
+assert_absent "schema: K5 recording no longer waits" "$vt_schema" "client_consent_missing"
 
 echo "== --help exit 0; bad flag exit 2 =="
 set +e

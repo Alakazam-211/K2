@@ -3,5 +3,5 @@
   "identifier": "sew-voice",
   "description": "Native voice and video calls for K2 UI webviews (not Browser pane children). Read only with the native-voice feature (build.rs).",
   "webviews": ["main", "window-*", "focus-*"],
-  "permissions": ["sew-voice:default", "sew-voice:call-details", "sew-voice:video"]
+  "permissions": ["sew-voice:default", "sew-voice:call-details", "sew-voice:video", "sew-voice:recording"]
 }

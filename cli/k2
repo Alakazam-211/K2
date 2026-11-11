@@ -12299,6 +12299,32 @@ recording_not_found · 422 not_in_voice (join the call first) · 422
 recording_not_active (it ended) · 409 consent_notice_changed (the notice
 changed after it was shown: show details.consent_prompt, with its new
 notice_version, and ask again) · 503 recording_unavailable (retry).
+In these rooms people are told, not asked (0.46.11): K2's notice is OK
+(records you) or Leave call, never "join without being recorded". Someone
+who doesn't answer within a minute is dropped (recording_consent_timeout).
+Record and Stop: POST /cli/voice/recording/start {"room": "room-1"} and
+POST /cli/voice/recording/stop {"recordingId": "77"}, a person's own login
+(a Voice & Chat only login: voice_chat_not_allowed); Sew decides who may.
+
+CALL TRANSCRIPTS (after a call; agents need "Read call transcripts", the
+owner's switch, off by default). Only this server's own rooms: an App's
+Spaces keep their own rule (k2 study app-recording).
+  k2 voice recordings [--room <room>]     ids, room, when, transcript ready
+  k2 voice transcript <id> [--after <line-id>]
+                                          the text, a page at a time
+  k2 voice transcripts [--room <room>]    who may read, who each room tells
+  k2 voice transcripts subscribe <room> <workspace>
+                                          a note in that agent's inbox when a
+                                          recording in <room> has its transcript
+  k2 voice transcripts unsubscribe <room> <workspace>
+  k2 voice transcripts reads [--recording <id>]   the read log (owner/Admin)
+Every read is logged (who, which recording, how many lines). While any
+agent holds the switch, each person's recording notice says:
+  "Agents on this server may read the transcript."
+Without the switch you get transcripts_read_off; ask once and wait:
+  k2 permission request voice.transcripts-read --why "review our calls"
+The bare owner token lists but never reads a transcript
+(owner_token_cannot_read): read it from an owner or Admin login.
 
 REFUSALS. room_full · room_closing · room_not_found · host_not_pro ·
 voice_unavailable (details.engine media_path_down = the voice lane is
@@ -12413,9 +12439,9 @@ SERVER POLICIES  k2 hostchat recording policy [set KEY VALUE]:
   recording.required (off|multi_person), recording.audio_max_days. The
   owner or an Admin, in person; recording.required the owner only.
 
-K5 ROOMS (this server's own voice rooms): k2 voice settings. Its "require
-recording" switch stays hidden in Settings and is refused
-(client_consent_missing) until K2's desktop app answers consent prompts.
+K5 ROOMS (this server's own voice rooms): k2 voice settings. There people
+are told, not asked: K2's notice is OK or leave. Agents read those rooms'
+transcripts on their own switch (k2 study voice-rooms), not server_read.
 
 THE RECORDINGS THEMSELVES (holds, exports, deleting one): Sew's own admin,
 which the owner opens with k2 hostchat open. Uninstalling an App never
@@ -48600,7 +48626,10 @@ cmd_schema() {
     {"name": "hostchat deliveries", "usage": "k2 hostchat deliveries [list] [<workspace>] | set <workspace> [--quiet-hours …] [--tz …] [--batch …] | reset <workspace> [--json]", "description": "Every chat agent's delivery hub: running, cursor, held, delivered and missed counts, prefs and follows. set/reset change a workspace's prefs (reset also clears its follows' --batch). Manage Chat / Voice Hosting (agents) or owner/admin; audited (GET /cli/sew/admin/deliveries, POST /set, /reset).", "args": [], "flags": []},
     {"name": "hostchat log", "usage": "k2 hostchat log [--limit N] [--json]", "description": "Chat administration record: access grants and changes, community management and on-behalf reviews (no message text). GET /cli/sew/admin/log.", "args": [], "flags": []},
     {"name": "voice", "usage": "k2 voice <rooms|status|repair|set rooms <0-10>|settings|rename|close|join|leave|kick|mute|unmute|deafen|undeafen> ... [--now] [--json]", "description": "Voice rooms on this server (a preview; Linux servers with Pro host them; people talk from the K2 app). rooms: the rooms and who is in each (anyone, agents too). status: hosting state and why, the K5 Space, members, sync holds, the voice lane (owner/Admin; agents read it). repair: check the K5 Space with Sew and fix it (make it and its rooms again if Sew lost them, re-link rooms, re-add members, retry refused changes; safe to run twice; owner/Admin, or an agent with Manage Chat / Voice Hosting). set rooms, rename, close: owner/Admin (rooms close from the top; --now gives a 10 s notice, then calls end). join/leave: your own login only (the CLI has no audio; agents and the bare owner token never join). kick|mute|unmute|deafen|undeafen <room> <person>: from the owner's or an Admin's own login. GET /cli/voice/rooms, /cli/voice/status; POST /cli/voice/settings, /rooms/rename, /rooms/close, /join, /session/leave, /moderate, /repair. Exit 2 = bad usage, 3 = refused or unavailable. k2 study voice-rooms.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON (any subcommand)."}, {"name": "--now", "arg": null, "description": "set rooms / close: close now (a 10 s notice, then calls end)."}]},
-    {"name": "voice settings", "usage": "k2 voice settings [--start-level none|moderator|member|inherit] [--require-recording on|off|inherit] [--json]", "description": "Recording in the K5 rooms (Sew 0.9.0; POST /cli/voice/recording/settings, read through GET /cli/voice/status .recording); no flags: show it. --start-level: owner/Admin. --require-recording: the owner only, and refused (client_consent_missing) until K2's desktop app can answer a recording consent prompt. inherit = the server's own rule. Each person still consents.", "args": [], "flags": []},
+    {"name": "voice settings", "usage": "k2 voice settings [--start-level none|moderator|member|inherit] [--require-recording on|off|inherit] [--json]", "description": "Recording in the K5 rooms (Sew 0.9.0; POST /cli/voice/recording/settings, read through GET /cli/voice/status .recording); no flags: show it. --start-level: owner/Admin. --require-recording: the owner only. inherit = the server's own rule. In these rooms people are told, not asked: K2's notice is OK or leave, and someone who doesn't answer within a minute is dropped.", "args": [], "flags": []},
+    {"name": "voice recordings", "usage": "k2 voice recordings [--room <room>] [--after <id>] [--limit N] [--json]", "description": "The recordings of this server's own voice rooms (GET /cli/voice/recordings; Sew 0.9.0): id, room, when, what started it, whether the transcript is ready. No text. The owner, an Admin, an agent with Read call transcripts (or Manage Chat / Voice Hosting); others get transcripts_read_off. An App's Spaces are not included. k2 study voice-rooms.", "args": [], "flags": []},
+    {"name": "voice transcript", "usage": "k2 voice transcript <recording-id> [--after <line-id>] [--limit N] [--json]", "description": "One recording's transcript, a page at a time (GET /cli/voice/transcript?id=; next page: --after the last line's id). Every read is logged (who, the recording, how many lines). An agent needs Read call transcripts (the owner's switch; ask: k2 permission request voice.transcripts-read --why \"...\"); the owner's or an Admin's own login reads; the bare owner token never does (owner_token_cannot_read). Only this server's own rooms (an App's recording: not_found).", "args": [{"name": "recording-id", "required": true}], "flags": []},
+    {"name": "voice transcripts", "usage": "k2 voice transcripts [list] [--room <room>] | subscribe <room> <workspace> | unsubscribe <room> <workspace> | reads [--recording <id>] [--json]", "description": "Who may read this server's call transcripts, and which agents each room tells (GET /cli/voice/transcripts). subscribe: a note in that agent's inbox when a recording in the room has its transcript, with the id and how to read it (POST /cli/voice/transcripts/subscribe; the owner, an Admin, or the agent itself; the agent needs Read call transcripts). reads: the read log (GET /cli/voice/transcripts/reads; owner/Admin).", "args": [], "flags": []},
     {"name": "chat", "usage": "k2 chat <spaces|channels|messages|read|unread|mark-read|ack|wait|whoami|send|post|reply|dm|edit|delete|outbox|follow|unfollow|prefs|deliveries|access|channel|space|role|ban|unban|timeout|mute> ...", "description": "Chat inside Spaces, for agents (Chat / Voice Hosting, powered by Sew; runs as the agent's own Sew member; id + locked tool, so a K2 terminal sends its passport). Levels per Space: read < reply < send < manage; a Space may queue every post for approval (out_…, exit 0). Server admin is k2 hostchat. Exit 0 ok (incl. queued), 1 error, 2 usage or wait timeout, 3 not allowed here.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON (any subcommand)."}]},
     {"name": "chat send", "usage": "k2 chat send|post <space>/<channel> \"text\"|- [--on-behalf-of <user>] [--key K] [--json]", "description": "Post to a channel (POST /cli/sew/chat/send). Prints msg_… when posted or out_… when queued for approval. --on-behalf-of <user>: you speak for the person you assist; the post is yours, goes out at once (unless the Space holds every post) and they can review it later. --key: idempotency key; re-run with the same key after an error so nothing double-posts. - reads the text from stdin.", "args": [], "flags": []},
     {"name": "chat reply", "usage": "k2 chat reply <msg_…> \"text\"|- [--broadcast] [--on-behalf-of <user>] [--key K] [--json]", "description": "Reply under a message (replying to a reply answers in the same chain). --broadcast also shows it in the channel; fine at level reply.", "args": [], "flags": []},
@@ -74450,11 +74479,34 @@ server can't host, and lets the owner or an Admin change them. Read
                                       start a recording (none = nobody, the default;
                                       owner/Admin). --require-recording on: every call
                                       with two or more people is recorded (the owner
-                                      only). It is refused (client_consent_missing)
-                                      until K2's desktop app can answer a recording
-                                      consent prompt. Each person still consents for
-                                      themselves. inherit = the server's own rule
+                                      only). In these rooms people are told, not asked:
+                                      the notice is OK or leave, and someone who
+                                      doesn't answer in a minute is dropped.
+                                      inherit = the server's own rule
                                       (k2 hostchat recording policy)
+
+Call transcripts (after a call; k2 study voice-transcripts):
+  k2 voice recordings [--room <room>] the K5 rooms' recordings, newest page first
+                                      (ids, room, when, transcript ready or not; no text)
+  k2 voice transcript <recording-id> [--after <line-id>] [--limit N]
+                                      one recording's transcript, a page at a time
+                                      (next page: --after the last line's id). Every
+                                      read is logged with who read it
+  k2 voice transcripts [--room <room>]
+                                      who may read them, and which agents each room
+                                      sends its transcripts to
+  k2 voice transcripts subscribe <room> <workspace>
+  k2 voice transcripts unsubscribe <room> <workspace>
+                                      a note in that agent's inbox when a recording in
+                                      <room> has its transcript (the owner, an Admin,
+                                      or the agent itself; the agent needs "Read call
+                                      transcripts")
+  k2 voice transcripts reads [--recording <id>]
+                                      the read log (owner/Admin)
+  Agents read only with "Read call transcripts" on (the owner's switch; ask
+  with k2 permission request voice.transcripts-read --why "…"). The bare
+  owner token lists but never reads a transcript (owner_token_cannot_read):
+  read from your own owner or Admin login.
 
 Agents: read only (rooms, status). Every change, join, consent and
 moderation refuses an agent's passport (owner_or_admin_only,
@@ -74611,8 +74663,44 @@ elif verb == "settings":
     print("require recording:  %s" % ("inherit (the server'"'"'s rule)" if req is None else ("on" if req else "off")))
     if rec.get("locked"):
         print("LOCKED: no recording in the K5 rooms (CUI/FCI); only the owner lifts it, in person")
-    if not rec.get("consentSheet"):
-        print("--require-recording waits for K2'"'"'s desktop app to answer recording consent prompts (client_consent_missing until then)")
+    if rec.get("agentReaders"):
+        print("transcripts:        agents on this server may read them (each person'"'"'s notice says so; k2 voice transcripts)")
+elif verb == "recordings":
+    items = v.get("recordings") or []
+    if not items:
+        print("no recordings in this server'"'"'s voice rooms")
+    for r in items:
+        ready = "transcript ready" if r.get("transcriptReady") else "transcript %s" % (r.get("transcriptState") or "not ready")
+        print("  %-20s %-10s %-20s %s  %s" % (r.get("id"), r.get("room") or r.get("channelId"), r.get("startedAt"), r.get("trigger"), ready))
+    if v.get("next"):
+        print("more: k2 voice recordings --after %s" % v["next"])
+    if items and v.get("canRead"):
+        print("read one: k2 voice transcript <id>")
+elif verb == "transcript":
+    r = v.get("recording") or {}
+    print("Recording %s in %s, started %s (%s)" % (r.get("id"), r.get("roomName") or r.get("room"), r.get("startedAt"), "transcript ready" if r.get("transcriptReady") else "transcript still being written"))
+    lines = v.get("lines") or []
+    if not lines:
+        print("  (no lines on this page)")
+    for t in lines:
+        ms = int(t.get("startMs") or 0) // 1000
+        print("[%02d:%02d] %s: %s" % (ms // 60, ms % 60, t.get("speaker"), t.get("text")))
+    if v.get("next"):
+        print("more: k2 voice transcript %s --after %s" % (r.get("id"), v["next"]))
+    print("(this read is logged)")
+elif verb in ("transcripts", "subscribe"):
+    if verb == "subscribe":
+        print("%s %s" % (v.get("agent"), ("now gets this room'"'"'s transcripts" if v.get("on") else "no longer gets this room'"'"'s transcripts") + ("" if v.get("changed") else " (already so)")))
+    rd = v.get("readers") or []
+    print("agents that may read transcripts: %s" % (", ".join(rd) if rd else "none (Read call transcripts is off for every agent)"))
+    for r in v.get("rooms") or []:
+        print("  %-8s %-24s sends to: %s" % (r.get("room"), r.get("name"), ", ".join(r.get("sendTo") or []) or "nobody"))
+elif verb == "reads":
+    rows = v.get("reads") or []
+    if not rows:
+        print("no transcript reads logged")
+    for x in rows:
+        print("  %s  %-28s recording %s, %s line(s)" % (x.get("at"), x.get("reader"), x.get("recordingId"), x.get("lines")))
 elif verb == "consent":
     if v.get("consent"):
         print("recording %s: you said yes; it records you" % v.get("recordingId"))
@@ -74627,11 +74715,15 @@ cmd_voice() {
     if [ $# -eq 0 ]; then _voice_usage; return 0; fi
     local sub="$1"; shift
     case "$sub" in -h|--help|help) _voice_usage; return 0 ;; esac
-    local as_json=0 now=0 call="" notice="" rec_req="" rec_level="" pos=()
+    local as_json=0 now=0 call="" notice="" rec_req="" rec_level="" vt_room="" vt_after="" vt_limit="" vt_rec="" pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; shift ;;
             --now) now=1; shift ;;
+            --room) vt_room="${2:?--room <room>}"; shift 2 ;;
+            --after) vt_after="${2:?--after <id>}"; shift 2 ;;
+            --limit) vt_limit="${2:?--limit N}"; shift 2 ;;
+            --recording) vt_rec="${2:?--recording <id>}"; shift 2 ;;
             --call) call="${2:?--call <callId>}"; shift 2 ;;
             --notice) notice="${2:?--notice <version>}"; shift 2 ;;
             --require-recording) rec_req="${2:?--require-recording on|off|inherit}"; shift 2 ;;
@@ -74652,7 +74744,50 @@ cmd_voice() {
     if { [ -n "$rec_req" ] || [ -n "$rec_level" ]; } && [ "$sub" != "settings" ]; then
         _voice_bad "--require-recording and --start-level only apply to k2 voice settings"
     fi
+    if { [ -n "$vt_room" ] || [ -n "$vt_after" ] || [ -n "$vt_limit" ] || [ -n "$vt_rec" ]; } && \
+        [ "$sub" != "recordings" ] && [ "$sub" != "transcript" ] && [ "$sub" != "transcripts" ]; then
+        _voice_bad "--room, --after, --limit and --recording only apply to k2 voice recordings, transcript and transcripts"
+    fi
+    for _vt in "$vt_after" "$vt_limit" "$vt_rec"; do
+        case "$_vt" in *[!0-9]*) _voice_bad "--after, --limit and --recording are whole numbers" ;; esac
+    done
+    local vt_q=""
+    [ -n "$vt_room" ] && vt_q="${vt_q}&room=$(urlencode "$vt_room")"
+    [ -n "$vt_after" ] && vt_q="${vt_q}&after=${vt_after}"
+    [ -n "$vt_limit" ] && vt_q="${vt_q}&limit=${vt_limit}"
     case "$sub" in
+        recordings)
+            [ "$n" -eq 0 ] || _voice_bad "k2 voice recordings [--room <room>]"
+            [ -z "$vt_after$vt_rec" ] || [ -z "$vt_rec" ] || _voice_bad "--recording only applies to k2 voice transcripts reads"
+            _hostchat_call GET /cli/voice/recordings "${vt_q#&}"
+            _voice_print recordings "$as_json" ;;
+        transcript)
+            [ "$n" -eq 1 ] || _voice_bad "k2 voice transcript <recording-id> [--after <line-id>] [--limit N]"
+            case "${pos[0]}" in ''|*[!0-9]*) _voice_bad "the recording id is a number (k2 voice recordings lists them)" ;; esac
+            [ -z "$vt_room$vt_rec" ] || _voice_bad "k2 voice transcript takes --after and --limit"
+            _hostchat_call GET /cli/voice/transcript "id=${pos[0]}${vt_q}"
+            _voice_print transcript "$as_json" ;;
+        transcripts)
+            local tsub="${pos[0]:-list}"
+            case "$tsub" in
+                list)
+                    [ "$n" -le 1 ] || _voice_bad "k2 voice transcripts [--room <room>]"
+                    _hostchat_call GET /cli/voice/transcripts "${vt_q#&}"
+                    _voice_print transcripts "$as_json" ;;
+                subscribe|unsubscribe)
+                    [ "$n" -eq 3 ] || _voice_bad "k2 voice transcripts $tsub <room> <workspace>"
+                    local onb=1; [ "$tsub" = "unsubscribe" ] && onb=0
+                    _hostchat_call POST /cli/voice/transcripts/subscribe "$(_compute_json K2_CJ_room="${pos[1]}" K2_CJ_agent="${pos[2]}" K2_CJ_on_b="$onb")"
+                    _voice_print subscribe "$as_json" ;;
+                reads)
+                    [ "$n" -eq 1 ] || _voice_bad "k2 voice transcripts reads [--recording <id>]"
+                    local rq=""
+                    [ -n "$vt_rec" ] && rq="id=${vt_rec}"
+                    [ -n "$vt_limit" ] && rq="${rq:+$rq&}limit=${vt_limit}"
+                    _hostchat_call GET /cli/voice/transcripts/reads "$rq"
+                    _voice_print reads "$as_json" ;;
+                *) _voice_bad "k2 voice transcripts [list|subscribe|unsubscribe|reads]" ;;
+            esac ;;
         settings)
             # Sew 0.9.0: the K5 rooms' recording. Read through voice/status.
             [ "$n" -eq 0 ] || _voice_bad "k2 voice settings [--start-level none|moderator|member|inherit] [--require-recording on|off|inherit]"

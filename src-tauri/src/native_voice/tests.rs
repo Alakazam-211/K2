@@ -744,3 +744,72 @@ fn the_app_ships_each_crates_notice() {
         assert!(conf.contains(&format!("../resources/notices/{krate}-NOTICE")), "{krate} isn't in bundle.resources");
     }
 }
+
+// ── recording: consent, Record and Stop (Sew 0.9.0, K-g) ─────────────
+
+/// Sew's recording as the person sees it (the daemon's `recording`).
+fn sew_recording() -> Value {
+    json!({"id": "42", "channel_id": "901", "state": "recording", "started_by": "7", "started_at": "2026-11-10T13:00:00Z",
+           "auto": false, "trigger": "manual", "message_id": "5", "mixed": true, "audio_keep_days": 0, "max_duration_ms": 0,
+           "participants": [], "my_consent": "granted"})
+}
+
+fn sent_body(req: &str) -> Value {
+    serde_json::from_str(req.split("\r\n\r\n").nth(1).expect("body")).expect("json")
+}
+
+/// The person's answer to a notice reaches `/cli/voice/recording/consent`
+/// with their saved login, and Sew's recording comes back to the engine.
+#[tokio::test]
+async fn consent_posts_the_answer_with_the_saved_login() {
+    let (base, mut seen) = fake_daemon(vec![(200, json!({"ok": true, "recordingId": "42", "consent": true, "recording": sew_recording()}))]).await;
+    let p = provider_for(&base);
+    let answer: tauri_plugin_sew_voice::ConsentAnswer =
+        serde_json::from_value(json!({"target": "host-1", "room": "room-1", "recording_id": "42", "consent": true, "notice_version": 3141}))
+            .expect("an answer");
+    let rec = p.consent(answer).await.unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(rec.id.to_string(), "42");
+    let got = seen.recv().await.expect("the request");
+    assert!(got.starts_with("POST /cli/voice/recording/consent HTTP/1.1\r\n"), "{got}");
+    assert!(got.contains(&format!("authorization: Bearer {LOGIN_TOKEN}")), "{got}");
+    assert_eq!(sent_body(&got), json!({"recording_id": "42", "consent": true, "notice_version": 3141}));
+}
+
+/// Record and Stop call the daemon's routes, Record by the room, Stop by the
+/// recording; Sew's refusal comes back as its code.
+#[tokio::test]
+async fn record_and_stop_call_the_daemons_routes() {
+    let refusal = json!({"ok": false, "code": "recording_required", "error": {"code": "recording_required", "hint": "h",
+        "details": {"sew": {"details": {"reason": "recording_required"}}}}});
+    let (base, mut seen) = fake_daemon(vec![
+        (200, json!({"ok": true, "action": "started", "recording": sew_recording()})),
+        (200, json!({"ok": true, "action": "stopped", "recording": sew_recording()})),
+        (422, refusal),
+    ])
+    .await;
+    let p = provider_for(&base);
+    let start: tauri_plugin_sew_voice::RecordingRequest =
+        serde_json::from_value(json!({"target": "host-1", "room": "room-1", "action": "start"})).expect("start");
+    let stop: tauri_plugin_sew_voice::RecordingRequest =
+        serde_json::from_value(json!({"target": "host-1", "room": "room-1", "action": "stop", "recording_id": "42"})).expect("stop");
+    p.recording(start).await.unwrap_or_else(|e| panic!("{e}"));
+    let got = seen.recv().await.expect("record");
+    assert!(got.starts_with("POST /cli/voice/recording/start HTTP/1.1\r\n"), "{got}");
+    assert_eq!(sent_body(&got), json!({"room": "room-1"}));
+    p.recording(stop.clone()).await.unwrap_or_else(|e| panic!("{e}"));
+    let got = seen.recv().await.expect("stop");
+    assert!(got.starts_with("POST /cli/voice/recording/stop HTTP/1.1\r\n"), "{got}");
+    assert_eq!(sent_body(&got), json!({"recordingId": "42"}));
+    match p.recording(stop).await {
+        Err(ProviderError::Refused { code, .. }) => assert_eq!(code, "recording_required"),
+        other => panic!("a required room's Stop is refused by name: {other:?}"),
+    }
+}
+
+/// The plugin's Record and Stop are their own permission set; K2's
+/// renderer knows the two command names.
+#[test]
+fn the_recording_commands_are_the_plugins() {
+    let f = fixture();
+    assert_eq!(f["recordingCommands"], json!(tauri_plugin_sew_voice::RECORDING_COMMANDS));
+}

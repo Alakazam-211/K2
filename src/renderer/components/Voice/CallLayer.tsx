@@ -32,6 +32,7 @@ import type { CallPerson } from '@/lib/voice/video-labels'
 import CallTile, { useCallVideoLive } from './CallTile'
 import VideoStage from './VideoStage'
 import CallExpanded from './CallExpanded'
+import RecordingNotice from './RecordingNotice'
 import { CALL_PANEL_ICON, CallPanelButton } from './CallControls'
 import { MicIcon, MicOffIcon, PhoneOffIcon } from '@/components/icons/K2Icons'
 
@@ -74,6 +75,18 @@ export const callActions = {
   setMuted: (m: boolean) => voice.setMuted(m),
   setDeafened: (d: boolean) => voice.setDeafened(d),
   leave: () => voice.leave(),
+  startRecording: () => voice.startRecording(),
+  stopRecording: () => voice.stopRecording(),
+}
+
+/** K2's recording notice, in every window, video or not. */
+function NoticeLayer({ call }: { call: VoiceCall }): React.JSX.Element | null {
+  const agentReaders = useVoice((s) => s.rooms[call.hostKey]?.list?.agentReaders === true)
+  if (!call.recordingNotice) return null
+  return createPortal(
+    <RecordingNotice call={call} agentReaders={agentReaders} onAnswer={(a) => void voice.answerRecordingNotice(a)} />,
+    document.body,
+  )
 }
 
 function InCall({ call }: { call: VoiceCall }): React.JSX.Element | null {
@@ -159,6 +172,12 @@ export default function CallLayer(): React.JSX.Element | null {
   // Whether the call's window is open, followed from the first render (it
   // may have opened before this window did).
   useEffect(() => (callWindow ? undefined : watchCallPopout()), [callWindow])
-  if (callWindow || !call || !native || !preview) return null
-  return <InCall call={call} />
+  const notice = call && native ? <NoticeLayer call={call} /> : null
+  if (callWindow || !call || !native || !preview) return notice
+  return (
+    <>
+      {notice}
+      <InCall call={call} />
+    </>
+  )
 }

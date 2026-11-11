@@ -1,6 +1,8 @@
 //! K2's `JoinProvider`: this person's saved login → `POST /cli/voice/join` on
 //! the hosting daemon → Sew's join answer, for the engine (prd-k2-voice-rooms-v1
-//! §14.4; vs-live V30).
+//! §14.4; vs-live V30). The person's answer to a recording notice goes to
+//! `POST /cli/voice/recording/consent`, their Record and Stop (Sew 0.9.0) to
+//! `POST /cli/voice/recording/start|stop`, the same way.
 //!
 //! No product logic: no room state, no logging in (a refused login answers
 //! `signin_required`, and the renderer's login coordinator signs in again), no
@@ -14,7 +16,10 @@
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tauri_plugin_sew_voice::{BoxFuture, ConsentRequired, JoinAnswer, JoinProvider, JoinRequest, ProviderError};
+use tauri_plugin_sew_voice::sew_call_client::Recording;
+use tauri_plugin_sew_voice::{
+    BoxFuture, ConsentAnswer, ConsentRequired, JoinAnswer, JoinProvider, JoinRequest, ProviderError, RecordingControl, RecordingRequest,
+};
 
 /// The longest a daemon can take to answer a join (`voice/bff.rs`: a
 /// reconnecting lane, a level sync, the member gate and Sew's answer add up to
@@ -82,11 +87,106 @@ impl<L: LoginSource> K2Provider<L> {
         };
         answer_from(status, retry_after, &bytes, &login)
     }
+
+    /// `POST <base>/cli/voice/<route>` with this person's login, for the
+    /// recording routes: `(status, Retry-After secs, body, login)`.
+    async fn post_person(&self, target: &str, route: &str, body: Value) -> Result<(u16, Option<u64>, Vec<u8>, Login), ProviderError> {
+        if target == LOCAL_TARGET {
+            return Err(refused("owner_token_cannot_join", "this computer's K2 has no login of yours to answer with"));
+        }
+        let logins = std::sync::Arc::clone(&self.logins);
+        let t = target.to_string();
+        let login = tokio::task::spawn_blocking(move || logins.login(&t))
+            .await
+            .map_err(|_| ProviderError::Other("reading the saved login failed".into()))??;
+        let url = format!("{}/cli/voice/{route}", login.base_url);
+        let res = match self.http.post(&url).bearer_auth(&login.token).json(&body).send().await {
+            Ok(r) => r,
+            Err(e) if e.is_timeout() => return Err(refused("join_timeout", "the server didn't answer in time")),
+            Err(_) => return Err(ProviderError::Unavailable { retry_after_ms: None }),
+        };
+        let status = res.status().as_u16();
+        let retry_after = res.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
+        let bytes = res.bytes().await.map_err(|_| ProviderError::Unavailable { retry_after_ms: None })?;
+        Ok((status, retry_after, bytes.to_vec(), login))
+    }
+
+    async fn consent_inner(&self, answer: ConsentAnswer) -> Result<Recording, ProviderError> {
+        let (status, retry, body, login) = self.post_person(&answer.target, "recording/consent", consent_body(&answer)).await?;
+        recording_from(status, retry, &body, &login)
+    }
+
+    async fn recording_inner(&self, req: RecordingRequest) -> Result<Recording, ProviderError> {
+        let (route, body) = recording_body(&req)?;
+        let (status, retry, bytes, login) = self.post_person(&req.target, route, body).await?;
+        recording_from(status, retry, &bytes, &login)
+    }
 }
 
 impl<L: LoginSource> JoinProvider for K2Provider<L> {
     fn join(&self, req: JoinRequest) -> BoxFuture<'_, Result<JoinAnswer, ProviderError>> {
         Box::pin(self.join_inner(req))
+    }
+
+    fn consent(&self, answer: ConsentAnswer) -> BoxFuture<'_, Result<Recording, ProviderError>> {
+        Box::pin(self.consent_inner(answer))
+    }
+
+    fn recording(&self, req: RecordingRequest) -> BoxFuture<'_, Result<Recording, ProviderError>> {
+        Box::pin(self.recording_inner(req))
+    }
+}
+
+/// `POST /cli/voice/recording/consent`'s body (`voice/bff.rs` `consent_body`).
+pub fn consent_body(a: &ConsentAnswer) -> Value {
+    let mut b = json!({ "recording_id": a.recording_id.to_string(), "consent": a.consent });
+    if let Some(v) = a.notice_version {
+        b["notice_version"] = json!(v);
+    }
+    b
+}
+
+/// Record → `recording/start {room}`; Stop → `recording/stop {recordingId}`.
+/// The daemon maps the room (a slug, or Sew's channel id after a move) to
+/// the channel itself.
+pub fn recording_body(req: &RecordingRequest) -> Result<(&'static str, Value), ProviderError> {
+    match (req.action, req.recording_id) {
+        (RecordingControl::Start, _) => Ok(("recording/start", json!({ "room": req.room }))),
+        (RecordingControl::Stop, Some(id)) => Ok(("recording/stop", json!({ "recordingId": id.to_string() }))),
+        (RecordingControl::Stop, None) => Err(refused("no_recording", "there is no recording to stop")),
+        _ => Err(refused("recording_unsupported", "this K2 doesn't know that recording action")),
+    }
+}
+
+/// The daemon's answer to a consent, Record or Stop: `{ok, recording}` →
+/// Sew's recording; a changed notice → [`ProviderError::ConsentRequired`];
+/// a refusal → its code (Sew's reason kept in `details`).
+pub fn recording_from(status: u16, retry_after_secs: Option<u64>, body: &[u8], login: &Login) -> Result<Recording, ProviderError> {
+    match status {
+        200 => {
+            let v: Value = serde_json::from_slice(body).map_err(|_| ProviderError::Other("the server's recording answer did not parse".into()))?;
+            let rec = v.get("recording").filter(|r| r.is_object()).ok_or_else(|| ProviderError::Other("the server's answer carried no recording".into()))?;
+            let bytes = serde_json::to_vec(rec).map_err(|_| ProviderError::Other("the server's recording answer did not parse".into()))?;
+            ConsentAnswer::recording_from_json(&bytes)
+        }
+        401 => Err(ProviderError::SigninRequired),
+        _ => {
+            let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            if let Some(c) = consent_required(&v) {
+                return Err(ProviderError::ConsentRequired(Box::new(c)));
+            }
+            match v.pointer("/error/code").or_else(|| v.get("code")).and_then(Value::as_str) {
+                Some(code) => {
+                    let hint = v.pointer("/error/hint").or_else(|| v.get("hint")).cloned().unwrap_or(Value::Null);
+                    let details = v.pointer("/error/details").or_else(|| v.get("details")).cloned().unwrap_or(Value::Null);
+                    Err(ProviderError::Refused { code: code.to_string(), detail: clean_detail(json!({ "hint": hint, "details": details }), &login.token) })
+                }
+                None if matches!(status, 429 | 502 | 503 | 504) => {
+                    Err(ProviderError::Unavailable { retry_after_ms: retry_after_secs.map(|s| s.saturating_mul(1000)) })
+                }
+                None => Err(ProviderError::Other(format!("the server answered {status}"))),
+            }
+        }
     }
 }
 

@@ -292,6 +292,9 @@ fn the_floors_are_the_codes() {
     // 0.46.11 (Rosson): only the Owner turns "Manage the org chart" on; an
     // Admin may turn it off.
     assert_eq!((floor("organization.manage"), floor("organization.manage-off")), (Floor::Owner, Floor::Admin));
+    // 0.46.11 (Rosson): only the Owner turns "Read call transcripts" on; an
+    // Admin may turn it off.
+    assert_eq!((floor("voice.transcripts-read"), floor("voice.transcripts-read-off")), (Floor::Owner, Floor::Admin));
 }
 
 /// Each catalog wall is one lane C's walls map teaches (same action, same
@@ -314,9 +317,6 @@ fn the_walls_match_the_refusals() {
     // 0.46.9: and the agent's own `k2 compute access on` (the switch's route).
     assert_eq!(code("compute.use"), ["compute_off", "forbidden"]);
     assert_eq!(code("organization.manage"), ["org_manage_off"]);
-    // 0.46.11 (Rosson): only the Owner turns "Read call transcripts" on; an
-    // Admin may turn it off.
-    assert_eq!((floor("voice.transcripts-read"), floor("voice.transcripts-read-off")), (Floor::Owner, Floor::Admin));
     assert_eq!(code("voice.transcripts-read"), ["transcripts_read_off"]);
     assert_eq!(code("compute.operate"), ["operate_off"]);
     assert_eq!(code("compute.manage"), ["owner_only"]);

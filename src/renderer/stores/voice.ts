@@ -17,7 +17,7 @@ import { isWebClient } from '@/lib/is-web'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { onVoiceRoomsChanged } from '@/stores/session-events'
 import { useToastStore } from '@/stores/toast'
-import { fetchVoiceRooms, joinVoiceRoom, leaveVoiceCall, sendVoiceSelfState } from '@/lib/voice/voice-api'
+import { fetchRecordingControls, fetchVoiceRooms, joinVoiceRoom, leaveVoiceCall, sendVoiceSelfState } from '@/lib/voice/voice-api'
 import { makeVoiceEngine } from '@/lib/voice/voice-engine'
 import { NativeVoiceEngine, type NativeStatus, type NativeVoiceBridge } from '@/lib/voice/native-voice-engine'
 import { setUpdateInstallGuard } from '@/stores/update'
@@ -132,6 +132,7 @@ export const voice = createVoiceController({
     join: joinVoiceRoom,
     leave: leaveVoiceCall,
     selfState: sendVoiceSelfState,
+    recordingControls: fetchRecordingControls,
   },
   makeEngine: makeVoiceEngine,
   toast: (text, kind) => useToastStore.getState().addToast(text, kind === 'error' ? 'error' : 'info'),

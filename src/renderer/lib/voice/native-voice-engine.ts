@@ -44,15 +44,41 @@ export type NativeCallState = NativeCallPlace &
     | { state: 'ended'; reason: string }
   )
 
+/** The notice's slots K2's own notice shows (Sew's `ConsentPrompt`). */
+export interface NativeConsentPrompt {
+  /** Echoed in the answer: a changed notice is asked again. */
+  noticeVersion: number
+  /** Who started it (absent for a room that records by itself). */
+  startedByName: string | null
+  /** 0 = deleted once the transcript is final. */
+  audioKeepDays: number
+  /** The room records every call with two or more people. */
+  required: boolean
+  /** Apps whose servers can read the transcript. */
+  appReaders: string[]
+  /** Sew's own "agents in this channel can read the transcript". */
+  agentReaders: boolean
+  /** `join_unrecorded` or `not_join` (K2's own rooms are `not_join`). */
+  declineMode: string
+}
+
 /** The `recording` event (plugin 0.2.0+): the call's active recording, or null
- *  once none is active. Only what K2 reads today. This device is recorded only
- *  after Sew says `granted`: no answer is never consent. */
+ *  once none is active. This device is recorded only after Sew says
+ *  `granted`: no answer is never consent. */
 export interface NativeRecording {
   recordingId: string
   /** `pending`, `granted`, `declined` or `withdrawn`. */
   myConsent: string
   /** The recorder (Sew Notes) is in the call's media now. */
   recorderPresent: boolean
+  /** Sew 0.9.0: `manual`, `auto` or `required` (`manual` when absent). */
+  trigger: string
+  /** Sew 0.9.0: the room requires its recording (Stop is refused with 2+). */
+  required: boolean
+  /** Sew's member id of the person who started it. */
+  startedBy: string | null
+  /** The notice, while `myConsent` is `pending`. */
+  prompt: NativeConsentPrompt | null
 }
 
 /** No names here: the media token and call keys carry none (the rooms list does). */
@@ -149,13 +175,37 @@ export function parseCallState(v: unknown): NativeCallState {
   throw badShape('state', v)
 }
 
+export function parsePrompt(v: unknown): NativeConsentPrompt | null {
+  const p = record(v)
+  if (!p) return null
+  if (typeof p.notice_version !== 'number') throw badShape('consent prompt', v)
+  const started = record(p.started_by)
+  return {
+    noticeVersion: p.notice_version,
+    startedByName: typeof started?.display_name === 'string' && started.display_name !== '' ? started.display_name : null,
+    audioKeepDays: typeof p.audio_keep_days === 'number' ? p.audio_keep_days : 0,
+    required: p.required === true,
+    appReaders: Array.isArray(p.app_readers) ? p.app_readers.filter((x): x is string => typeof x === 'string') : [],
+    agentReaders: p.agent_readers === true,
+    declineMode: typeof p.decline_mode === 'string' ? p.decline_mode : 'join_unrecorded',
+  }
+}
+
 export function parseRecording(v: unknown): NativeRecording | null {
   if (v === null) return null
   const r = record(v)
   if (!r || typeof r.recording_id !== 'string' || typeof r.my_consent !== 'string' || typeof r.recorder_present !== 'boolean') {
     throw badShape('recording', v)
   }
-  return { recordingId: r.recording_id, myConsent: r.my_consent, recorderPresent: r.recorder_present }
+  return {
+    recordingId: r.recording_id,
+    myConsent: r.my_consent,
+    recorderPresent: r.recorder_present,
+    trigger: typeof r.trigger === 'string' ? r.trigger : 'manual',
+    required: r.required === true,
+    startedBy: typeof r.started_by === 'string' ? r.started_by : null,
+    prompt: parsePrompt(r.consent_prompt),
+  }
 }
 
 export function parseParticipants(v: unknown): NativeParticipant[] {
@@ -290,5 +340,21 @@ export class NativeVoiceEngine {
 
   async setDevice(change: { input?: string; output?: string }): Promise<void> {
     await this.command<null>('set_device', change)
+  }
+
+  /** The person's answer to the recording notice they saw (`noticeVersion`).
+   *  A held join then joins; mid-call, Sew records them from here on. */
+  async consent(granted: boolean, noticeVersion: number): Promise<void> {
+    await this.command<null>('consent', { granted, notice_version: noticeVersion })
+  }
+
+  /** Record (Sew 0.9.0, permission set `sew-voice:recording`). */
+  async startRecording(): Promise<void> {
+    await this.command<null>('start_recording')
+  }
+
+  /** Stop the room's recording (Sew refuses `recording_required` with 2+ in a required room). */
+  async stopRecording(): Promise<void> {
+    await this.command<null>('stop_recording')
   }
 }

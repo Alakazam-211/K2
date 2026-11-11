@@ -78,6 +78,9 @@ export interface VoiceRoomsList {
   canManage: boolean
   /** The daemon's occupancy follower is live, so `occupants` is current. */
   feedLive: boolean
+  /** 0.46.11: an agent on this server may read the rooms' transcripts, so
+   *  K2's recording notice says so. */
+  agentReaders?: boolean
 }
 
 function str(v: unknown): string | null {
@@ -127,13 +130,14 @@ export function parseVoiceRooms(body: unknown): VoiceRoomsList {
   if (!body || typeof body !== 'object' || !Array.isArray((body as { rooms?: unknown }).rooms)) {
     throw new Error('voice/rooms: not a rooms list')
   }
-  const b = body as { rooms: unknown[]; hosting?: unknown; rev?: unknown; canManage?: unknown; feed?: unknown }
+  const b = body as { rooms: unknown[]; hosting?: unknown; rev?: unknown; canManage?: unknown; feed?: unknown; agentReaders?: unknown }
   return {
     hosting: parseHosting(b.hosting),
     rooms: b.rooms.map(parseRoom).filter((r): r is VoiceRoom => r !== null),
     rev: typeof b.rev === 'number' && Number.isFinite(b.rev) ? b.rev : null,
     canManage: b.canManage === true,
     feedLive: b.feed === 'live',
+    agentReaders: b.agentReaders === true,
   }
 }
 
@@ -268,7 +272,8 @@ const CODE_OF: Readonly<Record<string, VoiceErrorCode>> = {
   unauthenticated: 'signin_required',
   owner_token_cannot_join: 'owner_token_cannot_join',
   // Sew 0.7.3: the room is recorded and the join carried no answer to its
-  // notice. The K2 app has no consent sheet yet, so it can't send one.
+  // notice. The K2 app answers it on its own notice; a window without the
+  // app's engine (the web client) can't show one.
   recording_consent_required: 'recorded_room',
   recording_consent_required_to_join: 'recorded_room',
 }
@@ -412,23 +417,20 @@ export function callEndedText(reason: string, roomName: string, serverLabel: str
     case 'recording_withdrawn':
       return `You left ${roomName}: you stopped being recorded, and this room needs everyone recorded.`
     case 'recording_consent_timeout':
-      return `You left ${roomName}: it's recorded, and no answer to the recording notice came in time.`
+      // Rosson 2026-11-10: a plain ended state, not an error.
+      return "You left the call because you didn't answer the recording notice."
     case 'recording_consent_required':
-      return `The call to ${roomName} ended: it's now recorded, and the K2 app can't answer recording notices yet.`
+      return `The call to ${roomName} ended: it's now recorded. Join again to see its recording notice.`
     default:
       return `The call to ${roomName} ended.`
   }
 }
 
-/** A join into a recorded room. Sew asks each person first, and no answer is
- *  never a yes; the K2 app can't answer the notice yet. */
+/** A join into a recorded room from a window without the K2 app's call
+ *  engine (the web client): it can't show the recording notice, and no answer
+ *  is never a yes. The K2 app shows the notice and joins. */
 export function recordedRoomJoinText(roomName: string): string {
-  return `${roomName} is being recorded. The K2 app can't answer recording notices yet, so you weren't joined.`
-}
-
-/** A recording started in this person's call. They stay in it, unrecorded. */
-export function recordingStartedText(roomName: string): string {
-  return `Someone started recording ${roomName}. You aren't recorded: the K2 app can't answer recording notices yet.`
+  return `${roomName} is being recorded. Join it from the K2 app, which shows the recording notice first.`
 }
 
 /** The system refused the mic: the person stays in the call and can listen. */

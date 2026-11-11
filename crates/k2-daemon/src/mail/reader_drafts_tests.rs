@@ -408,3 +408,82 @@ async fn d7_agents_cant_use_the_reader_draft_routes() {
         assert!(fx.fake.state.lock().unwrap().envelopes.is_empty());
     });
 }
+
+/// D8: a draft in a Microsoft 365 inbox linked over Microsoft Graph is shown
+/// but never editable, even when K2 knows where it sits: the reader marks it
+/// read-only with the Outlook hint, and save, send and discard answer 409
+/// before anything reaches the mailbox. Keyed off the backend (`kind =
+/// 'graph'`), not the provider label.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn d8_a_microsoft_graph_draft_is_read_only() {
+    let fx = Fx::start().await;
+    let inbox_id: String = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE mail_external_inboxes SET kind = 'graph', provider = 'microsoft' WHERE email_address = ?1",
+            rusqlite::params![fx.linked_addr],
+        )
+        .expect("the linked inbox speaks Microsoft Graph");
+        conn.query_row(
+            "SELECT id FROM mail_external_inboxes WHERE email_address = ?1",
+            rusqlite::params![fx.linked_addr],
+            |r| r.get(0),
+        )
+        .expect("the linked inbox row")
+    };
+    let row = crate::mail::drafts::DraftRow {
+        id: crate::mail::drafts::new_id(),
+        source: crate::mail::access::Source::Linked,
+        inbox_id,
+        address: fx.linked_addr.clone(),
+        project_id: fx.ws_id.clone(),
+        reply_of: fx.linked_tok.clone(),
+        thread_ref: None,
+        in_reply_to: None,
+        refs: None,
+        // K2 knows where it is: before D8's fix that alone made it editable.
+        backend_ref: Some("graph:AAMkDraft".to_string()),
+        author_kind: "agent".to_string(),
+        author: fx.ws_id.clone(),
+        author_label: "outlook-bot".to_string(),
+        created_at: 100,
+        edited_at: 100,
+        edited_by: None,
+        state: crate::mail::drafts::STATE_OPEN.to_string(),
+        state_at: None,
+        state_by: None,
+        outbound_id: None,
+    };
+    crate::mail::drafts::insert(&row).expect("record the Graph draft");
+    block(|| {
+        let list = rget(&fx, OWNER, "drafts", &[("inbox", &fx.linked_addr)]);
+        assert_eq!(list.status, 200, "{}", list.body);
+        let d = json(&list)["drafts"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no drafts: {}", list.body))
+            .iter()
+            .find(|d| d["id"] == serde_json::json!(row.id))
+            .cloned()
+            .unwrap_or_else(|| panic!("the Graph draft is listed: {}", list.body));
+        assert_eq!(d["editable"], false, "only Outlook edits a Graph draft: {d}");
+        assert_eq!(d["hint"], "This draft can only be edited in Outlook.", "{d}");
+        let mine = agent_view(&fx, &row.id);
+        assert_eq!(mine["editable"], false, "the agent's view agrees: {mine}");
+
+        for route in ["draft-save", "draft-send", "draft-discard"] {
+            let r = rpost(
+                &fx,
+                OWNER,
+                route,
+                serde_json::json!({ "id": row.id, "to": ["ada@example.com"], "cc": [], "subject": "Re: hi", "body": "x" }),
+            );
+            assert_eq!(r.status, 409, "{route}: {}", r.body);
+            assert_eq!(json(&r)["error"]["code"], "not_editable", "{route}: {}", r.body);
+            assert_eq!(json(&r)["error"]["hint"], "This draft can only be edited in Outlook.", "{route}: {}", r.body);
+        }
+        let still = crate::mail::drafts::load(&row.id).expect("the record stays");
+        assert_eq!(still.state, crate::mail::drafts::STATE_OPEN, "nothing ended it");
+        assert_eq!(still.backend_ref.as_deref(), Some("graph:AAMkDraft"), "nothing moved it");
+    });
+}

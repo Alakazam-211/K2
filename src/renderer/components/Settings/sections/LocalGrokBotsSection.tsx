@@ -7,15 +7,28 @@
 //   - Show: detect Grok Bot on that server's computer, list its agents in
 //     Agents (tagged "Grok Bot") and read their chats.
 //   - Send: let people send messages to them from K2. Each message runs a
-//     billed Grok turn and speaks as the person who sends it.
+//     billed Grok turn and speaks as the person who sends it. Turning it on
+//     asks first.
 // Before Show is on, an admin sees what K2 found (the folder and the agent
-// names) so nothing is read without knowing what it is.
+// names) so nothing is read without knowing what it is. A Member sees the
+// switches as plain On / Off, with one line saying who can change them.
 
 import React, { useCallback, useEffect, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
-import { SettingsGroup } from '../controls/SettingControls'
-import { Toggle } from '@/components/ui/Toggle'
+import {
+  SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
+  SaveError,
+  SaveNote,
+  SettingSwitchRow,
+  SettingsGroup,
+  SettingsLoadState,
+  useSaveStatus,
+} from '../controls/SettingControls'
+import { Button, Tag, Toggle } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
+import { daemonErrorText } from '@/lib/daemon-error'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import {
   detectGrokBots,
   fetchGrokSettings,
@@ -24,6 +37,7 @@ import {
   type GrokSettings,
 } from '@/lib/grokbots'
 import { useGrokBotsStore } from '@/stores/grokbots'
+import { StatusDot, type HealthTone } from './ConnectionsParts'
 
 export const LOCAL_GROKBOTS_MANIFEST: SettingEntry[] = [
   {
@@ -32,7 +46,7 @@ export const LOCAL_GROKBOTS_MANIFEST: SettingEntry[] = [
     label: 'Show Grok Bots',
     description: 'Detect Grok Bot agents on this server and show their chats in Agents and Home',
     keywords: ['grok', 'grok bot', 'grokbot', 'sand', 'agents', 'external', 'detect', 'local'],
-    group: 'Local Grok Bots',
+    group: 'What K2 may do',
   },
   {
     id: 'grokbots.send',
@@ -40,166 +54,275 @@ export const LOCAL_GROKBOTS_MANIFEST: SettingEntry[] = [
     label: 'Send to Grok Bots',
     description: 'Let people send messages to Grok Bot agents from K2 (billed Grok turns)',
     keywords: ['grok', 'grok bot', 'grokbot', 'send', 'message', 'billed'],
-    group: 'Local Grok Bots',
+    group: 'What K2 may do',
   },
 ]
 
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+export const GROK_READ_ONLY_LINE = 'Only the server’s owner or an admin can change these.'
+const SHOW_LABEL = 'Show Grok Bot agents'
+const SEND_LABEL = 'Let people message them'
+
+const PAGE = 'w-full max-w-[52rem] space-y-6 pb-6'
+
+/** "Scout", "Scout and Ledger", "Scout, Ledger and Atlas". */
+function andList(names: string[]): string {
+  if (names.length <= 1) return names.join('')
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
 }
 
-function Row({
-  settingId,
+function Header({ readOnly }: { readOnly: boolean }): React.JSX.Element {
+  return (
+    <header className="min-w-0">
+      <h2 className="type-title text-[var(--color-text-primary)] flex items-center gap-2">
+        Grok Bot
+        {readOnly && <Tag tone="muted">View only</Tag>}
+      </h2>
+      <p className={`${SETTING_ROW_HINT} mt-1`}>
+        Show Grok Bot agents from this server’s computer in Agents and on your Homes, tagged Grok Bot. Off until you turn
+        it on.
+      </p>
+      {readOnly && (
+        <p className="type-hint text-[var(--color-text-primary)] mt-1" data-testid="grokbots-settings-readonly">
+          {GROK_READ_ONLY_LINE}
+        </p>
+      )}
+    </header>
+  )
+}
+
+/** A status row: a dot, a short title, one line and an optional action. */
+function StatusRow({
+  tone,
   title,
-  hint,
   children,
+  action,
+  testId,
 }: {
-  settingId: string
+  tone: HealthTone
   title: string
-  hint: React.ReactNode
   children: React.ReactNode
+  action?: React.ReactNode
+  testId?: string
 }): React.JSX.Element {
   return (
-    <div
-      className="flex items-center justify-between gap-4 py-2 border-b border-[var(--color-border)]"
-      data-settings-id={settingId}
-    >
-      <div className="min-w-0">
-        <div className="type-row text-[var(--color-text-primary)]">{title}</div>
-        <div className="type-hint text-[var(--color-text-muted)]">{hint}</div>
+    <div className="px-4 py-3" data-testid={testId} data-tone={tone}>
+      <div className="flex items-start justify-between gap-6">
+        <div className="min-w-0">
+          <div className={`${SETTING_ROW_LABEL} flex items-center gap-2`}>
+            <StatusDot tone={tone} />
+            <span>{title}</span>
+          </div>
+          <div className={SETTING_ROW_HINT}>{children}</div>
+        </div>
+        {action && <div className="flex items-center gap-2 flex-shrink-0">{action}</div>}
       </div>
-      <div className="flex-shrink-0">{children}</div>
     </div>
   )
 }
 
+/** A switch a Member can see but not change: plain On / Off on its edge. */
+function ReadOnlySwitch({ on, label }: { on: boolean; label: string }): React.JSX.Element {
+  return (
+    <span aria-label={label} data-readonly-value="" className="type-row text-[var(--color-text-primary)]">
+      {on ? 'On' : 'Off'}
+    </span>
+  )
+}
+
+const PATH = 'font-mono break-words text-[var(--color-text-primary)]'
+
 export function LocalGrokBotsSection(): React.JSX.Element {
   const [settings, setSettings] = useState<GrokSettings | null>(null)
-  const [found, setFound] = useState<GrokDetection | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [saveError, setSaveError] = useState<string | null>(null)
+  const [found, setFound] = useState<GrokDetection | null>(null)
+  const [findError, setFindError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const showSave = useSaveStatus()
+  const sendSave = useSaveStatus()
 
-  useEffect(() => {
-    let cancelled = false
-    const scope = primaryScope()
-    fetchGrokSettings(scope).then(
+  // The preview is an admin read (folder + names, no chat, no token).
+  const look = useCallback((): void => {
+    setFound(null)
+    setFindError(null)
+    detectGrokBots(primaryScope()).then(setFound, (e: unknown) => setFindError(daemonErrorText(e)))
+  }, [])
+
+  const load = useCallback((): void => {
+    setSettings(null)
+    setLoadError(null)
+    fetchGrokSettings(primaryScope()).then(
       (s) => {
-        if (cancelled) return
         setSettings(s)
-        // The preview is an admin read (folder + names, no chat, no token).
-        if (s.canEdit) {
-          detectGrokBots(scope).then(
-            (d) => !cancelled && setFound(d),
-            () => {},
-          )
-        }
+        if (s.canEdit) look()
       },
-      (e: unknown) => !cancelled && setLoadError(errorText(e)),
+      (e: unknown) => setLoadError(daemonErrorText(e)),
     )
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  }, [look])
 
-  const save = useCallback(async (change: { show?: boolean; send?: boolean }): Promise<void> => {
-    setBusy(true)
-    setSaveError(null)
-    try {
-      const scope = primaryScope()
-      setSettings(await saveGrokSettings(scope, change))
-      void useGrokBotsStore.getState().refresh(scope)
-    } catch (e) {
-      setSaveError(errorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }, [])
+  useEffect(() => load(), [load])
 
-  const canEdit = settings?.canEdit === true
+  const save = useCallback(
+    async (change: { show?: boolean; send?: boolean }, status: ReturnType<typeof useSaveStatus>): Promise<void> => {
+      setBusy(true)
+      try {
+        const scope = primaryScope()
+        setSettings(await saveGrokSettings(scope, change))
+        status.saved()
+        void useGrokBotsStore.getState().refresh(scope)
+      } catch (e) {
+        status.failed(daemonErrorText(e))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [],
+  )
+
+  const flipSend = async (next: boolean): Promise<void> => {
+    if (next) {
+      const ok = await useConfirmDialogStore.getState().confirm({
+        title: 'Let people message Grok Bot agents?',
+        message:
+          'The owner and admins can then send messages to Grok Bot agents from K2. Each message runs a billed Grok turn and is sent as the person typing. You can turn this off at any time.',
+        confirmLabel: 'Turn on sending',
+      })
+      if (!ok) return
+    }
+    await save({ send: next }, sendSave)
+  }
+
+  if (!settings) {
+    return (
+      <div className={PAGE} data-testid="local-grokbots-settings">
+        <Header readOnly={false} />
+        {loadError ? (
+          <SettingsLoadState
+            kind="error"
+            title="Couldn’t load the Grok Bot settings"
+            detail={loadError}
+            action={<Button onClick={load}>Try again</Button>}
+            testId="grokbots-load-error"
+          >
+            Nothing changed on this server; this page just couldn’t read it.
+          </SettingsLoadState>
+        ) : (
+          <SettingsLoadState kind="loading" title="Loading the Grok Bot settings…" testId="grokbots-loading" />
+        )}
+      </div>
+    )
+  }
+
+  const canEdit = settings.canEdit
   const locked = !canEdit || busy
 
+  const foundState = !canEdit ? undefined : findError ? (
+    <SettingsLoadState
+      kind="error"
+      title="Couldn’t check for Grok Bot"
+      detail={findError}
+      action={<Button onClick={look}>Try again</Button>}
+      testId="grokbots-find-error"
+    >
+      Nothing was read or changed; K2 just couldn’t look on this computer.
+    </SettingsLoadState>
+  ) : found === null ? (
+    <SettingsLoadState kind="loading" title="Looking for Grok Bot on this computer…" testId="grokbots-looking" />
+  ) : undefined
+
   return (
-    <div className="max-w-xl" data-testid="local-grokbots-settings">
-      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Grok Bot</h2>
-      <p className="type-hint text-[var(--color-text-muted)] mb-6">
-        Grok Bot agents running on this server's computer can show up in Agents and on your Homes, tagged
-        "Grok Bot". K2 reads only Grok Bot's agent list and their chats, for the user K2 runs as. Off until you
-        turn it on.
-      </p>
+    <div className={PAGE} data-testid="local-grokbots-settings">
+      <Header readOnly={!canEdit} />
 
-      <div className="space-y-6">
-        <SettingsGroup title="What K2 found">
-          {found === null && canEdit && <p className="type-hint text-[var(--color-text-muted)] py-2">Looking…</p>}
-          {found === null && settings && !canEdit && (
-            <p className="type-hint text-[var(--color-text-muted)] py-2">Only the owner or an admin can see this.</p>
-          )}
-          {found && !found.installed && (
-            <p data-testid="grokbots-not-found" className="type-hint text-[var(--color-text-muted)] py-2">
-              No Grok Bot here (looked in <code>{found.dataPath}</code>).
-            </p>
-          )}
-          {found && found.installed && (
-            <div data-testid="grokbots-found" className="py-2 type-hint text-[var(--color-text-secondary)]">
-              <div>
-                Grok Bot data in <code>{found.dataPath}</code>
-              </div>
-              <div className="mt-1">
-                {found.agents.length === 0
-                  ? 'No agents yet.'
-                  : `Agents: ${found.agents.map((a) => a.name).join(', ')}`}
-              </div>
-            </div>
-          )}
-        </SettingsGroup>
+      <SettingsGroup title="What K2 found" card state={foundState} testId="grokbots-found-group">
+        {!canEdit ? (
+          <StatusRow
+            tone={settings.show ? 'ok' : 'neutral'}
+            title={settings.show ? 'Grok Bot agents show on this server' : 'Grok Bot is off on this server'}
+            testId="grokbots-member-status"
+          >
+            {settings.show
+              ? 'Its agents and their chats appear in Agents and on your Homes, tagged Grok Bot.'
+              : 'Its agents and chats stay out of K2.'}
+          </StatusRow>
+        ) : found && found.installed ? (
+          <StatusRow tone="ok" title="Grok Bot is on this computer" testId="grokbots-found">
+            {found.agents.length === 0
+              ? 'No agents yet.'
+              : `${found.agents.length === 1 ? '1 agent' : `${found.agents.length} agents`}: ${andList(found.agents.map((a) => a.name))}.`}
+            <span className="block">
+              Its data is in <code className={PATH}>{found.dataPath}</code>.
+            </span>
+          </StatusRow>
+        ) : found ? (
+          <StatusRow
+            tone="neutral"
+            title="Grok Bot isn’t on this computer"
+            testId="grokbots-not-found"
+            action={<Button onClick={look}>Check again</Button>}
+          >
+            K2 looked in <code className={PATH}>{found.dataPath}</code> and found nothing. Install Grok Bot for the user K2
+            runs as, then check again.
+          </StatusRow>
+        ) : null}
+      </SettingsGroup>
 
-        <SettingsGroup title="Local Grok Bots">
-          {loadError && (
-            <p role="alert" className="type-hint text-[var(--color-status-error)] py-2">
-              Could not load this setting: {loadError}
-            </p>
-          )}
-          {!settings && !loadError && <p className="type-hint text-[var(--color-text-muted)] py-2">Loading…</p>}
-          {settings && (
-            <>
-              {!canEdit && (
-                <p data-testid="grokbots-settings-readonly" className="type-hint text-[var(--color-text-muted)] py-1">
-                  Only the owner or an admin can change these.
-                </p>
-              )}
-              <Row
-                settingId="grokbots.show"
-                title="Show"
-                hint="Detect Grok Bot, list its agents and read their chats. Agents and App guests never see them."
-              >
+      <SettingsGroup title="What K2 may do" card testId="grokbots-switches">
+        <SettingSwitchRow
+          settingId="grokbots.show"
+          control={
+            canEdit ? (
+              <>
+                <SaveNote state={showSave.state} />
                 <Toggle
-                  aria-label="Show Grok Bots"
+                  aria-label={SHOW_LABEL}
                   checked={settings.show}
                   disabled={locked}
-                  onChange={(v) => void save(v ? { show: true } : { show: false, send: false })}
+                  onChange={(v) => void save(v ? { show: true } : { show: false, send: false }, showSave)}
                 />
-              </Row>
-              <Row
-                settingId="grokbots.send"
-                title="Send"
-                hint="Let the owner and admins message Grok Bot agents from K2. Each message runs a billed Grok turn and is sent as the person typing."
-              >
+              </>
+            ) : (
+              <ReadOnlySwitch on={settings.show} label={SHOW_LABEL} />
+            )
+          }
+        >
+          <div className={SETTING_ROW_LABEL}>{SHOW_LABEL}</div>
+          <div className={SETTING_ROW_HINT}>
+            List its agents in Agents and on your Homes and read their chats, for the user K2 runs as. Agents and App guests
+            never see them.
+          </div>
+          <SaveError state={showSave.state} />
+        </SettingSwitchRow>
+        <SettingSwitchRow
+          settingId="grokbots.send"
+          control={
+            canEdit ? (
+              <>
+                <SaveNote state={sendSave.state} />
                 <Toggle
-                  aria-label="Send to Grok Bots"
+                  aria-label={SEND_LABEL}
                   checked={settings.send && settings.show}
                   disabled={locked || !settings.show}
-                  onChange={(v) => void save({ send: v })}
+                  onChange={(v) => void flipSend(v)}
                 />
-              </Row>
-            </>
-          )}
-          {saveError && (
-            <p role="alert" className="type-hint text-[var(--color-status-error)] py-2">
-              Could not save: {saveError}
-            </p>
-          )}
-        </SettingsGroup>
-      </div>
+              </>
+            ) : (
+              <ReadOnlySwitch on={settings.send && settings.show} label={SEND_LABEL} />
+            )
+          }
+        >
+          <div className={SETTING_ROW_LABEL}>{SEND_LABEL}</div>
+          <div className={SETTING_ROW_HINT}>
+            The owner and admins can message Grok Bot agents from K2. Each message runs a billed Grok turn and is sent as the
+            person typing.
+            {canEdit && !settings.show && (
+              <span className="block mt-1" data-testid="grokbots-send-needs-show">
+                Turn on {SHOW_LABEL} first.
+              </span>
+            )}
+          </div>
+          <SaveError state={sendSave.state} />
+        </SettingSwitchRow>
+      </SettingsGroup>
     </div>
   )
 }

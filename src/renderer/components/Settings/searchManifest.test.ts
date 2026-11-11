@@ -72,6 +72,34 @@ describe('section manifests', () => {
   })
 })
 
+describe('setting ids', () => {
+  // Every module the scan above reads, loaded for real, so the check sees
+  // the same *_MANIFEST arrays the palette spreads.
+  const modules = {
+    ...import.meta.glob<Record<string, unknown>>(['./sections/*.ts', './sections/*.tsx', '!./sections/*.test.*'], { eager: true }),
+    ...import.meta.glob<Record<string, unknown>>('../Projects/project-settings.ts', { eager: true }),
+  }
+
+  it('are unique across every section manifest, so a search result jumps to one row', () => {
+    const owners = new Map<string, string[]>()
+    let manifestCount = 0
+    for (const [file, mod] of Object.entries(modules)) {
+      for (const [name, value] of Object.entries(mod)) {
+        if (!name.endsWith('_MANIFEST')) continue
+        expect(Array.isArray(value), `${file} ${name}`).toBe(true)
+        manifestCount += 1
+        for (const e of value as SettingEntry[]) {
+          owners.set(e.id, [...(owners.get(e.id) ?? []), name])
+        }
+      }
+    }
+    // A glob that loads nothing would pass vacuously.
+    expect(manifestCount).toBeGreaterThan(40)
+    const duplicates = [...owners].filter(([, names]) => names.length > 1)
+    expect(duplicates).toEqual([])
+  })
+})
+
 describe('searchManifest ranking', () => {
   const entries: SettingEntry[] = [
     { id: 'a.desc', section: 'terminal', label: 'Cursor Style', description: 'How the font looks' },

@@ -1105,6 +1105,17 @@ mod unix_impl {
                 let who = crate::sources_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::sources_routes::handle(p, who, body, params))
             }
+            // 0.46.11: the K5 rooms' transcripts, as on TCP. The handler
+            // classifies this passport as its agent: with "Read call
+            // transcripts" it reads, without it transcripts_read_off (the
+            // card); listing, the read log and subscriptions keep their rules.
+            p if crate::voice::transcripts::is_route(p) => {
+                if body.len() > crate::voice::transcripts::MAX_BODY {
+                    return from_cli(crate::voice::routes::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::voice::transcripts::handle_blocking(p, &who, is_post, params, body))
+            }
             // Voice rooms (preview): a passport is an agent. The handler
             // answers dark, reads, or the agent refusals; it never needs the
             // owner token for a passport (every path that would refuses first).

@@ -555,6 +555,21 @@ fn reads(r: &Reader, params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+/// [`handle`] for the cell socket, whose verbs run on the blocking pool
+/// (`cell_server::dispatch_cell_verb`): the same handler, driven by the
+/// daemon's runtime from this thread. Off any runtime (a unit test calling
+/// the cell dispatch directly) it gets a small runtime of its own.
+pub fn handle_blocking(path: &str, who: &Who, is_post: bool, params: &HashMap<String, String>, body: &[u8]) -> CliResponse {
+    let fut = handle(path, who, is_post, params, body);
+    match tokio::runtime::Handle::try_current() {
+        Ok(h) => h.block_on(fut),
+        Err(_) => match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(rt) => rt.block_on(fut),
+            Err(e) => CliResponse::internal_error(format!("runtime: {e}")),
+        },
+    }
+}
+
 /// One `/cli/voice/recordings|transcript|transcripts*` call.
 pub async fn handle(path: &str, who: &Who, is_post: bool, params: &HashMap<String, String>, body: &[u8]) -> CliResponse {
     if !k2_core::voice_preview::enabled() {

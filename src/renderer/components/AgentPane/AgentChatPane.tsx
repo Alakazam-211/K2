@@ -78,6 +78,8 @@ import { useBrowserOverlay } from '@/lib/browser-overlay'
 import { harnessLabel, harnessOfCommand, movePinnedChat, movePinnedChatMessage, PINNED_HARNESSES } from '@/lib/pinned-harness'
 import { usePresetsStore } from '@/stores/presets'
 import { harnessMissingMessage, isMainChatMissing, MAIN_CHAT_MISSING_MESSAGE } from '@/lib/harness-missing'
+import { firstChatChoices, isHarnessNotInstalled, type FirstChatHarness } from '@/lib/first-chat-choice'
+import { FirstChatPicker } from './FirstChatPicker'
 
 interface AgentChatPaneProps {
   agentName: string
@@ -699,6 +701,9 @@ interface EnsurePinnedChatResponse {
   /** Fresh continue. Absent on older daemons, which must not be treated as a spawn. */
   freshSpawn?: boolean
 }
+// 0.46.11: a never-chatted agent on a server that has never had a pinned
+// chat answers 409 `harness_choice_needed` with the harnesses to pick from
+// (lib/first-chat-choice.ts); the pick goes back as `{project, harness}`.
 
 const FRESH_ARGV_REJECT = new Set(['--resume', '--fork-session', 'resume'])
 
@@ -746,7 +751,7 @@ async function watchFreshProviderId(opts: {
 async function ensurePinnedChat(
   scope: ServerScope,
   projectPath: string,
-  opts?: { forceRespawn?: boolean; restoredSessionId?: string; explicitSelection?: boolean; freshProvider?: string },
+  opts?: { forceRespawn?: boolean; restoredSessionId?: string; explicitSelection?: boolean; freshProvider?: string; harness?: string },
 ): Promise<EnsurePinnedChatResponse> {
   // host-aware POST (daemonCliPost). The daemon is authoritative;
   // restoredSessionId rides along ONLY as an offline hint (PRD §4.5 / D3).
@@ -760,6 +765,14 @@ async function ensurePinnedChat(
     return daemonCliPost<EnsurePinnedChatResponse>(scope, 'workspace/ensure-pinned-chat', {
       project: projectPath,
       freshProvider: opts.freshProvider,
+    })
+  }
+  // The first chat's pick: the daemon saves it as the agent's default and
+  // starts it (ignored once the agent has a pinned chat).
+  if (opts?.harness) {
+    return daemonCliPost<EnsurePinnedChatResponse>(scope, 'workspace/ensure-pinned-chat', {
+      project: projectPath,
+      harness: opts.harness,
     })
   }
   return daemonCliPost<EnsurePinnedChatResponse>(scope, 'workspace/ensure-pinned-chat', {
@@ -812,6 +825,8 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
     // `folderTrust`: the daemon refused because of the folder (409), so the
     // decision shows here instead of a Retry.
     | { kind: 'error'; message: string; folderTrust?: boolean }
+    // 0.46.11: the daemon waits for the person to pick the first chat's LLM.
+    | { kind: 'choose'; harnesses: FirstChatHarness[]; error: string | null }
   const [phase, setPhase] = useState<Phase>({ kind: 'ensuring' })
   const phaseRef = useRef(phase)
   phaseRef.current = phase
@@ -987,6 +1002,11 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         // just mounted once and is already on the right PTY.)
         if (forceRespawn) setAttachNonce((n) => n + 1)
       } catch (err) {
+        const choices = firstChatChoices(err)
+        if (choices) {
+          setPhase({ kind: 'choose', harnesses: choices, error: null })
+          return
+        }
         console.error('[AgentChatPane] ensure-pinned-chat failed:', err)
         const trustRefusal = folderTrustMessage(
           httpStatusOf(err) ?? 0,
@@ -1000,6 +1020,43 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
       }
     },
     [projectPath, restoredSessionId],
+  )
+
+  // The first chat's pick (0.46.11): the daemon saves it and starts the chat.
+  // Still asking (another pick raced it) or that CLI isn't installed: the
+  // list stays, with the reason. Any other refusal is the usual error.
+  const [startingHarness, setStartingHarness] = useState<string | null>(null)
+  const startFirstChat = useCallback(
+    async (harness: string): Promise<void> => {
+      setStartingHarness(harness)
+      try {
+        const res = await ensurePinnedChat(room.scope, projectPath, { harness })
+        attachedSessionIdRef.current = res.sessionId
+        setPhase({ kind: 'ready', sessionId: res.sessionId, canonicalSessionId: res.claudeSessionId })
+        const ensuredProvider = res.provider || providerKeyForCommand(res.command)
+        if (ensuredProvider) setLiveProvider(ensuredProvider)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const choices = firstChatChoices(err)
+        if (choices || isHarnessNotInstalled(err)) {
+          setPhase((prev) => ({
+            kind: 'choose',
+            harnesses: choices ?? (prev.kind === 'choose' ? prev.harnesses : []),
+            error: choices ? null : message,
+          }))
+          return
+        }
+        console.error('[AgentChatPane] first chat start failed:', err)
+        const trustRefusal = folderTrustMessage(
+          httpStatusOf(err) ?? 0,
+          JSON.stringify((err as { body?: unknown } | null)?.body ?? null),
+        )
+        setPhase({ kind: 'error', message: trustRefusal ?? message, folderTrust: trustRefusal !== null })
+      } finally {
+        setStartingHarness(null)
+      }
+    },
+    [projectPath, room.scope],
   )
 
   // The session isn't running and the folder may be why (K2 stopped it when
@@ -1308,6 +1365,26 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
         </div>
         ))}
         </OverlayTabBody>
+      </div>
+      </>
+    )
+  }
+
+  if (phase.kind === 'choose') {
+    // Every view shows the question: there is no chat or Thread yet.
+    return (
+      <>
+      {continueDialog}
+      <div ref={containerRef} className="relative h-full flex flex-col bg-[var(--color-bg)] overflow-hidden">
+        {header}
+        <FirstChatPicker
+          scope={room.scope}
+          harnesses={phase.harnesses}
+          starting={startingHarness}
+          error={phase.error}
+          onStart={(h) => void startFirstChat(h)}
+          onRecheck={() => void ensure(false)}
+        />
       </div>
       </>
     )

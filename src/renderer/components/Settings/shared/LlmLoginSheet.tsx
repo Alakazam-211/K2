@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import type { ServerScope } from '@/kessel/server-scope'
 import { DialogCloseButton, useDialogCancel } from '@/components/ui'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 import {
   addLogin,
   cancelLogin,
@@ -73,6 +74,10 @@ export function LlmLoginSheet({
   const canChangeDefault = useLlmAccountsStore((s) => s.entries[scope.id]?.doc?.canChangeDefault !== false)
   const loginRef = useRef<LlmLogin | null>(null)
   loginRef.current = login
+  // The Chat tab's first-chat list opens this sheet over a room too (0.46.11),
+  // where a Browser tab may be live: claim the window like a dialog.
+  const rootRef = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: true, ref: rootRef, fullscreen: true, kind: 'modal' })
 
   const done = login ? login.done || FINAL.has(login.state) : false
 
@@ -191,6 +196,7 @@ export function LlmLoginSheet({
 
   return (
     <div
+      ref={rootRef}
       className="fixed inset-0 z-[500] flex items-center justify-center bg-black/50 p-4"
       role="dialog"
       aria-modal="true"

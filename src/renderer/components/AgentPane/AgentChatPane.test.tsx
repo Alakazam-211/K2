@@ -20,7 +20,7 @@
 // args, onChildExit).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { act, render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import ContextMenu from '@/components/ContextMenu/ContextMenu'
 import { useEffect } from 'react'
@@ -1635,5 +1635,121 @@ describe('folder trust: the decision shows where the session would be', () => {
     await screen.findByText('Waiting for the owner to trust /ws.')
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
     expect(ensureBodies()).toHaveLength(1)
+  })
+})
+
+describe('0.46.11 — the first pinned chat asks which LLM to start', () => {
+  const HARNESSES = [
+    { harness: 'claude', label: 'Claude', installed: true, install: true, signedIn: false, signIn: true },
+    { harness: 'codex', label: 'Codex', installed: true, install: true, signedIn: true, signIn: true },
+    { harness: 'grok', label: 'Grok', installed: false, install: true, signedIn: false, signIn: true },
+  ]
+  const choiceNeeded = (): DaemonHttpError => {
+    const error = { code: 'harness_choice_needed', hint: 'Choose the LLM this agent\'s chat starts with.', harnesses: HARNESSES }
+    return new DaemonHttpError(error.hint, 409, error.code, error, { error })
+  }
+  const STARTED = {
+    sessionId: 'sess-codex',
+    claudeSessionId: '',
+    resumedExisting: false,
+    command: 'codex',
+    args: ['--yolo'],
+    cols: 80,
+    rows: 24,
+    reused: false,
+    provider: 'codex',
+    pendingSessionDiscovery: true,
+  }
+
+  let restorePost: ReturnType<typeof h.daemonCliPost.getMockImplementation>
+  let onPick: (body: Record<string, unknown>) => unknown
+  beforeEach(() => {
+    restorePost = h.daemonCliPost.getMockImplementation()
+    onPick = () => STARTED
+    h.daemonCliPost.mockImplementation(async (route: string, body?: unknown): Promise<unknown> => {
+      if (route === 'workspace/ensure-pinned-chat') {
+        const b = (body ?? {}) as Record<string, unknown>
+        if (typeof b.harness === 'string') return onPick(b)
+        throw choiceNeeded()
+      }
+      if (route === 'agents/ensure-cli') return { ok: true, installed: true }
+      return undefined
+    })
+  })
+  afterEach(() => {
+    h.daemonCliPost.mockImplementation(restorePost!)
+    localStorage.clear()
+  })
+
+  it('shows the harnesses instead of a chat, a shell or a failure, and starts nothing', async () => {
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await screen.findByTestId('first-chat-picker')
+    expect(screen.getByText('Choose the LLM this agent starts with')).toBeTruthy()
+    for (const h of HARNESSES) expect(screen.getByTestId(`first-chat-${h.harness}`)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Start with Claude' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Start with Codex' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start with Grok' })).toBeNull()
+    // Not signed in yet and K2 can sign it in: Sign in. Already signed in: none.
+    expect(screen.getByTestId('first-chat-claude').textContent).toContain('Sign in')
+    expect(screen.getByTestId('first-chat-codex').textContent).not.toContain('Sign in')
+    expect(screen.getByTestId('first-chat-grok').textContent).toContain('Install')
+    expect(screen.queryByTestId('terminal-pane')).toBeNull()
+    expect(screen.queryByText('Chat session failed to start')).toBeNull()
+    expect(ensureBodies()).toEqual([{ project: '/ws' }])
+  })
+
+  it('Thread view asks the same question', async () => {
+    localStorage.setItem('k2.newAgentView', JSON.stringify({ view: 'thread', left: 'terminal', right: 'thread' }))
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await screen.findByTestId('first-chat-picker')
+  })
+
+  it('Start sends the pick to the daemon and attaches the chat it starts', async () => {
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Start with Codex' }))
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    expect(lastEnsureCall()).toEqual({ project: '/ws', harness: 'codex' })
+    expect(screen.getByTestId('terminal-pane').getAttribute('data-sessionid')).toBe('sess-codex')
+    expect(screen.queryByTestId('first-chat-picker')).toBeNull()
+  })
+
+  it('a pick whose CLI is not installed stays on the list with the reason', async () => {
+    onPick = () => {
+      const error = { code: 'harness_not_installed', hint: "'codex' is not installed on this computer. Nothing has started yet.", harness: 'codex' }
+      throw new DaemonHttpError(error.hint, 409, error.code, error, { error })
+    }
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Start with Codex' }))
+    await screen.findByText("'codex' is not installed on this computer. Nothing has started yet.")
+    expect(screen.getByTestId('first-chat-picker')).toBeTruthy()
+    expect(screen.queryByTestId('terminal-pane')).toBeNull()
+  })
+
+  it('Install installs the CLI on the room\'s server, then asks the daemon again', async () => {
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await screen.findByTestId('first-chat-picker')
+    const row = screen.getByTestId('first-chat-grok')
+    fireEvent.click(within(row).getByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(ensureBodies()).toHaveLength(2))
+    const install = h.daemonCliPost.mock.calls.find((c) => c[0] === 'agents/ensure-cli')
+    expect(install?.[1]).toEqual({ program: 'grok' })
+  })
+
+  it('another viewer starting the chat replaces the list with that chat', async () => {
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await screen.findByTestId('first-chat-picker')
+    act(() => {
+      h.sessionHandlers.current!.onAdded!({ agent_name: 'proj-1', session_id: 'sess-other', workspace_path: '/ws' })
+    })
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    expect(screen.queryByTestId('first-chat-picker')).toBeNull()
+  })
+
+  it('an agent whose chat starts as before never sees the list', async () => {
+    h.daemonCliPost.mockImplementation(restorePost!)
+    renderInRoom(room, <AgentChatPane agentName="agent" projectPath="/ws" />)
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
+    expect(screen.queryByTestId('first-chat-picker')).toBeNull()
+    expect(ensureBodies().every((b) => !('harness' in b))).toBe(true)
   })
 })

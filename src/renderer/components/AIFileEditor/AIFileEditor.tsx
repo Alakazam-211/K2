@@ -167,7 +167,6 @@ export function AIFileEditor({
   disableSessionResume = false,
 }: AIFileEditorProps): React.JSX.Element {
   const terminalIdRef = useRef(`ai-editor-${crypto.randomUUID()}`)
-  const [terminalReady, setTerminalReady] = useState(false)
   // In multi-file mode, `files[0]` is the initial active tab. In single-file
   // mode we fall back to the legacy `filePath` prop.
   const isMultiFile = !!files && files.length > 1
@@ -341,9 +340,7 @@ export function AIFileEditor({
 
   useEffect(() => {
     const id = terminalIdRef.current
-    const t = setTimeout(() => setTerminalReady(true), 100)
     return () => {
-      clearTimeout(t)
       // Save session before killing so it can be resumed next time
       saveEditorSession(cwdRef.current, commandRef.current).finally(() => {
         terminalKill(primaryScope(), id).catch(() => {})

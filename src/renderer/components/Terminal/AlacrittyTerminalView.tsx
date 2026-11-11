@@ -194,7 +194,6 @@ export function AlacrittyTerminalView({
   const naturalTextEditing = terminalSettings?.naturalTextEditing !== false
 
   const [created, setCreated] = useState(false)
-  const [cursorBlinkVisible, setCursorBlinkVisible] = useState(true)
 
   // ── Link detection state ──────────────────────────────────────────
   const cmdHeldRef = useRef(false)
@@ -874,13 +873,6 @@ export function AlacrittyTerminalView({
       openFileLink(clicked.filePath)
     }
   }, [linkClickMode, hoveredLink, cwd, tabId, paneGroupId])
-
-  // ── Cursor blink ───────────────────────────────────────────────────
-
-  useEffect(() => {
-    const interval = setInterval(() => setCursorBlinkVisible((v) => !v), 530)
-    return () => clearInterval(interval)
-  }, [])
 
   // ── Auto-focus ─────────────────────────────────────────────────────
 

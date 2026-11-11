@@ -5,6 +5,9 @@ import { useAddWorkspaceDialogStore } from '../../stores/add-workspace-dialog'
 import { GitToolsBanner } from '@/components/GitTools/GitToolsNotice'
 import { ADD_WORKSPACE_Z } from '@/lib/overlay-layers'
 
+/** The dialog's title; the nav's Add menu names it the same way. */
+export const ADD_WORKSPACE_TITLE = 'Add Workspace to K2'
+
 // The Skip / Start-Fresh / Adopt consent picker was removed with the
 // canonical-agents PRD (§7 Removal Catalog): harness fan-out is now off by
 // default, so adding a workspace no longer touches any harness file and
@@ -64,7 +67,7 @@ export default function AddWorkspaceDialog(): React.JSX.Element | null {
         <div className="px-5 pt-5 pb-2">
           <div className="flex items-start justify-between gap-2">
             <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
-              Add Workspace to K2
+              {ADD_WORKSPACE_TITLE}
             </h2>
             <DialogCloseButton className="-mt-3 -mr-3" onClick={close} disabled={isPending} heldReason="Can’t close while the workspace is being added" />
           </div>

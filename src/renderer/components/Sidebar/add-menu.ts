@@ -1,5 +1,7 @@
 // The nav's add menu (the footer's Add and the rail's +): Create an agent
-// (prd-agent-templates-v1 §6.1) beside Add workspace. The app's shared menu
+// (prd-agent-templates-v1 §6.1) beside Add Workspace, each named as the
+// dialog it opens titles itself (the sheet's "Create an agent", "Add
+// Workspace to K2"). The app's shared menu
 // (ContextMenu: Glass's menu material, Terminal's square box), each row with
 // its icon. It opens under the button that opened it, or above it when the
 // button sits at the window's foot (the nav footer), so it never covers the
@@ -17,7 +19,7 @@ export const ADD_MENU_TITLE = 'Create an agent or add a workspace'
 
 export const ADD_MENU_ITEMS: ContextMenuItemDef[] = [
   { id: ADD_MENU_CREATE_AGENT, label: 'Create an agent', icon: AgentsIcon({ size: 14 }) },
-  { id: ADD_MENU_ADD_WORKSPACE, label: 'Add workspace', icon: FolderIcon({ size: 14 }) },
+  { id: ADD_MENU_ADD_WORKSPACE, label: 'Add Workspace', icon: FolderIcon({ size: 14 }) },
 ]
 
 /** The menu's height: two 27px rows, 4px padding top and bottom, and its

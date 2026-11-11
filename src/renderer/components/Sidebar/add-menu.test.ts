@@ -1,10 +1,14 @@
-// The nav's add menu: Create an agent beside Add workspace, each with its
-// icon, shown under the button that opened it, or above it at the window's
-// foot.
+// @vitest-environment jsdom
+//
+// The nav's add menu: Create an agent beside Add Workspace, each with its
+// icon and named as the dialog it opens titles itself, shown under the
+// button that opened it, or above it at the window's foot.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ADD_MENU_ADD_WORKSPACE, ADD_MENU_CREATE_AGENT, ADD_MENU_HEIGHT, ADD_MENU_ITEMS, addMenuPosition, showAddMenu } from './add-menu'
 import { useContextMenuStore } from '@/stores/context-menu'
+import { CREATE_AGENT_COPY } from '@/components/AgentTemplates/CreateAgentSheet'
+import { ADD_WORKSPACE_TITLE } from '@/components/AddWorkspaceDialog/AddWorkspaceDialog'
 import { resetAgentTemplatesForTests, useAgentTemplatesStore } from '@/stores/agent-templates'
 
 const anchor = { getBoundingClientRect: () => ({ left: 10, top: 16, bottom: 40 }) } as unknown as HTMLElement
@@ -14,9 +18,14 @@ beforeEach(() => {
 })
 
 describe('add menu', () => {
-  it('offers Create an agent and Add workspace, each with an icon', () => {
-    expect(ADD_MENU_ITEMS.map((i) => i.label)).toEqual(['Create an agent', 'Add workspace'])
+  it('offers Create an agent and Add Workspace, each with an icon', () => {
+    expect(ADD_MENU_ITEMS.map((i) => i.label)).toEqual(['Create an agent', 'Add Workspace'])
     expect(ADD_MENU_ITEMS.every((i) => !!i.icon)).toBe(true)
+  })
+
+  it('each item is named as the dialog it opens titles itself, casing and all', () => {
+    expect(ADD_MENU_ITEMS[0].label).toBe(CREATE_AGENT_COPY.title)
+    expect(ADD_WORKSPACE_TITLE.startsWith(`${ADD_MENU_ITEMS[1].label} `)).toBe(true)
   })
 
   it('opens under the button, or above it when there is no room below', () => {
@@ -37,7 +46,7 @@ describe('add menu', () => {
     show.mockRestore()
   })
 
-  it('Add workspace runs the folder pick; dismissing does nothing', async () => {
+  it('Add Workspace runs the folder pick; dismissing does nothing', async () => {
     const show = vi.spyOn(useContextMenuStore.getState(), 'show').mockResolvedValueOnce(ADD_MENU_ADD_WORKSPACE).mockResolvedValueOnce(null)
     const add = vi.fn()
     await showAddMenu(anchor, add)

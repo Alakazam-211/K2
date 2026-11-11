@@ -419,7 +419,7 @@ function SaveReview({ plan: raw }: { plan: SaveTemplateResult }): React.JSX.Elem
           </ReviewRow>
         </ReviewCard>
       </ReviewSection>
-      <ReviewSection title="Left out" hint="Never its chats or secrets, and nothing else unless listed here." testId="save-template-skipped">
+      <ReviewSection title="Left out" hint="Chats and secrets are never included. Nothing else is, unless it’s listed here." testId="save-template-skipped">
         {plan.skipped.length ? (
           <ReviewCard>
             {plan.skipped.map((x) => (

@@ -366,9 +366,9 @@ function colWithin(rowDiv: Element, node: Node, offset: number): number {
 }
 
 /** Dropped or pasted file paths as terminal text, or null after a refusal
- *  toast. */
+ *  toast. On Windows the daemon opens PowerShell for this terminal. */
 function dropText(paths: string[]): string | null {
-  return dropTextOrToast(buildTerminalDropPayload(paths))
+  return dropTextOrToast(buildTerminalDropPayload(paths, 'powershell'))
 }
 
 /** Whether a snapshot's visible grid contains any non-blank cell.

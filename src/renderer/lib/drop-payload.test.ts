@@ -1,6 +1,6 @@
 // The one builder for path text: external drops, in-app drags, compose
-// drafts and copies all come here (lib/drop-payload.ts). Pins the quoting,
-// the image rules Claude Code's `[Image #N]` needs, and the
+// drafts and copies all come here (lib/drop-payload.ts). Pins the quoting
+// per shell, the image rules Claude Code's `[Image #N]` needs, and the
 // refusal of names with control characters.
 
 import { describe, expect, it } from 'vitest'
@@ -11,9 +11,12 @@ import {
   bracketPaste,
   buildComposeDropPayload,
   buildTerminalDropPayload,
+  dropShellFor,
   formatDropPaths,
   hasControlChar,
   isImagePath,
+  isWindowsPath,
+  quoteDropPath,
   quotePathForImageDrop,
   type DropText,
 } from './drop-payload'
@@ -143,10 +146,63 @@ describe('control characters are refused', () => {
     expect(formatDropPaths(['/tmp/a\u0000b.txt'], { trailingSpace: false })).toEqual(REFUSED)
   })
 
+  it('refuses a Windows path with a control character', () => {
+    expect(buildTerminalDropPayload(['C:\\tmp\\a\nb.txt'], 'cmd')).toEqual(REFUSED)
+  })
+
   it('accepts printable characters next to the control ranges', () => {
     for (const ch of [' ', '~', '\u00a0', '\u00e9']) {
       expect(hasControlChar(`/tmp/a${ch}b`), JSON.stringify(ch)).toBe(false)
     }
+  })
+})
+
+describe('Windows paths', () => {
+  it('knows a drive path and a UNC path; a POSIX path is not one', () => {
+    expect(isWindowsPath('C:\\Users\\a.txt')).toBe(true)
+    expect(isWindowsPath('d:/work/a.txt')).toBe(true)
+    expect(isWindowsPath('\\\\server\\share\\a.txt')).toBe(true)
+    expect(isWindowsPath('\\\\?\\C:\\long\\a.txt')).toBe(true)
+    expect(isWindowsPath('/Users/a.txt')).toBe(false)
+    expect(isWindowsPath('C:relative.txt')).toBe(false)
+  })
+
+  it('picks the shell family from the paths; the caller names the Windows shell', () => {
+    expect(dropShellFor(['/tmp/a'])).toBe('posix')
+    expect(dropShellFor(['C:\\a'])).toBe('powershell')
+    expect(dropShellFor(['C:\\a'], 'cmd')).toBe('cmd')
+    expect(dropShellFor(['/tmp/a'], 'cmd')).toBe('posix')
+  })
+
+  it('PowerShell: a safe path stays bare, others single-quoted, never backslash-escaped', () => {
+    expect(text(buildTerminalDropPayload(['C:\\Users\\a\\notes.txt']))).toBe('C:\\Users\\a\\notes.txt ')
+    expect(text(buildTerminalDropPayload(['C:\\Users\\a b\\x.txt']))).toBe("'C:\\Users\\a b\\x.txt' ")
+  })
+
+  it('PowerShell: $ and backticks are literal inside single quotes', () => {
+    expect(quoteDropPath('C:\\tmp\\$env:HOME `x`.txt', 'powershell')).toBe("'C:\\tmp\\$env:HOME `x`.txt'")
+  })
+
+  it('PowerShell: an apostrophe, and the curly quotes PowerShell also reads as one, are doubled', () => {
+    expect(quoteDropPath("C:\\tmp\\Bob's.txt", 'powershell')).toBe("'C:\\tmp\\Bob''s.txt'")
+    expect(quoteDropPath('C:\\tmp\\Bob\u2019s.txt', 'powershell')).toBe("'C:\\tmp\\Bob\u2019\u2019s.txt'")
+    expect(quoteDropPath('C:\\tmp\\\u2018a\u201a\u201b.txt', 'powershell')).toBe(
+      "'C:\\tmp\\\u2018\u2018a\u201a\u201a\u201b\u201b.txt'",
+    )
+  })
+
+  it('cmd: a safe path stays bare, others double-quoted as they are', () => {
+    expect(text(buildTerminalDropPayload(['C:\\Users\\a\\notes.txt'], 'cmd'))).toBe('C:\\Users\\a\\notes.txt ')
+    expect(text(buildTerminalDropPayload(['C:\\Users\\a b\\R&D (1).txt'], 'cmd'))).toBe(
+      '"C:\\Users\\a b\\R&D (1).txt" ',
+    )
+  })
+
+  it('an image keeps the bracketed paste, quoted the Windows way (Claude Code strips quotes)', () => {
+    expect(text(buildTerminalDropPayload(['C:\\Users\\a\\Screen Shot.png', 'C:\\Users\\a\\b.txt']))).toBe(
+      bracketPaste("'C:\\Users\\a\\Screen Shot.png' C:\\Users\\a\\b.txt "),
+    )
+    expect(text(buildTerminalDropPayload(['C:\\shot.png'], 'cmd'))).toBe(bracketPaste('C:\\shot.png '))
   })
 })
 

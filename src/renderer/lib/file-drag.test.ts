@@ -106,6 +106,21 @@ describe('in-app drag from the file tree onto a terminal', () => {
       document.body.innerHTML = ''
     }
   })
+
+  it('Windows paths: PowerShell quoting for v2, cmd quoting for v1', () => {
+    target = mountTerminal('v2')
+    const seen: string[] = []
+    target.parentElement!.addEventListener('k2so:terminal-write', (e) => {
+      seen.push((e as CustomEvent<{ data: string }>).detail.data)
+    })
+    drop(['C:\\Users\\a\\my notes.txt'])
+    expect(seen).toEqual(["'C:\\Users\\a\\my notes.txt' "])
+    document.body.innerHTML = ''
+
+    target = mountTerminal('v1')
+    drop(['C:\\Users\\a\\my notes.txt'])
+    expect(h.writes).toEqual([{ scope: scope.id, id: 'term-1', data: '"C:\\Users\\a\\my notes.txt" ' }])
+  })
 })
 
 describe('in-app drag from the file tree onto a compose bar', () => {

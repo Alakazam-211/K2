@@ -87,9 +87,9 @@ interface AlacrittyTerminalViewProps {
 }
 
 /** Dropped or pasted file paths as terminal text, or null after a refusal
- *  toast. */
+ *  toast. This legacy terminal opens %COMSPEC% (cmd) on Windows. */
 function dropText(paths: string[]): string | null {
-  return dropTextOrToast(buildTerminalDropPayload(paths))
+  return dropTextOrToast(buildTerminalDropPayload(paths, 'cmd'))
 }
 
 function colorToCSS(c: number): string {

@@ -36,6 +36,7 @@ import { isFileDragActive } from './file-drag'
 import {
   buildComposeDropPayload,
   buildTerminalDropPayload,
+  type WindowsShell,
 } from './drop-payload'
 import { dropTextOrToast } from './drop-refusal'
 import { isWebClient } from './is-web'
@@ -300,9 +301,19 @@ export function hitTestExternalDrop(
 
 // ── Terminal payload ──────────────────────────────────────────────────
 
+/** Which Windows shell a drop target runs: a v1 terminal (`terminalWrite`)
+ *  opens %COMSPEC% (cmd), a v2 one PowerShell. Only used for Windows
+ *  paths (lib/drop-payload.ts). */
+function windowsShellOf(target: Extract<ExternalDropTarget, { kind: 'terminal' }>): WindowsShell {
+  return target.terminalKind !== 'v2' && target.terminalId ? 'cmd' : 'powershell'
+}
+
 /** The terminal text for `paths`, or null after a refusal toast. */
-function terminalText(paths: string[]): string | null {
-  return dropTextOrToast(buildTerminalDropPayload(paths))
+function terminalText(
+  target: Extract<ExternalDropTarget, { kind: 'terminal' }>,
+  paths: string[],
+): string | null {
+  return dropTextOrToast(buildTerminalDropPayload(paths, windowsShellOf(target)))
 }
 
 // ── Inject / refresh side-effects ─────────────────────────────────────
@@ -464,11 +475,11 @@ export async function routeExternalDrop(
           paths,
           { kind: 'terminal' },
           { workspacePath: target.workspacePath || undefined },
-          terminalText,
+          (remote) => terminalText(target, remote),
         )
         if (payload) injectIntoTerminal(scope, target, payload)
       } else {
-        const payload = terminalText(paths)
+        const payload = terminalText(target, paths)
         if (payload !== null) injectIntoTerminal(scope, target, payload)
       }
       return
@@ -571,7 +582,7 @@ export async function routeBrowserFileDrop(
         files,
         { kind: 'terminal' },
         { workspacePath: target.workspacePath || undefined },
-        terminalText,
+        (remote) => terminalText(target, remote),
       )
       if (payload) injectIntoTerminal(scope, target, payload)
       return

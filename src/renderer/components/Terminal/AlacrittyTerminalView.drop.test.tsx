@@ -2,7 +2,8 @@
 //
 // The legacy terminal view: the text a file drop or a Finder paste writes
 // to its PTY. Built by lib/drop-payload.ts (tested there); this pins that
-// the view uses it and writes nothing after a refusal. Only the view's I/O
+// the view uses it, quotes Windows paths for cmd (this terminal opens
+// %COMSPEC%), and writes nothing after a refusal. Only the view's I/O
 // boundaries are mocked.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -98,6 +99,12 @@ describe('AlacrittyTerminalView: files dropped or pasted', () => {
     dropFiles(el, ['/tmp/notes\nrm -rf ~'])
     expect(h.writes).toEqual([])
     expect(toasts()).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
+  })
+
+  it('a Windows path is written cmd-quoted (this terminal opens %COMSPEC%)', async () => {
+    const el = await view()
+    dropFiles(el, ['C:\\Users\\a\\my notes.txt'])
+    expect(h.writes).toEqual([{ id: 'term-1', data: '"C:\\Users\\a\\my notes.txt" ' }])
   })
 
   it('Finder paths pasted: the same text as a drop; a line break is refused', async () => {

@@ -575,6 +575,12 @@ describe('files dropped or pasted on the terminal', () => {
     expect(toasts()).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
   })
 
+  it('a Windows path is typed PowerShell-quoted (the daemon opens powershell here)', async () => {
+    const el = await terminalPane()
+    dropFiles(el, ['C:\\Users\\a\\my notes.txt'])
+    expect(sends('input').map((m) => m.text)).toEqual(["'C:\\Users\\a\\my notes.txt' "])
+  })
+
   it('Finder paths pasted: the same text as a drop; a line break is refused', async () => {
     await terminalPane()
     await pasteFinderPaths(['/tmp/a b.txt'])

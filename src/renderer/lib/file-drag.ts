@@ -226,9 +226,10 @@ export function beginFileDrag(
       const termContainer = (el as HTMLElement).closest('[data-terminal-id]') as HTMLElement | null
       if (termContainer && termContainer.dataset.terminalId) {
         // Paste paths into the terminal: the same text as an external drop
-        // (lib/drop-payload.ts). A refused name writes nothing.
+        // (lib/drop-payload.ts). A v1 terminal on Windows runs %COMSPEC%
+        // (cmd), a v2 one PowerShell. A refused name writes nothing.
         const isV2 = termContainer.dataset.terminalKind === 'v2'
-        const data = dropTextOrToast(buildTerminalDropPayload(dragPaths))
+        const data = dropTextOrToast(buildTerminalDropPayload(dragPaths, isV2 ? 'powershell' : 'cmd'))
         if (data !== null && isV2) {
           // V2 sessions live in the daemon's session_lookup and
           // accept input over a WS owned by the React TerminalPane.

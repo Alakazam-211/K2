@@ -44,7 +44,7 @@ import {
 } from './external-drop-router'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { COMPOSE_BAR_SELECTOR, COMPOSE_DROP_SURFACE_SELECTOR } from './compose-surface-drop'
-import { CONTROL_CHAR_REFUSAL } from './drop-payload'
+import { CONTROL_CHAR_REFUSAL, bracketPaste } from './drop-payload'
 import { useToastStore } from '@/stores/toast'
 import { primaryScope } from '@/kessel/server-scope'
 
@@ -628,5 +628,20 @@ describe('routeExternalDrop — the text a terminal or draft gets', () => {
     await routeExternalDrop(primaryScope(), ['/tmp/a\rb.txt'], { x: 3, y: 3 }, surfaceDoc(bar))
     expect(bar._events).toHaveLength(0)
     expect(toasts()).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
+  })
+
+  it('Windows paths: a v2 terminal (PowerShell) gets single quotes', async () => {
+    const { grid, term } = v2Terminal()
+    await routeExternalDrop(primaryScope(), ["C:\\Users\\a\\Bob's notes.txt"], { x: 3, y: 3 }, surfaceDoc(grid))
+    expect((term._events[0] as CustomEvent<{ data: string }>).detail.data).toBe("'C:\\Users\\a\\Bob''s notes.txt' ")
+  })
+
+  it('Windows paths: a v1 terminal (cmd) gets double quotes, images still a bracketed paste', async () => {
+    const grid = surfaceNode({})
+    surfaceNode({ terminalId: 'term-1', workspacePath: '/ws' }, [grid])
+    await routeExternalDrop(primaryScope(), ['C:\\Users\\a\\Screen Shot.png'], { x: 3, y: 3 }, surfaceDoc(grid))
+    expect(terminalWriteMock).toHaveBeenCalledTimes(1)
+    expect(terminalWriteMock.mock.calls[0][1]).toBe('term-1')
+    expect(terminalWriteMock.mock.calls[0][2]).toBe(bracketPaste('"C:\\Users\\a\\Screen Shot.png" '))
   })
 })

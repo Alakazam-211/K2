@@ -33,6 +33,11 @@ describe('file clipboard → OS clipboard text', () => {
     expect(useFileClipboardStore.getState().mode).toBe('cut')
   })
 
+  it('Windows paths: PowerShell single quotes', () => {
+    useFileClipboardStore.getState().copy(['C:\\Users\\a\\my notes.txt'])
+    expect(writeText).toHaveBeenCalledWith("'C:\\Users\\a\\my notes.txt'")
+  })
+
   it('a name with a line break: nothing on the OS clipboard, a toast, the in-app copy still holds', () => {
     useFileClipboardStore.getState().copy(['/tmp/ok.txt', '/tmp/notes\nrm -rf ~'])
     expect(writeText).not.toHaveBeenCalled()

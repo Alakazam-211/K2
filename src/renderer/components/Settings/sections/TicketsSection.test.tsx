@@ -43,6 +43,7 @@ import { parseTicketSettings } from './tickets-settings-api'
 import { SECTION_LABELS } from '../searchManifest'
 import { settingsNav } from '../Settings'
 import { readTicketOpenOn, initialTicketScope, ticketPrefOwner } from '@/lib/ticket-open-pref'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
 
 function serverSettings(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -53,7 +54,7 @@ function serverSettings(over: Record<string, unknown> = {}): Record<string, unkn
     defaultAssigneeKnown: true,
     values: ['off', 'warn', 'require'],
     people: [
-      { value: 'owner', label: 'Rosson (owner)', role: 'owner', disabled: false },
+      { value: 'owner', label: 'alex (owner)', role: 'owner', disabled: false },
       { value: 'julie', label: 'julie', role: 'member', disabled: false },
     ],
     canEdit: true,
@@ -113,7 +114,7 @@ describe('Settings → Tickets: server rules', () => {
     render(<TicketsSection />)
     await loaded()
     expect(screen.getByRole('heading', { name: 'Tickets' })).toBeTruthy()
-    expect(screen.getByText('Server rules')).toBeTruthy()
+    expect(screen.getByText('For everyone on this server')).toBeTruthy()
     expect(screen.getByText('Just for you')).toBeTruthy()
     expect(trigger('Require an HTML brief').textContent).toContain('Require')
     expect(trigger('Require an assignee').textContent).toContain('Warn')
@@ -133,15 +134,22 @@ describe('Settings → Tickets: server rules', () => {
     await waitFor(() => expect(cli.posts).toHaveLength(1))
     expect(cli.posts[0]).toEqual({ route: 'tickets/settings', body: { briefPolicy: 'require' } })
     await waitFor(() => expect(trigger('Require an HTML brief').textContent).toContain('Require'))
+    // The row says it saved, and its hint now says what Require does.
+    const briefRow = document.querySelector('[data-settings-id="tickets.require-brief"]') as HTMLElement
+    await waitFor(() => expect(within(briefRow).getByRole('status').textContent).toContain('Saved'))
+    expect(briefRow.textContent).toContain('Require: a ticket without one is turned back until the agent adds it.')
+    // Picking the value it already has sends nothing.
+    await pick('Require an HTML brief', 'Require')
+    expect(cli.posts).toHaveLength(1)
 
     await pick('Require an assignee', 'Off')
     await waitFor(() => expect(cli.posts).toHaveLength(2))
     expect(cli.posts[1].body).toEqual({ assigneePolicy: 'off' })
 
-    await pick('Default assignee', 'Rosson (owner)')
+    await pick('Default assignee', 'alex (owner)')
     await waitFor(() => expect(cli.posts).toHaveLength(3))
     expect(cli.posts[2].body).toEqual({ defaultAssignee: 'owner' })
-    await waitFor(() => expect(trigger('Default assignee').textContent).toContain('Rosson (owner)'))
+    await waitFor(() => expect(trigger('Default assignee').textContent).toContain('alex (owner)'))
 
     await pick('Default assignee', 'Nobody')
     await waitFor(() => expect(cli.posts).toHaveLength(4))
@@ -149,46 +157,69 @@ describe('Settings → Tickets: server rules', () => {
     await waitFor(() => expect(trigger('Default assignee').textContent).toContain('Nobody'))
   })
 
-  it('member: sees the rules, cannot change them', async () => {
-    cli.settings = serverSettings({ canEdit: false })
+  it('member: sees the rules as plain values, says who can change them', async () => {
+    cli.settings = serverSettings({ canEdit: false, briefPolicy: 'require', defaultAssignee: 'julie' })
     render(<TicketsSection />)
-    await loaded()
+    await screen.findByTestId('tickets-settings-readonly')
     expect(screen.getByTestId('tickets-settings-readonly').textContent).toBe(
-      'Only the owner or an admin can change these.',
+      'Only the server’s owner or an admin can change these.',
     )
+    expect(screen.getByText('View only')).toBeTruthy()
     for (const name of ['Require an HTML brief', 'Require an assignee', 'Default assignee']) {
-      expect(trigger(name).disabled).toBe(true)
-      fireEvent.click(trigger(name))
-      expect(screen.queryByTestId('setting-dropdown-menu')).toBeNull()
+      expect(screen.queryByRole('button', { name })).toBeNull()
     }
+    expect(screen.getByTestId('tickets.require-brief-value').textContent).toBe('Require')
+    expect(screen.getByTestId('tickets.require-assignee-value').textContent).toBe('Warn')
+    expect(screen.getByTestId('tickets.default-assignee-value').textContent).toBe('julie')
     expect(cli.posts).toEqual([])
     // Their own landing tab is still theirs to set.
     expect(trigger('Open the Tickets page on').disabled).toBe(false)
   })
 
-  it('a refused save shows the daemon’s error', async () => {
-    cli.postError = new Error('only the owner or an admin may change the ticket rules')
+  it('a refused save says what failed in words, then the daemon’s reason', async () => {
+    cli.postError = new DaemonHttpError('only the owner or an admin may change the ticket rules', 403, 'role_required')
     render(<TicketsSection />)
     await loaded()
     await pick('Require an assignee', 'Require')
-    expect((await screen.findByTestId('tickets-settings-save-error')).textContent).toContain(
-      'only the owner or an admin',
-    )
+    const err = await screen.findByTestId('tickets-settings-save-error')
+    expect(err.textContent).toContain('Couldn’t save: this login can’t change the server’s ticket rules. Nothing changed')
+    expect(err.textContent).toContain('The server said: only the owner or an admin may change the ticket rules.')
     expect(trigger('Require an assignee').textContent).toContain('Warn')
+    // Only the row that failed says so.
+    const briefRow = document.querySelector('[data-settings-id="tickets.require-brief"]') as HTMLElement
+    expect(within(briefRow).queryByRole('alert')).toBeNull()
   })
 
-  it('a server without the route says it could not load', async () => {
+  it('a save that never reached the server says so', async () => {
+    cli.postError = new Error('Failed to fetch')
+    render(<TicketsSection />)
+    await loaded()
+    await pick('Default assignee', 'julie')
+    expect((await screen.findByTestId('tickets-settings-save-error')).textContent).toContain(
+      'Couldn’t save: K2 couldn’t reach this server. Nothing changed; try again.',
+    )
+  })
+
+  it('a server without the route says it could not load, and Try again reloads', async () => {
     cli.getError = new Error('404 not found')
     render(<TicketsSection />)
-    expect((await screen.findByTestId('tickets-settings-error')).textContent).toContain('404 not found')
+    const card = await screen.findByTestId('tickets-settings-error')
+    expect(card.textContent).toContain('Couldn’t load the ticket rules')
+    expect(card.textContent).toContain('The server said: 404 not found.')
+    // Their own setting is still there.
+    expect(trigger('Open the Tickets page on').disabled).toBe(false)
+    cli.getError = null
+    fireEvent.click(within(card).getByRole('button', { name: 'Try again' }))
+    await loaded()
+    expect(screen.queryByTestId('tickets-settings-error')).toBeNull()
   })
 
   it('a default that is no longer a user still shows, and says so', async () => {
     cli.settings = serverSettings({ defaultAssignee: 'gone', defaultAssigneeKnown: false })
     render(<TicketsSection />)
     await loaded()
-    expect(trigger('Default assignee').textContent).toContain('gone')
-    expect(screen.getByText(/no longer on this server/)).toBeTruthy()
+    expect(trigger('Default assignee').textContent).toContain('gone (no longer here)')
+    expect(screen.getByText(/gone is no longer on this server/).textContent).toContain('Pick someone else.')
   })
 
   it('parses a short or odd body without inventing rights', () => {
@@ -209,6 +240,8 @@ describe('Settings → Tickets: just for you', () => {
 
     await pick('Open the Tickets page on', 'All')
     expect(readTicketOpenOn()).toBe('all')
+    const row = document.querySelector('[data-settings-id="tickets.open-on"]') as HTMLElement
+    expect(within(row).getByRole('status').textContent).toContain('Saved')
     expect(initialTicketScope()).toBe('all')
     const { host, user } = ticketPrefOwner()
     expect(localStorage.getItem(`k2.tickets.openOn.${host}.${user}`)).toBe('all')

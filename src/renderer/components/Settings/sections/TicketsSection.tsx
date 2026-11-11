@@ -1,15 +1,33 @@
-// Settings → Tickets (0.45.4, Rosson 2026-10-10). Two groups:
+// Settings → Tickets (0.45.4, Rosson 2026-10-10). Two card groups:
 //
-//   - Server rules (the daemon's, `settings.json` → `tickets`): require an
-//     HTML brief, require an assignee, the default assignee. Everyone can
-//     see them; only the owner or an admin can change them (the daemon
-//     says so with `canEdit`). Thin client over /cli/tickets/settings.
+//   - For everyone on this server (the daemon's, `settings.json` →
+//     `tickets`): require an HTML brief, require an assignee, the default
+//     assignee. Everyone can see them; only the owner or an admin can change
+//     them (the daemon says so with `canEdit`). Thin client over
+//     /cli/tickets/settings. A person who can't change them sees the values
+//     as plain text, with a line saying who can.
 //   - Just for you: which tab the Tickets page opens on. A per-person view
 //     preference kept on this computer (`lib/ticket-open-pref.ts`).
+//
+// The row labels "Require an HTML brief" and "Require an assignee" are the
+// names the daemon's warnings to agents point at (`feedback_brief.rs`), so
+// they stay as they are.
 
 import React, { useCallback, useEffect, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
-import { SettingDropdown, SettingsGroup } from '../controls/SettingControls'
+import {
+  SETTING_ROW_HINT,
+  SaveNote,
+  SettingDropdown,
+  SettingRow,
+  SettingsGroup,
+  SettingsLoadState,
+  useSaveStatus,
+  type SaveState,
+} from '../controls/SettingControls'
+import { Button } from '@/components/ui/Button'
+import { Tag } from '@/components/ui/Tag'
+import { httpStatusOf } from '@/lib/daemon-http-error'
 import {
   RULE_OPTIONS,
   fetchTicketSettings,
@@ -30,25 +48,25 @@ export const TICKETS_MANIFEST: SettingEntry[] = [
     id: 'tickets.require-brief',
     section: 'tickets',
     label: 'Require an HTML Brief',
-    description: 'Whether agent tickets must carry an HTML brief (off, warn, require)',
+    description: 'Whether an agent must attach a short page saying what it needs (off, warn, require)',
     keywords: ['ticket', 'tickets', 'brief', 'html', 'feedback', 'agent', 'policy', 'require'],
-    group: 'Server rules',
+    group: 'For everyone on this server',
   },
   {
     id: 'tickets.require-assignee',
     section: 'tickets',
     label: 'Require an Assignee',
-    description: 'Whether agent tickets must name a user on this server',
+    description: 'Whether an agent must name the person on this server who should answer',
     keywords: ['ticket', 'tickets', 'assign', 'assignee', 'feedback', 'agent', 'policy', 'require'],
-    group: 'Server rules',
+    group: 'For everyone on this server',
   },
   {
     id: 'tickets.default-assignee',
     section: 'tickets',
     label: 'Default Assignee',
-    description: 'Who gets an agent ticket filed without an assignee',
+    description: 'Who gets an agent’s ticket that names nobody',
     keywords: ['ticket', 'tickets', 'assign', 'assignee', 'default', 'owner', 'user'],
-    group: 'Server rules',
+    group: 'For everyone on this server',
   },
   {
     id: 'tickets.open-on',
@@ -60,190 +78,304 @@ export const TICKETS_MANIFEST: SettingEntry[] = [
   },
 ]
 
-const RULE_HELP: Record<TicketRule, string> = {
-  off: 'No check.',
-  warn: 'The ticket is filed and the agent is told what is missing.',
-  require: 'The ticket is refused until the agent fixes it.',
+/** What each rule does right now, in words, after the row's own line. */
+const BRIEF_NOW: Record<TicketRule, string> = {
+  off: 'Off: agents may leave it out.',
+  warn: 'Warn: a ticket without one is still filed, and the agent is asked to add one.',
+  require: 'Require: a ticket without one is turned back until the agent adds it.',
+}
+
+const ASSIGNEE_NOW: Record<TicketRule, string> = {
+  off: 'Off: agents may leave it blank.',
+  warn: 'Warn: a ticket without one is still filed, and the agent is asked to name someone.',
+  require: 'Require: a ticket without one is turned back until the agent names someone.',
 }
 
 const NO_DEFAULT = '__none__'
+
+const READ_ONLY_LINE = 'Only the server’s owner or an admin can change these.'
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-function Row({
-  settingId,
-  title,
-  hint,
-  children,
-}: {
-  settingId: string
-  title: string
-  hint: React.ReactNode
-  children: React.ReactNode
-}): React.JSX.Element {
+/** A value this person can see but not change: plain text on the control's
+ *  edge, so it never reads as a broken dropdown. */
+function ReadOnlyValue({ label, testId }: { label: string; testId: string }): React.JSX.Element {
   return (
-    <div
-      className="flex items-center justify-between gap-4 py-2 border-b border-[var(--color-border)]"
-      data-settings-id={settingId}
-    >
-      <div className="min-w-0">
-        <div className="type-row text-[var(--color-text-primary)]">{title}</div>
-        <div className="type-hint text-[var(--color-text-muted)]">{hint}</div>
-      </div>
-      <div className="flex-shrink-0">{children}</div>
+    <span data-readonly-value="" data-testid={testId} className="block text-right type-row text-[var(--color-text-primary)] truncate">
+      {label}
+    </span>
+  )
+}
+
+/** Why a change didn't save, under the row's hint: what failed in plain
+ *  words and that nothing changed, then the server's own reason quietly. */
+function RowSaveError({ state, status }: { state: SaveState; status: number | null }): React.JSX.Element | null {
+  if (typeof state !== 'object') return null
+  const reason = state.error.trim().replace(/[.\s]+$/, '')
+  const lead =
+    status === 403 || status === 401
+      ? 'Couldn’t save: this login can’t change the server’s ticket rules. Nothing changed; ask the owner or an admin.'
+      : status === null
+        ? 'Couldn’t save: K2 couldn’t reach this server. Nothing changed; try again.'
+        : 'Couldn’t save this change. Nothing changed; try again.'
+  return (
+    <div role="alert" data-save-error="" data-testid="tickets-settings-save-error" className="mt-1">
+      <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">{lead}</p>
+      {reason && <p className={SETTING_ROW_HINT}>The server said: {reason}.</p>}
     </div>
   )
 }
 
+/** One server rule: a dropdown for people who may change it, plain text for
+ *  everyone else, "Saved" by the control after a write, and the reason under
+ *  the hint when a write fails. */
+function ServerRuleRow({
+  settingId,
+  label,
+  hint,
+  value,
+  options,
+  canEdit,
+  busy,
+  onSave,
+}: {
+  settingId: string
+  label: string
+  hint: React.ReactNode
+  value: string
+  options: { value: string; label: string }[]
+  canEdit: boolean
+  busy: boolean
+  onSave: (value: string) => Promise<void>
+}): React.JSX.Element {
+  const save = useSaveStatus()
+  const [status, setStatus] = useState<number | null>(null)
+  const shown = options.find((o) => o.value === value)?.label ?? value
+  return (
+    <SettingRow
+      settingId={settingId}
+      label={<span className="inline-flex items-center gap-2">{label}<SaveNote state={save.state} /></span>}
+      hint={
+        <>
+          {hint}
+          <RowSaveError state={save.state} status={status} />
+        </>
+      }
+      field
+    >
+      {canEdit ? (
+        <SettingDropdown
+          ariaLabel={label}
+          value={value}
+          options={options}
+          disabled={busy}
+          fullWidth
+          onChange={async (v) => {
+            if (v === value) return
+            save.reset()
+            try {
+              await onSave(v)
+              save.saved()
+            } catch (e) {
+              setStatus(httpStatusOf(e))
+              save.failed(e)
+            }
+          }}
+        />
+      ) : (
+        <ReadOnlyValue label={shown} testId={`${settingId}-value`} />
+      )}
+    </SettingRow>
+  )
+}
+
+type Load = 'loading' | 'ready' | { error: string }
+
 export function TicketsSection(): React.JSX.Element {
   const [settings, setSettings] = useState<TicketSettings | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [saveError, setSaveError] = useState<string | null>(null)
+  const [load, setLoad] = useState<Load>('loading')
   const [busy, setBusy] = useState(false)
   const [openOn, setOpenOn] = useState<TicketOpenOn>(() => readTicketOpenOn())
+  const openOnSave = useSaveStatus()
+
+  const fetchRules = useCallback((isCancelled: () => boolean = () => false): void => {
+    setLoad('loading')
+    fetchTicketSettings().then(
+      (s) => {
+        if (isCancelled()) return
+        setSettings(s)
+        setLoad('ready')
+      },
+      (e: unknown) => {
+        if (!isCancelled()) setLoad({ error: errorText(e) })
+      },
+    )
+  }, [])
 
   useEffect(() => {
     let cancelled = false
-    fetchTicketSettings().then(
-      (s) => {
-        if (!cancelled) setSettings(s)
-      },
-      (e: unknown) => {
-        if (!cancelled) setLoadError(errorText(e))
-      },
-    )
+    fetchRules(() => cancelled)
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [fetchRules])
 
+  /** Throws on failure; the row says what happened. */
   const save = useCallback(async (change: TicketSettingsChange): Promise<void> => {
     setBusy(true)
-    setSaveError(null)
     try {
       setSettings(await saveTicketSettings(change))
-    } catch (e) {
-      setSaveError(errorText(e))
     } finally {
       setBusy(false)
     }
   }, [])
 
   const canEdit = settings?.canEdit === true
-  const locked = !canEdit || busy
+  const ruleOptions = RULE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))
 
   const assigneeOptions = settings
     ? [
         { value: NO_DEFAULT, label: 'Nobody' },
         ...settings.people.map((p) => ({
           value: p.value,
-          label: p.label,
-          badge: p.disabled ? 'Disabled' : undefined,
+          label: p.disabled ? `${p.label} (account turned off)` : p.label,
         })),
         // A stored default that is no longer a user here still shows.
         ...(settings.defaultAssignee && !settings.people.some((p) => p.value === settings.defaultAssignee)
-          ? [{ value: settings.defaultAssignee, label: settings.defaultAssignee, badge: 'Not a user here' }]
+          ? [{ value: settings.defaultAssignee, label: `${settings.defaultAssignee} (no longer here)` }]
           : []),
       ]
     : []
 
+  const defaultGone = !!settings?.defaultAssignee && settings.defaultAssigneeKnown === false
+  const hasDefault = !!settings?.defaultAssignee && !defaultGone
+
+  const rulesState =
+    load === 'loading' ? (
+      <SettingsLoadState kind="loading" title="Loading the ticket rules…" testId="tickets-settings-loading">
+        Asking this server for its rules.
+      </SettingsLoadState>
+    ) : typeof load === 'object' ? (
+      <SettingsLoadState
+        kind="error"
+        title="Couldn’t load the ticket rules"
+        detail={load.error}
+        testId="tickets-settings-error"
+        action={<Button onClick={() => fetchRules()}>Try again</Button>}
+      >
+        K2 couldn’t read them from this server. Your own setting below still works.
+      </SettingsLoadState>
+    ) : undefined
+
   return (
-    <div className="max-w-xl" data-testid="tickets-settings">
-      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Tickets</h2>
-      <p className="type-hint text-[var(--color-text-muted)] mb-6">
-        Rules for the tickets agents file with <code>k2 tickets ask</code>, and how your Tickets page opens.
-      </p>
+    <div className="w-full max-w-[52rem] space-y-6 pb-6" data-testid="tickets-settings">
+      <header className="min-w-0">
+        <h2 className="type-title text-[var(--color-text-primary)]">Tickets</h2>
+        <p className="type-hint text-[var(--color-text-secondary)] mt-1 max-w-[75ch]">
+          Tickets are the questions and approvals agents send to people on this server. Set what agents must include, who
+          gets a ticket that names nobody, and how your Tickets page opens.
+        </p>
+      </header>
 
-      <div className="space-y-6">
-        <SettingsGroup title="Server rules">
-          {loadError && (
-            <p role="alert" data-testid="tickets-settings-error" className="type-hint text-[var(--color-status-error)] py-2">
-              Could not load the ticket rules: {loadError}
-            </p>
-          )}
-          {!settings && !loadError && (
-            <p className="type-hint text-[var(--color-text-muted)] py-2">Loading…</p>
-          )}
-          {settings && (
-            <>
-              {!canEdit && (
-                <p data-testid="tickets-settings-readonly" className="type-hint text-[var(--color-text-muted)] py-1">
-                  Only the owner or an admin can change these.
-                </p>
-              )}
-              <Row
-                settingId="tickets.require-brief"
-                title="Require an HTML brief"
-                hint={`On agent tickets (fyi is exempt). ${RULE_HELP[settings.briefPolicy]}`}
-              >
-                <SettingDropdown
-                  ariaLabel="Require an HTML brief"
-                  value={settings.briefPolicy}
-                  options={RULE_OPTIONS}
-                  disabled={locked}
-                  onChange={(v) => save({ briefPolicy: v as TicketRule })}
-                />
-              </Row>
-              <Row
-                settingId="tickets.require-assignee"
-                title="Require an assignee"
-                hint={`Agent tickets must name a user on this server (fyi is exempt). ${RULE_HELP[settings.assigneePolicy]}`}
-              >
-                <SettingDropdown
-                  ariaLabel="Require an assignee"
-                  value={settings.assigneePolicy}
-                  options={RULE_OPTIONS}
-                  disabled={locked}
-                  onChange={(v) => save({ assigneePolicy: v as TicketRule })}
-                />
-              </Row>
-              <Row
-                settingId="tickets.default-assignee"
-                title="Default assignee"
-                hint={
-                  settings.defaultAssignee && !settings.defaultAssigneeKnown
-                    ? 'This user is no longer on this server, so new tickets stay unassigned. Pick someone else.'
-                    : 'An agent ticket filed without an assignee goes to this person.'
-                }
-              >
-                <SettingDropdown
-                  ariaLabel="Default assignee"
-                  value={settings.defaultAssignee ?? NO_DEFAULT}
-                  options={assigneeOptions}
-                  disabled={locked}
-                  onChange={(v) => save({ defaultAssignee: v === NO_DEFAULT ? '' : v })}
-                />
-              </Row>
-              {saveError && (
-                <p role="alert" data-testid="tickets-settings-save-error" className="type-hint text-[var(--color-status-error)] mt-1">
-                  {saveError}
-                </p>
-              )}
-            </>
-          )}
-        </SettingsGroup>
-
-        <SettingsGroup title="Just for you">
-          <Row
-            settingId="tickets.open-on"
-            title="Open the Tickets page on"
-            hint="Kept on this computer for your login on this server."
-          >
-            <SettingDropdown
-              ariaLabel="Open the Tickets page on"
-              value={openOn}
-              options={TICKET_OPEN_ON_OPTIONS}
-              onChange={(v) => {
-                const next = v as TicketOpenOn
-                writeTicketOpenOn(next)
-                setOpenOn(next)
-              }}
+      <SettingsGroup
+        card
+        title="For everyone on this server"
+        testId="tickets-server-rules"
+        badge={settings && !canEdit ? <Tag tone="muted">View only</Tag> : undefined}
+        hint={
+          <>
+            These apply to every agent&rsquo;s questions and approvals. Notes marked FYI never need a brief or an
+            assignee.
+            {settings && !canEdit && (
+              <span data-testid="tickets-settings-readonly" className="block mt-1 text-[var(--color-text-primary)]">
+                {READ_ONLY_LINE}
+              </span>
+            )}
+          </>
+        }
+        state={rulesState}
+      >
+        {settings && (
+          <>
+            <ServerRuleRow
+              settingId="tickets.require-brief"
+              label="Require an HTML brief"
+              hint={
+                <>
+                  A short page from the agent: what it needs from you and the choices it offers.{' '}
+                  {BRIEF_NOW[settings.briefPolicy]}
+                </>
+              }
+              value={settings.briefPolicy}
+              options={ruleOptions}
+              canEdit={canEdit}
+              busy={busy}
+              onSave={(v) => save({ briefPolicy: v as TicketRule })}
             />
-          </Row>
-        </SettingsGroup>
-      </div>
+            <ServerRuleRow
+              settingId="tickets.require-assignee"
+              label="Require an assignee"
+              hint={
+                <>
+                  Who on this server should answer. {ASSIGNEE_NOW[settings.assigneePolicy]}
+                  {hasDefault && settings.assigneePolicy !== 'off' && ' A ticket that names nobody goes to the default assignee instead.'}
+                </>
+              }
+              value={settings.assigneePolicy}
+              options={ruleOptions}
+              canEdit={canEdit}
+              busy={busy}
+              onSave={(v) => save({ assigneePolicy: v as TicketRule })}
+            />
+            <ServerRuleRow
+              settingId="tickets.default-assignee"
+              label="Default assignee"
+              hint={
+                defaultGone ? (
+                  <span className="text-[var(--color-status-warn-text)]">
+                    {settings.defaultAssignee} is no longer on this server, so tickets that name nobody stay unassigned.{' '}
+                    {canEdit ? 'Pick someone else.' : 'Ask the owner or an admin to pick someone else.'}
+                  </span>
+                ) : hasDefault ? (
+                  'Gets every agent ticket that names nobody, and its notification.'
+                ) : (
+                  'Nobody: an agent ticket that names nobody stays unassigned until someone takes it.'
+                )
+              }
+              value={settings.defaultAssignee ?? NO_DEFAULT}
+              options={assigneeOptions}
+              canEdit={canEdit}
+              busy={busy}
+              onSave={(v) => save({ defaultAssignee: v === NO_DEFAULT ? '' : v })}
+            />
+          </>
+        )}
+      </SettingsGroup>
+
+      <SettingsGroup card title="Just for you" hint="Kept on this computer, for your login on this server." testId="tickets-just-for-you">
+        <SettingRow
+          settingId="tickets.open-on"
+          label={<span className="inline-flex items-center gap-2">Open the Tickets page on<SaveNote state={openOnSave.state} /></span>}
+          hint="The list you see first each time you open Tickets."
+          field
+        >
+          <SettingDropdown
+            ariaLabel="Open the Tickets page on"
+            value={openOn}
+            options={TICKET_OPEN_ON_OPTIONS}
+            fullWidth
+            onChange={(v) => {
+              const next = v as TicketOpenOn
+              if (next === openOn) return
+              writeTicketOpenOn(next)
+              setOpenOn(next)
+              openOnSave.saved()
+            }}
+          />
+        </SettingRow>
+      </SettingsGroup>
     </div>
   )
 }

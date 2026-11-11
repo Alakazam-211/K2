@@ -19,6 +19,9 @@
 //!   group name) before any write, then apply with an undo list.
 //! - [`limits`]: an API key's hire envelope and the ceiling checks.
 //! - [`ledger`]: `agent_instances`, members, `hire_events`.
+//! - [`template`]: agent templates (prd-agent-templates-v1): built-in and
+//!   library types, `apply`, `.k2/agent/template.lock`. Every door's
+//!   `template` resolves through it.
 //!
 //! Launch and first brief need the daemon's session machinery, so the
 //! daemon runs them after the durable steps commit.
@@ -34,7 +37,7 @@ pub mod plan;
 pub mod recipe;
 pub mod root;
 pub mod steps;
-pub mod templates;
+pub mod template;
 
 use std::fmt;
 

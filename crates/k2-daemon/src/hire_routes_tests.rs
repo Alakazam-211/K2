@@ -568,3 +568,103 @@ fn msg_who_answers_from_the_credential_not_the_body() {
     let r = handle_cli(CLI_MSG_WHO, Who::Agent { project_id: "x".into(), session_id: "s".into() }, false, b"", &params(&id), None);
     assert_eq!(r.status, "404 Not Found", "{}", r.body);
 }
+
+// ── agent templates (prd-agent-templates-v1 T1/T2) ──────────────────
+
+fn cli(path: &str, who: Who, post: bool, body: Value, q: &[(&str, &str)]) -> (u16, Value) {
+    let p: HashMap<String, String> = q.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let r = handle_cli(path, who, post, body.to_string().as_bytes(), &p, None);
+    (status_code(r.status), serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("json {e}: {}", r.body)))
+}
+
+/// AT6 against the real catalog: every built-in's suggestions are standing
+/// V1 actions, and the loader refuses a one-time one once installed.
+#[test]
+fn template_builtins_suggest_only_standing_actions() {
+    super::install_template_action_check();
+    for t in k2_core::hire::template::builtins() {
+        let t = t.unwrap_or_else(|e| panic!("built-in fails with the real catalog installed: {e}"));
+        for id in t.suggested() {
+            assert_eq!(
+                super::template_action_kind(&id),
+                k2_core::hire::template::ActionKind::Standing,
+                "{}: suggest {id}",
+                t.meta.id
+            );
+        }
+    }
+    assert_eq!(super::template_action_kind("connections.add"), k2_core::hire::template::ActionKind::OneTime);
+    assert_eq!(super::template_action_kind("no.such-action"), k2_core::hire::template::ActionKind::Unknown);
+}
+
+#[test]
+fn template_list_and_show_routes() {
+    let _home = k2_core::test_env::TempHome::new();
+    ensure_test_root();
+    let (st, v) = cli(CLI_TEMPLATES, Who::Owner, false, json!({}), &[]);
+    assert_eq!(st, 200, "{v}");
+    let ids: Vec<&str> = v["templates"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
+    assert_eq!(ids.first(), Some(&"general"), "General first: {ids:?}");
+    assert_eq!(ids.len(), 10, "the ten built-ins: {ids:?}");
+    // An agent passport reads them too (K5 and leads hire).
+    let agent = Who::Agent { project_id: "w".into(), session_id: "s".into() };
+    let (st, v) = cli(CLI_TEMPLATES_SHOW, agent, false, json!({}), &[("id", "qa"), ("files", "1")]);
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["template"]["id"], "reviewer", "qa is the Reviewer: {v}");
+    assert!(v["template"]["files"]["ROLE.md"].as_str().unwrap().contains("You check work"));
+    let (st, v) = cli(CLI_TEMPLATES_SHOW, Who::Owner, false, json!({}), &[("id", "boss")]);
+    assert_eq!((st, v["error"]["code"].as_str()), (404, Some("unknown_template")), "{v}");
+    let (st, _) = cli(CLI_TEMPLATES_SHOW, Who::Owner, false, json!({}), &[]);
+    assert_eq!(st, 400);
+    let r = handle_cli(CLI_TEMPLATES, Who::Owner, true, b"{}", &HashMap::new(), None);
+    assert_eq!(r.status, "405 Method Not Allowed");
+}
+
+#[test]
+fn template_hire_through_the_cli_door() {
+    let _home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    let name = uniq("Max");
+    // A dry run with no folder: the review rows, nothing written.
+    let (st, plan) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": name, "preset": "codex", "dryRun": true }), &[]);
+    assert_eq!(st, 200, "{plan}");
+    assert_eq!(plan["dryRun"], true);
+    let path = plan["path"].as_str().unwrap().to_string();
+    assert!(Path::new(&path).starts_with(&root), "{path} under {}", root.display());
+    assert!(!Path::new(&path).exists(), "a dry run writes nothing");
+    assert!(plan["rows"].as_array().unwrap().iter().any(|r| r["step"] == "role" && r["status"] == "write"), "{plan}");
+    // The hire.
+    let (st, out) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": name, "preset": "codex", "launch": false }), &[]);
+    assert_eq!(st, 200, "{out}");
+    assert_eq!(out["path"], path.as_str());
+    assert_eq!(out["created"], true);
+    assert!(out["hello"].as_str().is_some_and(|h| h.contains("Say hello")), "{out}");
+    assert!(out["steps"].as_array().unwrap().iter().any(|s| s["step"] == "write-persona" && s["status"] == "done"), "{out}");
+    assert_eq!(project_by_handle(out["handle"].as_str().unwrap()).map(|(id, _)| id), out["id"].as_str().map(str::to_string));
+    // Again: nothing changes.
+    let (_, again) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": name, "preset": "codex" }), &[]);
+    assert_eq!(again["changed"], false, "{again}");
+    // Another template on the same agent is a conflict.
+    let (st, e) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "ops", "path": path }), &[]);
+    assert_eq!((st, e["error"]["code"].as_str()), (409, Some("template_conflict")), "{e}");
+    // Template and persona together are refused.
+    let (st, _) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "ops", "persona": "x", "path": format!("{path}-x") }), &[]);
+    assert_eq!(st, 400);
+}
+
+/// A recipe member takes any template id (AT11); an API key can't hire a
+/// system template (checked on the plan, before anything is written).
+#[test]
+fn template_recipe_member_takes_a_template() {
+    let _home = k2_core::test_env::TempHome::new();
+    let who = owner();
+    let handle = uniq("rev");
+    let (st, v) = call(V1_HIRE, &who, true, json!({ "agent": { "handle": handle, "template": "qa", "launch": false } }), None);
+    assert_eq!(st, 200, "{v}");
+    let (_, path) = project_by_handle(&handle).expect("hired");
+    let lock = std::fs::read_to_string(Path::new(&path).join(".k2/agent/template.lock")).expect("lock");
+    assert!(lock.contains("id = \"reviewer\""), "{lock}");
+    assert!(Path::new(&path).join(".k2/wiki/Review notes.md").is_file());
+    let (st, v) = call(V1_HIRE, &who, true, json!({ "agent": { "template": "boss" } }), None);
+    assert_eq!(st, 400, "{v}");
+}

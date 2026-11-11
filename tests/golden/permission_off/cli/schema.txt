@@ -487,13 +487,14 @@ exit: 0
     },
     {
       "name": "agent hire",
-      "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
-      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
-      "args": [{"name": "dir", "required": true}],
+      "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>). Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "args": [{"name": "dir", "required": false}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
         {"name": "--agent", "arg": "preset", "description": "Which agent PROGRAM this workspace launches (preset id/label/command token; see k2 preset list). Must exist and be enabled. Without it, spawns fall through to the global default and ultimately Claude."},
-        {"name": "--template", "arg": "archetype", "description": "Built-in persona archetype: worker | manager | qa | researcher. Mutually exclusive with --persona (both = exit 2)."},
+        {"name": "--template", "arg": "id", "description": "An agent template id (k2 agent template list: general, lead, developer, app-owner, designer, researcher, reviewer, writer, support, ops; old ids worker, manager, qa still work). Writes only what's missing, never the agent's own files; one template per agent; suggests permissions, grants none. Mutually exclusive with --persona (both = exit 2)."},
+        {"name": "--param", "arg": "key=value", "description": "A value the template asks for (repeatable; k2 agent template show <id> lists them), e.g. about=\"the billing service\"."},
         {"name": "--persona", "arg": "file.md", "description": "Use this file as the agent's persona (copied to <dir>/.k2/agent/ROLE.md)."},
         {"name": "--mode", "arg": "mode", "description": "off | custom | manager | k2 (default: custom). 'off' also sets enabled=false."},
         {"name": "--enabled", "arg": "bool", "description": "true | false (default: true). false pauses without changing mode."},
@@ -501,15 +502,35 @@ exit: 0
         {"name": "--project", "arg": "project", "description": "Add the new agent to a project (name or id, repeatable; see k2 project list). Already a member = reported no-op; the FIRST member of an empty project becomes its Point of Contact (becamePoc)."},
         {"name": "--focus-group", "arg": "group", "description": "Assign the workspace to a Focus Group (name or id). none/off clears. Unknown group = exit 4."},
         {"name": "--color", "arg": "hex|rgb", "description": "Workspace color as #rrggbb, #rgb, rgb(r,g,b), or r,g,b. Not limited to the GUI swatches."},
-        {"name": "--context", "arg": "path|catalog-id", "description": "Seed an always-on context layer after open (repeatable). Path must exist; catalog ids from `k2 agent context catalog` (wiki:index|home|hygiene, subagents:pack, manager:pack, k2:pack, connections|heartbeats|skills|users:roster, …) warn if the file is missing and still stack. Re-hire with the same layer is a no-op."},
+        {"name": "--context", "arg": "path|catalog-id", "description": "Seed an always-on context layer after open (repeatable). Path must exist; catalog ids from `k2 agent context catalog` (wiki:index|home|hygiene, subagents:pack, manager:pack, k5:pack, connections|heartbeats|skills|users:roster, …) warn if the file is missing and still stack. Re-hire with the same layer is a no-op."},
         {"name": "--db-access", "arg": "off|read|write", "description": "Create-only passport for k2 db create (default off). List/dsn/store work when this workspace owns a DB or has a grant. Does not mint a database — hire calls k2 db create separately."},
         {"name": "--no-wiki", "arg": null, "description": "Skip seeding .k2/wiki/Home.md + _Index.md on first register (wiki is seeded by default)."},
         {"name": "--no-agents-md", "arg": null, "description": "Skip planting cwd AGENTS.md on first register (generated by default for new agents). Compose still writes .k2/AGENTS.md."},
         {"name": "--fanout", "arg": null, "description": "Opt in to leftover harness fan-out (CLAUDE.md, GEMINI.md, AGENT.md, …). Off by default."},
-        {"name": "--launch", "arg": null, "description": "Start the agent's session after provisioning."},
+        {"name": "--launch", "arg": null, "description": "Start the agent's session after provisioning. On a template hire's first create the agent then says hello on its Thread."},
         {"name": "--onboard", "arg": "msg", "description": "Send msg to the agent after it starts (implies --launch)."},
         {"name": "--dry-run", "arg": null, "description": "Print the exact action plan; change nothing."},
         {"name": "--json", "arg": null, "description": "JSON output (ok/changed/actions)."}
+      ]
+    },
+    {
+      "name": "agent template list",
+      "usage": "k2 agent template list [--all] [--json]",
+      "description": "The agent types you can hire (agent templates): K2's built-ins, General first, then templates saved on this server. --all adds K2's system templates (hired by id only). Hire one with k2 agent hire --template <id> --name <name>.",
+      "args": [],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "Include system templates."},
+        {"name": "--json", "arg": null, "description": "JSON output: {ok, templates: [{id, version, name, summary, kind, aliases, author, origin, hash}], problems}."}
+      ]
+    },
+    {
+      "name": "agent template show",
+      "usage": "k2 agent template show <id> [--files] [--json]",
+      "description": "What one agent template gives a new agent: charter, params (--param key=value on hire), starter wiki notes, context layers, suggested permissions (suggestions only; nothing is granted) and its hello. Old ids work: worker, manager, qa. Unknown id = exit 4.",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--files", "arg": null, "description": "Print every file of the template."},
+        {"name": "--json", "arg": null, "description": "JSON output: {ok, template}."}
       ]
     },
     {
@@ -639,7 +660,7 @@ exit: 0
     {
       "name": "agent context add",
       "usage": "k2 agent context add <path|catalog-id> [--label name] [--json]",
-      "description": "Add an optional layer by workspace-relative path or catalog id (see `k2 agent context catalog`: wiki:*, subagents:pack, manager:pack, k2:pack, *:roster, …). Regenerates AGENTS.md.",
+      "description": "Add an optional layer by workspace-relative path or catalog id (see `k2 agent context catalog`: wiki:*, subagents:pack, manager:pack, k5:pack, *:roster, …). Regenerates AGENTS.md.",
       "args": [{"name": "path_or_catalog", "required": true}],
       "flags": [
         {"name": "--label", "arg": "name", "description": "Optional display label for the layer."},

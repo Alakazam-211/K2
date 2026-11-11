@@ -54,12 +54,33 @@ out="$(k2 agent hire "$dir" --name "Core Agent" --template worker --db-access re
 [ "$(step_status register-workspace <<<"$out")" = "done" ] || fail "register via core: $out"
 [ "$(step_status write-persona <<<"$out")" = "done" ] || fail "persona via core: $out"
 [ "$(step_status set-db-access <<<"$out")" = "done" ] || fail "db access via core: $out"
-grep -q "WORKER agent" "$dir/.k2/agent/ROLE.md" || fail "template persona written"
+# 0.46.12: `worker` is the General template; the daemon writes the persona.
+grep -q "You are Core Agent. You help" "$dir/.k2/agent/ROLE.md" || fail "template persona written: $(cat "$dir/.k2/agent/ROLE.md")"
+grep -q '^id = "general"' "$dir/.k2/agent/template.lock" || fail "template lock written"
+[ "$(step_status apply-template <<<"$out")" = "done" ] || fail "apply-template via core: $out"
+[ -f "$dir/.k2/wiki/About my person.md" ] || fail "starter note written"
 conf="$(k2 agent conf "$dir" --json)"
 [ "$(jq -r .name <<<"$conf")" = "Core Agent" ] || fail "name: $conf"
 again="$(k2 agent hire "$dir" --name "Core Agent" --template worker --db-access read --json)"
 [ "$(jq -r .changed <<<"$again")" = "false" ] || fail "re-hire converges: $again"
 ok "create + converge"
+
+echo "== template hire with no <dir>, list, show =="
+k2 agent hire-root set "$SANDBOX_HOME/agents" >/dev/null
+plan="$(k2 agent hire --template writer --name "Max Example" --dry-run --json)"
+[ "$(jq -r .dryRun <<<"$plan")" = "true" ] || fail "dry run: $plan"
+case "$(jq -r .path <<<"$plan")" in "$SANDBOX_HOME/agents/"*) ;; *) fail "no-dir path under the hire root: $plan" ;; esac
+[ ! -e "$(jq -r .path <<<"$plan")" ] || fail "a dry run writes nothing"
+k2 agent hire --template writer --name "Max Example" --json >"$SANDBOX_HOME/writer.json" || fail "no-dir hire: $(cat "$SANDBOX_HOME/writer.json")"
+wpath="$(jq -r .path "$SANDBOX_HOME/writer.json")"
+[ -f "$wpath/.k2/wiki/Voice and style.md" ] || fail "writer starter in $wpath"
+k2 agent template list | grep -q "^  general " || fail "list shows general"
+k2 agent template show qa | grep -q "^Reviewer (reviewer)" || fail "qa is the Reviewer"
+set +e; k2 agent template show boss >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "4" ] || fail "unknown template exits 4 (got $rc)"
+set +e; k2 agent hire "$wpath" --template ops >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "3" ] || fail "a second template on one agent is refused with 3 (got $rc)"
+ok "template hire, list, show"
 
 echo "== hire root =="
 k2 agent hire-root set "$SANDBOX_HOME/agents" >/dev/null

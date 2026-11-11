@@ -294,6 +294,19 @@ pub(crate) fn handle_v1_hire(principal: &V1Principal, body: &[u8]) -> CliRespons
     if !out.wiki_notes.is_empty() {
         body["wiki"] = serde_json::json!({ "notes": out.wiki_notes });
     }
+    // prd-agent-templates-v1 AT11: a template hire reports its rows, its
+    // suggestions and (first create only) its hello; `/v1/w` never starts a
+    // session, so the caller delivers the hello.
+    if let Some(t) = out.template.as_ref() {
+        body["template"] = serde_json::json!({
+            "id": t.template.id,
+            "version": t.template.version,
+            "hash": t.template.hash,
+            "rows": t.rows,
+            "permissions": t.permissions,
+            "hello": t.hello,
+        });
+    }
     if req.context.is_some() || req.layers.is_some() {
         body["context"] = stack_json(&out.path);
     }
@@ -996,13 +1009,101 @@ mod tests {
             k2_core::workspace::agent_identity::workspace_agent_path(&path),
         );
         let text = fs::read_to_string(&persona).expect("persona");
+        // 0.46.12: the old `worker` id is the General template.
         assert!(
-            text.contains("WORKER agent"),
+            text.contains("You are Scout. You help") && text.contains("<!-- K2:MANAGED:BEGIN -->"),
             "template body missing: {text}"
         );
+        assert_eq!(v["template"]["id"], "general", "{v}");
+        let lock = fs::read_to_string(ws.join(".k2/agent/template.lock")).expect("lock");
+        assert!(lock.contains("id = \"general\""), "{lock}");
         let row = lookup_project(&path).expect("row");
         assert_eq!(row.default_agent.as_deref(), Some("claude"));
         assert_eq!(row.default_model.as_deref(), Some("opus"));
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    /// prd-agent-templates-v1 §3: a re-run changes nothing, and the agent's
+    /// own edits survive it (written only with JSON and files, so the same
+    /// test runs red on a K2 without templates).
+    #[test]
+    fn hire_template_rerun_changes_nothing_and_keeps_edits() {
+        let _home = k2_core::test_env::TempHome::new();
+        k2_core::db::init_for_tests();
+        let ws = unique_ws("tmpl-rerun");
+        let path = ws.to_string_lossy().into_owned();
+        let body = serde_json::json!({ "path": path, "template": "writer", "name": "Max" }).to_string();
+        let first = parse_ok(&handle_v1_hire(&V1Principal::Owner, body.as_bytes()));
+        assert_eq!(first["changed"], true, "{first}");
+        let note = ws.join(".k2/wiki/About my person.md");
+        assert!(note.is_file(), "starter note written");
+        let mine = "# About my person\n\nSam likes short updates.\n";
+        fs::write(&note, mine).expect("edit the note");
+        let role = ws.join(".k2/agent/ROLE.md");
+        let role_mine = format!("{}\nMy own rule.\n", fs::read_to_string(&role).expect("role"));
+        fs::write(&role, &role_mine).expect("edit ROLE.md");
+        let lock_before = fs::read_to_string(ws.join(".k2/agent/template.lock")).expect("lock");
+        let again = parse_ok(&handle_v1_hire(&V1Principal::Owner, body.as_bytes()));
+        assert_eq!(again["changed"], false, "a second run changes nothing: {again}");
+        assert_eq!(fs::read_to_string(&note).unwrap(), mine, "the agent's note is never overwritten");
+        assert_eq!(fs::read_to_string(&role).unwrap(), role_mine, "ROLE.md is never replaced");
+        assert_eq!(fs::read_to_string(ws.join(".k2/agent/template.lock")).unwrap(), lock_before, "lock untouched");
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    /// The loader refuses a bad library template, naming the file (and a
+    /// good one hires).
+    #[test]
+    fn hire_template_loader_refuses_a_bad_library_template() {
+        let home = k2_core::test_env::TempHome::new();
+        k2_core::db::init_for_tests();
+        let lib = home.path().join(".k2/agent-templates");
+        let write = |id: &str, toml: &str, role: Option<&str>| {
+            let d = lib.join(id).join("v1");
+            fs::create_dir_all(&d).expect("mkdir");
+            fs::write(d.join("template.toml"), toml).expect("toml");
+            if let Some(r) = role {
+                fs::write(d.join("ROLE.md"), r).expect("role");
+            }
+        };
+        let head = |id: &str| format!("schema = 1\nid = \"{id}\"\nversion = 1\nname = \"Example\"\nsummary = \"An example.\"\nauthor = \"user:sam\"\n");
+        write("bad-key", &format!("{}sendMail = true\n", head("bad-key")), Some("x\n"));
+        write("bad-ph", &head("bad-ph"), Some("Hello {{boss}}\n"));
+        write("fake-k2", &head("fake-k2").replace("user:sam", "K2"), Some("x\n"));
+        write("good-one", &head("good-one"), Some("You are {{name}}, for {{person}}.\n"));
+        for (id, want) in [("bad-key", "sendMail"), ("bad-ph", "{{boss}}"), ("fake-k2", "author")] {
+            let ws = unique_ws(id);
+            let body = serde_json::json!({ "path": ws.to_string_lossy(), "template": id }).to_string();
+            let r = handle_v1_hire(&V1Principal::Owner, body.as_bytes());
+            assert_eq!(r.status, "400 Bad Request", "{id}: {}", r.body);
+            assert!(r.body.contains("bad_template") && r.body.contains(want), "{id}: want {want}: {}", r.body);
+            assert!(!ws.exists(), "{id}: a refused template writes nothing");
+        }
+        let ws = unique_ws("good-one");
+        let body = serde_json::json!({ "path": ws.to_string_lossy(), "template": "good-one", "name": "Max" }).to_string();
+        parse_ok(&handle_v1_hire(&V1Principal::Owner, body.as_bytes()));
+        let text = fs::read_to_string(ws.join(".k2/agent/ROLE.md")).expect("persona");
+        assert!(text.contains("You are Max, for "), "{text}");
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    /// AT11: `/v1/w {template}` takes any template id, not just the old four.
+    #[test]
+    fn hire_template_takes_any_template_id() {
+        let _home = k2_core::test_env::TempHome::new();
+        k2_core::db::init_for_tests();
+        let ws = unique_ws("tmpl-any");
+        let path = ws.to_string_lossy().into_owned();
+        let body = serde_json::json!({ "path": path, "template": "support", "params": { "about": "the shop's email" } }).to_string();
+        let v = parse_ok(&handle_v1_hire(&V1Principal::Owner, body.as_bytes()));
+        assert_eq!(v["template"]["id"], "support", "{v}");
+        assert!(ws.join(".k2/wiki/Customers and FAQs.md").is_file());
+        let text = fs::read_to_string(ws.join(".k2/agent/ROLE.md")).expect("persona");
+        assert!(text.contains("focus on: the shop's email"), "{text}");
+        let bad = serde_json::json!({ "path": unique_ws("tmpl-bad").to_string_lossy(), "template": "boss" }).to_string();
+        let r = handle_v1_hire(&V1Principal::Owner, bad.as_bytes());
+        assert_eq!(r.status, "404 Not Found", "{}", r.body);
+        assert!(r.body.contains("unknown_template"), "{}", r.body);
         let _ = fs::remove_dir_all(&ws);
     }
 

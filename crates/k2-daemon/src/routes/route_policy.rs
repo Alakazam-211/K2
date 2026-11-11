@@ -198,6 +198,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/agent-teams/link", Admin),
     get("/cli/agent-teams/links", Member),
     post("/cli/agent-teams/unlink", Admin),
+    // Agent templates (prd-agent-templates-v1 T1): list + one card. Member
+    // (anyone who may hire); agent passports read them too.
+    get("/cli/agent-templates", Member),
+    get("/cli/agent-templates/show", Member),
     post("/cli/agent/complete", Member),
     get("/cli/agent/conf", Member),
     // 0.45.5 app identity surface: an App pass (agent:handle /

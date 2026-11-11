@@ -16,13 +16,21 @@ use super::{HireCaller, HireError};
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConvergeRequest {
+    /// The folder. Required here; a template hire (`apply`) may leave it
+    /// empty for `<hire root>/<handle>`.
+    #[serde(default)]
     pub path: String,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
     pub preset: Option<String>,
+    /// An agent template id or alias (`writer`, `worker`): resolved through
+    /// the template registry (prd-agent-templates-v1 AT11).
     #[serde(default)]
     pub template: Option<String>,
+    /// The template's `[params]` (`about`), and `person`.
+    #[serde(default)]
+    pub params: Option<std::collections::BTreeMap<String, String>>,
     /// ROLE.md body.
     #[serde(default)]
     pub persona: Option<String>,
@@ -100,6 +108,8 @@ pub struct ConvergeOutcome {
     pub created: bool,
     pub steps: Vec<StepReport>,
     pub wiki_notes: Vec<serde_json::Value>,
+    /// The template's own steps, when the request named one.
+    pub template: Option<super::template::WorkspaceOutcome>,
 }
 
 /// Expand `~`, require absolute, canonicalize an existing directory.
@@ -242,11 +252,21 @@ pub fn converge(
     if (template.is_some() as u8 + persona.is_some() as u8 + persona_raw.is_some() as u8) > 1 {
         return Err(HireError::usage("template and persona are mutually exclusive — pass one or the other"));
     }
-    if let Some(t) = template {
-        if super::templates::hire_template_body(t).is_none() {
-            return Err(HireError::usage(format!("unknown template '{t}' — valid: worker, manager, qa, researcher")));
+    let tpl = match template {
+        Some(t) => {
+            let tpl = super::template::resolve(t)?;
+            super::template::check_caller(&tpl, caller)?;
+            let vars = super::template::bind_params(&tpl, &req.params.clone().unwrap_or_default(), caller)?;
+            super::template::apply::check_lock(&path, &tpl)?;
+            Some((tpl, vars))
         }
-    }
+        None => {
+            if req.params.as_ref().is_some_and(|p| !p.is_empty()) {
+                return Err(HireError::usage("params go with a template (--template <id>)"));
+            }
+            None
+        }
+    };
     check_db_access(caller, req.db_access.as_deref(), auth.max_db)?;
     if existing.is_none() {
         if !auth.may_create {
@@ -314,20 +334,51 @@ pub fn converge(
         }
     }
 
-    let source = if let Some(t) = template {
-        PersonaSource::Template(t.to_string())
-    } else if let Some(p) = persona {
-        PersonaSource::Body(p.to_string())
-    } else if let Some(raw) = persona_raw {
-        PersonaSource::Raw(raw.to_string())
+    let mut template_out = None;
+    if let Some((tpl, vars)) = tpl.as_ref() {
+        // The template writes the persona (and its starters, layers, lock)
+        // before the name and preset steps below.
+        let display = match req.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(n) => n.to_string(),
+            None => {
+                let d = crate::workspace::display::agent_display_name(&path);
+                if d.is_empty() {
+                    Path::new(&path).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+                } else {
+                    d
+                }
+            }
+        };
+        let out = super::template::apply::workspace_steps(&super::template::apply::StepInput {
+            tpl,
+            vars,
+            path: &path,
+            caller,
+            display_name: display,
+            created,
+            registered: true,
+            dry_run: false,
+            no_wiki,
+            tool_chosen: req.preset.as_deref().is_some_and(|s| !s.trim().is_empty()),
+            model_chosen: req.default_model.as_deref().is_some_and(|s| !s.trim().is_empty()),
+        })?;
+        changed |= out.changed;
+        steps_out.push(if out.wrote_role { done("write-persona") } else { skipped("write-persona", "exists") });
+        template_out = Some(out);
     } else {
-        PersonaSource::Default
-    };
-    if steps::ensure_persona(&path, req.role.as_deref(), &source)? {
-        changed = true;
-        steps_out.push(done("write-persona"));
-    } else {
-        steps_out.push(skipped("write-persona", "exists"));
+        let source = if let Some(p) = persona {
+            PersonaSource::Body(p.to_string())
+        } else if let Some(raw) = persona_raw {
+            PersonaSource::Raw(raw.to_string())
+        } else {
+            PersonaSource::Default
+        };
+        if steps::ensure_persona(&path, req.role.as_deref(), &source)? {
+            changed = true;
+            steps_out.push(done("write-persona"));
+        } else {
+            steps_out.push(skipped("write-persona", "exists"));
+        }
     }
 
     if let Some(name) = req.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -399,6 +450,7 @@ pub fn converge(
         created,
         steps: steps_out,
         wiki_notes,
+        template: template_out,
     })
 }
 

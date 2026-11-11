@@ -144,9 +144,7 @@ pub struct Instantiated {
 }
 
 fn persona_source(m: &super::recipe::MemberRecipe) -> PersonaSource {
-    if let Some(t) = m.template.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        PersonaSource::Template(t.to_string())
-    } else if let Some(p) = m.persona.as_deref().filter(|s| !s.trim().is_empty()) {
+    if let Some(p) = m.persona.as_deref().filter(|s| !s.trim().is_empty()) {
         PersonaSource::Body(p.to_string())
     } else {
         PersonaSource::Default
@@ -279,7 +277,33 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
             ledger::add_member(&conn, instance_id, &ws_id, &m.role, &m.handle, &path_s, m.lead)?;
         }
         let r = &m.recipe;
-        steps::ensure_persona(&path_s, Some(&m.role), &persona_source(r))?;
+        // A template member: the template's own steps (persona, starters,
+        // catalog, layers, lock) instead of the bare persona (AT11).
+        let mut hello = None;
+        match r.template.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(t) => {
+                let tpl = super::template::resolve(t)?;
+                super::template::check_caller(&tpl, caller)?;
+                let vars = super::template::bind_params(&tpl, &r.params.clone().unwrap_or_default(), caller)?;
+                let out = super::template::apply::workspace_steps(&super::template::apply::StepInput {
+                    tpl: &tpl,
+                    vars: &vars,
+                    path: &path_s,
+                    caller,
+                    display_name: r.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| m.handle.clone()),
+                    created: true,
+                    registered: true,
+                    dry_run: false,
+                    no_wiki: !seed_wiki,
+                    tool_chosen: r.preset.is_some(),
+                    model_chosen: r.model.is_some(),
+                })?;
+                hello = out.hello;
+            }
+            None => {
+                steps::ensure_persona(&path_s, Some(&m.role), &persona_source(r))?;
+            }
+        }
         if let Some(n) = r.name.as_deref() {
             steps::set_display_name(&path_s, n)?;
         }
@@ -330,8 +354,11 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
             Some(a) => Some(apply_app_login(a, &ws_id, instance_id, caller, undo)?),
             None => None,
         };
-        if r.launch.unwrap_or(false) || r.brief.is_some() {
-            launches.push(LaunchJob { path: path_s.clone(), handle: m.handle.clone(), brief: r.brief.clone() });
+        // A template's hello is the first brief unless the recipe has its
+        // own; `launch: false` keeps the agent asleep (and the hello unsent).
+        let brief = r.brief.clone().or_else(|| hello.filter(|_| r.launch != Some(false)));
+        if r.launch.unwrap_or(false) || brief.is_some() {
+            launches.push(LaunchJob { path: path_s.clone(), handle: m.handle.clone(), brief });
         }
         hired.push(HiredMember {
             role: m.role.clone(),
@@ -518,7 +545,16 @@ pub fn instantiate(
                 plan.on_behalf_of.as_deref(),
                 "ok",
                 None,
-                Some(&serde_json::json!({ "members": body["members"].as_array().map(|a| a.len()).unwrap_or(0), "team": plan.team_name })),
+                Some(&serde_json::json!({
+                    "members": body["members"].as_array().map(|a| a.len()).unwrap_or(0),
+                    "team": plan.team_name,
+                    // prd-agent-templates-v1: template@version and its hash per member.
+                    "templates": plan.members.iter().filter_map(|m| {
+                        let t = m.recipe.template.as_deref()?;
+                        let tpl = super::template::resolve(t).ok()?;
+                        Some(serde_json::json!({ "handle": m.handle, "template": format!("{}@{}", tpl.meta.id, tpl.meta.version), "hash": tpl.hash }))
+                    }).collect::<Vec<_>>(),
+                })),
             );
             for l in &made_links {
                 ledger::event(&conn, "agent-link", caller, Some(&instance_id), Some(&l.id), plan.on_behalf_of.as_deref(), "ok", None, None);

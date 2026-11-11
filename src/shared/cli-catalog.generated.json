@@ -405,8 +405,18 @@
    },
    {
     "name": "agent hire",
-    "usage": "k2 agent hire <dir> [--name <n>] [--agent <preset>] [--template <t>|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
-    "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found."
+    "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
+    "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>). Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found."
+   },
+   {
+    "name": "agent template list",
+    "usage": "k2 agent template list [--all] [--json]",
+    "description": "The agent types you can hire (agent templates): K2's built-ins, General first, then templates saved on this server. --all adds K2's system templates (hired by id only). Hire one with k2 agent hire --template <id> --name <name>."
+   },
+   {
+    "name": "agent template show",
+    "usage": "k2 agent template show <id> [--files] [--json]",
+    "description": "What one agent template gives a new agent: charter, params (--param key=value on hire), starter wiki notes, context layers, suggested permissions (suggestions only; nothing is granted) and its hello. Old ids work: worker, manager, qa. Unknown id = exit 4."
    },
    {
     "name": "agent conf",
@@ -471,7 +481,7 @@
    {
     "name": "agent context add",
     "usage": "k2 agent context add <path|catalog-id> [--label name] [--json]",
-    "description": "Add an optional layer by workspace-relative path or catalog id (see `k2 agent context catalog`: wiki:*, subagents:pack, manager:pack, k2:pack, *:roster, …). Regenerates AGENTS.md."
+    "description": "Add an optional layer by workspace-relative path or catalog id (see `k2 agent context catalog`: wiki:*, subagents:pack, manager:pack, k5:pack, *:roster, …). Regenerates AGENTS.md."
    },
    {
     "name": "agent context remove",

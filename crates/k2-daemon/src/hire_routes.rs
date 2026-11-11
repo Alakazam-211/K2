@@ -56,6 +56,10 @@ pub const CLI_LINK: &str = "/cli/agent-teams/link";
 pub const CLI_UNLINK: &str = "/cli/agent-teams/unlink";
 pub const CLI_LINKS: &str = "/cli/agent-teams/links";
 pub const CLI_MSG_WHO: &str = "/cli/msg/who";
+/// Agent templates (prd-agent-templates-v1 T1): the picker and one card.
+/// Member floor; agent passports read them too (K5 and leads hire).
+pub const CLI_TEMPLATES: &str = "/cli/agent-templates";
+pub const CLI_TEMPLATES_SHOW: &str = "/cli/agent-templates/show";
 
 /// Every `/v1` hire path (exact).
 pub const V1_PATHS: &[&str] = &[V1_HIRE, V1_INSTANCES, V1_RETIRE, V1_LINK, V1_UNLINK, V1_LINKS];
@@ -72,6 +76,8 @@ const CLI_PATHS: &[&str] = &[
     CLI_UNLINK,
     CLI_LINKS,
     CLI_MSG_WHO,
+    CLI_TEMPLATES,
+    CLI_TEMPLATES_SHOW,
 ];
 const CLI_POST_ONLY: &[&str] = &[CLI_HIRE, CLI_INSTANCES_HIRE, CLI_INSTANCES_RETIRE, CLI_LINK, CLI_UNLINK];
 
@@ -754,6 +760,12 @@ pub fn handle_cli(
         CLI_HIRE => cli_converge(&who, body),
         CLI_HIRE_ROOT => hire_root(&who, is_post, body),
         CLI_MSG_WHO => msg_who(&who, params),
+        CLI_TEMPLATES | CLI_TEMPLATES_SHOW => {
+            if is_post {
+                return CliResponse::method_not_allowed();
+            }
+            templates_read(path, params)
+        }
         CLI_LINKS => {
             if is_post {
                 return CliResponse::method_not_allowed();
@@ -818,6 +830,11 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
     let extra: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
     let take_app = extra.get("takeApp").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let brief = extra.get("brief").and_then(|v| v.as_str()).map(str::to_string);
+    // prd-agent-templates-v1 T2: a template hire runs `apply` (the one
+    // front door: optional path, dry run as the review, the lock).
+    if req.template.as_deref().is_some_and(|t| !t.trim().is_empty()) {
+        return cli_template_hire(who, &caller, &req, &extra, take_app.as_deref(), brief.as_deref());
+    }
     match converge::converge(&req, &caller, &ConvergeAuthority::unrestricted()) {
         Ok(out) => {
             if out.changed || out.created {
@@ -835,6 +852,89 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
             });
             if let Some(app) = take_app {
                 v["handover"] = match crate::apps::handover::hire_take(who, &app, &out.id, brief.as_deref(), out.created) {
+                    Ok(h) => h,
+                    Err(e) => serde_json::json!({ "error": { "code": e.code, "hint": e.hint } }),
+                };
+            }
+            ok(v)
+        }
+        Err(e) => hire_error_response(&e),
+    }
+}
+
+/// The daemon's V1 action catalog, for the template loader (AT6).
+pub fn template_action_kind(id: &str) -> k2_core::hire::template::ActionKind {
+    use k2_core::hire::template::ActionKind;
+    use k2_core::permission::catalog::Grant;
+    match crate::permission::actions::find(id) {
+        Some(r) if r.spec.grant == Grant::Standing => ActionKind::Standing,
+        Some(_) => ActionKind::OneTime,
+        None => ActionKind::Unknown,
+    }
+}
+
+pub fn install_template_action_check() {
+    k2_core::hire::template::install_action_check(template_action_kind);
+}
+
+/// `GET /cli/agent-templates[?all=1]` and `GET /cli/agent-templates/show?id=<id>[&files=1]`.
+fn templates_read(path: &str, params: &HashMap<String, String>) -> CliResponse {
+    let flag = |k: &str| params.get(k).is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"));
+    let r = if path == CLI_TEMPLATES {
+        k2_core::hire::template::list_json(flag("all"))
+    } else {
+        match params.get("id").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            Some(id) => k2_core::hire::template::show_json(id, flag("files")),
+            None => Err(HireError::usage("missing ?id=<template id> (see: k2 agent template list)")),
+        }
+    };
+    match r {
+        Ok(v) => ok(v),
+        Err(e) => hire_error_response(&e),
+    }
+}
+
+/// `POST /cli/agents/hire {template, params?, path?, …}` (T2). `path` is
+/// optional: `<hire root>/<handle>`. `dryRun` returns the review rows and
+/// writes nothing. The response carries `hello` on the first create; the
+/// caller launches the agent and delivers it.
+fn cli_template_hire(
+    who: &Who,
+    caller: &HireCaller,
+    req: &ConvergeRequest,
+    extra: &serde_json::Value,
+    take_app: Option<&str>,
+    brief: Option<&str>,
+) -> CliResponse {
+    let flag = |k: &str| extra.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+    let opt = |s: &Option<String>| s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let areq = k2_core::hire::template::ApplyRequest {
+        template: req.template.clone().unwrap_or_default(),
+        params: req.params.clone().unwrap_or_default(),
+        path: opt(&Some(req.path.clone())),
+        name: opt(&req.name),
+        handle: extra.get("handle").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+        tool: opt(&req.preset),
+        model: opt(&req.default_model),
+        dry_run: flag("dryRun"),
+        db_access: opt(&req.db_access),
+        no_wiki: req.no_wiki.unwrap_or(false),
+        no_agents_md: req.no_agents_md.unwrap_or(false),
+        fanout: req.fanout.unwrap_or(false),
+    };
+    let has = |s: &Option<String>| s.as_deref().is_some_and(|s| !s.trim().is_empty());
+    if has(&req.persona) || has(&req.persona_raw) {
+        return err(400, "usage", "template and persona are mutually exclusive — pass one or the other");
+    }
+    match k2_core::hire::template::apply(&areq, caller) {
+        Ok(out) => {
+            if !out.dry_run && (out.changed || out.created) {
+                crate::v1_hire::emit_hire_watches();
+            }
+            let mut v = out.to_json();
+            v["id"] = serde_json::json!(out.workspace_id);
+            if let (Some(app), false) = (take_app, out.dry_run) {
+                v["handover"] = match crate::apps::handover::hire_take(who, app, &out.workspace_id, brief, out.created) {
                     Ok(h) => h,
                     Err(e) => serde_json::json!({ "error": { "code": e.code, "hint": e.hint } }),
                 };

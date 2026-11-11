@@ -241,6 +241,13 @@ pub fn plan(req: &HireRequest, members: Vec<MemberRecipe>, ctx: &PlanContext) ->
         (_, l) => l.clone(),
     };
     let base = super::root::base_dir(limits.as_ref().map(|l| l.folder.as_str()))?;
+    // Templates: an API key never hires a system one (k5, chief-of-staff).
+    for (i, m) in members.iter().enumerate() {
+        if let Some(t) = m.template.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            let tpl = super::template::resolve(t).map_err(|e| HireError { hint: format!("members[{i}].template: {}", e.hint), ..e })?;
+            super::template::check_caller(&tpl, &ctx.caller)?;
+        }
+    }
     let team_name = req.team.as_ref().map(|t| t.name.trim().to_string());
     let topology: &'static str = match req.team.as_ref().and_then(|t| t.topology.as_deref()) {
         Some("mesh") => "mesh",

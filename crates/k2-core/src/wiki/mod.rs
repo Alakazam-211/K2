@@ -904,6 +904,22 @@ pub struct WikiNoteBody {
     pub workspace_path: Option<String>,
 }
 
+/// The seed `_Index.md`, byte for byte. An agent template adds its pointer
+/// line only while the index is still exactly this (prd-agent-templates-v1
+/// §3: the agent's own index is never edited).
+pub const SEED_INDEX_MD: &str = r#"---
+title: _Index
+aliases: [Wiki Index]
+tags: [index]
+---
+
+# _Index
+
+Entry: [[Home]]
+
+Add one line per note as the wiki grows.
+"#;
+
 /// Create seed `Home.md` + `_Index.md` if the wiki dir is empty/missing.
 /// After any seed, syncs the host **wiki-index** at `~/.k2/wiki/` so the
 /// new brain appears on the K2 fleet map. Workspace seeds never link to
@@ -947,22 +963,7 @@ Create new `.md` files under `.k2/wiki/` and link them with `[[Note Title]]`.
     }
     let index = wiki.join("_Index.md");
     if !index.exists() {
-        fs::write(
-            &index,
-            r#"---
-title: _Index
-aliases: [Wiki Index]
-tags: [index]
----
-
-# _Index
-
-Entry: [[Home]]
-
-Add one line per note as the wiki grows.
-"#,
-        )
-        .map_err(|e| format!("write _Index.md: {e}"))?;
+        fs::write(&index, SEED_INDEX_MD).map_err(|e| format!("write _Index.md: {e}"))?;
         created.push("_Index.md".into());
     }
     // Deterministic host registration — best-effort (DB may be empty in unit tests).

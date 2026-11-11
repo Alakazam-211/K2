@@ -14,8 +14,6 @@ use crate::workspace::context_layers::{self, ContextError};
 pub enum PersonaSource {
     /// The default scaffold for the role.
     Default,
-    /// One of the four hire types.
-    Template(String),
     /// A ROLE.md body (frontmatter is generated).
     Body(String),
     /// A whole ROLE.md file as given (`k2 agent hire --persona <file>` and
@@ -23,7 +21,7 @@ pub enum PersonaSource {
     Raw(String),
 }
 
-fn ctx_err(e: ContextError) -> HireError {
+pub(crate) fn ctx_err(e: ContextError) -> HireError {
     let status = match &e {
         ContextError::NotFound(_) => 404,
         ContextError::DuplicateLayer(_) => 409,
@@ -61,11 +59,6 @@ pub fn ensure_persona(path: &str, role: Option<&str>, source: &PersonaSource) ->
     }
     let agent_name = technical_agent_name(path);
     let (role_s, agent_type, prompt) = match source {
-        PersonaSource::Template(t) => (
-            t.clone(),
-            Some(if t == "manager" { "manager" } else { "agent-template" }.to_string()),
-            super::templates::hire_template_body(t).map(str::to_string),
-        ),
         PersonaSource::Body(b) => (role.unwrap_or("custom").to_string(), None, Some(b.clone())),
         PersonaSource::Raw(_) | PersonaSource::Default => {
             (role.map(str::to_string).unwrap_or_else(|| agent_name.clone()), None, None)
@@ -120,7 +113,7 @@ pub fn set_setting(path: &str, field: &str, value: &str) -> Result<bool, HireErr
     Ok(true)
 }
 
-fn current_setting(path: &str, field: &str) -> Option<String> {
+pub(crate) fn current_setting(path: &str, field: &str) -> Option<String> {
     if field == "db_agent_access" {
         return Some(crate::workspace::settings::db_agent_access_for_path(path));
     }

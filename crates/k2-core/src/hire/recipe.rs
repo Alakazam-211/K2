@@ -103,9 +103,13 @@ pub struct MemberRecipe {
     /// ROLE.md body. Exclusive with `template`.
     #[serde(default)]
     pub persona: Option<String>,
-    /// One of today's four hire types: worker | manager | qa | researcher.
+    /// An agent template id or alias (`developer`, `worker`; `k2 agent
+    /// template list`). Exclusive with `persona`.
     #[serde(default)]
     pub template: Option<String>,
+    /// The template's `[params]` (`about`), and `person`.
+    #[serde(default)]
+    pub params: Option<std::collections::BTreeMap<String, String>>,
     /// Harness preset id (`claude`, `codex`, …).
     #[serde(default)]
     pub preset: Option<String>,
@@ -208,7 +212,6 @@ impl HireRequest {
     }
 }
 
-pub const TEMPLATES: &[&str] = &["worker", "manager", "qa", "researcher"];
 pub const DB_ACCESS: &[&str] = &["off", "read", "write"];
 pub const FREQUENCIES: &[&str] = &["hourly", "daily", "weekly", "monthly", "yearly"];
 
@@ -270,10 +273,20 @@ pub fn validate_member(m: &MemberRecipe, idx: usize) -> Result<(), HireError> {
             return Err(HireError::usage(format!("{}: at most {MAX_PERSONA_BYTES} bytes", at("persona"))));
         }
     }
-    if let Some(t) = m.template.as_deref() {
-        if !TEMPLATES.contains(&t.trim()) {
-            return Err(HireError::usage(format!("{}: one of {}", at("template"), TEMPLATES.join(", "))));
+    match (m.template.as_deref(), m.params.as_ref()) {
+        (Some(t), params) => {
+            // AT11: any template id or alias, through the registry.
+            let tpl = super::template::resolve(t).map_err(|e| HireError::usage(format!("{}: {}", at("template"), e.hint)))?;
+            if let Some(p) = params {
+                // The caller only fills `person`, which isn't checked here.
+                super::template::bind_params(&tpl, p, &super::HireCaller::Owner)
+                    .map_err(|e| HireError::usage(format!("{}: {}", at("params"), e.hint)))?;
+            }
         }
+        (None, Some(p)) if !p.is_empty() => {
+            return Err(HireError::usage(format!("{}: params go with a template", at("params"))));
+        }
+        _ => {}
     }
     for (field, v) in [("preset", &m.preset), ("model", &m.model)] {
         if let Some(s) = v.as_deref() {

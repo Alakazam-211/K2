@@ -51,7 +51,6 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   // Browser tab) is hidden while they are open.
   'components/Settings/SettingsSearchModal.tsx': 'Settings is open: Browser tabs are hidden',
   'components/Settings/sections/AddConnectionPicker.tsx': 'Settings is open: Browser tabs are hidden (an inline panel in Connections)',
-  'components/Settings/sections/ApiTokensSection.tsx': 'Settings is open: Browser tabs are hidden',
   'components/Settings/sections/DataSourcesBatchDialog.tsx': 'Settings is open: Browser tabs are hidden',
   'components/Settings/sections/DataSourceRow.tsx': 'Settings is open: Browser tabs are hidden',
   'components/Settings/sections/FanoutConfirmModal.tsx': 'Settings is open: Browser tabs are hidden',

@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { beginFileDrag } from '@/lib/file-drag'
 import { showContextMenu } from '@/lib/context-menu'
@@ -16,7 +16,7 @@ import { useFileSelectionStore } from '@/stores/file-selection'
 import { useFileClipboardStore } from '@/stores/file-clipboard'
 import { fileUndoFor } from '@/stores/file-undo'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
-import { FILE_TREE_EXTERNAL_DROP_EVENT } from '@/lib/external-drop-router'
+import { FILE_TREE_EXTERNAL_DROP_EVENT, dropPointToCss } from '@/lib/external-drop-router'
 import { onFileTreeReveal, takeFileTreeReveal } from '@/lib/file-open-requests'
 import { compressFolder, downloadFile, extractArchive } from '@/lib/fs-transfer'
 import { isWebClient } from '@/lib/is-web'
@@ -1158,8 +1158,10 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       else unlisteners.push(fn)
     }
 
-    // tauri://drag-* is emitted on the Webview, not the Window.
-    const webview = getCurrentWebview()
+    // WebviewWindow target: the one Tauri delivers tauri://drag-* to
+    // whether or not the window holds a Browser child webview (GH #82;
+    // see external-drop-router.ts).
+    const webview = getCurrentWebviewWindow()
 
     webview.listen('tauri://drag-enter', () => {
       // Don't set isDragOver here — let drag-over handle it based on position,
@@ -1167,7 +1169,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     }).then(track)
 
     webview.listen<{ position: { x: number; y: number } }>('tauri://drag-over', (event) => {
-      const { position } = event.payload
+      const position = dropPointToCss(event.payload.position)
       // Only show drop targets when hovering over the file tree panel
       if (!treeRef.current) {
         setIsDragOver(false)

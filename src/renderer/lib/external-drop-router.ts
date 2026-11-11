@@ -6,12 +6,19 @@
 // effect deps (FileTree's loadDir) leaked handlers → N uploads of the same
 // file (collision_free_path → report.pdf, report (1).pdf, …).
 //
-// Multi-window: subscribe via getCurrentWebview().listen (Webview-scoped),
-// NOT process-global listen() from @tauri-apps/api/event (target { kind: 'Any' }
-// delivers every drop to every open K2 window → multi-window inject/copy).
-// Also NOT getCurrentWindow().listen — that targets { kind: 'Window' }, but
-// Tauri emits tauri://drag-* on the Webview, so Window-scoped listeners never
-// fire (0.40.82 regression: drops into terminals did nothing).
+// Multi-window: subscribe via getCurrentWebviewWindow().listen (target
+// { kind: 'WebviewWindow', label }), NOT process-global listen() from
+// @tauri-apps/api/event (target { kind: 'Any' } delivers every drop to every
+// open K2 window → multi-window inject/copy). Tauri 2.12 emits tauri://drag-*
+// for the window's own webview two ways (tauri manager/window.rs):
+//   - window has only its own webview → emit_to(AnyLabel): any target kind
+//     with the label matches;
+//   - window ALSO holds a child webview (a Browser tab) →
+//     emit_to_window: ONLY Window / WebviewWindow targets match.
+// A Webview target (getCurrentWebview) misses the second case, so once a
+// Browser tab existed in the window every OS drop did nothing (GH #82); a
+// Window target misses Webview-kind emits (the 0.40.82 regression).
+// WebviewWindow is the one target every path delivers to.
 //
 // This module owns the ONE subscriber per webview. Hit-test order matches product rules:
 //   0. Compose bar → remote upload + insert path into draft; local path insert
@@ -50,6 +57,7 @@ import { useToastStore } from '@/stores/toast'
 import { useFileUndoStore } from '@/stores/file-undo'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { roomForElement } from '@/stores/window-room'
+import type { DesktopOs } from './desktop-chrome'
 import { markZenDropOver, zenDropTargetAt, zenFramePoint, type ZenDropHandler } from './zen/zen-drop-targets'
 
 // ── Public event names ────────────────────────────────────────────────
@@ -541,12 +549,59 @@ export async function routeExternalDrop(
       return
     }
     case 'miss': {
-      // Local window-chrome drops have no product meaning.
-      if (!isRemote) return
+      // This computer's server: a drop outside a terminal, message box or
+      // Files panel has nowhere to go. Say so; never a silent drop.
+      if (!isRemote) {
+        useToastStore.getState().addToast(LOCAL_MISS_MESSAGE, 'info')
+        return
+      }
       await executeRemoteDrop(scope, paths, { kind: 'miss' }, {})
       return
     }
   }
+}
+
+/** A drop on this computer's server that lands on nothing that takes it. */
+export const LOCAL_MISS_MESSAGE =
+  'Nothing here takes a dropped file. Drop it on a terminal, a message box or the Files panel.'
+
+/** A drop whose routing threw before it could say anything itself: log it
+ *  and tell the person, so no drop is ever silent. */
+export function reportDropFailure(err: unknown): void {
+  console.error('[external-drop-router] drop failed', err)
+  const detail = err instanceof Error ? err.message : String(err)
+  useToastStore.getState().addToast(`The drop failed: ${detail}`, 'error')
+}
+
+/** Windows or not, from the navigator (desktop-chrome's rule; not imported
+ *  from there, which computes the chrome when it loads). */
+function navigatorOs(): DesktopOs {
+  if (typeof navigator === 'undefined') return 'other'
+  const platform = navigator.platform?.toLowerCase() ?? ''
+  const ua = navigator.userAgent?.toLowerCase() ?? ''
+  if (platform.includes('mac') || ua.includes('mac os') || ua.includes('macintosh')) return 'mac'
+  if (platform.startsWith('win') || ua.includes('windows')) return 'windows'
+  return 'other'
+}
+
+/**
+ * Tauri's drag position → the CSS pixels `elementFromPoint` takes. The
+ * payload is typed `PhysicalPosition`, but wry 0.57 reports points on
+ * macOS (`draggingLocation`) and GTK widget (logical) pixels on Linux:
+ * those already are CSS pixels (K2 sets no webview zoom). Only WebView2 on
+ * Windows reports physical client pixels (`ScreenToClient`), so only there
+ * divide by the device pixel ratio. Dividing on macOS would halve the
+ * point on a Retina screen and hit the wrong element.
+ */
+export function dropPointToCss(
+  position: { x: number; y: number },
+  os: DesktopOs = navigatorOs(),
+  devicePixelRatio: number = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1,
+): { x: number; y: number } {
+  if (os !== 'windows' || !(devicePixelRatio > 0) || devicePixelRatio === 1) {
+    return { x: position.x, y: position.y }
+  }
+  return { x: position.x / devicePixelRatio, y: position.y / devicePixelRatio }
 }
 
 // ── Hosted web: HTML5 File drops ──────────────────────────────────────
@@ -671,7 +726,7 @@ export function mountExternalDropRouter(): () => void {
       if (files.length === 0) return
       e.preventDefault()
       e.stopPropagation()
-      void routeBrowserFileDrop(primaryScope(), files, { x: e.clientX, y: e.clientY })
+      routeBrowserFileDrop(primaryScope(), files, { x: e.clientX, y: e.clientY }).catch(reportDropFailure)
     }
     window.addEventListener('dragover', onDragOver)
     window.addEventListener('drop', onDrop)
@@ -685,33 +740,35 @@ export function mountExternalDropRouter(): () => void {
     }
   }
 
-  // Multi-window: Webview-scoped listen only. Process-global event.listen
-  // (target Any) fan-outs every drop to every open K2 window. Window-scoped
-  // getCurrentWindow().listen never receives drag-* (emitted as Webview).
-  import('@tauri-apps/api/webview')
-    .then(({ getCurrentWebview }) => {
+  // Multi-window: WebviewWindow-scoped listen only (see the header: the
+  // one target Tauri delivers drag-* to whether or not the window holds a
+  // Browser child webview). Process-global event.listen (target Any)
+  // fan-outs every drop to every open K2 window.
+  import('@tauri-apps/api/webviewWindow')
+    .then(({ getCurrentWebviewWindow }) => {
       if (torndown) return
-      return getCurrentWebview()
+      const view = getCurrentWebviewWindow()
+      return view
         .listen<{ paths: string[]; position: { x: number; y: number } }>(
           'tauri://drag-drop',
           (event) => {
             const { paths, position } = event.payload
             markZenDropOver(null)
             if (!paths || paths.length === 0 || !position) return
-            void routeExternalDrop(primaryScope(), paths, position)
+            routeExternalDrop(primaryScope(), paths, dropPointToCss(position)).catch(reportDropFailure)
           },
         )
         .then(track)
         .then(() =>
           // GP4: K2 draws the drop ring on a listening widget frame (it
           // can't see a Tauri drag itself).
-          getCurrentWebview().listen<{ position?: { x: number; y: number } }>('tauri://drag-over', (event) => {
-            const p = event.payload?.position
+          view.listen<{ position?: { x: number; y: number } }>('tauri://drag-over', (event) => {
+            const p = event.payload?.position ? dropPointToCss(event.payload.position) : null
             markZenDropOver(p ? (zenDropTargetAt(document.elementFromPoint(p.x, p.y))?.frame ?? null) : null)
           }),
         )
         .then((off) => off && track(off))
-        .then(() => getCurrentWebview().listen('tauri://drag-leave', () => markZenDropOver(null)))
+        .then(() => view.listen('tauri://drag-leave', () => markZenDropOver(null)))
         .then((off) => off && track(off))
     })
     .catch((err) => {

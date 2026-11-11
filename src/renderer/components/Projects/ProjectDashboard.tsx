@@ -72,6 +72,7 @@ import {
   PHASE_CHECKING,
   PHASE_DORMANT,
   TilePicture,
+  TileViewMenu,
   TileViewPicker,
   useAgentTileAddr,
   useTileView,
@@ -210,6 +211,7 @@ function AgentTileFrame({
       onHeaderMouseDown={onHeaderMouseDown}
       lead={<TilePicture name={title} addr={addr} />}
       picker={<TileViewPicker view={view} onView={setView} />}
+      pickerCompact={<TileViewMenu view={view} onView={setView} />}
       tools={member && tileToolsPlace(view) ? <TileBarTools view={view} workspaceId={workspaceId} name={title} /> : undefined}
       tileView={view}
     >

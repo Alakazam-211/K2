@@ -21,8 +21,8 @@ const PANEL_TOOLTIP: Record<ThreadPanelKind, string> = {
 }
 
 /** `switch` mode's segments: the words are the accessible names. */
-const VIEW_LABEL: Record<TileView, string> = { terminal: 'Terminal', thread: 'Thread', chatter: 'Chatter', heartbeats: 'Heartbeats' }
-const VIEW_TOOLTIP: Record<TileView, string> = {
+export const VIEW_LABEL: Record<TileView, string> = { terminal: 'Terminal', thread: 'Thread', chatter: 'Chatter', heartbeats: 'Heartbeats' }
+export const VIEW_TOOLTIP: Record<TileView, string> = {
   terminal: 'Terminal',
   thread: 'Thread',
   chatter: 'Chatter: messages between agents',
@@ -251,7 +251,9 @@ export function ThreadDrawerSelector(props: ThreadDrawerSelectorProps): JSX.Elem
   )
 }
 
-function ViewIcon({ kind }: { kind: TileView }): JSX.Element {
+/** A view's icon, as its segment draws it (also an agent tile's compact
+ *  view menu, Projects). */
+export function ViewIcon({ kind }: { kind: TileView }): JSX.Element {
   if (kind === 'terminal') return <TerminalIcon />
   if (kind === 'thread') return <ThreadIcon />
   if (kind === 'chatter') return <ChatterIcon />

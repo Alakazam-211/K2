@@ -66,4 +66,37 @@ describe('OverflowMenu', () => {
     expect(screen.queryByRole('menu')).toBeNull()
     expect(document.activeElement).toBe(trigger)
   })
+
+  it('a pick-one menu: its own trigger and name, checked items as radios, opening on the checked one', () => {
+    const pick = vi.fn()
+    const items: OverflowMenuItem[] = ['Terminal', 'Thread', 'Chatter'].map((v) => ({
+      id: v,
+      label: v,
+      icon: <span data-testid={`icon-${v}`} />,
+      checked: v === 'Thread',
+      onSelect: () => pick(v),
+    }))
+    render(<OverflowMenu items={items} label="View: Thread" menuLabel="View" align="start" trigger={<span data-testid="current" />} />)
+    const trigger = screen.getByRole('button', { name: 'View: Thread' })
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu')
+    expect(trigger.contains(screen.getByTestId('current'))).toBe(true)
+    fireEvent.click(trigger)
+    expect(screen.getByRole('menu', { name: 'View' })).toBeTruthy()
+    const radios = screen.getAllByRole('menuitemradio')
+    expect(radios.map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false'])
+    expect(document.activeElement).toBe(screen.getByRole('menuitemradio', { name: 'Thread' }))
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(screen.getByRole('menuitemradio', { name: 'Chatter' }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Chatter' }))
+    expect(pick).toHaveBeenCalledWith('Chatter')
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('plain items stay menuitems with no check state', () => {
+    const { trigger } = setup()
+    fireEvent.click(trigger)
+    expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0)
+    expect(screen.getByRole('menuitem', { name: 'Restart' }).hasAttribute('aria-checked')).toBe(false)
+  })
 })

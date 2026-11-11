@@ -62,7 +62,7 @@ import { renderInRoom, testRoom } from '@/test-utils/room'
 import { primaryScope } from '@/kessel/server-scope'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
-import { DashboardAgentTile, TileViewPicker, tileSessionViewTab, useTileView, type TermPhase } from './DashboardAgentTile'
+import { DashboardAgentTile, TileViewMenu, TileViewPicker, tileSessionViewTab, useTileView, type TermPhase } from './DashboardAgentTile'
 import type { ProjectDefaultView, ProjectGroupMemberInfo } from './projects-api'
 
 const room = testRoom({
@@ -108,6 +108,27 @@ describe("the tile's view picker", () => {
   it('is the small capsule (size="sm")', () => {
     renderInRoom(room, <Tile />)
     expect(screen.getByTestId('tile-view-picker').getAttribute('data-tab-size')).toBe('sm')
+  })
+})
+
+describe("the picker folded to one button (a narrow tile's bar)", () => {
+  it('names the current view, opens the four views with it checked, and switches', () => {
+    const picked: string[] = []
+    renderInRoom(room, <TileViewMenu view="thread" onView={(v) => picked.push(v)} />)
+    const b = screen.getByRole('button', { name: 'View: Thread' })
+    expect(b.getAttribute('aria-haspopup')).toBe('menu')
+    // The shared button's focus ring (Button: k2-focus, the control cut).
+    expect(b.className).toContain('k2-focus')
+    expect(b.getAttribute('data-k2-chamfer')).toBe('control')
+    fireEvent.click(b)
+    const radios = screen.getAllByRole('menuitemradio')
+    expect(radios.map((r) => r.textContent)).toEqual(['Terminal', 'Thread', 'Chatter', 'Heartbeats'])
+    expect(radios.map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false', 'false'])
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Thread' }))
+    expect(picked).toEqual([])
+    fireEvent.click(b)
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Chatter' }))
+    expect(picked).toEqual(['chatter'])
   })
 })
 

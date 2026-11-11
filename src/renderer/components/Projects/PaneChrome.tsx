@@ -55,6 +55,7 @@ export function PaneChrome({
   onHeaderMouseDown,
   lead,
   picker,
+  pickerCompact,
   tools,
   tileView,
   children,
@@ -67,6 +68,9 @@ export function PaneChrome({
    *  beside it (prd-projects-threads-v1 §3.1). Its segments are buttons, so
    *  pressing one never starts a drag. */
   picker?: React.ReactNode
+  /** The picker folded to one menu button (TileViewMenu), shown in its place
+   *  when the bar is short of room, before the name gives anything up. */
+  pickerCompact?: React.ReactNode
   /** An agent tile's bell and search (TileBarTools), at the bar's right end
    *  before ⌘N and the ×. Given, the tile is its Thread search's host
    *  (`data-thread-floats-host`): ⌘F anywhere in the tile searches. */
@@ -82,7 +86,7 @@ export function PaneChrome({
   onHeaderMouseDown?: (e: React.MouseEvent) => void
   children: React.ReactNode
 }): React.JSX.Element {
-  const [barRef, fit] = useTileBarFit([title, hint, shortcutNum, readOnly, !!picker, !!lead, !!tools, tileView])
+  const [barRef, fit] = useTileBarFit([title, hint, shortcutNum, readOnly, !!picker, !!pickerCompact, !!lead, !!tools, tileView])
   const name = (
     <>
       {lead && (
@@ -146,6 +150,7 @@ export function PaneChrome({
     'data-tile-hint': hint ? (fit.hint ? 'on' : 'off') : undefined,
     'data-tile-keys': shortcutNum !== undefined ? (fit.keys ? 'on' : 'off') : undefined,
     'data-tile-bell': tools ? (fit.bell ? 'on' : 'off') : undefined,
+    'data-tile-pick': picker && pickerCompact ? (fit.compact ? 'compact' : 'full') : undefined,
     onMouseDown: readOnly ? undefined : onHeaderMouseDown,
   }
   // `relative`: an open search field hangs from the bar (globals.css).
@@ -168,15 +173,22 @@ export function PaneChrome({
         // Three columns: name | picker | controls. While the name fits
         // beside it, the picker is truly centred (Rosson, 2026-11-11: equal
         // side columns); when it doesn't, the picker follows the name and
-        // the controls keep the right end (`data-tile-fit`, globals.css). A
-        // narrow tile puts the picker on its own row (agent-tile).
+        // the controls keep the right end (`data-tile-fit`, globals.css).
+        // Shorter still, it folds to one menu button (`data-tile-pick`).
         <div {...barProps} data-tile-fit={fit.centred ? 'centred' : 'follow'} className={`grid items-center ${bar}`}>
           <div className="flex min-w-0 items-center overflow-hidden" data-tile-start="">
             {name}
           </div>
           {/* The capsule's own padding is not a button: keep it off the drag. */}
           <span className="flex cursor-default justify-self-center" data-tile-picker="" onMouseDown={(e) => e.stopPropagation()}>
-            {picker}
+            <span className="flex" data-tile-picker-full="">
+              {picker}
+            </span>
+            {pickerCompact ? (
+              <span className="flex" data-tile-picker-compact="">
+                {pickerCompact}
+              </span>
+            ) : null}
           </span>
           <div className="flex items-center justify-end" data-tile-end="">
             {controls}

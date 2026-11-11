@@ -18,6 +18,9 @@ export interface OverflowMenuItem {
   group?: boolean
   /** A leading icon (14px), as the app's other menus draw one. */
   icon?: React.ReactNode
+  /** One of a set to pick from (a view): the item is a `menuitemradio`,
+   *  checked or not, with a check mark on the checked one. */
+  checked?: boolean
 }
 
 /** What a custom trigger gets: its ref (the menu anchors to it), the menu
@@ -38,20 +41,25 @@ export interface OverflowMenuProps {
   className?: string
   /** Draw your own trigger (the nav's Add) instead of the "…" button. */
   renderTrigger?: (t: OverflowMenuTriggerProps) => React.ReactNode
+  /** The "…" button's content in its place (e.g. the current choice's icon). */
+  trigger?: React.ReactNode
+  /** The menu's own name, when the trigger's names the current choice
+   *  ("View: Thread" opens "View"). Default: `label`. */
+  menuLabel?: string
   /** Which trigger edge the menu lines up with. Default 'end'. */
   align?: 'start' | 'end'
 }
 
 function menuItems(root: HTMLElement | null): HTMLElement[] {
   if (!root) return []
-  return Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])'))
+  return Array.from(root.querySelectorAll<HTMLElement>(':is([role="menuitem"], [role="menuitemradio"]):not([aria-disabled="true"])'))
 }
 
 /** A row's "…" button and the menu it opens: the one place a row keeps the
  *  actions that don't earn a button of their own. Portalled, so a chamfered
  *  or scrolling ancestor can't clip it. Opening puts focus on the first item,
  *  arrows move, Esc closes and returns focus to the button. */
-export function OverflowMenu({ items, label, triggerProps, className, renderTrigger, align = 'end' }: OverflowMenuProps): React.JSX.Element {
+export function OverflowMenu({ items, label, triggerProps, className, renderTrigger, trigger, menuLabel, align = 'end' }: OverflowMenuProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const menu = useAnchoredMenu<HTMLButtonElement>({
     open,
@@ -65,7 +73,10 @@ export function OverflowMenu({ items, label, triggerProps, className, renderTrig
   const listRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    if (open) menuItems(listRef.current)[0]?.focus({ preventScroll: true })
+    if (!open) return
+    // The checked choice, if there is one; else the first item.
+    const list = menuItems(listRef.current)
+    ;(list.find((el) => el.getAttribute('aria-checked') === 'true') ?? list[0])?.focus({ preventScroll: true })
   }, [open])
 
   const close = (): void => {
@@ -113,11 +124,13 @@ export function OverflowMenu({ items, label, triggerProps, className, renderTrig
         onClick={() => setOpen((v) => !v)}
         {...triggerProps}
       >
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true" className="block">
-          <circle cx="3" cy="7" r="1.2" />
-          <circle cx="7" cy="7" r="1.2" />
-          <circle cx="11" cy="7" r="1.2" />
-        </svg>
+        {trigger ?? (
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true" className="block">
+            <circle cx="3" cy="7" r="1.2" />
+            <circle cx="7" cy="7" r="1.2" />
+            <circle cx="11" cy="7" r="1.2" />
+          </svg>
+        )}
       </Button>
       )}
       {open &&
@@ -132,7 +145,7 @@ export function OverflowMenu({ items, label, triggerProps, className, renderTrig
             <div
               ref={listRef}
               role="menu"
-              aria-label={label}
+              aria-label={menuLabel ?? label}
               data-k2-chamfer="surface"
               // Floating chrome: Frost in Glass (a see-through fill over a live
               // blur, with the bright rim); Terminal keeps the opaque cut box.
@@ -148,7 +161,8 @@ export function OverflowMenu({ items, label, triggerProps, className, renderTrig
                   )}
                   <button
                     type="button"
-                    role="menuitem"
+                    role={item.checked === undefined ? 'menuitem' : 'menuitemradio'}
+                    aria-checked={item.checked === undefined ? undefined : item.checked}
                     aria-disabled={item.disabled ? true : undefined}
                     data-menu-item={item.id}
                     title={item.title}
@@ -170,12 +184,19 @@ export function OverflowMenu({ items, label, triggerProps, className, renderTrig
                           ),
                     )}
                   >
-                    {item.icon ? (
+                    {item.icon || item.checked !== undefined ? (
                       <span className="flex items-center gap-2 whitespace-nowrap">
-                        <span aria-hidden="true" className="flex w-3.5 flex-shrink-0 items-center justify-center" data-menu-icon="">
-                          {item.icon}
-                        </span>
-                        {item.label}
+                        {item.icon ? (
+                          <span aria-hidden="true" className="flex w-3.5 flex-shrink-0 items-center justify-center" data-menu-icon="">
+                            {item.icon}
+                          </span>
+                        ) : null}
+                        <span className="flex-1">{item.label}</span>
+                        {item.checked !== undefined ? (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={cx('flex-none ml-3', !item.checked && 'invisible')}>
+                            <path d="M20 6L9 17l-5-5" />
+                          </svg>
+                        ) : null}
                       </span>
                     ) : (
                       <span className="block whitespace-nowrap">{item.label}</span>

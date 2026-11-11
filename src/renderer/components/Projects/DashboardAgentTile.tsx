@@ -28,13 +28,13 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useSettingsStore } from '@/stores/settings'
 import { usePageLive } from '@/contexts/TabVisibilityContext'
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
-import { Button } from '@/components/ui'
+import { Button, OverflowMenu, usePressSpring } from '@/components/ui'
 import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
 import { ThreadEarlyCompose } from '@/components/SessionView/ThreadEarlyCompose'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { InputsList } from '@/components/SessionView/ThreadDrawerPanel'
-import { ThreadDrawerSelector } from '@/components/SessionView/ThreadDrawerSelector'
+import { ThreadDrawerSelector, VIEW_LABEL, VIEW_TOOLTIP, ViewIcon } from '@/components/SessionView/ThreadDrawerSelector'
 import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
 import { DEFAULT_SPLIT_LEFT, DEFAULT_SPLIT_RIGHT, type SessionViewTab } from '@/components/SessionView/sessionViewTab'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -44,7 +44,7 @@ import {
   wakeCanonicalMemberSession,
   type MemberSessionPhase,
 } from './wake-member-session'
-import { resolveTileView, tileViewKey, type TileView } from './tile-view'
+import { resolveTileView, TILE_VIEWS, tileViewKey, type TileView } from './tile-view'
 import { projectDefaultView, type ProjectDefaultView, type ProjectGroupMemberInfo } from './projects-api'
 import { TileState, TryAgain } from './TileState'
 
@@ -132,6 +132,39 @@ export function tileSessionViewTab(view: TileView): SessionViewTab {
  *  smaller than elsewhere (`sm`) so it sits lightly in the bar's centre. */
 export function TileViewPicker({ view, onView }: { view: TileView; onView: (next: TileView) => void }): JSX.Element {
   return <ThreadDrawerSelector mode="switch" size="sm" view={view} onView={onView} />
+}
+
+/** The picker folded to one button (a narrow tile, the owner's mockup): the
+ *  current view's icon, opening the four views as a menu with the current
+ *  one checked, so the name keeps its room. PaneChrome shows it in place of
+ *  the capsule when the bar is short of room (tile-bar-fit.ts). */
+export function TileViewMenu({ view, onView }: { view: TileView; onView: (next: TileView) => void }): JSX.Element {
+  return (
+    <OverflowMenu
+      label={`View: ${VIEW_LABEL[view]}`}
+      menuLabel="View"
+      align="start"
+      triggerProps={{ 'data-testid': 'tile-view-menu' }}
+      trigger={
+        <span className="flex items-center gap-1">
+          <ViewIcon kind={view} />
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </span>
+      }
+      items={TILE_VIEWS.map((kind) => ({
+        id: kind,
+        label: VIEW_LABEL[kind],
+        title: VIEW_TOOLTIP[kind],
+        icon: <ViewIcon kind={kind} />,
+        checked: kind === view,
+        onSelect: () => {
+          if (kind !== view) onView(kind)
+        },
+      }))}
+    />
+  )
 }
 
 // ── The bar's picture ────────────────────────────────────────────────────

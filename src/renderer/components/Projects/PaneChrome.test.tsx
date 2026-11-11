@@ -17,7 +17,7 @@ const bar = (): HTMLElement => document.querySelector('[data-tile-bar]') as HTML
 const CSS = fs.readFileSync(path.resolve(__dirname, '../../globals.css'), 'utf8')
 
 /** Give the jsdom layout the widths a real bar would have. */
-function stubWidths(widths: { bar: number; title: number; picker?: number; hint?: number }): () => void {
+function stubWidths(widths: { bar: number; title: number; picker?: number; hint?: number; compact?: number }): () => void {
   const proto = HTMLElement.prototype
   const saved = {
     client: Object.getOwnPropertyDescriptor(proto, 'clientWidth'),
@@ -27,7 +27,8 @@ function stubWidths(widths: { bar: number; title: number; picker?: number; hint?
   const pick = (el: HTMLElement): number => {
     if (el.hasAttribute('data-tile-bar')) return widths.bar
     if (el.hasAttribute('data-tile-title')) return widths.title
-    if (el.hasAttribute('data-tile-picker')) return widths.picker ?? 0
+    if (el.hasAttribute('data-tile-picker') || el.hasAttribute('data-tile-picker-full')) return widths.picker ?? 0
+    if (el.hasAttribute('data-tile-picker-compact')) return widths.compact ?? 0
     if (el.hasAttribute('data-tile-hint')) return widths.hint ?? 0
     if (el.hasAttribute('data-tile-lead')) return 16
     if (el.hasAttribute('data-tile-shortcut')) return 20
@@ -259,7 +260,47 @@ describe('PaneChrome', () => {
       expect([bar().getAttribute('data-tile-keys'), bar().getAttribute('data-tile-bell')]).toEqual(['off', 'off'])
       restore()
       // A folded bell collapses like ⌘N (globals.css).
-      expect(CSS).toContain('[data-tile-bar][data-tile-bell="off"] [data-tile-tool="bell"] { max-width: 0;')
+      expect(CSS).toContain('[data-tile-bar][data-tile-bell="off"] [data-tile-tool="bell"],')
     })
+  })
+
+  it('folds the picker to its menu button after ⌘N, keeping one row and the name', () => {
+    const folding = (): React.JSX.Element => (
+      <PaneChrome
+        title="Design System"
+        shortcutNum={2}
+        readOnly={false}
+        focused={false}
+        onClose={() => {}}
+        lead={<span />}
+        picker={<div data-testid="capsule" />}
+        pickerCompact={<button type="button" aria-label="View: Thread" />}
+        tileView="thread"
+      >
+        <div />
+      </PaneChrome>
+    )
+    // name 106, ⌘N 20, × 24: in full 106 + 96 + 44 + 1 = 247; without ⌘N 227; folded (36) 167.
+    let restore = stubWidths({ bar: 227, title: 90, picker: 96, compact: 36 })
+    render(folding())
+    expect([bar().getAttribute('data-tile-keys'), bar().getAttribute('data-tile-pick')]).toEqual(['off', 'full'])
+    cleanup(); restore()
+    restore = stubWidths({ bar: 226, title: 90, picker: 96, compact: 36 })
+    render(folding())
+    expect([bar().getAttribute('data-tile-keys'), bar().getAttribute('data-tile-pick')]).toEqual(['off', 'compact'])
+    // Both stay mounted (the capsule keeps Ctrl+`); CSS shows one.
+    const cell = bar().querySelector('[data-tile-picker]') as HTMLElement
+    expect(cell.querySelector('[data-tile-picker-full] [data-testid="capsule"]')).not.toBeNull()
+    expect(cell.querySelector('[data-tile-picker-compact]')!.contains(screen.getByRole('button', { name: 'View: Thread' }))).toBe(true)
+    restore()
+    expect(CSS).toContain('[data-tile-bar][data-tile-pick="compact"] [data-tile-picker-full],')
+    expect(CSS).toContain('[data-tile-bar][data-tile-pick="full"] [data-tile-picker-compact] { max-width: 0;')
+    // No more own row for the picker in a narrow tile.
+    expect(CSS).not.toContain('[data-tile-bar] > [data-tile-picker] { grid-column: 1 / -1')
+  })
+
+  it('a bar without a folded picker has no fold state', () => {
+    render(agentTile())
+    expect(bar().hasAttribute('data-tile-pick')).toBe(false)
   })
 })

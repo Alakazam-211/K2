@@ -2416,14 +2416,16 @@ html[data-style="glass"] [data-page-tabs][data-tab-mode="switch"][data-tab-size=
    While the name fits beside it, the picker is centred (equal side
    columns); when it doesn't, the picker follows the name and the controls
    keep the right end. PaneChrome measures and sets `data-tile-fit`, and
-   hides the hint, then the ⌘N slot, then the bell, before the name
-   truncates. A hidden part collapses to no width (so it can still be
-   measured). */
+   hides the hint, then the ⌘N slot, folds the picker to its menu button,
+   then hides the bell, before the name truncates. A hidden part collapses
+   to no width (so it can still be measured). */
 [data-tile-bar][data-tile-fit="centred"] { grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr); }
 [data-tile-bar][data-tile-fit="follow"] { grid-template-columns: minmax(0, max-content) auto minmax(max-content, 1fr); }
 [data-tile-bar][data-tile-hint="off"] [data-tile-hint],
 [data-tile-bar][data-tile-keys="off"] [data-tile-shortcut],
-[data-tile-bar][data-tile-bell="off"] [data-tile-tool="bell"] { max-width: 0; margin: 0; overflow: hidden; visibility: hidden; }
+[data-tile-bar][data-tile-bell="off"] [data-tile-tool="bell"],
+[data-tile-bar][data-tile-pick="compact"] [data-tile-picker-full],
+[data-tile-bar][data-tile-pick="full"] [data-tile-picker-compact] { max-width: 0; margin: 0; overflow: hidden; visibility: hidden; }
 /* ⌘N is a shortcut hint, not content: it shows while the pointer is on the
    bar and while keyboard focus is on a control in the tile (not while
    typing in its message box or terminal). It keeps its slot, so nothing
@@ -2451,27 +2453,10 @@ html[data-style="glass"] [data-page-tabs][data-tab-mode="switch"][data-tab-size=
 [data-bar-search-drop] > [data-thread-search] { flex: 1 1 auto; min-width: 0; }
 [data-bar-search-drop] .thread-search-input { flex: 1 1 auto; width: auto; min-width: 3ch; }
 
-/* A narrow agent tile (Projects): the picker takes its own row, centred and
-   tighter, so all four views stay reachable; the name and the close button
-   share the first row and the ⌘N badge steps aside. 240px is where the
-   centred row would leave the name no room. The asleep bar puts Wake under
-   its line. */
+/* An agent tile is a container: its asleep bar puts Wake under its line
+   when narrow. (A narrow tile's bar stays one row: the picker folds to its
+   menu button, PaneChrome / tile-bar-fit.ts.) */
 [data-tile-view] { container: agent-tile / inline-size; }
-@container agent-tile (max-width: 240px) {
-  [data-tile-bar][data-tile-fit] { grid-template-columns: minmax(0, 1fr) max-content; height: auto; row-gap: 4px; padding-block: 4px; }
-  [data-tile-bar] > [data-tile-start] { grid-column: 1; grid-row: 1; }
-  [data-tile-bar] > [data-tile-end] { grid-column: 2; grid-row: 1; }
-  [data-tile-bar] > [data-tile-picker] { grid-column: 1 / -1; grid-row: 2; }
-  [data-tile-bar] [data-tile-shortcut] { display: none; }
-  html[data-style="glass"] [data-tile-bar] [data-page-tabs][data-tab-mode="switch"] { gap: 2px; }
-}
-/* Narrower still, the four views sit two by two. */
-@container agent-tile (max-width: 128px) {
-  html [data-tile-bar] [data-page-tabs][data-tab-mode="switch"] { display: grid; grid-template-columns: repeat(2, max-content); }
-  html[data-style="glass"] [data-tile-bar] [data-page-tabs][data-tab-mode="switch"] { border-radius: 14px; }
-  html:not([data-style="glass"]) [data-tile-bar] [data-tab-mode="switch"] > [data-page-tab]:nth-child(3) { border-left: 0; }
-  html:not([data-style="glass"]) [data-tile-bar] [data-tab-mode="switch"] > [data-page-tab]:nth-child(n+3) { border-top: 1px solid var(--color-border); }
-}
 @container agent-tile (max-width: 280px) {
   [data-tile-wake] { flex-wrap: wrap; justify-content: center; padding-block: 6px; padding-inline: 8px; }
   [data-tile-wake] > span { flex-basis: 100%; text-align: center; }

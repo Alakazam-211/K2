@@ -31,3 +31,33 @@ pub(crate) fn action(keep_daemon_on_quit: bool, macos: bool) -> CloseAction {
     }
     CloseAction::Quit { stop_daemon: macos }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setting_on_hides_the_window_on_every_os() {
+        assert_eq!(action(true, true), CloseAction::Hide);
+        assert_eq!(action(true, false), CloseAction::Hide);
+    }
+
+    #[test]
+    fn setting_off_on_macos_stops_the_daemon_then_quits() {
+        assert_eq!(action(false, true), CloseAction::Quit { stop_daemon: true });
+    }
+
+    #[test]
+    fn setting_off_off_macos_quits_and_leaves_the_daemon() {
+        assert_eq!(action(false, false), CloseAction::Quit { stop_daemon: false });
+    }
+
+    #[test]
+    fn a_settings_file_without_the_field_hides_the_window() {
+        // A settings file without the field: it defaults to on, so the
+        // close button keeps the server running on every OS.
+        let keep = k2_client::app_settings_view::parse("{}").keep_daemon_on_quit;
+        assert_eq!(action(keep, true), CloseAction::Hide);
+        assert_eq!(action(keep, false), CloseAction::Hide);
+    }
+}

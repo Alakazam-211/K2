@@ -4,7 +4,9 @@
 //! Guest routes (an App pass):
 //! - `POST /cli/skin/refresh` (Public, `guests.refresh`): a device's
 //!   refresh token → a new pass + the next refresh token (one-time,
-//!   rotating; reuse ends that device's sign-in).
+//!   rotating; reuse ends that device's sign-in). The token is the
+//!   credential; on an App's gateway link the call carries the App pass
+//!   (the link wants one) and only the link's App's tokens work.
 //! - `GET /cli/skin/devices` (`guests.devices`): this guest's devices that
 //!   stay signed in to this App.
 //! - `POST /cli/skin/devices/revoke {id}` (`guests.revokeDevice`).
@@ -91,8 +93,13 @@ pub fn device_session_json(d: &app_login::DeviceSession, principal_id: &str) -> 
     })
 }
 
-/// `POST /cli/skin/refresh {refresh, app?}` (Public).
-pub fn handle_refresh(body: &[u8]) -> CliResponse {
+/// `POST /cli/skin/refresh {refresh, app?}` (Public: the refresh token is
+/// the credential). On an App's gateway link the gate still wants a pass
+/// (the App's own, since the device's old pass has usually ended), and
+/// `link_app` (the link's service id) is the App: only its tokens work
+/// there, whatever the body's `app` says (0.46.11). Elsewhere (a phone on
+/// the main port) the body's `app` narrows it when given.
+pub fn handle_refresh(body: &[u8], link_app: Option<&str>) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
         Err(r) => return r,
@@ -100,7 +107,7 @@ pub fn handle_refresh(body: &[u8]) -> CliResponse {
     let Some(raw) = text(&v, &["refresh"]) else {
         return usage("send {refresh} (the k2skr_ token from the last login or refresh)");
     };
-    match app_login::refresh(raw, text(&v, &["app", "appId"])) {
+    match app_login::refresh(raw, link_app.or_else(|| text(&v, &["app", "appId"]))) {
         Ok(app_login::Refresh::Ok(d)) => {
             skin::profile::record_session(&d.session.meta.id, skin::profile::VIA_REFRESH, Some(&d.device.name));
             let principal_id = skin::resolve_skin_token(&d.session.raw).and_then(|p| p.principal_id).unwrap_or_default();

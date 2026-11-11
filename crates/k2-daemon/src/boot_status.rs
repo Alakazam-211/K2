@@ -822,6 +822,11 @@ pub const FEATURE_APP_RECORDINGS: &str = "app-recordings-v1";
 /// `/v1/apps/<id>/auth/exchange`. Whether the door is on for a box or an
 /// App is `k2 app auth`; `GET /.k2/auth/ping` answers per host.
 pub const FEATURE_APP_SIGN_IN_DOOR: &str = "app-hosted-sign-in-v1";
+/// `auth.doorStatus` (0.46.11): an App's server reads on its gateway link
+/// whether the sign-in door is on for its own App and on which hosts
+/// (`GET /cli/skin/auth/door`, the App pass), instead of fetching its own
+/// public `/.k2/auth/ping`.
+pub const FEATURE_APP_SIGN_IN_DOOR_STATUS: &str = "app-sign-in-door-status-v1";
 /// Thread push message previews (0.46.1): `POST /cli/push/register-device`
 /// takes `previews` (absent = keep the stored value), its reply and
 /// `GET /cli/push/device` carry `previews` + `previewsAllowed`, and a
@@ -1194,6 +1199,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_CHAT_SPACE);
     out.push(FEATURE_APP_RECORDINGS);
     out.push(FEATURE_APP_SIGN_IN_DOOR);
+    out.push(FEATURE_APP_SIGN_IN_DOOR_STATUS);
     if crate::access_live::enabled() {
         out.push(FEATURE_LIVE_ACCESS);
     }

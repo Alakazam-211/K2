@@ -1,5 +1,5 @@
 import { K2Error } from './errors.ts';
-import { type AppAuthSession, type AppCallVerb, type AppSubscribeVerb, type AppSurfaces, type AppVerbs, type AppGuestLogin } from './generated/verbs.ts';
+import { type AppAuthDoorStatus, type AppAuthSession, type AppCallVerb, type AppSubscribeVerb, type AppSurfaces, type AppVerbs, type AppGuestLogin } from './generated/verbs.ts';
 import { type BeginOptions, type SignInStart } from './auth.ts';
 import { type AccessChange, type OnAccessChangedOptions, type OnGuestAccessChangedOptions } from './access.ts';
 import { type WebSocketCtor } from './socket.ts';
@@ -41,6 +41,13 @@ export interface K2Auth {
             name?: string;
         };
     }): Promise<AppAuthSession>;
+    /**
+     * Whether K2 answers `/.k2/auth/*` for this App now (`on`), and on which of
+     * its public hosts (`hosts[].door`): read it before your page posts a
+     * password to the door (K2 0.46.11; the App pass on your link). Your own
+     * App only, never a guest's call.
+     */
+    doorStatus(): Promise<AppAuthDoorStatus>;
 }
 /**
  * A login whose password someone else set (K2 0.46.6: the owner, an

@@ -31,6 +31,18 @@ k2 app auth <app>          # is it on for this App? which hosts?
 `k2 app auth door off <app>` hands `/.k2/auth/*` back to one App that
 serves that path itself.
 
+Your App's server can ask for itself on its gateway link, with its App pass
+(K2 0.46.11; its own App only, never a guest's pass):
+
+```js
+const d = await k2.auth.doorStatus()
+// {ok, on, app, box, appOff, door: '/.k2/auth', hosts: [{host, door}]}
+if (!d.on) renderYourOwnForm()   // no door: never post the password to /.k2/auth/*
+```
+
+Without the SDK: `GET /cli/skin/auth/door` on `K2_GATEWAY_URL` with
+`Authorization: Bearer <App pass>`.
+
 ## Where the door is
 
 - **Yes:** the App's K2 label (`<app>.<box>.k2.dev`, with the default
@@ -128,6 +140,35 @@ hands the app with the challenge. A Tauri window whose bundled pages call
 `fetch` sends `Origin: tauri://localhost`: list it with
 `k2 app auth origins <app> --origin tauri://localhost` (each call replaces
 the list). A listed origin gets CORS on every verb and on ping.
+
+### Staying signed in (device sign-in and refresh)
+
+Send `device: {id, name}` with the exchange (the id is made once per
+install and kept). While the App's Stay signed in is on (30 days by
+default; `k2 app stay-signed-in <app> <days>`, `0` = off), the answer adds:
+
+| field | what |
+|---|---|
+| `pass` | the person's pass (`k2skn_…`; `token` on the raw route) |
+| `refresh` | `k2skr_…`, one use: keep it in the Keychain / Keystore |
+| `passExpiresAt` | when the pass ends, in seconds since the epoch |
+| `refreshExpiresAt` | when the refresh token ends if unused, in seconds since the epoch |
+
+Before `passExpiresAt` (or on a 401), trade the refresh token on your
+link:
+
+```js
+const s = await k2.guests.refresh({ refresh })   // goes with the App pass
+// store s.refresh in place of the old one; s.pass is the new pass
+```
+
+The refresh token in the body is the credential; the call goes with your
+App pass, never the device's old pass (which has usually ended), and on
+your link only your own App's tokens work. Without the SDK:
+`POST /cli/skin/refresh {refresh}` on `K2_GATEWAY_URL` with the App pass.
+`refresh_invalid` (unknown, ended, expired, another App's) and
+`refresh_reused` (used twice: K2 signed that device out) both mean: sign in
+again.
 
 ## Handling the password on the page
 

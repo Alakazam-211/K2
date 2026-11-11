@@ -558,9 +558,17 @@ pub struct Config {
 }
 
 impl Config {
-    /// Pairing is on: not turned off, and at least one phone app named.
+    /// Pairing is on: the owner saved it (a confirmed set) and it isn't
+    /// turned off. A set names at least one phone app, or says
+    /// `desktopOnly` (0.46.11: then no ids, and K2 serves no iOS or Android
+    /// file; the code is typed into the desktop app).
     pub fn is_on(&self) -> bool {
-        self.enabled && (!self.ios.is_empty() || !self.android.is_empty())
+        self.enabled
+    }
+
+    /// No phone app named: a desktop app pairs by a typed code (0.46.11).
+    pub fn desktop_only(&self) -> bool {
+        self.ios.is_empty() && self.android.is_empty()
     }
 }
 
@@ -809,11 +817,18 @@ fn store_url(s: &str, prefix: &str, field: &str) -> Result<String, String> {
 /// field. `app` and `confirmToken` are the route's.
 pub fn parse_input(v: &serde_json::Value) -> Result<ConfigInput, String> {
     let Some(o) = v.as_object() else { return Err("send a JSON object".into()) };
-    const KNOWN: &[&str] = &["app", "confirmToken", "ios", "android", "hosts", "nativeOrigins", "linkPaths", "store"];
+    const KNOWN: &[&str] = &["app", "confirmToken", "ios", "android", "hosts", "nativeOrigins", "linkPaths", "store", "desktopOnly"];
     if let Some(k) = o.keys().find(|k| !KNOWN.contains(&k.as_str())) {
         let shown: String = k.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(32).collect();
         return Err(format!("unknown field {shown}"));
     }
+    // 0.46.11: an App with no phone app pairs a desktop app by a typed code.
+    // Said out loud (`desktopOnly: true`), never by leaving the ids out.
+    let desktop_only = match v.get("desktopOnly") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(_) => return Err("desktopOnly: true or false".into()),
+    };
     let mut ios = Vec::new();
     for s in str_list(v, "ios", MAX_IOS_APPS)? {
         if !valid_ios_app(&s) {
@@ -867,8 +882,16 @@ pub fn parse_input(v: &serde_json::Value) -> Result<ConfigInput, String> {
         }
         Some(_) => return Err("android: a list of {package, sha256: [...]}".into()),
     }
-    if ios.is_empty() && android.is_empty() {
-        return Err("ios and/or android: name at least one phone app (TEAMID.bundle.id, or {package, sha256})".into());
+    match (desktop_only, ios.is_empty() && android.is_empty()) {
+        (false, true) => {
+            return Err(
+                "ios and/or android: name at least one phone app (TEAMID.bundle.id, or {package, sha256}), \
+                 or desktopOnly: true for an App whose only native app is a desktop app (it pairs by a typed code)"
+                    .into(),
+            )
+        }
+        (true, false) => return Err("desktopOnly: true names no phone app: leave out ios and android (or leave out desktopOnly)".into()),
+        _ => {}
     }
     let hosts = match v.get("hosts") {
         None | Some(serde_json::Value::Null) => None,
@@ -904,6 +927,9 @@ pub fn parse_input(v: &serde_json::Value) -> Result<ConfigInput, String> {
         if !link_paths.contains(&s) {
             link_paths.push(s);
         }
+    }
+    if desktop_only && !link_paths.is_empty() {
+        return Err("linkPaths: universal-link paths go in an iOS app's file, and desktopOnly names none".into());
     }
     let (mut store_ios, mut store_android) = (None, None);
     match v.get("store") {

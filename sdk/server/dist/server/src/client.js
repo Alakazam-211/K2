@@ -3,7 +3,10 @@
 // - Every call carries one pass. **The default actor is the guest of the
 //   request you are serving** (`withGuest`, `middleware`); a call with no
 //   guest bound fails `guest_required`. Acting as the App is written out:
-//   `k2.asApp()`. `k2.asGuest(pass)` names a guest explicitly.
+//   `k2.asApp()`. `k2.asGuest(pass)` names a guest explicitly. Three verbs
+//   always go with the App pass, whoever the actor is: `guests.login`,
+//   `auth.exchange` and `guests.refresh` (its refresh token is the
+//   credential; the device's old pass has usually ended).
 // - The App pass is a file K2 rotates; it is read again when it changes
 //   and once more (with one retry of the call) when K2 answers
 //   `pass_invalid`.
@@ -28,6 +31,18 @@ import { buildRequest, project } from "./wire.js";
 const LOGIN_VERB = 'guests.login';
 /** The sign-in door's code swap (K2 0.46.9): the App's own pass, like a login. */
 const EXCHANGE_VERB = 'auth.exchange';
+/**
+ * A device's refresh (K2 0.46.11): the refresh token in the body is the
+ * credential; the link still wants a pass, and the device's old pass has
+ * usually ended, so it goes with the App's own pass, like a login, whoever
+ * the default actor is. It names this App (K2_APP_ID); on the link K2 uses
+ * the link's App anyway.
+ */
+const REFRESH_VERB = 'guests.refresh';
+/** Whether the sign-in door is on for this App (K2 0.46.11): the App's own pass. */
+const DOOR_STATUS_VERB = 'auth.doorStatus';
+/** The verbs that always present the App pass (or none, with no pass file). */
+const APP_PASS_VERBS = new Set([LOGIN_VERB, EXCHANGE_VERB, REFRESH_VERB]);
 /** The must-change answer inside a `password_change_required` refusal, or
  *  null for any other error. A malformed one is rethrown (never a login). */
 function mustChangeOf(e) {
@@ -101,6 +116,7 @@ export class K2App {
                 const row = this.row(EXCHANGE_VERB);
                 return project(row.response, raw, row.responseNames);
             },
+            doorStatus: async () => (await this.callAs({ kind: 'app' }, DOOR_STATUS_VERB, undefined)),
         };
     }
     // ── actors ─────────────────────────────────────────────────────────
@@ -258,8 +274,8 @@ export class K2App {
     }
     /** The pass a call presents, or null (a login on a --cmd service: no pass needed). */
     passFor(cred, verb) {
-        if (verb === LOGIN_VERB || verb === EXCHANGE_VERB) {
-            // A login opens the link with the App's pass when it has one.
+        if (APP_PASS_VERBS.has(verb)) {
+            // A login (and a refresh) opens the link with the App's pass when it has one.
             return this.passFile && this.passFile.exists() ? this.passFile.read() : null;
         }
         if (cred.kind === 'guest')
@@ -286,10 +302,10 @@ export class K2App {
         if (row.door === 'helper')
             throw new K2Error({ code: 'not_on_link', hint: `${verb} is for a guest's own browser session, never a server`, verb });
         let callArgs = args;
-        if (verb === LOGIN_VERB && this.appId && (args?.app === undefined || args.app === ''))
+        if ((verb === LOGIN_VERB || verb === REFRESH_VERB) && this.appId && (args?.app === undefined || args.app === ''))
             callArgs = { ...args, app: this.appId };
         const req = buildRequest(row.http, callArgs);
-        const usesAppPass = verb === LOGIN_VERB || verb === EXCHANGE_VERB || cred.kind === 'app';
+        const usesAppPass = APP_PASS_VERBS.has(verb) || cred.kind === 'app';
         for (let attempt = 0;; attempt++) {
             const pass = this.passFor(cred, verb);
             const headers = { ...extraHeaders };

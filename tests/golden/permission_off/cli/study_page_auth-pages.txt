@@ -34,6 +34,28 @@ THE SHAPE
   device {id, name}: a device sign-in, with a refresh token when the App's
   Stay signed in is on. Answers carry authAt (when K2 checked the password).
 
+IS THE DOOR ON? (your server asks before the page posts a password)
+  const d = await k2.auth.doorStatus()   // the App pass; your own App only
+  → {on, box, appOff, hosts: [{host, door}]}, all true/false: on = box (the
+  owner's switch) and not appOff (this App's own). Every public host of the
+  App is listed; door: false where none answers (a raw k2.dev label). No
+  SDK: GET /cli/skin/auth/door on your link. The page's ping stays its check.
+
+DEVICE SIGN-IN AND REFRESH (an app that stays signed in)
+  Exchange with device {id, name} (one id per install: k2 study app-profile).
+  While Stay signed in is on (k2 app stay-signed-in; 30 days by default) the
+  answer adds refresh (k2skr_…, one use: keep it in the Keychain) and
+  passExpiresAt and refreshExpiresAt (seconds since the epoch). Before
+  passExpiresAt, or on a 401:
+    const s = await k2.guests.refresh({refresh})
+    // {pass, refresh, passExpiresAt, refreshExpiresAt, username, principalId,
+    //  app, device}; raw JSON names the pass "token". Keep the new refresh.
+  It always goes with the App pass, never the person's pass (that one has
+  usually ended); the refresh token is the credential, and only your App's
+  work. No SDK: POST /cli/skin/refresh {refresh} on your link with the App
+  pass. 401 refresh_invalid, or 401 refresh_reused (used twice: K2 signed
+  that device out): sign in again.
+
 PHONES AND TAURI
   Native HTTP (no Origin): post to https://<app host>/.k2/auth/*; your
   server keeps s.verifier against a one-time id it hands the app with the

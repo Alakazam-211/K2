@@ -5,6 +5,12 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.46.11
 
+### App SDK
+- **`k2.guests.refresh({refresh})` works as documented.** It now goes with your App pass, like a login, instead of failing `guest_required` when no guest is bound (the device's old pass has usually ended by then). On an App's link only that App's refresh tokens work, whatever the body names. `k2 study auth-pages` lists the device sign-in fields (`refresh`, `passExpiresAt`, `refreshExpiresAt`, in seconds since the epoch) and the refresh call.
+- **Is the sign-in door on for my App?** `k2.auth.doorStatus()` (`GET /cli/skin/auth/door` on the link, App pass) answers `{on, box, appOff, hosts: [{host, door}]}` for your own App only, so your server no longer has to fetch its own `/.k2/auth/ping` from outside.
+- **Pairing for an App with no phone app.** `k2 app pairing setup <app> --desktop-only` turns pairing on so a desktop app pairs with the code the web App shows, typed in. The same owner confirm and checks as phone apps; K2 serves no iOS or Android files for it.
+- `k2 app sdk --help` says why an agent's App folder must be inside its own workspace, and what to do instead.
+
 ### Apps in containers can use the box's Postgres
 - **A container App reaches its databases at `127.0.0.1:5432`, inside its wall.** That covers guarded Apps (the default) and open ones. Each App has its own database door: K2 checks every connection's role and database before it reaches Postgres. An App opens only its workspace's databases and the ones granted to that workspace, as one of K2's roles for that database. It never logs in as the superuser, never opens a replication connection, and never opens another workspace's database. Anything else gets a Postgres error that says why, in the App's own driver. The password check stays in Postgres, so K2 never sees the App's password.
 - **Your `DATABASE_URL` keeps working.** When a container App starts, a box database URL in its secrets is pointed at the door (`127.0.0.1:5432`, `sslmode=disable`) on whichever Postgres version the database runs. TLS isn't used inside the wall: a client that asks for it is told no and goes on in plain text, and `sslmode=require` fails with a clear error.

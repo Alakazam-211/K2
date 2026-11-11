@@ -20,8 +20,9 @@
 //!   pairing rows in skin.db).
 //!
 //! **State.** An App's pairing is on once the owner saved at least one iOS
-//! app id or Android package with a fresh confirm, and nobody turned it
-//! off. `K2_APP_PAIRING=off` in the daemon's environment turns every App
+//! app id or Android package (or, 0.46.11, `desktopOnly`: no phone app, a
+//! desktop app pairs by a typed code) with a fresh confirm, and nobody
+//! turned it off. `K2_APP_PAIRING=off` in the daemon's environment turns every App
 //! off: start, check, redeem and the link files (Rosson's switch rule).
 //! v1 pairs on the App's own k2.dev labels only (R1): a custom domain works
 //! only when its owner fronts it to the label.
@@ -57,7 +58,7 @@ pub fn confirm_reason(action: &str, service_id: Option<&str>) -> Option<Result<S
     let Some(id) = service_id.map(str::trim).filter(|s| !s.is_empty()) else { return Some(Err("secretId (the App's service id) is required")) };
     let Some(row) = published(id) else { return Some(Err("no published App by that service id")) };
     let name: String = row.name.chars().filter(|c| !c.is_control()).take(64).collect();
-    Some(Ok(format!("choose which phone apps open sign-in codes for App {name} ({})", row.id)))
+    Some(Ok(format!("choose which phone apps open sign-in codes (or a desktop app only, by typed code) for App {name} ({})", row.id)))
 }
 
 /// Why an App's pairing is off (`Ok` = on).

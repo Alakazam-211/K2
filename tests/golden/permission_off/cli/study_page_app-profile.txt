@@ -40,7 +40,10 @@ THE VERBS (k2.asGuest(pass).profile.* in the server SDK)
 DEVICES: ONE ID PER INSTALL
   A login from an app (phone or desktop shell) passes device {id, name} in
   guests.login. It gets its own pass and refresh token (k2 app
-  stay-signed-in). The id is made once per install and kept in the app's
+  stay-signed-in), with refresh, passExpiresAt and refreshExpiresAt (seconds
+  since the epoch) in the answer; guests.refresh trades the refresh token
+  for the next pair (k2 study auth-pages: DEVICE SIGN-IN AND REFRESH).
+  The id is made once per install and kept in the app's
   own storage, never one per platform: a fixed id like "ios" makes each
   phone replace the one before it. A login with no device is a plain 7-day
   pass, uncounted, with no refresh token. A person keeps up to 20 devices

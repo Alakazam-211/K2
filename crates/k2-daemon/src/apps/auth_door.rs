@@ -95,6 +95,9 @@ pub const CHANGE_PASSWORD: &str = "/.k2/auth/change-password";
 pub const LINK_EXCHANGE: &str = "/cli/skin/auth/exchange";
 /// The exchange's verb under `/v1/apps/<id>/` (the App key).
 pub const KEY_EXCHANGE_VERB: &str = "auth/exchange";
+/// Whether the door is on for the link's own App (catalog
+/// `auth.doorStatus`, 0.46.11): a read on the gateway link, the App pass.
+pub const LINK_STATUS: &str = "/cli/skin/auth/door";
 
 /// The largest body the door reads (V3: the biggest legal one is well
 /// under 1 KiB).
@@ -1075,6 +1078,53 @@ pub fn exchange_response(svc: &str, body: &[u8]) -> CliResponse {
     out["authAt"] = json!(e.auth_at);
     out["via"] = json!(e.via);
     CliResponse::ok_json(out.to_string())
+}
+
+// ── the link's status read ───────────────────────────────────────────
+
+/// `auth.doorStatus` for runtime App `app_id` (service `svc`): the link's
+/// own App, never one the caller names. `on` is exactly what the door does
+/// now ([`door_service`]); each public host says whether `/.k2/auth/*`
+/// answers there (a raw k2.dev label has no door; a custom name always
+/// has it while `on`). Blocking.
+pub fn door_status_response(app_id: &str, svc: &str) -> CliResponse {
+    let st = match store::settings(svc) {
+        Ok(s) => s,
+        Err(e) => return ex_err("500 Internal Server Error", "failed", &e),
+    };
+    let on = door_service(app_id).is_some();
+    let label_door = crate::app_pairing::front_rewrites(svc).is_ok();
+    let sub = crate::apps::origins::box_subdomain();
+    let suffix = (!sub.is_empty()).then(|| format!(".{sub}.{}", k2_core::tunnel::config::SUBDOMAIN_HOST));
+    let hosts: Vec<J> = crate::app_pairing::pairing_hosts(svc)
+        .into_iter()
+        .map(|h| {
+            let label = suffix.as_deref().is_some_and(|s| h.ends_with(s));
+            json!({ "host": h, "door": on && (!label || label_door) })
+        })
+        .collect();
+    CliResponse::ok_json(
+        json!({
+            "ok": true,
+            "on": on,
+            "app": app_id,
+            "box": box_on(),
+            "appOff": st.off,
+            "door": PREFIX,
+            "hosts": hosts,
+        })
+        .to_string(),
+    )
+}
+
+/// `auth.doorStatus` from a guest's session: the App's own data is the
+/// App pass's only (like `app.self`).
+pub fn door_status_not_exposed() -> CliResponse {
+    ex_err(
+        "403 Forbidden",
+        "not_exposed",
+        "auth.doorStatus answers this App's own pass on its gateway link (k2.auth.doorStatus or asApp), never a guest",
+    )
 }
 
 #[cfg(test)]

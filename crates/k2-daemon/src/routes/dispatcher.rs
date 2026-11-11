@@ -5196,6 +5196,29 @@ async fn handle_one_request(
             };
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // GET /cli/skin/auth/door (0.46.11, catalog auth.doorStatus): an
+        // App's server reads whether the sign-in door is on for its own App
+        // and on which of its hosts. The App is the link's (never one the
+        // caller names); a guest's session is not_exposed; off a link: 404,
+        // like the exchange.
+        crate::apps::auth_door::LINK_STATUS => {
+            let _ = stream.read(&mut buf).await;
+            let link = if ingress == Ingress::App { crate::apps::gateway::current() } else { None };
+            let r = match link {
+                None => crate::cli_response::CliResponse::not_found(),
+                Some(link) => match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass) {
+                    Some(pass) if !pass.session => {
+                        let (app_id, svc) = (link.app_id.clone(), link.service_id.clone());
+                        tokio::task::spawn_blocking(move || crate::apps::auth_door::door_status_response(&app_id, &svc))
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")))
+                    }
+                    Some(_) => crate::apps::auth_door::door_status_not_exposed(),
+                    None => crate::skin_routes::revoked_skin_response(),
+                },
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // POST /cli/skin/login — PUBLIC (NO token gate). Exact arm before
         // the `/cli/skin*` prefix so the roster stays owner-gated.
         "/cli/skin/login" => {
@@ -11775,7 +11798,10 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let body = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let r = tokio::task::spawn_blocking(move || crate::app_mobile_routes::handle_refresh(&body))
+            // 0.46.11: on an App's gateway link the App is the link's (a
+            // BFF sends its App pass; the body's `app` can't name another).
+            let link_app = if ingress == Ingress::App { crate::apps::gateway::current().map(|l| l.service_id.clone()) } else { None };
+            let r = tokio::task::spawn_blocking(move || crate::app_mobile_routes::handle_refresh(&body, link_app.as_deref()))
                 .await
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             if r.status.starts_with("401") {

@@ -24,7 +24,8 @@ ONCE, AS THE OWNER (from a terminal outside K2; Touch ID confirms)
   v1 pairs on your App's own k2.dev labels. While pairing is on, K2 answers
   /.well-known/apple-app-site-association and assetlinks.json there: list
   your App's other link paths with --link-path. Apple's CDN can take a day;
-  phones re-check about weekly. Stay signed in must be on (k2 app people).
+  phones re-check about weekly. Stay signed in must be on (k2 app
+  stay-signed-in <app> <days>; 30 days by default).
 
 IN THE WEB APP (the person's own session pass)
   const p = await k2.asGuest(pass).pairing.start()     // {password} when
@@ -49,6 +50,19 @@ IN THE PHONE APP (plain HTTPS to your box; the link names no server)
   A webview app (Tauri, Capacitor) sends an Origin: the owner lists it
   (--native-origin), else pairing_not_from_browser. A BFF redeems through
   its link (its own limits), never for many phones on the main port.
+
+A DESKTOP APP AND NO PHONE APP
+  k2 app pairing setup <app> --desktop-only [--native-origin tauri://localhost]
+  turns pairing on with no phone app (status: desktopOnly: true). K2 serves
+  no iOS or Android file and nothing opens the QR: show the code (p.code)
+  in big type, the person types it into your desktop app, and the desktop
+  app does steps 2 to 4 above itself, over plain HTTPS to your box (check
+  and redeem are Public: the code is the credential). The same owner
+  confirm and checks as a phone app; --ios, --android and --link-path are
+  refused with it (--host and the store links are fine).
+  A Mac app that opens universal links can go under --ios instead.
+  Or skip pairing: your desktop app signs in through the sign-in door with a
+  device (k2 study auth-pages: DEVICE SIGN-IN AND REFRESH).
 
 WHO
   The App's agent: k2 app pairing status|off (Build and run Apps), log

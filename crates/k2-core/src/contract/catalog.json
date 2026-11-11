@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 54,
+  "catalogVersion": 55,
   "caps": [
     {
       "name": "agents:read",
@@ -7254,6 +7254,104 @@
       "example": "const s = await k2.auth.exchange({code, verifier})"
     },
     {
+      "verb": "auth.doorStatus",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-sign-in-door-status-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/auth/door",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppAuthDoorStatus",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "on": {
+            "type": "boolean",
+            "description": "K2 answers /.k2/auth/* for this App now: the box's door is on, this App's isn't turned off, and it is a runtime App."
+          },
+          "app": {
+            "type": "string",
+            "description": "This App's id."
+          },
+          "box": {
+            "type": "boolean",
+            "description": "The box's switch (the owner's k2 app auth door on|off, or K2_APP_AUTH_DOOR on the daemon)."
+          },
+          "appOff": {
+            "type": "boolean",
+            "description": "The door was turned off for this App only (k2 app auth door off <app>): /.k2/auth/* reaches your App."
+          },
+          "door": {
+            "type": "string",
+            "description": "The path the door owns on each host: /.k2/auth."
+          },
+          "hosts": {
+            "type": "array",
+            "description": "This App's public hosts, each with door: whether /.k2/auth/* answers there now (a k2.dev label with host.clientIp: false has none; a custom name always has it while on is true).",
+            "items": {
+              "title": "AppAuthDoorHost",
+              "type": "object",
+              "properties": {
+                "host": {
+                  "type": "string"
+                },
+                "door": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "host",
+                "door"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "on",
+          "app",
+          "box",
+          "appOff",
+          "door",
+          "hosts"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "not_exposed",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Whether the sign-in door (/.k2/auth/*) is on for this App, and on which of its hosts: read it before your page posts a password there (its own App only; the App pass, never a guest).",
+      "example": "const d = await k2.auth.doorStatus()"
+    },
+    {
       "verb": "guests.rooms",
       "cap": "guests:rooms",
       "exposure": [
@@ -9213,7 +9311,7 @@
             },
             "app": {
               "type": "string",
-              "description": "This App's service id; must be the App the token was minted for.",
+              "description": "This App's service id; must be the App the token was minted for. On the link K2 uses the link's App (the SDK sends K2_APP_ID).",
               "default": ""
             }
           },
@@ -9292,7 +9390,7 @@
         "usage",
         "failed"
       ],
-      "doc": "Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in).",
+      "doc": "Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in). On the link it goes with the App pass (the device's old pass has usually ended): the refresh token in the body is the credential, and only this App's tokens work.",
       "example": "const s = await k2.guests.refresh({refresh})"
     },
     {

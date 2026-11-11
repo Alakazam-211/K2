@@ -5,7 +5,7 @@
 // The server SDK's verb table and types (runtime S23). `fromEnv()` builds
 // one helper per row; `call` / `subscribe` reach the same verbs by name.
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 54;
+export const CATALOG_VERSION = 55;
 /** Every App verb, in catalog order. */
 export const APP_VERBS = {
     'me.get': {
@@ -62,6 +62,17 @@ export const APP_VERBS = {
         socket: null,
         responseNames: { 'pass': 'token' },
         response: { "additionalProperties": false, "properties": { "app": { "type": "string" }, "authAt": { "type": "integer" }, "caps": { "items": { "type": "string" }, "type": "array" }, "device": { "additionalProperties": false, "properties": { "id": { "type": "string" }, "name": { "type": "string" } }, "type": "object" }, "mustChangePassword": { "type": "boolean" }, "ok": { "type": "boolean" }, "pass": { "type": "string" }, "passExpiresAt": { "type": "integer" }, "principalId": { "type": "string" }, "refresh": { "type": "string" }, "refreshExpiresAt": { "type": "integer" }, "role": { "type": ["string", "null"] }, "roomAccess": { "items": { "additionalProperties": false, "properties": { "caps": { "items": { "type": "string" }, "type": "array" }, "handle": { "type": "string" } }, "type": "object" }, "type": "array" }, "roomHandles": { "items": { "type": "string" }, "type": "array" }, "rooms": { "items": { "type": "string" }, "type": "array" }, "username": { "type": "string" }, "via": { "type": "string" } }, "type": "object" },
+    },
+    'auth.doorStatus': {
+        cap: null,
+        effect: 'read',
+        kind: 'call',
+        feature: 'app-sign-in-door-status-v1',
+        door: 'link',
+        http: { method: 'GET', route: '/cli/skin/auth/door', params: {}, query: [] },
+        socket: null,
+        responseNames: {},
+        response: { "additionalProperties": false, "properties": { "app": { "type": "string" }, "appOff": { "type": "boolean" }, "box": { "type": "boolean" }, "door": { "type": "string" }, "hosts": { "items": { "additionalProperties": false, "properties": { "door": { "type": "boolean" }, "host": { "type": "string" } }, "type": "object" }, "type": "array" }, "ok": { "type": "boolean" }, "on": { "type": "boolean" } }, "type": "object" },
     },
     'guests.rooms': {
         cap: 'guests:rooms',

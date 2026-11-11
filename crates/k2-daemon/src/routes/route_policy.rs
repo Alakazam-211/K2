@@ -2081,6 +2081,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/skin/app-info", Public),
     // prd-app-caps-0464-v1 AC5 (0.46.4): app.rooms, an App's own pass only.
     get("/cli/skin/app-rooms", NoLogin),
+    // 0.46.11: auth.doorStatus, the App's own pass on its gateway link
+    // (the link's App; the handler refuses a guest and off a link).
+    get("/cli/skin/auth/door", NoLogin),
     // 0.46.9 sign-in door: the App's server swaps a door code on its
     // gateway link (the link's App; the handler refuses off a link).
     post("/cli/skin/auth/exchange", Public),

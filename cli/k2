@@ -14190,6 +14190,17 @@ vendor/ and package.json inside <app-folder>.
 Who: the owner, an Admin, a K2 terminal, the App's agent with "Build and
 run Apps" (folders inside its own workspace).
 
+An agent's <app-folder> must be inside its own workspace folder (the
+owner, an Admin and a K2 terminal may name any folder), on purpose: it is
+the same rule as k2 app deploy (an agent builds and writes
+only in its own workspace, never in another agent's or the owner's
+folders). A folder elsewhere is refused (folder_outside_workspace), however
+it is named; a link that points outside counts as outside. To use it there:
+keep the App's source inside your workspace, or ask a person to run k2 app
+sdk add on that folder from their own terminal, or copy vendor/ and the
+package.json lines from a folder inside your workspace (they are ordinary
+files).
+
 Exit codes: 0 done, 2 usage, 3 refused, with JSON on stderr:
   apps_manage_off           ask your owner for "Build and run Apps"
   folder_outside_workspace  an agent's folder must be in its workspace
@@ -16136,6 +16147,10 @@ one-time code; your server swaps the code for the person's pass
                                         empties it. The webview origins the
                                         App's phone pairing lists count too.
 
+Your App's own server reads the same answer for itself on its link, with
+no agent: k2.auth.doorStatus() (GET /cli/skin/auth/door with the App pass):
+{on, box, appOff, hosts: [{host, door}]}, its own App only.
+
 Who: door on|off for the server is the owner's. One App's door and origins:
 the owner, an Admin, or the App's own agent with "Build and run Apps"
 (Settings → Apps). Every change is recorded. Exit codes: 0 ok, 2 bad usage,
@@ -16241,6 +16256,18 @@ iOS and Android link files on its own k2.dev labels while pairing is on.
                                        or the vault password confirms it (from
                                        a terminal outside K2). Every setup
                                        replaces the last one.
+  k2 app pairing setup <app> --desktop-only [--native-origin tauri://localhost]…
+                 [--host <app label host>]…
+                                       An App with no phone app: turn pairing
+                                       on so its desktop app pairs with the
+                                       code the web App shows, typed in (K2
+                                       serves no link files; nothing opens the
+                                       QR). Same owner, same confirm, the same
+                                       checks. Not with --ios, --android or
+                                       --link-path. A Mac app that opens
+                                       universal links (Associated Domains)
+                                       can go under --ios TEAMID.bundle.id
+                                       instead, like an iPhone app.
   k2 app pairing off <app>             Turn it off (the owner, an Admin or the
                                        App's agent). Codes stop at once; phones
                                        already paired stay signed in (end them
@@ -16261,9 +16288,9 @@ Who: status and off: an Admin or the App's own agent ("Build and run Apps");
 log: the App's agent only when it may manage the App's users; setup and
 check: the owner in person (an agent asks with a permission card).
 
-The web App calls pairing.start / pairing.status; the phone app calls
-pairing.check, then pairing.redeem: k2 study app-pairing for the whole guide.
-K2 Companion's own phones are k2 users pair-phone (k2 users --help).
+The web App calls pairing.start / pairing.status; the phone (or desktop) app
+calls pairing.check, then pairing.redeem: k2 study app-pairing for the whole
+guide. K2 Companion's own phones are k2 users pair-phone (k2 users --help).
 EOF
 }
 
@@ -16281,6 +16308,8 @@ if state != "on":
         why = (why + "; " if why else "") + v["notServed"]
     line += " (" + why + ")"
 print(line)
+if v.get("desktopOnly"):
+    print("  apps:     desktop only (no phone app; people type the code into your desktop app)")
 for i in v.get("ios") or []:
     print("  iOS:      " + i)
 for a in v.get("android") or []:
@@ -16340,11 +16369,12 @@ cmd_app_pairing_status() {
 }
 
 cmd_app_pairing_setup() {
-    local app="" json_out=0 ios="" android="" hosts="" origins="" paths="" appstore="" playstore=""
+    local app="" json_out=0 ios="" android="" hosts="" origins="" paths="" appstore="" playstore="" desktop=0
     local nl='
 '
     while [ $# -gt 0 ]; do
         case "$1" in
+            --desktop-only) desktop=1; shift ;;
             --ios) ios="$ios${2:-}$nl"; shift 2 ;;
             --android) android="$android${2:-}$nl"; shift 2 ;;
             --host) hosts="$hosts${2:-}$nl"; shift 2 ;;
@@ -16358,16 +16388,22 @@ cmd_app_pairing_setup() {
             *) app="$1"; shift ;;
         esac
     done
-    local usage="usage: k2 app pairing setup <app> [--ios TEAMID.com.you.app]… [--android com.you.app:AB:CD:…]… [--host h]… [--native-origin o]… [--link-path p]… [--app-store URL] [--play-store URL]"
+    local usage="usage: k2 app pairing setup <app> ([--ios TEAMID.com.you.app]… [--android com.you.app:AB:CD:…]… | --desktop-only) [--host h]… [--native-origin o]… [--link-path p]… [--app-store URL] [--play-store URL]"
     [ -n "$app" ] || { echo "$usage" >&2; exit 2; }
-    { [ -z "$ios" ] && [ -z "$android" ]; } && { echo "$usage" >&2; echo "name at least one phone app: --ios and/or --android" >&2; exit 2; }
+    if [ "$desktop" = 1 ]; then
+        { [ -n "$ios" ] || [ -n "$android" ]; } && { echo "$usage" >&2; echo "--desktop-only names no phone app: leave out --ios and --android" >&2; exit 2; }
+    else
+        { [ -z "$ios" ] && [ -z "$android" ]; } && { echo "$usage" >&2; echo "name at least one phone app (--ios and/or --android), or --desktop-only for an App whose only native app is a desktop app" >&2; exit 2; }
+    fi
     local body
     body="$(K2_AP_APP="$app" K2_AP_IOS="$ios" K2_AP_ANDROID="$android" K2_AP_HOSTS="$hosts" K2_AP_ORIGINS="$origins" K2_AP_PATHS="$paths" \
-        K2_AP_APPSTORE="$appstore" K2_AP_PLAYSTORE="$playstore" python3 -c '
+        K2_AP_APPSTORE="$appstore" K2_AP_PLAYSTORE="$playstore" K2_AP_DESKTOP="$desktop" python3 -c '
 import json, os, sys
 e = os.environ
 lines = lambda k: [x.strip() for x in e.get(k, "").split("\n") if x.strip()]
 b = {"app": e["K2_AP_APP"]}
+if e.get("K2_AP_DESKTOP") == "1":
+    b["desktopOnly"] = True
 if lines("K2_AP_IOS"):
     b["ios"] = lines("K2_AP_IOS")
 android = []
@@ -53123,7 +53159,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 54.
+From K2's verb catalog, version 55.
 
 THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   Once per App (again after a K2 update), in the folder you deploy:
@@ -53156,10 +53192,11 @@ no cap (your own rooms)
   roomAgents.list          GET  /cli/skin/agents                                 The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.
   guests.login             POST /cli/skin/login (server only)                    Log a guest in through this App; the answer carries the guest's session pass, or mustChangePassword and a change token when someone else set the password.
   auth.exchange            POST /cli/skin/auth/exchange (server only)            Swap a sign-in door code for the person's pass: your page posted the password to /.k2/auth/* on your own host, K2 answered with a one-time code, and your server sends it here with its PKCE verifier. No password reaches your server.
+  auth.doorStatus          GET  /cli/skin/auth/door (server only)                Whether the sign-in door (/.k2/auth/*) is on for this App, and on which of its hosts: read it before your page posts a password there (its own App only; the App pass, never a guest).
   app.rooms                GET  /cli/skin/app-rooms (server only)                This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it).
   password.change          POST /cli/skin/password/change                        A guest changes their own password (5 wrong current passwords per 15 minutes, then rate_limited); stay: true keeps this pass signed in.
   guests.logout            POST /cli/skin/logout (server only)                   Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working).
-  guests.refresh           POST /cli/skin/refresh (server only)                  Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in).
+  guests.refresh           POST /cli/skin/refresh (server only)                  Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in). On the link it goes with the App pass (the device's old pass has usually ended): the refresh token in the body is the credential, and only this App's tokens work.
   guests.devices           GET  /cli/skin/devices                                This guest's devices that stay signed in to this App.
   guests.revokeDevice      POST /cli/skin/devices/revoke                         Sign one of this guest's own devices out (its pass and refresh token end).
   profile.get              GET  /cli/skin/profile                                This person's own profile in this App: names, email, picture hash, role and rooms here, sessions count, and what they may change.
@@ -56508,6 +56545,28 @@ THE SHAPE
   device {id, name}: a device sign-in, with a refresh token when the App's
   Stay signed in is on. Answers carry authAt (when K2 checked the password).
 
+IS THE DOOR ON? (your server asks before the page posts a password)
+  const d = await k2.auth.doorStatus()   // the App pass; your own App only
+  → {on, box, appOff, hosts: [{host, door}]}, all true/false: on = box (the
+  owner's switch) and not appOff (this App's own). Every public host of the
+  App is listed; door: false where none answers (a raw k2.dev label). No
+  SDK: GET /cli/skin/auth/door on your link. The page's ping stays its check.
+
+DEVICE SIGN-IN AND REFRESH (an app that stays signed in)
+  Exchange with device {id, name} (one id per install: k2 study app-profile).
+  While Stay signed in is on (k2 app stay-signed-in; 30 days by default) the
+  answer adds refresh (k2skr_…, one use: keep it in the Keychain) and
+  passExpiresAt and refreshExpiresAt (seconds since the epoch). Before
+  passExpiresAt, or on a 401:
+    const s = await k2.guests.refresh({refresh})
+    // {pass, refresh, passExpiresAt, refreshExpiresAt, username, principalId,
+    //  app, device}; raw JSON names the pass "token". Keep the new refresh.
+  It always goes with the App pass, never the person's pass (that one has
+  usually ended); the refresh token is the credential, and only your App's
+  work. No SDK: POST /cli/skin/refresh {refresh} on your link with the App
+  pass. 401 refresh_invalid, or 401 refresh_reused (used twice: K2 signed
+  that device out): sign in again.
+
 PHONES AND TAURI
   Native HTTP (no Origin): post to https://<app host>/.k2/auth/*; your
   server keeps s.verifier against a one-time id it hands the app with the
@@ -56681,7 +56740,8 @@ ONCE, AS THE OWNER (from a terminal outside K2; Touch ID confirms)
   v1 pairs on your App's own k2.dev labels. While pairing is on, K2 answers
   /.well-known/apple-app-site-association and assetlinks.json there: list
   your App's other link paths with --link-path. Apple's CDN can take a day;
-  phones re-check about weekly. Stay signed in must be on (k2 app people).
+  phones re-check about weekly. Stay signed in must be on (k2 app
+  stay-signed-in <app> <days>; 30 days by default).
 
 IN THE WEB APP (the person's own session pass)
   const p = await k2.asGuest(pass).pairing.start()     // {password} when
@@ -56706,6 +56766,19 @@ IN THE PHONE APP (plain HTTPS to your box; the link names no server)
   A webview app (Tauri, Capacitor) sends an Origin: the owner lists it
   (--native-origin), else pairing_not_from_browser. A BFF redeems through
   its link (its own limits), never for many phones on the main port.
+
+A DESKTOP APP AND NO PHONE APP
+  k2 app pairing setup <app> --desktop-only [--native-origin tauri://localhost]
+  turns pairing on with no phone app (status: desktopOnly: true). K2 serves
+  no iOS or Android file and nothing opens the QR: show the code (p.code)
+  in big type, the person types it into your desktop app, and the desktop
+  app does steps 2 to 4 above itself, over plain HTTPS to your box (check
+  and redeem are Public: the code is the credential). The same owner
+  confirm and checks as a phone app; --ios, --android and --link-path are
+  refused with it (--host and the store links are fine).
+  A Mac app that opens universal links can go under --ios instead.
+  Or skip pairing: your desktop app signs in through the sign-in door with a
+  device (k2 study auth-pages: DEVICE SIGN-IN AND REFRESH).
 
 WHO
   The App's agent: k2 app pairing status|off (Build and run Apps), log
@@ -56848,7 +56921,10 @@ THE VERBS (k2.asGuest(pass).profile.* in the server SDK)
 DEVICES: ONE ID PER INSTALL
   A login from an app (phone or desktop shell) passes device {id, name} in
   guests.login. It gets its own pass and refresh token (k2 app
-  stay-signed-in). The id is made once per install and kept in the app's
+  stay-signed-in), with refresh, passExpiresAt and refreshExpiresAt (seconds
+  since the epoch) in the answer; guests.refresh trades the refresh token
+  for the next pair (k2 study auth-pages: DEVICE SIGN-IN AND REFRESH).
+  The id is made once per install and kept in the app's
   own storage, never one per platform: a fixed id like "ios" makes each
   phone replace the one before it. A login with no device is a plain 7-day
   pass, uncounted, with no refresh token. A person keeps up to 20 devices
@@ -91525,7 +91601,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 54.
+for at once (no review). From K2's verb catalog, version 55.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope

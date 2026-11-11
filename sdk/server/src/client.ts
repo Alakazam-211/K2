@@ -3,7 +3,10 @@
 // - Every call carries one pass. **The default actor is the guest of the
 //   request you are serving** (`withGuest`, `middleware`); a call with no
 //   guest bound fails `guest_required`. Acting as the App is written out:
-//   `k2.asApp()`. `k2.asGuest(pass)` names a guest explicitly.
+//   `k2.asApp()`. `k2.asGuest(pass)` names a guest explicitly. Three verbs
+//   always go with the App pass, whoever the actor is: `guests.login`,
+//   `auth.exchange` and `guests.refresh` (its refresh token is the
+//   credential; the device's old pass has usually ended).
 // - The App pass is a file K2 rotates; it is read again when it changes
 //   and once more (with one retry of the call) when K2 answers
 //   `pass_invalid`.
@@ -19,7 +22,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 
 import { K2Error, fromResponse } from './errors.ts'
-import { APP_VERBS, type AppAuthSession, type AppCallVerb, type AppSubscribeVerb, type AppSurfaces, type AppVerbRow, type AppVerbs, type AppGuestLogin } from './generated/verbs.ts'
+import { APP_VERBS, type AppAuthDoorStatus, type AppAuthSession, type AppCallVerb, type AppSubscribeVerb, type AppSurfaces, type AppVerbRow, type AppVerbs, type AppGuestLogin } from './generated/verbs.ts'
 import { beginSignIn, clearSignInCookie, verifierFromCookieHeader, SIGN_IN_COOKIE, type BeginOptions, type SignInStart } from './auth.ts'
 import { SecretFile } from './pass.ts'
 import { watchAccess, watchGuestAccess, type AccessActor, type AccessChange, type OnAccessChangedOptions, type OnGuestAccessChangedOptions } from './access.ts'
@@ -49,6 +52,18 @@ type Cred = { kind: 'guest'; pass: string } | { kind: 'app' } | { kind: 'default
 const LOGIN_VERB = 'guests.login' as const
 /** The sign-in door's code swap (K2 0.46.9): the App's own pass, like a login. */
 const EXCHANGE_VERB = 'auth.exchange' as const
+/**
+ * A device's refresh (K2 0.46.11): the refresh token in the body is the
+ * credential; the link still wants a pass, and the device's old pass has
+ * usually ended, so it goes with the App's own pass, like a login, whoever
+ * the default actor is. It names this App (K2_APP_ID); on the link K2 uses
+ * the link's App anyway.
+ */
+const REFRESH_VERB = 'guests.refresh' as const
+/** Whether the sign-in door is on for this App (K2 0.46.11): the App's own pass. */
+const DOOR_STATUS_VERB = 'auth.doorStatus' as const
+/** The verbs that always present the App pass (or none, with no pass file). */
+const APP_PASS_VERBS: ReadonlySet<string> = new Set([LOGIN_VERB, EXCHANGE_VERB, REFRESH_VERB])
 
 /** `k2.auth`: the sign-in door's server half (K2 0.46.9; see auth.ts). */
 export interface K2Auth {
@@ -66,6 +81,13 @@ export interface K2Auth {
    * a code that is used, expired, another App's, or whose verifier differs.
    */
   exchange(args: { code: string; verifier: string; device?: { id: string; name?: string } }): Promise<AppAuthSession>
+  /**
+   * Whether K2 answers `/.k2/auth/*` for this App now (`on`), and on which of
+   * its public hosts (`hosts[].door`): read it before your page posts a
+   * password to the door (K2 0.46.11; the App pass on your link). Your own
+   * App only, never a guest's call.
+   */
+  doorStatus(): Promise<AppAuthDoorStatus>
 }
 
 /**
@@ -215,6 +237,7 @@ export class K2App {
         const row = this.row(EXCHANGE_VERB)
         return project(row.response, raw, row.responseNames) as AppAuthSession
       },
+      doorStatus: async () => (await this.callAs({ kind: 'app' }, DOOR_STATUS_VERB, undefined)) as AppAuthDoorStatus,
     }
   }
 
@@ -382,8 +405,8 @@ export class K2App {
 
   /** The pass a call presents, or null (a login on a --cmd service: no pass needed). */
   private passFor(cred: Cred, verb: string): string | null {
-    if (verb === LOGIN_VERB || verb === EXCHANGE_VERB) {
-      // A login opens the link with the App's pass when it has one.
+    if (APP_PASS_VERBS.has(verb)) {
+      // A login (and a refresh) opens the link with the App's pass when it has one.
       return this.passFile && this.passFile.exists() ? this.passFile.read() : null
     }
     if (cred.kind === 'guest') return cred.pass
@@ -407,9 +430,9 @@ export class K2App {
     if (!row.http) throw new K2Error({ code: 'usage', hint: `${verb} is a subscribe verb: use subscribe`, verb })
     if (row.door === 'helper') throw new K2Error({ code: 'not_on_link', hint: `${verb} is for a guest's own browser session, never a server`, verb })
     let callArgs = args
-    if (verb === LOGIN_VERB && this.appId && (args?.app === undefined || args.app === '')) callArgs = { ...args, app: this.appId }
+    if ((verb === LOGIN_VERB || verb === REFRESH_VERB) && this.appId && (args?.app === undefined || args.app === '')) callArgs = { ...args, app: this.appId }
     const req = buildRequest(row.http, callArgs)
-    const usesAppPass = verb === LOGIN_VERB || verb === EXCHANGE_VERB || cred.kind === 'app'
+    const usesAppPass = APP_PASS_VERBS.has(verb) || cred.kind === 'app'
     for (let attempt = 0; ; attempt++) {
       const pass = this.passFor(cred, verb)
       const headers: Record<string, string> = { ...extraHeaders }

@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 54
+export const CATALOG_VERSION = 55
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -93,6 +93,17 @@ export const APP_VERBS = {
     socket: null,
     responseNames: { 'pass': 'token' },
     response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"authAt":{"type":"integer"},"caps":{"items":{"type":"string"},"type":"array"},"device":{"additionalProperties":false,"properties":{"id":{"type":"string"},"name":{"type":"string"}},"type":"object"},"mustChangePassword":{"type":"boolean"},"ok":{"type":"boolean"},"pass":{"type":"string"},"passExpiresAt":{"type":"integer"},"principalId":{"type":"string"},"refresh":{"type":"string"},"refreshExpiresAt":{"type":"integer"},"role":{"type":["string","null"]},"roomAccess":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"handle":{"type":"string"}},"type":"object"},"type":"array"},"roomHandles":{"items":{"type":"string"},"type":"array"},"rooms":{"items":{"type":"string"},"type":"array"},"username":{"type":"string"},"via":{"type":"string"}},"type":"object"},
+  },
+  'auth.doorStatus': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-sign-in-door-status-v1',
+    door: 'link',
+    http: { method: 'GET', route: '/cli/skin/auth/door', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"appOff":{"type":"boolean"},"box":{"type":"boolean"},"door":{"type":"string"},"hosts":{"items":{"additionalProperties":false,"properties":{"door":{"type":"boolean"},"host":{"type":"string"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"},"on":{"type":"boolean"}},"type":"object"},
   },
   'guests.rooms': {
     cap: 'guests:rooms',
@@ -1865,6 +1876,27 @@ export interface AppAuthSession {
   readonly username: string
   /** Which door verb made the code: sign-in, set-password or change-password. */
   readonly via: string
+}
+
+export interface AppAuthDoorHost {
+  readonly door: boolean
+  readonly host: string
+}
+
+export interface AppAuthDoorStatus {
+  /** This App's id. */
+  readonly app: string
+  /** The door was turned off for this App only (k2 app auth door off <app>): /.k2/auth/* reaches your App. */
+  readonly appOff: boolean
+  /** The box's switch (the owner's k2 app auth door on|off, or K2_APP_AUTH_DOOR on the daemon). */
+  readonly box: boolean
+  /** The path the door owns on each host: /.k2/auth. */
+  readonly door: string
+  /** This App's public hosts, each with door: whether /.k2/auth/* answers there now (a k2.dev label with host.clientIp: false has none; a custom name always has it while on is true). */
+  readonly hosts: AppAuthDoorHost[]
+  readonly ok: boolean
+  /** K2 answers /.k2/auth/* for this App now: the box's door is on, this App's isn't turned off, and it is a runtime App. */
+  readonly on: boolean
 }
 
 export interface AppGuestRooms {
@@ -4100,6 +4132,7 @@ export interface AppVerbs {
   'roomAgents.list': { args: Record<string, never>; value: AppRoomAgents }
   'guests.login': { args: { app?: string; device?: AppDevice; password: string; username: string }; value: AppGuestLogin }
   'auth.exchange': { args: { code: string; device?: AppDevice; verifier: string }; value: AppAuthSession }
+  'auth.doorStatus': { args: {  }; value: AppAuthDoorStatus }
   'guests.rooms': { args: { app?: string; username: string }; value: AppGuestRooms }
   'guests.setRooms': { args: { app?: string; rooms: string[]; username: string }; value: AppGuestRooms }
   'app.rooms': { args: { app?: string }; value: AppRooms }
@@ -4245,7 +4278,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'auth.exchange' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'recordings.list' | 'recordings.get' | 'recordings.transcript' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'auth.exchange' | 'auth.doorStatus' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'recordings.list' | 'recordings.get' | 'recordings.transcript' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'me.events' | 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'recordings.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -4271,7 +4304,7 @@ export interface AppSurfaces {
     list(args?: { app?: string; cursor?: string; limit?: number }): Promise<AppGuestList>
     /** Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working). no cap · POST /cli/skin/logout. e.g. `await k2.asGuest(pass).guests.logout()` */
     logout(args?: {  }): Promise<AppOk>
-    /** Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in). no cap · POST /cli/skin/refresh. e.g. `const s = await k2.guests.refresh({refresh})` */
+    /** Trade a device's refresh token for a new pass and a new refresh token (one-time, rotating; a reused token ends the device's sign-in). On the link it goes with the App pass (the device's old pass has usually ended): the refresh token in the body is the credential, and only this App's tokens work. no cap · POST /cli/skin/refresh. e.g. `const s = await k2.guests.refresh({refresh})` */
     refresh(args: { app?: string; refresh: string }): Promise<AppDeviceSession>
     /** This guest's devices that stay signed in to this App. no cap · GET /cli/skin/devices. e.g. `const {devices} = await k2.asGuest(pass).guests.devices()` */
     devices(args?: {  }): Promise<AppDevices>
@@ -4285,6 +4318,8 @@ export interface AppSurfaces {
   readonly auth: {
     /** Swap a sign-in door code for the person's pass: your page posted the password to /.k2/auth/* on your own host, K2 answered with a one-time code, and your server sends it here with its PKCE verifier. No password reaches your server. no cap · POST /cli/skin/auth/exchange. e.g. `const s = await k2.auth.exchange({code, verifier})` */
     exchange(args: { code: string; device?: AppDevice; verifier: string }): Promise<AppAuthSession>
+    /** Whether the sign-in door (/.k2/auth/*) is on for this App, and on which of its hosts: read it before your page posts a password there (its own App only; the App pass, never a guest). no cap · GET /cli/skin/auth/door. e.g. `const d = await k2.auth.doorStatus()` */
+    doorStatus(args?: {  }): Promise<AppAuthDoorStatus>
   }
   readonly app: {
     /** This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it). no cap · GET /cli/skin/app-rooms. e.g. `const {ceiling, granted} = await k2.asApp().app.rooms()` */

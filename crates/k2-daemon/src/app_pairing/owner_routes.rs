@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! GET  /cli/app/pairing        ?app=   Admin; the App's agent ("Build and run Apps"): config, state, hosts, counts
-//! POST /cli/app/pairing/set    {app, ios?, android?, hosts?, nativeOrigins?, linkPaths?, store?, confirmToken}
+//! POST /cli/app/pairing/set    {app, ios?, android?, desktopOnly?, hosts?, nativeOrigins?, linkPaths?, store?, confirmToken}
 //!                                      the owner in person + a fresh confirm (vault action app-pairing-apps)
 //! POST /cli/app/pairing/off    {app}   Admin, or the App's agent ("Build and run Apps"): lower only
 //! POST /cli/app/pairing/check  {app}   the owner: fetches the link files from each host over the internet
@@ -17,6 +17,12 @@
 //! confirm bound to the App (Touch ID, the login or the vault password):
 //! the owner token alone is readable by agents (CP22, V22). An agent asks
 //! with a permission card. Values are checked before the confirm is spent.
+//!
+//! A desktop-only App (0.46.11) says `desktopOnly: true` and names no
+//! phone app: the same owner, the same confirm, the same checks on every
+//! other value. K2 then serves no iOS or Android file for it, and its
+//! desktop app redeems the code the person types (the code is the
+//! credential either way; the ids only pick which phone app opens a link).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -108,6 +114,8 @@ pub(crate) fn status_json(t: &Target) -> R<J> {
         "hosts": hosts,
         "ios": cfg.as_ref().map(|c| json!(c.ios)).unwrap_or(json!([])),
         "android": cfg.as_ref().map(|c| json!(c.android)).unwrap_or(json!([])),
+        // 0.46.11: set up with no phone app; a desktop app pairs by a typed code.
+        "desktopOnly": cfg.as_ref().is_some_and(|c| c.desktop_only()),
         "hostsChosen": cfg.as_ref().and_then(|c| c.hosts.clone()),
         "nativeOrigins": cfg.as_ref().map(|c| json!(c.native_origins)).unwrap_or(json!([])),
         "linkPaths": cfg.as_ref().map(|c| json!(c.link_paths)).unwrap_or(json!([])),
@@ -177,26 +185,40 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
     let cfg = store::set_config(&t.service_id, &input, &by).map_err(|e| no("usage", 400, e))?;
     super::refresh_links(&t.service_id);
     let ids: Vec<String> = cfg.ios.iter().cloned().chain(cfg.android.iter().map(|a| a.package.clone())).collect();
-    super::audit("app-pairing-set", &by, "ok", "-", "cli", &format!("app={} apps={}", t.service_id, ids.join(",")));
-    crate::apps::alerts::note(
-        &t.project_id,
-        "Phone pairing set up",
-        &format!("The owner set the phone apps for {} ({by}): {}. People can now pair their phone from the web App.", t.name, ids.join(", ")),
-    );
+    let desktop_only = cfg.desktop_only();
+    let apps = if desktop_only { "desktop-only".to_string() } else { ids.join(",") };
+    super::audit("app-pairing-set", &by, "ok", "-", "cli", &format!("app={} apps={apps}", t.service_id));
+    let note = if desktop_only {
+        format!(
+            "The owner turned on pairing for {} with no phone app ({by}): people pair its desktop app by typing the code the web App shows.",
+            t.name
+        )
+    } else {
+        format!("The owner set the phone apps for {} ({by}): {}. People can now pair their phone from the web App.", t.name, ids.join(", "))
+    };
+    crate::apps::alerts::note(&t.project_id, if desktop_only { "Desktop pairing set up" } else { "Phone pairing set up" }, &note);
     let mut out = status_json(&t)?;
     let served: Vec<String> = super::served_hosts(&cfg, &all);
-    let mut warnings = vec![format!(
-        "while pairing is on, K2 itself answers /.well-known/apple-app-site-association and /.well-known/assetlinks.json on {}: \
-         the App's own files there are replaced; list its other universal-link paths with --link-path",
-        served.join(", ")
-    )];
+    let mut warnings = if desktop_only {
+        vec!["desktop only: K2 serves no iOS or Android link file for this App and no app opens the QR's link; \
+              show the code for the person to type into your desktop app (pairing.check, then pairing.redeem: k2 study app-pairing)"
+            .to_string()]
+    } else {
+        vec![format!(
+            "while pairing is on, K2 itself answers /.well-known/apple-app-site-association and /.well-known/assetlinks.json on {}: \
+             the App's own files there are replaced; list its other universal-link paths with --link-path",
+            served.join(", ")
+        )]
+    };
     if before.as_ref().is_some_and(|b| b.ios != cfg.ios || b.android != cfg.android) {
         warnings.push(
             "phones that already checked the old app ids may keep opening the old app for up to about a week (Apple's CDN and Android re-check on their own schedule)"
                 .into(),
         );
     }
-    warnings.push("list each host exactly in your app (applinks:<host>), never a wildcard: a wildcard makes iOS read k2.dev's own file".into());
+    if !desktop_only {
+        warnings.push("list each host exactly in your app (applinks:<host>), never a wildcard: a wildcard makes iOS read k2.dev's own file".into());
+    }
     out["warnings"] = json!(warnings);
     Ok(out)
 }

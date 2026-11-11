@@ -76,6 +76,7 @@
     },
     "allow_custom": false,
     "answeredAt": 1761061200,
+    "closedAs": "withdrawn",
     "expiresAt": 1761319200,
     "options": [
       {

@@ -307,7 +307,7 @@
     {
       "file": "approver-click__cancelled__cards2.json",
       "form": "cards2",
-      "sha256": "73f6e25f314aa3e3c5e76364116662e559cb5f70155ec17344ca2fc3b6b2edb6",
+      "sha256": "1395a6eaf4ae71e4a14aeb1e7c9c195a22eaa14b869b6a53793d4b50d9952ca1",
       "state": "cancelled",
       "transport": "doc",
       "view": "approver-click"
@@ -531,7 +531,7 @@
     {
       "file": "asker__cancelled__cards2.json",
       "form": "cards2",
-      "sha256": "c4ea98af13915214a3d0acf5295489499ffc4d8028f730b6c2939beb114dd059",
+      "sha256": "a142e27aec3554ec3f2b103e168ad7556f2ef5dc8a8ab64c7e8cfb1571d73d8e",
       "state": "cancelled",
       "transport": "doc",
       "view": "asker"

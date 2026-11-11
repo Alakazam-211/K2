@@ -3,7 +3,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
-import { readDesktopList, type DesktopGrant, type DesktopList, type DesktopStatus, type DesktopViewer } from './desktop-state'
+import { readDesktopList, readDesktopStatus, type DesktopGrant, type DesktopList, type DesktopStatus, type DesktopViewer } from './desktop-state'
 import type { Display } from './desktop-wire'
 
 export interface DesktopAuditLine {
@@ -23,8 +23,10 @@ export interface DesktopAuditLine {
 
 /** `desktop` names the desktop (prd-linux-virtual-desktop-v1 §3.1); left
  *  out, This server. */
-export function fetchDesktopStatus(scope: ServerScope, desktop?: string): Promise<DesktopStatus> {
-  return daemonCliGet<DesktopStatus>(scope, 'desktop/status', desktop ? { desktop } : undefined)
+/** Read with `readDesktopStatus`, as Settings does: an odd reply is a plain
+ *  error the tab shows, never a crash on `status.you`. */
+export async function fetchDesktopStatus(scope: ServerScope, desktop?: string): Promise<DesktopStatus> {
+  return readDesktopStatus(await daemonCliGet<unknown>(scope, 'desktop/status', desktop ? { desktop } : undefined))
 }
 
 /** `GET /cli/desktop/list`: the desktops this person may open.

@@ -341,6 +341,7 @@ describe('CreateAgentSheet', () => {
       params: { about: 'Blog posts' },
       dryRun: true,
     })
+    expect(body).not.toHaveProperty('launch')
     const rows = screen.getAllByTestId('create-agent-row')
     expect(rows).toHaveLength(ROWS.length)
     expect(rows[0].textContent).toContain('/home/r/agents/max')
@@ -365,6 +366,7 @@ describe('CreateAgentSheet', () => {
     const real = h.daemonCliPost.mock.calls[1]
     expect(real[0]).toBe('agents/hire')
     expect((real[1] as { dryRun: boolean }).dryRun).toBe(false)
+    expect((real[1] as { launch?: boolean }).launch).toBe(true)
     expect(useAgentTemplatesStore.getState().createOpen).toBe(false)
     expect(h.openWorkspaceThread).toHaveBeenCalledWith('ws-max')
     await waitFor(() => expect(h.daemonCliPostQuery).toHaveBeenCalledTimes(2))

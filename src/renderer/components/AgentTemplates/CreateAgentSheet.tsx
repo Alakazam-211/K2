@@ -355,7 +355,7 @@ function CreateAgentBody(): React.JSX.Element {
     setBusy(true)
     setFailed(null)
     try {
-      const made = await hireFromTemplate(scope, request(false))
+      const made = await hireFromTemplate(scope, { ...request(false), launch: true })
       close()
       void openWorkspaceThread(made.id || made.workspaceId)
       // Fallback for an older daemon only: a newer one has already said hello.

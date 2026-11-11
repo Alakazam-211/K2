@@ -140,6 +140,9 @@ export interface HireRequest {
   params?: Record<string, string>
   answers?: Record<string, string>
   dryRun: boolean
+  /** Start the agent and deliver its hello (the real create only; absent:
+   *  no launch). */
+  launch?: boolean
 }
 
 export interface HireRoot {

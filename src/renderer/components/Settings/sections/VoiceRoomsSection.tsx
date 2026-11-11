@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { BetaTag, Button, Callout, Checkbox, Input, Toggle } from '@/components/ui'
+import { BetaTag, Button, Callout, Checkbox, Input, Spinner, Toggle } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { fetchVoiceRooms, fetchVoiceStatus, renameVoiceRoom, setVoiceRecordingRequired, setVoiceRoomCount } from '@/lib/voice/voice-api'
 import type { VoiceHosting, VoiceRoom, VoiceRoomsList, VoiceStatus } from '@/lib/voice/voice-wire'
@@ -32,7 +32,6 @@ import {
   SETTING_FIELD_WIDTH,
   SETTING_LIST_ROW_HOVER,
   SETTING_ROW_HINT,
-  SETTING_SERVER_REASON,
   SettingRow,
   SettingsGroup,
   SettingsLoadState,
@@ -84,13 +83,20 @@ export function hostingView(h: VoiceHosting): HostingView | null {
     case 'not_pro':
       return { line: 'Voice rooms need the Pro plan.', tone: 'info', link: 'plans' }
     case 'count_zero':
-      return { line: 'This server hosts no rooms right now.', tone: 'info' }
+      // The Rooms card's empty state says it, with the next step.
+      return null
     case 'voice_lane_reconnecting':
     case 'voice_lane_down':
       return { line: 'Voice is reconnecting to K2’s network. Calls carry on as soon as it’s back.', tone: 'warn' }
     default:
       return { line: h.line ?? h.detail ?? 'Voice rooms aren’t available right now.', tone: 'warn' }
   }
+}
+
+/** What was wrong with an answer K2 couldn't read, in words. */
+function shapeLine(shape: string): string {
+  if (/^the server's answer/.test(shape)) return `${shape.charAt(0).toUpperCase()}${shape.slice(1)}.`
+  return 'Part of the server’s answer wasn’t in a form K2 can read.'
 }
 
 function occupancy(r: VoiceRoom): string {
@@ -109,6 +115,8 @@ export function VoiceRoomsSection(): React.JSX.Element {
   const [count, setCount] = useState<number | null>(null)
   const [closeNow, setCloseNow] = useState(false)
   const [busy, setBusy] = useState(false)
+  /** What is saving now: `count`, `recording`, or a room's id (a rename). */
+  const [saving, setSaving] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
   const [names, setNames] = useState<Record<string, string>>({})
   const joinMuted = useVoice((s) => s.prefs.joinMuted)
@@ -165,14 +173,18 @@ export function VoiceRoomsSection(): React.JSX.Element {
     if (now) {
       const n = (current ?? 0) - count
       const yes = await useConfirmDialogStore.getState().confirm({
-        title: n === 1 ? 'Close the room now?' : `Close ${n} rooms now?`,
-        message: 'Everyone in them gets a 10-second notice, then is disconnected. The other rooms aren’t affected.',
+        title: n === 1 ? 'Close this room now?' : `Close ${n} rooms now?`,
+        message:
+          n === 1
+            ? 'Everyone in it gets a 10-second notice, then is disconnected. The other rooms aren’t affected.'
+            : 'Everyone in them gets a 10-second notice, then is disconnected. The other rooms aren’t affected.',
         confirmLabel: 'Close now',
         destructive: true,
       })
       if (!yes) return
     }
     setBusy(true)
+    setSaving('count')
     countNote.clear()
     try {
       await setVoiceRoomCount(primaryScope(), count, now)
@@ -190,12 +202,14 @@ export function VoiceRoomsSection(): React.JSX.Element {
     } catch (err) {
       countNote.failed('Couldn’t change the number of rooms. Nothing changed; try again.', err)
     } finally {
+      setSaving(null)
       setBusy(false)
     }
   }
 
   const requireRecording = async (on: boolean): Promise<void> => {
     setBusy(true)
+    setSaving('recording')
     recordingNote.clear()
     try {
       await setVoiceRecordingRequired(primaryScope(), on)
@@ -204,6 +218,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
     } catch (err) {
       recordingNote.failed(on ? 'Couldn’t turn this on. Calls still aren’t required to record.' : 'Couldn’t turn this off. Calls are still recorded.', err)
     } finally {
+      setSaving(null)
       setBusy(false)
     }
   }
@@ -216,6 +231,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
     const name = (names[r.id] ?? '').trim()
     if (!name) return
     setBusy(true)
+    setSaving(r.id)
     roomsNote.clear()
     try {
       await renameVoiceRoom(primaryScope(), r.id, name)
@@ -230,6 +246,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
     } catch (err) {
       roomsNote.failed(`Couldn’t rename “${r.name}”. It keeps its name; try again.`, err)
     } finally {
+      setSaving(null)
       setBusy(false)
     }
   }
@@ -245,14 +262,14 @@ export function VoiceRoomsSection(): React.JSX.Element {
     roomsFail ? (
       <SettingsLoadState kind="error" title="Couldn’t load the voice rooms" detail={roomsFail.detail} action={tryAgain} testId="voice-rooms-error">
         K2 couldn&apos;t read this server&apos;s rooms.
-        {roomsFail.shape ? <span className="block mt-1 text-[var(--color-text-muted)]">Details: {roomsFail.shape}.</span> : null}
+        {roomsFail.shape ? <span className="block mt-1 text-[var(--color-text-muted)]">{shapeLine(roomsFail.shape)}</span> : null}
       </SettingsLoadState>
     ) : (
       <SettingsLoadState kind="loading" title="Loading the voice rooms…" testId="voice-rooms-loading" />
     )
   ) : rooms.rooms.length === 0 ? (
     <SettingsLoadState kind="empty" title="No rooms yet" testId="voice-rooms-empty">
-      {manage ? 'Set the number of rooms above to add one.' : 'The server’s owner or an Admin adds rooms.'}
+      {manage ? 'Raise the number of rooms above to add one.' : 'The server’s owner or an Admin can add some.'}
     </SettingsLoadState>
   ) : undefined
 
@@ -261,7 +278,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
     statusFail ? (
       <SettingsLoadState kind="error" title="Couldn’t load the room settings" detail={statusFail.detail} action={tryAgain} testId="voice-rooms-status-error">
         K2 couldn&apos;t read how many rooms this server hosts.
-        {statusFail.shape ? <span className="block mt-1 text-[var(--color-text-muted)]">Details: {statusFail.shape}.</span> : null}
+        {statusFail.shape ? <span className="block mt-1 text-[var(--color-text-muted)]">{shapeLine(statusFail.shape)}</span> : null}
       </SettingsLoadState>
     ) : (
       <SettingsLoadState kind="loading" title="Loading the room settings…" />
@@ -285,27 +302,22 @@ export function VoiceRoomsSection(): React.JSX.Element {
       </header>
 
       {why && hosting ? (
-        <Callout tone={why.tone} role="status" className="type-row" data-testid="voice-rooms-hosting" data-state={hosting.state}>
-          <div className="flex items-center justify-between gap-4">
-            <div className="min-w-0">
-              <p>{why.line}</p>
-              {hosting.detail ? (
-                <p data-testid="voice-rooms-hosting-detail" className={SETTING_SERVER_REASON}>
-                  Details: {hosting.detail.replace(/[.\s]+$/, '')}.
-                </p>
-              ) : null}
-            </div>
-            {why.link === 'plans' ? (
-              <Button className="flex-shrink-0" onClick={() => void openUrl('https://k2.dev/dashboard').catch(() => roomsNote.failed('Couldn’t open the plans page.', null))}>
-                See plans
-              </Button>
-            ) : why.link === 'chat' ? (
-              <Button className="flex-shrink-0" onClick={() => useSettingsStore.getState().setSection('sew')}>
-                Open Chat / Voice
-              </Button>
-            ) : null}
-          </div>
-        </Callout>
+        <div data-testid="voice-rooms-hosting" data-state={hosting.state}>
+          <SettingsLoadState
+            kind="empty"
+            title={why.line}
+            detail={hosting.detail}
+            action={
+              why.link === 'plans' ? (
+                <Button onClick={() => void openUrl('https://k2.dev/dashboard').catch(() => roomsNote.failed('Couldn’t open the plans page.', null))}>
+                  See plans
+                </Button>
+              ) : why.link === 'chat' ? (
+                <Button onClick={() => useSettingsStore.getState().setSection('sew')}>Open Chat / Voice</Button>
+              ) : undefined
+            }
+          />
+        </div>
       ) : null}
 
       {manage ? (
@@ -326,7 +338,9 @@ export function VoiceRoomsSection(): React.JSX.Element {
                   {lowering && occupiedDropped ? (
                     <label className="flex items-center gap-2 type-row text-[var(--color-text-secondary)]">
                       <Checkbox data-testid="voice-rooms-close-now" checked={closeNow} onChange={(e) => setCloseNow(e.currentTarget.checked)} />
-                      Close them now: everyone in them gets a 10-second notice, then is disconnected
+                      {dropped.length === 1
+                        ? 'Close it now: everyone in it gets a 10-second notice, then is disconnected'
+                        : 'Close them now: everyone in them gets a 10-second notice, then is disconnected'}
                     </label>
                   ) : null}
                   <ActionNote note={countNote.note} testId="voice-rooms-count-note" />
@@ -363,14 +377,21 @@ export function VoiceRoomsSection(): React.JSX.Element {
                 +
               </Button>
             </div>
-            <Button variant="accent" data-testid="voice-rooms-apply" disabled={busy || count === null || count === current} onClick={() => void applyCount()}>
-              Save
+            <Button variant="accent" data-testid="voice-rooms-apply" aria-busy={saving === 'count' || undefined} disabled={busy || count === null || count === current} onClick={() => void applyCount()}>
+              {saving === 'count' ? 'Saving…' : 'Save'}
             </Button>
           </SettingRow>
           {showRequire && recording ? (
             <SettingSwitchRow
               testId="voice-rooms-require-row"
               control={
+                <>
+                {saving === 'recording' ? (
+                  <span role="status" className="inline-flex items-center gap-1.5 type-hint text-[var(--color-text-secondary)] whitespace-nowrap">
+                    <Spinner />
+                    Saving…
+                  </span>
+                ) : null}
                 <Toggle
                   data-testid="voice-rooms-require-recording"
                   aria-label="Require recording when two or more people are in a room"
@@ -378,6 +399,7 @@ export function VoiceRoomsSection(): React.JSX.Element {
                   disabled={busy || recording.locked}
                   onChange={(on) => void requireRecording(on)}
                 />
+                </>
               }
             >
               <div className="type-row text-[var(--color-text-primary)]">Require recording when two or more people are in a room</div>
@@ -454,8 +476,8 @@ export function VoiceRoomsSection(): React.JSX.Element {
                           setNames((n) => ({ ...n, [r.id]: v }))
                         }}
                       />
-                      <Button type="submit" disabled={busy || !changed}>
-                        Rename
+                      <Button type="submit" aria-busy={saving === r.id || undefined} disabled={busy || !changed}>
+                        {saving === r.id ? 'Renaming…' : 'Rename'}
                       </Button>
                     </form>
                   ) : null}

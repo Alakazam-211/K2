@@ -61,8 +61,8 @@ describe('parseVoiceRooms (voice/routes.rs rooms_view)', () => {
   })
 
   it('throws on a body that is not a rooms list', () => {
-    expect(() => parseVoiceRooms({ ok: false, code: 'voice_rooms_off' })).toThrow('the reply is not a rooms list')
-    expect(() => parseVoiceRooms(null)).toThrow('the reply is not a rooms list')
+    expect(() => parseVoiceRooms({ ok: false, code: 'voice_rooms_off' })).toThrow("the server's answer was missing the list of rooms")
+    expect(() => parseVoiceRooms(null)).toThrow("the server's answer was missing the list of rooms")
   })
 
   it('full is the daemon saying so, or the count at the limit', () => {

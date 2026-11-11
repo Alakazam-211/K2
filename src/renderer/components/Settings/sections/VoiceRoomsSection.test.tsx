@@ -92,7 +92,7 @@ describe('VoiceRoomsSection', () => {
     fireEvent.click(screen.getByTestId('voice-rooms-close-now'))
     fireEvent.click(screen.getByTestId('voice-rooms-apply'))
     // Cutting people off asks first.
-    await waitFor(() => expect(screen.getByText('Close the room now?')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Close this room now?')).toBeTruthy())
     expect(h.setCount).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Close now' }))
     await waitFor(() => expect(h.setCount).toHaveBeenCalledWith({ hostKey: 'sewlab.k2.dev', id: 'p' }, 1, true))
@@ -123,13 +123,13 @@ describe('VoiceRoomsSection', () => {
   })
 
   it('an odd rooms reply is a plain error card with Try again, never a raw parser line', async () => {
-    h.rooms.mockRejectedValueOnce(new Error('the reply is not a rooms list'))
+    h.rooms.mockRejectedValueOnce(new Error("the server's answer was missing the list of rooms"))
     h.rooms.mockResolvedValue(rooms(false))
     render(<VoiceRoomsSection />)
     const card = await screen.findByTestId('voice-rooms-error')
     expect(card.getAttribute('role')).toBe('alert')
     expect(card.textContent).toContain('Couldn’t load the voice rooms')
-    expect(card.textContent).toContain('Details: the reply is not a rooms list.')
+    expect(card.textContent).toContain("The server's answer was missing the list of rooms.")
     expect(card.textContent).not.toContain('voice/rooms')
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(screen.getAllByTestId('voice-rooms-row')).toHaveLength(2))
@@ -210,6 +210,34 @@ describe('VoiceRoomsSection', () => {
     const box = await screen.findByTestId('voice-rooms-hosting')
     expect(box.textContent).toContain('Voice rooms need Chat / Voice Hosting')
     expect(box.textContent).not.toContain('k2 hostchat')
-    expect(screen.getByTestId('voice-rooms-hosting-detail').textContent).toBe('Details: identity: standalone.')
+    expect(box.textContent).toContain('The server said: identity: standalone.')
+  })
+
+  it('a server with no rooms says so once, with the next step', async () => {
+    const hosting = { state: 'count_zero', line: 'This server hosts no rooms.', detail: null }
+    h.rooms.mockResolvedValue({ ...rooms(true), hosting, rooms: [] })
+    h.status.mockResolvedValue({ hosting, count: 0, mediaTier: null })
+    render(<VoiceRoomsSection />)
+    const empty = await screen.findByTestId('voice-rooms-empty')
+    expect(empty.textContent).toContain('Raise the number of rooms above to add one.')
+    expect(screen.queryByTestId('voice-rooms-hosting')).toBeNull()
+  })
+
+  it('Save says Saving… and Rename says Renaming… while the write is in flight', async () => {
+    h.rooms.mockResolvedValue(rooms(true))
+    h.status.mockResolvedValue({ hosting: { state: 'ok', line: null, detail: null }, count: 2, mediaTier: null })
+    let release: () => void = () => {}
+    h.setCount.mockReturnValue(new Promise<void>((r) => (release = r)))
+    h.rename.mockReturnValue(new Promise<void>(() => {}))
+    render(<VoiceRoomsSection />)
+    await waitFor(() => expect(screen.getByTestId('voice-rooms-count').textContent).toBe('2'))
+    fireEvent.click(screen.getByTestId('voice-rooms-plus'))
+    fireEvent.click(screen.getByTestId('voice-rooms-apply'))
+    await waitFor(() => expect(screen.getByTestId('voice-rooms-apply').textContent).toBe('Saving…'))
+    release()
+    await waitFor(() => expect(screen.getByTestId('voice-rooms-apply').textContent).toBe('Save'))
+    fireEvent.change(screen.getByLabelText('Name of Room 1'), { target: { value: 'Standup' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Rename' })[0])
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Renaming…' })).toBeTruthy())
   })
 })

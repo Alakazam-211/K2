@@ -208,6 +208,9 @@ mod reader_tests;
 // Does this server have mail (the Mail tab's rule), end to end.
 #[cfg(test)]
 mod reader_presence_tests;
+// Drafted replies in the reader: at the top of the thread, edit, send, discard.
+#[cfg(test)]
+mod reader_drafts_tests;
 pub mod send;
 pub mod submit;
 pub mod sieve_user;

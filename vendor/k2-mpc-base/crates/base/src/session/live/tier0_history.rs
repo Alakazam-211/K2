@@ -226,7 +226,7 @@ impl Session {
         not_reached: &mut Vec<NotReached>,
     ) -> Result<()> {
         let before = store.blob_versions(self.doc_id)?;
-        let (released, approvals) = store.blob_purge_versions(self.doc_id, vids, now)?;
+        let (released, approvals, _anchors) = store.blob_purge_versions(self.doc_id, vids, now)?;
         counts.blob_versions += vids.len() as u64;
         counts.approvals += approvals;
         let purged: Vec<BlobId> = released.iter().map(|r| r.1).collect();

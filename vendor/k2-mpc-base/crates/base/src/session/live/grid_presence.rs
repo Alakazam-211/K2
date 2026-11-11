@@ -893,6 +893,11 @@ impl Session {
         if let ClaimSpan::Elems { root, keys } = &span {
             return self.claim_elems_inner(conn, root, keys, ttl_ms, note, hold);
         }
+        if let ClaimSpan::Nodes { .. } = &span {
+            return Err(SessionError::BadPosition(format!(
+                "{span}: index nodes are a blob doc's; claim lines, rows, columns, cells or elements"
+            )));
+        }
         if !self.is_grid() {
             return match span {
                 ClaimSpan::Lines(l) => self.claim_inner(conn, l, ttl_ms, note, hold),

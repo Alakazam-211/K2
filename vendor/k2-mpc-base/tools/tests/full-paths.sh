@@ -36,7 +36,7 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wir
   # oss-check (K-OSS-3) reads the licence files, NOTICE.md and every manifest of ours (not the
   # lockfiles, which are large: in a bundle it checks package.json files without them)
   evidence) EF=
-      echo "tools/evidence docs/evidence tools/check-private.sh tools/private-allow.txt" \
+      echo "tools/evidence docs/evidence tools/check-private.sh tools/test-check-private.sh tools/private-allow.txt" \
       "tools/check-windows-names.sh tools/test-windows-names.sh" $EF \
       "tools/oss-check.sh tools/test-oss-check.sh LICENSE-MIT LICENSE-APACHE NOTICE.md" \
       "client/LICENSE-MIT client/LICENSE-APACHE" \

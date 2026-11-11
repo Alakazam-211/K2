@@ -28,13 +28,24 @@ use super::participant::{
 use super::presence::{self, Presence};
 use super::ratelimit::Bucket;
 
+mod annot;
+mod index_page;
+mod index_read;
+mod index_tool;
+mod node_claims;
 mod promote;
+mod struct_index;
+use crate::anchor::{AnchorJudgment, AnchorRules, CandidateWhy};
 use crate::blob::{BlobError, BlobId, BlobInfo, BlobReader, BlobStore};
+use crate::index::{Fingerprint, IndexDraft, IndexLimits, IndexNode, IndexRefused, IndexSpec};
 use crate::store::{
     Approval, ApprovalState, BlobReason, BlobSync, BlobVersion, DocId, DocKey, DocMeta, DocStore,
     PurgeCounts, StoreError, VersionId, BLOB_DOC_PACK,
 };
+pub use index_read::INDEX_ADDRS_MAX;
+pub use node_claims::NODE_CLAIM_ROOT;
 pub use promote::{Promoted, Promotion};
+pub use struct_index::{IndexInput, IndexJob};
 
 /// The participant a pack's merge of a conflicting save is attributed to (tier 0.5).
 pub const MERGE_PID: &str = "kit:merge";
@@ -78,6 +89,96 @@ pub trait BlobPack: Send + Sync {
     /// never overwritten (the kit adds ` 2`, ` 3`...).
     fn conflict_copy_name(&self, file_name: &str, at_ms: u64, who: &str) -> String {
         conflict_copy_name(file_name, at_ms, who)
+    }
+
+    /// `Some` turns the structure index on (`docs/SESSIONS.md`, "The structure index").
+    /// Default `None`.
+    fn index_spec(&self) -> Option<IndexSpec> {
+        None
+    }
+
+    /// Read one version into nodes: forward only, it may stop early (the kit reads the rest
+    /// and only records after a verified end). Called off the session lock, possibly in
+    /// another process, on hostile bytes: bounded by `limits`. Default
+    /// [`IndexRefused::Unsupported`].
+    fn index(
+        &self,
+        src: &mut dyn Read,
+        size: u64,
+        limits: &IndexLimits,
+    ) -> std::result::Result<IndexDraft, IndexRefused> {
+        let _ = (src, size, limits);
+        Err(IndexRefused::Unsupported)
+    }
+
+    /// The file-type half of an anchor's state (`docs/SESSIONS.md`, "Anchors"): `now` holds
+    /// the anchor's key in a later version; is it still the node `was` describes? `hint` is
+    /// what this pack put on the anchor. Bounded, no I/O: it runs once per anchor read, and
+    /// inside a store transaction when an index is recorded. Default
+    /// [`crate::anchor::judge_by_default`]: another kind is
+    /// [`AnchorJudgment::KindChanged`]; renamed, moved past its old diagonal and with other
+    /// content is [`AnchorJudgment::IdentityDoubt`]; a plain rename or move is the same node.
+    /// `was` is the anchored version's node (its content hash included), so a judge never
+    /// needs that version's index.
+    fn judge_anchor(
+        &self,
+        was: &Fingerprint,
+        hint: Option<&str>,
+        now: &IndexNode,
+    ) -> AnchorJudgment {
+        let _ = hint;
+        crate::anchor::judge_by_default(was, now)
+    }
+
+    /// The anchor's key is gone (or held by several nodes): is `node` a candidate a person
+    /// may re-anchor to? Never taken by the kit. Bounded, no I/O. Default
+    /// [`crate::anchor::candidate_by_default`]: the same kind, with a weak ID in common or the
+    /// same name.
+    fn anchor_candidate(
+        &self,
+        was: &Fingerprint,
+        hint: Option<&str>,
+        node: &IndexNode,
+    ) -> Option<CandidateWhy> {
+        let _ = hint;
+        crate::anchor::candidate_by_default(was, node)
+    }
+
+    /// Whether an agent may `write` this type. Default [`AgentWrites::Allowed`]. A pack that
+    /// never takes agent-written bytes returns [`AgentWrites::Refused`]: `write` and
+    /// `expect_save` by a [`ParticipantKind::Agent`] are then refused (`MPC-E715`); a restore
+    /// makes no new bytes and stays allowed.
+    fn agent_writes(&self) -> AgentWrites {
+        AgentWrites::Allowed
+    }
+}
+
+/// Whether agents may write a blob type ([`BlobPack::agent_writes`]). A rule about the file
+/// type, not a right a person can grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AgentWrites {
+    /// Agents write as anyone with edit.
+    Allowed,
+    /// Agents can't write this type: they propose (a new file, a comment).
+    Refused,
+}
+
+/// A blob pack's anchor rules ([`BlobPack::judge_anchor`], [`BlobPack::anchor_candidate`]).
+pub(crate) struct PackRules<'a>(pub &'a dyn BlobPack);
+
+impl AnchorRules for PackRules<'_> {
+    fn judge(&self, was: &Fingerprint, hint: Option<&str>, now: &IndexNode) -> AnchorJudgment {
+        self.0.judge_anchor(was, hint, now)
+    }
+
+    fn candidate(
+        &self,
+        was: &Fingerprint,
+        hint: Option<&str>,
+        node: &IndexNode,
+    ) -> Option<CandidateWhy> {
+        self.0.anchor_candidate(was, hint, node)
     }
 }
 
@@ -363,6 +464,9 @@ pub struct BlobStatus {
     pub disk: Option<DiskState>,
     /// The doc's conflict copies that exist now (recorded by the kit; oldest first).
     pub conflict_copies: Vec<ConflictCopy>,
+    /// Where the current version's structure index stands ([`BlobSession::index_status`]);
+    /// `None` for a type with no index ([`BlobPack::index_spec`]).
+    pub index: Option<crate::index::IndexStatus>,
 }
 
 /// A conflict copy the kit wrote and recorded ([`BlobStatus::conflict_copies`]).
@@ -454,6 +558,8 @@ struct BState {
     /// Tickets that ended this load, newest last, at most [`SAVE_TICKETS_KEPT`]: (id,
     /// connection, how).
     ended: VecDeque<(u64, ConnId, Ended)>,
+    /// Live claims on index nodes ([`BlobSession::claim_nodes`]), oldest first; memory only.
+    node_claims: Vec<node_claims::NodeClaim>,
 }
 
 const OWN_WRITES_KEPT: usize = 8;
@@ -556,6 +662,10 @@ pub struct BlobSession {
     load: u64,
     state: Mutex<BState>,
     last_used_ms: AtomicU64,
+    index_flight: Arc<struct_index::InFlight>,
+    /// Comment writes hold it shared from their admission to their commit; a participant's
+    /// erasure holds it alone, so no comment admitted before an erasure commits after it.
+    annot_gate: std::sync::RwLock<()>,
 }
 
 /// A value no other load of any doc has had: a per-process base from the wall clock, plus a
@@ -643,7 +753,10 @@ impl BlobSession {
                 last_cleanup_ms: None,
                 expected: None,
                 ended: VecDeque::new(),
+                node_claims: Vec::new(),
             }),
+            index_flight: Arc::default(),
+            annot_gate: std::sync::RwLock::new(()),
         }
     }
 
@@ -714,16 +827,10 @@ impl BlobSession {
             stat: disk::Seen::now(s).persisted(),
         });
         let (doc_id, vid) = store.create_blob_doc(&meta, &first, sync.as_ref())?;
-        Ok(Self::build(
-            host,
-            config,
-            blobs,
-            pack,
-            store,
-            doc_id,
-            key,
-            (vid, first),
-        ))
+        let for_index = (store.clone(), key.clone(), first.blob, first.size);
+        let s = Self::build(host, config, blobs, pack, store, doc_id, key, (vid, first));
+        s.want_index_key(&for_index.0, &for_index.1, vid, for_index.2, for_index.3);
+        Ok(s)
     }
 
     // ----- plumbing -----
@@ -764,6 +871,8 @@ impl BlobSession {
     }
 
     fn remove_member(&self, st: &mut BState, i: usize, reason: LeaveReason) {
+        let conn = st.members[i].conn;
+        self.end_node_claims_of(st, conn);
         let m = st.members.remove(i);
         self.emit(AuditEvent::Left {
             key: st.key.clone(),
@@ -816,6 +925,17 @@ impl BlobSession {
         Ok(i)
     }
 
+    /// [`BlobPack::agent_writes`]: an agent can't write a type that refuses it. Checked once
+    /// edit rights are known: an agent without them is told that first.
+    fn check_agent_write(&self, st: &BState, i: usize) -> Result<()> {
+        if st.members[i].p.kind == ParticipantKind::Agent
+            && self.pack.agent_writes() == AgentWrites::Refused
+        {
+            return Err(SessionError::AgentWriteRefused);
+        }
+        Ok(())
+    }
+
     /// Admit a write: edit rights, not declined, under the pid's rate limit.
     fn admit_write(
         &self,
@@ -825,6 +945,15 @@ impl BlobSession {
         now: u64,
     ) -> Result<usize> {
         let i = self.admit(st, conn, Need::Edit, action, now)?;
+        #[cfg(any(test, feature = "differential"))]
+        if crate::differential::index_mutant()
+            == Some(crate::differential::IndexMutant::ClaimBlocksWrite)
+            && Self::claimed_by_other(st, &st.members[i].p.pid)
+        {
+            return Err(SessionError::BadClaim(
+                "planted: a node claim blocks".into(),
+            ));
+        }
         if let Some(reason) = st.disk.as_ref().and_then(|d| d.declined.clone()) {
             return Err(SessionError::Declined(Declined {
                 code: "declined",
@@ -1000,6 +1129,7 @@ impl BlobSession {
     /// them) first, then viewers, then away. `region` and `holds_lease` are filled; there
     /// are no carets. Alone, it lists only the caller. Needs read.
     pub fn roster(&self, conn: ConnId) -> Result<Vec<RosterEntry>> {
+        self.refresh_node_claims();
         let out = self.roster_inner(conn);
         self.for_viewer(conn, out, |l, v| {
             v.into_iter().map(|e| l.entry(e)).collect()
@@ -1011,12 +1141,14 @@ impl BlobSession {
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::Read, Action::Roster, now)?;
         self.expire_lease(&mut st, now);
+        self.sweep_node_claims(&mut st, now);
         let holder = st.lease.as_ref().map(|l| l.pid.clone());
         let is_holder = |pid: &str| holder.as_deref() == Some(pid);
         let mut rows = presence::fold_roster(&st.members, now, &self.config, is_holder);
         for (conns, entry, _) in &mut rows {
             entry.region = conns.iter().find_map(|m| m.region.clone());
             entry.holds_lease = is_holder(&entry.participant.pid);
+            entry.claims = Self::node_claims_of(&st, &entry.participant.pid, now);
         }
         Ok(presence::sort_roster(rows))
     }
@@ -1400,6 +1532,13 @@ impl BlobSession {
         let mut st = self.lock()?;
         self.expire_lease(&mut st, now);
         let conflict_copies = self.existing_copies(&mut st)?;
+        let index = match self.pack.index_spec() {
+            Some(spec) => {
+                let t = self.target_of(&st, None)?;
+                Some(self.status_of(&t, &spec)?)
+            }
+            None => None,
+        };
         Ok(BlobStatus {
             key: st.key.clone(),
             version: st.vid,
@@ -1409,6 +1548,7 @@ impl BlobSession {
             lease: st.lease.clone(),
             disk: Self::disk_state(&st),
             conflict_copies,
+            index,
         })
     }
 
@@ -1451,6 +1591,7 @@ impl BlobSession {
         let (space, pid, auto) = {
             let mut st = self.lock()?;
             let i = self.admit_write(&mut st, conn, Action::WriteBase, now)?;
+            self.check_agent_write(&st, i)?;
             let pid = st.members[i].p.pid.clone();
             self.check_lease(&mut st, &pid, now)?;
             if base != st.vid {
@@ -1556,6 +1697,7 @@ impl BlobSession {
         )?[0];
         st.vid = vid;
         st.cur = v;
+        self.want_index(st, st.vid, st.cur.blob, st.cur.size);
         st.members[i].last_edit_ms = Some(now);
         Self::mark_dirty(st, now);
         // a failed write-back is reported as an event; tick retries
@@ -1601,6 +1743,7 @@ impl BlobSession {
         let st = &mut *st;
         self.expire_ticket(st, now);
         let i = self.admit_write(st, conn, Action::WriteBase, now)?;
+        self.check_agent_write(st, i)?;
         let pid = st.members[i].p.pid.clone();
         self.check_lease(st, &pid, now)?;
         if base != st.vid {
@@ -1808,6 +1951,7 @@ impl BlobSession {
         )?[0];
         st.vid = vid;
         st.cur = v;
+        self.want_index(st, st.vid, st.cur.blob, st.cur.size);
         st.members[i].last_edit_ms = Some(now);
         // the file holds these bytes, and they are the kit's own, as write_back records its
         // own writes: the save's change event, also one that comes in after a later version
@@ -2115,7 +2259,7 @@ impl BlobSession {
             }
         }
         let space = st.key.space.clone();
-        let (released, approvals) = store.blob_purge_versions(self.doc_id, &vids, now)?;
+        let (released, approvals, anchors) = store.blob_purge_versions(self.doc_id, &vids, now)?;
         let purged: Vec<BlobId> = released.iter().map(|r| r.1).collect();
         let free: Vec<(u64, BlobId, u64)> = released
             .iter()
@@ -2161,6 +2305,7 @@ impl BlobSession {
             blobs_removed,
             conflict_copies: copies_removed,
             approvals,
+            anchors,
             ..PurgeCounts::default()
         };
         let rewrite = match store.rewrite_file() {
@@ -2421,6 +2566,7 @@ impl BlobSession {
     /// The host's clock tick: lease expiry, the stat backup while anyone is present, a
     /// write-back that failed before, and the conflict-copy cleanup.
     pub(crate) fn tick(&self) -> Result<BlobTick> {
+        self.refresh_node_claims();
         let now = self.host.now_ms();
         let mut st = self.lock()?;
         let st = &mut *st;
@@ -2428,6 +2574,7 @@ impl BlobSession {
             expired: self.expire_lease(st, now),
             ..BlobTick::default()
         };
+        self.sweep_node_claims(st, now);
         if st.disk.is_none() {
             return Ok(out);
         }
@@ -2839,6 +2986,7 @@ impl BlobSession {
             )?[0];
             st.vid = vid;
             st.cur = theirs;
+            self.want_index(st, st.vid, st.cur.blob, st.cur.size);
             let d = st.disk.as_mut().expect("has disk");
             d.synced = info.id;
             d.stat = Some(disk::Seen::now(stat));
@@ -2870,6 +3018,7 @@ impl BlobSession {
         )?[0];
         st.vid = vid;
         st.cur = theirs;
+        self.want_index(st, st.vid, st.cur.blob, st.cur.size);
         if let (Some(recs), Some(rec)) = (st.copies.as_mut(), copy.clone()) {
             recs.push(CopyRec {
                 version: vid,
@@ -2945,8 +3094,10 @@ impl BlobSession {
             &[theirs.clone(), merged.clone()],
             Some(sync),
         )?;
+        self.want_index(st, vids[0], theirs.blob, theirs.size);
         st.vid = vids[1];
         st.cur = merged;
+        self.want_index(st, st.vid, st.cur.blob, st.cur.size);
         let d = st.disk.as_mut().expect("has disk");
         d.synced = theirs.blob;
         d.stat = Some(disk::Seen::now(stat));

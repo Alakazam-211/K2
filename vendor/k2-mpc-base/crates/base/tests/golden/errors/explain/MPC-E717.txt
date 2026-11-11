@@ -1,0 +1,27 @@
+MPC-E717 index_stale (tier 0 and blobs)
+exit:     1
+message:  the index job for version {version} is out of date: {reason}
+next:     The version the job was reading changed under it (it was purged, deleted or rewritten). Nothing was recorded; the host may take a new job.
+step:     status; why: That version changed while its index was being built; see which versions the doc has now.
+rule:     structure index
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E717",
+  "name": "index_stale",
+  "area": "tier 0 and blobs",
+  "exit": 1,
+  "message": "the index job for version {version} is out of date: {reason}",
+  "next": "The version the job was reading changed under it (it was purged, deleted or rewritten). Nothing was recorded; the host may take a new job.",
+  "next_step": {
+    "verb": "status",
+    "args": [],
+    "why": "That version changed while its index was being built; see which versions the doc has now."
+  },
+  "rule": "structure index",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

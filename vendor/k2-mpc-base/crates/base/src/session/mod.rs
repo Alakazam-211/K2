@@ -68,7 +68,7 @@ pub use config::{
     DEFAULT_BLAME_CHECK_LARGE_AT,
 };
 pub use disk::{file_identity, is_write_temp, DiskCheck, DiskState, FileIdentity, FlushOutcome};
-pub use error::{DroppedBy, EditWithError, ElemsClaim, SessionError};
+pub use error::{DroppedBy, EditWithError, ElemsClaim, NodesClaim, SessionError};
 pub use host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, PurgedScope, Rights};
 #[cfg(feature = "conformance")]
 pub use live::CharBlame;
@@ -97,10 +97,10 @@ pub use participant::{
 pub use position::{At, Cursor, LineCol, LineRange};
 pub use roster::{RosterEvent, RosterMember, Who};
 pub use tier0::{
-    conflict_copy_name, AnyFile, BlobApproval, BlobAuthor, BlobBlame, BlobLogEntry, BlobLogKind,
-    BlobMerge, BlobPack, BlobRead, BlobSession, BlobStatus, BlobWriteResult, ConflictCopy,
-    LeaseInfo, NotRecorded, Promoted, Promotion, SaveTicket, MERGE_PID, REGION_MAX_BYTES,
-    SAVE_TICKETS_KEPT,
+    conflict_copy_name, AgentWrites, AnyFile, BlobApproval, BlobAuthor, BlobBlame, BlobLogEntry,
+    BlobLogKind, BlobMerge, BlobPack, BlobRead, BlobSession, BlobStatus, BlobWriteResult,
+    ConflictCopy, IndexInput, IndexJob, LeaseInfo, NotRecorded, Promoted, Promotion, SaveTicket,
+    INDEX_ADDRS_MAX, MERGE_PID, NODE_CLAIM_ROOT, REGION_MAX_BYTES, SAVE_TICKETS_KEPT,
 };
 pub use undo::{ConflictKind, ConflictRegion};
 pub use view::View;

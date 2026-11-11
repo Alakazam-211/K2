@@ -30,8 +30,9 @@ pub(super) const BLOB_SYNC: TableDefinition<(u64, u8), &[u8]> = TableDefinition:
 pub(super) const BLOB_APPROVALS: TableDefinition<(u64, u64), &[u8]> =
     TableDefinition::new("blob_approvals");
 
-/// A purged space: its key's number and the blobs (id, size) whose rows were removed.
-pub(crate) type PurgedSpace = (u64, Vec<(BlobId, u64)>);
+/// A purged space: its key's number, the blobs (id, size) whose rows were removed, and how
+/// many structure-index rows went with them.
+pub(crate) type PurgedSpace = (u64, Vec<(BlobId, u64)>, u64);
 
 /// A blob a purge released: the space's key number, its id and size, and the references
 /// it still has (0: nothing else uses it, so its bytes can go now).
@@ -283,7 +284,7 @@ fn r_opt_u64(r: &mut R<'_>) -> Result<Option<u64>, StoreError> {
 }
 
 /// Blob version record 2: record 1 plus the `redacted` flag at the end.
-fn enc_version(v: &BlobVersion) -> Vec<u8> {
+pub(super) fn enc_version(v: &BlobVersion) -> Vec<u8> {
     let mut w = W::default();
     w.u8(2).bytes(v.blob.as_bytes()).u64(v.size);
     opt_u64(&mut w, v.mtime_ms);
@@ -592,6 +593,10 @@ impl DocStore {
                 }
             }
         }
+        // the invariant: an index row exists only while its blob row does
+        for (no, id, _) in &gone {
+            super::blob_struct::remove_rows(&w, *no, id)?;
+        }
         w.commit()?;
         Ok(gone)
     }
@@ -628,7 +633,8 @@ impl DocStore {
                     for (id, _) in &rows {
                         t.remove((k.no, id.as_bytes().as_slice()))?;
                     }
-                    Some((k.no, rows))
+                    let struct_rows = super::blob_struct::remove_space_rows(&w, k.no)?;
+                    Some((k.no, rows, struct_rows))
                 }
             }
         };
@@ -802,6 +808,14 @@ impl DocStore {
                 return Err(StoreError::NamedVersion(id, vid));
             }
             t.remove((id, vid))?;
+            #[cfg(any(test, feature = "differential"))]
+            let keep_keys = crate::differential::index_mutant()
+                == Some(crate::differential::IndexMutant::DeleteKeepsKeys);
+            #[cfg(not(any(test, feature = "differential")))]
+            let keep_keys = false;
+            if !keep_keys {
+                super::blob_struct::remove_keys(&w, id, vid)?;
+            }
             let k = space_in(&w, &key.space)?;
             adjust_ref(&w, k.no, &v.blob, -1, now)?;
         }
@@ -826,7 +840,7 @@ impl DocStore {
         id: DocId,
         vids: &[VersionId],
         now: u64,
-    ) -> Result<(Vec<PurgedBlob>, u64), StoreError> {
+    ) -> Result<(Vec<PurgedBlob>, u64, u64), StoreError> {
         let w = self.begin_write()?;
         let out = {
             let meta = {
@@ -855,6 +869,9 @@ impl DocStore {
                 if v.redacted {
                     continue;
                 }
+                // the key overlay of a purged version goes with it; the row stays if the
+                // blob is still held elsewhere (a shared blob keeps its row)
+                super::blob_struct::remove_keys(&w, id, vid)?;
                 if let Some(a) = w.open_table(BLOB_APPROVALS)?.get((id, vid))? {
                     // decoded: a damaged record stops the purge rather than riding along
                     dec_approval(a.value())?;
@@ -872,6 +889,14 @@ impl DocStore {
                     }
                 }
                 released.push((blob, v.size));
+                #[cfg(any(test, feature = "differential"))]
+                if crate::differential::index_mutant()
+                    == Some(crate::differential::IndexMutant::SharedLosesRow)
+                {
+                    if let Some(k) = &space {
+                        super::blob_struct::remove_rows(&w, k.no, &blob)?;
+                    }
+                }
             }
             let mut out = Vec::new();
             if let Some(k) = &space {
@@ -889,7 +914,9 @@ impl DocStore {
                     out.push((k.no, b, size, refs));
                 }
             }
-            (out, approvals)
+            // the anchors' copies of these versions' node names and hints go too
+            let anchors = super::annot::forget_versions(&w, id, vids)?;
+            (out, approvals, anchors)
         };
         w.commit()?;
         Ok(out)

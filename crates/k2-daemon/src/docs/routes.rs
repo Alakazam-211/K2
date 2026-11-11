@@ -28,6 +28,14 @@
 //! | `/cli/docs/export/targets` | GET | read | `ExportRegistry::targets_for` + the worker's `describe` | P24 |
 //! | `/cli/docs/export/status`, `/cli/docs/export/fetch` | GET | the job's caller | the job table | P24 |
 //! | `/cli/docs/export/cancel` | POST | the job's caller | a kill | P24 |
+//! | `/cli/docs/comments/purge` | POST | owner (box owner or Admin login) | tier 0: `purge_annotations` ([`super::annotations`]) | K-PURGE-3 |
+//! | `/cli/docs/erase` | POST | owner | tier 0: `erase_participant` | K-PURGE-7 |
+//!
+//! Comments and claims by layer ride `/cli/docs/tool` (POST): every verb
+//! the file's registry runs through `BlobSession::run_tool` (`comment`,
+//! `reply`, `resolve`, `comment --delete`, `comments`, `reanchor`; on
+//! PSD/PSB files `layer list|show|diff|blame`, `outline`, `node`, `claim
+//! --node|--renew|--release`), see [`super::tier0`].
 //!
 //! **Any other file** (not Markdown) is a tier-0 doc on the same routes
 //! ([`super::tier0`]): presence, a lease, versions, restore, `write --base`
@@ -132,6 +140,7 @@ pub const ROUTES: &[&str] = &[
     STATUS, super::cores::CORES_ROUTE, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
     UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME, LEASE, CLAIM, ACTIVITY,
     super::export::EXPORT, super::export::TARGETS, super::export::STATUS, super::export::CANCEL, super::export::FETCH,
+    super::annotations::PURGE, super::annotations::ERASE,
 ];
 
 /// Tier 0's lease (K-T0-2): acquire, renew, release, break.
@@ -168,6 +177,8 @@ fn is_post_route(path: &str) -> bool {
             | "/cli/docs/claim"
             | "/cli/docs/export"
             | "/cli/docs/export/cancel"
+            | "/cli/docs/comments/purge"
+            | "/cli/docs/erase"
     ) || is_edit_route(path)
 }
 
@@ -406,6 +417,16 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         }
         Err(e) => return e.into_response(),
     };
+    if path == super::annotations::PURGE || path == super::annotations::ERASE {
+        return with_exit(
+            refusal(
+                "400 Bad Request",
+                "comments_any_file_only",
+                format!("{} is a live text doc: comments, their purge and participant erasure are on any-file docs", target.rel),
+            ),
+            k2_mpc_base::tools::exit::USAGE,
+        );
+    }
     if path == LEASE {
         return with_exit(
             refusal(
@@ -471,7 +492,14 @@ fn notes_text(n: &Notes) -> Value {
 }
 
 fn claim_json(c: &ClaimInfo) -> Value {
+    // A claim by node on a blob doc (kit A5): its node keys; `lines` is then
+    // the first and last node's #N (display only).
+    let nodes = match &c.span {
+        k2_mpc_base::session::ClaimSpan::Nodes { keys } => Value::from(keys.iter().map(|k| k.as_str().to_string()).collect::<Vec<_>>()),
+        _ => Value::Null,
+    };
     json!({
+        "nodes": nodes,
         "id": c.id.to_string(),
         "pid": c.pid,
         "name": c.name,
@@ -908,6 +936,12 @@ fn session_error_body(e: &SessionError) -> CliResponse {
                 "not_the_owner",
                 "only the doc's owner (the box owner or an Admin login) can do that, e.g. break someone else's lease",
             ),
+            // Kit A4 (MPC-E116): a read-only share comments only when the
+            // share grants it; edit implies it.
+            Need::Comment => kit_report(e, Some(
+                "you can read this doc but not comment on it: commenting needs edit, or a share with the comment grant \
+                 (a person runs k2 doc share <file> --with <your workspace> --comment). Nothing changed. Read the threads: k2 doc comments <file>",
+            )),
             _ => refusal("403 Forbidden", "doc_forbidden", "refused"),
         },
         SessionError::NotJoined { .. } => refusal("409 Conflict", "not_joined", "your connection to this doc closed; run the command again"),
@@ -936,7 +970,9 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         SessionError::PackMismatch { stored, pack } => {
             refusal("409 Conflict", "pack_mismatch", format!("this doc was stored as {stored}, not {pack}"))
         }
-        SessionError::BadParticipant(m) | SessionError::BadPosition(m) | SessionError::BadEdit(m) => bad(m.clone()),
+        // MPC-E115: an identity the kit refuses (K2's to fix, not the caller's).
+        SessionError::BadParticipant(_) => kit_report(e, None),
+        SessionError::BadPosition(m) | SessionError::BadEdit(m) => bad(m.clone()),
         // Kit v0.9.5 (hardening): an update with content the kit never uses
         // (subdocument updates are refused), unapplied; and a stored doc
         // holding such content, quarantined (never loaded as live). Both are
@@ -959,7 +995,64 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         SessionError::Closed { .. } => {
             refusal("503 Service Unavailable", "docs_closed", "this file's live session was just closed; run the command again")
         }
-        other => refusal("500 Internal Server Error", "docs_failed", other.to_string()),
+        // Kit A1 (MPC-E715): the pack refuses agent writes (PSD/PSB files).
+        SessionError::AgentWriteRefused => kit_report(e, Some(
+            "agents don't write this file type: nothing was written. Save your version as a new file beside it \
+             (k2 doc cat can't help: make it with your own tools), then comment on this one naming it: \
+             k2 doc comment --doc --body \"what I changed and why\" --proposal <new file> <file>",
+        )),
+        // Every other kit refusal (the structure index, comments, claims by
+        // node, annotation limits, and any a later kit adds): the kit's
+        // report, its name as the code, with what to do next.
+        other => kit_report(other, None),
+    }
+}
+
+/// HTTP status for a kit exit code (the CLI exits with `error.exit`).
+fn status_for_exit(exit: u8) -> &'static str {
+    match exit {
+        1 | 5 | 8 => "409 Conflict",
+        2 => "400 Bad Request",
+        3 => "403 Forbidden",
+        4 => "404 Not Found",
+        _ => "500 Internal Server Error",
+    }
+}
+
+/// A kit refusal from its report (`docs/ERRORS.md`): `code` the registry's
+/// name, `id`, the message and what to do next as `hint` (K2's own words
+/// when `hint` is given), `next`, `nextStep` (the verb to run, as data),
+/// `details` (an ambiguous address's candidates are listed in the hint
+/// too, at most the kit's 20) and `retryAfterMs` when the kit says when.
+pub(super) fn kit_report(e: &SessionError, hint: Option<&str>) -> CliResponse {
+    let r = e.report();
+    let v = super::tier0::report_value(&r);
+    let mut text = match hint {
+        Some(h) => h.to_string(),
+        None => format!("{}. {}", r.message(), r.next()),
+    };
+    for c in v["details"]["candidates"].as_array().into_iter().flatten() {
+        let addr = c["address"].as_str().or_else(|| c["key"].as_str()).unwrap_or("?");
+        match c["position"].as_str().or_else(|| c["place"].as_str()) {
+            Some(at) => text.push_str(&format!("\n  {addr} ({at})")),
+            None => text.push_str(&format!("\n  {addr}")),
+        }
+    }
+    let mut err = json!({
+        "code": r.entry().name,
+        "id": r.id(),
+        "hint": text,
+        "next": r.next(),
+        "nextStep": v.get("next_step").cloned().unwrap_or(Value::Null),
+        "details": v.get("details").cloned().unwrap_or_else(|| json!({})),
+    });
+    if let Some(ms) = v["details"]["retry_after_ms"].as_u64() {
+        err["retryAfterMs"] = json!(ms);
+    }
+    CliResponse {
+        status: status_for_exit(r.exit()),
+        content_type: "application/json",
+        body: json!({ "ok": false, "error": err }).to_string(),
     }
 }
 
@@ -1751,6 +1844,7 @@ fn shares_route(path: &str, caller: &DocCaller, input: &Input) -> CliResponse {
         folder,
         write: flag("write"),
         history: flag("history"),
+        comment: flag("comment"),
         by: pid.clone(),
         at_ms: host::now_ms(),
     };
@@ -1760,11 +1854,12 @@ fn shares_route(path: &str, caller: &DocCaller, input: &Input) -> CliResponse {
                 "doc-share",
                 &pid,
                 format!(
-                    "{owner}:{} with={sharee} folder={} write={} history={}",
+                    "{owner}:{} with={sharee} folder={} write={} history={} comment={}",
                     show_rel(&s.path),
                     s.folder,
                     s.write,
-                    s.history
+                    s.history,
+                    s.comment
                 ),
             );
             ok(json!({ "share": s, "replaced": prev }))

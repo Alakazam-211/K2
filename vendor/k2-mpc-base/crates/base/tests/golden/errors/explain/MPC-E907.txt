@@ -1,0 +1,21 @@
+MPC-E907 annotation_cap (limits)
+exit:     2
+message:  annotation limit: at most {limit} {what}
+next:     The call would pass a limit (details.what: body bytes, threads in the doc, comments in the thread, or history rows of the thread, past which only replies, deletes and purges still fit; capabilities lists the annot_* limits). Nothing changed. Write a shorter comment, or go on in a new thread.
+rule:     K-ANN-1 (annot_* limits)
+verbs:    comment; reply; resolve; resolve --reopen; reanchor
+status:   live
+--- json
+{
+  "id": "MPC-E907",
+  "name": "annotation_cap",
+  "area": "limits",
+  "exit": 2,
+  "message": "annotation limit: at most {limit} {what}",
+  "next": "The call would pass a limit (details.what: body bytes, threads in the doc, comments in the thread, or history rows of the thread, past which only replies, deletes and purges still fit; capabilities lists the annot_* limits). Nothing changed. Write a shorter comment, or go on in a new thread.",
+  "rule": "K-ANN-1 (annot_* limits)",
+  "verbs": ["comment", "reply", "resolve", "resolve --reopen", "reanchor"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

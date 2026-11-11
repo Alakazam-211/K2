@@ -682,6 +682,20 @@ export interface BoardFileChangedEvent {
   by: string
 }
 
+/** APP-LEVEL: a blob doc's structure or comments changed (a PSD/PSB file's
+ *  layer index recorded, a comment op, an anchor's new state, a node claim).
+ *  Metadata only: refetch through `/cli/docs/tool` (`outline --json`,
+ *  `comments --since <seq> --json`) or `/cli/docs/who`. */
+export interface DocStructureChangedEvent {
+  kind: 'doc_structure_changed'
+  projectId: string
+  rel: string
+  change: 'index_ready' | 'index_not_indexed' | 'annotation' | 'anchor_state' | 'claim_taken' | 'claim_ended'
+  version: number | null
+  seq: number | null
+  thread: string | null
+}
+
 /** APP-LEVEL — Changes tab v1 (prd-changes-tab-v1): the git state behind a
  *  workspace's Changes view may have moved (index / HEAD / refs, or a
  *  non-ignored working-tree edit). Debounced 300 ms (1 s max) per workspace
@@ -1010,6 +1024,7 @@ export type SessionEventMessage =
   | LlmAccountsChangedEvent
   | FsChangedEvent
   | BoardFileChangedEvent
+  | DocStructureChangedEvent
   | GitChangedEvent
   | GitNotesChangedEvent
   | OpenChangesEvent

@@ -105,6 +105,7 @@ fn copy_all(old: &Database, new: &Database) -> Result<u64, StoreError> {
     n += copy(&r, &w, HOST)?;
     n += copy(&r, &w, BLOB_SPACES)?;
     n += copy(&r, &w, BLOBS)?;
+    n += super::blob_struct::copy_live_rows(&r, &w)?;
     for (t, _) in DOC_TABLES {
         n += match *t {
             DocRows::One(d) => copy(&r, &w, d)?,

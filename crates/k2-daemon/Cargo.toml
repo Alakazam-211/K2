@@ -104,6 +104,10 @@ k2-mpc-board = { path = "../../vendor/k2-mpc-board/crates/board" }
 # pack's; it resolves into our Cargo.lock with the kit and the board crate above.
 k2-mpc-board-bridge = { path = "../../vendor/k2-mpc-board/bridge" }
 k2-mpc-markdown = { path = "../../vendor/k2-mpc-markdown/crates/markdown" }
+# The PSD/PSB pack (K2 Cores): reads a layered image's versions into the kit's
+# structure index, beside the blob; agents never write these files. Its own
+# workspace (vendor/k2-mpc-psd, without its fuzz/), as the other packs.
+k2-mpc-psd = { path = "../../vendor/k2-mpc-psd/crates/psd" }
 k2-mpc-text = { path = "../../vendor/k2-mpc-text/crates/text" }
 # URL hosts for the egress gate; the same `url` 2 k2-vault and reqwest use.
 url = "2"

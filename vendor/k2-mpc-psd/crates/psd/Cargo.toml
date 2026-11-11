@@ -1,0 +1,25 @@
+[package]
+name = "k2-mpc-psd"
+version = "0.1.1"
+description = "Reads PSD and PSB files: a type pack for the multiplayer kit."
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# Test-only: the comparison of a records-only walk with the full reader (tests, and the fuzz
+# targets on the main branch).
+differential = []
+
+[dependencies]
+photocraft-psd = { path = "../../vendor/photocraft-psd" }
+# The kit (k2-mpc-base), by path: its checkout sits beside this repo's (a host vendors both side
+# by side: vendor/k2-mpc-base beside vendor/k2-mpc-psd), at the kit release CHANGELOG.md names,
+# v0.13.1. Run `cargo update -p k2-mpc-base` and commit the lock when it moves.
+k2-mpc-base = { path = "../../../k2-mpc-base/crates/base" }
+
+[dev-dependencies]
+# testgen builds the generated test files; differential is this crate's own test-only module.
+photocraft-psd = { path = "../../vendor/photocraft-psd", features = ["testgen"] }
+k2-mpc-psd = { path = ".", features = ["differential"] }

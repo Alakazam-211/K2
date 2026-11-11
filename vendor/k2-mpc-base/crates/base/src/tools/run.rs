@@ -137,9 +137,10 @@ fn positional_refusal(verb: &str, address: &str) -> ToolError {
     )
 }
 
-/// The host's choices for one [`Session::run_tool_with`] call. `#[non_exhaustive]`: start
-/// from [`ToolOptions::default`] (or `new`) and use the setters.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// The host's choices for one [`Session::run_tool_with`] (or
+/// [`crate::session::BlobSession::run_tool`]) call. `#[non_exhaustive]`: start from
+/// [`ToolOptions::default`] (or `new`) and use the setters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ToolOptions {
     /// What an edit verb does about others' claims (default [`ClaimPolicy::Ignore`]).
@@ -147,11 +148,43 @@ pub struct ToolOptions {
     /// What an agent's edit by position with no version does (default
     /// [`POSITIONAL_DEFAULT`]).
     pub positional: PositionalMode,
+    /// The most bytes one page of a structure read returns (K-READ-2; default
+    /// [`crate::index::READ_BUDGET`], at least [`crate::index::READ_BUDGET_MIN`]). Terminal
+    /// verbs (`cat`, `sed`...) ignore it.
+    pub read_budget: usize,
+    /// Structure reads print their page as compact JSON (the host's own `--json`, which its
+    /// CLI may consume before the verb sees it); the verb's `--json` does the same. The page
+    /// and its cursor are the same either way.
+    pub json: bool,
+}
+
+impl Default for ToolOptions {
+    fn default() -> Self {
+        ToolOptions {
+            policy: ClaimPolicy::default(),
+            positional: PositionalMode::default(),
+            read_budget: crate::index::READ_BUDGET,
+            json: false,
+        }
+    }
 }
 
 impl ToolOptions {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The read budget for structure reads, in bytes of the page's compact JSON; raised to
+    /// [`crate::index::READ_BUDGET_MIN`] if smaller.
+    pub fn read_budget(mut self, bytes: usize) -> Self {
+        self.read_budget = bytes.max(crate::index::READ_BUDGET_MIN);
+        self
+    }
+
+    /// Print structure reads as JSON ([`ToolOptions::json`]).
+    pub fn json(mut self, json: bool) -> Self {
+        self.json = json;
+        self
     }
 
     /// The claim policy for an edit verb (`--respect-claims`: [`ClaimPolicy::Respect`]).

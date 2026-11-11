@@ -1,0 +1,21 @@
+MPC-E716 export_needs_renderer (tier 0 and blobs)
+exit:     4
+message:  a {kind} node has no stored content of its own to export
+next:     This node's look is made when the file is drawn (text, a placed or adjusted node, an effect), and the exporter writes only content the file stores. Nothing was written. Export the whole file, or a node of another kind.
+rule:     structure index
+verbs:    a structure index's verbs (named by the file type's pack) and node claims; a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E716",
+  "name": "export_needs_renderer",
+  "area": "tier 0 and blobs",
+  "exit": 4,
+  "message": "a {kind} node has no stored content of its own to export",
+  "next": "This node's look is made when the file is drawn (text, a placed or adjusted node, an effect), and the exporter writes only content the file stores. Nothing was written. Export the whole file, or a node of another kind.",
+  "rule": "structure index",
+  "verbs": ["@index", "(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

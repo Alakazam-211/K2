@@ -22,6 +22,8 @@
 //!   verbs), [`kit_grid_cases`] and the pack's [`GridCase`]s; it compares the grid **by key**
 //!   ([`GridObservation`]) as well as the rendered bytes. P35-P44 are grid rows; text and
 //!   blob lists don't carry them (a text pack maps them N/A in its exhaustive `match`).
+//! - A blob pack with a structure index: [`Registry::for_blob_pack`] adds its verbs and node
+//!   claims, and [`kit_index_cases`] checks them on two versions of a file the pack gives.
 //! - [`positions`]: how each verb counts the positions it takes or prints (K-ADDR-4), the
 //!   table `capabilities` states (`docs/POSITIONS.md`).
 //!
@@ -40,16 +42,22 @@
 //! ```
 
 mod action;
+mod annot;
 mod blob;
 mod blob_cases;
 mod cases;
 mod grid;
 mod grid_cases;
 mod harness;
+mod index_cases;
 pub mod positions;
 mod registry;
 
 pub use action::PersonAction;
+pub use annot::{
+    check_annotations, check_annotations_with, kit_annotation_cases, run_annotation_case,
+    AnnotArgvFn, AnnotCase, AnnotPersonFn, AnnotSetupFn, AnnotWorld,
+};
 pub use blob::{
     check_blob, check_blob_list, run_blob_case, BlobAgent, BlobAgentFn, BlobCase, BlobObservation,
     BlobPerson, BlobPersonFn, BlobPresenceObs, BlobSetupFn, BlobStage, BlobVersionObs, BLOB_DOC,
@@ -68,7 +76,8 @@ pub use harness::{
     RowStatus, SetupFn, Side, Stage, Step, VerbOut, VerbValue, VersionObs, ACTOR, DOC, DOC_PATH,
     OBSERVER,
 };
+pub use index_cases::kit_index_cases;
 pub use registry::{
     verb_form, Api, FileVerb, Registry, RegistryError, Source, Tier, VerbKind, VerbSpec, ALIASES,
-    KIT_VERBS, RUN_TOOL_VERBS,
+    ANNOTATION_VERBS, KIT_VERBS, RUN_TOOL_VERBS,
 };

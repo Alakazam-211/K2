@@ -1,4 +1,4 @@
-k2-mpc-base 0.12.0
+k2-mpc-base 0.13.1
 Error ids: MPC-Ennn (the kit), MPCE-Ennn (the engine). `explain <ID>` says what one means and what to do next; `--json` makes any output machine-readable.
 
 Exit codes (never change):
@@ -132,7 +132,7 @@ Verbs (after the doc path):
     usage:  write --base V | --base live (new text on stdin; a grid: --base V [--partial] [--respect-claims], merged by key)
     exits:  0 1 8
     serves: P14
-    errors: MPC-E102 MPC-E110 MPC-E111 MPC-E112 MPC-E113 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E701 MPC-E703 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901
+    errors: MPC-E102 MPC-E110 MPC-E111 MPC-E112 MPC-E113 MPC-E130 MPC-E171 MPC-E301 MPC-E305 MPC-E405 MPC-E701 MPC-E703 MPC-E715 MPC-E801 MPC-E802 MPC-E803 MPC-E804 MPC-E820 MPC-E901
   undo  [edit; text+grid; needs read+edit]
     usage:  undo [--steps N] [--for P]
     exits:  0 1
@@ -390,6 +390,13 @@ Limits in effect:
   lease_auto_ms = 120000
   save_ticket_ms = 30000
   blob_merge_max_bytes = 33554432
+  blob_index_max_bytes = 2147483648
+  blob_index_max_nodes = 100000
+  blob_index_max_stored_bytes = 67108864
+  annot_body_max_bytes = 16384
+  annot_threads_max = 10000
+  annot_comments_max = 1000
+  annot_thread_log_max = 4096
   conflict_copy_keep_ms = 2592000000
   grid_max_cells = 25000
   grid_max_cols = 1024

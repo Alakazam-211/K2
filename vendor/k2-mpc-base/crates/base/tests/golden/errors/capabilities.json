@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.12.0",
+  "version": "0.13.1",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -365,7 +365,7 @@
       "source": "kit",
       "run_tool": false,
       "alias_of": null,
-      "errors": ["MPC-E102", "MPC-E110", "MPC-E111", "MPC-E112", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E701", "MPC-E703", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E901"]
+      "errors": ["MPC-E102", "MPC-E110", "MPC-E111", "MPC-E112", "MPC-E113", "MPC-E130", "MPC-E171", "MPC-E301", "MPC-E305", "MPC-E405", "MPC-E701", "MPC-E703", "MPC-E715", "MPC-E801", "MPC-E802", "MPC-E803", "MPC-E804", "MPC-E820", "MPC-E901"]
     },
     {
       "name": "undo",
@@ -1066,6 +1066,13 @@
     "lease_auto_ms": 120000,
     "save_ticket_ms": 30000,
     "blob_merge_max_bytes": 33554432,
+    "blob_index_max_bytes": 2147483648,
+    "blob_index_max_nodes": 100000,
+    "blob_index_max_stored_bytes": 67108864,
+    "annot_body_max_bytes": 16384,
+    "annot_threads_max": 10000,
+    "annot_comments_max": 1000,
+    "annot_thread_log_max": 4096,
     "conflict_copy_keep_ms": 2592000000,
     "grid_max_cells": 25000,
     "grid_max_cols": 1024,
@@ -1639,6 +1646,18 @@
       "status": "live"
     },
     {
+      "id": "MPC-E116",
+      "name": "forbidden_comment",
+      "exit": 3,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E117",
+      "name": "forbidden_comment_author",
+      "exit": 3,
+      "status": "live"
+    },
+    {
       "id": "MPC-E120",
       "name": "tool_unsupported",
       "exit": 2,
@@ -1822,13 +1841,25 @@
       "id": "MPC-E172",
       "name": "address_not_found",
       "exit": 4,
-      "status": "reserved"
+      "status": "live"
     },
     {
       "id": "MPC-E173",
       "name": "stale_cursor",
       "exit": 1,
-      "status": "reserved"
+      "status": "live"
+    },
+    {
+      "id": "MPC-E174",
+      "name": "bad_cursor",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E175",
+      "name": "over_budget",
+      "exit": 2,
+      "status": "live"
     },
     {
       "id": "MPC-E176",
@@ -1917,6 +1948,18 @@
     {
       "id": "MPC-E310",
       "name": "selection_too_large",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E320",
+      "name": "no_annotation",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E321",
+      "name": "bad_annotation",
       "exit": 2,
       "status": "live"
     },
@@ -2182,6 +2225,48 @@
       "id": "MPC-E710",
       "name": "no_blob",
       "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E711",
+      "name": "index_unsupported",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E712",
+      "name": "not_indexed",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E713",
+      "name": "index_pending",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E714",
+      "name": "index_bad_result",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E715",
+      "name": "agent_write_refused",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E716",
+      "name": "export_needs_renderer",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E717",
+      "name": "index_stale",
+      "exit": 1,
       "status": "live"
     },
     {
@@ -2451,6 +2536,12 @@
     {
       "id": "MPC-E905",
       "name": "claim_waiters_cap",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E907",
+      "name": "annotation_cap",
       "exit": 2,
       "status": "live"
     },

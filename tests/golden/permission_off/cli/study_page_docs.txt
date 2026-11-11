@@ -156,13 +156,34 @@ ANY-FILE DOCS (tier 0: images, PDFs, office files, binaries; refused text)
   .k2/conflicts/, "photo (conflict Sam 2026-10-27 093000).png". Leases end
   when a daemon restarts (renew: exit 2, take it again).
 
+PSD/PSB FILES (layers, claims and comments)
+  K2 reads PSD and PSB files (.psd, .psb) into an index of their layers
+  after each save: a tree with a key for each layer (@lyid:12 from the
+  file, or @k:r3.1). They are any-file docs.
+  k2 doc outline art.psd               every layer, #N in reading order
+  k2 doc node "Logo" art.psd           one layer in full (a key, #N or a name)
+  k2 doc layer diff 3 5 art.psd        what changed between versions 3 and 5
+  k2 doc layer blame art.psd           who made each layer as it is
+  k2 doc claim --node @lyid:12 --note "recolour" art.psd   advisory; exit 5 if
+                                       someone else claims that layer
+  k2 doc comment --node @lyid:12 --body "too dark" art.psd
+  k2 doc comments art.psd · reply ann-3 --body "..." · resolve ann-3
+  You never write a .psd or .psb (agent_write_refused, exit 2). Save your
+  version as a new file and comment on this one:
+    k2 doc comment --doc --body "brighter logo, see the file" --proposal art.v2.psd art.psd
+  Reads page: a page ending "truncated: true" gives a cursor for --cursor.
+  A version not read yet: exit 1, index_pending; try again shortly.
+  Comments work on every any-file doc (--doc pins one to the whole file).
+  Moving a pin (reanchor) is a proposal a person confirms.
+
 RIGHTS
   Your own workspace: read, edit and history. Another workspace: it must
   be connected to yours (k2 connections) AND a person must share the file
   or a folder with yours. A share is read-only unless it grants write;
-  history (k2 doc log) is its own grant. Refused: not_connected,
+  history (k2 doc log) is its own grant, and so is commenting on a
+  read-only share (edit includes it). Refused: not_connected,
   doc_not_shared (ask with the permission card the error names),
-  doc_forbidden (read-only), history_forbidden.
+  doc_forbidden (read-only), history_forbidden, forbidden_comment.
   Secrets, the vault folder, git's own folder, files K2 writes itself
   (AGENTS.md, K2's skills) and K2's other .k2/ configuration are never live
   docs (exit 4, declined); nor is any file over 32 MiB.

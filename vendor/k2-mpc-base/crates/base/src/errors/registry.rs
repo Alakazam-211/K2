@@ -43,6 +43,17 @@ const RUN_TOOL: &[&str] = &["@run_tool"];
 const UNDO: &[&str] = &["undo", "redo", "undo --partial", "undo --drop"];
 const SYNC: &[&str] = &["(sync)"];
 const HOST: &[&str] = &["(host)"];
+/// The annotation verbs that change a thread (and need the comment right).
+const ANNOT_CHANGE: &[&str] = &[
+    "comment",
+    "reply",
+    "resolve",
+    "resolve --reopen",
+    "reanchor",
+];
+/// A structure index's verbs (`Registry::for_blob_pack`: the pack names them), and the host
+/// calls under them.
+const INDEX_HOST: &[&str] = &["@index", "(host)"];
 
 // The board file type's verbs (830–869): data, as its rows name them.
 /// The verbs whose change names the settings' rev: `meta`, and raw ops (`apply`, `inverse`).
@@ -393,6 +404,28 @@ BAD_PARTICIPANT = e("MPC-E115", "bad_participant", Session, 2, "K-PRES-9",
     "The host passed an identity the kit refuses (the message says which field). This is \
      the host's to fix, not the caller's.");
 
+// 116–117: comment rights (annotations, A4)
+
+FORBIDDEN_COMMENT = e("MPC-E116", "forbidden_comment", Session, 3, "K-ANN-6, Q24",
+    ANNOT_CHANGE,
+    "refused: needs Comment rights",
+    "You can read this doc but not comment on it: commenting needs edit, or the comment right \
+     the doc's owner grants a read-only share. Don't retry: read the threads, or ask the owner. \
+     Nothing changed.")
+    .step("comments", &[],
+        "You can't comment on this doc; read its threads instead, or ask the doc's owner for the \
+         comment right.");
+
+FORBIDDEN_COMMENT_AUTHOR = e("MPC-E117", "forbidden_comment_author", Session, 3, "K-ANN-6",
+    &["comment --delete"],
+    "refused: only its author, the person it was made for, or an owner can delete comment \
+     {comment} of {thread}",
+    "Only a comment's author, the person it was made for, or an owner can delete it. Don't \
+     retry: reply on the thread instead, or ask one of them. Nothing changed.")
+    .step("reply", &["{thread}"],
+        "Only the comment's author, the person it was made for or an owner can delete it; reply \
+         on the thread instead, or ask one of them.");
+
 // 120–129: the text tools
 
 TOOL_UNSUPPORTED = e("MPC-E120", "tool_unsupported", Session, 2, "K-PAR-7", RUN_TOOL,
@@ -617,21 +650,33 @@ POSITIONAL_NEEDS_VERSION = e("MPC-E171", "positional_needs_version", Session, 2,
      <that version> (a grid edit: --base <that version>), or name the thing by its key.");
 
 ADDRESS_NOT_FOUND = e("MPC-E172", "address_not_found", Session, 4, "K-READ-1, K-READ-3",
-    &["@pack"],
+    &["@pack", "@index"],
     "{count} of the addresses name nothing in version {version}",
     "Some of the addresses you asked for name nothing in this version. The output still \
      lists every address, with null for each missing one; details.missing gives each \
      missing address with what does exist there (candidates, its parent's children). Check \
-     them against outline, or ask for one of the candidates.")
-    .reserved("the node verb (K-READ-1)");
+     them against outline, or ask for one of the candidates.");
 
 STALE_CURSOR = e("MPC-E173", "stale_cursor", Session, 1, "K-READ-2",
-    &["@pack"],
+    &["@pack", "@index"],
     "the cursor is for another version, doc or call; nothing was read",
     "A cursor continues one read of one doc at one version with the same arguments. The doc \
      changed since (or the cursor is from another doc, or the arguments differ), so nothing \
-     was read. Read again without --cursor and page on with the cursor that read returns.")
-    .reserved("read budgets and cursors (K-READ-2)");
+     was read. Read again without --cursor and page on with the cursor that read returns.");
+
+BAD_CURSOR = e("MPC-E174", "bad_cursor", Session, 2, "K-READ-2",
+    &["@pack", "@index"],
+    "not a cursor ({reason}); nothing was read",
+    "A cursor is the opaque string a paged read printed after truncated: true, passed back \
+     unchanged. This one isn't such a string (cut short, changed, or from somewhere else), so \
+     nothing was read. Read again without --cursor and page on with the cursor it returns.");
+
+OVER_BUDGET = e("MPC-E175", "over_budget", Session, 2, "K-READ-2",
+    &["@pack", "@index"],
+    "the result is {bytes} bytes, over the {budget}-byte read budget; --no-truncate refuses a page",
+    "With --no-truncate a read returns everything or nothing, and everything is more than one \
+     read may return. Nothing was read. Read without --no-truncate and page on with the \
+     cursor each page returns, or narrow the read (a depth, a kind, fewer addresses).");
 
 LINE_ADDRESS_UNRELIABLE = e("MPC-E176", "line_address_unreliable", Session, 2, "K-ADDR-4, K-PAR-7",
     &["@pack"],
@@ -777,6 +822,23 @@ SELECTION_TOO_LARGE = e("MPC-E310", "selection_too_large", Presence, 2, "K-PRES-
     "A selection holds at most 256 elements, and nothing changed. Select fewer (details.max).")
     .step("select", &["--clear"],
         "A selection holds at most 256 elements; clear it, then select fewer.");
+
+// 320–329: comment threads (annotations, A4)
+
+NO_ANNOTATION = e("MPC-E320", "no_annotation", Presence, 4, "K-ANN-1",
+    &["reply", "resolve", "resolve --reopen", "comment --delete", "reanchor", "comments --log"],
+    "no annotation {thread}",
+    "There is no comment thread by that id in this doc (or no comment by that number on it). \
+     Nothing changed. List the threads and use an id from there.")
+    .step("comments", &[],
+        "That thread or comment isn't in this doc; list the threads and use an id from there.");
+
+BAD_ANNOTATION = e("MPC-E321", "bad_annotation", Presence, 2, "K-ANN-1, K-ANN-6",
+    &["comment", "reply", "reanchor", "comments"],
+    "bad annotation: {why}",
+    "The comment call was refused as given (details.why: an empty body, a bad mention, \
+     attachment or hint, a node the version doesn't have, or a key several nodes hold). \
+     Nothing changed. Fix it and run it again.");
 
 // ---------------------------------------------------------------- 4xx disk and outside edits
 
@@ -1079,6 +1141,59 @@ NO_BLOB = e("MPC-E710", "no_blob", Blob, 4, "K-T0-1", ANY,
     .indirect("a blob index row removed under a version")
     .step("log", &[],
         "The blob store has no record of those bytes; pick another version.");
+
+INDEX_UNSUPPORTED = e("MPC-E711", "index_unsupported", Blob, 2, "structure index",
+    INDEX_HOST,
+    "this file type has no structure index",
+    "This file type has no index of its structure, so there is nothing to list here. Read \
+     the file itself.")
+    .step("cat", &[],
+        "This file type has no structure index; read the file itself.");
+
+NOT_INDEXED = e("MPC-E712", "not_indexed", Blob, 4, "structure index", INDEX_HOST,
+    "version {version} has no index: {why}",
+    "That version has no index, and won't get one by waiting: it is past a limit, the file's \
+     structure couldn't be read, or it was purged (details.why). The file itself is untouched. \
+     Comments anchored to the whole doc still work.")
+    .step("status", &[],
+        "That version has no index; see the doc's state and which versions it has.");
+
+INDEX_PENDING = e("MPC-E713", "index_pending", Blob, 1, "structure index", INDEX_HOST,
+    "the index of version {version} isn't ready; retry in {retry_after_ms} ms",
+    "The version's structure hasn't been read yet (a job is queued or running). Nothing \
+     changed. Retry after details.retry_after_ms.")
+    .step("status", &[],
+        "That version's index isn't ready yet; see the doc's state, then retry after a wait.");
+
+INDEX_BAD_RESULT = e("MPC-E714", "index_bad_result", Blob, 1, "structure index",
+    &["(host)"],
+    "the indexer's result was refused: {reason}",
+    "The worker that read the file returned something the kit refuses: it was not trusted, \
+     and nothing was recorded. Report it to the host's operator. The host may run a new job, \
+     backing off between tries: the refusal isn't stored and the kit keeps no count of \
+     failures, so a worker that always fails would be run again on every try.");
+
+AGENT_WRITE_REFUSED = e("MPC-E715", "agent_write_refused", Blob, 2, "structure index",
+    &["write"],
+    "an agent can't write this file type",
+    "Agents don't write this file type. Nothing was written. Make a new file with the \
+     change and comment on the doc instead (the file type's pack says so).");
+
+EXPORT_NEEDS_RENDERER = e("MPC-E716", "export_needs_renderer", Blob, 4, "structure index",
+    INDEX_HOST,
+    "a {kind} node has no stored content of its own to export",
+    "This node's look is made when the file is drawn (text, a placed or adjusted node, an \
+     effect), and the exporter writes only content the file stores. Nothing was written. \
+     Export the whole file, or a node of another kind.")
+    .indirect("a file type's node exporter refusing a kind (the kit runs no exporter)");
+
+INDEX_STALE = e("MPC-E717", "index_stale", Blob, 1, "structure index", &["(host)"],
+    "the index job for version {version} is out of date: {reason}",
+    "The version the job was reading changed under it (it was purged, deleted or rewritten). \
+     Nothing was recorded; the host may take a new job.")
+    .step("status", &[],
+        "That version changed while its index was being built; see which versions the doc has \
+         now.");
 
 BLOB_REF_UNKNOWN = e("MPC-E720", "blob_ref_unknown", Blob, 4, "structured live, slice 5",
     &["@pack", "(host)"],
@@ -1518,6 +1633,16 @@ CLAIM_WAITERS_CAP = e("MPC-E905", "claim_waiters_cap", Limits, 2,
     .step("activity", &[],
         "That claim already has as many waiters as it allows; see where others are working and \
          work elsewhere, or retry after it ends.");
+
+// 906: C3's `connection_work_throttled` (the C3 kit design and the engine cite it)
+
+ANNOTATION_CAP = e("MPC-E907", "annotation_cap", Limits, 2, "K-ANN-1 (annot_* limits)",
+    &["comment", "reply", "resolve", "resolve --reopen", "reanchor"],
+    "annotation limit: at most {limit} {what}",
+    "The call would pass a limit (details.what: body bytes, threads in the doc, comments in \
+     the thread, or history rows of the thread, past which only replies, deletes and purges \
+     still fit; capabilities lists the annot_* limits). Nothing changed. Write a shorter \
+     comment, or go on in a new thread.");
 }
 
 registry! { ENGINE:

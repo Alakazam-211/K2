@@ -1,0 +1,21 @@
+# Public test files, fetched by reference: file, url, licence, sha256. Never committed here.
+# Files whose licence asks for attribution keep their notices at the listed source.
+type-layer.psd	https://raw.githubusercontent.com/psd-tools/psd-tools/6ecddc14f88766cadb95fc5e95ca4d5b04c6347d/tests/psd_files/layers/type-layer.psd	MIT	7a61ae63f2518e436320d48c9b6e4cd7b3df64f3d86dac23dd83055f12bc88ba
+green-1x1-one-group-with-two-subgroups.psd	https://raw.githubusercontent.com/chinedufn/psd/28357a29414f940b6272b71831b3273f57f267bd/tests/fixtures/groups/green-1x1-one-group-with-two-subgroups.psd	MIT OR Apache-2.0 (dual)	c4d84f3854f53e2ecd96ad0b8e7ed465fdf0a654a4c4cc12a203110a46707ac0
+placedLayer.psd	https://raw.githubusercontent.com/psd-tools/psd-tools/6ecddc14f88766cadb95fc5e95ca4d5b04c6347d/tests/psd_files/placedLayer.psd	MIT	69ea01bf88cb85c48d3a78c3bb9e06ae141c9c9fc6a88267eae95c315e16180e
+linked-layer.png	https://raw.githubusercontent.com/psd-tools/psd-tools/6ecddc14f88766cadb95fc5e95ca4d5b04c6347d/tests/psd_files/linked-layer.png	MIT	d37cfdbc5d4f5cf908846967ce7c0dea357aad74bae9fdcc580f796bf3062fa1
+smart-object-v8.psd	https://raw.githubusercontent.com/psd-tools/psd-tools/6ecddc14f88766cadb95fc5e95ca4d5b04c6347d/tests/psd_files/smart-object-v8.psd	MIT	7952b3052b262510a0984ab2dbd2af08b02dcd989ab5fbf0307b0e676ae6e9b5
+fill_adjustments.psd	https://raw.githubusercontent.com/psd-tools/psd-tools/6ecddc14f88766cadb95fc5e95ca4d5b04c6347d/tests/psd_files/fill_adjustments.psd	MIT	40fb3984526471ff38b6836c647075802c66d2cded2e88d675898a5486317e4a
+artboard.psd	https://raw.githubusercontent.com/psd-tools/psd-tools/6ecddc14f88766cadb95fc5e95ca4d5b04c6347d/tests/psd_files/artboard.psd	MIT	86d3ccc572cfeec57b271467ba103fb9e32c4f33351276abbf4f962913072b81
+layer_mask_data.psd	https://raw.githubusercontent.com/psd-tools/psd-tools/6ecddc14f88766cadb95fc5e95ca4d5b04c6347d/tests/psd_files/layer_mask_data.psd	MIT	e30f5d2f51ef2dc5790b45b50ff3911ab7991ffdf63230561364a2574c1392aa
+vector-mask2.psd	https://raw.githubusercontent.com/psd-tools/psd-tools/6ecddc14f88766cadb95fc5e95ca4d5b04c6347d/tests/psd_files/vector-mask2.psd	MIT	fc6c32967f6a62641fa02fa314fe24717de49b74da0e1367abdb51a4b55cd49f
+layer_effects.psd	https://raw.githubusercontent.com/psd-tools/psd-tools/6ecddc14f88766cadb95fc5e95ca4d5b04c6347d/tests/psd_files/layer_effects.psd	MIT	6ab41ce6e17b3287c703dc4cf4d898506ffc1bd9babf20d0f1de5ef6df1d2e1e
+32bit.psd	https://raw.githubusercontent.com/psd-tools/psd-tools/6ecddc14f88766cadb95fc5e95ca4d5b04c6347d/tests/psd_files/32bit.psd	MIT	78dd96ec74960a392db0a3bf4193478d62adfa5d93634ab7ce8a40e4468df5e1
+cmyk-alpha-spot.psd	https://raw.githubusercontent.com/psd-tools/psd-tools/6ecddc14f88766cadb95fc5e95ca4d5b04c6347d/tests/psd_files/cmyk-alpha-spot.psd	MIT	3f868555748e87a357890f2f20afa150f5820a460d73d3d0c1d2c52b14ebea0b
+smart-object-slice.psb	https://raw.githubusercontent.com/psd-tools/psd-tools/6ecddc14f88766cadb95fc5e95ca4d5b04c6347d/tests/psd_files/smart-object-slice.psb	MIT	4dfea68f5d42bd663bb8e9a375a5eb19622fb06b340acc22c6de1536b878f9f3
+example16.psd	https://raw.githubusercontent.com/meltingice/psd.js/7e8392d20fd5d66ad70ddda7309661b9a0ca67c8/examples/images/example16.psd	MIT	85dfa67dbe355a10006fbd8e9ce99c366b3751ce5dd28157829784bd358badd6
+example-cmyk.psd	https://raw.githubusercontent.com/meltingice/psd.js/7e8392d20fd5d66ad70ddda7309661b9a0ca67c8/examples/images/example-cmyk.psd	MIT	671e745850bff457179fe7123e1bc1b6de27640eac46aa2fa4ff32b1a30d8c75
+Sample.psd	https://raw.githubusercontent.com/MolecularMatters/psd_sdk/bfa117317e8bb15bfc9f76bad5800da603fddd1d/bin/Sample.psd	BSD-2-Clause	b10aa6f282ccf51dc88dc5a53eac038f6fa6cdb89c509de1e9ad8445cc65d912
+ADOM-OGA-UI-Deploy.psd	https://opengameart.org/sites/default/files/ADOM-OGA-UI-Deploy.psd	CC-BY 3.0	1ee7395d82ed18f583149d3e35b4bb5ad5b79eab11b801df73cd9dd84883a9ff
+some-box.psd	https://opengameart.org/sites/default/files/some-box.psd	CC0 1.0	0a0ec1568be997c6bc476ea2ec64ce5a99e6287e62f4cc9d199fb25d03420340
+cczero.psd	https://opengameart.org/sites/default/files/cczero.psd	CC0 1.0	13cbb765852fd001f7b2d02b090b6bb134fc6a56ef6d1020a62a33555c752f96

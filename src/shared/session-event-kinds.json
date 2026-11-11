@@ -33,6 +33,7 @@
   "doc_cores_changed": "app",
   "org_chart_changed": "app",
   "board_file_changed": "app",
+  "doc_structure_changed": "app",
   "ticket_changed": "app",
   "mail_changed": "app",
   "sew_changed": "app",

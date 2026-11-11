@@ -1,0 +1,21 @@
+MPC-E321 bad_annotation (presence and claims)
+exit:     2
+message:  bad annotation: {why}
+next:     The comment call was refused as given (details.why: an empty body, a bad mention, attachment or hint, a node the version doesn't have, or a key several nodes hold). Nothing changed. Fix it and run it again.
+rule:     K-ANN-1, K-ANN-6
+verbs:    comment; reply; reanchor; comments
+status:   live
+--- json
+{
+  "id": "MPC-E321",
+  "name": "bad_annotation",
+  "area": "presence and claims",
+  "exit": 2,
+  "message": "bad annotation: {why}",
+  "next": "The comment call was refused as given (details.why: an empty body, a bad mention, attachment or hint, a node the version doesn't have, or a key several nodes hold). Nothing changed. Fix it and run it again.",
+  "rule": "K-ANN-1, K-ANN-6",
+  "verbs": ["comment", "reply", "reanchor", "comments"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -4,7 +4,8 @@
 //! the two workspaces are connected (comms), **and** a person (owner token,
 //! or an Admin/Owner login) shared that file, or a folder above it, with
 //! the agent's workspace. Shares are off by default, read-only by default;
-//! `write` and `history` are separate grants. Revoking deletes the row, and
+//! `write`, `history` and `comment` (a read-only share may comment; `write`
+//! implies it) are separate grants. Revoking deletes the row, and
 //! open connections lose the right at the next upkeep pass (2 s). Every
 //! share and unshare is an Access Audit line (metadata only).
 //!
@@ -37,6 +38,10 @@ pub struct Share {
     pub folder: bool,
     pub write: bool,
     pub history: bool,
+    /// A read-only share may comment (edit implies it). Absent in rows
+    /// written before comments: no.
+    #[serde(default)]
+    pub comment: bool,
     /// Who shared it (`person:<key>`).
     pub by: String,
     pub at_ms: u64,
@@ -62,16 +67,29 @@ fn decode(v: &[u8]) -> Option<Share> {
     serde_json::from_slice(v).ok()
 }
 
+/// What the shares covering one file grant (their union).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Grant {
+    pub write: bool,
+    pub history: bool,
+    pub comment: bool,
+}
+
 /// The union of every share from `owner` to `sharee` that covers `rel`:
 /// `(write, history)`, or `None` when nothing covers it.
 pub fn grant(store: &DocStore, owner: &str, sharee: &str, rel: &str) -> Result<Option<(bool, bool)>, StoreError> {
+    Ok(grant_all(store, owner, sharee, rel)?.map(|g| (g.write, g.history)))
+}
+
+/// [`grant`] with the comment grant too.
+pub fn grant_all(store: &DocStore, owner: &str, sharee: &str, rel: &str) -> Result<Option<Grant>, StoreError> {
     let rows = store.host_scan(NS, &format!("{owner}\u{0}{sharee}\u{0}"))?;
-    let mut out: Option<(bool, bool)> = None;
+    let mut out: Option<Grant> = None;
     for (_, v) in rows {
         let Some(s) = decode(&v) else { continue };
         if s.owner == owner && s.sharee == sharee && s.covers(rel) {
-            let (w, h) = out.unwrap_or((false, false));
-            out = Some((w || s.write, h || s.history));
+            let g = out.unwrap_or_default();
+            out = Some(Grant { write: g.write || s.write, history: g.history || s.history, comment: g.comment || s.comment });
         }
     }
     Ok(out)
@@ -147,9 +165,32 @@ mod tests {
             folder,
             write,
             history,
+            comment: false,
             by: "person:owner".into(),
             at_ms: 1,
         }
+    }
+
+    /// A read-only share comments only when it grants it; the grant is a
+    /// union like the others, and an old row (no `comment`) grants none.
+    #[test]
+    fn the_comment_grant_is_off_by_default_and_unioned() {
+        let (st, dir) = store();
+        put(&st, &share("a", "b", "art", true, false, false)).expect("put");
+        assert_eq!(grant_all(&st, "a", "b", "art/p.psd").expect("scan"), Some(Grant::default()), "read only: no comment");
+        put(&st, &Share { comment: true, ..share("a", "b", "art/p.psd", false, false, false) }).expect("put comment");
+        assert_eq!(
+            grant_all(&st, "a", "b", "art/p.psd").expect("scan"),
+            Some(Grant { write: false, history: false, comment: true })
+        );
+        assert_eq!(grant_all(&st, "a", "b", "art/q.psd").expect("scan"), Some(Grant::default()), "only the file it names");
+        let old: Share = serde_json::from_str(
+            r#"{"owner":"a","sharee":"b","path":"x","folder":false,"write":false,"history":false,"by":"person:owner","atMs":1}"#,
+        )
+        .expect("a row written before comments");
+        assert!(!old.comment, "an old row grants no comment");
+        drop(st);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[test]

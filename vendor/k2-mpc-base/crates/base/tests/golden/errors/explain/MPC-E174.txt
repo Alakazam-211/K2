@@ -1,0 +1,21 @@
+MPC-E174 bad_cursor (sessions and edits)
+exit:     2
+message:  not a cursor ({reason}); nothing was read
+next:     A cursor is the opaque string a paged read printed after truncated: true, passed back unchanged. This one isn't such a string (cut short, changed, or from somewhere else), so nothing was read. Read again without --cursor and page on with the cursor it returns.
+rule:     K-READ-2
+verbs:    a pack's own verbs; a structure index's verbs (named by the file type's pack) and node claims
+status:   live
+--- json
+{
+  "id": "MPC-E174",
+  "name": "bad_cursor",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "not a cursor ({reason}); nothing was read",
+  "next": "A cursor is the opaque string a paged read printed after truncated: true, passed back unchanged. This one isn't such a string (cut short, changed, or from somewhere else), so nothing was read. Read again without --cursor and page on with the cursor it returns.",
+  "rule": "K-READ-2",
+  "verbs": ["@pack", "@index"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

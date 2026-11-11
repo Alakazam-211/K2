@@ -212,6 +212,26 @@ impl Limits {
     }
 }
 
+/// A structure index's limits on the wire (the kit's `IndexLimits`).
+pub fn index_limits_json(l: &k2_mpc_base::index::IndexLimits) -> serde_json::Value {
+    serde_json::json!({
+        "maxNodes": l.max_nodes,
+        "maxDepth": l.max_depth,
+        "maxStoredBytes": l.max_stored_bytes,
+        "maxTextBytes": l.max_text_bytes,
+    })
+}
+
+pub fn index_limits_from_json(v: &serde_json::Value) -> Option<k2_mpc_base::index::IndexLimits> {
+    let u = |k: &str| v.get(k).and_then(|x| x.as_u64());
+    Some(k2_mpc_base::index::IndexLimits::new(
+        u32::try_from(u("maxNodes")?).ok()?,
+        u16::try_from(u("maxDepth")?).ok()?,
+        u("maxStoredBytes")?,
+        u32::try_from(u("maxTextBytes")?).ok()?,
+    ))
+}
+
 /// The header line the host sends.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Header {
@@ -225,6 +245,17 @@ pub enum Header {
         options: Vec<(String, String)>,
         limits: Limits,
         name: String,
+        size: u64,
+    },
+    /// Read `size` bytes (they follow the header) with `pack`'s structure
+    /// indexer (`psd`) under `index`, and send the kit's wire result
+    /// (`IndexOutcome::to_wire`) as `D` frames, then `R` `{bytes}`. The
+    /// daemon checks the result as untrusted (`IndexJob::commit_wire`).
+    Index {
+        job: String,
+        pack: String,
+        limits: Limits,
+        index: k2_mpc_base::index::IndexLimits,
         size: u64,
     },
 }
@@ -247,6 +278,15 @@ impl Header {
                     "source": { "name": name, "size": size },
                 })
             }
+            Header::Index { job, pack, limits, index, size } => serde_json::json!({
+                "proto": PROTO,
+                "op": "index",
+                "job": job,
+                "kind": { "pack": pack },
+                "limits": limits.json(),
+                "index": index_limits_json(index),
+                "source": { "size": size },
+            }),
         }
     }
 
@@ -260,6 +300,16 @@ impl Header {
         let kind = v.get("kind").and_then(Kind::from_json).ok_or("header has no kind")?;
         match v.get("op").and_then(|o| o.as_str()) {
             Some("describe") => Ok(Header::Describe { kind }),
+            Some("index") => {
+                let Kind::Pack(pack) = kind else { return Err("an index header names a pack".into()) };
+                Ok(Header::Index {
+                    job: v.get("job").and_then(|x| x.as_str()).ok_or("header has no job")?.to_string(),
+                    pack,
+                    limits: v.get("limits").and_then(Limits::from_json).ok_or("header has no limits")?,
+                    index: v.get("index").and_then(index_limits_from_json).ok_or("header has no index limits")?,
+                    size: v.get("source").and_then(|s| s.get("size")).and_then(|n| n.as_u64()).ok_or("source has no size")?,
+                })
+            }
             Some("export") => {
                 let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
                 let options = match v.get("options") {
@@ -365,6 +415,14 @@ mod tests {
         assert_eq!(Header::parse(line.as_bytes()).expect("parse"), h);
         let d = Header::Describe { kind: Kind::Format("png".into()) };
         assert_eq!(Header::parse(d.json().to_string().as_bytes()).expect("parse"), d);
+        let ix = Header::Index {
+            job: "j2".into(),
+            pack: "psd".into(),
+            limits: Limits { max_input_bytes: 1, max_output_bytes: 2, max_pixels: 0, max_pages: 0, max_wall_ms: 5, memory_bytes: 6 },
+            index: k2_mpc_base::index::IndexLimits::new(10, 4, 1 << 20, 4096),
+            size: 9,
+        };
+        assert_eq!(Header::parse(ix.json().to_string().as_bytes()).expect("parse index"), ix);
         let wrong = line.replace("\"proto\":1", "\"proto\":2");
         assert!(Header::parse(wrong.as_bytes()).expect_err("proto 2").contains("proto 2"));
     }

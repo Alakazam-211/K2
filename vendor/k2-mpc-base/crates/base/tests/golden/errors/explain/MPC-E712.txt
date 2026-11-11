@@ -1,0 +1,27 @@
+MPC-E712 not_indexed (tier 0 and blobs)
+exit:     4
+message:  version {version} has no index: {why}
+next:     That version has no index, and won't get one by waiting: it is past a limit, the file's structure couldn't be read, or it was purged (details.why). The file itself is untouched. Comments anchored to the whole doc still work.
+step:     status; why: That version has no index; see the doc's state and which versions it has.
+rule:     structure index
+verbs:    a structure index's verbs (named by the file type's pack) and node claims; a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E712",
+  "name": "not_indexed",
+  "area": "tier 0 and blobs",
+  "exit": 4,
+  "message": "version {version} has no index: {why}",
+  "next": "That version has no index, and won't get one by waiting: it is past a limit, the file's structure couldn't be read, or it was purged (details.why). The file itself is untouched. Comments anchored to the whole doc still work.",
+  "next_step": {
+    "verb": "status",
+    "args": [],
+    "why": "That version has no index; see the doc's state and which versions it has."
+  },
+  "rule": "structure index",
+  "verbs": ["@index", "(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

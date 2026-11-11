@@ -756,6 +756,25 @@ pub enum SessionEvent {
     /// "rel": "<path in it>", "hash": "sha256-…", "by": "<pid>" }`. A client
     /// with that file open re-reads with `ifHash`.
     BoardFileChanged { workspace: String, rel: String, hash: String, by: String },
+    /// A blob doc's structure or comments changed (`docs/indexer.rs`): an
+    /// index was recorded (or refused past a cap), a comment op, an
+    /// anchor's new state, a node claim taken or ended. Metadata only. A
+    /// client with the file open refreshes its layer panel, pins or roster;
+    /// comments catch up with `comments --since <seq>`.
+    /// Wire: `{ "kind": "doc_structure_changed", "projectId": "<workspace
+    /// id>", "rel": "<path in it>", "change": "index_ready" |
+    /// "index_not_indexed" | "annotation" | "anchor_state" | "claim_taken" |
+    /// "claim_ended", "version": n|null, "seq": n|null, "thread":
+    /// "ann-N"|null }`.
+    DocStructureChanged {
+        #[serde(rename = "projectId")]
+        project_id: String,
+        rel: String,
+        change: String,
+        version: Option<u64>,
+        seq: Option<u64>,
+        thread: Option<String>,
+    },
 
     /// prd-app-tickets-websocket-v1 (0.43.3) — one ticket changed. Emitted
     /// once per stored ticket mutation from `feedback_routes.rs`, next to
@@ -1230,6 +1249,7 @@ impl SessionEvent {
             SessionEvent::AppApprovalsChanged { .. } => "app_approvals_changed",
             SessionEvent::DocCoresChanged { .. } => "doc_cores_changed",
             SessionEvent::BoardFileChanged { .. } => "board_file_changed",
+            SessionEvent::DocStructureChanged { .. } => "doc_structure_changed",
             SessionEvent::TicketChanged { .. } => "ticket_changed",
             SessionEvent::MailChanged { .. } => "mail_changed",
             SessionEvent::SewChanged { .. } => "sew_changed",

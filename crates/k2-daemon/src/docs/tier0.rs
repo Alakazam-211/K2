@@ -21,12 +21,24 @@
 //! | `approve` | the named person | `set_approval` (a decline says how to restore) |
 //! | `approvals` | read | `approvals` |
 //! | `mv` | edit | `rekey` + `file_moved` (not under someone else's lease) |
+//! | `tool` (any verb but `cat`) | the verb's (comment: edit or the comment grant) | `run_tool`: comments on any file; on PSD/PSB files also `layer list\|show\|diff\|blame`, `outline`, `node`, `claim --node` |
+//! | `comments/purge`, `erase` | owner | `purge_annotations`, `erase_participant` ([`super::annotations`]) |
 //!
-//! **Which verbs.** The kit's registry says which verbs work on any file
-//! (`VerbSpec::tiers`, [`registry`] = `Registry::for_tier(Tier::Blob)`); a
-//! route whose verb isn't there refuses with `not_a_text_doc` (exit 2),
-//! naming what tier 0 has. K2 adds `lock` / `unlock` (the CLI's names for
-//! `lease` / `lease --release`) and `view --region`.
+//! **Which verbs.** The kit's registry for the file's pack says which verbs
+//! work on it ([`registry_for`] = `Registry::for_blob_pack(&pack)`,
+//! [`super::blob_packs`]); a route whose verb isn't there refuses with
+//! `not_a_text_doc` (exit 2), naming what the file has. Every verb the
+//! registry runs through `run_tool` goes to `BlobSession::run_tool` from
+//! `/cli/docs/tool` (POST): the comment verbs on any file, and on PSD/PSB
+//! files the layer index's reads and claims by layer. K2 adds `lock` /
+//! `unlock` (the CLI's names for `lease` / `lease --release`) and `view
+//! --region`.
+//!
+//! **Index reads** page by the kit's read budget (`readBudget`, at least
+//! 16,384 bytes) and print JSON with `json: true` (`--json`). A version
+//! whose index isn't recorded yet (`MPC-E713`) asks the indexer for it and
+//! waits up to [`super::indexer::VERB_WAIT`] before answering
+//! `index_pending`.
 //!
 //! **On someone's behalf** (K-T0-9, kit amendment 11): an agent's write or
 //! restore `--on-behalf-of` a person applies at once and waits for that
@@ -36,16 +48,18 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use k2_mpc_base::parity::{Registry, Tier};
+use k2_mpc_base::index::{IndexStatus, NodeKey};
+use k2_mpc_base::parity::Registry;
 use k2_mpc_base::session::{
-    ApprovalState, BlobLogEntry, BlobSession, BlobWriteResult, ConflictCopy, Joined, LeaseInfo,
+    ApprovalState, BlobLogEntry, BlobSession, BlobWriteResult, ClaimSpan, ConflictCopy, ConnId, Joined, LeaseInfo,
     SessionError, Stay,
 };
 use k2_mpc_base::store::{BlobVersion, DocKey, VersionId};
+use k2_mpc_base::tools::{ToolOptions, ToolOutput, ToolRunError};
 
 use super::caller::refusal;
 use super::routes::{self, Call, VerbError};
@@ -53,20 +67,30 @@ use super::target::Target;
 use crate::cli_response::CliResponse;
 use k2_mpc_base::tools::exit;
 
-/// The verbs that work on a tier-0 doc: the kit's registry for tier 0.
+/// The verbs that work on any tier-0 doc: the kit's registry for a blob
+/// doc with no index (`for_blob_pack(&AnyFile)`: tier 0 and comments).
 pub fn registry() -> &'static Registry {
-    static R: OnceLock<Registry> = OnceLock::new();
-    R.get_or_init(|| Registry::for_tier(Tier::Blob))
+    super::blob_packs::registry_of(super::blob_packs::BlobKind::Any)
+}
+
+/// The verbs of the tier-0 doc `t`: its pack's registry.
+pub fn registry_for(t: &Target) -> &'static Registry {
+    super::blob_packs::registry_for(&t.rel)
 }
 
 /// K2's own names on top of the registry (CLI aliases and K2's verbs).
 pub const K2_VERBS: &[&str] = &["lock", "unlock", "view --region", "versions", "watch"];
 
 /// What a tier-0 doc offers, for the teaching refusal.
-pub fn offered() -> String {
-    let mut v: Vec<&str> = registry().verbs().iter().map(|v| v.name).collect();
+pub fn offered_for(reg: &Registry) -> String {
+    let mut v: Vec<&str> = reg.verbs().iter().map(|v| v.name).collect();
     v.extend(K2_VERBS.iter().copied());
     v.join(", ")
+}
+
+/// What any tier-0 doc offers.
+pub fn offered() -> String {
+    offered_for(registry())
 }
 
 /// A verb that needs a text doc, on a tier-0 doc (exit 2).
@@ -78,7 +102,7 @@ pub fn not_a_text_doc(t: &Target, verb: &str) -> CliResponse {
             "hint": format!(
                 "`{verb}` works on text docs; {} is an any-file doc (tier 0), which has: {}. k2 doc cat prints its bytes",
                 t.rel,
-                offered()
+                offered_for(registry_for(t))
             ),
             "verb": verb,
             "tier": 0,
@@ -101,7 +125,7 @@ fn route_verb(path: &str, c: &Call) -> Option<String> {
                 .and_then(Value::as_array)
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
                 .unwrap_or_default();
-            return Some(if argv.is_empty() { "tool".to_string() } else { k2_mpc_base::parity::verb_form(&argv) });
+            return Some(if argv.is_empty() { "tool".to_string() } else { registry_for(c.target).form_of(&argv) });
         }
         routes::EDIT => "edit",
         routes::CURSOR => "cursor",
@@ -143,7 +167,7 @@ pub(super) fn handle(path: &str, rt: &Arc<super::Runtime>, c: &Call, fallback: O
 
 fn handle_inner(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliResponse {
     if let Some(verb) = route_verb(path, c) {
-        if registry().get(&verb).is_none() {
+        if registry_for(c.target).get(&verb).is_none() {
             return not_a_text_doc(c.target, &verb);
         }
     }
@@ -251,6 +275,7 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
             };
             // Conflict copies hold earlier content: history only.
             let copies = c.rights.history.then(|| st.conflict_copies.iter().map(|cc| copy_json(t, cc)).collect::<Vec<_>>());
+            let index = index_status_json(st.index.as_ref());
             let approval = s.approval(j.conn, st.version).ok().flatten();
             Ok(ok0(
                 t,
@@ -264,6 +289,9 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
                     "disk": routes::disk_json(st.disk.as_ref()),
                     "declined": declined,
                     "conflictCopies": copies,
+                    // The structure index of the current version (PSD/PSB
+                    // files): null for a type with none.
+                    "index": index,
                     "rights": c.rights.json(),
                     "owner": c.rights.owner,
                 }),
@@ -291,9 +319,14 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
             ))
         }
         // `cat` on any file (the registry's tier-0 form): the bytes, as a
-        // text tool answers (stdout, or stdoutB64 when not UTF-8).
+        // text tool answers (stdout, or stdoutB64 when not UTF-8). Every
+        // other registry verb that runs through `run_tool` (comments; on
+        // PSD/PSB files the index reads and node claims) goes there.
         routes::TOOL => {
             let argv: Vec<&str> = input.body.get("argv").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+            if argv.first().is_some_and(|v| *v != "cat") {
+                return blob_tool(s, c);
+            }
             if argv.len() > 1 {
                 return Ok(ok0(
                     t,
@@ -321,8 +354,22 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
         routes::WHO => {
             let j = join(s, c, Stay::UntilIdle)?;
             let roster = s.roster(j.conn)?;
-            Ok(ok0(t, json!({ "roster": roster.iter().map(routes::roster_json).collect::<Vec<_>>() })))
+            // A layer panel's roster: the node keys people look at (their
+            // region, when it is a key) and claim, with each node's name,
+            // kind and whether it is shown now (`node_labels`).
+            let labels = if super::blob_packs::indexes(&t.rel) { node_labels_json(s, j.conn, &roster) } else { Value::Null };
+            Ok(ok0(
+                t,
+                json!({ "roster": roster.iter().map(routes::roster_json).collect::<Vec<_>>(), "nodeLabels": labels }),
+            ))
         }
+        // Claims on a blob doc name nodes of its index, through `run_tool`
+        // (`k2 doc claim --node`); the text claim route has no lines here.
+        routes::CLAIM => Err(VerbError::Response(routes::bad(format!(
+            "{} is an any-file doc: a claim names its layers, not lines: k2 doc claim --node <layer> {} (k2 doc outline lists them)",
+            t.rel, t.rel
+        )))),
+        super::annotations::PURGE | super::annotations::ERASE => Ok(ok0(t, super::annotations::route(path, s, c)?)),
         routes::OPEN => {
             let j = join(s, c, Stay::Held)?;
             Ok(ok0(t, json!({ "version": j.version, "client": j.client, "rights": c.rights.json() })))
@@ -478,6 +525,178 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
             ))
         }
         _ => Ok(CliResponse::not_found()),
+    }
+}
+
+/// `/cli/docs/tool` with a verb that runs through `BlobSession::run_tool`:
+/// a comment verb, an index read or a node claim. `--mention` names a
+/// person or agent the way `log --by` does (`me`, a login, a workspace) and
+/// reaches the kit as a pid.
+fn blob_tool(s: &Arc<BlobSession>, c: &Call) -> Result<CliResponse, VerbError> {
+    let argv = tool_argv(c)?;
+    let argv = mention_pids(argv, c)?;
+    let mut opts = ToolOptions::new().json(c.input.flag("json"));
+    if let Some(b) = c.input.u64("readBudget").map_err(VerbError::Response)? {
+        opts = opts.read_budget(usize::try_from(b).unwrap_or(usize::MAX));
+    }
+    let j = join(s, c, Stay::UntilIdle)?;
+    let v = run_blob_tool(s, j.conn, &c.target.key(), &argv, &opts)?;
+    Ok(ok0(c.target, v))
+}
+
+/// Most argv words a blob tool call may carry.
+const MAX_TOOL_ARGV: usize = 300;
+
+fn tool_argv(c: &Call) -> Result<Vec<String>, VerbError> {
+    match c.input.body.get("argv") {
+        Some(Value::Array(a)) if !a.is_empty() && a.len() <= MAX_TOOL_ARGV => a
+            .iter()
+            .map(|v| v.as_str().map(str::to_string))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| VerbError::Response(routes::bad("argv must be a list of strings"))),
+        _ => Err(VerbError::Response(routes::bad(format!("argv is required: the verb and its flags (at most {MAX_TOOL_ARGV} words)")))),
+    }
+}
+
+/// `--mention X` / `--mention=X` → the pid `X` names (`routes::any_pid`).
+pub(super) fn mention_pids(argv: Vec<String>, c: &Call) -> Result<Vec<String>, VerbError> {
+    let mut out = Vec::with_capacity(argv.len());
+    let mut it = argv.into_iter();
+    while let Some(a) = it.next() {
+        if a == "--" {
+            out.push(a);
+            out.extend(it);
+            break;
+        }
+        if a == "--mention" {
+            out.push(a);
+            if let Some(v) = it.next() {
+                out.push(routes::any_pid(&v, c.caller).map_err(VerbError::Response)?);
+            }
+        } else if let Some(v) = a.strip_prefix("--mention=") {
+            out.push(format!("--mention={}", routes::any_pid(v, c.caller).map_err(VerbError::Response)?));
+        } else {
+            out.push(a);
+        }
+    }
+    Ok(out)
+}
+
+/// Run one `run_tool` verb and shape its answer. A version whose index
+/// isn't recorded yet is waited for once ([`super::indexer::wait_ready`]).
+pub(super) fn run_blob_tool(
+    s: &BlobSession,
+    conn: ConnId,
+    key: &DocKey,
+    argv: &[String],
+    opts: &ToolOptions,
+) -> Result<Value, VerbError> {
+    let mut waited = false;
+    loop {
+        match s.run_tool(conn, argv, opts) {
+            Ok(out) => return Ok(tool_json(out)),
+            Err(ToolRunError::Tool(e)) => return Ok(tool_refusal_json(argv, &e.report())),
+            Err(ToolRunError::Session(SessionError::IndexPending { version, .. })) if !waited => {
+                waited = true;
+                super::indexer::wait_ready(s, key, version, super::indexer::VERB_WAIT);
+            }
+            Err(ToolRunError::Session(e)) => return Err(VerbError::Session(e)),
+        }
+    }
+}
+
+/// A kit report as JSON (`id, exit, message, next, rule, details, step`).
+pub(super) fn report_value(r: &k2_mpc_base::errors::ErrorReport) -> Value {
+    serde_json::from_str(&r.to_json()).unwrap_or_else(|_| json!({ "id": r.id(), "message": r.message() }))
+}
+
+/// A tool's answer: stdout (its JSON with `--json`), the summary line,
+/// the fence and warnings for stderr, and the refusal of an exit-4 read
+/// (`MPC-E172`: some addresses named nothing; the rest are still listed).
+pub(super) fn tool_json(out: ToolOutput) -> Value {
+    let mut stderr = out.stderr_summary.clone();
+    let refusal = out.refusal.as_ref().map(|r| {
+        stderr.push_str(&format!("\n{} ({}). {}", r.message(), r.id(), r.next()));
+        report_value(r)
+    });
+    let fence = out.fence.as_ref().map(|f| {
+        json!({ "begin": f.begin(routes::FENCE_PREFIX, routes::pid_label), "end": f.end(routes::FENCE_PREFIX), "nonce": f.nonce })
+    });
+    let notes = if out.warnings.is_empty() { Value::Null } else { Value::String(out.warnings.lines().join("\n")) };
+    let mut v = json!({
+        "exit": out.exit,
+        "stderr": stderr,
+        "version": out.version,
+        "fence": fence,
+        "notes": notes,
+        "refusal": refusal,
+    });
+    match String::from_utf8(out.stdout) {
+        Ok(text) => v["stdout"] = Value::String(text),
+        Err(e) => {
+            v["stdout"] = Value::Null;
+            v["stdoutB64"] = json!(routes::b64(e.as_bytes()));
+        }
+    }
+    v
+}
+
+/// A verb the kit refused as given (a usage error, an address): its exit,
+/// the report, and a stderr line with the id and what to do next.
+pub(super) fn tool_refusal_json(argv: &[String], r: &k2_mpc_base::errors::ErrorReport) -> Value {
+    let verb = argv.first().map(String::as_str).unwrap_or("tool");
+    json!({
+        "exit": r.exit(),
+        "stdout": "",
+        "stderr": format!("k2 doc {verb}: {} ({}). {}", r.message(), r.id(), r.next()),
+        "error": report_value(r),
+    })
+}
+
+/// Where the current version's index stands, for `status`.
+pub(super) fn index_status_json(st: Option<&IndexStatus>) -> Value {
+    match st {
+        None => Value::Null,
+        Some(IndexStatus::NoIndexer) => json!({ "state": "none" }),
+        Some(IndexStatus::Ready { version, nodes }) => json!({ "state": "ready", "version": version, "nodes": nodes }),
+        Some(IndexStatus::Pending { version, running }) => json!({ "state": "pending", "version": version, "running": running }),
+        Some(IndexStatus::NotIndexed { version, why }) => json!({ "state": "not_indexed", "version": version, "why": why.to_string() }),
+        Some(other) => json!({ "state": "other", "detail": format!("{other:?}") }),
+    }
+}
+
+/// `{key: {name, kind, visible}}` for the node keys a roster names (its
+/// regions that are keys, its node claims), from `node_labels`; `null`
+/// when the index can't be read now (pending, none).
+fn node_labels_json(s: &BlobSession, conn: ConnId, roster: &[k2_mpc_base::session::RosterEntry]) -> Value {
+    let mut keys: Vec<NodeKey> = Vec::new();
+    for e in roster {
+        if let Some(k) = e.region.as_deref().and_then(NodeKey::parse) {
+            keys.push(k);
+        }
+        for c in &e.claims {
+            if let ClaimSpan::Nodes { keys: ks } = &c.span {
+                keys.extend(ks.iter().cloned());
+            }
+        }
+    }
+    keys.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    keys.dedup();
+    if keys.is_empty() {
+        return json!({});
+    }
+    match s.node_labels(conn, &keys) {
+        Ok(labels) => {
+            let mut m = serde_json::Map::new();
+            for (k, l) in keys.iter().zip(labels) {
+                m.insert(
+                    k.as_str().to_string(),
+                    l.map_or(Value::Null, |l| json!({ "name": l.name, "kind": l.kind, "visible": l.visible })),
+                );
+            }
+            Value::Object(m)
+        }
+        Err(_) => Value::Null,
     }
 }
 
@@ -751,6 +970,42 @@ mod tests {
     /// The kit decides which verbs work on any file (`VerbSpec::tiers`):
     /// the leases are there, the text tools aren't, and K2's own names
     /// aren't the kit's.
+    /// K-PAR-5 for every blob pack: each verb of `Registry::for_blob_pack`
+    /// (any file, and PSD/PSB files: comments, the layer verbs, `outline`,
+    /// `node`, claims by node) is a `k2 doc` verb the CLI routes, and its
+    /// help names it.
+    #[test]
+    fn every_registry_verb_is_a_k2_doc_verb() {
+        let cli = include_str!("../../../../cli/k2");
+        let start = cli.find("\ncmd_doc() {").expect("cmd_doc in cli/k2");
+        let end = cli[start..].find("# END_CLI_DOC").expect("END_CLI_DOC") + start;
+        let body = &cli[start..end];
+        let labels: Vec<&str> = body
+            .lines()
+            .filter_map(|l| l.trim_start().split_once(')').map(|(p, _)| p))
+            .filter(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase() || c == '|' || c == '-'))
+            .flat_map(|p| p.split('|'))
+            .collect();
+        let usage_start = cli.find("\n_doc_usage() {").expect("_doc_usage");
+        let usage = &cli[usage_start..cli[usage_start..].find("\nEOF\n").expect("usage end") + usage_start];
+        let mut missing = Vec::new();
+        for kind in [super::super::blob_packs::BlobKind::Any, super::super::blob_packs::BlobKind::Psd] {
+            for spec in super::super::blob_packs::registry_of(kind).verbs() {
+                let word = spec.name.split_whitespace().next().unwrap_or(spec.name);
+                let routed = labels.contains(&word);
+                let documented = usage.contains(&format!("k2 doc {}", spec.name))
+                    || usage.contains(&format!("k2 doc {word}"))
+                    || usage.contains(&format!("|{word}"))
+                    || usage.contains(&format!("{word}|"));
+                if !routed || !documented {
+                    missing.push(format!("{} ({kind:?}: routed {routed}, in help {documented})", spec.name));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "registry verbs k2 doc lacks: {missing:?}");
+        assert!(usage.contains("PSD/PSB files"), "help lacks the PSD/PSB section");
+    }
+
     #[test]
     fn the_tier_0_verbs_come_from_the_kits_registry() {
         let names: Vec<&str> = registry().verbs().iter().map(|v| v.name).collect();

@@ -127,6 +127,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
     use crate::blob::BlobError;
     match e {
         SessionError::Forbidden { .. }
+        | SessionError::NotCommentAuthor { .. }
         | SessionError::Watching { .. }
         | SessionError::Doc(crate::doc::DocError::Unaccepted | crate::doc::DocError::Quarantined) => {
             exit::REFUSED
@@ -137,6 +138,8 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::NoSuchChange(_)
         | SessionError::NoApproval { .. }
         | SessionError::NoBlobStore
+        | SessionError::NotIndexed { .. }
+        | SessionError::NoAnnotation { .. }
         | SessionError::Deleted
         | SessionError::NoClaim(_)
         | SessionError::UnknownElem { .. }
@@ -158,17 +161,24 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::SelectionTooLarge { .. }
         | SessionError::AtLimit { .. }
         | SessionError::NeedsBase
+        | SessionError::IndexUnsupported
+        | SessionError::AgentWriteRefused
+        | SessionError::BadAnnotation(_)
+        | SessionError::AnnotationCap { .. }
         | SessionError::KeyNotOwn { .. }
         | SessionError::KeySpaceFull { .. }
         | SessionError::Doc(_) => exit::USAGE,
         SessionError::Held { .. } | SessionError::ClaimContended { .. } => exit::HELD,
         SessionError::Leased { .. }
         | SessionError::Claimed { .. }
-        | SessionError::ElemsClaimed(_) => exit::LEASED,
+        | SessionError::ElemsClaimed(_)
+        | SessionError::NodesClaimed(_) => exit::LEASED,
+        SessionError::IndexRead(r) => r.exit(),
         SessionError::Store(e) | SessionError::Blob(BlobError::Store(e)) => store_exit(e),
         SessionError::EngineMismatch { .. } => exit::STORE,
         SessionError::RevertTooOld { .. } | SessionError::BaseExpired { .. } => exit::TOO_OLD,
         SessionError::Stale { .. }
+        | SessionError::IndexPending { .. }
         | SessionError::FacetConflict(_)
         | SessionError::Disk(_)
         | SessionError::SaveMismatch { .. }

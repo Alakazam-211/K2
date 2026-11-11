@@ -1740,6 +1740,7 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 
 | Field | Default | Effect |
 |---|---|---|
+| `blob_index_max_bytes` / `blob_index_max_nodes` / `blob_index_max_stored_bytes` | 2 GiB / 100,000 / 64 MiB | [The structure index](#the-structure-index-a1)'s caps: the file size a job runs for, nodes in one index, a row's stored size |
 | `editor_window_ms` | 30 s | editor role window |
 | `outside_note_window_ms` / `outside_note_text_keep_ms` | 24 h / 24 h | [When an outside save removes someone's text](#when-an-outside-save-removes-someones-text): the rule's window, and how long a note holds its text |
 | `idle_leave_ms` | 60 s | connections without a hold close |
@@ -2278,6 +2279,314 @@ field in `--json` would be clearer than reusing 2.
 see amendment 11), participant erasure on blob docs, automatic version retention, the K-T0-4
 fuzz target, and hashing outside the session lock (a large outside save is hashed under it
 today). Purge is in [Erasure](#erasure).
+
+### The structure index (A1)
+
+A file type can have its structure read into a tree of **nodes** kept beside the blob:
+`BlobPack::index_spec` turns it on (a pack without it behaves exactly as before: no event, no
+table, nothing to run). The kit knows nodes, keys, keyed hashes and caps, and no format
+([`index`](../crates/base/src/index/mod.rs)); a pack's words go in a node's `kind`, `attrs`
+and `flags`.
+
+**The kit starts no thread.** When a version commits, a pack that indexes it, a size within
+`blob_index_max_bytes` and no row yet emit `AuditEvent::IndexWanted { key, version }`. The
+host later calls `BlobSession::index_job(Some(version))` (`None`: the current one): an
+`IndexJob`, or `None` when nothing is due (a job is out, the row exists, or it can't be read).
+It runs the job off the session lock: in-process with `run()`, or in a sandboxed worker with
+`open()` (`IndexInput` and the limits) and `commit_wire(input, bytes)` (bytes from
+`index::index_to_wire`). `BlobSession::index_status(version)` says where a version stands
+(`Ready`, `Pending { running }`, `NotIndexed { why }`, `NoIndexer`); `index_view(version)` reads
+it back, host-internal like `status()` ([Reading the index](#reading-the-index-a2) has the
+typed reads with rights). A verb on an unindexed version returns `MPC-E713 index_pending` (exit
+1, `details.retry_after_ms`), never blocks.
+
+**What a job trusts: nothing.** The worker parsed a hostile file. A result on the wire is
+bounded before it is decoded (`IndexLimits::wire_max`, a node count over `max_nodes` stops the
+read). A draft from any source then passes `shape`: node count and depth against the caps,
+every string and map against its `INDEX_*` limit, every parent an earlier node. Over a cap, the
+refusal is **recorded** (`NotIndexed { TooManyNodes | TooDeep | IndexTooBig }`, so the same file
+isn't tried again): tier 0 is untouched. Malformed: `MPC-E714 index_bad_result` (exit 1), nothing
+recorded, and the job can be run again. A job reads its stream to the **verified end** before
+recording, even when the pack or worker stopped early: a damaged blob is `MPC-E705`, nothing
+recorded. The commit re-checks in its own transaction that the version still exists, still
+holds this blob and isn't purged, and that the blob row is still there: a job racing a purge is
+`MPC-E717 index_stale`, and can't put a row back.
+
+**The tables.** `blob_struct`, `(space no, blob id, pack, format)` → one row (the same bytes in
+two docs or versions share it; a format bump is recomputed, the older row goes with the next
+commit). `blob_struct_keys`, `(doc, version)` → minted keys, per doc. Both are created by the
+first commit: a store with no index has no table, and the additive rules apply (a store with
+one that an older kit opens: purge and rewrite refuse, reads and edits work). A row exists only
+while its blob row does: it goes in the transaction that removes the blob
+(`blob_remove_unreferenced`, `blob_purge_space`), `BlobStore::gc` sweeps any left by an older
+kit, and a rewrite doesn't copy them. A purged version whose blob is shared keeps the row; only
+the overlay for that version goes.
+
+**Keys and hashes.** A node's key is its native ID when the file gives one, unique in this
+version. Otherwise (none, or the ID is duplicated: every holder, and that native address becomes
+ambiguous, the native ID stays readable on the node) the kit mints `@k:r<version>.<n>` once.
+Keys carry forward: from the same blob in this doc (a restore is the same content, same keys),
+else the nearest indexed version of the doc, by kind + name + parent path, then position
+(`KeyClass::Minted { weak: true }`, which an anchor reads as suspect); a tie never pairs. A
+pack hands the kit raw digests (`Digest`), and the kit stores only `HMAC-SHA256(a key derived
+from the space key, digest)`: not comparable across spaces, and no plain content hash (K-PURGE-1).
+
+**Agents.** `BlobPack::agent_writes` (default allowed); `AgentWrites::Refused` makes an agent's
+`write` and `expect_save` refuse `MPC-E715` (exit 2). Restores are allowed: they make no new
+bytes. `ParticipantKind::App` viewers are not covered: an App is not an agent, and writes as its
+host grants.
+
+**Overlays and format bumps.** A key overlay records the pack and format it was minted under;
+under any other it is absent, so a format bump re-mints (keys minted earlier don't carry into a
+new format), and an overlay never lands on rows it wasn't made for. Within one format keys are
+written once: the first job or read wins, and a late job (one that outlived a session unload)
+changes nothing already shown.
+
+**Purge.** The row goes with the blob, and a version's overlay with the version. A
+`purge_space_key` that removed any index rows rewrites the store file too
+(`PurgeReport::index_rows_removed`, `store_rewritten`): a space's rows hold names and text. GC
+removes rows without rewriting the file, as a doc delete does: their old bytes stay in freed
+pages until a later rewrite, and a purge is what leaves no bytes behind.
+
+### Anchors (A3)
+
+Where a comment is pinned ([`anchor`](../crates/base/src/anchor.rs), pure: no store, no file
+type). An `Anchor` targets the whole doc or a node by its key (`@n:42`, `@k:r4.1`), and keeps what
+identified the node when it was made: its `Fingerprint` (kind, name, bounds, keyed content hash,
+weak IDs), the pack's
+opaque `hint`, and `last_seen` (a record of where it was last found, never where it points).
+
+**One state per version**, computed on read by `anchor::resolve(anchor, version, nodes, rules)`,
+never stored as the anchor. The first row that applies:
+
+| # | State | When |
+|---|---|---|
+| 1 | `suspect` (`duplicate_key`, `weak_key`) | several nodes hold the key; or the key was carried from the version before by position alone |
+| 2 | `orphaned` | the key is gone and no node is a candidate |
+| 3 | `suspect` (`candidate_only`) | the key is gone and some node is a candidate (K-ANN-9) |
+| 4 | `suspect` (`hints_purged`, `kind_changed`, `identity_doubt`) | found, but a purge took the fingerprint; or the pack doubts it |
+| 5 | `hidden` | found, not visible in the tree |
+| 6 | `hint-stale` | found, the pack says the hint is off |
+| 7 | `attached` | otherwise; a doc anchor always |
+
+The file type's half is two defaulted `BlobPack` methods: `judge_anchor(was, hint, now)` (the
+default: another kind is `kind_changed`; renamed **and** moved past its old diagonal **and** with
+other content (or content unknown) is `identity_doubt`; a plain rename, a plain move or a content
+edit is the same node; never `hint-stale`, the kit can't read a hint) and `anchor_candidate(was,
+hint, node)` (the default: the same kind with a weak ID in common, or the same name). The judge
+sees only the anchor's fingerprint and the later node: the fingerprint carries the anchored
+version's content hash, so no older index is read. A weak ID (a placed item's, which several
+nodes may share) only ever makes a candidate, never an identity. Candidates (at most 8, in reading order) are suggestions:
+**an anchor is never moved silently**; only a re-anchor moves it.
+
+### Annotations (A4)
+
+Comment threads, per doc, in five additive tables created by the doc's first comment
+(`annot_threads`; `annot_comments`: the only copy of each body; `annot_log`: one row per op,
+never a body; `annot_thread_log`: each thread's history rows; `annot_changed`: each thread's
+last change). A store no comment reached has none, and a host that hasn't adopted comments
+sees no change: no table, no event, no verb in `Registry::for_tier`. The table, its ops,
+rights, events and purge don't look at the anchor's target, so text, grid, CAD and 3D anchors
+come with their resolvers only. Blob docs have them now:
+
+| Call (`BlobSession`) | Verb (`run_annotation`, `run_tool`) | Needs |
+|---|---|---|
+| `comment(conn, NewComment)` | `comment (--doc \| --node KEY [--version V] [--hint H]) --body T [--mention P]… [--proposal PATH]…` | comment (+ history for an older V) |
+| `reply(conn, t, body, mentions, attachments)` | `reply ann-N --body T …` | comment |
+| `resolve`, `reopen` | `resolve ann-N [--reopen]` | comment |
+| `delete_comment(conn, t, n)` | `comment --delete ann-N [--n N]` | comment, and the author, the person it was for, or an owner (`MPC-E117`) |
+| `thread(conn, t, version)`, `comments(conn, &ThreadQuery)` | `comments [--open \| --resolved] [--version V] [--on KEY] [--since SEQ] [--after ann-N] [--limit N]` | read (+ history for an older V) |
+| `annotation_log(conn, t, since, limit)` | `comments --log [ann-N] [--since SEQ]` | read and history |
+| `reanchor(conn, t, NewAnchor)` | `reanchor ann-N (--doc \| --node KEY [--version V])` | comment |
+| `purge_annotations(conn, AnnotPurge)`, `erase_participant(conn, pid, pseudonym)` | (the host's purge) | owner |
+
+`Registry::for_blob_pack` lists the verbs (any pack: a doc comment needs no index;
+`Registry::with_annotations` adds them to any other registry), and `BlobSession::run_tool`
+hands them to `run_annotation`: one line a thread and a comment, or JSON with `--json`.
+
+- **Rights.** `Rights::comment` is implied by edit (a product ruling); a read-only share
+  comments only when the host grants it (`Rights::read_only().with_comment(true)`). Refused:
+  `MPC-E116 forbidden_comment`, exit 3. A reader without history sees no copy of a node from
+  an older version: not the fingerprint or `last_seen` taken there, and no resolution against
+  an older index (`resolution: None` until the current version's index is recorded).
+- **Attribution.** Taken from the connection's participant. Ids (pid, on behalf of) over 256
+  bytes are refused at the write (`MPC-E115`, the host's to fix); a name or surface over 256
+  bytes is cut at a character boundary. A row is never refused for its length when read, so
+  everything written reads back and purges.
+- **Outside the versions.** A comment makes no version and no undo step; an agent's comment on
+  someone's behalf records `on_behalf_of` and starts no approval. Comments aren't editable: a
+  correction is a reply or a delete, so each body has one copy. Calls take the session lock
+  only to admit the caller (and copy an App viewer's handles), and share the pid's edit rate
+  bucket. A call reports the thread as its transaction left it, and its event is emitted from
+  that: a committed change never reads back as a failure.
+- **Anchors.** A node comment names a key in a version's index (pending: `MPC-E713`; a type with
+  none: `MPC-E711`, where `--doc` still works; no such node, or a key several nodes hold:
+  `MPC-E321`). Names and `#N` are the read side's (A2) to turn into keys. The transaction that
+  writes an anchor's copy of a node (a comment, a re-anchor, an index record) re-checks that its
+  version is still live: a purge that won the race is `MPC-E712` (purged), nothing written.
+  Each thread's anchor is resolved at the version asked; when that version's index isn't
+  recorded yet, against the newest earlier one that is (`AnchorResolution::current` false, at
+  most 32 versions back). When an index job records a version, the node-anchored threads are
+  resolved off any transaction (one key map for all of them), and the changed records
+  (`last_seen`, the state) applied in one short transaction that skips a thread changed
+  meanwhile; `AuditEvent::AnchorState { was, now }` is emitted for each applied change.
+  Nothing moves an anchor: only `reanchor`, and only a `ParticipantKind::Person`'s applies;
+  anyone else's is recorded as `Thread::pending_anchor`, which a person confirms by
+  re-anchoring to it (the history keeps both rows).
+- **Delete** clears the body (and its mentions and attachments) at once, with no undo; who
+  and when stay. Its old bytes stay in the store file's freed pages until the next rewrite (any
+  purge rewrites it); `purge_annotations(AnnotPurge::Comment(..))` is the way to leave none now.
+- **Purge (K-PURGE-3).** `AnnotPurge::Comment`, `Thread`, `Text` (whole or by any 8-byte window,
+  at least 8 bytes) and `All` clear bodies, and (but `Comment`) the anchors' copies of node names
+  and hints; a `Purged` history row per thread; the store file is rewritten. A version purge
+  (`BlobSession::purge`) takes the hints and fingerprints of anchors made on that version and
+  the `last_seen` of anchors last seen there, in the same transaction (a node's name is that
+  version's content): they read `suspect` (`hints_purged`) while their key is found. A cleared
+  anchor stays cleared: no index record puts a `last_seen` back until a re-anchor. A doc
+  delete takes the five tables (`DOC_TABLES`). Annotation purges add
+  `NotReached::SentNotifications`: the notifications the host sent are its own copies.
+- **Erasure.** `erase_participant` replaces the pid by the pseudonym in every attribution of
+  the doc (its versions and approvals, threads, comments, mentions and history), clears the
+  bodies the erased participant wrote or an agent wrote on their behalf, removes their
+  connections and rewrites the store. It refuses what `Session::purge`'s erasure refuses (an
+  empty, equal or reserved pid or pseudonym; the owner erasing themselves), a pseudonym over
+  256 bytes, and one that is already a participant's (present, or in the doc's records). It
+  holds the session's annotation gate alone: comment writes hold it shared from admission to
+  commit, so none admitted before the erasure commits after it.
+- **A promoted doc** (tier 0 → text, which keeps the doc id) keeps its threads, and the text
+  doc's purges reach them in the purge's own transaction: a purge by text (or of changes)
+  clears the bodies and anchor copies its needles match, a participant erasure renames and
+  clears as above, and a purge of the whole history clears every anchor's copies of tier-0
+  node content.
+- **Events.** `AuditEvent::Annotation { seq, thread, comment, op, pid, on_behalf_of, mentions,
+  anchor_key }`, never a body: the host notifies the mentions, reading the body with
+  `thread()`. A tab catches up with `comments(.. since: head)`: `head` is the doc's change
+  seq, and every change counts, history row or not (an erasure's renames, a purge's clears, an
+  anchor's new state). It reads one row a thread.
+- **App viewers** get handles for every pid in threads, comments, mentions and the history, as
+  for the rest of tier 0; a mention they pass is a handle.
+- **Limits** (`Config`): `annot_body_max_bytes` (16 KiB), `annot_threads_max` (10,000 per doc),
+  `annot_comments_max` (1,000 per thread), `annot_thread_log_max` (4,096 history rows a thread:
+  past it the ops that only toggle or move a thread, resolve, reopen and re-anchor, are
+  refused; replies, deletes and purges always fit): `MPC-E907`, exit 2. At most 32 mentions,
+  refused before any is read. A thread's history is read through its own index, and every
+  history read is bounded by its limit. Unknown thread or comment: `MPC-E320`, exit 4.
+  (`MPC-E906` is C3's.)
+- **Parity.** `parity::check_annotations(pack, bytes, node)` runs every annotation action both
+  ways (the typed call as a person, the verb as an agent) and compares the threads, comments,
+  history, exit and output; the one documented difference is the re-anchor proposal.
+  `check_blob` runs it for a registry that has the verbs (`for_blob_pack`), so a pack's blob
+  list names them under P23 and P27.
+
+### Reading the index (A2)
+
+The typed reads a host's views call, each with a connection, rights asked on every call
+(read; read and history for a version that isn't the current one, a diff and a blame, as
+`show --version` and `blame` are) and an App viewer's handles:
+
+- `index_list(conn, &ListQuery)` → `Outline`: every node the query keeps (a version, a kind,
+  down to a depth; 0 the roots) in **outline order**, a depth-first walk with each node's
+  children in sibling order. Each carries its `position`, the `#N` of that walk; a filter never
+  renumbers. No text, attributes or hashes.
+- `index_nodes(conn, addrs, version, depth)` → `NodesRead`: one entry per address, in order, the
+  node in full with its ancestors and its descendants `depth` levels down; `None` for an address
+  that names nothing, listed in `missing` with candidates (a name differing in case, or
+  containing it; never chosen). At most `INDEX_ADDRS_MAX` (256) addresses.
+- `index_diff(conn, from, to)` → `IndexDiff`: per node `added`, `removed`, `moved` (another
+  parent, or out of the longest run of shared siblings that kept their order: a node that only
+  shifted because a sibling came or went is not moved), `renamed`, `props` (kind, visible,
+  bounds, `attrs.<k>`, `flags.<f>`, or `record` when only the record changed), `content`,
+  `text`. In `to`'s outline order, then the removed ones.
+- `index_blame(conn, version)` → `IndexBlame`: per node, the version that made it as it is
+  (walking back while the node is unchanged: record, content, text, name, parent, fields) and
+  who set that version. Only indexes that exist are used: a version with no index stops the walk
+  (`stopped_at`, `missing`), as do `BLAME_WALK_MAX` (256) versions, and the rows it didn't settle
+  say `settled: false`. Same bytes as the version after it are walked through without a read.
+- `node_labels(conn, keys)`: name, kind and shown, per key, in the current version, for a roster
+  whose regions are node keys (`set_region` stays a plain string; the host joins the two).
+- `status()` gains `index: Option<IndexStatus>`: the current version's (`None` for a type with no
+  index).
+
+None of these pages: the verbs do. `index_view(version)` stays host-internal, with no
+connection.
+
+**Addresses: the kit's one grammar** (`crate::addr`, forms native, key, `#N`, name). `@k:…` a
+minted key, a native ID the file's own, `#N` the Nth node of the version read (which the output
+reports), `name:X` or a bare word the one node with that name. A number is never a position (`2`
+is a name). A name or native ID two nodes share refuses the read: `MPC-E170`, exit 2, every
+holder in `details.candidates` by key and place. Nothing resolves to "the nearest" or "the
+first".
+
+**The verbs: `BlobSession::run_tool(conn, argv, &ToolOptions)`.** The pack names them
+(`IndexVerbs`: `part list`, `part show`, `part diff`, `part blame`), the kit adds `outline` and
+`node` as other names for the first two (K-READ-1), and claims by node (below). Each verb is a
+parser over the typed call, so a verb and a view see the same thing; `--json` (or
+`ToolOptions::json`) prints the page as compact JSON, and the typed results' `to_json` print the
+same page whole. The show verb exits **4** with `MPC-E172 address_not_found` when any address
+names nothing: every address is still listed (`null` for the missing ones), and the refusal's
+`details.missing` says what exists. `<show> ADDR --text` prints one node's text whole, as it is.
+Every other verb of a blob doc is its own call (`cat` is `read`); a type with no index refuses
+`outline`, `node` and `claim` with `MPC-E711`. Output is fenced: names and text come from the file.
+
+**Pages and cursors (K-READ-2).** A read returns at most `ToolOptions::read_budget` bytes
+(default `READ_BUDGET`, 32,768; at least `READ_BUDGET_MIN`, 16,384) per page, in text and in
+JSON: an item counts as the larger of its two forms, so a page cut once is the same page in both
+and its cursor means the same thing; the fence isn't counted. An item that couldn't fit a page
+by itself is shortened a step at a time, each step saying what it left out and the read that
+returns it: a node's text (`text_omitted`, `text_bytes`, `text_read`: `<show> ADDR --text`);
+its descendants, to those that fit (`descendants_total`, `descendants_read`: `<list> --under
+ADDR --depth D`, which pages); every field, strings to 256 bytes (`<field>_bytes`), lists and
+attributes to 16 entries (`<field>_total`, `attrs_cut`), with `read` (`<show> ADDR --whole`: the
+node and its ancestors in full; a diff's change, both versions; a blame row, `log`); and last a
+stub: key, place, `omitted`, its size and `read`. A node read's misses come on its first page
+only, at most a quarter of the budget, with `missing_total`; at most `CANDIDATES_MAX` (20)
+candidates per miss or ambiguous address, with `candidates_total`. Past it, the page ends
+`truncated: true` with a cursor: `c1.` and hex of the version read, the next item's offset and a
+tag, `HMAC` under a key derived from the space key over the doc key, the version, the verb, the
+arguments that pick the items (not the output mode) and the offset. No path, no workspace. Pass it
+back with `--cursor` and the same arguments. Another version (a read of the current version after
+an edit; a read of a named version keeps its cursor), doc or arguments: `MPC-E173 stale_cursor`,
+exit 1. Not a cursor: `MPC-E174 bad_cursor`, exit 2. `--no-truncate` past the budget: `MPC-E175
+over_budget`, exit 2, nothing read, whenever the whole answer is over the budget (more pages,
+or an item shortened). Rights are asked before a cursor is looked at.
+
+**The registry: `Registry::for_blob_pack(&pack)`.** `for_tier(Tier::Blob)` and, for a pack with
+an index, its verbs as kit verbs of tier 0 (`VerbSpec::is_index`), all but the export verb
+through `run_tool`. A pack with no index gets exactly `for_tier(Tier::Blob)`, and `for_tier` never
+lists these. Refused: a name that isn't two lowercase words, whose first word is a kit verb's
+(`outline`, `node` and `claim` included), or two of one name. The parity rows are P3 (list,
+show), P19 (diff), P22 (blame), P24 (export) and P8 (the claims, though P8 isn't a tier-0 row:
+a pack that indexes lists it). `parity::kit_index_cases(verbs, first, second)` checks them on two
+versions of a file the pack gives; the export verb's case is the pack's.
+
+**Export by node** is the host's export with `export::NODE_OPTION` (`node`, the key): the host
+resolves the address with `index_nodes` at the version it exports, so an exporter never sees a
+name or a position, and an exporter that can't write a node's kind refuses with
+`ExportError::NeedsRenderer` (`MPC-E716`, exit 4). The kit runs no exporter.
+
+### Claims on nodes (A5)
+
+`claim_nodes(conn, keys, ttl_ms, note)`, `renew_claim`, `release_claim`, `claims`: the CSV
+claim model on a whole-file doc. A claim names node keys of the current version's index (every
+key must be a node now; no index yet: `MPC-E713`), lasts `claim_default_ms` unless asked (at most
+`claim_max_ms`; 0 refused), and carries its note. **Advisory:** it never refuses a write, a
+restore or a lease (the lease guards the file); nothing in the write path reads claims. Another
+participant's live claim on one of the same nodes refuses a new one: `SessionError::NodesClaimed`,
+`MPC-E301` `claimed`, exit 5. Limits as any claim's (`claims_max`, `claims_per_participant`, 256
+nodes, a 1 KiB note). Memory only.
+
+It ends on release, expiry, its connection leaving (`ClaimEnd::Left`), and `ClaimEnd::Deleted`
+once a version's index holds none of its nodes (checked when that index exists; a claim isn't
+ended by an edit: a whole-file save can't say a claimant was done). **No index is decoded under
+the session lock:** a claim reads the current index off the lock, then takes the lock again and
+re-checks the connection, the others' claims and the limits; the check against a new version
+runs off the lock before the roster, `claims` and `tick`, once per version. `ClaimInfo::span` is
+`ClaimSpan::Nodes { keys }`; `lines` is display only (root `index`, the first and last node's
+`#N`). The roster's `claims` list them, and `AuditEvent::ClaimTaken` / `ClaimEnded` report them as
+for text. The verbs: `claim --node ADDR... [--version V] [--ttl MS] [--note TEXT]` (an agent's
+`#N` names its version, `MPC-E171` under `PositionalMode::Refuse`; a missing address claims
+nothing, `MPC-E172`), `claim --renew [--id ID] [--ttl MS]`, `claim --release [--id ID]` (exit 1:
+none), all through `run_tool`.
 
 ### Tier 0 → text (v0.9.2)
 

@@ -29,6 +29,9 @@ test-hostile = []
 
 [dependencies]
 k2-mpc-base = { path = "../../vendor/k2-mpc-base/crates/base" }
+# The structure indexers the worker runs on hostile bytes (the `index` op):
+# PSD/PSB. A release daemon never runs them in its own process.
+k2-mpc-psd = { path = "../../vendor/k2-mpc-psd/crates/psd" }
 serde_json = "1"
 libc = "0.2"
 

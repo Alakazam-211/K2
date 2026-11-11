@@ -8,24 +8,42 @@
 #
 # Files: `git ls-files` when ROOT is a git checkout, else every file under ROOT (a node job's
 # unpacked bundle), `target/` and `.git/` left out. Binary files are skipped.
-# Patterns: PATTERNS below (extended regexes, case-insensitive).
-# Allowlist: private-allow.txt beside this script, one entry per line, `#` comments (this script
-# and the allowlist hold the patterns, and are always skipped):
+# Patterns: kept outside the tree, never in it; the first of these that is set or exists:
+#   MPC_PRIVATE_PATTERNS        the patterns themselves, one per line
+#   MPC_PRIVATE_PATTERNS_FILE   a file of them
+#   ~/.config/k2-mpc/private-patterns.txt
+# One extended regex per line, matched case-insensitively; `#` starts a comment (to the end of
+# the line), blank lines are ignored. No patterns there, or none left after comments: exit 2
+# (fail closed). The script never prints a pattern.
+# Allowlist: private-allow.txt beside this script, one entry per line, `#` comments (the
+# allowlist may quote a match, so it is always skipped):
 #   PATH          the whole file
 #   PATH:TEXT     a matching line of PATH that contains TEXT (fixed string)
-# Exit 0 clean, 1 findings (each printed as PATH:LINE:TEXT), 2 usage.
+# Exit 0 clean, 1 findings (each printed as PATH:LINE:TEXT), 2 usage or no patterns.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=${1:-$(cd "$HERE/.." && pwd)}
 [ -d "$ROOT" ] || { echo "check-private: no directory $ROOT" >&2; exit 2; }
+PATS=$(mktemp); LIST=$(mktemp); HITS=$(mktemp)
+trap 'rm -f "$PATS" "$LIST" "$HITS"' EXIT
+# the patterns: one per line, comments and blank lines dropped
+clean() { sed -e 's/#.*$//' -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' | grep -v '^$' || true; }
+CONF=${HOME:-/nonexistent}/.config/k2-mpc/private-patterns.txt
+if [ -n "${MPC_PRIVATE_PATTERNS:-}" ]; then
+  printf '%s\n' "$MPC_PRIVATE_PATTERNS" | clean > "$PATS"
+elif [ -n "${MPC_PRIVATE_PATTERNS_FILE:-}" ]; then
+  [ -r "$MPC_PRIVATE_PATTERNS_FILE" ] && clean < "$MPC_PRIVATE_PATTERNS_FILE" > "$PATS"
+elif [ -r "$CONF" ]; then
+  clean < "$CONF" > "$PATS"
+fi
+if [ ! -s "$PATS" ]; then
+  echo "check-private: no patterns: set MPC_PRIVATE_PATTERNS (the patterns, one per line) or MPC_PRIVATE_PATTERNS_FILE (a file of them), or write ~/.config/k2-mpc/private-patterns.txt (one extended regex per line, # comments)" >&2
+  exit 2
+fi
 cd "$ROOT"
-PATTERNS='k2n[0-9]|-vin\b|k2-arch|z3mbp|\.k2\.dev\b'
 ALLOW=$HERE/private-allow.txt
-# this script and the allowlist, as paths under ROOT (skipped: they hold the patterns)
-SELF=${HERE#"$(pwd)"/}/check-private.sh
+# the allowlist, as a path under ROOT (skipped: it may quote a match)
 ALLOWREL=${HERE#"$(pwd)"/}/private-allow.txt
-LIST=$(mktemp); HITS=$(mktemp)
-trap 'rm -f "$LIST" "$HITS"' EXIT
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git ls-files -z | tr '\0' '\n' > "$LIST"
 else
@@ -34,12 +52,12 @@ fi
 : > "$HITS"
 while IFS= read -r f; do
   [ -f "$f" ] || continue
-  grep -nIiE "$PATTERNS" "$f" 2>/dev/null | sed "s|^|$f:|" >> "$HITS" || true
+  grep -nIiE -f "$PATS" "$f" 2>/dev/null | sed "s|^|$f:|" >> "$HITS" || true
 done < "$LIST"
 [ -f "$ALLOW" ] || ALLOW=/dev/null
-BAD=$(awk -v allow="$ALLOW" -v self="$SELF" -v allowrel="$ALLOWREL" '
+BAD=$(awk -v allow="$ALLOW" -v allowrel="$ALLOWREL" '
   BEGIN {
-    whole[self] = 1; whole[allowrel] = 1
+    whole[allowrel] = 1
     while ((getline l < allow) > 0) {
       sub(/[ \t]+$/, "", l); if (l == "" || l ~ /^#/) continue
       i = index(l, ":")

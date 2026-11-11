@@ -270,7 +270,14 @@ fn remove_uploaded_copies(project_id: &str, conversation_id: &str, before: &over
         if !is_uploaded_copy(&a.path) || others.iter().any(|p| p == &a.path) {
             continue;
         }
-        if let Some(p) = real {
+        // Where it really is now (symlinks followed) must be an upload too:
+        // a link in downloads/ to a workspace file never deletes that file.
+        let real_root = root.as_deref().and_then(|r| dunce::canonicalize(r).ok());
+        let real_is_upload = match (&real, &real_root) {
+            (Some(p), Some(r)) => p.strip_prefix(r).is_ok_and(|rel| is_uploaded_copy(&rel.to_string_lossy().replace('\\', "/"))),
+            _ => false,
+        };
+        if let (Some(p), true) = (real, real_is_upload) {
             match std::fs::remove_file(&p) {
                 Ok(()) => crate::session_events::emit_fs_changed_for_paths([p.to_string_lossy().to_string()]),
                 Err(e) => k2_core::log_debug!("[thread-delete] remove {}: {e}", a.path),

@@ -240,6 +240,25 @@ fn a_waiting_delivery_of_a_deleted_post_is_dropped() {
     assert!(job.into_retry().source_deleted(), "the retry knows it too");
 }
 
+/// An upload swapped for a link to a workspace file after it was sent: the
+/// delete never follows the link into the workspace.
+#[cfg(unix)]
+#[test]
+fn a_link_in_downloads_never_deletes_the_file_it_points_at() {
+    let _home = crate::test_support::TempHome::new();
+    let (handle, _project_id, root) = ws("ovldel5");
+    let rel = format!(".k2/downloads/notes-{}.txt", &uuid::Uuid::new_v4().to_string()[..8]);
+    std::fs::write(root.join(&rel), "lunch order").expect("upload copy");
+    let posted = post_as("owner", &handle, "see the notes", Some(serde_json::json!([{ "path": rel }])));
+    let target = root.join("keep-me.md");
+    std::fs::write(&target, "workspace file").expect("workspace file");
+    std::fs::remove_file(root.join(&rel)).expect("rm upload");
+    std::os::unix::fs::symlink(&target, root.join(&rel)).expect("link");
+    let r = delete_as("owner", &HashMap::new(), serde_json::json!({ "addr": handle, "id": posted["id"] }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(std::fs::read_to_string(&target).expect("still there"), "workspace file");
+}
+
 #[test]
 fn the_note_names_people_and_a_time_never_the_text() {
     assert_eq!(

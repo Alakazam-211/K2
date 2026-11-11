@@ -1031,6 +1031,24 @@
   background: color-mix(in srgb, var(--tile-raised) 90%, var(--color-text-primary));
 }
 
+/* A Projects tile's body action (the asleep Wake, Retry) is hand-built so
+   Terminal keeps its quiet wash. In Glass it reads as the shared Button: the
+   field pill and edge, and Wake takes the accent fill. */
+[data-style="glass"] button[data-pane-action]:not([data-zen-root] *) {
+  border-radius: var(--radius-field);
+  box-shadow: var(--ring-field);
+}
+[data-style="glass"] button[data-pane-action="accent"]:not([data-zen-root] *) {
+  background: var(--color-accent-fill);
+  color: var(--color-on-accent);
+}
+[data-style="glass"] button[data-pane-action="accent"]:hover:not(:disabled):not([data-zen-root] *) {
+  background: color-mix(in srgb, var(--color-accent-fill) 90%, black);
+}
+[data-style="glass"] button[data-pane-action="accent"]:active:not(:disabled):not([data-zen-root] *) {
+  background: color-mix(in srgb, var(--color-accent-fill) 80%, black);
+}
+
 /* The Settings page: a nav tile and small cards on the near-black page, as on
    the phone. The content pane is the page, not one more big tile. */
 [data-style="glass"] [data-settings-shell]:not([data-zen-root] *) { gap: var(--gap-pane); }

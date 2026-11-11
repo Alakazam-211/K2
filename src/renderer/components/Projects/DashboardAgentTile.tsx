@@ -28,7 +28,7 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useSettingsStore } from '@/stores/settings'
 import { usePageLive } from '@/contexts/TabVisibilityContext'
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
-import { Button } from '@/components/ui'
+import { Button, usePressSpring } from '@/components/ui'
 import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
 import { ThreadEarlyCompose } from '@/components/SessionView/ThreadEarlyCompose'
@@ -428,6 +428,9 @@ export function PaneBody({ children }: { children: ReactNode }): JSX.Element {
   )
 }
 
+/** A tile body's action (asleep Wake, Retry). Terminal keeps its quiet wash;
+ *  Glass gives it the shared Button's pill, edge and accent fill through
+ *  `data-pane-action` (styles/glass/overrides.css), and the press spring. */
 export function PaneActionButton({
   onClick,
   accent,
@@ -437,9 +440,12 @@ export function PaneActionButton({
   accent?: boolean
   children: ReactNode
 }): JSX.Element {
+  const press = usePressSpring<HTMLButtonElement>()
   return (
     <button
+      ref={press}
       type="button"
+      data-pane-action={accent ? 'accent' : 'default'}
       onClick={onClick}
       className={`px-3 py-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
         accent

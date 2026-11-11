@@ -229,6 +229,39 @@ describe('an asleep tile', () => {
     expect(screen.getByTestId('heartbeats-list')).toBeTruthy()
     expect(screen.queryByTestId('mock-terminal')).toBeNull()
   })
+
+  it("both Wake buttons take Glass's button look", () => {
+    renderInRoom(room, <Tile phase={DORMANT} />)
+    // The Wake bar's Wake is the shared accent Button (pill, edge, fill).
+    const barWake = screen.getByTestId('tile-wake')
+    expect(barWake.getAttribute('data-k2-chamfer')).toBe('control')
+    expect(barWake.className).toContain('bg-[var(--color-accent-fill)]')
+    expect(barWake.className).toContain('[box-shadow:var(--ring-field)]')
+    // Terminal view's Wake keeps Terminal's wash; Glass styles it by its hook.
+    pick('terminal')
+    const termWake = screen.getByRole('button', { name: 'Wake' })
+    expect(termWake.getAttribute('data-pane-action')).toBe('accent')
+    expect(termWake.className).toContain('bg-[var(--color-accent)]/15')
+  })
+})
+
+describe('the Glass hook for a tile body action', () => {
+  it('gives data-pane-action the pill, edge and accent fill, in Glass only and never in a Garden', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const css = readFileSync(join(process.cwd(), 'styles', 'glass', 'overrides.css'), 'utf8')
+    const rule = (sel: string): string => {
+      const at = css.indexOf(`${sel} {`)
+      expect(at, sel).toBeGreaterThan(-1)
+      return css.slice(at, css.indexOf('}', at))
+    }
+    const shape = rule('[data-style="glass"] button[data-pane-action]:not([data-zen-root] *)')
+    expect(shape).toContain('border-radius: var(--radius-field)')
+    expect(shape).toContain('box-shadow: var(--ring-field)')
+    const fill = rule('[data-style="glass"] button[data-pane-action="accent"]:not([data-zen-root] *)')
+    expect(fill).toContain('background: var(--color-accent-fill)')
+    expect(fill).toContain('color: var(--color-on-accent)')
+  })
 })
 
 describe('switching a tile', () => {

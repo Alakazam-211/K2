@@ -12,7 +12,10 @@ import {
 } from '../../stores/context-menu'
 
 /** Terminal's fill, edge and shadow, as classes so Frost can replace them
- *  (a style can't beat an inline style). */
+ *  (a style can't beat an inline style). The box is cut like K2's other
+ *  menus in Terminal (`data-k2-chamfer="surface"`; its wrapper carries the
+ *  drop shadow, `data-k2-chamfer-float`, since a box-shadow can't follow a
+ *  cut) and Frost in Glass, as the shared row menu (OverflowMenu) is. */
 const PANEL_CLASS =
   "bg-[var(--color-bg)] border border-[var(--color-border)] [box-shadow:0_4px_24px_rgba(0,0,0,0.5),0_1px_4px_rgba(0,0,0,0.3)] [font-family:var(--font-ui)]"
 
@@ -221,13 +224,11 @@ function Submenu({
   return (
     <div
       ref={ref}
-      role="menu"
-      data-context-submenu=""
-      {...floatMaterial('menu')}
-      className={PANEL_CLASS}
-      style={{ ...PANEL_STYLE, position: 'absolute', left: '100%', top: -4, zIndex: 1 }}
+      data-k2-chamfer-float="menu"
+      style={{ position: 'absolute', left: '100%', top: -4, zIndex: 1 }}
       onMouseDown={(e) => e.stopPropagation()}
     >
+      <div role="menu" data-context-submenu="" data-k2-chamfer="surface" {...floatMaterial('menu', 'frost')} className={PANEL_CLASS} style={PANEL_STYLE}>
       {items.map((item, i) =>
         item.type === 'separator' || item.type === 'heading' || item.type === 'note' ? (
           <StaticRow key={item.id || `sub-${i}`} item={item} index={i} />
@@ -244,6 +245,7 @@ function Submenu({
           />
         ),
       )}
+      </div>
     </div>
   )
 }
@@ -412,11 +414,9 @@ export default function ContextMenu(): React.JSX.Element | null {
       />
       <div
         ref={menuRef}
-        data-context-menu=""
-        {...floatMaterial('menu')}
-        className={`no-drag ${PANEL_CLASS}`}
+        data-k2-chamfer-float="menu"
+        className="no-drag"
         style={{
-          ...PANEL_STYLE,
           position: 'fixed',
           left: x,
           top: y,
@@ -424,6 +424,7 @@ export default function ContextMenu(): React.JSX.Element | null {
           animation: 'context-menu-fade-in 50ms ease-out',
         }}
       >
+      <div data-context-menu="" data-k2-chamfer="surface" {...floatMaterial('menu', 'frost')} className={PANEL_CLASS} style={PANEL_STYLE}>
         {items.map((item, index) => {
           if (item.type === 'separator' || item.type === 'heading' || item.type === 'note') {
             return <StaticRow key={item.id || `sep-${index}`} item={item} index={index} />
@@ -455,6 +456,7 @@ export default function ContextMenu(): React.JSX.Element | null {
             </div>
           )
         })}
+      </div>
       </div>
     </>
   )

@@ -154,6 +154,97 @@ export function hireSummary(l: HireLimits | null | undefined): string {
   return parts.join(' · ')
 }
 
+// ── Plain words for Settings → API Keys ────────────────────────────────
+// What a key can do and reach, said the way a person reads it (no route or
+// flag names). The terse helpers above stay for the workspace panel.
+
+/** The things a key can do, in the order the create form lists them. */
+export const KEY_DOORS = [
+  { key: 'hostSessions', label: 'Run agent sessions', hint: 'Start agent sessions in its workspaces and talk to them.', short: 'agent sessions', needsWorkspace: true },
+  { key: 'canonicalMessage', label: 'Send messages', hint: 'Send a message to the agents in its workspaces.', short: 'messages', needsWorkspace: true },
+  { key: 'sandboxes', label: 'Sandboxes', hint: 'Create sandboxes and run sessions in them.', short: 'sandboxes', needsWorkspace: false },
+  { key: 'db', label: 'Workspace databases', hint: 'Create, update and download the databases in its workspaces.', short: 'databases', needsWorkspace: true },
+] as const
+
+export type KeyDoor = (typeof KEY_DOORS)[number]['key']
+
+/** "a", "a and b", "a, b and c". */
+export function joinWords(words: string[]): string {
+  if (words.length <= 1) return words[0] ?? ''
+  return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`
+}
+
+const cap = (s: string): string => (s ? s[0].toUpperCase() + s.slice(1) : s)
+
+/** Where a key reaches, e.g. "in every workspace", "in notes and web-app". */
+export function grantWords(raw: string | null | undefined): string {
+  const g = parseWorkspaceGrant(raw)
+  if (g.kind === 'all') return 'in every workspace'
+  if (g.kind === 'none') return 'in no workspace yet'
+  if (g.slugs.length > 3) return `in ${g.slugs.slice(0, 2).join(', ')} and ${g.slugs.length - 2} more workspaces`
+  return `in ${joinWords(g.slugs)}`
+}
+
+/** What a key can do and where, in one line. A hire key's limits have
+ *  their own line (`hireWords`): `omitHire` leaves hiring out of this one
+ *  (empty for a key that only hires). */
+export function reachWords(k: ApiKeyRow, omitHire = false): string {
+  if (k.scope === 'status') return 'Reads this server’s status (its version and whether it’s ready) for a monitor. Nothing else.'
+  const c = k.capabilities ?? {}
+  const on = KEY_DOORS.filter((d) => c[d.key])
+  const parts: string[] = []
+  if (on.length) {
+    const where = on.some((d) => d.needsWorkspace) ? ` ${grantWords(k.allowedWorkspaces)}` : ''
+    parts.push(`${cap(joinWords(on.map((d) => d.short)))}${where}`)
+  }
+  if (c.hire && !omitHire) parts.push(on.length ? 'hires agents' : 'Hires agents')
+  if (k.legacyNewWorkspace) parts.push(parts.length ? 'can also create workspaces' : 'Can create workspaces')
+  if (!parts.length) return c.hire && omitHire ? '' : 'Can’t reach anything yet.'
+  return `${parts.join('; ')}.`
+}
+
+/** A hire key's limits in a sentence. */
+export function hireWords(l: HireLimits | null | undefined): string {
+  if (!l) return ''
+  const lead = `Hires up to ${l.maxMembersPerDay} agents a day (${l.maxLiveMembers} at once, ${l.maxMembersPerTeam} per team).`
+  const may: string[] = []
+  if (l.reach === 'message') may.push('message')
+  if (l.reach === 'host-sessions') may.push('message and run sessions for')
+  if (l.link) may.push('link into teams')
+  if (l.retire) may.push('retire')
+  const tail = may.length ? ` May ${joinWords(may)} the agents it hired.` : ''
+  const db = l.db === 'read' ? ' They can read its databases.' : l.db === 'write' ? ' They can read and change its databases.' : ''
+  return `${lead}${tail}${db}`
+}
+
+/** A key timestamp (seconds; milliseconds tolerated) as a short date. */
+export function keyDate(ts: number | null | undefined): string | null {
+  if (!ts || !Number.isFinite(ts)) return null
+  const ms = ts > 1e12 ? ts : ts * 1000
+  return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(ms))
+}
+
+const PROVIDER_NAMES: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', google: 'Google', xai: 'xAI' }
+
+/** When it was made, turned off or revoked, and whether it brings its own
+ *  LLM key: the quiet line under a key. */
+export function keyDates(k: ApiKeyRow): string {
+  const parts: string[] = []
+  const made = keyDate(k.createdAt)
+  if (made) parts.push(`Created ${made}`)
+  const off = keyDate(k.disabledAt)
+  if (off && !k.revokedAt) parts.push(`Turned off ${off}`)
+  const gone = keyDate(k.revokedAt)
+  if (gone) parts.push(`Revoked ${gone}`)
+  if (k.anthropicKeySet) parts.push(`Uses its own ${PROVIDER_NAMES[k.provider ?? 'anthropic'] ?? k.provider} key`)
+  return parts.join(' · ')
+}
+
+/** The name a key goes by on screen. */
+export function keyName(k: Pick<ApiKeyRow, 'label'>): string {
+  return k.label?.trim() || 'Unnamed key'
+}
+
 /** Parse the form into the mint body's `hire` object; throws on a bad number. */
 export function hireLimitsFromForm(f: HireForm, keyHasDb: boolean): Record<string, unknown> {
   const num = (label: string, raw: string): number => {

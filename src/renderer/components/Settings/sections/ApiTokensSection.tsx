@@ -1,71 +1,58 @@
-// Settings → K2 API Tokens — daemon-wide inventory of k2sk_ keys.
-// Owner-tier routes (/cli/api-keys/*). Secret shown once on create only.
+// Settings → Access → API Keys: the keys other apps and services use to
+// reach this server through K2's API (`/cli/api-keys/*`, Owner only). One
+// column at the Settings content width, like Admin Access:
+//
+//   header        what a key is for, and the Access Audit link
+//   API off       one banner when the public API is off, with a way there
+//   Keys          one row per key: its name, what it can reach, when it was
+//                 made; a "…" menu with App access (hire keys), Turn off /
+//                 Turn back on, and Revoke (asks first; permanent)
+//   Revoked       keys that no longer work, kept so you can see who had access
+//
+// Create API key opens the shared dialog (ApiKeyDialogs.tsx); the new key's
+// secret shows once, in that dialog. A change says what it did at the top of
+// the Keys card; a failed one says what failed on its row.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { floatMaterial } from '@/components/ui/float-material'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
+import { daemonErrorText } from '@/lib/daemon-error'
+import { httpStatusOf } from '@/lib/daemon-http-error'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import type { SettingEntry } from '../searchManifest'
 import {
   capsSummary,
-  ceilingFormFromLimits,
-  ceilingFromForm,
-  ceilingSummary,
-  EMPTY_CEILING_FORM,
   fetchCeilingOptions,
-  finishCeilingConfirm,
-  finishHireKeyConfirm,
   formatGrant,
-  HIRE_FORM_DEFAULTS,
-  hireLimitsFromForm,
-  hireSummary,
+  hireWords,
+  keyDates,
   keyGrantsWorkspace,
+  keyName,
   keyState,
-  NO_APP_ACCESS,
-  saveHireCeiling,
-  SELF_ROOM,
-  startHireKeyConfirm,
+  reachWords,
+  ceilingSummary,
+  workspaceGrantSlug,
   type ApiKeyRow,
-  type CeilingForm,
   type CeilingOptions,
-  type CeilingRoom,
-  type HireForm,
 } from './api-keys-api'
 import { primaryScope } from '@/kessel/server-scope'
-import { Button, Checkbox, DialogCloseButton, Spinner, Tag, useDialogCancel } from '@/components/ui'
-import { currentShortcutOs } from '@/lib/shortcut-label'
+import { Button, Callout, OverflowMenu, Spinner, Tag, type OverflowMenuItem } from '@/components/ui'
 import { isAirgap } from '@/lib/airgap'
-import { SettingDropdown, SettingsGroup } from '../controls/SettingControls'
-import type { DesktopOs } from '@/lib/desktop-chrome'
+import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
+import { ConfirmSheet } from './AccessDialogs'
+import { AppAccessDialog, CreateKeyDialog, type CreatedKey } from './ApiKeyDialogs'
+import { useActiveHostRole } from './useActiveHostRole'
 
-/** Where the "Public API" switch lives: the Policies column
- *  of Network → Tunnel, or of Connected Servers under air-gap (Tunnel is
- *  hidden then; `K2ConnectSettingsShell`). */
-export function publicApiToggleLocation(airgap: boolean = isAirgap()): string {
-  return airgap
-    ? 'Settings → Network → Connected Servers → Policies'
-    : 'Settings → Network → Tunnel → Policies'
-}
-
-/** The hire-key confirm copy. Touch ID (`local-auth`) exists only for the
- *  owner on a Mac; Linux and Windows confirm with a password (the Connect
- *  login password or the vault password, `vault_routes.rs` `methods`). */
-export function hireConfirmCopy(os: DesktopOs = currentShortcutOs()): string {
-  return os === 'mac'
-    ? 'Creating it asks you to confirm (Touch ID or a password).'
-    : 'Creating it asks for your password to confirm.'
-}
+export { hireConfirmCopy } from './ApiKeyDialogs'
 
 export const API_TOKENS_MANIFEST: SettingEntry[] = [
   {
     id: 'api-tokens.inventory',
     section: 'api-tokens',
     label: 'API Keys',
-    description: 'Mint, disable, and revoke top-level k2sk_ keys for the public /v1 API',
+    description: 'Create, turn off and revoke the keys your apps and services use to reach this server',
     keywords: [
       'api',
       'api key',
@@ -83,41 +70,97 @@ export const API_TOKENS_MANIFEST: SettingEntry[] = [
   },
 ]
 
-type ListResponse = { keys?: ApiKeyRow[] }
-
-function stateBadge(state: ReturnType<typeof keyState>): React.JSX.Element {
-  const cls =
-    state === 'active'
-      ? 'text-[var(--color-status-ok-soft)]'
-      : state === 'disabled'
-        ? 'text-[var(--color-status-warn-text)]'
-        : 'text-[var(--color-text-muted)]'
-  return <span className={`type-section uppercase ${cls}`}>{state}</span>
+/** Where the Public API switch lives: Network → Tunnel's policies, or
+ *  Connected Servers' under air-gap (Tunnel is hidden then;
+ *  `K2ConnectSettingsShell`). */
+export function publicApiSection(airgap: boolean = isAirgap()): 'k2-connect' | 'connections' {
+  return airgap ? 'connections' : 'k2-connect'
 }
+
+/** Open the page with the Public API switch and bring the switch into view,
+ *  the way Settings search does. */
+export function openPublicApiSetting(): void {
+  useSettingsStore.getState().setSection(publicApiSection())
+  let tries = 0
+  const reveal = (): void => {
+    const el = document.querySelector<HTMLElement>('[data-settings-id="k2-connect.public-api"]')
+    if (!el) {
+      if (++tries < 30) requestAnimationFrame(reveal)
+      return
+    }
+    el.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    el.classList.add('settings-search-pulse')
+    window.setTimeout(() => el.classList.remove('settings-search-pulse'), 1500)
+  }
+  requestAnimationFrame(reveal)
+}
+
+type ListResponse = { keys?: ApiKeyRow[] }
+type Load = { kind: 'loading' } | { kind: 'error'; detail: string } | { kind: 'not-owner' } | { kind: 'ready' }
+type Dialog = { kind: 'create' } | { kind: 'revoke'; key: ApiKeyRow } | { kind: 'app-access'; key: ApiKeyRow } | null
+type Action = 'disable' | 'enable' | 'revoke'
+
+/** A row change that failed: what, what to do now, the server's reason. */
+interface RowFail {
+  what: string
+  next: string
+  detail: string
+}
+
+function rowFail(action: Action, name: string, detail: string): RowFail {
+  if (action === 'revoke') return { what: `Couldn’t revoke ${name}.`, next: 'It still works. Try again in a moment.', detail }
+  if (action === 'disable') return { what: `Couldn’t turn off ${name}.`, next: 'It still works. Try again in a moment.', detail }
+  return { what: `Couldn’t turn ${name} back on.`, next: 'It’s still off. Try again in a moment.', detail }
+}
+
+function doneNote(action: Action, name: string): string {
+  if (action === 'revoke') return `${name} is revoked. Apps using it can’t reach this server any more.`
+  if (action === 'disable') return `${name} is off. Apps using it stop working until you turn it back on.`
+  return `${name} is on again. Apps using it work as before.`
+}
+
+/** A key's state, when it isn't simply working. */
+function StateTag({ k }: { k: ApiKeyRow }): React.JSX.Element | null {
+  const state = keyState(k)
+  if (state === 'revoked') return <Tag tone="muted">Revoked</Tag>
+  if (state === 'disabled') return <Tag tone="warn">Off</Tag>
+  return null
+}
+
+/** A thrown error's status, when the server answered one. */
+const statusOf = (e: unknown): number | null => httpStatusOf(e)
 
 export function ApiTokensSection(): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
   const apiEnabled = useSettingsStore((s) => s.apiEnabled)
+  const { role } = useActiveHostRole()
+  // Keys are the Owner's (route_policy: Owner). A role the server reported
+  // below Owner never asks; an unread role tries and the server decides.
+  const roleBelowOwner = role.kind === 'known' && role.role !== 'owner'
   const [keys, setKeys] = useState<ApiKeyRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [createOpen, setCreateOpen] = useState(false)
-  const [mintedSecret, setMintedSecret] = useState<string | null>(null)
-  const [busyId, setBusyId] = useState<string | null>(null)
+  const [load, setLoad] = useState<Load>({ kind: 'loading' })
   const [ceilingOpts, setCeilingOpts] = useState<CeilingOptions>({ apps: [], rooms: [] })
   const [ceilingOptsError, setCeilingOptsError] = useState<string | null>(null)
-  const [editing, setEditing] = useState<ApiKeyRow | null>(null)
+  const [dialog, setDialog] = useState<Dialog>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [fails, setFails] = useState<Record<string, RowFail>>({})
 
-  const refresh = useCallback(async () => {
-    setError(null)
+  const refresh = useCallback(async (): Promise<void> => {
     try {
       const d = await daemonCliGet<ListResponse>(primaryScope(), 'api-keys/list')
       setKeys(Array.isArray(d.keys) ? d.keys : [])
+      setLoad({ kind: 'ready' })
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-      setKeys([])
-    } finally {
-      setLoading(false)
+      const status = statusOf(e)
+      setLoad((prev) =>
+        status === 401 || status === 403
+          ? { kind: 'not-owner' }
+          : prev.kind === 'ready'
+            ? prev
+            : { kind: 'error', detail: daemonErrorText(e) },
+      )
+      return
     }
     try {
       setCeilingOpts(await fetchCeilingOptions())
@@ -128,876 +171,295 @@ export function ApiTokensSection(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    if (roleBelowOwner) return
     void refresh()
-  }, [refresh])
+  }, [refresh, roleBelowOwner])
 
-  const act = useCallback(
-    async (id: string, action: 'disable' | 'enable' | 'revoke') => {
-      if (action === 'revoke') {
-        const ok = window.confirm(
-          'Permanently revoke this API key? It cannot be re-enabled — you must mint a new secret.',
-        )
-        if (!ok) return
-      }
-      setBusyId(id)
-      setError(null)
-      try {
-        await daemonCliPost(primaryScope(), `api-keys/${action}`, { id })
-        await refresh()
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
-      } finally {
-        setBusyId(null)
-      }
-    },
-    [refresh],
+  const retry = (): void => {
+    setLoad({ kind: 'loading' })
+    void refresh()
+  }
+
+  const act = async (k: ApiKeyRow, action: Action): Promise<void> => {
+    const name = keyName(k)
+    setBusyId(k.id)
+    setNotice(null)
+    setFails(({ [k.id]: _gone, ...rest }) => rest)
+    try {
+      await daemonCliPost(primaryScope(), `api-keys/${action}`, { id: k.id })
+      setNotice(doneNote(action, name))
+      await refresh()
+    } catch (e) {
+      setFails((prev) => ({ ...prev, [k.id]: rowFail(action, name, daemonErrorText(e)) }))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const live = useMemo(() => keys.filter((k) => keyState(k) !== 'revoked'), [keys])
+  const revoked = useMemo(() => keys.filter((k) => keyState(k) === 'revoked'), [keys])
+  const workspaces = useMemo(
+    () => projects.map((p) => ({ slug: workspaceGrantSlug(p), label: p.name || p.path })),
+    [projects],
+  )
+
+  const notOwner = roleBelowOwner || load.kind === 'not-owner'
+  const createButton = (
+    <Button
+      variant="accent"
+      onClick={() => {
+        setNotice(null)
+        setDialog({ kind: 'create' })
+      }}
+    >
+      Create API key
+    </Button>
   )
 
   return (
-    <div className="max-w-4xl space-y-6">
-      <div>
+    <div className="w-full max-w-[52rem] space-y-6 pb-6">
+      <header className="min-w-0" data-settings-id="api-tokens.inventory">
         <h2 className="type-title text-[var(--color-text-primary)]">API Keys</h2>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1 max-w-2xl">
-          Top-level <code className="type-hint">k2sk_…</code> keys for the public{' '}
-          <code className="type-hint">/v1</code> API (host-sessions, sandboxes, …). The raw secret
-          is shown only once when created. Disable for emergencies (re-enableable); revoke is
-          permanent.
+        <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed max-w-[75ch]">
+          Keys let your own apps and services use this server: run agent sessions, send messages, use sandboxes and
+          databases, or hire agents. Each key reaches only the workspaces and actions you choose.
         </p>
         <AccessAuditLink className="mt-1" />
-        {!apiEnabled && (
-          <p className="type-hint text-[var(--color-status-warn-text)] mt-1 max-w-2xl" data-testid="api-surface-off">
-            The public /v1 API is off on this server, so no key works yet (hiring agents included).
-            Turn it on under {publicApiToggleLocation()} → Public API, or{' '}
-            <code className="type-hint">k2 api on</code>.
-          </p>
-        )}
-      </div>
+      </header>
 
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            setMintedSecret(null)
-            setCreateOpen(true)
-          }}
-          className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer"
-        >
-          Create API key
-        </button>
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          className="px-3 py-1.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] cursor-pointer"
-        >
-          Refresh
-        </button>
-      </div>
-
-      {error && (
-        <p className="type-hint text-[var(--color-status-error-soft)] max-w-2xl">{error}</p>
-      )}
-
-      {mintedSecret && (
-        <div className="border border-[var(--color-status-warn)]/40 bg-[var(--color-status-warn)]/10 p-3 space-y-2">
-          <p className="type-name text-[var(--color-text-primary)]">
-            Store this key now — it cannot be retrieved again
-          </p>
-          <code className="block type-hint break-all select-all text-[var(--color-text-primary)]">
-            {mintedSecret}
-          </code>
-          <button
-            type="button"
-            className="type-hint text-[var(--color-accent)] cursor-pointer"
-            onClick={() => {
-              void navigator.clipboard?.writeText(mintedSecret)
-            }}
-          >
-            Copy to clipboard
-          </button>
-        </div>
-      )}
-
-      {loading ? (
-        <p className="type-hint text-[var(--color-text-muted)]">Loading keys…</p>
-      ) : keys.length === 0 ? (
-        <p className="type-hint text-[var(--color-text-muted)]">
-          No API keys yet. Create one to allow external apps to call host-sessions on
-          granted workspaces.
-        </p>
-      ) : (
-        <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-          {keys.map((k) => {
-            const state = keyState(k)
-            const busy = busyId === k.id
-            // PRD boot-status-ghost B6: a `status` key (fleet monitor) reads
-            // this server's full /boot-status and nothing else — no doors,
-            // no workspaces, no LLM key. Label it and offer Revoke only.
-            if (k.scope === 'status') {
-              return (
-                <div
-                  key={k.id}
-                  data-testid={`status-key-${k.id}`}
-                  className="p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"
-                >
-                  <div className="min-w-0 space-y-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="type-name text-[var(--color-text-primary)]">
-                        {k.label || '(no label)'}
-                      </span>
-                      <Tag tone="neutral">
-                        Status (read-only)
-                      </Tag>
-                      {stateBadge(state)}
-                    </div>
-                    <p className="type-hint font-mono text-[var(--color-text-muted)] break-all">{k.id}</p>
-                    <p className="type-hint text-[var(--color-text-secondary)]">
-                      Reads this server&apos;s status (version, phase) for a monitor. Opens nothing else.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 flex-shrink-0">
-                    {state !== 'revoked' && (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void act(k.id, 'revoke')}
-                        className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-status-error-soft)] hover:border-[var(--color-status-error-soft)] cursor-pointer disabled:opacity-50"
-                      >
-                        Revoke
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
-            }
-            return (
-              <div key={k.id} className="p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 space-y-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="type-name text-[var(--color-text-primary)]">
-                      {k.label || '(no label)'}
-                    </span>
-                    {stateBadge(state)}
-                  </div>
-                  <p className="type-hint font-mono text-[var(--color-text-muted)] break-all">
-                    {k.id}
-                  </p>
-                  <p className="type-hint text-[var(--color-text-secondary)]">
-                    Workspaces: {formatGrant(k.allowedWorkspaces)}
-                  </p>
-                  <p className="type-hint text-[var(--color-text-secondary)]">
-                    Caps: {capsSummary(k.capabilities)}
-                    {k.anthropicKeySet ? ' · LLM key staged' : ' · no LLM key'}
-                    {k.provider ? ` · ${k.provider}` : ''}
-                  </p>
-                  {k.capabilities?.hire && k.hireLimits && (
-                    <p className="type-hint text-[var(--color-text-secondary)]" data-testid={`hire-limits-${k.id}`}>
-                      Hires agents: {hireSummary(k.hireLimits)}
-                    </p>
-                  )}
-                  {k.capabilities?.hire && k.hireLimits && (
-                    <p className="type-hint text-[var(--color-text-secondary)]" data-testid={`hire-ceiling-${k.id}`}>
-                      App access: {ceilingSummary(k.hireLimits.apps, ceilingOpts)}
-                    </p>
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-1.5 flex-shrink-0">
-                  {state !== 'revoked' && k.capabilities?.hire && k.hireLimits && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => setEditing(k)}
-                      aria-label={`Change App access for ${k.label || k.id}`}
-                      className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-50"
-                    >
-                      App access…
-                    </button>
-                  )}
-                  {state === 'active' && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void act(k.id, 'disable')}
-                      className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-status-warn)] cursor-pointer disabled:opacity-50"
-                    >
-                      Disable
-                    </button>
-                  )}
-                  {state === 'disabled' && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void act(k.id, 'enable')}
-                      className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-status-ok)] cursor-pointer disabled:opacity-50"
-                    >
-                      Enable
-                    </button>
-                  )}
-                  {state !== 'revoked' && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void act(k.id, 'revoke')}
-                      className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-status-error-soft)] hover:border-[var(--color-status-error-soft)] cursor-pointer disabled:opacity-50"
-                    >
-                      Revoke
-                    </button>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      {createOpen && (
-        <CreateKeyModal
-          workspaceOptions={projects.map((p) => ({
-            id: p.id,
-            name: p.name,
-            path: p.path,
-          }))}
-          ceilingOpts={ceilingOpts}
-          ceilingOptsError={ceilingOptsError}
-          onClose={() => setCreateOpen(false)}
-          onCreated={(secret) => {
-            setCreateOpen(false)
-            setMintedSecret(secret)
-            void refresh()
-          }}
-        />
-      )}
-
-      {editing && (
-        <EditCeilingModal
-          keyRow={editing}
-          ceilingOpts={ceilingOpts}
-          ceilingOptsError={ceilingOptsError}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null)
-            void refresh()
-          }}
-        />
-      )}
-    </div>
-  )
-}
-
-/**
- * The owner confirm (Touch ID / login password, or the vault password) for
- * a hire-key mint or an App access raise. `begin(then)` runs `then(token)`
- * right away on a Mac, or after the password prompt.
- */
-function useOwnerConfirm(finish: (method: string, password?: string) => Promise<{ token: string }>) {
-  const [step, setStep] = useState<'idle' | 'mac' | 'password'>('idle')
-  const [pwMethod, setPwMethod] = useState('vault-password')
-  const pwRef = useRef<HTMLInputElement>(null)
-  const pending = useRef<((token: string) => Promise<void>) | null>(null)
-
-  const begin = async (then: (token: string) => Promise<void>): Promise<void> => {
-    try {
-      const { methods } = await startHireKeyConfirm()
-      if (methods.includes('local-auth')) {
-        setStep('mac')
-        const { token } = await finish('local-auth')
-        setStep('idle')
-        await then(token)
-        return
-      }
-      const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
-      if (pw) {
-        pending.current = then
-        setPwMethod(pw)
-        setStep('password')
-        return
-      }
-    } catch (e) {
-      setStep('idle')
-      throw e
-    }
-    throw new Error('No way to confirm here yet. Set a vault password from a terminal outside K2: k2 vault confirm-password set.')
-  }
-
-  const submitPassword = async (): Promise<void> => {
-    const el = pwRef.current
-    if (!el) return
-    const pw = el.value
-    el.value = ''
-    const { token } = await finish(pwMethod, pw)
-    setStep('idle')
-    const then = pending.current
-    pending.current = null
-    if (then) await then(token)
-  }
-
-  return { step, pwMethod, pwRef, begin, submitPassword }
-}
-
-function ConfirmPrompt({
-  confirm,
-  submitting,
-  onSubmit,
-  buttonLabel,
-}: {
-  confirm: ReturnType<typeof useOwnerConfirm>
-  submitting: boolean
-  onSubmit: () => void
-  buttonLabel: string
-}): React.JSX.Element | null {
-  if (confirm.step === 'mac') {
-    return <p className="type-hint text-[var(--color-text-secondary)]">Confirm on this Mac (Touch ID or your login password)…</p>
-  }
-  if (confirm.step !== 'password') return null
-  return (
-    <div className="space-y-1">
-      <p className="type-hint text-[var(--color-text-secondary)]">
-        {confirm.pwMethod === 'connect-password' ? 'Your login password' : 'Vault password'} to confirm
-      </p>
-      <input
-        ref={confirm.pwRef}
-        type="password"
-        aria-label="Confirm password"
-        className="w-full px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') onSubmit()
-        }}
-      />
-      <button
-        type="button"
-        disabled={submitting}
-        onClick={onSubmit}
-        className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
-      >
-        {buttonLabel}
-      </button>
-    </div>
-  )
-}
-
-/**
- * "App access limit": the most an App login made for a hired agent may
- * get — one App, its rooms, and the highest role. "No App access" (the
- * empty choice) means hired agents get no App login.
- */
-function AppAccessLimit({
-  form,
-  onChange,
-  opts,
-  optsError,
-}: {
-  form: CeilingForm
-  onChange: (f: CeilingForm) => void
-  opts: CeilingOptions
-  optsError: string | null
-}): React.JSX.Element {
-  const app = opts.apps.find((a) => a.id === form.app)
-  const appRooms = app ? app.roomIds : []
-  const roomRows = useMemo(() => {
-    const self = opts.rooms.filter((r) => r.id === SELF_ROOM)
-    const used = opts.rooms.filter((r) => r.id !== SELF_ROOM && appRooms.includes(r.id))
-    const other = opts.rooms.filter((r) => r.id !== SELF_ROOM && !appRooms.includes(r.id))
-    // A stored room this list no longer has stays visible (and removable).
-    const gone = form.rooms
-      .filter((id) => !opts.rooms.some((r) => r.id === id))
-      .map((id) => ({ id, handle: id, name: '(no longer on this server)' }))
-    return { first: [...self, ...used, ...gone], other }
-  }, [opts.rooms, appRooms, form.rooms])
-
-  const toggleRoom = (id: string, on: boolean) => {
-    const rooms = on ? [...form.rooms.filter((r) => r !== id), id] : form.rooms.filter((r) => r !== id)
-    onChange({ ...form, rooms })
-  }
-  const roomBox = (r: CeilingRoom) => (
-    <label key={r.id} className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
-      <Checkbox
-        checked={form.rooms.includes(r.id)}
-        onChange={(e) => toggleRoom(r.id, e.target.checked)}
-        aria-label={`Room ${r.handle || r.id}`}
-      />
-      <span className="truncate">{r.id === SELF_ROOM ? r.name : r.handle || r.name}</span>
-      {r.id !== SELF_ROOM && r.name && r.name !== r.handle && (
-        <span className="type-hint text-[var(--color-text-muted)] truncate">{r.name}</span>
-      )}
-    </label>
-  )
-
-  return (
-    <div className="space-y-1.5 border-t border-[var(--color-border)] pt-1.5" data-testid="app-access-limit">
-      <p className="type-hint text-[var(--color-text-secondary)]">App access limit</p>
-      <p className="type-hint text-[var(--color-text-muted)]">
-        The most an App login made for a hired agent may get: one App, its rooms, and the highest role.
-      </p>
-      {optsError && <p className="type-hint text-[var(--color-status-error-soft)]">Couldn&apos;t load Apps: {optsError}</p>}
-      <div className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
-        App
-        <SettingDropdown
-          compact
-          className="min-w-0 max-w-[60%]"
-          ariaLabel="App"
-          value={form.app}
-          options={[
-            { value: '', label: NO_APP_ACCESS },
-            ...opts.apps.map((a) => ({ value: a.id, label: a.workspace ? `${a.name} (${a.workspace})` : a.name })),
-            ...(form.app && !app ? [{ value: form.app, label: `${form.app} (not published any more)` }] : []),
-          ]}
-          onChange={(v) => {
-            // A re-pick of the same App keeps the rooms and role.
-            if (v === form.app) return
-            onChange({ app: v, rooms: v ? [SELF_ROOM] : [], role: '' })
-          }}
-        />
-      </div>
-      {!form.app ? (
-        <p className="type-hint text-[var(--color-text-muted)]" data-testid="app-access-none">
-          {NO_APP_ACCESS}: agents hired with this key get no App login.
-          {opts.apps.length === 0 && ' No Apps are published on this server yet.'}
-        </p>
-      ) : (
-        <>
-          <p className="type-hint text-[var(--color-text-muted)]">Rooms</p>
-          <div className="max-h-32 overflow-y-auto border border-[var(--color-border)] p-2 space-y-1">
-            {roomRows.first.map(roomBox)}
-            {roomRows.other.length > 0 && (
-              <p className="type-hint text-[var(--color-text-muted)] pt-1">Other rooms on this server</p>
-            )}
-            {roomRows.other.map(roomBox)}
-          </div>
-          {form.rooms.length === 0 && (
-            <p className="type-hint text-[var(--color-status-warn-text)]">Pick at least one room.</p>
-          )}
-          <div className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
-            Highest role
-            <SettingDropdown
-              compact
-              className="min-w-0 max-w-[60%]"
-              ariaLabel="Highest role"
-              value={form.role}
-              options={[
-                { value: '', label: 'No role (Thread only in these rooms)' },
-                ...(app?.roles ?? []).map((r) => ({ value: r.id, label: r.appId ? r.name : `${r.name} (all Apps)` })),
-                ...(form.role && !app?.roles.some((r) => r.id === form.role)
-                  ? [{ value: form.role, label: `${form.role} (not found)` }]
-                  : []),
-              ]}
-              onChange={(v) => onChange({ ...form, role: v })}
-            />
-          </div>
-          <p className="type-hint text-[var(--color-text-muted)]">
-            A hired agent may get this role, or one no wider, when all its rooms are ticked above.
-          </p>
-        </>
-      )}
-      <p className="type-hint text-[var(--color-status-warn-text)]" data-testid="hire-whole-room-warning">
-        App logins for hired agents cover whole rooms until folder grants exist.
-      </p>
-    </div>
-  )
-}
-
-function CreateKeyModal({
-  workspaceOptions,
-  ceilingOpts,
-  ceilingOptsError,
-  onClose,
-  onCreated,
-}: {
-  workspaceOptions: Array<{ id: string; name: string; path: string }>
-  ceilingOpts: CeilingOptions
-  ceilingOptsError: string | null
-  onClose: () => void
-  onCreated: (secret: string) => void
-}): React.JSX.Element {
-  const [label, setLabel] = useState('')
-  const [allWs, setAllWs] = useState(false)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [hostSessions, setHostSessions] = useState(true)
-  const [canonicalMessage, setCanonicalMessage] = useState(false)
-  const [sandboxes, setSandboxes] = useState(false)
-  const [db, setDb] = useState(false)
-  const [hire, setHire] = useState(false)
-  const [hireForm, setHireForm] = useState<HireForm>(HIRE_FORM_DEFAULTS)
-  const [ceiling, setCeiling] = useState<CeilingForm>(EMPTY_CEILING_FORM)
-  const confirm = useOwnerConfirm(finishHireKeyConfirm)
-  const [submitting, setSubmitting] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  // Esc (claimed: Settings stays open), the × and a press outside close it;
-  // held while saving or confirming.
-  const cancel = useDialogCancel(onClose, submitting)
-  const setHireField = <K extends keyof HireForm>(k: K, v: HireForm[K]) =>
-    setHireForm((prev) => ({ ...prev, [k]: v }))
-
-  const slugs = useMemo(
-    () =>
-      workspaceOptions.map((p) => ({
-        slug: (p.name || p.path.split(/[/\\]/).pop() || p.id).trim(),
-        label: p.name || p.path,
-      })),
-    [workspaceOptions],
-  )
-
-  const hireBody = (): Record<string, unknown> => {
-    const h = hireLimitsFromForm(hireForm, db)
-    const apps = ceilingFromForm(ceiling, ceilingOpts)
-    return apps.length ? { ...h, apps } : h
-  }
-
-  const mint = async (confirmToken?: string) => {
-    const body: Record<string, unknown> = {
-      label: label.trim() || undefined,
-      capabilities: {
-        hostSessions,
-        canonicalMessage,
-        sandboxes,
-        db,
-      },
-    }
-    if (allWs) {
-      body.workspaces = '*'
-    } else if (selected.size > 0) {
-      body.workspaces = [...selected]
-    }
-    if (hire) {
-      body.hire = hireBody()
-      body.confirmToken = confirmToken
-    }
-    const res = await daemonCliPost<{ id?: string; key?: string; error?: string }>(primaryScope(),
-      'api-keys/create',
-      body,
-    )
-    if (!res.key) throw new Error(res.error || 'create returned no key')
-    onCreated(res.key)
-  }
-
-  const submit = async () => {
-    setSubmitting(true)
-    setErr(null)
-    try {
-      if (!hire) {
-        await mint()
-        return
-      }
-      // Validate the limits before asking for the confirm.
-      hireBody()
-      // A key that can hire agents needs a fresh owner confirm (Touch ID /
-      // login password, or the vault password), owner token included.
-      await confirm.begin(mint)
-    } catch (e) {
-      setErr(daemonErrorText(e))
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const submitPassword = async () => {
-    setSubmitting(true)
-    setErr(null)
-    try {
-      await confirm.submitPassword()
-    } catch (e) {
-      setErr(daemonErrorText(e))
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Create API key">
-      <div {...floatMaterial('dialog')} {...cancel} className="relative w-full max-w-md max-h-full flex flex-col border border-[var(--color-border)] bg-[var(--color-bg)] shadow-xl">
-        <div className="flex flex-shrink-0 items-start gap-2 px-4 pt-4 pb-3">
-          <h3 className="min-w-0 flex-1 type-heading text-[var(--color-text-primary)]">Create API key</h3>
-          <DialogCloseButton className="-mt-2 -mr-2" onClick={onClose} disabled={submitting} heldReason="Can’t close while the key is created" />
-        </div>
-        <div className="min-h-0 overflow-y-auto px-4 pb-4 space-y-3">
-          <label className="block type-hint text-[var(--color-text-muted)]">
-            Label
-            <input
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              className="mt-1 w-full px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-              placeholder="e.g. sales-bot"
-            />
-          </label>
-          <div className="space-y-1">
-            <p className="type-hint text-[var(--color-text-muted)]">Workspace grant</p>
-            <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
-              <Checkbox checked={allWs} onChange={(e) => setAllWs(e.target.checked)} />
-              All workspaces (*)
-            </label>
-            {!allWs && (
-              <div className="max-h-32 overflow-y-auto border border-[var(--color-border)] p-2 space-y-1">
-                {slugs.length === 0 ? (
-                  <p className="type-hint text-[var(--color-text-muted)]">No workspaces registered.</p>
-                ) : (
-                  slugs.map(({ slug, label: lab }) => (
-                    <label
-                      key={slug}
-                      className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer"
-                    >
-                      <Checkbox
-                        checked={selected.has(slug)}
-                        onChange={(e) => {
-                          setSelected((prev) => {
-                            const next = new Set(prev)
-                            if (e.target.checked) next.add(slug)
-                            else next.delete(slug)
-                            return next
-                          })
-                        }}
-                      />
-                      <span className="truncate">{lab}</span>
-                      <span className="type-hint text-[var(--color-text-muted)] font-mono">{slug}</span>
-                    </label>
-                  ))
-                )}
-              </div>
-            )}
-            {!allWs && selected.size === 0 && (
-              <p className="type-hint text-[var(--color-status-warn-text)]">
-                No workspaces selected — key will authorize zero /v1 workspaces (fail-closed).
+      {!apiEnabled && !notOwner ? (
+        <Callout tone="warn" role="status" className="type-hint" data-testid="api-surface-off">
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0 space-y-0.5">
+              <p className="font-medium">The public API is off, so no key works yet.</p>
+              <p className="text-[var(--color-text-secondary)]">
+                Apps can’t use their keys until it’s on. Your keys stay as they are.
               </p>
-            )}
+            </div>
+            <Button className="flex-shrink-0" onClick={openPublicApiSetting}>
+              Open the Public API setting
+            </Button>
           </div>
-          <div className="space-y-1">
-            <p className="type-hint text-[var(--color-text-muted)]">Capabilities</p>
-            {(
-              [
-                ['hostSessions', hostSessions, setHostSessions, 'host-sessions'],
-                ['canonicalMessage', canonicalMessage, setCanonicalMessage, 'canonical-message'],
-                ['sandboxes', sandboxes, setSandboxes, 'sandboxes'],
-                ['db', db, setDb, 'db (create, migrate and dump workspace databases)'],
-              ] as const
-            ).map(([key, val, set, lab]) => (
-              <label
-                key={key}
-                className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer"
+        </Callout>
+      ) : null}
+
+      {notOwner ? (
+        <SettingsLoadState kind="empty" title="Only an Owner can manage API keys" testId="api-keys-not-owner">
+          A key lets another app reach this server, so only its Owners can see, create or revoke keys. If an app you use
+          needs one, ask an Owner.
+        </SettingsLoadState>
+      ) : (
+        <SettingsGroup
+          title="Keys"
+          hint="Turn a key off to pause it for a while. Revoke it to stop it for good."
+          action={load.kind === 'ready' && live.length > 0 ? createButton : undefined}
+          card
+          testId="api-keys"
+          state={
+            load.kind === 'loading' ? (
+              <SettingsLoadState kind="loading" title="Loading your API keys…" testId="api-keys-loading">
+                Reading the keys on this server.
+              </SettingsLoadState>
+            ) : load.kind === 'error' ? (
+              <SettingsLoadState
+                kind="error"
+                title="Couldn’t load your API keys"
+                detail={load.detail}
+                action={<Button onClick={retry}>Try again</Button>}
+                testId="api-keys-error"
               >
-                <Checkbox checked={val} onChange={(e) => set(e.target.checked)} />
-                {lab}
-              </label>
-            ))}
-          </div>
-          <div className="space-y-1" data-testid="hire-scope">
-            <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
-              <Checkbox checked={hire} onChange={(e) => setHire(e.target.checked)} aria-label="Allow hiring agents" />
-              Allow hiring agents (POST /v1/agents/hire)
-            </label>
-            {hire && (
-              <div className="border border-[var(--color-border)] p-2 space-y-1.5">
-                <p className="type-hint text-[var(--color-text-muted)]">
-                  Agents this key hires never get more than the key allows. Only the App access limit can be
-                  changed later; for the rest, mint a new key and revoke this one. {hireConfirmCopy()}
-                </p>
-                {(
-                  [
-                    ['maxMembersPerDay', 'Agents per day'],
-                    ['maxLiveMembers', 'Live agents'],
-                    ['maxMembersPerTeam', 'Agents per team'],
-                  ] as const
-                ).map(([k, lab]) => (
-                  <label key={k} className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
-                    {lab}
-                    <input
-                      aria-label={lab}
-                      value={hireForm[k]}
-                      onChange={(e) => setHireField(k, e.target.value)}
-                      inputMode="numeric"
-                      className="w-20 px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-                    />
-                  </label>
-                ))}
-                <div className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
-                  Database access for hired agents
-                  <SettingDropdown
-                    compact
-                    className="min-w-0"
-                    ariaLabel="Database access for hired agents"
-                    value={hireForm.db}
-                    options={[
-                      { value: 'off', label: 'off' },
-                      { value: 'read', label: 'read', disabled: !db },
-                      { value: 'write', label: 'write', disabled: !db },
-                    ]}
-                    onChange={(v) => setHireField('db', v as HireForm['db'])}
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
-                  Messages and sessions to its agents
-                  <SettingDropdown
-                    compact
-                    className="min-w-0"
-                    ariaLabel="Reach"
-                    value={hireForm.reach}
-                    options={[
-                      { value: 'none', label: 'none (hire, link, retire only)' },
-                      { value: 'message', label: 'message' },
-                      { value: 'host-sessions', label: 'message + host sessions' },
-                    ]}
-                    onChange={(v) => setHireField('reach', v as HireForm['reach'])}
-                  />
-                </div>
-                <label className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
-                  Folder under the hire root
-                  <input
-                    aria-label="Folder under the hire root"
-                    value={hireForm.folder}
-                    onChange={(e) => setHireField('folder', e.target.value)}
-                    placeholder="(the root)"
-                    className="w-32 px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-                  />
-                </label>
-                <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
-                  <Checkbox checked={hireForm.link} onChange={(e) => setHireField('link', e.target.checked)} aria-label="May link teams" />
-                  May link teams (only to agents this key hired)
-                </label>
-                <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
-                  <Checkbox checked={hireForm.retire} onChange={(e) => setHireField('retire', e.target.checked)} aria-label="May retire" />
-                  May retire the agents it hired
-                </label>
-                <AppAccessLimit form={ceiling} onChange={setCeiling} opts={ceilingOpts} optsError={ceilingOptsError} />
-              </div>
-            )}
-          </div>
-          <ConfirmPrompt
-            confirm={confirm}
-            submitting={submitting}
-            onSubmit={() => void submitPassword()}
-            buttonLabel="Confirm and create"
-          />
-          {err && <p className="type-hint text-[var(--color-status-error-soft)]">{err}</p>}
-          <div className="flex justify-end gap-2 pt-1">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 type-control text-[var(--color-text-muted)] cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => void submit()}
-              className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
-            >
-              {submitting ? 'Creating…' : 'Create'}
-            </button>
-          </div>
-        </div>
-      </div>
+                Your keys keep working as they were. Try again in a moment.
+              </SettingsLoadState>
+            ) : live.length === 0 && !notice ? (
+              <SettingsLoadState kind="empty" title="No API keys yet" action={createButton} testId="api-keys-empty">
+                Create a key when an app or service needs to use this server, like a website chat or a build script.
+              </SettingsLoadState>
+            ) : undefined
+          }
+        >
+          {notice ? (
+            <div role="status" className="px-4 py-2.5 flex items-center justify-between gap-4" data-testid="api-keys-notice">
+              <span className="inline-flex items-center gap-1.5 type-hint text-[var(--color-status-ok-soft)]">
+                <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3 flex-shrink-0">
+                  <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+                </svg>
+                {notice}
+              </span>
+              <Button variant="quiet" onClick={() => setNotice(null)}>
+                Dismiss
+              </Button>
+            </div>
+          ) : null}
+          {live.map((k) => (
+            <KeyRow
+              key={k.id}
+              k={k}
+              busy={busyId === k.id}
+              fail={fails[k.id] ?? null}
+              ceilingOpts={ceilingOpts}
+              onAction={(a) => (a === 'revoke' ? setDialog({ kind: 'revoke', key: k }) : void act(k, a))}
+              onAppAccess={() => setDialog({ kind: 'app-access', key: k })}
+            />
+          ))}
+          {live.length === 0 ? (
+            <div className="px-4 py-3 flex items-center justify-between gap-6">
+              <p className={SETTING_ROW_HINT}>No working keys left. Create one when an app needs to reach this server.</p>
+              {createButton}
+            </div>
+          ) : null}
+        </SettingsGroup>
+      )}
+
+      {!notOwner && load.kind === 'ready' && revoked.length > 0 ? (
+        <SettingsGroup
+          title="Revoked"
+          hint="These keys no longer work. They stay listed so you can see what had access."
+          card
+          testId="api-keys-revoked"
+        >
+          {revoked.map((k) => (
+            <KeyRow key={k.id} k={k} busy={false} fail={null} ceilingOpts={ceilingOpts} />
+          ))}
+        </SettingsGroup>
+      ) : null}
+
+      {dialog?.kind === 'create' ? (
+        <CreateKeyDialog
+          workspaces={workspaces}
+          ceilingOpts={ceilingOpts}
+          ceilingOptsError={ceilingOptsError}
+          apiOff={!apiEnabled}
+          onCreated={() => void refresh()}
+          onClose={(created: CreatedKey | null) => {
+            setDialog(null)
+            if (created) setNotice(`${created.name} is ready. Its key won’t be shown again.`)
+          }}
+        />
+      ) : dialog?.kind === 'revoke' ? (
+        <ConfirmSheet
+          title={`Revoke ${keyName(dialog.key)}?`}
+          message="Apps using this key stop working right away, for good. A revoked key can’t be turned back on: to let an app in again, create a new key."
+          confirmLabel="Revoke key"
+          destructive
+          testId="revoke-confirm-dialog"
+          onCancel={() => setDialog(null)}
+          onConfirm={() => {
+            const k = dialog.key
+            setDialog(null)
+            void act(k, 'revoke')
+          }}
+        />
+      ) : dialog?.kind === 'app-access' ? (
+        <AppAccessDialog
+          keyRow={dialog.key}
+          ceilingOpts={ceilingOpts}
+          ceilingOptsError={ceilingOptsError}
+          onClose={() => setDialog(null)}
+          onSaved={() => {
+            setNotice(`App access for ${keyName(dialog.key)} is saved.`)
+            setDialog(null)
+            void refresh()
+          }}
+        />
+      ) : null}
     </div>
   )
 }
 
-/**
- * Change a hire key's App access limit. The daemon decides: lowering
- * (fewer rooms, a lower role, no App access) saves straight away; widening
- * answers `vault_confirm_required`, and this asks for the same owner
- * confirm as minting, then saves with the token.
- */
-function EditCeilingModal({
-  keyRow,
+/** The width of a row's "…" menu: a revoked row keeps it free so every
+ *  row's text ends at the same edge. */
+const MENU_SLOT = 'w-8 flex-shrink-0'
+
+/** One key: its name and state, what it can reach, when it was made, and
+ *  (while it works) the "…" menu. Errors go under the text, so nothing
+ *  moves when one shows. */
+function KeyRow({
+  k,
+  busy,
+  fail,
   ceilingOpts,
-  ceilingOptsError,
-  onClose,
-  onSaved,
+  onAction,
+  onAppAccess,
 }: {
-  keyRow: ApiKeyRow
+  k: ApiKeyRow
+  busy: boolean
+  fail: RowFail | null
   ceilingOpts: CeilingOptions
-  ceilingOptsError: string | null
-  onClose: () => void
-  onSaved: () => void
+  onAction?: (a: Action) => void
+  onAppAccess?: () => void
 }): React.JSX.Element {
-  const stored = keyRow.hireLimits?.apps ?? []
-  const [form, setForm] = useState<CeilingForm>(() => ceilingFormFromLimits(stored))
-  const confirm = useOwnerConfirm(finishCeilingConfirm)
-  const [submitting, setSubmitting] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  // Esc (claimed: Settings stays open), the × and a press outside close it;
-  // held while saving or confirming.
-  const cancel = useDialogCancel(onClose, submitting)
+  const state = keyState(k)
+  const name = keyName(k)
+  const status = k.scope === 'status'
+  const hires = !status && !!k.capabilities?.hire && !!k.hireLimits
+  const dates = keyDates(k)
+  const reach = reachWords(k, hires)
 
-  const save = async () => {
-    setSubmitting(true)
-    setErr(null)
-    try {
-      const apps = ceilingFromForm(form, ceilingOpts)
-      try {
-        await saveHireCeiling(keyRow.id, apps)
-        onSaved()
-      } catch (e) {
-        if (daemonErrorOf(e)?.code !== 'vault_confirm_required') throw e
-        // Widening: confirm, then save again with the one-use token.
-        await confirm.begin(async (token) => {
-          await saveHireCeiling(keyRow.id, apps, token)
-          onSaved()
-        })
-      }
-    } catch (e) {
-      setErr(daemonErrorText(e))
-    } finally {
-      setSubmitting(false)
+  const items: OverflowMenuItem[] = []
+  if (onAction && state !== 'revoked') {
+    if (hires && onAppAccess) {
+      items.push({ id: 'app-access', label: 'App access…', hint: 'Which App logins its hired agents may get.', onSelect: onAppAccess })
     }
-  }
-
-  const submitPassword = async () => {
-    setSubmitting(true)
-    setErr(null)
-    try {
-      await confirm.submitPassword()
-    } catch (e) {
-      setErr(daemonErrorText(e))
-    } finally {
-      setSubmitting(false)
+    // A status key reads this server's status only: it is revoked, not paused.
+    if (!status) {
+      items.push(
+        state === 'active'
+          ? { id: 'disable', label: 'Turn off', hint: 'Apps using it stop working until you turn it back on.', onSelect: () => onAction('disable') }
+          : { id: 'enable', label: 'Turn back on', hint: 'Apps using it work again right away.', onSelect: () => onAction('enable') },
+      )
     }
+    items.push({ id: 'revoke', label: 'Revoke…', hint: 'Stops it for good.', danger: true, group: items.length > 0, onSelect: () => onAction('revoke') })
   }
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="App access">
-      <div {...floatMaterial('dialog')} {...cancel} className="relative w-full max-w-md max-h-full flex flex-col border border-[var(--color-border)] bg-[var(--color-bg)] shadow-xl" data-testid="edit-app-access">
-        <div className="flex flex-shrink-0 items-start gap-2 px-4 pt-4 pb-3">
-          <h3 className="min-w-0 flex-1 type-heading text-[var(--color-text-primary)]">
-            App access for {keyRow.label || keyRow.id}
-          </h3>
-          <DialogCloseButton className="-mt-2 -mr-2" onClick={onClose} disabled={submitting} heldReason="Can’t close while your changes save" />
-        </div>
-        <div className="min-h-0 overflow-y-auto px-4 pb-4 space-y-3">
-          <p className="type-hint text-[var(--color-text-secondary)]">
-            Now: {ceilingSummary(stored, ceilingOpts)}
-          </p>
-          <p className="type-hint text-[var(--color-text-muted)]">
-            Lowering it saves right away. Widening it (another App, a new room or a higher role) asks you to
-            confirm, like creating the key. Logins already made keep what they have.
-          </p>
-          {stored.length > 1 && (
-            <p className="type-hint text-[var(--color-status-warn-text)]">
-              This key names {stored.length} Apps (set from a terminal). Saving here keeps only the one shown.
-            </p>
-          )}
-          <AppAccessLimit form={form} onChange={setForm} opts={ceilingOpts} optsError={ceilingOptsError} />
-          <ConfirmPrompt
-            confirm={confirm}
-            submitting={submitting}
-            onSubmit={() => void submitPassword()}
-            buttonLabel="Confirm and save"
-          />
-          {err && <p className="type-hint text-[var(--color-status-error-soft)]">{err}</p>}
-          <div className="flex justify-end gap-2 pt-1">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 type-control text-[var(--color-text-muted)] cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => void save()}
-              className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
-            >
-              {submitting ? 'Saving…' : 'Save'}
-            </button>
+    <div
+      className={`px-4 py-3 ${state === 'revoked' ? '' : 'transition-colors hover:bg-[var(--color-wash-1)]'}`}
+      data-testid={`api-key-row-${k.id}`}
+      title={`Key ID: ${k.id}`}
+    >
+      <div className="flex items-start justify-between gap-6">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
+            <span className={`type-name ${state === 'revoked' ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-primary)]'}`}>{name}</span>
+            {status ? <Tag tone="neutral">Status only</Tag> : null}
+            <StateTag k={k} />
           </div>
+          {reach ? (
+            <p className={SETTING_ROW_HINT} data-testid={`api-key-reach-${k.id}`}>
+              {reach}
+            </p>
+          ) : null}
+          {hires ? (
+            <p className={SETTING_ROW_HINT} data-testid={`hire-limits-${k.id}`}>
+              {hireWords(k.hireLimits)}
+            </p>
+          ) : null}
+          {hires ? (
+            <p className={SETTING_ROW_HINT} data-testid={`hire-ceiling-${k.id}`}>
+              App access: {ceilingSummary(k.hireLimits?.apps, ceilingOpts)}
+            </p>
+          ) : null}
+          {dates ? <p className={SETTING_ROW_HINT}>{dates}</p> : null}
+          {busy ? (
+            <p className={`${SETTING_ROW_HINT} flex items-center gap-1.5`} role="status">
+              <Spinner />
+              Saving…
+            </p>
+          ) : null}
+          {fail ? (
+            <div role="alert" data-save-error="" className={`${SETTING_ROW_HINT} mt-1`}>
+              <p className="text-[var(--color-status-error-soft)]">
+                {fail.what} {fail.next}
+              </p>
+              <p>The server said: {fail.detail.trim().replace(/[.\s]+$/, '')}.</p>
+            </div>
+          ) : null}
         </div>
+        {items.length > 0 ? (
+          <OverflowMenu label={`More actions for ${name}`} items={items} />
+        ) : (
+          <span aria-hidden="true" className={MENU_SLOT} />
+        )}
       </div>
     </div>
   )
@@ -1035,7 +497,7 @@ export function WorkspaceApiKeysPanel({
   }, [refresh])
 
   const act = useCallback(
-    async (id: string, action: 'disable' | 'enable' | 'revoke') => {
+    async (id: string, action: Action) => {
       if (action === 'revoke') {
         const ok = await useConfirmDialogStore.getState().confirm({
           title: 'Revoke this API key?',
@@ -1095,8 +557,8 @@ export function WorkspaceApiKeysPanel({
             <div key={k.id} className="px-4 py-3 flex items-start justify-between gap-6">
               <div className="min-w-0 flex-1 space-y-0.5">
                 <div className="flex items-center gap-2">
-                  <span className="type-name text-[var(--color-text-primary)]">{k.label || 'Unnamed key'}</span>
-                  {stateBadge(state)}
+                  <span className="type-name text-[var(--color-text-primary)]">{keyName(k)}</span>
+                  <StateTag k={k} />
                 </div>
                 <p className="type-hint font-mono text-[var(--color-text-secondary)] break-all">{k.id}</p>
                 <p className="type-hint text-[var(--color-text-secondary)]">

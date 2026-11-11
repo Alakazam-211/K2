@@ -41,7 +41,7 @@ describe('platform copy', () => {
   it('hire confirm offers Touch ID only on a Mac', () => {
     expect(hireConfirmCopy('mac')).toContain('Touch ID')
     for (const os of ['linux', 'windows', 'other'] as const) {
-      expect(hireConfirmCopy(os)).toBe('Creating it asks for your password to confirm.')
+      expect(hireConfirmCopy(os)).toBe('Creating it asks for your password to confirm it’s you.')
     }
   })
 

@@ -14,6 +14,12 @@ import {
   parseWorkspaceGrant,
   formatGrant,
   workspaceGrantSlug,
+  grantWords,
+  hireWords,
+  joinWords,
+  keyDates,
+  keyName,
+  reachWords,
 } from './api-keys-api'
 import type { ApiKeyRow } from './api-keys-api'
 
@@ -159,5 +165,57 @@ describe('App access limit helpers (0.45.6)', () => {
       role: 'r-m',
     })
     expect(ceilingFormFromLimits(undefined)).toEqual(EMPTY_CEILING_FORM)
+  })
+})
+
+describe('plain words for Settings → API Keys', () => {
+  it('joinWords lists like a sentence', () => {
+    expect(joinWords([])).toBe('')
+    expect(joinWords(['a'])).toBe('a')
+    expect(joinWords(['a', 'b'])).toBe('a and b')
+    expect(joinWords(['a', 'b', 'c'])).toBe('a, b and c')
+  })
+
+  it('grantWords says where a key reaches', () => {
+    expect(grantWords('*')).toBe('in every workspace')
+    expect(grantWords(null)).toBe('in no workspace yet')
+    expect(grantWords(JSON.stringify(['notes', 'docs']))).toBe('in notes and docs')
+    expect(grantWords(JSON.stringify(['a', 'b', 'c', 'd', 'e']))).toBe('in a, b and 3 more workspaces')
+  })
+
+  it('reachWords names what a key does without route or flag names', () => {
+    expect(reachWords(row({ allowedWorkspaces: '*', capabilities: { hostSessions: true, db: true } }))).toBe(
+      'Agent sessions and databases in every workspace.',
+    )
+    // Sandboxes alone don't need a workspace.
+    expect(reachWords(row({ capabilities: { sandboxes: true } }))).toBe('Sandboxes.')
+    expect(reachWords(row({ capabilities: { hire: true } }))).toBe('Hires agents.')
+    expect(reachWords(row({ allowedWorkspaces: '["notes"]', capabilities: { canonicalMessage: true, hire: true } }))).toBe(
+      'Messages in notes; hires agents.',
+    )
+    expect(reachWords(row({ capabilities: { hire: true } }), true)).toBe('')
+    expect(reachWords(row({ capabilities: {} }))).toBe('Can’t reach anything yet.')
+    expect(reachWords(row({ scope: 'status' }))).toMatch(/status.*Nothing else\.$/)
+  })
+
+  it('hireWords puts a hire key’s limits in a sentence', () => {
+    expect(
+      hireWords({ maxMembersPerDay: 5, maxLiveMembers: 50, maxMembersPerTeam: 4, db: 'read', link: true, linkTargets: 'created', retire: false, reach: 'message', folder: '' }),
+    ).toBe('Hires up to 5 agents a day (50 at once, 4 per team). May message and link into teams the agents it hired. They can read its databases.')
+    expect(hireWords(null)).toBe('')
+  })
+
+  it('keyDates says when a key was made, turned off or revoked', () => {
+    const made = keyDates(row({ createdAt: 1790000000 }))
+    expect(made).toMatch(/^Created .*2026$/)
+    expect(keyDates(row({ createdAt: 1790000000, disabledAt: 1791000000 }))).toMatch(/· Turned off .*2026$/)
+    // Revoked wins over turned off; milliseconds read the same as seconds.
+    expect(keyDates(row({ createdAt: 1790000000 * 1000, disabledAt: 1, revokedAt: 1791000000 }))).toMatch(/^Created .*2026 · Revoked .*2026$/)
+    expect(keyDates(row({ createdAt: 0, anthropicKeySet: true, provider: 'openai' }))).toBe('Uses its own OpenAI key')
+  })
+
+  it('keyName names an unlabelled key', () => {
+    expect(keyName({ label: '  ' })).toBe('Unnamed key')
+    expect(keyName({ label: 'Support chat' })).toBe('Support chat')
   })
 })

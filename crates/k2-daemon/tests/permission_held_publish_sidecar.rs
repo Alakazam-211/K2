@@ -345,3 +345,148 @@ async fn a_sidecars_held_publish_run_gets_its_card_on_the_sidecar_and_allow_runs
         "{v}"
     );
 }
+
+/// A real passport file per spawned harness: the shim writes the
+/// `K2_HOOK_TOKEN` K2 put in its env to `<dir>/<cell>-<sidecar name>.token`
+/// (the canonical cell's name is empty), then becomes `cat`.
+fn token_shim(dir: &std::path::Path) -> k2_core::test_env::AgentShim {
+    std::fs::create_dir_all(dir).expect("token dir");
+    k2_core::test_env::AgentShim::with_body(&format!(
+        "if [ \"$1\" = \"--help\" ]; then printf '      --no-daemon\\n'; exit 0; fi\n\
+         if [ \"$1\" = \"create-chat\" ]; then /usr/bin/uuidgen | /usr/bin/tr 'A-Z' 'a-z'; exit 0; fi\n\
+         f=\"{dir}/$K2_CELL-$K2_SIDECAR_NAME\"\n\
+         printf '%s' \"$K2_HOOK_TOKEN\" > \"$f.tmp\"\n\
+         /bin/mv \"$f.tmp\" \"$f.token\"\n\
+         exec cat",
+        dir = dir.display()
+    ))
+}
+
+async fn wait_token(dir: &std::path::Path, file: &str) -> String {
+    let path = dir.join(file);
+    let mut found = None;
+    wait_until(&format!("the harness to write {file}"), 20, || {
+        found = std::fs::read_to_string(&path).ok().filter(|t| !t.is_empty());
+        found.is_some()
+    })
+    .await;
+    found.expect("a passport")
+}
+
+/// A user's report (0.46.10): a sidecar's `k2 permission request` card went
+/// to the workspace's main Thread. Here everything is real: the sidecars
+/// come from `k2 sidecar new` (claude, and codex, whose conversation id K2
+/// learns later), the main agent from a real spawn, and each asks with the
+/// passport K2 put in its own env. Each card lands on the Thread of the
+/// session that asked, and nowhere else. Before the fix, the main agent's
+/// open card for the same change answered the sidecar's ask
+/// (`already_pending` with the main card): the person found nothing on the
+/// sidecar's Thread and the answer went to the main session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_k2_sidecar_new_sidecars_ask_lands_on_its_own_thread_and_the_mains_on_main() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "asker");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO workspaces (id, project_id, name) VALUES (?1, ?2, 'main')",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), ws.id],
+        )
+        .expect("workspaces row");
+    }
+    let peer = seed_ws(&env, "askerpeer");
+    let main = pin_chat(&ws);
+    let tokens = env.path().join("tok");
+    let _shim = token_shim(&tokens);
+    struct Off(Vec<String>);
+    impl Drop for Off {
+        fn drop(&mut self) {
+            k2_core::permission::gate::set_server_switch(false);
+            for key in k2_daemon::v2_session_map::list_agents() {
+                if self.0.iter().any(|k| *k == key) || key.starts_with("tab-") {
+                    if let Some(s) = k2_daemon::v2_session_map::unregister(&key) {
+                        s.kill();
+                    }
+                }
+            }
+        }
+    }
+    let _off = Off(vec![ws.id.clone()]);
+    k2_core::permission::gate::set_server_switch(true);
+    cards_on(&ws);
+
+    let peer2 = seed_ws(&env, "askerpeer2");
+    // Ask for `connections.add to=<to>`; the answer, which must be a 200.
+    let ask = |passport: String, to: String| async move {
+        let r = post(port, "/cli/permission/request", &passport, json!({"action": "connections.add", "params": {"to": to}, "why": "Talk to the peer"})).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        r.json()
+    };
+    let row = |id: &str| -> (Option<String>, Option<String>) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT conversation_id, addr FROM permission_requests WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .expect("the request row")
+    };
+
+    // 1. The main agent, spawned for real, asks first: its card is on main.
+    k2_daemon::spawn::spawn_agent_session_v2_blocking(k2_daemon::spawn::SpawnWorkspaceSessionRequest {
+        agent_name: ws.id.clone(),
+        project_id: Some(ws.id.clone()),
+        cwd: ws.path.to_string_lossy().into_owned(),
+        command: Some("claude".to_string()),
+        args: Some(vec!["--resume".to_string(), main.clone()]),
+        cols: 80,
+        rows: 24,
+        canonical_key: Some(ws.id.clone()),
+        env: Default::default(),
+        env_owner_set: false,
+        launch_prompt: None,
+        label: None,
+    })
+    .expect("spawn the main agent");
+    let main_passport = wait_token(&tokens, "canonical-.token").await;
+    let m = ask(main_passport, peer.handle.clone()).await;
+    assert_eq!((m["status"].as_str(), m["addr"].as_str()), (Some("pending"), Some(ws.handle.as_str())), "{m}");
+    let main_card = m["card"].as_str().expect("card").to_string();
+    assert_eq!(row(m["id"].as_str().expect("id")).0.as_deref(), Some(main.as_str()));
+
+    // 2. Each sidecar asks on its own Thread. The claude one asks for the
+    //    same change the main card waits on (the user's report: it got the
+    //    main card back); the codex one for another peer (the workspace's
+    //    ask limit, 2 a week for one change, is not what this tests).
+    for (harness, to) in [("claude", peer.handle.clone()), ("codex", peer2.handle.clone())] {
+        let name = format!("rev{harness}");
+        let r = post(port, "/cli/sidecar/new", OWNER, json!({"workspace": ws.handle, "name": name, "harness": harness})).await;
+        assert_eq!(r.status, 200, "sidecar new {harness}: {}", r.body);
+        let v = r.json();
+        let side = format!("{}/{name}", ws.handle);
+        assert_eq!(v["address"], side.as_str(), "{v}");
+        let passport = wait_token(&tokens, &format!("sidecar-{name}.token")).await;
+        let thread = k2_daemon::overlay_routes::conversation_for_addr(&side).unwrap_or_else(|| panic!("{side} has a Thread"));
+        assert_ne!(thread, main, "{side}'s Thread is its own");
+
+        let a = ask(passport.clone(), to.clone()).await;
+        assert_eq!(a["status"], "pending", "{harness}: a card of its own, not another Thread's: {a}");
+        assert_eq!(a["addr"], side.as_str(), "{harness}: the card names the sidecar's Thread: {a}");
+        let card = a["card"].as_str().expect("card").to_string();
+        assert_ne!(card, main_card, "{harness}");
+        let (conv, addr) = row(a["id"].as_str().expect("id"));
+        assert_eq!(conv.as_deref(), Some(thread.as_str()), "{harness}: on {side}'s Thread, not the main one ({main})");
+        assert_eq!(addr.as_deref(), Some(side.as_str()));
+        assert!(k2_core::overlay::get_thread_doc(&thread, &card).expect("read").is_some(), "{harness}: the card is on the sidecar's Thread");
+        assert!(k2_core::overlay::get_thread_doc(&main, &card).expect("read").is_none(), "{harness}: and not on the main Thread");
+
+        // Asked again from the same Thread: the same card, nothing new.
+        let again = ask(passport, to).await;
+        assert_eq!(
+            (again["status"].as_str(), again["card"].as_str(), again["addr"].as_str()),
+            (Some("already_pending"), Some(card.as_str()), Some(side.as_str())),
+            "{again}"
+        );
+    }
+    assert!(k2_core::overlay::get_thread_doc(&main, &main_card).expect("read").is_some(), "the main card stays on main");
+}

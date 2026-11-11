@@ -674,6 +674,25 @@ async fn async_main() {
             std::process::exit(2);
         }
     }
+    // 0.46.11: the Get started list and Kessel at first run start on for a
+    // brand-new server only (no settings file and migration 0290's "not in
+    // use" rule; see `app_settings::apply_new_server_defaults`). Right after
+    // the database opens, before anything can make a project or a login. A
+    // database error counts as in use, so nothing turns on.
+    {
+        let in_use = || {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::first_run::server_in_use(&conn).unwrap_or(true)
+        };
+        match k2_core::app_settings::apply_new_server_defaults(&in_use) {
+            Ok(k2_core::app_settings::NewServerDefaults::TurnedOn) => {
+                log_debug!("[daemon] new server: Get started list and Kessel at first run on")
+            }
+            Ok(_) => {}
+            Err(e) => log_debug!("ERROR [daemon] new-server defaults: {e}"),
+        }
+    }
     // Folder trust (prd-security-sweep-0464-v1 SS10): the card presenter,
     // before anything can spawn a harness.
     crate::folder_trust::install();

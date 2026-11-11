@@ -520,8 +520,9 @@ pub struct AppSettings {
     #[serde(default)]
     pub board_file_preview: bool,
     /// The setup checklist (prd-setup-checklist-v1): whether the app shows
-    /// it. Owner only, off by default until K2 Design has polished it. The
-    /// daemon only stores it and reports it as `enabled` on
+    /// it. Owner only. Off by default, so an updating server keeps it off;
+    /// a brand-new server's first boot writes it on
+    /// ([`apply_new_server_defaults`]). The daemon only stores it and reports it as `enabled` on
     /// `GET /cli/first-run/status`; `k2 setup` prints the list either way.
     /// Wire name `setupChecklist`.
     #[serde(default)]
@@ -529,8 +530,10 @@ pub struct AppSettings {
     /// Kessel at first run, and the Chief of Staff (prd-setup-checklist-v1
     /// §10): the "Meet Kessel" offer, the `chief_of_staff` row in place of
     /// `first_agent`, and the `/cli/first-run/kessel` and `chief-of-staff`
-    /// routes. Owner only, off by default until K2 Design polishes the Kessel
-    /// sheet; off, the routes answer 404 `kessel_first_run_off`. Wire name
+    /// routes. Owner only. Off by default, so an updating server keeps it
+    /// off; a brand-new server's first boot writes it on
+    /// ([`apply_new_server_defaults`]). Off, the routes answer 404
+    /// `kessel_first_run_off`. Wire name
     /// `kesselFirstRun`.
     #[serde(default)]
     pub kessel_first_run: bool,
@@ -1602,6 +1605,60 @@ pub fn apply_permission_cards_default(owner_turned_off: &dyn Fn() -> bool) -> Re
         .map_err(|e| format!("serialize settings: {e}"))?;
     write_settings_file(&json)?;
     Ok(outcome)
+}
+
+/// What [`apply_new_server_defaults`] found and did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewServerDefaults {
+    /// A settings file is already there (or can't be checked): nothing
+    /// touched, whatever it says or leaves out.
+    HasFile,
+    /// No settings file, but the database shows a server already in use:
+    /// nothing written, so both stay off.
+    InUse,
+    /// A brand-new server: a settings file was written with both on.
+    TurnedOn,
+}
+
+/// 0.46.11 (Rosson, through K2): the Get started list (`setupChecklist`)
+/// and Kessel at first run (`kesselFirstRun`) start on for a brand-new
+/// server only. Called once per daemon boot, right after the database
+/// opens. The serde defaults stay off, so a settings file that leaves the
+/// keys out still reads them as off, and an updating server keeps them off.
+///
+/// "No settings file" alone doesn't mean a new server: a server in use
+/// may never have saved one. So the signal is both:
+/// - no settings file yet, and
+/// - `server_in_use` false. The daemon passes
+///   `first_run::server_in_use`, migration 0290's rule (no existing-install
+///   cutoff, no project but the audit sentinels, no LLM account), which
+///   the setup checklist already uses to tell an existing install.
+///
+/// Then it writes the file once, with both keys on (and
+/// [`PERMISSION_CARDS_DEFAULT_KEY`], since a new server's permission cards
+/// are already on by default, so that pass leaves the file alone on the
+/// next boot). From then on the file exists and this does nothing again,
+/// so a later off from the owner stays off. [`load`] stays read-only.
+pub fn apply_new_server_defaults(server_in_use: &dyn Fn() -> bool) -> Result<NewServerDefaults, String> {
+    let _guard = settings_lock().lock();
+    let file = settings_file();
+    match fs::symlink_metadata(&file) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return Ok(NewServerDefaults::HasFile),
+    }
+    if server_in_use() {
+        return Ok(NewServerDefaults::InUse);
+    }
+    let settings = AppSettings {
+        setup_checklist: true,
+        kessel_first_run: true,
+        permission_cards_default_applied: true,
+        ..AppSettings::default()
+    };
+    let json = serde_json::to_string_pretty(&settings).map_err(|e| format!("serialize settings: {e}"))?;
+    ensure_dir();
+    write_settings_file(&json)?;
+    Ok(NewServerDefaults::TurnedOn)
 }
 
 /// The refusal for `gardenAccess: false` (or anything but `true`).
@@ -2848,6 +2905,76 @@ mod tests {
 
     fn owner_off_on_record() -> bool {
         true
+    }
+
+    fn not_in_use() -> bool {
+        false
+    }
+
+    fn in_use() -> bool {
+        true
+    }
+
+    /// 0.46.11: a brand-new server (no settings file, nothing in use) gets
+    /// the Get started list and Kessel at first run on, written once; the
+    /// owner's later off survives every restart.
+    #[test]
+    fn a_new_server_starts_with_the_checklist_and_kessel_on_once() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        assert!(!settings_file().exists());
+        assert_eq!(apply_new_server_defaults(&not_in_use).unwrap(), NewServerDefaults::TurnedOn);
+        let v = stored_json();
+        assert_eq!(v["setupChecklist"], true, "{v}");
+        assert_eq!(v["kesselFirstRun"], true, "{v}");
+        let s = load();
+        assert!(s.setup_checklist && s.kessel_first_run);
+        assert!(s.permission_cards, "permission cards keep their default");
+        assert_eq!(
+            apply_permission_cards_default(&no_off_on_record).unwrap(),
+            PermissionCardsDefault::AlreadyApplied,
+            "the permission-cards pass leaves a new server's file alone"
+        );
+        assert_eq!(apply_new_server_defaults(&not_in_use).unwrap(), NewServerDefaults::HasFile, "once");
+
+        // The owner turns both off: a restart (the pass again) keeps them off.
+        update(serde_json::json!({"setupChecklist": false, "kesselFirstRun": false})).expect("off");
+        for _ in 0..2 {
+            assert_eq!(apply_new_server_defaults(&not_in_use).unwrap(), NewServerDefaults::HasFile);
+            let s = load();
+            assert!(!s.setup_checklist && !s.kessel_first_run, "the owner's off stays off");
+        }
+    }
+
+    /// An existing settings file that leaves the keys out (any server from
+    /// before 0.46.11) reads both as off and is never rewritten to on.
+    #[test]
+    fn an_existing_settings_file_without_the_keys_keeps_both_off() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        ensure_dir();
+        let raw = r#"{"defaultAgent": "codex", "apps": true}"#;
+        fs::write(settings_file(), raw).unwrap();
+        let s = load();
+        assert!(!s.setup_checklist && !s.kessel_first_run, "missing keys read as off");
+        assert_eq!(apply_new_server_defaults(&not_in_use).unwrap(), NewServerDefaults::HasFile);
+        assert_eq!(fs::read_to_string(settings_file()).unwrap(), raw, "the file is untouched");
+        let s = load();
+        assert!(!s.setup_checklist && !s.kessel_first_run);
+    }
+
+    /// A server in use that never saved a settings file stays off, and
+    /// nothing is written.
+    #[test]
+    fn a_server_in_use_with_no_settings_file_stays_off() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        for _ in 0..2 {
+            assert_eq!(apply_new_server_defaults(&in_use).unwrap(), NewServerDefaults::InUse);
+            assert!(!settings_file().exists(), "nothing written");
+            let s = load();
+            assert!(!s.setup_checklist && !s.kessel_first_run);
+        }
     }
 
     #[test]

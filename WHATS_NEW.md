@@ -101,7 +101,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Each project has a default view** (Terminal, Thread or Chatter) that its tiles open in. Admins set it in the project's settings or with `k2 project view <project> <view>`.
 
 ### Getting started
-- **A Get started list** walks a new owner through: installing Apple's developer tools (only on a Mac that's missing them), signing in to an AI tool, meeting Kessel (K2's own agent, which hires your Chief of Staff), linking your subdomain and connecting your phone. Hide it and it folds into a **Get started** button in your accent colour; the sidebar's collapse button and ⌘B wait until setup is done. `k2 setup` prints the same list and runs on a fresh Mac with nothing installed.
+- **A Get started list** (on for new servers) walks a new owner through: installing Apple's developer tools (only on a Mac that's missing them), signing in to an AI tool, meeting Kessel (K2's own agent, which hires your Chief of Staff), linking your subdomain and connecting your phone. Hide it and it folds into a **Get started** button in your accent colour; the sidebar's collapse button and ⌘B wait until setup is done. `k2 setup` prints the same list and runs on a fresh Mac with nothing installed.
 
 ### Workspaces and sync
 - **The eye/pencil (watch or drive a session) is always on the terminal's bar,** not only when someone else is there.

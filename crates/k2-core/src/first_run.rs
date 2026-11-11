@@ -35,7 +35,7 @@
 //! for such a person (hide, skip) keeps them finished.
 //!
 //! **Kessel at first run** (prd-setup-checklist-v1 §10, `kessel-first-run-contract.md`),
-//! all behind the owner's `kesselFirstRun` switch, off by default. On, the
+//! all behind the owner's `kesselFirstRun` switch (off by default, on for a new server). On, the
 //! status also carries `offer` ("meet_kessel" while a tool is signed in, there is
 //! no live Kessel, the caller is the owner token, an Owner or an Admin, and this
 //! person hasn't said "Not now"), `kessel` (the live Kessel or null) and
@@ -126,7 +126,7 @@ pub struct Row {
 /// The whole answer (`GET /cli/first-run/status` and every POST).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Status {
-    /// The server switch (`setupChecklist`), off by default.
+    /// The server switch (`setupChecklist`), off by default, on for a new server.
     pub enabled: bool,
     pub hidden: bool,
     pub finished: bool,
@@ -449,6 +449,23 @@ pub fn cutoff(conn: &Connection) -> Result<Option<i64>, Error> {
         .query_row("SELECT existing_cutoff FROM first_run_meta WHERE id = 1", [], |r| r.get::<_, Option<i64>>(0))
         .optional()?
         .flatten())
+}
+
+/// Whether this server is already in use, by migration 0290's rule: it has
+/// an existing-install cutoff, or a project that isn't an audit sentinel,
+/// or any LLM account (removed ones count, as in 0290). A brand-new
+/// server's first boot answers false. Read by
+/// `app_settings::apply_new_server_defaults` at daemon boot.
+pub fn server_in_use(conn: &Connection) -> Result<bool, Error> {
+    if cutoff(conn)?.is_some() {
+        return Ok(true);
+    }
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM projects WHERE id NOT IN ('_orphan', '_broadcast'))
+             OR EXISTS (SELECT 1 FROM llm_accounts)",
+        [],
+        |r| r.get::<_, bool>(0),
+    )?)
 }
 
 /// Whether a person with no record counts as finished: there is a cutoff,

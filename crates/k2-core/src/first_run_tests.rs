@@ -403,6 +403,47 @@ fn a_fresh_database_has_no_cutoff_and_everyone_starts_unfinished() {
     assert_eq!(cutoff(&conn).expect("cutoff"), None, "audit sentinels only");
 }
 
+/// `server_in_use` is 0290's rule: a fresh database (or one with only the
+/// audit sentinels) is not in use; a cutoff, a project or an LLM account is.
+#[test]
+fn server_in_use_follows_the_0290_rule() {
+    assert!(!server_in_use(&db()).expect("fresh"), "fresh database");
+    assert!(!server_in_use(&upgraded("")).expect("sentinels"), "audit sentinels only");
+    for seed in [
+        "INSERT INTO projects (id, name, path) VALUES ('p-old', 'old', '/tmp/p-old');",
+        "INSERT INTO llm_accounts (id, tool, label, created_at) VALUES ('a1', 'claude', 'work', 1);",
+    ] {
+        let conn = upgraded(seed);
+        assert!(cutoff(&conn).expect("cutoff").is_some(), "{seed}");
+        assert!(server_in_use(&conn).expect("in use"), "upgraded with {seed}");
+        let conn = db();
+        conn.execute_batch(seed).expect("seed");
+        assert!(server_in_use(&conn).expect("in use"), "made after 0290: {seed}");
+    }
+    // A cutoff alone counts, even with its projects gone.
+    let conn = upgraded("INSERT INTO projects (id, name, path) VALUES ('p-old', 'old', '/tmp/p-old');");
+    conn.execute("DELETE FROM projects WHERE id = 'p-old'", []).expect("delete");
+    assert!(server_in_use(&conn).expect("cutoff"));
+}
+
+/// End to end with a real database: a new server gets the checklist and
+/// Kessel on; a server in use with no settings file keeps them off.
+#[test]
+fn new_server_defaults_read_the_database() {
+    use crate::app_settings::{apply_new_server_defaults, load, NewServerDefaults};
+    let project = "INSERT INTO projects (id, name, path) VALUES ('p-old', 'old', '/tmp/p-old');";
+    let login = "INSERT INTO llm_accounts (id, tool, label, created_at) VALUES ('a1', 'claude', 'work', 1);";
+    for (seed, want) in [("", NewServerDefaults::TurnedOn), (project, NewServerDefaults::InUse), (login, NewServerDefaults::InUse)] {
+        let _home = crate::test_env::TempHome::new();
+        let conn = upgraded(seed);
+        let in_use = || server_in_use(&conn).unwrap_or(true);
+        assert_eq!(apply_new_server_defaults(&in_use).expect("pass"), want, "{seed}");
+        let s = load();
+        let on = want == NewServerDefaults::TurnedOn;
+        assert_eq!((s.setup_checklist, s.kessel_first_run), (on, on), "{seed}");
+    }
+}
+
 #[test]
 fn an_existing_server_marks_its_people_finished_and_later_logins_start_fresh() {
     for seed in [

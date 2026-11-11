@@ -370,6 +370,20 @@ async fn change_set_password_must_change_invites_and_the_link_exchange() {
     assert_eq!((r.status, r.code()), (403, "password_change_required".to_string()), "{}", r.body);
     let tok = r.json()["changeToken"].as_str().expect("changeToken").to_string();
     assert!(tok.starts_with("k2chg_") && !r.body.contains("k2skn_"));
+    // The exact shape k2 study auth-pages shows (0.46.12): the token at the
+    // top level and again in error, with its end in seconds.
+    let j = r.json();
+    let mut keys: Vec<&str> = j.as_object().expect("object").keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["changeExpiresAt", "changeToken", "error", "mustChangePassword", "ok"], "{j}");
+    let mut ekeys: Vec<&str> = j["error"].as_object().expect("error").keys().map(String::as_str).collect();
+    ekeys.sort_unstable();
+    assert_eq!(ekeys, ["changeExpiresAt", "changeToken", "code", "hint"], "{j}");
+    assert_eq!((j["ok"].as_bool(), j["mustChangePassword"].as_bool(), j["error"]["changeToken"].as_str()), (Some(false), Some(true), Some(tok.as_str())), "{j}");
+    let exp = j["changeExpiresAt"].as_i64().expect("changeExpiresAt");
+    assert_eq!(j["error"]["changeExpiresAt"].as_i64(), Some(exp), "{j}");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    assert!(exp > now && exp <= now + 15 * 60 + 5, "seconds since the epoch, 15 minutes: {j}");
     let r = post_door(front, "/.k2/auth/set-password", json!({"token": tok, "password": "temp-pass-44", "challenge": c})).await;
     assert_eq!(r.code(), "password_unchanged");
     let r = post_door(front, "/.k2/auth/set-password", json!({"token": tok, "password": "mine-pass-555", "challenge": c})).await;

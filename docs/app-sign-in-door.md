@@ -121,7 +121,10 @@ other App's code is `401 bad_code`.
   the top level of the answer) when someone else set the password. Show
   your new-password form and post `{token: changeToken, password,
   challenge}` to `/.k2/auth/set-password`, with the same challenge. The
-  answer has a code: no second typing.
+  answer has a code: no second typing. The whole answer:
+  `{"ok":false,"error":{"code":"password_change_required","hint":"…","changeToken":"k2chg_…","changeExpiresAt":1767225600},"mustChangePassword":true,"changeToken":"k2chg_…","changeExpiresAt":1767225600}`
+  (read `body.changeToken`; `error.changeToken` is the same token, good for
+  15 minutes; `changeExpiresAt` is in seconds since the epoch).
 - An invite or reset link brings `#k2inv_…` to your page (set it with
   `k2 app login settings <app> --set-password-url`). Send the token without
   the `#`, the same way. With a challenge the answer has a code (unless the

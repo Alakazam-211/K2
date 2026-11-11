@@ -56585,10 +56585,12 @@ THE VERBS (POST, JSON, Content-Length, at most 8 KiB)
   sign-in          {username, password, challenge}              → {ok, code}
   set-password     {token, password, challenge?}                → {ok, code?}
   change-password  {username, oldPassword, password, challenge} → {ok, code}
-  First password: sign-in answers 403 password_change_required with
-  changeToken (top level); post {token: changeToken, password, challenge} to
-  set-password. Invite or reset: your page gets k2inv_… after the # (k2 app
-  login settings --set-password-url); send it without the #. With a
+  First password: sign-in answers 403 password_change_required:
+    {"ok":false,"error":{"code":"password_change_required","hint":"…","changeToken":"k2chg_…","changeExpiresAt":1767225600},"mustChangePassword":true,"changeToken":"k2chg_…","changeExpiresAt":1767225600}
+  Read body.changeToken (error.changeToken is the same; 15 minutes); post
+  {token: changeToken, password, challenge} to set-password. Invite or
+  reset: your page gets k2inv_… after the # (k2 app login settings
+  --set-password-url); send it without the #. With a
   challenge you get a code, unless the person can't use this App (then the
   password is set, no code); without one, no code: send them to sign in.
   The token must be this App's; the owner's own reset never works here.

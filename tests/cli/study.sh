@@ -841,7 +841,8 @@ assert_contains "title" "$ap_out" "k2 study auth-pages — your own sign-in page
 for needle in "/.k2/auth/ping" "/.k2/auth/sign-in" "k2.auth.begin()" "k2.auth.exchange" "/v1/apps/<service id>/auth/exchange" "/cli/skin/auth/exchange" \
     "password_change_required" "bad_origin" "k2 app auth door on" "tauri://localhost" "send no password" "authAt" \
     "k2.auth.doorStatus()" "/cli/skin/auth/door" "hosts: [{host, door}]" "passExpiresAt" "refreshExpiresAt" "k2skr_" \
-    "k2.guests.refresh({refresh})" "always goes with the App pass" "/cli/skin/refresh {refresh}" "refresh_reused"; do
+    "k2.guests.refresh({refresh})" "always goes with the App pass" "/cli/skin/refresh {refresh}" "refresh_reused" \
+    "\"mustChangePassword\":true,\"changeToken\":\"k2chg_…\"" "Read body.changeToken"; do
     assert_contains "auth-pages: $needle" "$ap_out" "$needle"
 done
 # The responsibility statement waits for its legal review (vs-live V30):

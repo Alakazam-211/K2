@@ -18,6 +18,7 @@
 
 import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import {
   LS_PALETTE,
   LS_SCHEME,
@@ -55,6 +56,7 @@ export const STYLES_MANIFEST: SettingEntry[] = [
   { id: 'styles.density', section: 'styles', label: 'Spacing', description: 'Compact, Regular or Spacious room between panes and tiles', keywords: ['density', 'gaps', 'spacing', 'compact', 'regular', 'spacious', 'padding', 'tiles'] },
   { id: 'styles.dials', section: 'styles', label: 'Frost', description: 'How much Glass blurs what is behind menus and popovers', keywords: ['dials', 'frost', 'blur', 'adjust', 'tweak', 'slider', 'glass', 'effects', 'translucency'] },
   { id: 'styles.text-weight', section: 'styles', label: 'Terminal text weight', description: 'How thick text looks in terminals, saved for each style', keywords: ['gamma', 'weight', 'thickness', 'bold', 'thin', 'chonky', 'webgl', 'text', 'terminal'] },
+  { id: 'styles.reset-defaults', section: 'styles', label: 'Reset to defaults', description: 'Put the style, light and dark, palettes, accent colours, spacing, Frost and text weight back to how K2 ships', keywords: ['reset', 'defaults', 'default', 'restore', 'factory', 'start over', 'undo', 'original', 'theme', 'look'] },
 ]
 
 /** A palette's accent as its swatch shows it: its saved choice, else its own. */
@@ -178,7 +180,7 @@ function schemeModeHint(sel: StyleSelection): StyleScheme {
 }
 
 /** Where a change was made, so a save that failed is reported in its row. */
-type SaveSpot = 'style' | 'palette' | 'scheme' | 'auto' | 'accent' | 'density' | 'dials' | 'text-weight'
+type SaveSpot = 'style' | 'palette' | 'scheme' | 'auto' | 'accent' | 'density' | 'dials' | 'text-weight' | 'defaults'
 
 export function StylesSection(): React.JSX.Element {
   const styleId = useStyleStore((s) => s.styleId)
@@ -195,6 +197,7 @@ export function StylesSection(): React.JSX.Element {
   const accent = useStyleStore((s) => s.accent)
   const setAccent = useStyleStore((s) => s.setAccent)
   const resetAccent = useStyleStore((s) => s.resetAccent)
+  const resetToDefaults = useStyleStore((s) => s.resetToDefaults)
   const updateStyleSettings = useSettingsStore((s) => s.updateStyleSettings)
   const openSettings = useSettingsStore((s) => s.openSettings)
   const painter = useTerminalSettingsStore((s) => s.painter)
@@ -387,6 +390,26 @@ export function StylesSection(): React.JSX.Element {
     const now = useStyleStore.getState()
     noteSave('text-weight', readKey(textGammaStorageKey(now.styleId, now.resolvedScheme)) === null)
     rerender()
+  }
+
+  // ── Reset to defaults ──────────────────────────────────────────────
+  // After a confirm: the look K2 ships, on this computer. The store clears
+  // every palette's accent, dial and text weight and applies DEFAULT_SELECTION.
+  const handleResetToDefaults = async (): Promise<void> => {
+    const ok = await useConfirmDialogStore.getState().confirm({
+      title: 'Put Styles back to how K2 ships?',
+      message: 'Your look, light and dark, palettes and accent colours go back to the defaults on this computer.',
+      confirmLabel: 'Reset',
+    })
+    if (!ok) return
+    const saved = resetToDefaults()
+    const sel = useStyleStore.getState()
+    void updateStyleSettings({ id: sel.styleId, palette: sel.paletteId, scheme: sel.schemeMode, gaps: sel.gapsPreset })
+    setSelectedStyleId(sel.styleId)
+    setHexDraft(null)
+    setHexError(false)
+    setDialValues({})
+    noteSave('defaults', saved)
   }
 
   const schemeDisabled = (mode: 'light' | 'dark' | 'auto'): string | null => {
@@ -892,6 +915,20 @@ export function StylesSection(): React.JSX.Element {
                 </div>
               </div>
             </div>
+          </SettingsGroup>
+
+          <SettingsGroup title="Defaults" card>
+            <SettingRow
+              settingId="styles.reset-defaults"
+              label="Reset to defaults"
+              hint="The style, light and dark, palettes, accent colours, spacing, Frost and text weight, as K2 ships them. Only on this computer."
+              below={unsaved === 'defaults' ? <RowError>{NOT_SAVED}</RowError> : undefined}
+            >
+              {savedNote('defaults')}
+              <Button variant="quiet" className="flex-shrink-0" onClick={() => void handleResetToDefaults()}>
+                Reset to defaults
+              </Button>
+            </SettingRow>
           </SettingsGroup>
         </div>
       </div>

@@ -34,6 +34,7 @@ import { dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-d
 import {
   ACCENT_VARS,
   accentStorageKey,
+  legacyAccentStorageKey,
   accentVarsFor,
   lsAccentStampFor,
   parseAccentChoice,
@@ -44,6 +45,7 @@ import { migrateRetiredStyleKeys, migrateSharedAccentKeys, seedRetiredStyleAccen
 import {
   clampTextGamma,
   clearStoredTextGamma,
+  textGammaStorageKey,
   resolveEffectiveTextGamma,
   resolveTextGammaPreset,
   writeStoredTextGamma,
@@ -113,6 +115,10 @@ interface StyleState extends StyleSelection {
   setAccent: (choice: AccentChoice) => void
   /** The applied palette back to its own accent, at once. */
   resetAccent: () => void
+  /** This computer back to the look K2 ships: DEFAULT_SELECTION (style,
+   *  mode, Auto palettes, spacing), every palette's own accent, every dial
+   *  and every text weight at its default. Returns whether storage kept it. */
+  resetToDefaults: () => boolean
 }
 
 export function osPrefersLight(): boolean {
@@ -697,6 +703,20 @@ function selectionOf(s: StyleSelection): StyleSelection {
   }
 }
 
+/** Every saved piece of the look a style keeps per client, for every style:
+ *  each palette's accent (and the old shared key), each dial, and the text
+ *  weight for both appearances. Settings → Styles' "Reset to defaults". */
+export function lookStorageKeys(): string[] {
+  const keys: string[] = []
+  for (const style of STYLES) {
+    keys.push(legacyAccentStorageKey(style.id))
+    for (const p of style.palettes) keys.push(accentStorageKey(style.id, p.id))
+    for (const d of style.dials) keys.push(dialStorageKey(style.id, d.id))
+    for (const scheme of ['dark', 'light'] as const) keys.push(textGammaStorageKey(style.id, scheme))
+  }
+  return keys
+}
+
 /** Write the accent onto <html> and the pre-paint stamp, without the rest of
  *  a style stamp (a colour drag shouldn't re-apply the window chrome). The
  *  choice is passed in, so it shows even when storage refused to save it. */
@@ -798,6 +818,34 @@ export const useStyleStore = create<StyleState>((set, get) => ({
     }
     set({ accent: null })
     applyAccent(sel, null)
+  },
+
+  resetToDefaults: () => {
+    const keys = lookStorageKeys()
+    let cleared = true
+    try {
+      for (const key of keys) localStorage.removeItem(key)
+      cleared = keys.every((key) => localStorage.getItem(key) === null)
+    } catch {
+      // The defaults still apply live below; they just won't all survive a relaunch.
+      cleared = false
+    }
+    const sel = defaultSelection()
+    get().applyStyle(sel)
+    // applyStyle keeps the live text weight when the look's identity didn't
+    // change; the saved one is gone, so load the default either way.
+    const resolved = resolveStyleSelection(sel, osPrefersLight())
+    set({ textGamma: resolveEffectiveTextGamma(resolved.style, resolved.resolvedPalette, resolved.resolvedScheme) })
+    let saved = cleared
+    try {
+      saved =
+        saved &&
+        localStorage.getItem(LS_STYLE) === sel.styleId &&
+        localStorage.getItem(LS_SCHEME) === sel.schemeMode
+    } catch {
+      saved = false
+    }
+    return saved
   },
 }))
 

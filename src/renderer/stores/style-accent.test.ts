@@ -654,6 +654,26 @@ describe('the one-time switch to the default look (first launch of 0.46.11)', ()
   })
 })
 
+describe('resetToDefaults', () => {
+  it('already on the default look: the accents, Frost and live text weight still go back', async () => {
+    mem.clear()
+    mem.set(SWITCHED, '1')
+    mem.set('k2.style.migrated-accent-per-palette', '1')
+    const store = await freshStore()
+    store.getState().setAccent('#ff00aa')
+    store.getState().setTextGamma(2.5)
+    mem.set('k2.dial.glass.frost', '3')
+    mem.set('k2.accent.glass.veil', '#3366cc')
+    expect(store.getState().resetToDefaults()).toBe(true)
+    expect([...mem.keys()].filter((k) => /^k2\.(accent|dial|textGamma)\./.test(k) && !k.startsWith('k2.accent.stamp.'))).toEqual([])
+    expect(store.getState().textGamma).not.toBe(2.5)
+    expect([store.getState().accent, accentVar()]).toEqual([null, ''])
+    expect(mem.has('k2.accent.stamp.dark')).toBe(false)
+    // The migration flags stay: the switch never runs again.
+    expect(mem.get(SWITCHED)).toBe('1')
+  })
+})
+
 describe('Gardens', () => {
   it('the shield re-points every accent property at a Zen token', async () => {
     const { ZEN_STYLE_SHIELD } = await import('@/lib/zen/zen-style-shield')

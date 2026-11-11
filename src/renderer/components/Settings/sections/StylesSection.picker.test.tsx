@@ -6,7 +6,7 @@
 
 import React from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 const openSettings = vi.fn()
@@ -16,6 +16,7 @@ vi.mock('@/stores/settings', () => ({
 }))
 
 import { useStyleStore } from '@/stores/style'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { getStyle } from '@/styles.generated'
 import { STYLES_MANIFEST, StylesSection } from './StylesSection'
@@ -300,6 +301,81 @@ describe('the accent', () => {
     const alert = screen.getByRole('alert')
     expect(alert.textContent).toContain("couldn't save it")
     expect(alert.closest('[data-settings-id="styles.accent"]')).not.toBeNull()
+  })
+})
+
+describe('Reset to defaults', () => {
+  const realConfirm = useConfirmDialogStore.getState().confirm
+  afterEach(() => useConfirmDialogStore.setState({ confirm: realConfirm }))
+
+  /** A customised look: Terminal / Paper / Light, spacious, accents on two
+   *  palettes of each style, Frost and text weight changed. */
+  const customise = (): void => {
+    useStyleStore.getState().applyStyle({ styleId: 'terminal', paletteId: 'paper', schemeMode: 'light', gapsPreset: 'spacious' })
+    localStorage.setItem('k2.accent.terminal.paper', '#ff00aa')
+    localStorage.setItem('k2.accent.terminal.charcoal', '#00ff88')
+    localStorage.setItem('k2.accent.glass.obsidian', '#3366cc')
+    localStorage.setItem('k2.accent.glass.yellow', '#22aa66')
+    localStorage.setItem('k2.accent.glass', 'yellow')
+    localStorage.setItem('k2.dial.glass.frost', '3')
+    localStorage.setItem('k2.textGamma.terminal.light', '2')
+    localStorage.setItem('k2.textGamma.glass.dark', '1.5')
+    useStyleStore.getState().applyStyle({})
+  }
+  const lookKeys = (): string[] =>
+    Object.keys(localStorage).filter(
+      (k) => /^k2\.(accent|dial|textGamma)\./.test(k) && !k.startsWith('k2.accent.stamp.'),
+    )
+
+  it('asks first, with Reset and the shared confirm; Cancel changes nothing', async () => {
+    customise()
+    const confirm = vi.fn(async () => false)
+    useConfirmDialogStore.setState({ confirm })
+    render(<StylesSection />)
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }))
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
+    expect(confirm).toHaveBeenCalledWith({
+      title: 'Put Styles back to how K2 ships?',
+      message: 'Your look, light and dark, palettes and accent colours go back to the defaults on this computer.',
+      confirmLabel: 'Reset',
+    })
+    expect(useStyleStore.getState().styleId).toBe('terminal')
+    expect(localStorage.getItem('k2.accent.terminal.paper')).toBe('#ff00aa')
+  })
+
+  it('after Reset: the shipped look, every palette its own accent, dials and text weight at their defaults', async () => {
+    customise()
+    useConfirmDialogStore.setState({ confirm: vi.fn(async () => true) })
+    render(<StylesSection />)
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }))
+    await waitFor(() => expect(useStyleStore.getState().styleId).toBe('glass'))
+    const s = useStyleStore.getState()
+    expect([s.styleId, s.schemeMode, s.autoPalettes, s.gapsPreset, s.accent]).toEqual([
+      'glass',
+      'auto',
+      { dark: 'obsidian', light: 'veil' },
+      '',
+      null,
+    ])
+    expect(lookKeys()).toEqual([])
+    expect(document.documentElement.style.getPropertyValue('--color-accent')).toBe('')
+    expect([localStorage.getItem('k2.style'), localStorage.getItem('k2.scheme')]).toEqual(['glass', 'auto'])
+    expect(screen.getByRole('heading', { level: 2, name: 'Glass' })).toBeTruthy()
+    const row = document.querySelector('[data-settings-id="styles.reset-defaults"]') as HTMLElement
+    expect(row.querySelector('[data-save-note]')?.textContent).toBe('Saved')
+  })
+
+  it('a reset that can’t be saved says so in its row', async () => {
+    customise()
+    useConfirmDialogStore.setState({ confirm: vi.fn(async () => true) })
+    render(<StylesSection />)
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('SecurityError')
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain("couldn't save it"))
+    expect(screen.getByRole('alert').closest('[data-settings-id="styles.reset-defaults"]')).not.toBeNull()
+    expect(useStyleStore.getState().styleId).toBe('glass')
   })
 })
 

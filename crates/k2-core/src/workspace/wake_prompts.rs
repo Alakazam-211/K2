@@ -26,12 +26,9 @@ use crate::db::schema::AgentHeartbeat;
 use crate::terminal::event_sink::TerminalEventSink;
 use crate::terminal::grid_types::GridUpdate;
 
-// Shipped templates. Built-in markdown copied from
-// `crates/k2so-core/wakeup_templates/*.md` at compile time. The
-// matching files ship alongside this module; src-tauri's historical
-// copies under `src-tauri/wakeup_templates/` are retained only for any
-// reference callers that still want the UPPERCASE file scaffold — the
-// authoritative sources now live here.
+// Shipped templates. The markdown lives in
+// `crates/k2-core/wakeup_templates/*.md` and is built in with
+// include_str! at compile time. These are the only copies.
 
 pub const WAKEUP_TEMPLATE_WORKSPACE: &str =
     include_str!("../../wakeup_templates/workspace.md");

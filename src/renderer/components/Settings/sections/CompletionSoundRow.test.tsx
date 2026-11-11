@@ -109,6 +109,19 @@ describe('Completion sound volume and choice', () => {
     expect(useSettingsStore.getState().completionSoundVolume).toBe(80)
   })
 
+  it('a refused volume write puts the slider back where the drag began', async () => {
+    settingsUpdate.mockRejectedValueOnce(new Error('settings_update 403: forbidden'))
+    render(<WorkspaceBehaviorRows />)
+    fireEvent.change(slider(), { target: { value: '60' } })
+    fireEvent.change(slider(), { target: { value: '80' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(COMPLETION_SOUND_VOLUME_SAVE_DELAY_MS)
+    })
+    expect(settingsUpdate).toHaveBeenCalledWith({ completionSoundVolume: 80 })
+    expect(useSettingsStore.getState().completionSoundVolume).toBe(50)
+    expect(slider().value).toBe('50')
+  })
+
   it('takes the daemon\'s clamped value from the echo', async () => {
     settingsUpdate.mockImplementation(async () => echo({ completionSoundVolume: 100 }))
     useSettingsStore.getState().setCompletionSoundVolume(100)

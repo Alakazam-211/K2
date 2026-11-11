@@ -13,6 +13,13 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(async () => undefined),
   listen: vi.fn(async () => () => undefined),
 }))
+// The server keeps every write and echoes the shortcuts back; a test that
+// wants a refusal rejects one call.
+vi.mock('@/lib/daemon-settings', async (orig) => ({
+  ...(await orig<typeof import('@/lib/daemon-settings')>()),
+  settingsGet: vi.fn(async () => ({})),
+  settingsUpdate: vi.fn(async (u: { keybindings?: Record<string, string> }) => ({ keybindings: u.keybindings ?? {} })),
+}))
 vi.mock('@/lib/desktop-chrome', async (orig) => ({
   ...(await orig<typeof import('@/lib/desktop-chrome')>()),
   isMacPlatform: () => h.mac,
@@ -110,6 +117,19 @@ describe('Key Bindings: recording, clashes and reset', () => {
     })
     expect(useSettingsStore.getState().keybindings.goToTickets).toBeTruthy()
     expect(rowFor('Go to Tickets').querySelector('[data-save-note]')).toBeTruthy()
+  })
+
+  it('a shortcut the server refuses keeps the old keys and never says Saved', async () => {
+    const { settingsUpdate } = await import('@/lib/daemon-settings')
+    vi.mocked(settingsUpdate).mockRejectedValueOnce(new Error('settings_update 403: forbidden'))
+    render(<KeybindingsSection />)
+    fireEvent.click(keyButton(rowFor('Go to Tickets')))
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'y', code: 'KeyY', metaKey: true, ctrlKey: true })
+    })
+    expect(useSettingsStore.getState().keybindings.goToTickets).toBeUndefined()
+    expect(rowFor('Go to Tickets').querySelector('[data-save-error]')?.textContent).toContain('Couldn’t save')
+    expect(rowFor('Go to Tickets').querySelector('[data-save-note]')).toBeNull()
   })
 
   it('a key the terminal needs is refused out loud, and recording goes on', async () => {

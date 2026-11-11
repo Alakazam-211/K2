@@ -262,6 +262,24 @@ describe('Settings → General', () => {
     await waitFor(() => expect(row('general.keep-daemon-on-quit').querySelector('[data-save-note]')?.textContent).toBe('Saved'))
   })
 
+  it('a refused font change puts the size back and says so, never Saved', async () => {
+    const { settingsUpdate } = await import('@/lib/daemon-settings')
+    vi.mocked(settingsUpdate).mockRejectedValueOnce(new Error('settings_update 403: forbidden'))
+    useSettingsStore.setState((s) => ({ editor: { ...s.editor, fontSize: 13 } }))
+    render(<GeneralSection />)
+    const size = row('general.font-size')
+    fireEvent.click(within(size).getByRole('button', { name: 'Font size' }))
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('setting-dropdown-menu')).getByRole('button', { name: '16px' }))
+    })
+    // The real store setter posted the change, the server refused it.
+    expect(settingsUpdate).toHaveBeenCalledWith({ editor: expect.objectContaining({ fontSize: 16 }) })
+    expect(useSettingsStore.getState().editor.fontSize).toBe(13)
+    expect(within(size).getByRole('button', { name: 'Font size' }).textContent).toContain('13px')
+    await waitFor(() => expect(size.querySelector('[data-save-error]')?.textContent).toContain('Couldn’t save'))
+    expect(size.querySelector('[data-save-note]')).toBeNull()
+  })
+
   it('a server that isn\'t answering is said plainly, with no raw error in the sentence', async () => {
     tauri.daemon = { state: 'unreachable', reason: 'connection refused' }
     render(<GeneralSection />)

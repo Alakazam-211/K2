@@ -6,7 +6,12 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => {}), listen: vi.fn(async () => () => {}) }))
+vi.mock('@/lib/daemon-settings', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/daemon-settings')>()
+  return { ...actual, settingsGet: vi.fn(async () => ({})), settingsUpdate: vi.fn(async () => ({})) }
+})
 
+import { settingsUpdate } from '@/lib/daemon-settings'
 import { TerminalSection, TERMINAL_MANIFEST } from './TerminalSection'
 import { useSettingsStore } from '@/stores/settings'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
@@ -83,6 +88,38 @@ describe('TerminalSection', () => {
       fireEvent.click(screen.getByRole('switch', { name: 'Mac text shortcuts' }))
     })
     expect(document.querySelector('[data-save-error]')?.textContent).toContain('Couldn’t save')
+  })
+
+  describe('with the real store setter', () => {
+    beforeEach(() => {
+      vi.mocked(settingsUpdate).mockReset()
+      useSettingsStore.setState({ updateTerminalSettings: realUpdate })
+    })
+
+    it('a refused save puts the switch back and says so, never Saved', async () => {
+      vi.mocked(settingsUpdate).mockRejectedValueOnce(new Error('settings_update 403: forbidden'))
+      render(<TerminalSection />)
+      const toggle = screen.getByRole('switch', { name: 'Mac text shortcuts' })
+      await act(async () => {
+        fireEvent.click(toggle)
+      })
+      expect(settingsUpdate).toHaveBeenCalledWith({ terminal: expect.objectContaining({ naturalTextEditing: false }) })
+      expect(useSettingsStore.getState().terminal.naturalTextEditing).toBe(true)
+      expect(toggle.getAttribute('aria-checked')).toBe('true')
+      expect(document.querySelector('[data-save-error]')?.textContent).toContain('Couldn’t save')
+      expect(document.querySelector('[data-save-note]')).toBeNull()
+    })
+
+    it('a save the server keeps says Saved', async () => {
+      vi.mocked(settingsUpdate).mockImplementationOnce(async (u: Record<string, unknown>) => ({ terminal: u.terminal }) as never)
+      render(<TerminalSection />)
+      await act(async () => {
+        fireEvent.click(screen.getByRole('switch', { name: 'Mac text shortcuts' }))
+      })
+      expect(useSettingsStore.getState().terminal.naturalTextEditing).toBe(false)
+      expect(document.querySelector('[data-save-note]')).toBeTruthy()
+      expect(document.querySelector('[data-save-error]')).toBeNull()
+    })
   })
 
   it('every search entry points at a row on the page', () => {

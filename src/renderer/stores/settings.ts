@@ -525,6 +525,8 @@ let _volumeSaveTimer: ReturnType<typeof setTimeout> | null = null
 /** The slider value waiting for its write. A daemon echo that lands in
  *  that window must not snap the slider back to the stored value. */
 let _pendingVolume: number | null = null
+/** The volume before the drag began: put back when its write fails. */
+let _volumeBeforeDrag: number | null = null
 
 /** The completion chime choice from a daemon settings body: unknown or
  *  missing values (older daemons) read as the defaults. */
@@ -556,52 +558,52 @@ export function normalizeKeybindings(raw: unknown): Record<string, string> {
   return out
 }
 
+/** Write `updates` to the server and adopt its echo. A refused or failed
+ *  write throws: every setter catches it, puts its old value back and
+ *  resolves, so a page that checks the store after the save shows its
+ *  failure line, never "Saved". */
 async function persistAndApply(
   set: (state: Partial<SettingsState>) => void,
   updates: Record<string, any>
 ): Promise<void> {
   _writeSeq++
-  try {
-    const result = await settingsUpdate(updates)
-    set({
-      terminal: result.terminal,
-      keybindings: normalizeKeybindings(result.keybindings),
-      projectSettings: result.projectSettings ?? {},
-      defaultAgent: result.defaultAgent ?? 'claude',
-      // Always on — ignore any stale false from disk / remote hosts.
-      agenticSystemsEnabled: true,
-      claudeAuthAutoRefresh: result.claudeAuthAutoRefresh ?? false,
-      activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
-      ownerDisplayName: result.ownerDisplayName ?? '',
-      allowRemoteInstruct: result.allowRemoteInstruct ?? false,
-      dnsManageEnabled: result.dnsManageEnabled ?? false,
-      agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
-      connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
-      bootStatusPublic: normalizeBootStatusPublic(result.bootStatusPublic),
-      federationEnabled: result.federationEnabled ?? false,
-      computePreview: result.computePreview ?? false,
-      voiceRoomsPreview: result.voiceRoomsPreview ?? false,
-      boardFilePreview: result.boardFilePreview ?? false,
-      orgChart: result.orgChart === true,
-      videoRoomsPreview: result.videoRoomsPreview ?? true,
-      apps: appsSwitchFrom(result),
-      apiEnabled: result.apiEnabled ?? false,
-      completionSoundEnabled: result.completionSoundEnabled ?? true,
-      ...completionSoundChoice(result),
-      // Caret target is per-install localStorage — never adopt the daemon echo.
-      workspaceSwitchFocus: readWorkspaceSwitchFocus(),
-      newAgentView: readNewAgentView(),
-      threadTextWidth: readThreadTextWidth(),
-      editor: mergeEditorDefaults(result.editor),
-      // Style is client-local SSOT — never adopt the daemon echo here.
-      style: styleFromLocalStore(),
-      lastActiveProjectId: result.lastActiveProjectId ?? null,
-      lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,
-      loaded: true
-    })
-  } catch (e) {
-    console.warn('[settings] persistAndApply failed:', e)
-  }
+  const result = await settingsUpdate(updates)
+  set({
+    terminal: result.terminal,
+    keybindings: normalizeKeybindings(result.keybindings),
+    projectSettings: result.projectSettings ?? {},
+    defaultAgent: result.defaultAgent ?? 'claude',
+    // Always on — ignore any stale false from disk / remote hosts.
+    agenticSystemsEnabled: true,
+    claudeAuthAutoRefresh: result.claudeAuthAutoRefresh ?? false,
+    activeWindowHours: clampActiveWindowHours(result.activeWindowHours ?? DEFAULT_ACTIVE_WINDOW_HOURS),
+    ownerDisplayName: result.ownerDisplayName ?? '',
+    allowRemoteInstruct: result.allowRemoteInstruct ?? false,
+    dnsManageEnabled: result.dnsManageEnabled ?? false,
+    agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
+    connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
+    bootStatusPublic: normalizeBootStatusPublic(result.bootStatusPublic),
+    federationEnabled: result.federationEnabled ?? false,
+    computePreview: result.computePreview ?? false,
+    voiceRoomsPreview: result.voiceRoomsPreview ?? false,
+    boardFilePreview: result.boardFilePreview ?? false,
+    orgChart: result.orgChart === true,
+    videoRoomsPreview: result.videoRoomsPreview ?? true,
+    apps: appsSwitchFrom(result),
+    apiEnabled: result.apiEnabled ?? false,
+    completionSoundEnabled: result.completionSoundEnabled ?? true,
+    ...completionSoundChoice(result),
+    // Caret target is per-install localStorage — never adopt the daemon echo.
+    workspaceSwitchFocus: readWorkspaceSwitchFocus(),
+    newAgentView: readNewAgentView(),
+    threadTextWidth: readThreadTextWidth(),
+    editor: mergeEditorDefaults(result.editor),
+    // Style is client-local SSOT — never adopt the daemon echo here.
+    style: styleFromLocalStore(),
+    lastActiveProjectId: result.lastActiveProjectId ?? null,
+    lastActiveWorkspaceId: result.lastActiveWorkspaceId ?? null,
+    loaded: true
+  })
 }
 
 function resolveSettingsSection(
@@ -901,8 +903,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       // Partial update — the daemon deep-merges `apps` and syncs it into
       // deploy::set_enabled() so /cli/app/* lights up (or goes dark) at once
       // on THIS host (settingsUpdate is host-aware). Owner-only server-side:
-      // unlike persistAndApply this does not swallow a 403, it rolls back
-      // and throws so the caller can show why.
+      // unlike the other setters this does not resolve after a 403, it
+      // rolls back and throws so the caller can show why.
       const result = await settingsUpdate({ apps: enabled })
       set({ apps: appsSwitchFrom(result) })
     } catch (err) {
@@ -930,16 +932,25 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setCompletionSoundVolume: (volume: number) => {
     const next = clampCompletionSoundVolume(volume)
+    if (_volumeBeforeDrag === null) _volumeBeforeDrag = get().completionSoundVolume
     _pendingVolume = next
     set({ completionSoundVolume: next }) // optimistic
     if (_volumeSaveTimer) clearTimeout(_volumeSaveTimer)
     _volumeSaveTimer = setTimeout(() => {
       _volumeSaveTimer = null
       const value = _pendingVolume
+      const prev = _volumeBeforeDrag
       _pendingVolume = null
+      _volumeBeforeDrag = null
       if (value === null) return
-      // Partial update — the daemon clamps and deep-merges it.
-      void persistAndApply(set, { completionSoundVolume: value })
+      // Partial update — the daemon clamps and deep-merges it. A refused
+      // write puts the slider back, unless a newer drag has begun.
+      persistAndApply(set, { completionSoundVolume: value }).catch((err) => {
+        console.error('[settings] Failed to persist completion-sound volume:', err)
+        if (prev !== null && _pendingVolume === null && get().completionSoundVolume === value) {
+          set({ completionSoundVolume: prev })
+        }
+      })
     }, COMPLETION_SOUND_VOLUME_SAVE_DELAY_MS)
   },
 

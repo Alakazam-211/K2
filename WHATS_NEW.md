@@ -6,6 +6,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ## 0.46.12 — Inbox fixes, and Themes
 
 ### Look and feel
+- **Side drawers: drag a tab to reorder it,** or press Alt+Left/Right on a focused tab. Your order is kept on this computer, and right-click → Reset Tab Order puts it back.
 - **Styles is now Themes.** Settings → Themes is the same page with a clearer name. Glass's dark gold palette is now called **Dusk**; your choice is kept.
 
 ### Fixes

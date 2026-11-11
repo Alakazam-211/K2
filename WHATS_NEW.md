@@ -3,6 +3,13 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.12 — Inbox fixes
+
+### Fixes
+- **Agents can read their inbox again in every session.** When several sessions started at the same moment, some (sidecars or main agents) could lose their private connection to K2, and `k2 inbox read` answered "the K2 daemon gave no usable answer". Each session now gets its connection, and the `k2` command falls back to the normal one if it ever can't reach it.
+- **Inbox item names are checked.** An inbox item id or folder is now always a single name inside the workspace's own inbox.
+- **If you're updating from 0.46.10 or earlier,** you still get the new default look (Glass, Auto) once, the same as 0.46.11.
+
 ## 0.46.11 — Kessel, a new look, and a Get started list
 
 ### App SDK

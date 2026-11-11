@@ -44,7 +44,7 @@ import { useSettingsStore } from '@/stores/settings'
 export const K5_SHEET_COPY = {
   step1: 'Name and folder',
   step2: 'Choose K5’s tool',
-  adminCreator: 'K5 will ask an Owner before changing your Org Chart.',
+  adminCreator: 'K5 will ask an Owner before changing your Org Chart, which sets who leads which agents.',
   create: 'Create K5',
 } as const
 
@@ -80,7 +80,15 @@ export const K5_TRY_AGAIN = 'Try again'
 export const K5_CREATE_FAILED = {
   what: 'K2 couldn’t create K5.',
   next: 'Nothing was made. Fix what the server says, then try again.',
+  /** The server couldn't write K5's folder. */
+  permission: 'Nothing was made. K2 can’t write to that folder. Choose another folder name, or ask whoever runs this server to check its permissions.',
 } as const
+
+/** What to do after a failed create: a folder K2 can't write gets its own
+ *  next step; anything else the general one. */
+export function createFailedNext(reason: string): string {
+  return /permission denied|EACCES|EPERM|not writable|read-only file system/i.test(reason) ? K5_CREATE_FAILED.permission : K5_CREATE_FAILED.next
+}
 
 export interface K5Tool {
   tool: string
@@ -216,7 +224,7 @@ function K5Frame({
         aria-busy={busy || undefined}
         data-testid="k5-sheet"
         placement="top"
-        className="w-[min(36rem,calc(100vw-2.5rem))] min-h-[min(21.5rem,calc(100vh-var(--dialog-top)-1rem))] max-h-[calc(100vh-var(--dialog-top)-1rem)] flex flex-col"
+        className="w-[min(36rem,calc(100vw-2.5rem))] min-h-[min(22.25rem,calc(100vh-var(--dialog-top)-1rem))] max-h-[calc(100vh-var(--dialog-top)-1rem)] flex flex-col"
       >
         <div className="flex-shrink-0 px-5 pt-5 pb-4 pr-10">
           {step ? (
@@ -592,7 +600,7 @@ function K5SheetBody(): React.JSX.Element {
               {K5_MADE_ELSEWHERE.line}
             </Callout>
           ) : (
-            <FailedNote what={K5_CREATE_FAILED.what} next={K5_CREATE_FAILED.next} detail={error.text} />
+            <FailedNote what={K5_CREATE_FAILED.what} next={createFailedNext(error.text)} detail={error.text} />
           )}
         </div>
       ) : null}

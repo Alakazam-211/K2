@@ -50,6 +50,7 @@ import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import K5Sheet, {
   K5_CREATE_FAILED,
+  createFailedNext,
   K5_MADE_ELSEWHERE,
   K5_BUSY_TEXT,
   K5_TRY_AGAIN,
@@ -308,6 +309,12 @@ async function toStep2NoTool(): Promise<void> {
 }
 
 describe('K5 sheet helpers', () => {
+  it('a folder K2 cannot write gets its own next step; anything else the general one', () => {
+    expect(createFailedNext("couldn't make the folder /home/a/k2-agents/k5: Permission denied")).toBe(K5_CREATE_FAILED.permission)
+    expect(createFailedNext('EACCES: open /x')).toBe(K5_CREATE_FAILED.permission)
+    expect(createFailedNext('tool codex is not signed in')).toBe(K5_CREATE_FAILED.next)
+  })
+
   it('signed-in tools follow the llm_sign_in rule', () => {
     expect(signedInK5Tools(parseAccountsDoc(ACCOUNTS)).map((t) => t.tool)).toEqual(['claude', 'codex'])
     expect(signedInK5Tools(null)).toEqual([])

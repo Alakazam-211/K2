@@ -2256,16 +2256,6 @@ exit: 0
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
-      "name": "checkin",
-      "usage": "k2 checkin [--status \"msg\"] [--done]",
-      "description": "Agent check-in / status update.",
-      "args": [],
-      "flags": [
-        {"name": "--status", "arg": "msg", "description": "Post a status message."},
-        {"name": "--done", "arg": null, "description": "Mark current work done."}
-      ]
-    },
-    {
       "name": "heartbeat",
       "usage": "k2 heartbeat",
       "description": "List this workspace's active heartbeat schedules (named scheduled wakes; = 'heartbeat schedule list'). Some people call these routines, scheduled tasks or cron jobs. --help anywhere prints usage and never mutates.",

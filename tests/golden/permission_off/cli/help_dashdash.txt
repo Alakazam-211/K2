@@ -36,12 +36,8 @@ YOUR INBOX
   inbox delete <id>                     Move to macOS Recycle Bin (recoverable from Trash)
   inbox search "query"                  Search inbox + folders
   inbox folders                         List folders this workspace has created
-
-CHECKIN
-  checkin                               Heartbeat ping ("I'm alive")
-  checkin --status "message"            Report status update
-  checkin --done [--blocked "reason"]   Task complete (or blocked)
-  done                                  API cell (K2_API_CELL=1): complete (grace); else checkin --done
+  done [--blocked "reason"]             Mark your task done (or blocked) via /cli/done;
+                                        in an API cell (K2_API_CELL=1): complete (grace)
 
 AGENTS
   agent                                 Hire, configure, list, retire this server's agents;

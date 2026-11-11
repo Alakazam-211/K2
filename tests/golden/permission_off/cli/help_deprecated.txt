@@ -7,7 +7,9 @@ HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
 
   state list|get|set              → (removed — Workspace States retired)
   app-update                      → update --app
-  status "msg"                    → checkin --status "msg"
+  status "msg"                    → organization update "<news>"
+  checkin                         → organization bulletin|update, thread, tickets, inbox
+  checkin --done                  → done [--blocked "reason"]
 
   # 0.40.31 — legacy per-agent adaptive heartbeat control removed
   # (heartbeat.json; nothing consumed it since 0.39.0d). Named
@@ -65,7 +67,7 @@ EXAMPLES OF MIGRATION
   New: k2 msg scout_v3 "hello"            # workspace-implicit; --agent removed
 
   # Marking a task done
-  Old: k2 done --blocked "Stripe API access"
-  New: k2 checkin --done --blocked "Stripe API access"   (or just `done`)
+  Old: k2 checkin --done --blocked "Stripe API access"
+  New: k2 done --blocked "Stripe API access"
 --- stderr
 --- requests

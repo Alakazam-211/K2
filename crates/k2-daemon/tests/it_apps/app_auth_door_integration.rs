@@ -370,7 +370,7 @@ async fn change_set_password_must_change_invites_and_the_link_exchange() {
     assert_eq!((r.status, r.code()), (403, "password_change_required".to_string()), "{}", r.body);
     let tok = r.json()["changeToken"].as_str().expect("changeToken").to_string();
     assert!(tok.starts_with("k2chg_") && !r.body.contains("k2skn_"));
-    // The exact shape k2 study auth-pages shows (0.46.12): the token at the
+    // The exact shape k2 study auth-pages shows (0.46.11): the token at the
     // top level and again in error, with its end in seconds.
     let j = r.json();
     let mut keys: Vec<&str> = j.as_object().expect("object").keys().map(String::as_str).collect();
@@ -560,7 +560,7 @@ async fn origins_content_type_limits_and_a_suspended_app() {
     let _ = (&s.other_app, &s.other_svc);
 }
 
-// ── on the link: the door's status, a device refresh (0.46.12) ───────
+// ── on the link: the door's status, a device refresh (0.46.11) ───────
 
 /// Open `app`'s gateway link (any free port); its App pass and port.
 fn open_link(ws: &Ws, app: &str, svc: &str) -> (String, u16) {

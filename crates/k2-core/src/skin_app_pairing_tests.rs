@@ -438,7 +438,7 @@ fn bad(v: serde_json::Value, field: &str) {
 #[test]
 fn desktop_only_is_said_out_loud_names_no_phone_app_and_keeps_every_other_check() {
     use serde_json::json;
-    // 0.46.12: no phone app, said with desktopOnly: true.
+    // 0.46.11: no phone app, said with desktopOnly: true.
     let ok = parse_input(&json!({"app": "x", "desktopOnly": true, "nativeOrigins": ["tauri://localhost"], "hosts": ["jobs.box.k2.dev"]})).expect("desktop only");
     assert!(ok.ios.is_empty() && ok.android.is_empty(), "{ok:?}");
     assert_eq!(ok.native_origins, ["tauri://localhost"]);

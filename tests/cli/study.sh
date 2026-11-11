@@ -849,7 +849,7 @@ done
 # the public CLI never carries the draft.
 assert_absent "auth-pages: no draft statement" "$ap_out" "DRAFT WORDING"
 ap_lines="$(printf '%s\n' "$ap_out" | wc -l | tr -d ' ')"
-# 0.46.12: + IS THE DOOR ON? and DEVICE SIGN-IN AND REFRESH (80 → 100).
+# 0.46.11: + IS THE DOOR ON? and DEVICE SIGN-IN AND REFRESH (80 → 100).
 if [ "$ap_lines" -le 100 ]; then echo "  PASS: auth-pages is bounded ($ap_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: auth-pages is $ap_lines lines (max 100)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: auth-pages row" "$("$K2" study)" "  auth-pages          Your own sign-in page posts passwords to K2"
 echo "== k2 study tauri (prd-tauri-core-0467-v1 TC-14, 0.46.7) =="

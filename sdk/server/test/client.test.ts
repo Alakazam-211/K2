@@ -439,7 +439,7 @@ describe('login (must-not-break: the BFF logs its guests in)', () => {
   })
 })
 
-describe('guests.refresh (K2 0.46.12): the documented call works with no guest bound', () => {
+describe('guests.refresh (K2 0.46.11): the documented call works with no guest bound', () => {
   const REFRESHED = { ok: true, token: GUEST, refresh: 'k2skr_next', passExpiresAt: 1_900_000_000, refreshExpiresAt: 1_902_000_000, username: 'ada', principalId: 'p1', app: 'svc-jobs-1', device: { id: 'install-1', name: 'Laptop' } }
 
   it('k2.guests.refresh({refresh}) goes with the App pass, names this App, and renames token to pass', async () => {
@@ -491,7 +491,7 @@ describe('guests.refresh (K2 0.46.12): the documented call works with no guest b
   })
 })
 
-describe('auth.doorStatus (K2 0.46.12): is the sign-in door on for this App', () => {
+describe('auth.doorStatus (K2 0.46.11): is the sign-in door on for this App', () => {
   const STATUS = { ok: true, on: true, app: 'jobs', box: true, appOff: false, door: '/.k2/auth', hosts: [{ host: 'jobs.box.example.k2.dev', door: true }] }
 
   it('k2.auth.doorStatus() is a GET with the App pass, answer projected', async () => {

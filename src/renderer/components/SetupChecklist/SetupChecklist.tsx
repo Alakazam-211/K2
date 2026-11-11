@@ -59,12 +59,12 @@ export const SETUP_CHECKLIST_COPY: Record<FirstRunRowId, { label: string; line: 
   llm_sign_in: { label: 'Sign in to an AI tool', line: 'Claude, Codex or Grok. Your agents think with it.' },
   chief_of_staff: { label: 'Hire your Chief of Staff', line: 'Your lead agent. K5 hires it with you.' },
   first_agent: { label: 'Make your first agent', line: 'Each workspace is an agent with its own folder.' },
-  tunnel: { label: 'Turn on the tunnel', line: 'Reach this server from anywhere.' },
+  tunnel: { label: 'Link your subdomain', line: 'Gives this server an address of its own at k2.dev, so your phone and other people can reach it.' },
   phone: { label: 'Connect your phone', line: 'Talk to your agents from your phone.' },
   own_sign_in: { label: 'Make your own sign-in', line: 'Sign in from your phone and your other devices.' },
 }
 
-export const NEEDS_TUNNEL_NOTE = 'Away from home, your phone needs the tunnel first.'
+export const NEEDS_TUNNEL_NOTE = 'Away from home, your phone needs your subdomain first.'
 export const NEEDS_K5_NOTE = 'You’ll meet K5 first.'
 
 /** Each note's copy (a note this client doesn't know never reaches here). */

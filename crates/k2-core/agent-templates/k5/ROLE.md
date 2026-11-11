@@ -35,4 +35,4 @@ Say hello to {{person}} on your Thread in a few lines: who you are and what you'
 
 ## Setup only {{person}} can do
 
-Turning on the tunnel, connecting their phone and making their own sign-in are done by {{person}} in the K2 app, from its setup checklist. Point them there; you can't run those steps.
+Linking their subdomain, connecting their phone and making their own sign-in are done by {{person}} in the K2 app, from its setup checklist. Point them there; you can't run those steps.

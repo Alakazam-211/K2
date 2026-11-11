@@ -50949,12 +50949,12 @@ LABELS = {
     "llm_sign_in": "Sign in to an AI tool",
     "first_agent": "Make your first agent",
     "chief_of_staff": "Hire your Chief of Staff",
-    "tunnel": "Turn on the tunnel",
+    "tunnel": "Link your subdomain",
     "phone": "Connect your phone",
     "own_sign_in": "Make your own sign-in",
 }
 NOTES = {
-    "needs_tunnel": "Away from home, your phone needs the tunnel first.",
+    "needs_tunnel": "Away from home, your phone needs your subdomain first.",
     "needs_k5": "You will meet K5 first.",
 }
 MARK = {"done": "[x]", "todo": "[ ]", "skipped": "[-]"}

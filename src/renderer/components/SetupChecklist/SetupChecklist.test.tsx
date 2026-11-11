@@ -172,6 +172,11 @@ describe('SetupChecklist', () => {
       label: 'Sign in to an AI tool',
       line: 'Claude, Codex or Grok. Your agents think with it.',
     })
+    expect(SETUP_CHECKLIST_COPY.tunnel).toEqual({
+      label: 'Link your subdomain',
+      line: 'Gives this server an address of its own at k2.dev, so your phone and other people can reach it.',
+    })
+    expect(NEEDS_TUNNEL_NOTE).toBe('Away from home, your phone needs your subdomain first.')
     const first = screen.getByTestId('setup-row-llm_sign_in')
     expect(first.textContent).toContain('Sign in to an AI tool')
     expect(first.textContent).toContain('Claude, Codex or Grok. Your agents think with it.')

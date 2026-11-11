@@ -12,8 +12,12 @@
 #    session with the same base commit, assets and Windows flag → reuse it
 #    (K2_RELEASE_RESUME runs, a by-hand re-run within 12 h). A session with
 #    other parameters → stop loudly: someone else opened one; investigate.
-#    An expired session with the same base → re-approve (the prompt says
-#    RE-APPROVE).
+#    When it signed nothing (an earlier run that stopped at a gate, then a
+#    fix commit), the error prints the one line that cancels it:
+#    `sudo /usr/local/libexec/k2sign/k2sign-admin cancel-session <version>`
+#    (a person's admin password; the signer re-checks that nothing was
+#    signed), then re-run release.sh. An expired session with the same base
+#    → re-approve (the prompt says RE-APPROVE).
 # 2. `k2sign challenge …` → the challenge JSON the signer made and keeps.
 # 3. K2 Release Approve (a small Swift app in ~/Applications, run as this
 #    user with `open -W`): Touch ID or the login password, then a Secure Enclave P-256 signature
@@ -132,7 +136,19 @@ k2sa_open_session() {
         swin="$(printf '%s' "$st" | k2sa_status_field session.windows)"
         valid="$(printf '%s' "$st" | k2sa_status_field session.valid)"
         if [ "$sbase" != "$base" ] || [ "$sassets" != "$assets_sorted" ] || { [ "$swin" = true ] && [ "$windows" = 0 ]; } || { [ "$swin" = false ] && [ "$windows" = 1 ]; }; then
-            k2sa_fail "$version already has an approved session with different parameters (approved $(printf '%s' "$st" | k2sa_status_field session.approved), base ${sbase:0:12}, assets: $sassets). This run wants base ${base:0:12}, assets: $assets_sorted. Investigate before re-approving."
+            local scount ssigned way
+            scount="$(printf '%s' "$st" | k2sa_status_field session.count)"
+            ssigned="$(printf '%s' "$st" | k2sa_status_field signed)"
+            if [ "$scount" = 0 ] && [ -z "$ssigned" ]; then
+                # Nothing signed under it (the signer checks again, and its
+                # audit log, before it cancels anything).
+                way="Investigate before re-approving. If the earlier run stopped before it built or signed anything (a failed pre-flight gate, then a fix commit), cancel that session (a person types the admin password; the signer refuses if anything was signed), then re-run:
+    sudo /usr/local/libexec/k2sign/k2sign-admin cancel-session $version
+    ./scripts/release.sh $version"
+            else
+                way="Investigate before re-approving: it has signatures (session count ${scount:-?}; signed: ${ssigned:-none}), so it can't be cancelled (the release may be out)."
+            fi
+            k2sa_fail "$version already has an approved session with different parameters (approved $(printf '%s' "$st" | k2sa_status_field session.approved), base ${sbase:0:12}, assets: $sassets). This run wants base ${base:0:12}, assets: $assets_sorted. $way"
             return 1
         fi
         if [ "$valid" = true ]; then

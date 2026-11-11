@@ -28,6 +28,7 @@ Admin verbs (root):
   generate-u2           import u1 <key file> [--password-stdin]
   pin-compute-controller <fp> <key>    pin-compute-node <name> <pem> <fp>    unpin-compute-node <name>
   clear-compute-evidence <version>
+  cancel-session <version> [--restore-last-version <x.y.z>]   (only a session that signed nothing)
 
 Exit codes: 0 ok; 2 usage; 3 refused (one red line saying why); 4 internal.
 
@@ -1890,7 +1891,9 @@ def write_session(ctx, pol, challenge, by):
     # "opened": this version's FIRST approval. A re-approval keeps it, so
     # compute receipts from the same release run stay inside the window.
     prev = load_session(ctx, version)
-    opened = int(prev.get("opened", prev["approved"])) if prev is not None and challenge["reapproval"] else now
+    again = prev is not None and challenge["reapproval"]
+    opened = int(prev.get("opened", prev["approved"])) if again else now
+    last = last_version(ctx)
     sess = {
         "version": version, "base_commit": challenge["base_commit"], "assets": challenge["assets"],
         "windows": challenge["windows"], "max_signatures": challenge["max_signatures"],
@@ -1898,8 +1901,15 @@ def write_session(ctx, pol, challenge, by):
         "nonce": challenge["nonce"], "reapproval": challenge["reapproval"], "by": by,
         "count": 0, "signed": [],
     }
+    # "prev_last_version": state/last_version before this version's FIRST
+    # approval (null: there was none), so cancel-session can put it back. A
+    # re-approval carries it over; a session written before this field
+    # existed has none, and cancel-session then needs the admin to name it.
+    if not again:
+        sess["prev_last_version"] = last
+    elif "prev_last_version" in prev:
+        sess["prev_last_version"] = prev["prev_last_version"]
     write_file(ctx, session_path(ctx, version), json.dumps(sess, sort_keys=True))
-    last = last_version(ctx)
     if last is None or vtuple(version) > vtuple(last):
         write_file(ctx, os.path.join(ctx.state, "last_version"), version + "\n")
     audit(ctx, version, "APPROVED-BY-ADMIN" if by == "admin" else "APPROVED", detail="base %s; %s; expires %s%s" % (
@@ -2353,10 +2363,185 @@ def admin_clear_compute_evidence(ctx, args):
     say("compute evidence for %s cleared (audited): its x86 daemon now needs GitHub's attestation" % version)
 
 
+def read_var(ctx, path):
+    """The bytes of a file under /var/k2sign, or None when it is missing;
+    never through a symlink or a hard link (admin reads as root)."""
+    folder, name = var_split(ctx, path)
+    dfd = var_dirfd(ctx, folder, create=False)
+    if dfd is None:
+        return None
+    try:
+        try:
+            fd = os.open(name, os.O_RDONLY | FILE_FLAGS, dir_fd=dfd)
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            raise Refused("%s: %s (a symlink is refused)" % (path, e.strerror))
+    finally:
+        os.close(dfd)
+    try:
+        check_opened(ctx, fd, path)
+        chunks = []
+        while True:
+            b = os.read(fd, 1 << 16)
+            if not b:
+                break
+            chunks.append(b)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def rename_var(ctx, path, new_name):
+    """Rename a file under /var/k2sign within its folder (renameat: a
+    symlink is moved, never its target); never replaces anything."""
+    folder, name = var_split(ctx, path)
+    if "/" in new_name or new_name in (".", ".."):
+        raise Refused("internal: bad new name %r" % new_name)
+    dfd = var_dirfd(ctx, folder, create=False)
+    if dfd is None:
+        raise Refused("%s: its folder is missing" % path)
+    try:
+        try:
+            os.stat(new_name, dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise Refused("%s/%s already exists: refused" % (os.path.dirname(path), new_name))
+        os.rename(name, new_name, src_dir_fd=dfd, dst_dir_fd=dfd)
+    finally:
+        os.close(dfd)
+
+
+def release_signatures(ctx, version):
+    """Every signature of a release file under <version>, from the audit log
+    and the one-sha-per-asset registry. The preflight self-test is not one
+    (it signs a fixed text, never a release file)."""
+    found = []
+    text = read_var(ctx, os.path.join(ctx.audit_dir, version, "signatures.tsv"))
+    for line in (text or b"").decode().splitlines():
+        f = line.split("\t")
+        if f[:2] == ["time", "event"]:
+            continue  # the header
+        if len(f) < 4:
+            raise Refused("audit/%s/signatures.tsv has a malformed line: %r" % (version, line[:120]))
+        if f[1] == "SIGNED" and f[3] != SELF_TEST_ASSET:
+            found.append("audit: %s %s %s" % (f[0], f[2], f[3]))
+    reg = read_var(ctx, os.path.join(ctx.state, "assets", version + ".tsv"))
+    for line in (reg or b"").decode().splitlines():
+        if line.strip():
+            found.append("registry: %s" % line.split("\t")[0])
+    return found
+
+
+def admin_cancel_session(ctx, args):
+    """Cancel a version's approval session that signed NOTHING: a release run
+    that stopped before any build (a failed gate, 0.46.11) and must re-run
+    on another base commit. The session file is kept, moved aside to
+    sessions/<version>.json.cancelled-<UTC time>, and state/last_version
+    goes back to what it was before this version's first approval, so a
+    fresh challenge for the same version works. Both are audited.
+
+    Refused once anything was signed under the version, published or not:
+    the audit log, the asset registry and the session's count must hold no
+    release signature. Refused too with compute evidence registered.
+
+    A session written before prev_last_version was recorded needs
+    --restore-last-version <lower x.y.z> (the admin names it; never
+    guessed). With no session file left (one moved aside by hand), the
+    same flag only puts last_version back, after the same checks."""
+    usage = "cancel-session <version> [--restore-last-version <x.y.z>]"
+    restore_arg = None
+    rest = []
+    it = iter(args)
+    for a in it:
+        if a == "--restore-last-version":
+            restore_arg = next(it, None)
+            if restore_arg is None:
+                raise Usage(usage)
+            check_version(restore_arg)
+        elif a.startswith("--"):
+            raise Usage("cancel-session: unknown flag %s" % a)
+        else:
+            rest.append(a)
+    if len(rest) != 1:
+        raise Usage(usage)
+    version = check_version(rest[0])
+    if restore_arg is not None and vtuple(restore_arg) >= vtuple(version):
+        raise Refused("--restore-last-version %s must be lower than %s" % (restore_arg, version))
+    check_pins(ctx)
+    aside = None
+    with Locked(ctx):
+        state_dirs(ctx)
+        spath = session_path(ctx, version)
+        raw = read_var(ctx, spath)
+        sess = json.loads(raw.decode()) if raw is not None else None
+        if sess is None and restore_arg is None:
+            raise Refused("%s has no approval session to cancel" % version)
+        if sess is not None and sess.get("version") != version:
+            raise Refused("%s holds a session for %r: refused" % (spath, sess.get("version")))
+        signed = release_signatures(ctx, version)
+        if sess is not None and (int(sess.get("count", 0)) != 0 or sess.get("signed")):
+            signed.append("session: %s signature(s)" % sess.get("count"))
+        if signed:
+            raise Refused("%s has signatures (%s): a session that signed anything is never cancelled; "
+                          "investigate (the release may be out) and release a new version instead"
+                          % (version, "; ".join(signed[:6]) + ("; ..." if len(signed) > 6 else "")))
+        if read_var(ctx, compute_state_path(ctx, version)) is not None:
+            raise Refused("%s has K2 Compute evidence registered (release.sh Step 10.5 ran): investigate; "
+                          "clear-compute-evidence first only if you are sure nothing was signed or published" % version)
+        last = last_version(ctx)
+        # What last_version goes back to: the session's record, else the admin's.
+        restore = None
+        if last == version:
+            if sess is not None and "prev_last_version" in sess:
+                restore = (sess["prev_last_version"], "recorded in the session")
+                if restore_arg is not None and restore_arg != restore[0]:
+                    raise Refused("the session records last_version %s before %s's approval, not %s: "
+                                  "drop --restore-last-version" % (restore[0], version, restore_arg))
+                if restore[0] is not None and (not VERSION_RE.match(str(restore[0]))
+                                               or vtuple(restore[0]) >= vtuple(version)):
+                    raise Refused("the session's prev_last_version %r is not a version below %s"
+                                  % (restore[0], version))
+            elif restore_arg is not None:
+                restore = (restore_arg, "named by the admin")
+            else:
+                raise Refused("%s's session has no prev_last_version (written before it was recorded) and "
+                              "state/last_version is %s: name the version before it (the last one released) "
+                              "with --restore-last-version <x.y.z>" % (version, last))
+        elif restore_arg is not None:
+            raise Refused("state/last_version is %s, not %s: nothing to restore; drop --restore-last-version"
+                          % (last, version))
+        if sess is not None:
+            aside = "%s.json.cancelled-%s" % (version, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(ctx.now())))
+            # Audit first, then move (renameat: never a symlink's target).
+            audit(ctx, version, "SESSION-CANCELLED-BY-ADMIN",
+                  detail="base %s; %s; approved %s by %s; no signatures; moved to sessions/%s" % (
+                      sess.get("base_commit"), " ".join(sess.get("assets") or []),
+                      iso(int(sess.get("approved", 0))), sess.get("by"), aside))
+            rename_var(ctx, spath, aside)
+        if restore is not None:
+            audit(ctx, version, "LAST-VERSION-RESTORED-BY-ADMIN", detail="last_version %s -> %s (%s)" % (
+                version, restore[0] if restore[0] is not None else "none", restore[1]))
+            lv = os.path.join(ctx.state, "last_version")
+            if restore[0] is None:
+                unlink_var(ctx, lv)
+            else:
+                write_file(ctx, lv, restore[0] + "\n")
+    if aside is not None:
+        say("%s's approval session cancelled (audited); the file is kept as sessions/%s" % (version, aside))
+    if restore is not None:
+        say("state/last_version is %s again (was %s): a new approval for %s works"
+            % (restore[0] if restore[0] is not None else "unset", version, version))
+    else:
+        say("state/last_version stays %s" % last)
+
+
 ADMIN_VERBS = {"set-approver": admin_set_approver, "repin": admin_repin, "approve": admin_approve,
                "generate-u2": admin_generate_u2, "import": admin_import, "set-gh-token": admin_set_gh_token,
                "pin-compute-controller": admin_pin_compute_controller, "pin-compute-node": admin_pin_compute_node,
-               "unpin-compute-node": admin_unpin_compute_node, "clear-compute-evidence": admin_clear_compute_evidence}
+               "unpin-compute-node": admin_unpin_compute_node, "clear-compute-evidence": admin_clear_compute_evidence,
+               "cancel-session": admin_cancel_session}
 
 
 def main(argv):

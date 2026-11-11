@@ -119,6 +119,8 @@ pub(crate) fn pid_alive(pid: i32) -> bool {
     }
 }
 
+/// macOS: libproc's process status, with `ps` as the fallback when
+/// libproc can't say (`ps` is setuid, so it fails under a sandbox).
 #[cfg(all(unix, not(target_os = "linux")))]
 pub(crate) fn pid_alive(pid: i32) -> bool {
     if pid <= 0 {
@@ -127,6 +129,12 @@ pub(crate) fn pid_alive(pid: i32) -> bool {
     // SAFETY: signal 0 only checks existence.
     if unsafe { libc::kill(pid, 0) } != 0 {
         return false;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(info) = crate::mac_proc::bsd_info(pid) {
+            return !info.zombie;
+        }
     }
     let out = crate::bg_proc::command("ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])
@@ -157,14 +165,47 @@ pub(crate) fn proc_identity(pid: i32) -> Option<String> {
     rest.split_whitespace().nth(19).map(|s| format!("st:{s}"))
 }
 
+/// macOS: `bt:<sec>.<usec>`, libproc's start time (no locale, no time
+/// zone, microseconds). When libproc can't say, `ls:<lstart>`, the start
+/// time as `ps -o lstart=` prints it: the only form before the libproc
+/// switch, and still what other BSDs record.
 #[cfg(all(unix, not(target_os = "linux")))]
 pub(crate) fn proc_identity(pid: i32) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(info) = crate::mac_proc::bsd_info(pid) {
+            return Some(format!("bt:{}.{:06}", info.start_sec, info.start_usec));
+        }
+    }
+    ps_lstart(pid).map(|s| format!("ls:{s}"))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn ps_lstart(pid: i32) -> Option<String> {
     let out = crate::bg_proc::command("ps")
         .args(["-o", "lstart=", "-p", &pid.to_string()])
         .output()
         .ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!s.is_empty()).then(|| format!("ls:{s}"))
+    (!s.is_empty()).then_some(s)
+}
+
+/// The live `pid` is the process a pid record's `identity` names.
+///
+/// macOS also matches an `ls:` record, written by a build before the
+/// libproc switch or by the `ps` fallback: first by libproc's start time
+/// printed as `ps` prints it (no `ps` run), then by `ps` itself. So a
+/// daemon upgraded under a running tunnel still adopts its frpc.
+pub(crate) fn identity_matches(pid: i32, recorded: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(lstart) = recorded.strip_prefix("ls:") {
+            let from_libproc =
+                crate::mac_proc::bsd_info(pid).and_then(|i| crate::mac_proc::ps_lstart_text(i.start_sec));
+            return from_libproc.as_deref() == Some(lstart) || ps_lstart(pid).as_deref() == Some(lstart);
+        }
+    }
+    proc_identity(pid).as_deref() == Some(recorded)
 }
 
 /// Windows: the creation time (GetProcessTimes).
@@ -190,17 +231,35 @@ pub(crate) fn proc_argv(pid: i32) -> Option<Vec<String>> {
     )
 }
 
+/// macOS: `KERN_PROCARGS2` (our own uid only), with `ps` as the fallback
+/// when the kernel won't answer. Another uid's process is never read: it
+/// can't be our frpc.
 #[cfg(all(unix, not(target_os = "linux")))]
 pub(crate) fn proc_argv(pid: i32) -> Option<Vec<String>> {
+    #[cfg(target_os = "macos")]
+    {
+        match crate::mac_proc::argv(pid) {
+            Ok(argv) => return Some(argv),
+            Err(crate::mac_proc::ArgvError::OtherUser) => return None,
+            Err(crate::mac_proc::ArgvError::Unreadable) => {}
+        }
+    }
     // `ps -o command=` joins argv with spaces; frpc's argv is
     // `<frpc> -c <cfg>` and the config path carries no spaces in practice,
-    // but compare on the joined string to stay honest.
+    // but compare on the joined string to stay honest. The uid column
+    // keeps this fallback to our own processes too.
     let out = crate::bg_proc::command("ps")
-        .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
+        .args(["-ww", "-o", "uid=", "-o", "command=", "-p", &pid.to_string()])
         .output()
         .ok()?;
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!s.is_empty()).then(|| vec![s])
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let (uid, command) = line.split_once(char::is_whitespace)?;
+    // SAFETY: getuid has no failure mode.
+    if uid.parse::<libc::uid_t>().ok()? != unsafe { libc::getuid() } {
+        return None;
+    }
+    let command = command.trim();
+    (!command.is_empty()).then(|| vec![command.to_string()])
 }
 
 /// Windows: the recorded command line split as Windows programs read it,
@@ -252,7 +311,7 @@ pub(crate) fn argv_is_our_frpc(argv: &[String], cfg: &Path) -> bool {
         [_interp, script, flag, path] => {
             is_frpc(script) && flag == "-c" && path == cfg.as_ref()
         }
-        // The non-Linux `ps` form: one joined string.
+        // The `ps` fallback form (not Linux or Windows): one joined string.
         [joined] => {
             let mut it = joined.rsplitn(3, ' ');
             let (Some(path), Some(flag), Some(a0)) = (it.next(), it.next(), it.next()) else {
@@ -332,7 +391,7 @@ pub(crate) fn try_adopt(cfg_path: &Path, rendered: &str) -> Result<PidRecord, No
     if !pid_alive(rec.pid) {
         return Err(NoAdopt::Dead);
     }
-    if proc_identity(rec.pid).as_deref() != Some(rec.identity.as_str()) {
+    if !identity_matches(rec.pid, &rec.identity) {
         return Err(NoAdopt::Recycled);
     }
     match proc_argv(rec.pid) {
@@ -527,5 +586,98 @@ mod tests {
         assert!(!pid_alive(pid), "a zombie is not a live frpc");
         child.wait().expect("reap");
         assert!(!pid_alive(pid));
+    }
+
+    /// A live `<frpc> -c <cfg>` stand-in (a `#!/bin/sh` script named
+    /// frpc, so argv is `/bin/sh <dir>/frpc -c <cfg>`) and its config.
+    #[cfg(unix)]
+    struct StandIn {
+        dir: PathBuf,
+        cfg: PathBuf,
+        child: Child,
+    }
+
+    #[cfg(unix)]
+    impl StandIn {
+        const RENDERED: &'static str = "serverAddr = \"relay.example\"\n";
+
+        fn start() -> StandIn {
+            let dir = crate::test_env::unique_temp_path("frpc-adopt");
+            std::fs::create_dir_all(&dir).expect("temp dir");
+            let frpc = dir.join("frpc");
+            crate::test_env::write_executable(&frpc, "#!/bin/sh\nwhile :; do sleep 1; done\n");
+            let cfg = dir.join("frpc.toml");
+            std::fs::write(&cfg, Self::RENDERED).expect("write cfg");
+            let child = std::process::Command::new(&frpc).arg("-c").arg(&cfg).spawn().expect("spawn stand-in");
+            // Wait for the shell to be exec'd (argv names the script).
+            let pid = child.id() as i32;
+            let t = Instant::now();
+            while !proc_argv(pid).is_some_and(|a| argv_is_our_frpc(&a, &cfg)) {
+                assert!(t.elapsed() < Duration::from_secs(5), "stand-in argv: {:?}", proc_argv(pid));
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            StandIn { dir, cfg, child }
+        }
+
+        fn record(&self, identity: String) -> PidRecord {
+            let rec = PidRecord { pid: self.child.id() as i32, identity, cfg: self.cfg.clone(), log_offset: 0 };
+            write_pid_record(&rec);
+            rec
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for StandIn {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_live_frpc_with_this_builds_record_is_adopted() {
+        let s = StandIn::start();
+        let rec = s.record(proc_identity(s.child.id() as i32).expect("identity"));
+        if cfg!(target_os = "macos") {
+            assert!(rec.identity.starts_with("bt:"), "libproc identity: {}", rec.identity);
+        }
+        assert_eq!(try_adopt(&s.cfg, StandIn::RENDERED), Ok(rec.clone()));
+        assert_eq!(try_adopt(&s.cfg, "other"), Err(NoAdopt::ConfigChanged));
+        s.record(format!("{}0", rec.identity));
+        assert_eq!(try_adopt(&s.cfg, StandIn::RENDERED), Err(NoAdopt::Recycled));
+    }
+
+    /// A pid record written before the libproc switch holds
+    /// `ls:<ps -o lstart=>`. A daemon upgraded under a running tunnel must
+    /// still adopt that frpc, with or without a working `ps`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_live_frpc_with_an_old_ps_lstart_record_is_still_adopted() {
+        let s = StandIn::start();
+        let pid = s.child.id() as i32;
+        let start = crate::mac_proc::bsd_info(pid).expect("bsd info").start_sec;
+        // The old build's text: `ps` itself where it runs; under the compute
+        // node's sandbox (no setuid exec) `/bin/date +%c`, the same strftime
+        // call in the same locale.
+        let lstart = |sec: u64| -> String {
+            let out = std::process::Command::new("/bin/date").arg("-r").arg(sec.to_string()).arg("+%c").output().expect("date");
+            assert!(out.status.success(), "date: {out:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let old = match ps_lstart(pid) {
+            Some(from_ps) => {
+                assert_eq!(from_ps, lstart(start), "ps and strftime %c agree");
+                from_ps
+            }
+            None => lstart(start),
+        };
+        let rec = s.record(format!("ls:{old}"));
+        assert!(identity_matches(pid, &rec.identity));
+        assert_eq!(try_adopt(&s.cfg, StandIn::RENDERED), Ok(rec));
+        // Another start second is another process: never adopted.
+        s.record(format!("ls:{}", lstart(start + 1)));
+        assert_eq!(try_adopt(&s.cfg, StandIn::RENDERED), Err(NoAdopt::Recycled));
     }
 }

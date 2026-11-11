@@ -1635,6 +1635,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/product-feedback/diagnostics", Member),
     get("/cli/product-feedback/list", Member),
     post("/cli/product-feedback/retry", Member),
+    // A person's screenshot draft (prd-feedback-screenshot-v1 §5.2): upload
+    // and read back their own; every passport is refused in the handler
+    // (people only).
+    both("/cli/product-feedback/screenshot", Member),
+    post("/cli/product-feedback/screenshot/forget", Member),
     post("/cli/product-feedback/send", Member),
     both("/cli/product-feedback/settings", Member),
     get("/cli/product-feedback/show", Member),

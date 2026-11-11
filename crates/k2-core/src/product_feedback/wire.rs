@@ -11,7 +11,10 @@
 //!    JSON body from [`submission_body`]. Answers: `201 {id}`, `200 {id,
 //!    duplicate: true}`, `400 {code}`, `401 {code}`, `403 box_blocked`,
 //!    `413`, `429 {retryAfterSecs, scope}`, `503 intake_paused
-//!    {retryAfterSecs}`.
+//!    {retryAfterSecs}`. With a person's screenshot the body carries
+//!    [`Screenshot`] as `screenshot` (prd-feedback-screenshot-v1 §6.1, at
+//!    most [`MAX_BODY_WITH_SCREENSHOT`]) and the attempt waits up to
+//!    [`SCREENSHOT_TIMEOUT`].
 //!
 //! Redirects are never followed (an intake must not steer the box to
 //! another host). Before the intake or the relay route exists, both answer
@@ -24,11 +27,19 @@ use std::time::Duration;
 use serde_json::{json, Value as J};
 
 use super::diagnostics::Section;
+use super::screenshot::Meta;
 use super::store::Row;
 
 pub const SUBMISSIONS_PATH: &str = "/v1/submissions";
 pub const ASSERT_PATH: &str = "/api/identity/assert";
 const TIMEOUT: Duration = Duration::from_secs(20);
+/// One attempt with a screenshot (about 2.7 MB up; 22 s at 1 Mbit/s).
+pub const SCREENSHOT_TIMEOUT: Duration = Duration::from_secs(90);
+/// The whole submission with a screenshot: the intake's cap
+/// (`MAX_BODY_WITH_SCREENSHOT`, §6.1).
+pub const MAX_BODY_WITH_SCREENSHOT: usize = 3 * 1024 * 1024;
+/// The one image type sent.
+pub const SCREENSHOT_MIME: &str = "image/png";
 
 /// Retryable-failure codes kept in `last_error` (`<code>: <detail>`).
 pub const E_UNREACHABLE: &str = "service_unreachable";
@@ -38,10 +49,39 @@ pub const E_RATE_LIMITED: &str = "rate_limited";
 pub const E_PAUSED: &str = "intake_paused";
 pub const E_TOKEN: &str = "token_rejected";
 
+/// A row's picture as it goes out: the stored bytes and the meta.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Screenshot {
+    pub png: Vec<u8>,
+    pub meta: Meta,
+}
+
+impl Screenshot {
+    /// The `screenshot` object (§6.1): `mime`, `source`, `capture` (a window
+    /// picture only), `width`, `height`, `sha256` (lowercase hex of the
+    /// PNG) and `data` (the PNG, standard base64 with padding).
+    pub fn wire_json(&self) -> J {
+        use base64::Engine;
+        let mut v = json!({
+            "mime": SCREENSHOT_MIME,
+            "source": self.meta.source,
+            "width": self.meta.width,
+            "height": self.meta.height,
+            "sha256": self.meta.sha256,
+            "data": base64::engine::general_purpose::STANDARD.encode(&self.png),
+        });
+        if let Some(c) = self.meta.capture.as_deref() {
+            v["capture"] = json!(c);
+        }
+        v
+    }
+}
+
 /// The submission's JSON body: the row's fields, its stored versions
-/// (`meta_json`) and, only when the person consented, the diagnostics
-/// exactly as they were previewed.
-pub fn submission_body(row: &Row) -> J {
+/// (`meta_json`), only when the person consented the diagnostics exactly
+/// as they were previewed, and only for a person's row the screenshot they
+/// saw.
+pub fn submission_body(row: &Row, shot: Option<&Screenshot>) -> J {
     let mut body = json!({
         "clientId": row.id,
         "category": row.category,
@@ -68,6 +108,10 @@ pub fn submission_body(row: &Row) -> J {
     {
         let sections: Vec<J> = sections.iter().map(|s| json!({"id": s.id, "title": s.title, "text": s.text})).collect();
         obj.insert("diagnostics".into(), json!({ "sections": sections }));
+    }
+    // Agents can't attach one (v1); a belt behind the routes.
+    if let Some(s) = shot.filter(|_| row.sender_kind == "person") {
+        obj.insert("screenshot".into(), s.wire_json());
     }
     body
 }
@@ -168,21 +212,26 @@ pub fn classify(status: u16, body: &str, retry_after_header: Option<&str>) -> Ou
 }
 
 fn client() -> Result<reqwest::blocking::Client, String> {
+    client_with(TIMEOUT)
+}
+
+fn client_with(timeout: Duration) -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(TIMEOUT)
+        .timeout(timeout)
         .build()
         .map_err(|e| format!("build http client: {e}"))
 }
 
-/// One submission attempt.
-pub fn post_submission(endpoint: &str, jwt: &str, row: &Row) -> Outcome {
+/// One submission attempt (with the row's picture, when it has one: the
+/// longer [`SCREENSHOT_TIMEOUT`]).
+pub fn post_submission(endpoint: &str, jwt: &str, row: &Row, shot: Option<&Screenshot>) -> Outcome {
     let url = format!("{}{SUBMISSIONS_PATH}", endpoint.trim_end_matches('/'));
-    let http = match client() {
+    let http = match client_with(if shot.is_some() { SCREENSHOT_TIMEOUT } else { TIMEOUT }) {
         Ok(c) => c,
         Err(e) => return Outcome::Retry { code: E_UNREACHABLE.into(), detail: e, after_secs: None, reauth: false },
     };
-    let body = submission_body(row).to_string();
+    let body = submission_body(row, shot).to_string();
     match http
         .post(&url)
         .header("Authorization", format!("K2-Box {jwt}"))
@@ -347,12 +396,13 @@ mod tests {
             remote_id: None,
             sent_at: None,
             diagnostics_json: None,
+            screenshot_meta: None,
         }
     }
 
     #[test]
     fn the_body_carries_exactly_the_contract_fields() {
-        let b = submission_body(&row());
+        let b = submission_body(&row(), None);
         let keys: Vec<&String> = b.as_object().unwrap().keys().collect();
         let mut keys: Vec<&str> = keys.iter().map(|k| k.as_str()).collect();
         keys.sort();
@@ -364,9 +414,44 @@ mod tests {
         let mut r = row();
         r.contact_email = Some("a@b.co".into());
         r.diagnostics_json = Some(r#"[{"id":"versions","title":"Versions","text":"Daemon: 1"}]"#.into());
-        let b = submission_body(&r);
+        let b = submission_body(&r, None);
         assert_eq!(b["contactEmail"], json!("a@b.co"));
         assert_eq!(b["diagnostics"], json!({"sections": [{"id": "versions", "title": "Versions", "text": "Daemon: 1"}]}));
+    }
+
+    fn shot(capture: Option<&str>) -> Screenshot {
+        let png = crate::product_feedback::screenshot::fixture::png(5, 4);
+        let sha256 = crate::product_feedback::screenshot::sha256_hex(&png);
+        let meta = Meta { bytes: png.len(), width: 5, height: 4, source: (if capture.is_some() { "window" } else { "file" }).to_string(), capture: capture.map(str::to_string), sha256 };
+        Screenshot { png, meta }
+    }
+
+    #[test]
+    fn a_persons_screenshot_goes_as_base64_with_its_hash() {
+        use base64::Engine;
+        let mut r = row();
+        r.sender_kind = "person".into();
+        let s = shot(Some("page"));
+        let b = submission_body(&r, Some(&s));
+        let w = &b["screenshot"];
+        let mut keys: Vec<&str> = w.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["capture", "data", "height", "mime", "sha256", "source", "width"]);
+        assert_eq!((w["mime"].clone(), w["source"].clone(), w["capture"].clone()), (json!("image/png"), json!("window"), json!("page")));
+        assert_eq!((w["width"].clone(), w["height"].clone()), (json!(5), json!(4)));
+        let data = base64::engine::general_purpose::STANDARD.decode(w["data"].as_str().unwrap()).unwrap();
+        assert_eq!(data, s.png, "the stored bytes, exactly");
+        assert_eq!(w["sha256"], json!(crate::product_feedback::screenshot::sha256_hex(&data)));
+        // A file has no capture.
+        let f = submission_body(&r, Some(&shot(None)));
+        assert!(f["screenshot"].get("capture").is_none(), "{f}");
+        assert_eq!(f["screenshot"]["source"], json!("file"));
+        // Never on an agent's row.
+        let a = submission_body(&row(), Some(&s));
+        assert!(a.get("screenshot").is_none(), "{a}");
+        // The biggest picture fits the intake's cap.
+        let max_b64 = (crate::product_feedback::screenshot::MAX_BYTES + 2) / 3 * 4;
+        assert!(max_b64 + 64 * 1024 < MAX_BODY_WITH_SCREENSHOT);
     }
 
     #[test]

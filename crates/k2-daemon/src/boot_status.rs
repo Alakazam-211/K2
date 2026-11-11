@@ -1262,6 +1262,9 @@ pub fn features() -> Vec<&'static str> {
     // 0.46.11: Send feedback to K2 (`/cli/product-feedback/*`, the
     // `product_feedback_status` event). Clients hide the button without it.
     out.push(k2_core::product_feedback::FEATURE);
+    // prd-feedback-screenshot-v1: the screenshot draft routes and `send`'s
+    // `screenshot`. Clients hide Add screenshot without it.
+    out.push(k2_core::product_feedback::SCREENSHOT_FEATURE);
     if post_idempotency_ready() {
         out.push(FEATURE_POST_IDEMPOTENCY);
     }
@@ -1448,6 +1451,7 @@ mod tests {
                 "files-download-v1",
                 "transfers-v1",
                 "product-feedback-v1",
+                "product-feedback-screenshot-v1",
                 "post-idempotency-v1",
                 "remote-desktop-v1",
                 // Sew 0.9.0's pin: voice:record in App roles.

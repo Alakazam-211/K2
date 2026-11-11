@@ -14,14 +14,17 @@
 //! purpose so people can read what their box sends) is exactly
 //! [`wire::submission_body`]: the category, the vault-scrubbed text, an
 //! opt-in contact email, `senderKind`, `client`, the K2/OS versions, the
-//! `clientId`, and only with consent the previewed [`diagnostics`]
-//! sections. The sender's name, workspace and login stay on the box.
+//! `clientId`, only with consent the previewed [`diagnostics`] sections,
+//! and only when a person attached one and saw it, one [`screenshot`]
+//! (prd-feedback-screenshot-v1). The sender's name, workspace and login
+//! stay on the box.
 //!
 //! Before the intake exists (or while it is down) rows stay `queued`; the
 //! drain backs off and the settings answer says plainly that the service
 //! isn't reachable yet. Nothing is lost.
 
 pub mod diagnostics;
+pub mod screenshot;
 pub mod scrub;
 pub mod settings;
 pub mod store;
@@ -48,6 +51,9 @@ pub const CLIENTS: &[&str] = &["desktop", "web", "cli"];
 /// The feature key in `/boot-status` (clients hide the button on servers
 /// without it).
 pub const FEATURE: &str = "product-feedback-v1";
+/// The screenshot routes and `send`'s `screenshot` field
+/// (prd-feedback-screenshot-v1). Clients hide Add screenshot without it.
+pub const SCREENSHOT_FEATURE: &str = "product-feedback-screenshot-v1";
 
 /// The intake base URL in use: [`ENDPOINT_ENV`] when set (non-blank), else
 /// [`DEFAULT_ENDPOINT`]. No trailing slash.

@@ -865,8 +865,10 @@ mod unix_impl {
                 if crate::product_feedback_routes::is_post_only(p) && !is_post {
                     return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
                 }
-                if body.len() > crate::product_feedback_routes::MAX_BODY {
-                    return from_cli(crate::product_feedback_routes::too_large());
+                // The handler refuses every passport on the screenshot routes;
+                // the cap is still the route's own (the cell's is 4 MiB).
+                if body.len() > crate::product_feedback_routes::max_body(p) {
+                    return from_cli(crate::product_feedback_routes::too_large(p));
                 }
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::product_feedback_routes::handle(p, is_post, who, body, params))

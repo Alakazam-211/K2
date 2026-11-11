@@ -61,9 +61,57 @@ Content-Type: application/json
 | `client` | `desktop`, `web` or `cli` |
 | `k2Version`, `daemonVersion`, `installKind`, `os`, `osVersion`, `arch`, `locale` | versions and platform |
 | `diagnostics` | only with consent: `{"sections": [{"id", "title", "text"}]}`, at most 256 KB |
+| `screenshot` | only when a person attached one and saw it: see below |
 
 Nothing else: no names, logins, workspace or agent names, files, terminal
 output, chats, mail, tickets, environment variables, tokens or IP addresses.
+The one exception is a screenshot a person attaches.
+
+### Screenshot (a person only)
+
+A person may attach one picture in the desktop or web dialog: K2's window
+as K2 draws it, or an image they chose, with their marks and solid covers
+flattened into it. Agents and `k2 send-feedback` can't attach one.
+
+1. The dialog uploads the flattened PNG to **your server's daemon**
+   (`POST /cli/product-feedback/screenshot`, `{image, source, capture?}`,
+   base64, at most 2 MiB as a PNG and a 3 MiB body). The daemon checks it
+   (a PNG, each side at most 4096 px, not animated, decodes under limits),
+   cuts every chunk except `IHDR`, `PLTE`, `tRNS`, `IDAT`, `IEND`, `sRGB`,
+   `gAMA` and `pHYs` (so text, EXIF and time chunks go; the pixels don't
+   change) and keeps it in memory for an hour as a draft.
+2. The dialog shows the person **the daemon's own copy**. Send names that
+   draft and the sha256 of those bytes; any other hash is refused (`409
+   screenshot_changed`). So a picture leaves only after the person saw
+   exactly those bytes.
+3. The daemon stores it with the outbox row (`product_feedback_screenshots`)
+   and sends it in the same submission:
+
+```json
+"screenshot": {
+  "mime": "image/png",
+  "source": "window",
+  "capture": "page",
+  "width": 2560,
+  "height": 1600,
+  "sha256": "<64 lowercase hex: sha256 of the PNG bytes>",
+  "data": "<the PNG, standard base64 with padding>"
+}
+```
+
+| Field | Value |
+|---|---|
+| `mime` | always `image/png` |
+| `source` | `window` (K2's window) or `file` (an image the person chose) |
+| `capture` | a `window` picture only: `page` (drawn from the page; terminals, web frames, 3D views and video are labelled blanks) or `webview` (the window's own webview snapshot) |
+| `width`, `height` | the PNG's size, 1 to 4096 each |
+| `sha256`, `data` | the PNG exactly as the person saw it |
+
+With a screenshot the whole submission is at most 3 MiB and an attempt
+waits up to 90 seconds (20 seconds without). Every retry sends the same
+bytes under the same `clientId`. The vault scrub works on text only: the
+picture goes as the person saw it, and covering anything private is theirs
+to do before they send.
 
 ### Diagnostics (consent only)
 
@@ -98,9 +146,11 @@ After 7 days of retrying a submission is **failed**; Retry (the Sent tab,
 ## Kept
 
 On your server: outbox rows 90 days after they are sent, refused, cancelled
-or failed; the diagnostics that were sent 7 days. At Alakazam Labs:
-submissions 12 months, then the server label, contact email and ids are
-removed; diagnostics 90 days. Only Alakazam staff read them.
+or failed; the diagnostics that were sent 7 days; a screenshot only until
+the intake confirms it (or the row is refused or cancelled; a failed one
+keeps it for Retry). At Alakazam Labs: submissions 12 months, then the
+server label, contact email and ids are removed; diagnostics and
+screenshots 90 days. Only Alakazam staff read them.
 
 ## Tests and development
 

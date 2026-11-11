@@ -1,5 +1,12 @@
-//! The outbox (`product_feedback_outbox`, migration 0285) and a person's
-//! remembered diagnostics choice (`product_feedback_prefs`).
+//! The outbox (`product_feedback_outbox`, migration 0285), a person's
+//! remembered diagnostics choice (`product_feedback_prefs`) and the
+//! screenshot a person attached (`product_feedback_screenshots` and
+//! `screenshot_meta`, migration 0289, prd-feedback-screenshot-v1 §5.4).
+//!
+//! A row and its picture are written in one transaction. The picture is
+//! deleted in the same transaction as the move to `sent` (the intake
+//! confirmed it), `refused` or `cancelled`; a retry or a `failed` row keeps
+//! it, so the next attempt sends the same bytes. `screenshot_meta` stays.
 //!
 //! States: `queued` → `sending` → `sent`; a retryable failure goes back to
 //! `queued` with a later `next_attempt_at`; a reject the intake understood
@@ -84,6 +91,25 @@ pub struct Row {
     pub remote_id: Option<String>,
     pub sent_at: Option<i64>,
     pub diagnostics_json: Option<String>,
+    /// [`super::screenshot::Meta`] as JSON, when a person attached one.
+    pub screenshot_meta: Option<String>,
+}
+
+/// A picture to store with a new row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewShot {
+    pub png: Vec<u8>,
+    pub sha256: String,
+    /// [`super::screenshot::Meta`] as JSON.
+    pub meta_json: String,
+}
+
+/// A row's stored picture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredShot {
+    pub png: Vec<u8>,
+    pub sha256: String,
+    pub created_at: i64,
 }
 
 /// What a `send` stores.
@@ -98,10 +124,12 @@ pub struct NewRow {
     pub contact_email: Option<String>,
     pub meta_json: String,
     pub diagnostics_json: Option<String>,
+    pub screenshot: Option<NewShot>,
 }
 
 const COLS: &str = "id, created_at, queued_at, updated_at, sender_kind, sender, client, category, body, \
-     contact_email, meta_json, state, attempts, next_attempt_at, last_error, remote_id, sent_at, diagnostics_json";
+     contact_email, meta_json, state, attempts, next_attempt_at, last_error, remote_id, sent_at, diagnostics_json, \
+     screenshot_meta";
 
 fn from_row(r: &SqlRow<'_>) -> rusqlite::Result<Row> {
     let state: String = r.get(11)?;
@@ -126,29 +154,107 @@ fn from_row(r: &SqlRow<'_>) -> rusqlite::Result<Row> {
         remote_id: r.get(15)?,
         sent_at: r.get(16)?,
         diagnostics_json: r.get(17)?,
+        screenshot_meta: r.get(18)?,
     })
 }
 
-/// Store a new `queued` row, due now.
+/// Run `f` inside a savepoint: all of it, or none of it. Works inside or
+/// outside a transaction the caller holds.
+fn atomically<T>(conn: &Connection, f: impl FnOnce() -> rusqlite::Result<T>) -> rusqlite::Result<T> {
+    conn.execute_batch("SAVEPOINT product_feedback_store")?;
+    match f() {
+        Ok(v) => {
+            conn.execute_batch("RELEASE product_feedback_store")?;
+            Ok(v)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO product_feedback_store; RELEASE product_feedback_store");
+            Err(e)
+        }
+    }
+}
+
+/// Store a new `queued` row, due now, and its picture: both or neither.
 pub fn insert(conn: &Connection, n: &NewRow, now: i64) -> rusqlite::Result<Row> {
-    conn.execute(
-        "INSERT INTO product_feedback_outbox (id, created_at, queued_at, updated_at, sender_kind, sender, client, \
-         category, body, contact_email, meta_json, state, attempts, next_attempt_at, diagnostics_json) \
-         VALUES (?1, ?2, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'queued', 0, ?2, ?10)",
-        params![
-            n.id,
-            now,
-            n.sender_kind,
-            n.sender,
-            n.client,
-            n.category,
-            n.body,
-            n.contact_email,
-            n.meta_json,
-            n.diagnostics_json
-        ],
-    )?;
+    atomically(conn, || {
+        conn.execute(
+            "INSERT INTO product_feedback_outbox (id, created_at, queued_at, updated_at, sender_kind, sender, client, \
+             category, body, contact_email, meta_json, state, attempts, next_attempt_at, diagnostics_json, screenshot_meta) \
+             VALUES (?1, ?2, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'queued', 0, ?2, ?10, ?11)",
+            params![
+                n.id,
+                now,
+                n.sender_kind,
+                n.sender,
+                n.client,
+                n.category,
+                n.body,
+                n.contact_email,
+                n.meta_json,
+                n.diagnostics_json,
+                n.screenshot.as_ref().map(|s| s.meta_json.as_str())
+            ],
+        )?;
+        if let Some(s) = &n.screenshot {
+            conn.execute(
+                "INSERT INTO product_feedback_screenshots (feedback_id, png, sha256, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![n.id, s.png, s.sha256, now],
+            )?;
+        }
+        Ok(())
+    })?;
     get(conn, &n.id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
+}
+
+/// The row's picture, while it is still on this box.
+pub fn screenshot(conn: &Connection, id: &str) -> rusqlite::Result<Option<StoredShot>> {
+    conn.query_row(
+        "SELECT png, sha256, created_at FROM product_feedback_screenshots WHERE feedback_id = ?1",
+        params![id],
+        |r| Ok(StoredShot { png: r.get(0)?, sha256: r.get(1)?, created_at: r.get(2)? }),
+    )
+    .optional()
+}
+
+/// Whether the row's picture is still on this box (no bytes read).
+pub fn has_screenshot(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    Ok(conn
+        .query_row("SELECT 1 FROM product_feedback_screenshots WHERE feedback_id = ?1", params![id], |_| Ok(()))
+        .optional()?
+        .is_some())
+}
+
+fn purge_screenshot(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM product_feedback_screenshots WHERE feedback_id = ?1", params![id])?;
+    Ok(())
+}
+
+/// A state change that ends the picture's life on the box: the change and
+/// the delete in one savepoint.
+fn set_state_and_purge(
+    conn: &Connection,
+    id: &str,
+    from: &[&str],
+    sql_set: &str,
+    p: &[&dyn rusqlite::ToSql],
+) -> rusqlite::Result<bool> {
+    atomically(conn, || {
+        let changed = set_state(conn, id, from, sql_set, p)?;
+        if changed {
+            purge_screenshot(conn, id)?;
+        }
+        Ok(changed)
+    })
+}
+
+/// Pictures whose row is gone or final (`sent`, `refused`, `cancelled`):
+/// the prune's backstop. Returns how many went.
+pub fn prune_screenshots(conn: &Connection) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM product_feedback_screenshots WHERE feedback_id NOT IN \
+         (SELECT id FROM product_feedback_outbox WHERE state IN ('queued', 'sending', 'failed'))",
+        [],
+    )
 }
 
 pub fn get(conn: &Connection, id: &str) -> rusqlite::Result<Option<Row>> {
@@ -199,9 +305,10 @@ pub fn mark_sending(conn: &Connection, id: &str, now: i64) -> rusqlite::Result<b
     set_state(conn, id, &["queued"], "state = 'sending', updated_at = ?2", &[&now])
 }
 
-/// `sending` → `sent`, keeping the intake's id.
+/// `sending` → `sent`, keeping the intake's id. The intake confirmed it,
+/// so the picture goes from the box.
 pub fn mark_sent(conn: &Connection, id: &str, remote_id: &str, now: i64) -> rusqlite::Result<bool> {
-    set_state(
+    set_state_and_purge(
         conn,
         id,
         &["sending"],
@@ -233,9 +340,10 @@ pub fn mark_held(conn: &Connection, id: &str, next_at: i64, error: &str, now: i6
     )
 }
 
-/// The intake understood and rejected it: never retried.
+/// The intake understood and rejected it: never retried, so the picture
+/// goes.
 pub fn mark_refused(conn: &Connection, id: &str, error: &str, now: i64) -> rusqlite::Result<bool> {
-    set_state(
+    set_state_and_purge(
         conn,
         id,
         &["sending", "queued"],
@@ -255,9 +363,9 @@ pub fn retry(conn: &Connection, id: &str, now: i64) -> rusqlite::Result<bool> {
     )
 }
 
-/// Cancel: `queued` → `cancelled`.
+/// Cancel: `queued` → `cancelled`; the picture goes.
 pub fn cancel(conn: &Connection, id: &str, now: i64) -> rusqlite::Result<bool> {
-    set_state(conn, id, &["queued"], "state = 'cancelled', updated_at = ?2", &[&now])
+    set_state_and_purge(conn, id, &["queued"], "state = 'cancelled', updated_at = ?2", &[&now])
 }
 
 /// Boot: every `sending` row goes back to `queued`, due now.
@@ -290,8 +398,8 @@ pub fn give_up_stale(conn: &Connection, now: i64) -> rusqlite::Result<Vec<String
 }
 
 /// Delete final rows older than [`KEEP_FINAL_MS`]; clear the diagnostics
-/// of rows sent more than [`KEEP_SENT_DIAGNOSTICS_MS`] ago. Returns
-/// `(deleted, cleared)`.
+/// of rows sent more than [`KEEP_SENT_DIAGNOSTICS_MS`] ago; then
+/// [`prune_screenshots`]. Returns `(deleted, cleared)`.
 pub fn prune(conn: &Connection, now: i64) -> rusqlite::Result<(usize, usize)> {
     let deleted = conn.execute(
         "DELETE FROM product_feedback_outbox WHERE state IN ('sent', 'failed', 'refused', 'cancelled') AND updated_at < ?1",
@@ -302,6 +410,7 @@ pub fn prune(conn: &Connection, now: i64) -> rusqlite::Result<(usize, usize)> {
          WHERE state = 'sent' AND diagnostics_json IS NOT NULL AND sent_at < ?1",
         params![now - KEEP_SENT_DIAGNOSTICS_MS],
     )?;
+    prune_screenshots(conn)?;
     Ok((deleted, cleared))
 }
 
@@ -393,6 +502,7 @@ mod tests {
     fn db() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch(include_str!("../../drizzle_sql/0285_product_feedback.sql")).unwrap();
+        c.execute_batch(include_str!("../../drizzle_sql/0289_product_feedback_screenshot.sql")).unwrap();
         c
     }
 
@@ -407,7 +517,104 @@ mod tests {
             contact_email: None,
             meta_json: "{}".into(),
             diagnostics_json: None,
+            screenshot: None,
         }
+    }
+
+    fn with_shot(id: &str, png: &[u8]) -> NewRow {
+        let mut n = new(id, "login:alice", "person");
+        n.screenshot = Some(NewShot {
+            png: png.to_vec(),
+            sha256: crate::product_feedback::screenshot::sha256_hex(png),
+            meta_json: format!(r#"{{"bytes":{},"width":1,"height":1,"source":"window","capture":"page","sha256":"x"}}"#, png.len()),
+        });
+        n
+    }
+
+    fn shots(c: &Connection) -> i64 {
+        c.query_row("SELECT COUNT(*) FROM product_feedback_screenshots", [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn a_row_and_its_picture_are_written_together() {
+        let c = db();
+        let r = insert(&c, &with_shot("pf_s1", b"png-bytes"), 5).unwrap();
+        assert!(r.screenshot_meta.as_deref().unwrap().contains(r#""capture":"page""#));
+        let s = screenshot(&c, "pf_s1").unwrap().unwrap();
+        assert_eq!((s.png.as_slice(), s.created_at), (&b"png-bytes"[..], 5));
+        assert_eq!(s.sha256, crate::product_feedback::screenshot::sha256_hex(b"png-bytes"));
+        assert!(has_screenshot(&c, "pf_s1").unwrap());
+        // A row without one has neither.
+        let r = insert(&c, &new("pf_s0", "owner", "person"), 5).unwrap();
+        assert_eq!(r.screenshot_meta, None);
+        assert!(!has_screenshot(&c, "pf_s0").unwrap());
+    }
+
+    #[test]
+    fn a_failed_picture_write_leaves_no_row() {
+        let c = db();
+        c.execute_batch(
+            "CREATE TRIGGER fail_shot BEFORE INSERT ON product_feedback_screenshots BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+        )
+        .unwrap();
+        let e = insert(&c, &with_shot("pf_s2", b"png"), 1).unwrap_err();
+        assert!(e.to_string().contains("injected"), "{e}");
+        assert!(get(&c, "pf_s2").unwrap().is_none(), "no row without its picture");
+        assert_eq!(shots(&c), 0);
+        // And the connection is usable afterwards (the savepoint closed).
+        c.execute_batch("DROP TRIGGER fail_shot").unwrap();
+        insert(&c, &with_shot("pf_s2", b"png"), 2).unwrap();
+        assert_eq!(shots(&c), 1);
+    }
+
+    #[test]
+    fn sent_refused_and_cancelled_delete_the_picture_and_keep_the_meta() {
+        let c = db();
+        // Sent: only once the intake confirmed it.
+        insert(&c, &with_shot("pf_t1", b"a"), 1).unwrap();
+        mark_sending(&c, "pf_t1", 2).unwrap();
+        assert!(mark_retry(&c, "pf_t1", 10, "service_unreachable: timeout", 3).unwrap());
+        assert!(has_screenshot(&c, "pf_t1").unwrap(), "a failed attempt (or a timeout) keeps it for the next one");
+        mark_sending(&c, "pf_t1", 11).unwrap();
+        assert!(mark_sent(&c, "pf_t1", "remote-1", 12).unwrap());
+        assert!(!has_screenshot(&c, "pf_t1").unwrap(), "sent: gone from the box");
+        assert!(get(&c, "pf_t1").unwrap().unwrap().screenshot_meta.is_some(), "the meta stays for the Sent tab");
+        // A no-op transition deletes nothing.
+        insert(&c, &with_shot("pf_t2", b"b"), 1).unwrap();
+        assert!(!mark_sent(&c, "pf_t2", "r", 2).unwrap(), "sent only from sending");
+        assert!(has_screenshot(&c, "pf_t2").unwrap());
+        // Refused.
+        assert!(mark_refused(&c, "pf_t2", "bad_screenshot: no", 3).unwrap());
+        assert!(!has_screenshot(&c, "pf_t2").unwrap());
+        // Cancelled.
+        insert(&c, &with_shot("pf_t3", b"c"), 1).unwrap();
+        assert!(cancel(&c, "pf_t3", 2).unwrap());
+        assert!(!has_screenshot(&c, "pf_t3").unwrap());
+        assert!(get(&c, "pf_t3").unwrap().unwrap().screenshot_meta.is_some());
+        assert_eq!(shots(&c), 0);
+    }
+
+    #[test]
+    fn failed_keeps_the_picture_for_retry_and_prune_removes_orphans() {
+        let c = db();
+        insert(&c, &with_shot("pf_u1", b"a"), 0).unwrap();
+        mark_retry(&c, "pf_u1", 10, "unreachable", 5).unwrap();
+        assert_eq!(give_up_stale(&c, GIVE_UP_AFTER_MS + 1).unwrap(), vec!["pf_u1".to_string()]);
+        assert!(has_screenshot(&c, "pf_u1").unwrap(), "failed keeps it");
+        assert!(retry(&c, "pf_u1", GIVE_UP_AFTER_MS + 2).unwrap());
+        assert_eq!(screenshot(&c, "pf_u1").unwrap().unwrap().png, b"a".to_vec(), "Retry resends the same bytes");
+        // Orphans: a picture whose row is gone, or whose row is final.
+        c.execute("INSERT INTO product_feedback_screenshots (feedback_id, png, sha256, created_at) VALUES ('pf_gone', x'00', 's', 0)", []).unwrap();
+        insert(&c, &with_shot("pf_u2", b"b"), 0).unwrap();
+        c.execute("UPDATE product_feedback_outbox SET state = 'sent' WHERE id = 'pf_u2'", []).unwrap();
+        assert_eq!(prune_screenshots(&c).unwrap(), 2);
+        assert!(has_screenshot(&c, "pf_u1").unwrap(), "a queued row's picture stays");
+        // The 90-day prune of a failed row takes its picture too.
+        give_up_stale(&c, 2 * GIVE_UP_AFTER_MS + 10).unwrap();
+        c.execute("UPDATE product_feedback_outbox SET state = 'failed', updated_at = 0 WHERE id = 'pf_u1'", []).unwrap();
+        prune(&c, KEEP_FINAL_MS + 1).unwrap();
+        assert!(get(&c, "pf_u1").unwrap().is_none());
+        assert_eq!(shots(&c), 0);
     }
 
     #[test]

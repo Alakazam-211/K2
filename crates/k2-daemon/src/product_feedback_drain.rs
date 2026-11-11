@@ -12,6 +12,10 @@
 //! - a box token comes from the relay (cached until shortly before it
 //!   expires); `401` from the intake drops it and fetches a new one once;
 //! - `201`/`200 {id}` → `sent`; another `4xx` → `refused`, never retried;
+//! - a row with a person's screenshot sends it in the same request (the
+//!   stored bytes, every attempt, the same `clientId`), waiting up to 90 s;
+//!   `sent` and `refused` delete the picture from the box, a retry or a
+//!   timeout keeps it (prd-feedback-screenshot-v1 §5.5);
 //! - anything else (the service not deployed yet, offline, `5xx`, `429`,
 //!   `503 intake_paused`) → back to `queued`, the pass stops, and the next
 //!   one waits: 30 s doubling to 2 h, ±20 %, or the intake's
@@ -29,8 +33,9 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 
 use k2_core::log_debug;
+use k2_core::product_feedback::screenshot::Meta as ShotMeta;
 use k2_core::product_feedback::store::{self, Row, State};
-use k2_core::product_feedback::wire::{self, BoxToken, Outcome};
+use k2_core::product_feedback::wire::{self, BoxToken, Outcome, Screenshot};
 use k2_core::product_feedback::{self as pf, now_ms};
 
 use crate::session_events::{emit, SessionEvent};
@@ -329,9 +334,25 @@ fn token(force_new: bool) -> Result<BoxToken, Outcome> {
     }
 }
 
+/// The row's picture as it goes out, when it has one still on the box.
+fn load_shot(conn: &rusqlite::Connection, row: &Row) -> Option<Screenshot> {
+    let meta = row.screenshot_meta.as_deref().and_then(ShotMeta::parse)?;
+    match store::screenshot(conn, &row.id) {
+        Ok(Some(s)) => Some(Screenshot { png: s.png, meta: ShotMeta { sha256: s.sha256, bytes: meta.bytes, ..meta } }),
+        Ok(None) => {
+            log_debug!("[product-feedback] {}: its screenshot is no longer on the box; sending the text", row.id);
+            None
+        }
+        Err(e) => {
+            log_debug!("[product-feedback] {}: screenshot read failed: {e}", row.id);
+            None
+        }
+    }
+}
+
 fn send_one(row: &Row) -> Applied {
     let now = now_ms();
-    {
+    let shot = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         match store::mark_sending(&conn, &row.id, now) {
@@ -339,14 +360,15 @@ fn send_one(row: &Row) -> Applied {
             // Cancelled or taken meanwhile.
             _ => return Applied::Skipped,
         }
-    }
+        load_shot(&conn, row)
+    };
     emit_row(&row.id, State::Sending, None);
     let endpoint = pf::endpoint();
     let outcome = match token(false) {
         Err(o) => o,
-        Ok(t) => match wire::post_submission(&endpoint, &t.token, row) {
+        Ok(t) => match wire::post_submission(&endpoint, &t.token, row, shot.as_ref()) {
             Outcome::Retry { reauth: true, .. } => match token(true) {
-                Ok(t2) => wire::post_submission(&endpoint, &t2.token, row),
+                Ok(t2) => wire::post_submission(&endpoint, &t2.token, row, shot.as_ref()),
                 Err(o) => o,
             },
             other => other,

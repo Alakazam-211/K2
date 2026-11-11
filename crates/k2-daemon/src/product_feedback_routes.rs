@@ -9,7 +9,20 @@
 //!   the preview (PF26), kept an hour. An agent only while the owner
 //!   turned on `agentDiagnostics` (PF10a).
 //! - `POST send` `{category?, text, contactEmail?, client?, k2Version?,
-//!   locale?, diagnostics?: {draftId, drop?, edited?}}` → `{id, state}`
+//!   locale?, diagnostics?: {draftId, drop?, edited?}, screenshot?:
+//!   {draftId, sha256}}` → `{id, state}`
+//! - `POST screenshot` `{image, source, capture?}` → `{draftId, sha256,
+//!   bytes, width, height, source, capture, expiresAt}`: a person's
+//!   flattened PNG (base64, or a `data:image/png;base64,` URL; at most
+//!   2 MiB, a 3 MiB body), checked, chunks cut, kept an hour as a draft
+//!   (prd-feedback-screenshot-v1 §5.2). `GET screenshot?draftId=` → the
+//!   stored bytes as `{dataUrl, sha256, bytes, width, height, source,
+//!   capture}` (the picture the person confirms); `?id=pf_…` → a row's
+//!   picture while it is still on the box. `POST screenshot/forget
+//!   {draftId}` (Remove). People only: every passport gets 403
+//!   `screenshot_people_only`, on these routes and on a `send` that names
+//!   a screenshot. `send` refuses a hash that isn't the draft's (409
+//!   `screenshot_changed`): what is sent is what the person saw.
 //! - `GET  list?state=&limit=` → own rows; the owner and admins see all
 //! - `GET  show?id=` → one row (own; the owner and admins any)
 //! - `POST retry {id}` (`failed` → `queued`), `POST cancel {id}`
@@ -43,6 +56,8 @@ use crate::session_events::{emit, SessionEvent};
 
 /// A send carries the edited diagnostics (≤ 256 KB of text, escaped).
 pub const MAX_BODY: usize = 1024 * 1024;
+/// The screenshot upload: a 2 MiB PNG as base64 (about 2.67 MiB) in JSON.
+pub const MAX_SCREENSHOT_BODY: usize = 3 * 1024 * 1024;
 
 pub const DIAGNOSTICS: &str = "/cli/product-feedback/diagnostics";
 pub const SEND: &str = "/cli/product-feedback/send";
@@ -51,12 +66,25 @@ pub const SHOW: &str = "/cli/product-feedback/show";
 pub const RETRY: &str = "/cli/product-feedback/retry";
 pub const CANCEL: &str = "/cli/product-feedback/cancel";
 pub const SETTINGS: &str = "/cli/product-feedback/settings";
+pub const SCREENSHOT: &str = "/cli/product-feedback/screenshot";
+pub const SCREENSHOT_FORGET: &str = "/cli/product-feedback/screenshot/forget";
 
-pub const GET_ROUTES: &[&str] = &[LIST, SHOW, SETTINGS];
-pub const POST_ROUTES: &[&str] = &[DIAGNOSTICS, SEND, RETRY, CANCEL, SETTINGS];
+pub const GET_ROUTES: &[&str] = &[LIST, SHOW, SETTINGS, SCREENSHOT];
+pub const POST_ROUTES: &[&str] = &[DIAGNOSTICS, SEND, RETRY, CANCEL, SETTINGS, SCREENSHOT, SCREENSHOT_FORGET];
 
 pub fn is_route(path: &str) -> bool {
     GET_ROUTES.contains(&path) || POST_ROUTES.contains(&path)
+}
+
+/// The body cap for `path`: [`MAX_SCREENSHOT_BODY`] for the screenshot
+/// upload, [`MAX_BODY`] for every other route here. The dispatcher and the
+/// cell server both read it.
+pub fn max_body(path: &str) -> usize {
+    if path == SCREENSHOT {
+        MAX_SCREENSHOT_BODY
+    } else {
+        MAX_BODY
+    }
 }
 
 /// POST-only rows (a GET on them is 405).
@@ -83,7 +111,15 @@ fn refuse(status: &'static str, code: &str, message: impl Into<String>) -> CliRe
     resp(status, json!({ "ok": false, "error": code, "message": message.into() }))
 }
 
-pub fn too_large() -> CliResponse {
+/// The refusal for a body over [`max_body`].
+pub fn too_large(path: &str) -> CliResponse {
+    if path == SCREENSHOT {
+        return refuse(
+            "413 Payload Too Large",
+            "screenshot_too_large",
+            "A screenshot is at most 2 MB. Attach a smaller image.",
+        );
+    }
     refuse("413 Payload Too Large", "body_too_large", format!("Bodies here are at most {} KiB.", MAX_BODY / 1024))
 }
 
@@ -192,7 +228,8 @@ pub fn reason_line(code: &str, detail: &str) -> String {
     }
 }
 
-fn row_json(c: &Caller, r: &Row, full: bool) -> J {
+/// `full` rows (show) say whether the picture is still on the box.
+fn row_json(c: &Caller, r: &Row, full: bool, shot_on_box: bool) -> J {
     let (code, detail) = r.last_error.as_deref().map(split_error).unwrap_or_default();
     let mut v = json!({
         "id": r.id,
@@ -213,8 +250,20 @@ fn row_json(c: &Caller, r: &Row, full: bool) -> J {
         "sentAt": r.sent_at,
         "contactEmail": r.contact_email,
         "hasDiagnostics": r.diagnostics_json.is_some(),
+        "hasScreenshot": r.screenshot_meta.is_some(),
     });
     if full {
+        v["screenshot"] = match r.screenshot_meta.as_deref().and_then(pf::screenshot::Meta::parse) {
+            Some(m) => json!({
+                "bytes": m.bytes,
+                "width": m.width,
+                "height": m.height,
+                "source": m.source,
+                "capture": m.capture,
+                "onBox": shot_on_box,
+            }),
+            None => J::Null,
+        };
         let sections: J = r
             .diagnostics_json
             .as_deref()
@@ -264,6 +313,9 @@ pub fn handle(path: &str, is_post: bool, who: Who, body: &[u8], params: &HashMap
         (CANCEL, true) => transition(&c, body, false),
         (SETTINGS, false) => settings_get(&c),
         (SETTINGS, true) => settings_post(&c, body),
+        (SCREENSHOT, true) => screenshot_put(&c, body),
+        (SCREENSHOT, false) => screenshot_get(&c, params),
+        (SCREENSHOT_FORGET, true) => screenshot_forget(&c, body),
         _ => CliResponse::method_not_allowed(),
     }
 }
@@ -278,6 +330,16 @@ struct SendBody {
     k2_version: Option<String>,
     locale: Option<String>,
     diagnostics: Option<DiagChoice>,
+    screenshot: Option<ShotChoice>,
+}
+
+/// The screenshot the person confirmed: the draft, and the hash of the
+/// bytes they saw.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShotChoice {
+    draft_id: Option<String>,
+    sha256: Option<String>,
 }
 
 /// Which preview to send and what the person left out (PF26).
@@ -411,6 +473,9 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
         Ok(b) => b,
         Err(r) => return r,
     };
+    if b.screenshot.is_some() && c.passport {
+        return people_only();
+    }
     if let Some(r) = send_gate(c) {
         return r;
     }
@@ -461,6 +526,44 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
             }
         }
     };
+    // The picture the person saw (§3.1 D): the draft's own bytes, only
+    // when the hash they confirmed is the draft's.
+    let shot = match &b.screenshot {
+        None => None,
+        Some(choice) => {
+            let id = choice.draft_id.as_deref().unwrap_or("").trim();
+            let Some(draft) = pf::screenshot::get_draft(id, &c.sender, now_ms()) else {
+                return refuse(
+                    "410 Gone",
+                    "screenshot_expired",
+                    "That screenshot is gone from the server (it's kept an hour). Add it again.",
+                );
+            };
+            let seen = choice.sha256.as_deref().unwrap_or("").trim().to_ascii_lowercase();
+            if seen != draft.sha256 {
+                return refuse(
+                    "409 Conflict",
+                    "screenshot_changed",
+                    "The picture changed after you saw it. Look at it again.",
+                );
+            }
+            Some(draft)
+        }
+    };
+    if let Some(d) = &shot {
+        // The whole submission must fit the intake's cap with the picture.
+        let est = d.png.len().div_ceil(3) * 4
+            + diagnostics_json.as_deref().map_or(0, str::len)
+            + serde_json::to_string(&text).map_or(0, |t| t.len())
+            + 4096;
+        if est > k2_core::product_feedback::wire::MAX_BODY_WITH_SCREENSHOT {
+            return refuse(
+                "413 Payload Too Large",
+                "submission_too_large",
+                "With the screenshot and the K2 details together this is over 3 MB. Leave out some details or attach a smaller picture.",
+            );
+        }
+    }
     let now = now_ms();
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -486,6 +589,11 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
         contact_email: contact,
         meta_json: meta(c, client, &b).to_string(),
         diagnostics_json,
+        screenshot: shot.as_ref().map(|d| store::NewShot {
+            png: (*d.png).clone(),
+            sha256: d.sha256.clone(),
+            meta_json: serde_json::to_string(&d.meta()).expect("meta serializes"),
+        }),
     };
     let row = match store::insert(&conn, &n, now) {
         Ok(r) => r,
@@ -494,6 +602,9 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
     drop(conn);
     if let Some(d) = draft_id {
         pf::diagnostics::drop_draft(&d);
+    }
+    if let Some(d) = &shot {
+        pf::screenshot::drop_draft(&d.id);
     }
     emit_row(&row.id, State::Queued, None);
     drain::kick();
@@ -529,7 +640,7 @@ fn list(c: &Caller, params: &HashMap<String, String>) -> CliResponse {
             Err(e) => return db_err(e),
         }
     };
-    let items: Vec<J> = rows.iter().map(|r| row_json(c, r, false)).collect();
+    let items: Vec<J> = rows.iter().map(|r| row_json(c, r, false, false)).collect();
     ok(json!({ "items": items, "all": c.admin }))
 }
 
@@ -549,10 +660,175 @@ fn find(c: &Caller, id: &str) -> Result<Row, CliResponse> {
 
 fn show(c: &Caller, params: &HashMap<String, String>) -> CliResponse {
     let id = params.get("id").map(String::as_str).unwrap_or("").trim();
-    match find(c, id) {
-        Ok(r) => ok(json!({ "item": row_json(c, &r, true) })),
-        Err(r) => r,
+    let r = match find(c, id) {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
+    let on_box = if r.screenshot_meta.is_some() {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match store::has_screenshot(&conn, &r.id) {
+            Ok(b) => b,
+            Err(e) => return db_err(e),
+        }
+    } else {
+        false
+    };
+    ok(json!({ "item": row_json(c, &r, true, on_box) }))
+}
+
+// ── the screenshot (prd-feedback-screenshot-v1 §5.2) ─────────────────
+
+fn people_only() -> CliResponse {
+    refuse(
+        "403 Forbidden",
+        "screenshot_people_only",
+        "Only a person can attach a screenshot, in the Send feedback dialog. Agents and k2 send-feedback send text only.",
+    )
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShotBody {
+    image: Option<String>,
+    source: Option<String>,
+    capture: Option<String>,
+}
+
+fn shot_refusal(e: &pf::screenshot::ShotError) -> CliResponse {
+    let status = if e.code() == "screenshot_too_large" { "413 Payload Too Large" } else { "400 Bad Request" };
+    refuse(status, e.code(), e.message())
+}
+
+fn data_url(png: &[u8]) -> String {
+    use base64::Engine;
+    format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png))
+}
+
+fn screenshot_put(c: &Caller, body: &[u8]) -> CliResponse {
+    if c.passport {
+        return people_only();
     }
+    let b: ShotBody = match parse(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let source = b.source.as_deref().map(str::trim).unwrap_or("");
+    if !pf::screenshot::SOURCES.contains(&source) {
+        return bad("bad_screenshot", "source is window (K2's window) or file (an image the person chose).");
+    }
+    let capture = b.capture.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let capture = match (source, capture) {
+        ("window", Some(x)) if pf::screenshot::CAPTURES.contains(&x) => Some(x),
+        ("window", _) => return bad("bad_screenshot", "A window picture says how it was taken: capture is page or webview."),
+        (_, None) => None,
+        (_, Some(_)) => return bad("bad_screenshot", "capture is only for a picture of K2's window; leave it out for a file."),
+    };
+    let image = b.image.as_deref().unwrap_or("");
+    if image.trim().is_empty() {
+        return bad("bad_screenshot", "image is the PNG, base64.");
+    }
+    let raw = match pf::screenshot::decode_base64(image) {
+        Ok(r) => r,
+        Err(e) => return shot_refusal(&e),
+    };
+    let n = match pf::screenshot::normalize(&raw) {
+        Ok(n) => n,
+        Err(e) => return shot_refusal(&e),
+    };
+    let d = pf::screenshot::put_draft(&c.sender, n, source, capture, now_ms());
+    ok(json!({
+        "draftId": d.id,
+        "sha256": d.sha256,
+        "bytes": d.png.len(),
+        "width": d.width,
+        "height": d.height,
+        "source": d.source,
+        "capture": d.capture,
+        "expiresAt": d.created_at + pf::screenshot::DRAFT_TTL_MS,
+    }))
+}
+
+fn screenshot_get(c: &Caller, params: &HashMap<String, String>) -> CliResponse {
+    if c.passport {
+        return people_only();
+    }
+    let draft_id = params.get("draftId").map(|s| s.trim()).filter(|s| !s.is_empty());
+    let row_id = params.get("id").map(|s| s.trim()).filter(|s| !s.is_empty());
+    match (draft_id, row_id) {
+        (Some(id), None) => match pf::screenshot::get_draft(id, &c.sender, now_ms()) {
+            Some(d) => ok(json!({
+                "dataUrl": data_url(&d.png),
+                "sha256": d.sha256,
+                "bytes": d.png.len(),
+                "width": d.width,
+                "height": d.height,
+                "source": d.source,
+                "capture": d.capture,
+            })),
+            None => refuse(
+                "410 Gone",
+                "screenshot_expired",
+                "That screenshot is gone from the server (it's kept an hour). Add it again.",
+            ),
+        },
+        (None, Some(id)) => {
+            let row = match find(c, id) {
+                Ok(r) => r,
+                Err(r) => return r,
+            };
+            let meta = row.screenshot_meta.as_deref().and_then(pf::screenshot::Meta::parse);
+            let stored = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                match store::screenshot(&conn, id) {
+                    Ok(s) => s,
+                    Err(e) => return db_err(e),
+                }
+            };
+            match (meta, stored) {
+                (Some(m), Some(s)) => ok(json!({
+                    "dataUrl": data_url(&s.png),
+                    "sha256": s.sha256,
+                    "bytes": s.png.len(),
+                    "width": m.width,
+                    "height": m.height,
+                    "source": m.source,
+                    "capture": m.capture,
+                })),
+                (Some(_), None) => refuse(
+                    "404 Not Found",
+                    "screenshot_not_on_box",
+                    "This server no longer keeps that screenshot: it is deleted once the feedback is sent or cancelled.",
+                ),
+                (None, _) => refuse("404 Not Found", "no_screenshot", format!("{id} has no screenshot.")),
+            }
+        }
+        _ => bad("draft_id_required", "Name one: draftId (a draft, pfs_…) or id (a feedback, pf_…)."),
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ForgetBody {
+    draft_id: Option<String>,
+}
+
+fn screenshot_forget(c: &Caller, body: &[u8]) -> CliResponse {
+    if c.passport {
+        return people_only();
+    }
+    let b: ForgetBody = match parse(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let id = b.draft_id.as_deref().unwrap_or("").trim();
+    if id.is_empty() {
+        return bad("draft_id_required", "Name the draft (draftId, pfs_…).");
+    }
+    // Idempotent: a draft already gone (or another person's) is not an error.
+    let forgotten = pf::screenshot::forget_draft(id, &c.sender);
+    ok(json!({ "draftId": id, "forgotten": forgotten }))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -701,10 +977,10 @@ mod tests {
 
     #[test]
     fn route_sets() {
-        for p in [DIAGNOSTICS, SEND, RETRY, CANCEL] {
+        for p in [DIAGNOSTICS, SEND, RETRY, CANCEL, SCREENSHOT_FORGET] {
             assert!(is_post_only(p), "{p}");
         }
-        for p in [LIST, SHOW, SETTINGS] {
+        for p in [LIST, SHOW, SETTINGS, SCREENSHOT] {
             assert!(!is_post_only(p), "{p}");
         }
         assert!(!is_route("/cli/feedback/create"));
@@ -731,5 +1007,87 @@ mod tests {
         assert!(!m.admin);
         let a = must(Who::Login { username: "ad".into(), role: Role::Admin });
         assert!(a.admin);
+    }
+
+    #[test]
+    fn only_the_screenshot_upload_gets_the_bigger_body() {
+        assert_eq!(max_body(SCREENSHOT), 3 * 1024 * 1024);
+        for p in GET_ROUTES.iter().chain(POST_ROUTES).filter(|p| **p != SCREENSHOT) {
+            assert_eq!(max_body(p), MAX_BODY, "{p}");
+        }
+        assert!(too_large(SCREENSHOT).body.contains("screenshot_too_large"));
+        assert!(too_large(SEND).body.contains("body_too_large"));
+        // Both front doors read the per-path cap (and the refusal for it).
+        for (file, src) in [
+            ("routes/dispatcher.rs", include_str!("routes/dispatcher.rs")),
+            ("cell_server.rs", include_str!("cell_server.rs")),
+        ] {
+            assert!(src.contains("product_feedback_routes::max_body(p)"), "{file} doesn't use max_body");
+            assert!(src.contains("product_feedback_routes::too_large(p)"), "{file} doesn't use too_large(p)");
+            assert!(!src.contains("product_feedback_routes::MAX_BODY"), "{file} still uses the fixed cap");
+        }
+    }
+
+    #[test]
+    fn every_passport_is_refused_on_the_screenshot_routes() {
+        let agent = must(Who::Agent { project_id: "p".into(), session_id: "s".into() });
+        let shell = must(Who::Shell { project_id: "p".into(), session_id: "s".into() });
+        for c in [&agent, &shell] {
+            for r in [
+                screenshot_put(c, br#"{"image":"x","source":"file"}"#),
+                screenshot_get(c, &HashMap::from([("draftId".to_string(), "pfs_x".to_string())])),
+                screenshot_forget(c, br#"{"draftId":"pfs_x"}"#),
+                send(c, br#"{"text":"x","screenshot":{"draftId":"pfs_x","sha256":"00"}}"#),
+            ] {
+                assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+                assert!(r.body.contains("screenshot_people_only"), "{}", r.body);
+            }
+        }
+    }
+
+    #[test]
+    fn upload_checks_source_capture_and_bytes() {
+        use base64::Engine;
+        let me = must(Who::Login { username: "shot-route-test".into(), role: Role::Member });
+        let png = k2_core::product_feedback::screenshot::fixture::png(12, 9);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let put = |body: J| screenshot_put(&me, body.to_string().as_bytes());
+        for (body, code) in [
+            (json!({"image": b64, "source": "screen"}), "bad_screenshot"),
+            (json!({"image": b64, "source": "window"}), "bad_screenshot"),
+            (json!({"image": b64, "source": "window", "capture": "native"}), "bad_screenshot"),
+            (json!({"image": b64, "source": "file", "capture": "page"}), "bad_screenshot"),
+            (json!({"image": "%%% not base64", "source": "file"}), "bad_screenshot"),
+            (json!({"image": base64::engine::general_purpose::STANDARD.encode(b"GIF89a not a png"), "source": "file"}), "bad_screenshot"),
+        ] {
+            let r = put(body.clone());
+            assert_eq!(r.status, "400 Bad Request", "{body}: {}", r.body);
+            assert!(r.body.contains(code), "{}", r.body);
+        }
+        let big = base64::engine::general_purpose::STANDARD.encode(vec![7u8; pf::screenshot::MAX_BYTES + 10]);
+        let r = put(json!({"image": big, "source": "file"}));
+        assert_eq!(r.status, "413 Payload Too Large", "{}", r.body);
+        assert!(r.body.contains("screenshot_too_large"));
+
+        let r = put(json!({"image": b64, "source": "window", "capture": "page"}));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: J = serde_json::from_str(&r.body).unwrap();
+        assert_eq!((v["width"].clone(), v["height"].clone(), v["capture"].clone()), (json!(12), json!(9), json!("page")));
+        let id = v["draftId"].as_str().unwrap().to_string();
+        let g = screenshot_get(&me, &HashMap::from([("draftId".to_string(), id.clone())]));
+        let gv: J = serde_json::from_str(&g.body).unwrap();
+        let url = gv["dataUrl"].as_str().unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD.decode(url.strip_prefix("data:image/png;base64,").unwrap()).unwrap();
+        assert_eq!(pf::screenshot::sha256_hex(&bytes), v["sha256"].as_str().unwrap(), "the hash is of the bytes the person sees");
+        // Someone else can't see it; forget is the owner's.
+        let other = must(Who::Login { username: "shot-route-other".into(), role: Role::Member });
+        let g = screenshot_get(&other, &HashMap::from([("draftId".to_string(), id.clone())]));
+        assert_eq!(g.status, "410 Gone", "{}", g.body);
+        let f: J = serde_json::from_str(&screenshot_forget(&other, json!({"draftId": id}).to_string().as_bytes()).body).unwrap();
+        assert_eq!(f["forgotten"], json!(false));
+        let f: J = serde_json::from_str(&screenshot_forget(&me, json!({"draftId": id}).to_string().as_bytes()).body).unwrap();
+        assert_eq!(f["forgotten"], json!(true));
+        let g = screenshot_get(&me, &HashMap::from([("draftId".to_string(), id)]));
+        assert_eq!(g.status, "410 Gone", "Remove forgot it");
     }
 }

@@ -22,6 +22,12 @@
 //!   sent sections are the previewed bytes minus what was left out, a draft
 //!   is the caller's own and goes once sent, agents need the owner's
 //!   `agentDiagnostics`.
+//! - a screenshot (prd-feedback-screenshot-v1): too big, not a PNG, a
+//!   body over 3 MiB refused unread; chunks cut; the draft is the uploader's
+//!   own; passports and App passes refused; `send` names the draft by hash
+//!   and a different hash is refused; the intake gets the stored bytes;
+//!   sent and refused and cancelled delete the picture from the box, a
+//!   failed attempt keeps it and Retry resends the same bytes.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -700,4 +706,250 @@ async fn diagnostics_are_previewed_scrubbed_and_sent_as_shown() {
     let (s, v) = call(port, "POST", &q("/cli/product-feedback/diagnostics", &agent), Some(json!({"client": "desktop", "includeClientFaults": true})));
     assert_eq!(s, 200, "{v}");
     assert!(v["sections"][6]["text"].as_str().unwrap().contains("Client: cli"), "a passport is always cli: {v}");
+}
+
+// ── 6. a screenshot: seen, sent, deleted from the box ────────────────
+
+fn b64(b: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(b)
+}
+
+fn unb64(s: &str) -> Vec<u8> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.decode(s).expect("base64")
+}
+
+fn upload(port: u16, tok: &str, png: &[u8], source: &str, capture: Option<&str>) -> (u16, J) {
+    let mut body = json!({ "image": b64(png), "source": source });
+    if let Some(c) = capture {
+        body["capture"] = json!(c);
+    }
+    call(port, "POST", &q("/cli/product-feedback/screenshot", tok), Some(body))
+}
+
+fn draft_bytes(port: u16, tok: &str, draft: &str) -> (u16, J) {
+    call(port, "GET", &q(&format!("/cli/product-feedback/screenshot?draftId={draft}"), tok), None)
+}
+
+fn row_shot(port: u16, tok: &str, id: &str) -> (u16, J) {
+    call(port, "GET", &q(&format!("/cli/product-feedback/screenshot?id={id}"), tok), None)
+}
+
+fn data_url_bytes(v: &J) -> Vec<u8> {
+    let url = v["dataUrl"].as_str().unwrap_or_else(|| panic!("no dataUrl: {v}"));
+    unb64(url.strip_prefix("data:image/png;base64,").unwrap_or_else(|| panic!("not a PNG data URL: {url}")))
+}
+
+fn sha(b: &[u8]) -> String {
+    k2_core::product_feedback::screenshot::sha256_hex(b)
+}
+
+fn n_rows(port: u16) -> usize {
+    let (_, v) = call(port, "GET", &q("/cli/product-feedback/list", OWNER), None);
+    v["items"].as_array().expect("items").len()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_screenshot_is_seen_then_sent_then_deleted_from_the_box() {
+    use k2_core::product_feedback::screenshot::fixture;
+    let e = setup(true);
+    let port = e.port;
+    // The intake is down at first: everything stays queued.
+    e.intake.set(|_| (503, "down".into()));
+
+    // The feature key.
+    let (_, b) = call(port, "GET", "/boot-status", None);
+    assert!(b["features"].as_array().unwrap().iter().any(|f| f == "product-feedback-screenshot-v1"), "{b}");
+
+    // GET on the POST-only forget route: 405. GET with neither id: 400.
+    let (s, v) = call(port, "GET", &q("/cli/product-feedback/screenshot/forget", OWNER), None);
+    assert_eq!(s, 405, "{v}");
+    let (s, v) = call(port, "GET", &q("/cli/product-feedback/screenshot", OWNER), None);
+    assert_eq!((s, v["error"].clone()), (400, json!("draft_id_required")), "{v}");
+
+    // Not a PNG; too big; a body over 3 MiB refused from its head.
+    let (s, v) = upload(port, OWNER, b"GIF89a this is not a png", "file", None);
+    assert_eq!((s, v["error"].clone()), (400, json!("bad_screenshot")), "{v}");
+    let (s, v) = upload(port, OWNER, &vec![0u8; 2_200_000], "file", None);
+    assert_eq!((s, v["error"].clone()), (413, json!("screenshot_too_large")), "{v}");
+    {
+        let big = "A".repeat(3 * 1024 * 1024 + 1024);
+        let body = format!(r#"{{"source":"file","image":"{big}"}}"#);
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        stream.set_read_timeout(Some(Duration::from_secs(20))).expect("timeout");
+        let head = format!(
+            "POST /cli/product-feedback/screenshot?token={OWNER} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(head.as_bytes()).expect("head");
+        let _ = stream.write_all(body.as_bytes());
+        let mut raw = Vec::new();
+        let _ = stream.read_to_end(&mut raw);
+        let text = String::from_utf8_lossy(&raw);
+        assert!(text.starts_with("HTTP/1.1 413"), "{text}");
+        assert!(text.contains("screenshot_too_large"), "{text}");
+    }
+    // The other routes keep the 1 MiB cap.
+    let (s, v) = send(port, OWNER, json!({"text": "x".repeat(1024 * 1024 + 10)}));
+    assert_eq!((s, v["error"].clone()), (413, json!("body_too_large")), "{v}");
+
+    // A window picture with a text chunk: the stored copy has none, and
+    // its hash is of the stored bytes.
+    let clean = fixture::png(320, 200);
+    let dirty = fixture::with_chunks_after_ihdr(&clean, &[fixture::chunk(b"tEXt", b"Title\0Payroll - acme")]);
+    let (s, up) = upload(port, OWNER, &dirty, "window", Some("page"));
+    assert_eq!(s, 200, "{up}");
+    let draft = up["draftId"].as_str().expect("draftId").to_string();
+    let hash = up["sha256"].as_str().expect("sha256").to_string();
+    assert_eq!((up["width"].clone(), up["height"].clone(), up["source"].clone(), up["capture"].clone()), (json!(320), json!(200), json!("window"), json!("page")), "{up}");
+    assert_eq!(up["bytes"], json!(clean.len()), "{up}");
+    let (s, g) = draft_bytes(port, OWNER, &draft);
+    assert_eq!(s, 200, "{g}");
+    let seen = data_url_bytes(&g);
+    assert_eq!(seen, clean, "the text chunk was cut, nothing else");
+    assert_eq!(sha(&seen), hash, "the hash names the bytes the person sees");
+    assert_ne!(hash, sha(&dirty));
+
+    // Passports and App passes: refused, on every screenshot route and on send.
+    let agent = passport("ws-shot-agent");
+    let (s, v) = upload(port, &agent, &clean, "file", None);
+    assert_eq!((s, v["error"].clone()), (403, json!("screenshot_people_only")), "{v}");
+    let (s, v) = draft_bytes(port, &agent, &draft);
+    assert_eq!((s, v["error"].clone()), (403, json!("screenshot_people_only")), "{v}");
+    let (s, v) = call(port, "POST", &q("/cli/product-feedback/screenshot/forget", &agent), Some(json!({"draftId": draft})));
+    assert_eq!((s, v["error"].clone()), (403, json!("screenshot_people_only")), "{v}");
+    let (s, v) = send(port, &agent, json!({"text": "x", "screenshot": {"draftId": draft, "sha256": hash}}));
+    assert_eq!((s, v["error"].clone()), (403, json!("screenshot_people_only")), "{v}");
+    let (s, v) = upload(port, "k2skn_0123456789abcdef0123456789abcdef", &clean, "file", None);
+    assert_eq!((s, v["error"].clone()), (403, json!("product_feedback_wrong_credential")), "{v}");
+
+    // Another person can't see or use the draft.
+    let bob = login("pf-shot-bob", None);
+    let (s, v) = draft_bytes(port, &bob, &draft);
+    assert_eq!((s, v["error"].clone()), (410, json!("screenshot_expired")), "{v}");
+    let (s, v) = send(port, &bob, json!({"text": "x", "screenshot": {"draftId": draft, "sha256": hash}}));
+    assert_eq!((s, v["error"].clone()), (410, json!("screenshot_expired")), "{v}");
+
+    // The "seen" gate: a hash that isn't the draft's is refused, nothing saved.
+    let before = n_rows(port);
+    let (s, v) = send(port, OWNER, json!({"text": "x", "screenshot": {"draftId": draft, "sha256": sha(&dirty)}}));
+    assert_eq!((s, v["error"].clone()), (409, json!("screenshot_changed")), "{v}");
+    let (s, v) = send(port, OWNER, json!({"text": "x", "screenshot": {"draftId": draft}}));
+    assert_eq!((s, v["error"].clone()), (409, json!("screenshot_changed")), "no hash is no consent: {v}");
+    assert_eq!(n_rows(port), before, "nothing stored");
+
+    // The right hash: saved with the row; the intake is down, so it stays.
+    let (s, v) = send(port, OWNER, json!({"text": "the tab froze, see the picture", "category": "bug", "client": "desktop", "screenshot": {"draftId": draft, "sha256": hash.to_uppercase()}}));
+    assert_eq!(s, 200, "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    wait_row(port, OWNER, &id, "tried once", |it| it["error"] == json!("service_unreachable"));
+    let it = show(port, OWNER, &id);
+    assert_eq!(it["hasScreenshot"], json!(true), "{it}");
+    assert_eq!(it["screenshot"], json!({"bytes": clean.len(), "width": 320, "height": 200, "source": "window", "capture": "page", "onBox": true}), "{it}");
+    let first = e.intake.requests().last().cloned().expect("the failed attempt");
+    assert_eq!(unb64(first.json()["screenshot"]["data"].as_str().unwrap()), clean, "every attempt carries the picture");
+    let (s, v) = row_shot(port, OWNER, &id);
+    assert_eq!(s, 200, "a failed attempt keeps it: {v}");
+    assert_eq!(data_url_bytes(&v), clean);
+    let (s, v) = row_shot(port, &bob, &id);
+    assert_eq!(s, 404, "another person's row: {v}");
+    // The draft went with the send.
+    let (s, v) = send(port, OWNER, json!({"text": "again", "screenshot": {"draftId": draft, "sha256": hash}}));
+    assert_eq!((s, v["error"].clone()), (410, json!("screenshot_expired")), "{v}");
+
+    // The intake answers: sent with the picture, and the box forgets it.
+    e.intake.set(intake_created);
+    due_now(&id);
+    assert_eq!(drain_now(), Pass::Ran { sent: 1, refused: 0, retried: 0 });
+    let sub = e.intake.requests().last().cloned().expect("submission");
+    assert_eq!(sub.header("Idempotency-Key"), Some(id.as_str()), "the same key as the failed attempt");
+    let b = sub.json();
+    let w = &b["screenshot"];
+    let mut keys: Vec<String> = w.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(keys, ["capture", "data", "height", "mime", "sha256", "source", "width"].map(String::from).to_vec(), "{w}");
+    assert_eq!((w["mime"].clone(), w["source"].clone(), w["capture"].clone(), w["width"].clone(), w["height"].clone()), (json!("image/png"), json!("window"), json!("page"), json!(320), json!(200)));
+    let got = unb64(w["data"].as_str().unwrap());
+    assert_eq!(got, seen, "the intake got exactly the bytes the person saw");
+    assert_eq!(w["sha256"], json!(sha(&got)));
+    assert!(sub.body.len() < 3 * 1024 * 1024, "under the intake's cap");
+    let it = show(port, OWNER, &id);
+    assert_eq!((it["state"].clone(), it["hasScreenshot"].clone(), it["screenshot"]["onBox"].clone()), (json!("sent"), json!(true), json!(false)), "{it}");
+    let (s, v) = row_shot(port, OWNER, &id);
+    assert_eq!((s, v["error"].clone()), (404, json!("screenshot_not_on_box")), "{v}");
+
+    // A row without one says so.
+    let (s, v) = send(port, OWNER, json!({"text": "no picture"}));
+    assert_eq!(s, 200, "{v}");
+    let plain = v["id"].as_str().unwrap().to_string();
+    wait_row(port, OWNER, &plain, "sent", |it| it["state"] == json!("sent"));
+    assert!(e.intake.requests().last().unwrap().json().get("screenshot").is_none());
+    let (s, v) = row_shot(port, OWNER, &plain);
+    assert_eq!((s, v["error"].clone()), (404, json!("no_screenshot")), "{v}");
+
+    // Cancelled: the picture goes. A person's own Remove forgets a draft.
+    e.intake.set(|_| (503, "down".into()));
+    let (_, up) = upload(port, OWNER, &fixture::png(50, 40), "file", None);
+    assert_eq!(up["capture"], J::Null, "{up}");
+    let (s, v) = send(port, OWNER, json!({"text": "to cancel", "screenshot": {"draftId": up["draftId"], "sha256": up["sha256"]}}));
+    assert_eq!(s, 200, "{v}");
+    let c_id = v["id"].as_str().unwrap().to_string();
+    wait_row(port, OWNER, &c_id, "tried once", |it| it["error"] == json!("service_unreachable"));
+    let (s, _) = row_shot(port, OWNER, &c_id);
+    assert_eq!(s, 200);
+    let (s, v) = call(port, "POST", &q("/cli/product-feedback/cancel", OWNER), Some(json!({"id": c_id})));
+    assert_eq!((s, v["state"].clone()), (200, json!("cancelled")), "{v}");
+    let (s, v) = row_shot(port, OWNER, &c_id);
+    assert_eq!((s, v["error"].clone()), (404, json!("screenshot_not_on_box")), "cancel deletes it: {v}");
+    let (_, up) = upload(port, OWNER, &clean, "file", None);
+    let d2 = up["draftId"].as_str().unwrap().to_string();
+    let (s, v) = call(port, "POST", &q("/cli/product-feedback/screenshot/forget", OWNER), Some(json!({"draftId": d2})));
+    assert_eq!((s, v["forgotten"].clone()), (200, json!(true)), "{v}");
+    let (s, _) = draft_bytes(port, OWNER, &d2);
+    assert_eq!(s, 410, "Remove forgot it");
+
+    // Failed keeps it; Retry resends the same bytes. A login uploads too.
+    let alice = login("pf-shot-alice", None);
+    let pic = fixture::png(64, 64);
+    let (s, up) = upload(port, &alice, &pic, "window", Some("webview"));
+    assert_eq!(s, 200, "{up}");
+    let (s, v) = send(port, &alice, json!({"text": "alice's", "client": "web", "screenshot": {"draftId": up["draftId"], "sha256": up["sha256"]}}));
+    assert_eq!(s, 200, "{v}");
+    let f_id = v["id"].as_str().unwrap().to_string();
+    wait_row(port, &alice, &f_id, "tried once", |it| it["error"] == json!("service_unreachable"));
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE product_feedback_outbox SET state = 'failed' WHERE id = ?1", [&f_id]).unwrap();
+    }
+    let (s, _) = row_shot(port, &alice, &f_id);
+    assert_eq!(s, 200, "failed keeps it");
+    e.intake.set(intake_created);
+    drain::reset_for_tests();
+    let (s, v) = call(port, "POST", &q("/cli/product-feedback/retry", &alice), Some(json!({"id": f_id})));
+    assert_eq!((s, v["state"].clone()), (200, json!("queued")), "{v}");
+    wait_row(port, &alice, &f_id, "sent after retry", |it| it["state"] == json!("sent"));
+    let last = e.intake.requests().last().cloned().unwrap();
+    assert_eq!(last.header("Idempotency-Key"), Some(f_id.as_str()));
+    assert_eq!(unb64(last.json()["screenshot"]["data"].as_str().unwrap()), pic, "Retry sent the same bytes");
+    assert_eq!(last.json()["screenshot"]["capture"], json!("webview"));
+    let (s, _) = row_shot(port, &alice, &f_id);
+    assert_eq!(s, 404, "sent: gone");
+
+    // Refused: the picture goes.
+    e.intake.set(|_| (400, json!({"code": "bad_screenshot"}).to_string()));
+    let (_, up) = upload(port, OWNER, &pic, "file", None);
+    let (s, v) = send(port, OWNER, json!({"text": "refused", "screenshot": {"draftId": up["draftId"], "sha256": up["sha256"]}}));
+    assert_eq!(s, 200, "{v}");
+    let r_id = v["id"].as_str().unwrap().to_string();
+    wait_row(port, OWNER, &r_id, "refused", |it| it["state"] == json!("refused"));
+    let (s, v) = row_shot(port, OWNER, &r_id);
+    assert_eq!((s, v["error"].clone()), (404, json!("screenshot_not_on_box")), "refused deletes it: {v}");
+    let left: i64 = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT COUNT(*) FROM product_feedback_screenshots", [], |r| r.get(0)).unwrap()
+    };
+    assert_eq!(left, 0, "no picture left on the box");
 }

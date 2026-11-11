@@ -11,6 +11,11 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
 
 export const PRODUCT_FEEDBACK_FEATURE = 'product-feedback-v1' as const
+/** prd-feedback-screenshot-v1: the server takes one screenshot per feedback. */
+export const PRODUCT_FEEDBACK_SCREENSHOT_FEATURE = 'product-feedback-screenshot-v1' as const
+/** The daemon's limits (`k2_core::product_feedback::screenshot`). */
+export const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
+export const MAX_SCREENSHOT_SIDE = 4096
 /** The button's tooltip and label, and the dialog's title (PRD §3). */
 export const SEND_FEEDBACK_LABEL = 'Send feedback to K2'
 export const CONTACT_ADDRESS = 'hello@alakazamlabs.com'
@@ -87,6 +92,49 @@ export interface SentItem {
   sentAt: number | null
   hasDiagnostics: boolean
   diagnostics: DiagnosticsSection[] | null
+  hasScreenshot: boolean
+  /** Only on `show`: the picture's facts, and whether the server still
+   *  keeps it (it is deleted once sent, refused or cancelled). */
+  screenshot: SentScreenshot | null
+}
+
+/** Where a picture came from: K2's window, or an image the person chose. */
+export type ScreenshotSource = 'window' | 'file'
+/** How a window picture was taken: drawn from the page (labelled blanks
+ *  for terminals, web frames, 3D and video) or the webview's own snapshot. */
+export type ScreenshotCapture = 'page' | 'webview'
+
+export interface SentScreenshot {
+  bytes: number
+  width: number
+  height: number
+  source: ScreenshotSource
+  capture: ScreenshotCapture | null
+  onBox: boolean
+}
+
+/** A picture the daemon checked and keeps for an hour (the draft). */
+export interface ScreenshotDraft {
+  draftId: string
+  /** Lowercase hex sha256 of the stored PNG: Send names the draft by it. */
+  sha256: string
+  bytes: number
+  width: number
+  height: number
+  source: ScreenshotSource
+  capture: ScreenshotCapture | null
+  expiresAt: number
+}
+
+/** The daemon's own stored bytes, to show the person what will be sent. */
+export interface ScreenshotImage {
+  dataUrl: string
+  sha256: string
+  bytes: number
+  width: number
+  height: number
+  source: ScreenshotSource
+  capture: ScreenshotCapture | null
 }
 
 function str(v: unknown): string {
@@ -97,6 +145,26 @@ function strOrNull(v: unknown): string | null {
 }
 function num(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0
+}
+function source(v: unknown): ScreenshotSource {
+  return v === 'window' ? 'window' : 'file'
+}
+function capture(v: unknown): ScreenshotCapture | null {
+  return v === 'page' || v === 'webview' ? v : null
+}
+const SHA256_HEX = /^[0-9a-f]{64}$/
+
+function parseSentScreenshot(v: unknown): SentScreenshot | null {
+  if (v === null || typeof v !== 'object') return null
+  const r = v as Record<string, unknown>
+  return {
+    bytes: num(r.bytes),
+    width: num(r.width),
+    height: num(r.height),
+    source: source(r.source),
+    capture: capture(r.capture),
+    onBox: r.onBox === true,
+  }
 }
 
 const STATES: readonly FeedbackState[] = ['queued', 'sending', 'sent', 'failed', 'refused', 'cancelled']
@@ -153,6 +221,8 @@ export function parseItem(raw: unknown): SentItem | null {
     sentAt: typeof r.sentAt === 'number' ? r.sentAt : null,
     hasDiagnostics: r.hasDiagnostics === true,
     diagnostics: Array.isArray(r.diagnostics) ? parseSections(r.diagnostics) : null,
+    hasScreenshot: r.hasScreenshot === true,
+    screenshot: parseSentScreenshot(r.screenshot),
   }
 }
 
@@ -195,6 +265,11 @@ export interface SendArgs {
   k2Version: string | null
   locale: string | null
   diagnostics: { draftId: string; drop: string[]; edited: Record<string, string> } | null
+  /** The screenshot the person confirmed: the draft and the hash of the
+   *  bytes they saw (the daemon refuses any other hash, 409
+   *  `screenshot_changed`). Only to a server with
+   *  {@link PRODUCT_FEEDBACK_SCREENSHOT_FEATURE}. */
+  screenshot?: { draftId: string; sha256: string } | null
 }
 
 export async function sendFeedback(scope: ServerScope, a: SendArgs): Promise<{ id: string; state: FeedbackState }> {
@@ -203,6 +278,7 @@ export async function sendFeedback(scope: ServerScope, a: SendArgs): Promise<{ i
   if (a.k2Version) body.k2Version = a.k2Version
   if (a.locale) body.locale = a.locale
   if (a.diagnostics) body.diagnostics = a.diagnostics
+  if (a.screenshot) body.screenshot = { draftId: a.screenshot.draftId, sha256: a.screenshot.sha256 }
   const r = (await daemonCliPost(scope, 'product-feedback/send', body)) as Record<string, unknown>
   const id = str(r?.id)
   if (!id) throw new Error('The server answered without an id.')
@@ -226,6 +302,68 @@ export async function retrySent(scope: ServerScope, id: string): Promise<void> {
 
 export async function cancelSent(scope: ServerScope, id: string): Promise<void> {
   await daemonCliPost(scope, 'product-feedback/cancel', { id })
+}
+
+function parseDraft(r: Record<string, unknown> | null | undefined): ScreenshotDraft {
+  const draftId = str(r?.draftId)
+  const sha256 = str(r?.sha256)
+  if (!draftId || !SHA256_HEX.test(sha256)) throw new Error('The server answered without the screenshot.')
+  return {
+    draftId,
+    sha256,
+    bytes: num(r?.bytes),
+    width: num(r?.width),
+    height: num(r?.height),
+    source: source(r?.source),
+    capture: capture(r?.capture),
+    expiresAt: num(r?.expiresAt),
+  }
+}
+
+function parseImage(r: Record<string, unknown> | null | undefined): ScreenshotImage {
+  const dataUrl = str(r?.dataUrl)
+  const sha256 = str(r?.sha256)
+  if (!dataUrl.startsWith('data:image/png;base64,') || !SHA256_HEX.test(sha256)) {
+    throw new Error('The server answered without the picture.')
+  }
+  return {
+    dataUrl,
+    sha256,
+    bytes: num(r?.bytes),
+    width: num(r?.width),
+    height: num(r?.height),
+    source: source(r?.source),
+    capture: capture(r?.capture),
+  }
+}
+
+/** Upload the flattened PNG (base64, or a `data:image/png;base64,` URL) as
+ *  a draft on the window's server. People only (a passport is refused,
+ *  403 `screenshot_people_only`). A window picture says how it was taken;
+ *  a file has no `capture`. */
+export async function uploadScreenshot(
+  scope: ServerScope,
+  a: { image: string; source: 'window'; capture: ScreenshotCapture } | { image: string; source: 'file' },
+): Promise<ScreenshotDraft> {
+  const body: Record<string, unknown> = { image: a.image, source: a.source }
+  if (a.source === 'window') body.capture = a.capture
+  return parseDraft((await daemonCliPost(scope, 'product-feedback/screenshot', body)) as Record<string, unknown>)
+}
+
+/** The draft's stored bytes: what the final-picture view shows. */
+export async function fetchScreenshotDraft(scope: ServerScope, draftId: string): Promise<ScreenshotImage> {
+  return parseImage((await daemonCliGet(scope, 'product-feedback/screenshot', { draftId })) as Record<string, unknown>)
+}
+
+/** A row's picture while the server still keeps it (queued or failed). */
+export async function fetchSentScreenshot(scope: ServerScope, id: string): Promise<ScreenshotImage> {
+  return parseImage((await daemonCliGet(scope, 'product-feedback/screenshot', { id })) as Record<string, unknown>)
+}
+
+/** Remove: the server forgets the draft. Whether it was still there. */
+export async function forgetScreenshot(scope: ServerScope, draftId: string): Promise<boolean> {
+  const r = (await daemonCliPost(scope, 'product-feedback/screenshot/forget', { draftId })) as Record<string, unknown>
+  return r?.forgotten === true
 }
 
 /** "Copy as text" (PF7): what the person wrote, ready for an email. */

@@ -9222,17 +9222,19 @@ async fn handle_one_request(
         // never under `/cli/feedback/` (the tickets' POST prefix arm). People
         // (owner token, Connect logins at the Member floor) and passports;
         // the handler refuses App passes and API keys. POST-only rows 405 a
-        // GET; every branch consumes its request (keep-alive).
+        // GET; every branch consumes its request (keep-alive). The
+        // screenshot upload takes a 3 MiB body, every other route 1 MiB
+        // (`max_body`), refused before it is buffered.
         p if crate::product_feedback_routes::is_route(p) => {
             if crate::product_feedback_routes::is_post_only(p) && !is_post {
                 let _ = super::http::require_post(&mut *stream, &mut buf, is_post).await;
                 return DispatchOutcome::KeepAlive;
             }
             let body_bytes = if is_post {
-                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::product_feedback_routes::MAX_BODY).await {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::product_feedback_routes::max_body(p)).await {
                     Ok(b) => b,
                     Err(refused) => {
-                        let r = crate::product_feedback_routes::too_large();
+                        let r = crate::product_feedback_routes::too_large(p);
                         super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
                         return DispatchOutcome::Done;
                     }

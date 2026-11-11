@@ -168,6 +168,11 @@ export const REPORTED_FEATURES = {
    *  `/cli/product-feedback/*` and `product_feedback_status`. Without it the
    *  dialog only offers Copy as text and Alakazam's address. */
   'product-feedback-v1': 'product-feedback-v1',
+  /** prd-feedback-screenshot-v1 (0.46.11): one screenshot per feedback:
+   *  `POST/GET /cli/product-feedback/screenshot`, `screenshot/forget` and
+   *  `send`'s `screenshot: {draftId, sha256}`. The dialog hides Add
+   *  screenshot and Attach image for a server without it. */
+  'product-feedback-screenshot-v1': 'product-feedback-screenshot-v1',
   /** Sew 0.9.0 recording in Apps (K2 0.46.11 pin, `boot_status.rs`
    *  `FEATURE_VOICE_RECORD`): App manifests and role lines take
    *  `voice:record`. Settings → User Access offers "Record" only for a

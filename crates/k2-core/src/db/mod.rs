@@ -1920,6 +1920,13 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // is the CI release branch's. Renumber freely on a slip (and edit
         // the migration-order tests).
         ("0288_mail_linked_by", include_str!("../../drizzle_sql/0288_mail_linked_by.sql")),
+        // 0289 — a screenshot a person attached to Send feedback to K2
+        // (0.46.11, prd-feedback-screenshot-v1 §5.4): `screenshot_meta` on
+        // the outbox and `product_feedback_screenshots`. 0289 is reserved by
+        // K2 (0288 is the OCmail reader's); renumber only with K2 (and edit
+        // the migration-order tests). The store is
+        // `crate::product_feedback::store`.
+        ("0289_product_feedback_screenshot", include_str!("../../drizzle_sql/0289_product_feedback_screenshot.sql")),
         // 0290 — the setup checklist (prd-setup-checklist-v1, C1): one row
         // per person (hidden, skipped rows, finished) and the one-row
         // existing-install cutoff. 0287 and 0288 are 0.46.11's, and 0289 is
@@ -2853,6 +2860,8 @@ mod tests {
                 "0287_ci_release",
                 // 0.46.11: who linked each linked inbox (mail reader).
                 "0288_mail_linked_by",
+                // 0.46.11: a screenshot on Send feedback to K2.
+                "0289_product_feedback_screenshot",
                 // The setup checklist.
                 "0290_first_run",
             ],
@@ -3031,6 +3040,8 @@ mod tests {
                 "0287_ci_release",
                 // 0.46.11: who linked each linked inbox (mail reader).
                 "0288_mail_linked_by",
+                // 0.46.11: a screenshot on Send feedback to K2.
+                "0289_product_feedback_screenshot",
                 // The setup checklist.
                 "0290_first_run",
             ],
@@ -3379,9 +3390,10 @@ mod tests {
                 "0286_compute_key_chain",
                 "0287_ci_release",
                 "0288_mail_linked_by",
+                "0289_product_feedback_screenshot",
                 "0290_first_run"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287 and 0288, then the setup checklist's 0290)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -4226,7 +4238,11 @@ mod tests {
             // 0290 (the setup checklist) is the newest: its record goes (its
             // tables are IF NOT EXISTS and its insert OR IGNORE).
             conn.execute("DELETE FROM _migrations WHERE name = '0290_first_run'", []).unwrap();
-            // 0288 (who linked each linked inbox, 0.46.11) came before it: its
+            // 0289 (a feedback screenshot, 0.46.11) came before it: its record
+            // goes (its table is IF NOT EXISTS; its column re-add is skipped
+            // as a duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0289_product_feedback_screenshot'", []).unwrap();
+            // 0288 (who linked each linked inbox, 0.46.11) came before that: its
             // record goes (its column re-add is skipped as a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0288_mail_linked_by'", []).unwrap();
             // 0287 (k2 ci release, 0.46.11) came before it: its record goes
@@ -5893,5 +5909,47 @@ mod tests {
         run_migrations(&conn).unwrap();
         let once: i64 = conn.query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0287_ci_release'", [], |r| r.get(0)).unwrap();
         assert_eq!(once, 1, "0287 is recorded once");
+    }
+
+    /// 0289 (a feedback screenshot, prd-feedback-screenshot-v1 §5.4) on a
+    /// database from before it (last migration 0287): an existing outbox row
+    /// keeps every value and reads as having no screenshot, the picture
+    /// table starts empty and takes a row, and a second run is a no-op.
+    #[test]
+    fn a_0287_database_upgrades_through_0289_product_feedback_screenshot() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0287_ci_release")).unwrap();
+        assert!(!table_names(&conn).iter().any(|n| n == "product_feedback_screenshots"), "0287 has no picture table");
+        conn.execute_batch(
+            "INSERT INTO product_feedback_outbox (id, created_at, queued_at, updated_at, sender_kind, sender, client, category, body, meta_json, state, attempts, next_attempt_at) \
+             VALUES ('pf_old', 1, 1, 1, 'person', 'owner', 'desktop', 'bug', 'the tab froze', '{}', 'queued', 0, 1);",
+        )
+        .unwrap();
+        run_migrations(&conn).unwrap();
+        let (body, state, meta): (String, String, Option<String>) = conn
+            .query_row("SELECT body, state, screenshot_meta FROM product_feedback_outbox WHERE id = 'pf_old'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!((body.as_str(), state.as_str(), meta), ("the tab froze", "queued", None), "an old row has no screenshot");
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM product_feedback_screenshots", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+        conn.execute(
+            "INSERT INTO product_feedback_screenshots (feedback_id, png, sha256, created_at) VALUES ('pf_old', x'89504E47', 'ab', 2)",
+            [],
+        )
+        .unwrap();
+        let too_big = conn.execute(
+            "INSERT INTO product_feedback_screenshots (feedback_id, png, sha256, created_at) VALUES ('pf_big', zeroblob(2097153), 'ab', 2)",
+            [],
+        );
+        assert!(too_big.is_err(), "the table refuses a picture over 2 MiB");
+        run_migrations(&conn).unwrap();
+        let once: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0289_product_feedback_screenshot'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(once, 1, "0289 is recorded once");
+        let kept: i64 = conn.query_row("SELECT COUNT(*) FROM product_feedback_screenshots", [], |r| r.get(0)).unwrap();
+        assert_eq!(kept, 1, "a second run keeps the picture");
     }
 }

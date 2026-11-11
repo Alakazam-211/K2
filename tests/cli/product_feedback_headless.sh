@@ -13,7 +13,10 @@
 #   3. GET on a POST-only route is 405;
 #   4. --diagnostics-preview prints the scrubbed details and sends nothing;
 #      --diagnostics --yes sends exactly the previewed sections;
-#   5. `settings --enabled off` refuses the next send (exit 3, disabled).
+#   5. `settings --enabled off` refuses the next send (exit 3, disabled);
+#   6. a screenshot (prd-feedback-screenshot-v1): curl a fixture PNG to the
+#      draft route, read it back, send with its hash (a wrong hash is 409);
+#      the fake intake gets exactly those bytes and the box deletes them.
 #
 #   cargo build -p k2-daemon && bash tests/cli/product_feedback_headless.sh
 #
@@ -255,6 +258,61 @@ want_rc 3 "send while off"
 has "$ERR" '"disabled"' "the refusal names disabled"
 cli send-feedback settings --enabled on
 want_rc 0 "settings on"
+
+echo "== 6. a screenshot =="
+# A small PNG from the stdlib, with a tEXt chunk the daemon must cut.
+python3 - "$WORK/shot.json" <<'PY'
+import base64, json, struct, sys, zlib
+def chunk(t, d):
+    return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+w, h = 40, 30
+raw = b"".join(b"\x00" + bytes((x * 6) % 256 for x in range(w * 3)) for _ in range(h))
+png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+       + chunk(b"tEXt", b"Title\x00secret window") + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+json.dump({"image": base64.b64encode(png).decode(), "source": "window", "capture": "page"}, open(sys.argv[1], "w"))
+PY
+UP="$(curl -s -X POST -H 'Content-Type: application/json' --data-binary @"$WORK/shot.json" "$BASE/cli/product-feedback/screenshot?token=$DTOKEN")"
+jok "$UP" 'j["ok"] and j["width"] == 40 and j["height"] == 30 and j["capture"] == "page" and len(j["sha256"]) == 64' "the draft route keeps the picture"
+DRAFT="$(printf '%s' "$UP" | python3 -c 'import json,sys; print(json.load(sys.stdin)["draftId"])')"
+HASH="$(printf '%s' "$UP" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha256"])')"
+curl -s "$BASE/cli/product-feedback/screenshot?draftId=$DRAFT&token=$DTOKEN" > "$WORK/draft.json"
+python3 - "$WORK/draft.json" "$HASH" <<'PY' || fail "the draft read back"
+import base64, hashlib, json, sys
+g = json.load(open(sys.argv[1]))
+b = base64.b64decode(g["dataUrl"].split(",", 1)[1])
+assert hashlib.sha256(b).hexdigest() == sys.argv[2], "the hash is of the stored bytes"
+assert b"secret window" not in b, "the text chunk was cut"
+PY
+ok "read back: the stored bytes match the hash, the text chunk is gone"
+ZEROS="0000000000000000000000000000000000000000000000000000000000000000"
+code="$(curl -s -o "$WORK/bad.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    --data "{\"text\":\"headless: wrong hash\",\"screenshot\":{\"draftId\":\"$DRAFT\",\"sha256\":\"$ZEROS\"}}" \
+    "$BASE/cli/product-feedback/send?token=$DTOKEN")"
+[ "$code" = 409 ] || fail "a wrong hash answered $code: $(cat "$WORK/bad.json")"
+ok "a hash that isn't the draft's is 409"
+S="$(curl -s -X POST -H 'Content-Type: application/json' \
+    --data "{\"text\":\"headless: with a screenshot\",\"category\":\"bug\",\"screenshot\":{\"draftId\":\"$DRAFT\",\"sha256\":\"$HASH\"}}" \
+    "$BASE/cli/product-feedback/send?token=$DTOKEN")"
+jok "$S" 'j["ok"] and j["state"] == "queued"' "send with the screenshot"
+S_ID="$(printf '%s' "$S" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+for _ in $(seq 1 30); do jcheck "$(show "$S_ID")" 'j["item"]["state"] == "sent"' && break; sleep 1; done
+R="$(show "$S_ID")"
+jok "$R" 'j["item"]["state"] == "sent" and j["item"]["hasScreenshot"] and j["item"]["screenshot"]["onBox"] is False' "sent; the box no longer keeps the picture"
+python3 - "$WORK/intake.jsonl" "$WORK/draft.json" "$S_ID" <<'PY' || fail "the intake's screenshot"
+import base64, hashlib, json, sys
+rec = [json.loads(l) for l in open(sys.argv[1])][-1]
+assert {k.lower(): v for k, v in rec["headers"].items()}["idempotency-key"] == sys.argv[3]
+w = json.loads(rec["body"])["screenshot"]
+want = base64.b64decode(json.load(open(sys.argv[2]))["dataUrl"].split(",", 1)[1])
+got = base64.b64decode(w["data"])
+assert got == want, "the intake got other bytes than the person saw"
+assert w["sha256"] == hashlib.sha256(got).hexdigest()
+assert (w["mime"], w["source"], w["capture"], w["width"], w["height"]) == ("image/png", "window", "page", 40, 30), w
+PY
+ok "the intake got exactly the bytes the person saw, with their hash"
+code="$(curl -s -o "$WORK/gone.json" -w '%{http_code}' "$BASE/cli/product-feedback/screenshot?id=$S_ID&token=$DTOKEN")"
+[ "$code" = 404 ] || fail "the sent picture is still readable ($code)"
+has "$(cat "$WORK/gone.json")" "screenshot_not_on_box" "the row's picture is gone"
 
 echo ""
 echo "product_feedback_headless: $pass checks passed"

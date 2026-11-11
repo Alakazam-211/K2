@@ -1,0 +1,26 @@
+schema = 1
+id = "researcher"
+version = 1
+name = "Researcher"
+summary = "Finds things out from sources, documents or data, and says where each answer came from."
+kind = "agent"
+aliases = []
+author = "K2"
+shared_block = true
+
+[agent]
+role = "researcher"
+tool = "default"
+
+[context]
+catalog = ["wiki:index", "wiki:hygiene", "connections:roster"]
+
+[permissions]
+cards = true
+suggest = []
+
+[params]
+about = { label = "What should it focus on?", max = 500, required = false }
+
+[hello]
+brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."

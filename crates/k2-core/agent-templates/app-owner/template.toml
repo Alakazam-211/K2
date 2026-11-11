@@ -1,0 +1,26 @@
+schema = 1
+id = "app-owner"
+version = 1
+name = "App owner"
+summary = "Builds, ships and looks after K2 Apps."
+kind = "agent"
+aliases = []
+author = "K2"
+shared_block = true
+
+[agent]
+role = "app-owner"
+tool = "default"
+
+[context]
+catalog = ["wiki:index", "wiki:hygiene", "connections:roster", "apps:maintained", "apps:roster"]
+
+[permissions]
+cards = true
+suggest = ["apps.build", "compute.use"]
+
+[params]
+about = { label = "What should it focus on?", max = 500, required = false }
+
+[hello]
+brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."

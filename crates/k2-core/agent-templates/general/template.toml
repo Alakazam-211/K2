@@ -1,0 +1,26 @@
+schema = 1
+id = "general"
+version = 1
+name = "General"
+summary = "Helps with whatever you bring it; you shape the job over time."
+kind = "agent"
+aliases = ["worker"]
+author = "K2"
+shared_block = true
+
+[agent]
+role = "general"
+tool = "default"
+
+[context]
+catalog = ["wiki:index", "wiki:hygiene", "connections:roster"]
+
+[permissions]
+cards = true
+suggest = []
+
+[params]
+about = { label = "What should it focus on?", max = 500, required = false }
+
+[hello]
+brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."

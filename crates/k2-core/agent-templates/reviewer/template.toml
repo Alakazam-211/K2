@@ -1,0 +1,26 @@
+schema = 1
+id = "reviewer"
+version = 1
+name = "Reviewer"
+summary = "Checks work (code, documents, Apps or plans) and reports what it finds."
+kind = "agent"
+aliases = ["qa"]
+author = "K2"
+shared_block = true
+
+[agent]
+role = "reviewer"
+tool = "default"
+
+[context]
+catalog = ["wiki:index", "wiki:hygiene", "connections:roster", "skills:roster"]
+
+[permissions]
+cards = true
+suggest = ["compute.use"]
+
+[params]
+about = { label = "What should it focus on?", max = 500, required = false }
+
+[hello]
+brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."

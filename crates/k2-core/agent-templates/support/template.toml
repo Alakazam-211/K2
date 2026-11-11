@@ -1,0 +1,26 @@
+schema = 1
+id = "support"
+version = 1
+name = "Support"
+summary = "Looks after conversations with customers and leads."
+kind = "agent"
+aliases = []
+author = "K2"
+shared_block = true
+
+[agent]
+role = "support"
+tool = "default"
+
+[context]
+catalog = ["wiki:index", "wiki:hygiene", "connections:roster", "users:roster"]
+
+[permissions]
+cards = true
+suggest = []
+
+[params]
+about = { label = "What should it focus on?", max = 500, required = false }
+
+[hello]
+brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."

@@ -298,16 +298,21 @@ pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
             false,
             &["role", "manager"],
         ),
+        // 0.46.12 (prd-agent-templates-v1 §5, AT9): the old "K2 Agent"
+        // planner pack is now K5, K2's own agent. `k2:pack` and its
+        // aliases resolve here; a workspace that already stacked the old
+        // `catalog:k2-agent` row keeps its file and the row still composes
+        // (AT17: the meaning changes for new adds only).
         builtin_catalog_entry(
-            "k2:pack",
-            ".k2/context/catalog/k2-agent.md",
-            "K2 Agent",
-            "catalog:k2-agent",
+            K5_PACK_ID,
+            K5_PACK_PATH,
+            "K5: K2's own agent",
+            K5_PACK_SOURCE,
             "static",
-            "Lean always-on planner orientation. Full K2 Agent playbook stays a loadable skill.",
+            "Lean always-on orders for K5, the agent that runs K2 for its person: setup, settings and agent management.",
             Some("1.0.0"),
             false,
-            &["role", "planner"],
+            &["role", "k5"],
         ),
         builtin_catalog_entry(
             CONNECTIONS_ROSTER_ID,
@@ -396,10 +401,16 @@ pub struct CreatedUserPack {
     pub dir: PathBuf,
 }
 
+/// K5's pack (0.46.12): the id, its file and its source tag.
+pub const K5_PACK_ID: &str = "k5:pack";
+pub const K5_PACK_PATH: &str = ".k2/context/catalog/k5.md";
+pub const K5_PACK_SOURCE: &str = "catalog:k5";
+
 const RESERVED_ID_PREFIXES: &[&str] = &[
     "wiki:",
     "manager:",
     "k2:",
+    "k5:",
     "connections:",
     "heartbeats:",
     "skills:",
@@ -418,6 +429,7 @@ const RESERVED_ALIASES: &[&str] = &[
     "manager",
     "k2",
     "k2-agent",
+    "k5",
     "hygiene",
     "subagents",
     "connected-agents",
@@ -456,6 +468,7 @@ const RESERVED_ALIASES: &[&str] = &[
 const RESERVED_PATH_STEMS: &[&str] = &[
     "manager",
     "k2-agent",
+    "k5",
     "wiki-hygiene",
     "always-use-subagents",
     "connections-roster",
@@ -1615,6 +1628,29 @@ Write durable plans under `.k2/prds/` / `.k2/milestones/`; keep PROJECT.md curre
 - Skip writing decisions back to PROJECT.md / PRDs.
 "#;
 
+/// Lean always-on K5 layer (0.46.12): what K5 is for and how it asks.
+const K5_PACK_MD: &str = r#"# K5: K2's own agent (always-on)
+
+You are K5, the agent that runs K2 for your person: setup, settings and
+the agents on this server. The app is K2; you are its helper.
+
+## How you work
+
+- Learn a K2 command before you use it: `k2 study` lists the pages, and
+  every verb takes `--help`. Don't guess flags.
+- Make agents with `k2 agent hire --template <id>` (`k2 agent template list`
+  shows the types). Ask your person before you hire.
+- When K2 refuses you, ask on the card it prints. Never work around a
+  refusal, and never ask for more than the task needs.
+- Report what you changed on the Thread, and how you checked it.
+
+## Do not
+
+- Handle secrets in chat or the wiki: K2's vault and secret cards hold them.
+- Change another agent's files, or speak for another agent.
+- Paste long docs into always-on context; link the path instead.
+"#;
+
 /// Lean standing order: prefer subagent worktrees for heavy work.
 const SUBAGENTS_PACK_MD: &str = r#"# Always use subagents
 
@@ -1658,12 +1694,19 @@ fn known_catalog_ids() -> String {
         .join(", ")
 }
 
+/// Resolve a catalog id or alias to its entry (agent templates check their
+/// `[context] catalog` ids with it; prd-agent-templates-v1 §2.3).
+pub fn resolve_catalog_entry(catalog_id: &str) -> Result<ContextCatalogEntry, ContextError> {
+    resolve_catalog_id(catalog_id)
+}
+
 fn resolve_catalog_id(catalog_id: &str) -> Result<ContextCatalogEntry, ContextError> {
     let id = catalog_id.trim();
     // Accept short aliases (product language + skill dir names).
     let canonical = match id {
         "manager" | "workspace-manager" | "catalog:manager" => "manager:pack",
-        "k2-agent" | "k2" | "k2so-agent" | "catalog:k2-agent" => "k2:pack",
+        // AT9: every old K2 Agent spelling is K5's pack now.
+        "k2:pack" | "k2-agent" | "k2" | "k2so-agent" | "catalog:k2-agent" | "k5" | "catalog:k5" => K5_PACK_ID,
         "connections"
         | "roster"
         | "connections-roster"
@@ -1725,6 +1768,7 @@ fn is_materializing_pack(entry: &ContextCatalogEntry) -> bool {
         entry.source.as_str(),
         "catalog:manager"
             | "catalog:k2-agent"
+            | K5_PACK_SOURCE
             | WIKI_HYGIENE_SOURCE
             | SUBAGENTS_PACK_SOURCE
             | CONNECTIONS_ROSTER_SOURCE
@@ -1768,7 +1812,9 @@ fn materialize_pack_if_needed(
         }
         let body = match entry.source.as_str() {
             "catalog:manager" => MANAGER_PACK_MD,
+            // An old row whose file went missing gets the old body back.
             "catalog:k2-agent" => K2_AGENT_PACK_MD,
+            K5_PACK_SOURCE => K5_PACK_MD,
             WIKI_HYGIENE_SOURCE => WIKI_HYGIENE_PACK_MD,
             SUBAGENTS_PACK_SOURCE => SUBAGENTS_PACK_MD,
             _ => return Ok(()),
@@ -2863,7 +2909,8 @@ mod tests {
         assert!(catalog.iter().any(|p| p.id == WIKI_HYGIENE_ID));
         assert!(catalog.iter().any(|p| p.id == SUBAGENTS_PACK_ID));
         assert!(catalog.iter().any(|p| p.id == "manager:pack"));
-        assert!(catalog.iter().any(|p| p.id == "k2:pack"));
+        assert!(catalog.iter().any(|p| p.id == K5_PACK_ID));
+        assert!(!catalog.iter().any(|p| p.id == "k2:pack"), "k2:pack is an alias of k5:pack since 0.46.12");
         assert!(catalog.iter().any(|p| p.id == CONNECTIONS_ROSTER_ID));
         assert!(catalog.iter().any(|p| p.id == HEARTBEATS_ROSTER_ID));
         assert!(catalog.iter().any(|p| p.id == SKILLS_ROSTER_ID));
@@ -3535,17 +3582,43 @@ mod tests {
         let err = add_layer(path, None, Some("manager:pack"), None).expect_err("dup");
         assert_eq!(err.code(), "duplicate_layer");
 
+        // 0.46.12 AT9: the old K2 Agent alias stacks K5's pack.
         let k2_layer = add_layer(path, None, Some("k2-agent"), None).expect("k2 alias");
-        assert_eq!(k2_layer.source, "catalog:k2-agent");
-        assert!(root.join(".k2/context/catalog/k2-agent.md").is_file());
-        let k2_body = fs::read_to_string(root.join(".k2/context/catalog/k2-agent.md")).unwrap();
+        assert_eq!(k2_layer.source, K5_PACK_SOURCE);
+        assert_eq!(k2_layer.path, K5_PACK_PATH);
+        assert!(root.join(K5_PACK_PATH).is_file());
+        assert!(!root.join(".k2/context/catalog/k2-agent.md").exists(), "a new add never writes the old file");
+        let k2_body = fs::read_to_string(root.join(K5_PACK_PATH)).unwrap();
+        assert!(k2_body.starts_with("# K5: K2's own agent"), "K5 pack body: {k2_body}");
         assert!(
             k2_body.len() < 4_000,
-            "k2 pack must stay lean, len={}",
+            "k5 pack must stay lean, len={}",
             k2_body.len()
         );
 
         cleanup_project(path, &_pid);
+    }
+
+    /// prd-agent-templates-v1 AT9: `k2:pack` and every old K2 Agent
+    /// spelling resolve to `k5:pack`; adding one after another is the same
+    /// layer (a duplicate), not a second one.
+    #[test]
+    fn k2_pack_alias_resolves_to_k5_pack() {
+        // Literals on purpose: the same test runs red on a K2 without K5's pack.
+        for alias in ["k2:pack", "k2-agent", "k2", "k2so-agent", "catalog:k2-agent", "k5", "catalog:k5", "k5:pack"] {
+            let e = resolve_catalog_id(alias).unwrap_or_else(|err| panic!("{alias}: {err}"));
+            assert_eq!(e.id, "k5:pack", "{alias}");
+            assert_eq!(e.source, "catalog:k5", "{alias}");
+            assert_eq!(e.path, ".k2/context/catalog/k5.md", "{alias}");
+        }
+        let root = unique_root("k5alias");
+        let path = root.to_str().unwrap();
+        let pid = register_project(path);
+        let first = add_layer(path, None, Some("k2:pack"), None).expect("k2:pack");
+        assert_eq!(first.source, "catalog:k5");
+        let err = add_layer(path, None, Some("k5:pack"), None).expect_err("same layer twice");
+        assert_eq!(err.code(), "duplicate_layer");
+        cleanup_project(path, &pid);
     }
 
     #[test]
@@ -3663,6 +3736,9 @@ mod tests {
                 "people",
                 "manager",
                 "k2-agent",
+                "k5",
+                "k5:pack",
+                "k5:mine",
                 "wiki-hygiene",
                 "users-roster",
                 "apps:roster",

@@ -1,0 +1,26 @@
+schema = 1
+id = "lead"
+version = 1
+name = "Lead"
+summary = "Leads a small team of agents: splits the work, hands it out, follows up."
+kind = "agent"
+aliases = ["manager"]
+author = "K2"
+shared_block = true
+
+[agent]
+role = "lead"
+tool = "default"
+
+[context]
+catalog = ["wiki:index", "wiki:hygiene", "connections:roster", "manager:pack", "heartbeats:roster"]
+
+[permissions]
+cards = true
+suggest = ["agents.manage", "connections.create", "projects.manage"]
+
+[params]
+about = { label = "What should it focus on?", max = 500, required = false }
+
+[hello]
+brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."

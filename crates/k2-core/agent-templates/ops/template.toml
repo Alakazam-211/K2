@@ -1,0 +1,26 @@
+schema = 1
+id = "ops"
+version = 1
+name = "Ops"
+summary = "Keeps machines, services and scheduled jobs running."
+kind = "agent"
+aliases = []
+author = "K2"
+shared_block = true
+
+[agent]
+role = "ops"
+tool = "default"
+
+[context]
+catalog = ["wiki:index", "wiki:hygiene", "connections:roster", "heartbeats:roster"]
+
+[permissions]
+cards = true
+suggest = ["compute.use"]
+
+[params]
+about = { label = "What should it focus on?", max = 500, required = false }
+
+[hello]
+brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."

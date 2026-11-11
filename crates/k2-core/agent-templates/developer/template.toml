@@ -1,0 +1,26 @@
+schema = 1
+id = "developer"
+version = 1
+name = "Developer"
+summary = "Builds and fixes software in its folder."
+kind = "agent"
+aliases = []
+author = "K2"
+shared_block = true
+
+[agent]
+role = "developer"
+tool = "default"
+
+[context]
+catalog = ["wiki:index", "wiki:hygiene", "connections:roster", "skills:roster"]
+
+[permissions]
+cards = true
+suggest = ["compute.use"]
+
+[params]
+about = { label = "What should it focus on?", max = 500, required = false }
+
+[hello]
+brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."

@@ -435,7 +435,8 @@ describe('retired style ids at every way in', () => {
     __setPreBootMirrorCompleteForTests(false)
     migrateStyleFromDaemon({ id: 'bezel', palette: 'porcelain', scheme: 'light', gaps: '' })
     expect(useStyleStore.getState().resolvedPaletteId).toBe('veil')
-    expect(mem.get('k2.accent.glass')).toBe('yellow')
+    expect(mem.get('k2.accent.glass.veil')).toBe('yellow')
+    expect(mem.has('k2.accent.glass')).toBe(false)
     expect(useStyleStore.getState().accent).toBe('yellow')
   })
 

@@ -13,6 +13,7 @@ import {
   type StylePaletteMeta,
   type StyleScheme,
 } from '@/styles.generated'
+import type { AccentChoice } from '@/lib/style-accent'
 import type { KesselColorsConfig } from '@/kessel/config'
 import type { StyleTerminalColors } from '@/styles.generated'
 
@@ -45,8 +46,8 @@ export interface ResolvedStyle {
 /**
  * The look for a client that has never picked one (Rosson, 2026-11-11):
  * Glass under Auto, Obsidian when the system is dark and Veil when it is
- * light, with DEFAULT_ACCENT. A saved choice is never replaced by it. Keep
- * index.html's pre-paint bootstrap in step.
+ * light, each palette with DEFAULT_PALETTE_ACCENTS. A saved choice is never
+ * replaced by it. Keep index.html's pre-paint bootstrap in step.
  */
 export const DEFAULT_SELECTION: Readonly<StyleSelection> = Object.freeze({
   styleId: 'glass',
@@ -56,10 +57,21 @@ export const DEFAULT_SELECTION: Readonly<StyleSelection> = Object.freeze({
   autoPalettes: Object.freeze({ dark: 'obsidian', light: 'veil' }),
 })
 
-/** The default look's accent (lib/style-accent's `yellow`), saved once as the
- *  default style's accent on a client with no saved style. A missing accent
- *  key still means the palette's own accent. */
-export const DEFAULT_ACCENT = 'yellow'
+/**
+ * THE ONE PLACE that decides the default look's accents, per palette of the
+ * default style (Glass). The default look and the one-time 0.46.11 switch
+ * write exactly these, each to its own palette's key; a palette left out
+ * keeps its own accent. Values are lib/style-accent choices: `yellow` or a
+ * #rrggbb colour.
+ *
+ *   {}                      no accent written: every palette its own (now)
+ *   { obsidian: 'yellow' }  Obsidian with Yellow, Veil and Yellow their own
+ *
+ * Change it here, then update `defaultAccent` in index.html's pre-paint
+ * bootstrap to match: stores/style-accent.test.ts derives the values from
+ * this constant and fails until they agree.
+ */
+export const DEFAULT_PALETTE_ACCENTS: Readonly<Partial<Record<string, AccentChoice>>> = Object.freeze({})
 
 /** What the daemon's StyleSettings holds when nobody ever set it
  *  (app_settings.rs). Its echo is not a choice. */

@@ -71,7 +71,7 @@ describe('accent override', () => {
     store.getState().setAccent('#FF00AA')
     expect(accentVar()).toBe('#ff00aa')
     expect(store.getState().accent).toBe('#ff00aa')
-    expect(mem.get('k2.accent.terminal')).toBe('#ff00aa')
+    expect(mem.get('k2.accent.terminal.charcoal')).toBe('#ff00aa')
   })
 
   it('still applies live when storage refuses to save it', async () => {
@@ -86,7 +86,7 @@ describe('accent override', () => {
     }
     expect(accentVar()).toBe('#ff00aa')
     expect(store.getState().accent).toBe('#ff00aa')
-    expect(mem.has('k2.accent.terminal')).toBe(false)
+    expect(mem.has('k2.accent.terminal.charcoal')).toBe(false)
   })
 
   it('ignores an invalid colour', async () => {
@@ -94,11 +94,11 @@ describe('accent override', () => {
     store.getState().setAccent('not-a-colour')
     expect(accentVar()).toBe('')
     expect(store.getState().accent).toBeNull()
-    expect(mem.has('k2.accent.terminal')).toBe(false)
+    expect(mem.has('k2.accent.terminal.charcoal')).toBe(false)
   })
 
   it('an invalid stored value falls back to the default at boot', async () => {
-    mem.set('k2.accent.terminal', 'url(evil)')
+    mem.set('k2.accent.terminal.charcoal', 'url(evil)')
     const store = await freshStore()
     expect(store.getState().accent).toBeNull()
     expect(accentVar()).toBe('')
@@ -111,7 +111,7 @@ describe('accent override', () => {
     expect(accentVar()).toBe('')
     expect(html.style.getPropertyValue('--color-on-accent')).toBe('')
     expect(store.getState().accent).toBeNull()
-    expect(mem.has('k2.accent.terminal')).toBe(false)
+    expect(mem.has('k2.accent.terminal.charcoal')).toBe(false)
     expect(mem.has('k2.accent.stamp.dark')).toBe(false)
   })
 
@@ -131,7 +131,7 @@ describe('accent override', () => {
     const store = await freshStore()
     const { stampStyleAttributes } = await import('./style')
     store.getState().setAccent('#ff00aa')
-    mem.set('k2.accent.glass', '#00ff88')
+    mem.set('k2.accent.glass.obsidian', '#00ff88')
     const { styleId, paletteId, schemeMode, gapsPreset } = store.getState()
     stampStyleAttributes({ styleId: 'glass', paletteId: 'obsidian', schemeMode, gapsPreset })
     expect(accentVar()).toBe('#00ff88')
@@ -151,6 +151,100 @@ describe('accent override', () => {
     expect(STYLE_MIRROR_STORAGE_KEYS).toEqual(
       expect.arrayContaining(['k2.accent.stamp.dark', 'k2.accent.stamp.light']),
     )
+  })
+})
+
+describe('an accent per palette', () => {
+  const glassKeys = (): Record<string, string> =>
+    Object.fromEntries([...mem].filter(([k]) => /^k2\.accent\.glass\./.test(k)))
+
+  /** Glass on a fixed dark mode, Obsidian, past every migration. */
+  const seedGlass = (): void => {
+    mem.set('k2.style', 'glass')
+    mem.set('k2.palette', 'obsidian')
+    mem.set('k2.scheme', 'dark')
+  }
+
+  it('changing Obsidian’s accent leaves Veil’s and Yellow’s alone', async () => {
+    seedGlass()
+    mem.set('k2.accent.glass.veil', '#3366cc')
+    const store = await freshStore()
+    store.getState().setAccent('#ff00aa')
+    expect(glassKeys()).toEqual({ 'k2.accent.glass.obsidian': '#ff00aa', 'k2.accent.glass.veil': '#3366cc' })
+    store.getState().applyStyle({ paletteId: 'yellow' })
+    expect([store.getState().accent, accentVar()]).toEqual([null, ''])
+    store.getState().applyStyle({ paletteId: 'veil', schemeMode: 'light' })
+    expect([store.getState().accent, accentVar()]).toEqual(['#3366cc', '#3366cc'])
+    store.getState().applyStyle({ paletteId: 'obsidian', schemeMode: 'dark' })
+    expect([store.getState().accent, accentVar()]).toEqual(['#ff00aa', '#ff00aa'])
+  })
+
+  it('Reset returns only that palette to its own accent', async () => {
+    seedGlass()
+    mem.set('k2.accent.glass.obsidian', '#ff00aa')
+    mem.set('k2.accent.glass.yellow', '#00ff88')
+    const store = await freshStore()
+    store.getState().resetAccent()
+    expect(glassKeys()).toEqual({ 'k2.accent.glass.yellow': '#00ff88' })
+    expect([store.getState().accent, accentVar()]).toEqual([null, ''])
+    store.getState().applyStyle({ paletteId: 'yellow' })
+    expect(accentVar()).toBe('#00ff88')
+  })
+
+  it('under Auto, each OS appearance shows its own palette’s accent, live and at first paint', async () => {
+    mem.set('k2.style', 'glass')
+    mem.set('k2.scheme', 'auto')
+    mem.set('k2.palette', 'obsidian')
+    mem.set('k2.palette.dark', 'obsidian')
+    mem.set('k2.palette.light', 'veil')
+    mem.set('k2.accent.glass.obsidian', '#ff00aa')
+    mem.set('k2.accent.glass.veil', '#3366cc')
+    const store = await freshStore()
+    expect([store.getState().resolvedPaletteId, store.getState().accent, accentVar()]).toEqual([
+      'obsidian',
+      '#ff00aa',
+      '#ff00aa',
+    ])
+    const dark = JSON.parse(mem.get('k2.accent.stamp.dark')!)
+    const light = JSON.parse(mem.get('k2.accent.stamp.light')!)
+    expect([dark.palette, dark.vars['--color-accent'], light.palette, light.vars['--color-accent']]).toEqual([
+      'obsidian',
+      '#ff00aa',
+      'veil',
+      '#3366cc',
+    ])
+    clearHtml()
+    osLight = true
+    runBootstrap()
+    expect([html.getAttribute('data-palette'), accentVar()]).toEqual(['veil', '#3366cc'])
+    clearHtml()
+    osLight = false
+    runBootstrap()
+    expect([html.getAttribute('data-palette'), accentVar()]).toEqual(['obsidian', '#ff00aa'])
+  })
+
+  it('under Auto, the row edits the palette on screen: a light system’s change is Veil’s', async () => {
+    mem.set('k2.style', 'glass')
+    mem.set('k2.scheme', 'auto')
+    mem.set('k2.palette.dark', 'obsidian')
+    mem.set('k2.palette.light', 'veil')
+    osLight = true
+    const store = await freshStore()
+    store.getState().setAccent('#3366cc')
+    expect(glassKeys()).toEqual({ 'k2.accent.glass.veil': '#3366cc' })
+    expect(mem.has('k2.accent.stamp.dark')).toBe(false)
+  })
+
+  it('a hover preview of another palette shows that palette’s accent', async () => {
+    seedGlass()
+    mem.set('k2.accent.glass.veil', '#3366cc')
+    const store = await freshStore()
+    const { stampStyleAttributes } = await import('./style')
+    const { styleId, gapsPreset } = store.getState()
+    stampStyleAttributes({ styleId, paletteId: 'veil', schemeMode: 'light', gapsPreset })
+    expect(accentVar()).toBe('#3366cc')
+    stampStyleAttributes({ styleId, paletteId: 'obsidian', schemeMode: 'dark', gapsPreset })
+    expect(accentVar()).toBe('')
   })
 })
 
@@ -254,26 +348,29 @@ describe('Auto picks at boot', () => {
     seedAuto('charcoal', 'paper')
     const store = await freshStore()
     store.getState().setAccent('#ff00aa')
+    mem.set('k2.accent.terminal.paper', '#3366cc')
+    store.getState().applyStyle({})
     const light = JSON.parse(mem.get('k2.accent.stamp.light')!)
     const dark = JSON.parse(mem.get('k2.accent.stamp.dark')!)
     expect([light.palette, dark.palette]).toEqual(['paper', 'charcoal'])
     clearHtml()
     osLight = true
     runBootstrap()
-    expect(accentVar()).toBe('#ff00aa')
+    expect(accentVar()).toBe('#3366cc')
     expect(html.getAttribute('data-palette')).toBe('paper')
   })
 })
 
 describe('the default look on a client with nothing saved', () => {
-  const YELLOW_ON_OBSIDIAN = '#ffc700'
-  const YELLOW_ON_VEIL = '#e6b400'
-
   beforeEach(() => {
     mem.clear()
   })
 
-  it('boots to Glass under Auto, Obsidian and Veil, with the Yellow accent saved once', async () => {
+  /** Every saved accent choice (not the pre-paint stamps or flags). */
+  const accentChoiceKeys = (): string[] =>
+    [...mem.keys()].filter((k) => k.startsWith('k2.accent.') && !k.startsWith('k2.accent.stamp.'))
+
+  it('boots to Glass under Auto, Obsidian and Veil, with no accent written', async () => {
     const store = await freshStore()
     const s = store.getState()
     expect([s.styleId, s.paletteId, s.schemeMode, s.autoPalettes]).toEqual([
@@ -282,45 +379,48 @@ describe('the default look on a client with nothing saved', () => {
       'auto',
       { dark: 'obsidian', light: 'veil' },
     ])
-    expect(s.accent).toBe('yellow')
-    expect(mem.get('k2.accent.glass')).toBe('yellow')
+    expect(s.accent).toBeNull()
+    expect(accentChoiceKeys()).toEqual([])
     expect([html.getAttribute('data-style'), html.getAttribute('data-palette')]).toEqual(['glass', 'obsidian'])
-    expect(accentVar()).toBe(YELLOW_ON_OBSIDIAN)
+    expect(accentVar()).toBe('')
     expect([mem.get('k2.style'), mem.get('k2.scheme'), mem.get('k2.palette.light')]).toEqual(['glass', 'auto', 'veil'])
   })
 
-  it('on a light system it is Veil with Yellow', async () => {
+  it('on a light system it is Veil with its own accent', async () => {
     osLight = true
     const store = await freshStore()
     expect(store.getState().resolvedPaletteId).toBe('veil')
-    expect(accentVar()).toBe(YELLOW_ON_VEIL)
+    expect(accentVar()).toBe('')
   })
 
-  it('the first paint is already the default, with no flash of Terminal or blue', () => {
+  it('the first paint is already the default, with each palette’s own accent', () => {
     runBootstrap()
     expect([html.getAttribute('data-style'), html.getAttribute('data-palette'), html.getAttribute('data-scheme')]).toEqual([
       'glass',
       'obsidian',
       'dark',
     ])
-    expect(accentVar()).toBe(YELLOW_ON_OBSIDIAN)
+    expect(accentVar()).toBe('')
     clearHtml()
     osLight = true
     runBootstrap()
     expect([html.getAttribute('data-palette'), html.getAttribute('data-scheme')]).toEqual(['veil', 'light'])
-    expect(accentVar()).toBe(YELLOW_ON_VEIL)
+    expect(accentVar()).toBe('')
   })
 
-  it('the bootstrap’s Yellow is exactly what the store derives, on both palettes', async () => {
+  it('the bootstrap’s default accents are exactly what DEFAULT_PALETTE_ACCENTS derives, on both sides', async () => {
     const { accentVarsFor } = await import('@/lib/style-accent')
+    const { DEFAULT_PALETTE_ACCENTS } = await import('@/lib/style-resolve')
     const { getStyle } = await import('@/styles.generated')
     const glass = getStyle('glass')!
     for (const [palette, light] of [['obsidian', false], ['veil', true]] as const) {
       clearHtml()
       osLight = light
       runBootstrap()
-      const want = accentVarsFor('yellow', glass.palettes.find((p) => p.id === palette)!, light ? 'light' : 'dark')
-      const got = Object.fromEntries(Object.keys(want).map((k) => [k, html.style.getPropertyValue(k)]))
+      const choice = DEFAULT_PALETTE_ACCENTS[palette] ?? null
+      const want = accentVarsFor(choice, glass.palettes.find((p) => p.id === palette)!, light ? 'light' : 'dark')
+      const names = ['--color-accent', ...Object.keys(want)]
+      const got = Object.fromEntries(names.map((k) => [k, html.style.getPropertyValue(k)]).filter(([, v]) => v !== ''))
       expect([palette, got]).toEqual([palette, want])
     }
   })
@@ -329,7 +429,7 @@ describe('the default look on a client with nothing saved', () => {
     await freshStore()
     clearHtml()
     runBootstrap()
-    expect(accentVar()).toBe(YELLOW_ON_OBSIDIAN)
+    expect(accentVar()).toBe('')
     expect(html.getAttribute('data-style')).toBe('glass')
   })
 
@@ -342,42 +442,27 @@ describe('the default look on a client with nothing saved', () => {
       'dark',
     ])
     expect(store.getState().accent).toBeNull()
-    expect([...mem.keys()].filter((k) => k.startsWith('k2.accent.') && !k.startsWith('k2.accent.stamp.'))).toEqual([])
+    expect(accentChoiceKeys()).toEqual([])
     expect(accentVar()).toBe('')
     clearHtml()
     runBootstrap()
     expect([html.getAttribute('data-style'), accentVar()]).toEqual(['terminal', ''])
   })
 
-  it('an existing Glass client with no accent saved stays on the palette’s accent', async () => {
+  it('past the one-time switch, a deliberate Glass accent from before moves to every Glass palette', async () => {
     mem.set(SWITCHED, '1')
     mem.set('k2.style', 'glass')
-    mem.set('k2.palette', 'obsidian')
-    mem.set('k2.scheme', 'dark')
-    const store = await freshStore()
-    expect(store.getState().accent).toBeNull()
-    expect(mem.has('k2.accent.glass')).toBe(false)
-    expect(accentVar()).toBe('')
-    clearHtml()
-    runBootstrap()
-    expect(accentVar()).toBe('')
-  })
-
-  it('past the one-time switch, never replaces an accent already saved for Glass', async () => {
-    mem.set(SWITCHED, '1')
+    mem.set('k2.palette', 'veil')
+    mem.set('k2.scheme', 'light')
     mem.set('k2.accent.glass', '#00ff88')
     const store = await freshStore()
     expect(store.getState().accent).toBe('#00ff88')
-    expect(mem.get('k2.accent.glass')).toBe('#00ff88')
-  })
-
-  it('a person who resets to the palette’s accent keeps that', async () => {
-    const store = await freshStore()
-    store.getState().resetAccent()
     expect(mem.has('k2.accent.glass')).toBe(false)
-    const again = await freshStore()
-    expect(again.getState().accent).toBeNull()
-    expect(accentVar()).toBe('')
+    expect(['obsidian', 'veil', 'yellow'].map((p) => mem.get(`k2.accent.glass.${p}`))).toEqual([
+      '#00ff88',
+      '#00ff88',
+      '#00ff88',
+    ])
   })
 })
 
@@ -394,7 +479,7 @@ describe('the daemon’s style echo on a new client', () => {
     const { migrateStyleFromDaemon, __setPreBootMirrorCompleteForTests } = await import('./style')
     __setPreBootMirrorCompleteForTests(false)
     migrateStyleFromDaemon({ id: 'square', palette: 'charcoal', scheme: 'dark', gaps: '' })
-    expect([store.getState().styleId, store.getState().accent]).toEqual(['glass', 'yellow'])
+    expect([store.getState().styleId, store.getState().accent]).toEqual(['glass', null])
     expect(mem.get('k2.style.migrated')).toBe('1')
   })
 
@@ -405,13 +490,14 @@ describe('the daemon’s style echo on a new client', () => {
     migrateStyleFromDaemon({ id: 'glass', palette: 'veil', scheme: 'light', gaps: '' })
     expect([store.getState().styleId, store.getState().resolvedPaletteId]).toEqual(['glass', 'veil'])
     expect(store.getState().accent).toBeNull()
-    expect(mem.has('k2.accent.glass')).toBe(false)
+    expect(mem.has('k2.accent.glass.veil')).toBe(false)
   })
 })
 
 describe('the one-time switch to the default look (first launch of 0.46.11)', () => {
-  /** A client from before 0.46.11: Terminal / Charcoal / Dark, a pink accent,
-   *  the older daemon migration done, and no switch flag. */
+  /** A client from before 0.46.11: Terminal / Charcoal / Dark, a pink accent
+   *  under the old shared key, the older daemon migration done, and no
+   *  switch flag. */
   const seedOldTerminal = (): void => {
     mem.clear()
     mem.set('k2.style', 'terminal')
@@ -426,7 +512,7 @@ describe('the one-time switch to the default look (first launch of 0.46.11)', ()
     mem.set('k2.style.migrated', '1')
   }
 
-  it('moves an existing Terminal client to Glass / Auto / Obsidian + Veil / Yellow, and sets the flag', async () => {
+  it('moves an existing Terminal client to Glass / Auto / Obsidian + Veil, writes no Glass accent, and sets the flag', async () => {
     seedOldTerminal()
     const store = await freshStore()
     const s = store.getState()
@@ -435,7 +521,7 @@ describe('the one-time switch to the default look (first launch of 0.46.11)', ()
       'auto',
       { dark: 'obsidian', light: 'veil' },
       'obsidian',
-      'yellow',
+      null,
     ])
     expect(mem.get(SWITCHED)).toBe('1')
     expect([mem.get('k2.style'), mem.get('k2.scheme'), mem.get('k2.palette.dark'), mem.get('k2.palette.light')]).toEqual([
@@ -444,14 +530,30 @@ describe('the one-time switch to the default look (first launch of 0.46.11)', ()
       'obsidian',
       'veil',
     ])
-    expect(mem.get('k2.accent.glass')).toBe('yellow')
+    expect([...mem.keys()].filter((k) => k.startsWith('k2.accent.glass'))).toEqual([])
     expect(html.getAttribute('data-style')).toBe('glass')
-    expect(accentVar()).toBe('#ffc700')
-    // Terminal's own accent is kept for if they go back.
-    expect(mem.get('k2.accent.terminal')).toBe('#ff00aa')
+    expect(accentVar()).toBe('')
+    // Terminal's own accent is kept, per palette, for if they go back.
+    expect(mem.get('k2.accent.terminal.charcoal')).toBe('#ff00aa')
+    expect(mem.has('k2.accent.terminal')).toBe(false)
   })
 
-  it('the first frame of 0.46.11 is already Glass with Yellow, before any module runs', () => {
+  it('writes accents only from DEFAULT_PALETTE_ACCENTS, each on its own palette', async () => {
+    seedOldTerminal()
+    const setItem = vi.spyOn(localStorage, 'setItem')
+    try {
+      await freshStore()
+      const { DEFAULT_PALETTE_ACCENTS } = await import('@/lib/style-resolve')
+      const written = setItem.mock.calls
+        .map(([k]) => k)
+        .filter((k) => k.startsWith('k2.accent.glass'))
+      expect(written.sort()).toEqual(Object.keys(DEFAULT_PALETTE_ACCENTS).map((p) => `k2.accent.glass.${p}`).sort())
+    } finally {
+      setItem.mockRestore()
+    }
+  })
+
+  it('the first frame of 0.46.11 is already Glass, with each palette’s own accent, before any module runs', () => {
     seedOldTerminal()
     runBootstrap()
     expect([html.getAttribute('data-style'), html.getAttribute('data-palette'), html.getAttribute('data-scheme')]).toEqual([
@@ -459,14 +561,14 @@ describe('the one-time switch to the default look (first launch of 0.46.11)', ()
       'obsidian',
       'dark',
     ])
-    expect(accentVar()).toBe('#ffc700')
+    expect(accentVar()).toBe('')
     clearHtml()
     osLight = true
     runBootstrap()
     expect([html.getAttribute('data-style'), html.getAttribute('data-palette'), accentVar()]).toEqual([
       'glass',
       'veil',
-      '#e6b400',
+      '',
     ])
   })
 
@@ -486,22 +588,39 @@ describe('the one-time switch to the default look (first launch of 0.46.11)', ()
     expect([html.getAttribute('data-style'), accentVar()]).toEqual(['terminal', '#ff00aa'])
   })
 
-  it('a person who then resets Glass to the palette’s accent keeps that', async () => {
-    seedOldTerminal()
-    const store = await freshStore()
-    store.getState().resetAccent()
-    const again = await freshStore()
-    expect([again.getState().styleId, again.getState().accent]).toEqual(['glass', null])
+  it('a client that went through the old switch (Yellow on every Glass palette) ends with no accent keys', async () => {
+    mem.clear()
+    mem.set(SWITCHED, '1')
+    mem.set('k2.style.migrated', '1')
+    mem.set('k2.style', 'glass')
+    mem.set('k2.scheme', 'auto')
+    mem.set('k2.palette', 'obsidian')
+    mem.set('k2.palette.dark', 'obsidian')
+    mem.set('k2.palette.light', 'veil')
+    mem.set('k2.accent.glass', 'yellow')
+    const yellowStamp = (palette: string, hex: string): string =>
+      JSON.stringify({ style: 'glass', palette, vars: { '--color-accent': hex } })
+    mem.set('k2.accent.stamp.dark', yellowStamp('obsidian', '#ffc700'))
+    mem.set('k2.accent.stamp.light', yellowStamp('veil', '#e6b400'))
+    // The first frame of this build already leaves Yellow off.
+    runBootstrap()
     expect(accentVar()).toBe('')
+    const store = await freshStore()
+    expect([...mem.keys()].filter((k) => k.startsWith('k2.accent.'))).toEqual([])
+    expect([store.getState().accent, accentVar()]).toEqual([null, ''])
+    for (const p of ['obsidian', 'veil', 'yellow']) {
+      store.getState().applyStyle({ autoPalettes: { dark: p, light: 'veil' } })
+      expect([p, store.getState().accent, accentVar()]).toEqual([p, null, ''])
+    }
   })
 
-  it('a fresh client gets the default and the flag, with the accent written once', async () => {
+  it('a fresh client gets the default and the flag, and no accent key', async () => {
     mem.clear()
     const setItem = vi.spyOn(localStorage, 'setItem')
     try {
       const store = await freshStore()
-      expect([store.getState().styleId, store.getState().accent]).toEqual(['glass', 'yellow'])
-      expect(setItem.mock.calls.filter(([k]) => k === 'k2.accent.glass')).toHaveLength(1)
+      expect([store.getState().styleId, store.getState().accent]).toEqual(['glass', null])
+      expect(setItem.mock.calls.filter(([k]) => k.startsWith('k2.accent.') && !k.startsWith('k2.accent.stamp.'))).toEqual([])
       expect(setItem.mock.calls.filter(([k]) => k === SWITCHED)).toHaveLength(1)
     } finally {
       setItem.mockRestore()
@@ -529,7 +648,6 @@ describe('the one-time switch to the default look (first launch of 0.46.11)', ()
     try {
       const store = await freshStore()
       expect(store.getState().styleId).toBe('terminal')
-      expect(mem.has('k2.accent.glass')).toBe(false)
     } finally {
       setItem.mockRestore()
     }

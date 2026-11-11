@@ -21,7 +21,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { STYLES, type StyleMeta, type StylePaletteMeta, type StyleScheme } from '@/styles.generated'
 import {
   DAEMON_STYLE_DEFAULT,
-  DEFAULT_ACCENT,
+  DEFAULT_PALETTE_ACCENTS,
   DEFAULT_SELECTION,
   canonicalStyleSelection,
   paletteSlots,
@@ -40,7 +40,7 @@ import {
   type AccentChoice,
 } from '@/lib/style-accent'
 import { installFrostSupport } from '@/lib/frost-support'
-import { migrateRetiredStyleKeys, seedRetiredStyleAccent } from '@/lib/style-id-migration'
+import { migrateRetiredStyleKeys, migrateSharedAccentKeys, seedRetiredStyleAccent } from '@/lib/style-id-migration'
 import {
   clampTextGamma,
   clearStoredTextGamma,
@@ -94,9 +94,9 @@ interface StyleState extends StyleSelection {
    * WebGL panes re-read this live via PainterTheme.
    */
   textGamma: number
-  /** The active style's accent choice: `yellow`, a #rrggbb colour, or
-   *  null for the palette's own accent. Saved per style
-   *  (`k2.accent.<styleId>`); Settings → Styles owns it. */
+  /** The applied palette's accent choice: `yellow`, a #rrggbb colour, or
+   *  null for the palette's own accent. Saved per palette
+   *  (`k2.accent.<styleId>.<paletteId>`); Settings → Styles owns it. */
   accent: AccentChoice | null
   /** Resolve `sel` (merged over the current selection), stamp <html>,
    *  refresh the localStorage mirror. Idempotent. Does NOT talk to the
@@ -108,10 +108,10 @@ interface StyleState extends StyleSelection {
   setTextGamma: (v: number) => void
   /** Drop the active style+scheme override; restore polarity preset. */
   resetTextGamma: () => void
-  /** Use `choice` as the active style's accent, live and saved. An invalid
-   *  value is ignored. */
+  /** Use `choice` as the applied palette's accent, live and saved. An
+   *  invalid value is ignored. Other palettes keep theirs. */
   setAccent: (choice: AccentChoice) => void
-  /** Back to the style's own accent, at once. */
+  /** The applied palette back to its own accent, at once. */
   resetAccent: () => void
 }
 
@@ -145,23 +145,23 @@ function stampDialProperties(style: StyleMeta): void {
   }
 }
 
-/** A style's saved accent, or null (none, invalid, or storage unavailable). */
-function readStoredAccent(styleId: string): AccentChoice | null {
+/** A palette's saved accent, or null (none, invalid, or storage unavailable). */
+export function readStoredAccent(styleId: string, paletteId: string): AccentChoice | null {
   try {
-    return parseAccentChoice(localStorage.getItem(accentStorageKey(styleId)))
+    return parseAccentChoice(localStorage.getItem(accentStorageKey(styleId, paletteId)))
   } catch {
     return null
   }
 }
 
-/** Stamp the style's saved accent as inline custom properties on <html>, over
+/** Stamp the palette's saved accent as inline custom properties on <html>, over
  *  the palette's own values. Gardens are unaffected: the Zen root re-points
  *  each of these at a Zen token (lib/zen/zen-style-shield). */
 function stampAccentProperties(
   style: StyleMeta,
   palette: StylePaletteMeta,
   scheme: StyleScheme,
-  choice: AccentChoice | null = readStoredAccent(style.id),
+  choice: AccentChoice | null = readStoredAccent(style.id, palette.id),
 ): void {
   const html = document.documentElement
   for (const name of ACCENT_VARS) html.style.removeProperty(name)
@@ -393,7 +393,7 @@ function writeAccentStamps(sel: StyleSelection): void {
     for (const side of ['dark', 'light'] as const) {
       const key = lsAccentStampFor(side)
       const { style, resolvedPalette, resolvedScheme } = resolveStyleSelection(sel, side === 'light')
-      const vars = accentVarsFor(readStoredAccent(style.id), resolvedPalette, resolvedScheme)
+      const vars = accentVarsFor(readStoredAccent(style.id, resolvedPalette.id), resolvedPalette, resolvedScheme)
       if (Object.keys(vars).length === 0) localStorage.removeItem(key)
       else localStorage.setItem(key, JSON.stringify({ style: style.id, palette: resolvedPalette.id, vars }))
     }
@@ -520,31 +520,43 @@ export interface DaemonStyleSeed {
   gaps?: string
 }
 
-/**
- * Seed the default look's accent on a client with no saved style, before the
- * first read of the mirror. Only when the default style has no accent saved:
- * an empty key keeps meaning the palette's own accent for everyone else.
- * Returns whether it wrote one. Never throws.
- */
-function seedDefaultAccent(): boolean {
-  if (!hasNoSavedStyle()) return false
-  try {
-    const key = accentStorageKey(DEFAULT_SELECTION.styleId)
-    if (localStorage.getItem(key) !== null) return false
-    localStorage.setItem(key, DEFAULT_ACCENT)
-    return localStorage.getItem(key) === DEFAULT_ACCENT
-  } catch {
-    return false
-  }
+/** The default look's accents (lib/style-resolve DEFAULT_PALETTE_ACCENTS),
+ *  as `[storage key, choice]` for each palette it names. */
+function defaultAccentEntries(): [string, AccentChoice][] {
+  return Object.entries(DEFAULT_PALETTE_ACCENTS)
+    .filter((e): e is [string, AccentChoice] => typeof e[1] === 'string')
+    .map(([paletteId, choice]) => [accentStorageKey(DEFAULT_SELECTION.styleId, paletteId), choice])
 }
 
-/** Whether this boot gave the default style the default accent. */
-let _seededDefaultAccent = false
+/**
+ * Seed the default look's accents on a client with no saved style, before the
+ * first read of the mirror. Only on a palette with no accent saved: an empty
+ * key keeps meaning the palette's own accent. Returns the keys it wrote.
+ * Never throws.
+ */
+function seedDefaultAccents(): [string, AccentChoice][] {
+  if (!hasNoSavedStyle()) return []
+  const written: [string, AccentChoice][] = []
+  try {
+    for (const [key, choice] of defaultAccentEntries()) {
+      if (localStorage.getItem(key) !== null) continue
+      localStorage.setItem(key, choice)
+      if (localStorage.getItem(key) === choice) written.push([key, choice])
+    }
+  } catch {
+    // Whatever landed is listed.
+  }
+  return written
+}
+
+/** The default accents this boot gave the default style's palettes. */
+let _seededDefaultAccents: [string, AccentChoice][] = []
 
 /**
  * The one-time switch to the default look (Rosson, 2026-11-11): every client,
  * new or existing, starts 0.46.11 on Glass under Auto (Obsidian dark, Veil
- * light) with the Yellow accent, once. Runs before the first read of the
+ * light), once. It writes only the accents DEFAULT_PALETTE_ACCENTS names, each
+ * on its own palette; every other palette keeps its accent. Runs before the first read of the
  * mirror; index.html's bootstrap paints the same look while the flag is
  * missing, so the first frame is already Glass.
  *
@@ -573,7 +585,7 @@ function migrateToDefaultLook(): boolean {
     localStorage.setItem(LS_GAPS, sel.gapsPreset)
     localStorage.setItem(lsPaletteFor('dark'), sel.autoPalettes!.dark!)
     localStorage.setItem(lsPaletteFor('light'), sel.autoPalettes!.light!)
-    localStorage.setItem(accentStorageKey(sel.styleId), DEFAULT_ACCENT)
+    for (const [key, choice] of defaultAccentEntries()) localStorage.setItem(key, choice)
     localStorage.setItem(LS_STYLE_MIGRATED, '1')
   } catch {
     // Part-written: the store reads what landed and re-stamps the mirror.
@@ -603,17 +615,16 @@ export function migrateStyleFromDaemon(daemonStyle: DaemonStyleSeed | undefined 
   }
 
   if (daemonStyle && hasDaemonStylePayload(daemonStyle) && !isDaemonDefaultStyle(daemonStyle)) {
-    // The default accent came with the default look this boot; the
-    // person's own look comes with the palette's accent, as it did.
-    if (_seededDefaultAccent) {
+    // The default accents came with the default look this boot; the
+    // person's own look comes with the palettes' own accents, as it did.
+    for (const [key, choice] of _seededDefaultAccents) {
       try {
-        const key = accentStorageKey(DEFAULT_SELECTION.styleId)
-        if (localStorage.getItem(key) === DEFAULT_ACCENT) localStorage.removeItem(key)
+        if (localStorage.getItem(key) === choice) localStorage.removeItem(key)
       } catch {
-        // They keep the default accent on that style.
+        // They keep the default accent on that palette.
       }
-      _seededDefaultAccent = false
     }
+    _seededDefaultAccents = []
     if (daemonStyle.id) seedRetiredStyleAccent(daemonStyle.id, parseSchemeMode(daemonStyle.scheme))
     const sel = canonicalStyleSelection({
       styleId: daemonStyle.id ?? DAEMON_STYLE_DEFAULT.id,
@@ -661,8 +672,11 @@ export function styleSelectionToBackend(sel: {
 // Before the first read of the mirror, so the store and every per-style
 // key lookup after it only ever see current ids.
 migrateRetiredStyleKeys()
+// Before the switch, so a Yellow Glass accent only counts as the switch's
+// when the switch really ran on an earlier launch.
+migrateSharedAccentKeys()
 migrateToDefaultLook()
-_seededDefaultAccent = seedDefaultAccent()
+_seededDefaultAccents = seedDefaultAccents()
 
 const bootSelection = readMirror()
 const bootResolved = resolveStyleSelection(bootSelection, osPrefersLight())
@@ -698,7 +712,7 @@ export const useStyleStore = create<StyleState>((set, get) => ({
   resolvedScheme: bootResolved.resolvedScheme,
   resolvedPaletteId: bootResolved.resolvedPalette.id,
   textGamma: bootTextGamma,
-  accent: readStoredAccent(bootSelection.styleId),
+  accent: readStoredAccent(bootSelection.styleId, bootResolved.resolvedPalette.id),
 
   applyStyle: (partial: Partial<StyleSelection>) => {
     const cur = get()
@@ -722,7 +736,7 @@ export const useStyleStore = create<StyleState>((set, get) => ({
       ...sel,
       resolvedScheme: resolved.resolvedScheme,
       resolvedPaletteId: resolved.resolvedPalette.id,
-      accent: readStoredAccent(sel.styleId),
+      accent: readStoredAccent(sel.styleId, resolved.resolvedPalette.id),
     }
     if (prevResolvedKey !== nextResolvedKey) {
       next.textGamma = resolveEffectiveTextGamma(
@@ -763,9 +777,10 @@ export const useStyleStore = create<StyleState>((set, get) => ({
   setAccent: (choice: AccentChoice) => {
     const parsed = parseAccentChoice(choice)
     if (parsed === null) return
-    const sel = selectionOf(get())
+    const cur = get()
+    const sel = selectionOf(cur)
     try {
-      localStorage.setItem(accentStorageKey(sel.styleId), parsed)
+      localStorage.setItem(accentStorageKey(sel.styleId, cur.resolvedPaletteId), parsed)
     } catch {
       // Still applies below for this session; it just won't survive a relaunch.
     }
@@ -774,9 +789,10 @@ export const useStyleStore = create<StyleState>((set, get) => ({
   },
 
   resetAccent: () => {
-    const sel = selectionOf(get())
+    const cur = get()
+    const sel = selectionOf(cur)
     try {
-      localStorage.removeItem(accentStorageKey(sel.styleId))
+      localStorage.removeItem(accentStorageKey(sel.styleId, cur.resolvedPaletteId))
     } catch {
       // Best-effort; the live values below are already the default.
     }

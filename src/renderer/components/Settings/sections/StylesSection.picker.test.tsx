@@ -197,7 +197,7 @@ describe('the accent', () => {
   it('the colour well sets a colour; Reset returns to the theme, and starts disabled', () => {
     useTerminalCharcoal()
     render(<StylesSection />)
-    const reset = screen.getByRole('button', { name: 'Reset' }) as HTMLButtonElement
+    const reset = screen.getByRole('button', { name: 'Reset the accent colour of Charcoal' }) as HTMLButtonElement
     expect(reset.disabled).toBe(true)
     fireEvent.change(screen.getByTestId('accent-well'), { target: { value: '#ff00aa' } })
     expect(useStyleStore.getState().accent).toBe('#ff00aa')
@@ -208,6 +208,50 @@ describe('the accent', () => {
     expect(useStyleStore.getState().accent).toBeNull()
     expect(document.documentElement.style.getPropertyValue('--color-accent')).toBe('')
     expect(reset.disabled).toBe(true)
+  })
+
+  it('names the palette it edits, and saves to that palette alone', () => {
+    useTerminalCharcoal()
+    localStorage.removeItem('k2.accent.terminal.paper')
+    render(<StylesSection />)
+    const row = document.querySelector('[data-settings-id="styles.accent"]') as HTMLElement
+    expect(row.textContent).toContain('Accent colour, Charcoal')
+    fireEvent.change(screen.getByTestId('accent-well'), { target: { value: '#ff00aa' } })
+    expect(localStorage.getItem('k2.accent.terminal.charcoal')).toBe('#ff00aa')
+    expect(localStorage.getItem('k2.accent.terminal.paper')).toBeNull()
+    expect(localStorage.getItem('k2.accent.terminal')).toBeNull()
+  })
+
+  it('under Auto, edits the palette applied now and says which', () => {
+    useStyleStore.getState().applyStyle({
+      styleId: 'glass',
+      schemeMode: 'auto',
+      autoPalettes: { dark: 'obsidian', light: 'veil' },
+    })
+    useStyleStore.getState().resetAccent()
+    render(<StylesSection />)
+    const applied = useStyleStore.getState().resolvedPaletteId
+    const name = getStyle('glass')!.palettes.find((p) => p.id === applied)!.name
+    expect(screen.getByLabelText(`Accent colour, ${name}`)).toBeTruthy()
+    fireEvent.change(screen.getByTestId('accent-well'), { target: { value: '#22aa66' } })
+    expect(localStorage.getItem(`k2.accent.glass.${applied}`)).toBe('#22aa66')
+    for (const other of ['obsidian', 'veil', 'yellow'].filter((p) => p !== applied)) {
+      expect([other, localStorage.getItem(`k2.accent.glass.${other}`)]).toEqual([other, null])
+    }
+    useStyleStore.getState().resetAccent()
+  })
+
+  it('each palette card shows that palette’s own accent', () => {
+    useTerminalCharcoal()
+    localStorage.setItem('k2.accent.terminal.paper', '#3366cc')
+    render(<StylesSection />)
+    const swatchOf = (id: string): string => {
+      const card = document.querySelector(`[data-palette-id="${id}"]`) as HTMLElement
+      return (card.querySelectorAll('span.flex.h-6 > span')[3] as HTMLElement).style.backgroundColor
+    }
+    expect(swatchOf('paper')).toBe('rgb(51, 102, 204)')
+    expect(swatchOf('charcoal')).toBe('rgb(59, 130, 246)')
+    localStorage.removeItem('k2.accent.terminal.paper')
   })
 
   it('a typed hex applies at once, with or without the #', () => {

@@ -18,7 +18,15 @@
 
 import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
-import { LS_PALETTE, LS_SCHEME, LS_STYLE, osPrefersLight, stampStyleAttributes, useStyleStore } from '@/stores/style'
+import {
+  LS_PALETTE,
+  LS_SCHEME,
+  LS_STYLE,
+  osPrefersLight,
+  readStoredAccent,
+  stampStyleAttributes,
+  useStyleStore,
+} from '@/stores/style'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { DEFAULT_SELECTION, type StyleSelection } from '@/lib/style-resolve'
 import { dialDefault, dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
@@ -43,11 +51,16 @@ export const STYLES_MANIFEST: SettingEntry[] = [
   { id: 'styles.palette', section: 'styles', label: 'Palette', description: 'The set of colours the style uses', keywords: ['palette', 'color', 'colors', 'colour', 'colours', 'theme', 'charcoal', 'paper', 'obsidian', 'veil', 'dark mode', 'light mode'] },
   { id: 'styles.scheme', section: 'styles', label: 'Light or dark', description: 'Light, Dark, or Auto to follow your system', keywords: ['scheme', 'light', 'dark', 'auto', 'appearance', 'mode', 'night', 'day', 'os', 'system'] },
   { id: 'styles.auto-palettes', section: 'styles', label: 'Palettes for Auto', description: 'Under Auto, the palette for a light system and for a dark system', keywords: ['auto', 'system', 'light', 'dark', 'swap', 'palette', 'theme', 'yellow'] },
-  { id: 'styles.accent', section: 'styles', label: 'Accent colour', description: 'The colour of buttons, switches, links and focus rings, with a reset', keywords: ['accent', 'colour', 'color', 'tint', 'highlight', 'custom', 'reset', 'picker', 'hex'] },
+  { id: 'styles.accent', section: 'styles', label: 'Accent colour', description: 'The colour of buttons, switches, links and focus rings, for each palette, with a reset', keywords: ['accent', 'colour', 'color', 'tint', 'highlight', 'custom', 'reset', 'picker', 'hex', 'palette'] },
   { id: 'styles.density', section: 'styles', label: 'Spacing', description: 'Compact, Regular or Spacious room between panes and tiles', keywords: ['density', 'gaps', 'spacing', 'compact', 'regular', 'spacious', 'padding', 'tiles'] },
   { id: 'styles.dials', section: 'styles', label: 'Frost', description: 'How much Glass blurs what is behind menus and popovers', keywords: ['dials', 'frost', 'blur', 'adjust', 'tweak', 'slider', 'glass', 'effects', 'translucency'] },
   { id: 'styles.text-weight', section: 'styles', label: 'Terminal text weight', description: 'How thick text looks in terminals, saved for each style', keywords: ['gamma', 'weight', 'thickness', 'bold', 'thin', 'chonky', 'webgl', 'text', 'terminal'] },
 ]
+
+/** A palette's accent as its swatch shows it: its saved choice, else its own. */
+function paletteAccentHex(style: StyleMeta, p: StylePaletteMeta): string {
+  return accentFillHex(readStoredAccent(style.id, p.id), p, p.schemes[0] ?? 'dark')
+}
 
 /** Retired looks stay compiled but never reach the picker. */
 // The default look first: Glass, then Terminal (Rosson, 2026-11-11).
@@ -188,7 +201,9 @@ export function StylesSection(): React.JSX.Element {
 
   const committed: StyleSelection = { styleId, paletteId, schemeMode, gapsPreset, autoPalettes }
 
-  // The accent belongs to the style in use, whichever style's detail is showing.
+  // The accent belongs to the palette on screen (under Auto, the side the
+  // system shows), whichever style's detail is showing. Each palette keeps
+  // its own, so the row names the one it edits.
   const activeStyle = STYLES.find((s) => s.id === styleId) ?? PICKER_STYLES[0]
   const activePalette = activeStyle.palettes.find((p) => p.id === resolvedPaletteId) ?? activeStyle.palettes[0]
   const accentHex = accentFillHex(accent, activePalette, resolvedScheme)
@@ -282,15 +297,20 @@ export function StylesSection(): React.JSX.Element {
   const [hexDraft, setHexDraft] = useState<string | null>(null)
   const [hexError, setHexError] = useState(false)
 
+  /** The applied palette's accent key, read after a change. */
+  const accentKeyNow = (): string => {
+    const now = useStyleStore.getState()
+    return accentStorageKey(now.styleId, now.resolvedPaletteId)
+  }
   const chooseAccent = (hex: string): void => {
     setAccent(hex)
-    noteSave('accent', readKey(accentStorageKey(useStyleStore.getState().styleId)) === useStyleStore.getState().accent)
+    noteSave('accent', readKey(accentKeyNow()) === useStyleStore.getState().accent)
   }
   const handleAccentReset = (): void => {
     resetAccent()
     setHexDraft(null)
     setHexError(false)
-    noteSave('accent', readKey(accentStorageKey(useStyleStore.getState().styleId)) === null)
+    noteSave('accent', readKey(accentKeyNow()) === null)
   }
   const handleHexChange = (raw: string): void => {
     setHexDraft(raw)
@@ -381,6 +401,8 @@ export function StylesSection(): React.JSX.Element {
   const showDials = selectedIsActive && selectedStyle.dials.length > 0
   const layoutTitle = showDensity && showDials ? 'Layout and effects' : showDensity ? 'Layout' : 'Effects'
   const savedHere = `Saved for ${activeStyle.name} on this computer.`
+  // Browsing the other style, the row still edits the palette in use: say whose.
+  const accentPaletteName = selectedIsActive ? activePalette.name : `${activeStyle.name} ${activePalette.name}`
 
   return (
     <div className="h-full min-h-0 flex">
@@ -448,7 +470,7 @@ export function StylesSection(): React.JSX.Element {
                       swatchPalette.swatch.bg,
                       swatchPalette.swatch.surface,
                       swatchPalette.swatch.elevated,
-                      swatchPalette.swatch.accent,
+                      paletteAccentHex(style, swatchPalette),
                       swatchPalette.swatch.textPrimary,
                     ]}
                   />
@@ -514,7 +536,7 @@ export function StylesSection(): React.JSX.Element {
                         >
                           <span aria-hidden="true" className={cx('flex flex-col overflow-hidden border border-[var(--color-control-edge)]', SWATCH_SHAPE)}>
                             <span className="flex h-6">
-                              {[p.swatch.bg, p.swatch.surface, p.swatch.elevated, p.swatch.accent].map((c, i) => (
+                              {[p.swatch.bg, p.swatch.surface, p.swatch.elevated, paletteAccentHex(selectedStyle, p)].map((c, i) => (
                                 <span key={i} className="min-w-0 flex-1" style={{ backgroundColor: c }} />
                               ))}
                             </span>
@@ -610,8 +632,8 @@ export function StylesSection(): React.JSX.Element {
 
             <SettingRow
               settingId="styles.accent"
-              label="Accent colour"
-              hint={`Buttons, switches, links and focus rings. ${savedHere}`}
+              label={`Accent colour, ${accentPaletteName}`}
+              hint={`Buttons, switches, links and focus rings. Each palette keeps its own; this one is saved for ${accentPaletteName} on this computer.`}
               below={
                 hexError ? (
                   <RowError id="styles-accent-error">
@@ -625,7 +647,7 @@ export function StylesSection(): React.JSX.Element {
               {savedNote('accent')}
               <input
                 type="color"
-                aria-label="Accent colour"
+                aria-label={`Accent colour, ${accentPaletteName}`}
                 data-testid="accent-well"
                 value={accentHex}
                 onChange={(e) => {
@@ -636,7 +658,7 @@ export function StylesSection(): React.JSX.Element {
                 className="k2-color-well h-6 w-8 p-0 flex-shrink-0 overflow-hidden border border-[var(--color-control-edge)] bg-transparent cursor-pointer no-drag rounded-[var(--radius-field)]"
               />
               <Input
-                aria-label="Accent colour as hex"
+                aria-label={`Accent colour, ${accentPaletteName}, as hex`}
                 data-testid="accent-hex"
                 spellCheck={false}
                 autoComplete="off"
@@ -651,7 +673,13 @@ export function StylesSection(): React.JSX.Element {
                 }}
                 className={cx('w-24 font-mono', hexError && '!border-[var(--color-status-error-text)] [--k2-ch-edge:var(--color-status-error-text)]')}
               />
-              <Button variant="quiet" className="flex-shrink-0" disabled={accent === null} onClick={handleAccentReset}>
+              <Button
+                variant="quiet"
+                className="flex-shrink-0"
+                disabled={accent === null}
+                aria-label={`Reset the accent colour of ${accentPaletteName}`}
+                onClick={handleAccentReset}
+              >
                 Reset
               </Button>
             </SettingRow>

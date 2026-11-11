@@ -1,8 +1,9 @@
-// Accent colour choice (per client, per style) — pure.
+// Accent colour choice (per client, per palette) — pure.
 //
-// The user's accent for a style lives in localStorage
-// (`k2.accent.<styleId>`): `yellow`, a `#rrggbb` custom colour, or nothing
-// for the palette's own accent. This module turns that untrusted raw string
+// The user's accent for a palette lives in localStorage
+// (`k2.accent.<styleId>.<paletteId>`): `yellow`, a `#rrggbb` custom colour,
+// or nothing for that palette's own accent. Each palette keeps its own, so
+// Obsidian, Veil and Yellow never share one. This module turns that untrusted raw string
 // into the concrete CSS values the store writes onto <html>. Pure
 // functions, no DOM or storage access: stores/style.ts owns the side effects.
 //
@@ -29,9 +30,23 @@ const YELLOW: Readonly<Record<StyleScheme, OwnColors>> = {
   light: { accent: '#e6b400', hover: '#c79c00', soft: '#8a6d00', onAccent: '#1a1400' },
 }
 
-/** localStorage key for a style's accent choice. */
-export function accentStorageKey(styleId: string): string {
+/** localStorage key for a palette's accent choice. */
+export function accentStorageKey(styleId: string, paletteId: string): string {
+  return `k2.accent.${styleId}.${paletteId}`
+}
+
+/** The old key: one accent for every palette of a style. Read only to move
+ *  it per palette, once (lib/style-id-migration migrateSharedAccentKeys). */
+export function legacyAccentStorageKey(styleId: string): string {
   return `k2.accent.${styleId}`
+}
+
+/** The values the one-time 0.46.11 switch wrote to `k2.accent.glass`: the
+ *  word, or Yellow's hex on a dark or light palette. Any case. */
+export function isSwitchYellow(raw: string | null): boolean {
+  if (raw === null) return false
+  const v = raw.trim().toLowerCase()
+  return v === 'yellow' || v === YELLOW.dark.accent || v === YELLOW.light.accent
 }
 
 /** Per-scheme pre-paint stamp: `{style, palette, vars}`, written by the store,

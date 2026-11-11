@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { STYLES, getStyle, type StyleMeta } from '@/styles.generated'
 import {
-  DEFAULT_ACCENT,
+  DEFAULT_PALETTE_ACCENTS,
   DEFAULT_SELECTION,
   STYLE_ID_ALIASES,
   canonicalStyleSelection,
@@ -150,10 +150,17 @@ describe('the default look (a client with nothing saved)', () => {
     expect([light.style.id, light.resolvedPalette.id, light.resolvedScheme]).toEqual(['glass', 'veil', 'light'])
   })
 
-  it('uses palettes Glass ships, and the Yellow accent', () => {
+  it('uses palettes Glass ships, and names default accents only for them', () => {
     const glass = getStyle('glass')!
     for (const id of ['obsidian', 'veil']) expect(glass.palettes.some((p) => p.id === id), id).toBe(true)
-    expect(DEFAULT_ACCENT).toBe('yellow')
+    for (const id of Object.keys(DEFAULT_PALETTE_ACCENTS)) {
+      expect(glass.palettes.some((p) => p.id === id), id).toBe(true)
+    }
+  })
+
+  it('writes no default accent: every palette shows its own (K2, 0.46.11)', () => {
+    expect(DEFAULT_PALETTE_ACCENTS).toEqual({})
+    expect(Object.isFrozen(DEFAULT_PALETTE_ACCENTS)).toBe(true)
   })
 
   it('cannot be changed by a caller', () => {

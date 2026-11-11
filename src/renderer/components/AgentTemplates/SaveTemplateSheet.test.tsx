@@ -159,8 +159,11 @@ describe('SaveTemplateSheet', () => {
     expect(screen.getByTestId('save-template-suggest').textContent).toContain('compute.use')
     expect(screen.getByTestId('save-template-tool').textContent).toContain('codex')
     expect(screen.getByTestId('save-template-heartbeats').textContent).toContain('daily-digest')
-    expect(screen.getByTestId('save-template-skip').textContent).toContain('skill: k2-cli')
-    expect(screen.getByTestId('save-template-review-head').textContent).toContain('By rosson')
+    const skip = screen.getByTestId('save-template-skip').textContent
+    expect(skip).toContain('Skill')
+    expect(skip).toContain('k2-cli')
+    expect(skip).toContain('K2 provides it')
+    expect(screen.getByTestId('save-template-review-head').textContent).toContain('Byrosson')
   })
 
   it('Save writes and says what was saved', async () => {
@@ -235,6 +238,16 @@ describe('SaveTemplateSheet', () => {
     fireEvent.click(screen.getByTestId('save-template-cancel'))
     expect(screen.queryByTestId('save-template-open')).toBeNull()
     expect(screen.getByText(SAVE_UNSUPPORTED_TEXT)).toBeTruthy()
+  })
+
+  it('the row says what it does, and its button opens the sheet', async () => {
+    render(<SaveTemplateRow project={PROJECT} />)
+    const row = screen.getByTestId('save-template-row')
+    expect(row.textContent).toContain(SAVE_TEMPLATE_COPY.rowLabel)
+    expect(row.textContent).toContain(SAVE_TEMPLATE_COPY.rowHint)
+    expect(screen.getByTestId('save-template-open').textContent).toBe(SAVE_TEMPLATE_COPY.button)
+    fireEvent.click(screen.getByTestId('save-template-open'))
+    await waitFor(() => expect(screen.getByTestId('save-template-sheet')).toBeTruthy())
   })
 
   it('closing is held while it saves', async () => {

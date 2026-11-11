@@ -15,7 +15,8 @@
 // stops offering the button for that server.
 
 import { useEffect, useId, useState } from 'react'
-import { Button, Callout, Checkbox, Input, Spinner, Textarea } from '@/components/ui'
+import { Button, Callout, Checkbox, Input, Spinner, Surface, Textarea } from '@/components/ui'
+import { BookmarkIcon } from '@/components/icons/K2Icons'
 import { DIALOG_FIELD, DIALOG_LABEL, DIALOG_MUTED } from '@/components/Settings/sections/AccessDialogs'
 import { SettingRow } from '@/components/Settings/controls/SettingControls'
 import { fetchWikiIndex, isWikiArticleNode, type WikiNode } from '@/components/Wiki/wiki-api'
@@ -32,10 +33,11 @@ import {
 } from '@/lib/agent-templates-api'
 import { slugifyAddressToken } from '@/lib/federation'
 import { useAgentTemplatesStore } from '@/stores/agent-templates'
-import { ReviewGroup, ReviewLine, TemplateSheetFrame } from './TemplateSheetFrame'
+import { ReviewCard, ReviewList, ReviewRow, ReviewSection, TemplateSheetFrame } from './TemplateSheetFrame'
 
 export const SAVE_TEMPLATE_COPY = {
   button: 'Save as template',
+  rowLabel: 'Make more agents like this one',
   rowHint: 'Keeps this agent’s setup so you can make more agents like it.',
   details: 'Save as template',
   detailsIntro: 'A template keeps this agent’s charter, context, skills and heartbeats. Never its chats or secrets.',
@@ -72,7 +74,7 @@ export function SaveTemplateRow({ project }: { project: { path: string; name: st
   const unsupported = useAgentTemplatesStore((s) => !!s.saveUnsupported[hostKey])
   const [open, setOpen] = useState(false)
   return (
-    <SettingRow label={SAVE_TEMPLATE_COPY.button} hint={unsupported ? SAVE_UNSUPPORTED_TEXT : SAVE_TEMPLATE_COPY.rowHint}>
+    <SettingRow label={SAVE_TEMPLATE_COPY.rowLabel} hint={unsupported ? SAVE_UNSUPPORTED_TEXT : SAVE_TEMPLATE_COPY.rowHint} testId="save-template-row">
       {unsupported ? null : (
         <Button variant="quiet" onClick={() => setOpen(true)} data-testid="save-template-open">
           {SAVE_TEMPLATE_COPY.button}
@@ -193,11 +195,17 @@ export function SaveTemplateSheet({ project, onClose }: { project: { path: strin
           </Button>
         }
       >
-        <div className="space-y-0.5" data-testid="save-template-done">
-          <p className="type-row text-[var(--color-text-primary)]">
-            {saved.id}, version {saved.version}
-          </p>
-          <p className={`${DIALOG_MUTED} font-mono [overflow-wrap:anywhere]`}>{saved.path}</p>
+        <div className="space-y-3" data-testid="save-template-done">
+          <Surface chamfer material="tile" className="flex items-start gap-3 px-4 py-3">
+            <BookmarkIcon size={16} className="mt-px flex-shrink-0 text-[var(--color-accent-text)]" />
+            <div className="min-w-0 space-y-0.5">
+              <p className="type-row text-[var(--color-text-primary)]">
+                {saved.id}
+                <span className="text-[var(--color-text-secondary)]">, version {saved.version}</span>
+              </p>
+              <p className="type-hint text-[var(--color-text-secondary)] font-mono select-text [overflow-wrap:anywhere]">{saved.path}</p>
+            </div>
+          </Surface>
           <p className={DIALOG_MUTED}>It’s under “Yours” when you create an agent.</p>
         </div>
       </TemplateSheetFrame>
@@ -296,9 +304,9 @@ export function SaveTemplateSheet({ project, onClose }: { project: { path: strin
             </label>
             <Textarea id={ids.summary} className={DIALOG_FIELD} rows={2} value={summary} onChange={(e) => setSummary(e.target.value)} data-testid="save-template-summary" />
           </div>
-          <fieldset className="space-y-1.5" aria-describedby={ids.wiki} data-testid="save-template-wiki">
-            <legend className={DIALOG_LABEL}>{SAVE_TEMPLATE_COPY.wiki}</legend>
-            <p id={ids.wiki} className={DIALOG_MUTED}>
+          <fieldset className="m-0 p-0 border-0 min-w-0 space-y-2" aria-describedby={ids.wiki} data-testid="save-template-wiki">
+            <legend className={`${DIALOG_LABEL} p-0`}>{SAVE_TEMPLATE_COPY.wiki}</legend>
+            <p id={ids.wiki} className={`${DIALOG_MUTED} !mt-0`}>
               {SAVE_TEMPLATE_COPY.wikiHint}
             </p>
             {notes === null ? (
@@ -311,17 +319,19 @@ export function SaveTemplateSheet({ project, onClose }: { project: { path: strin
                 {notesError ? 'K2 couldn’t read this agent’s wiki.' : 'This agent has no wiki notes.'}
               </p>
             ) : (
-              notes.map((n) => (
-                <label key={n} className="flex items-start gap-2 cursor-pointer">
-                  <Checkbox
-                    className="mt-0.5"
-                    checked={wiki.includes(n)}
-                    onChange={(e) => setWiki((w) => (e.target.checked ? [...w, n] : w.filter((x) => x !== n)))}
-                    data-testid={`save-template-note-${n}`}
-                  />
-                  <span className="type-hint text-[var(--color-text-primary)] [overflow-wrap:anywhere]">{n}</span>
-                </label>
-              ))
+              <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]" data-testid="save-template-notes">
+                {notes.map((n) => (
+                  <label key={n} className="flex items-start gap-2.5 px-3.5 py-2 cursor-pointer">
+                    <Checkbox
+                      className="mt-0.5"
+                      checked={wiki.includes(n)}
+                      onChange={(e) => setWiki((w) => (e.target.checked ? [...w, n] : w.filter((x) => x !== n)))}
+                      data-testid={`save-template-note-${n}`}
+                    />
+                    <span className="type-hint text-[var(--color-text-primary)] [overflow-wrap:anywhere]">{n}</span>
+                  </label>
+                ))}
+              </Surface>
             )}
           </fieldset>
           {errorNote}
@@ -331,7 +341,9 @@ export function SaveTemplateSheet({ project, onClose }: { project: { path: strin
   )
 }
 
-/** The dry run, drawn: every list it returned, empty ones said so. */
+/** The dry run, drawn: the template on one card, then everything it holds
+ *  and leaves out on a second, every list it returned (an empty one said
+ *  so). */
 function SaveReview({ plan: raw }: { plan: SaveTemplateResult }): React.JSX.Element {
   // Every list through asArray: an older or odd body never breaks the map.
   const plan = {
@@ -342,60 +354,61 @@ function SaveReview({ plan: raw }: { plan: SaveTemplateResult }): React.JSX.Elem
     heartbeats: asArray<string>(raw.heartbeats),
     skipped: asArray<SaveTemplateResult['skipped'][number]>(raw.skipped),
   }
-  const none = <p className={DIALOG_MUTED}>None</p>
-  const list = (items: string[], testId: string): React.JSX.Element =>
-    items.length ? (
-      <ul className="m-0 p-0 list-none" data-testid={testId}>
-        {items.map((x) => (
-          <ReviewLine key={x} what={x} />
-        ))}
-      </ul>
-    ) : (
-      none
-    )
+  const none = <span className="text-[var(--color-text-secondary)]">None</span>
+  const list = (items: string[], testId: string, mono = true): React.JSX.Element =>
+    items.length ? <ReviewList testId={testId} items={items.map((x) => ({ key: x, what: x, mono }))} /> : none
   return (
     <>
-      <div className="space-y-0.5" data-testid="save-template-review-head">
-        <p className="type-row text-[var(--color-text-primary)]">
-          {plan.id}, version {plan.version}
-        </p>
-        <p className={DIALOG_MUTED}>By {authorLabel(plan.author)}</p>
-        <p className={`${DIALOG_MUTED} font-mono [overflow-wrap:anywhere]`}>{plan.path}</p>
-      </div>
-      <ReviewGroup title="Files" testId="save-template-files">
-        {plan.files.length ? (
-          <ul className="m-0 p-0 list-none">
-            {plan.files.map((f) => (
-              <ReviewLine key={f.path} what={f.path} state={formatBytes(f.bytes)} testId="save-template-file" />
-            ))}
-          </ul>
-        ) : (
-          none
-        )}
-      </ReviewGroup>
-      <ReviewGroup title="Context" testId="save-template-catalog">
-        {list(plan.catalog, 'save-template-catalog-list')}
-      </ReviewGroup>
-      <ReviewGroup title="Suggested permissions" testId="save-template-suggest">
-        {list(plan.suggest, 'save-template-suggest-list')}
-      </ReviewGroup>
-      <ReviewGroup title="Tool" testId="save-template-tool">
-        {plan.tool ? <p className="type-hint text-[var(--color-text-primary)] font-mono">{plan.tool}</p> : <p className={DIALOG_MUTED}>The server default</p>}
-      </ReviewGroup>
-      <ReviewGroup title="Heartbeats" testId="save-template-heartbeats">
-        {list(plan.heartbeats, 'save-template-heartbeats-list')}
-      </ReviewGroup>
-      <ReviewGroup title="Left out" testId="save-template-skipped">
+      <ReviewCard testId="save-template-review-head">
+        <ReviewRow label="Template">
+          {plan.id}
+          <span className="text-[var(--color-text-secondary)]">, version {plan.version}</span>
+        </ReviewRow>
+        <ReviewRow label="By">{authorLabel(plan.author)}</ReviewRow>
+        <ReviewRow label="Saved in">
+          <span className="font-mono select-text">{plan.path}</span>
+        </ReviewRow>
+      </ReviewCard>
+      <ReviewSection title="What it holds">
+        <ReviewCard>
+          <ReviewRow label="Files" testId="save-template-files">
+            {plan.files.length ? (
+              <ReviewList
+                items={plan.files.map((f) => ({ key: f.path, what: f.path, mono: true, note: formatBytes(f.bytes), testId: 'save-template-file' }))}
+              />
+            ) : (
+              none
+            )}
+          </ReviewRow>
+          <ReviewRow label="Context" testId="save-template-catalog">
+            {list(plan.catalog, 'save-template-catalog-list')}
+          </ReviewRow>
+          <ReviewRow label="Permissions" testId="save-template-suggest">
+            {plan.suggest.length ? (
+              <ReviewList testId="save-template-suggest-list" items={plan.suggest.map((x) => ({ key: x, what: x, mono: true, note: 'Suggested' }))} />
+            ) : (
+              none
+            )}
+          </ReviewRow>
+          <ReviewRow label="Tool" testId="save-template-tool">
+            {plan.tool ? <span className="font-mono">{plan.tool}</span> : <span className="text-[var(--color-text-secondary)]">The server default</span>}
+          </ReviewRow>
+          <ReviewRow label="Heartbeats" testId="save-template-heartbeats">
+            {list(plan.heartbeats, 'save-template-heartbeats-list')}
+          </ReviewRow>
+        </ReviewCard>
+      </ReviewSection>
+      <ReviewSection title="Left out" hint="Never its chats or secrets, and nothing else unless listed here." testId="save-template-skipped">
         {plan.skipped.length ? (
-          <ul className="m-0 p-0 list-none">
-            {plan.skipped.map((s) => (
-              <ReviewLine key={`${s.what}-${s.name}`} what={`${s.what}: ${s.name}`} state={SKIP_WHY[s.why] ?? s.why} testId="save-template-skip" />
+          <ReviewCard>
+            {plan.skipped.map((x) => (
+              <ReviewRow key={`${x.what}-${x.name}`} label={x.what ? x.what[0].toUpperCase() + x.what.slice(1) : x.what} testId="save-template-skip">
+                <ReviewList items={[{ key: x.name, what: x.name, mono: true, note: SKIP_WHY[x.why] ?? x.why }]} />
+              </ReviewRow>
             ))}
-          </ul>
-        ) : (
-          none
-        )}
-      </ReviewGroup>
+          </ReviewCard>
+        ) : null}
+      </ReviewSection>
     </>
   )
 }

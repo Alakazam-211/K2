@@ -23,12 +23,36 @@
 // server's own underneath, and "Try again".
 //
 // Opened from the sidebar's add menu (`useAgentTemplatesStore`), mounted once
-// in App. The window's server only. Look: the Kessel sheet's frame on the
-// shared DialogFrame; K2 Design polishes it.
+// in App. The window's server only.
+//
+// Look: the Kessel sheet's frame on the shared DialogFrame, one height for
+// every step (TemplateSheetFrame). Each kind is a card you pick (ui/RadioTile:
+// its icon, name and line, the picked one edged in the accent), grouped under
+// "Built into K2" and "Yours"; the tools are the Kessel sheet's list; the
+// Review is the agent on one card, each row with an Edit back to its step,
+// then what K2 sets up on a second, then the charter, folded, as formatted
+// text on an inset well.
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { Button, Callout, Input, Radio, Spinner, Tag, Textarea } from '@/components/ui'
+import remarkGfm from 'remark-gfm'
+import { Button, Callout, Input, Radio, RadioTile, Spinner, Surface, Tag, Textarea, TileIcon } from '@/components/ui'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
+import Markdown from '@/components/Markdown/Markdown'
+import { FEATURE_ICONS } from '@/components/icons/feature-icons'
+import {
+  AgentsIcon,
+  BookmarkIcon,
+  ChecklistIcon,
+  ChevronRightIcon,
+  GlobeIcon,
+  HeadphonesIcon,
+  OrgChartIcon,
+  PaletteIcon,
+  PencilIcon,
+  ServerIcon,
+  WikiIcon,
+  type K2IconProps,
+} from '@/components/icons/K2Icons'
 import { DIALOG_FIELD, DIALOG_LABEL, DIALOG_MUTED, FailedNote } from '@/components/Settings/sections/AccessDialogs'
 import { SETTING_ROW_LABEL } from '@/components/Settings/controls/SettingControls'
 import { primaryScope } from '@/kessel/server-scope'
@@ -60,7 +84,7 @@ import { useLlmAccountsStore, watchLlmAccounts, type LlmAccountsDoc } from '@/st
 import { requestLlmSignIn } from '@/stores/llm-sign-in-request'
 import { usePresetsStore, type AgentPreset } from '@/stores/presets'
 import { useSettingsStore } from '@/stores/settings'
-import { ReviewGroup, ReviewLine, TemplateSheetFrame } from './TemplateSheetFrame'
+import { ReviewCard, ReviewList, ReviewRow, ReviewSection, TemplateSheetFrame } from './TemplateSheetFrame'
 
 // ── Copy (purpose only) ──────────────────────────────────────────────
 
@@ -88,10 +112,32 @@ export const CREATE_AGENT_BUSY = 'Making the agent’s folder and setting it up�
 export const CREATE_AGENT_CLOSE_HELD = 'Can’t close while the agent is being made'
 export const CREATE_AGENT_NO_TEMPLATES = 'This server has no agent templates to pick from.'
 export const CREATE_AGENT_NOT_SIGNED_IN = 'This tool isn’t signed in on this server yet. The agent can start once it is.'
+/** No tool K2 signs in to is signed in on this server. */
+export const CREATE_AGENT_NO_TOOL = 'No tool is signed in on this server yet. The agent can start once one is.'
+export const CREATE_AGENT_NO_TOOLS_ON = 'This server has no tools turned on. Turn one on in Settings, then come back.'
 export const CREATE_AGENT_LIBRARY_NOTE = 'Its charter is someone’s own instructions. Read it before you create the agent.'
 
 type Step = 'pick' | 'name' | 'tool' | 'review'
-const STEP_NUMBER: Record<Step, number> = { pick: 1, name: 2, tool: 3, review: 4 }
+
+/** Each built-in kind's icon (K2's own set); a saved template gets the
+ *  bookmark, and a kind K2 doesn't know the agent. */
+const TEMPLATE_ICONS: Record<string, (p: K2IconProps) => React.JSX.Element> = {
+  general: AgentsIcon,
+  developer: FEATURE_ICONS.terminal,
+  reviewer: ChecklistIcon,
+  writer: PencilIcon,
+  lead: OrgChartIcon,
+  support: HeadphonesIcon,
+  'app-owner': GlobeIcon,
+  designer: PaletteIcon,
+  ops: ServerIcon,
+  researcher: WikiIcon,
+}
+
+export function templateIconFor(t: Pick<TemplateSummary, 'id' | 'origin'>): (p: K2IconProps) => React.JSX.Element {
+  if (t.origin === 'library') return BookmarkIcon
+  return TEMPLATE_ICONS[t.id] ?? AgentsIcon
+}
 
 // ── Helpers (pure; tested) ───────────────────────────────────────────
 
@@ -377,6 +423,7 @@ function CreateAgentBody(): React.JSX.Element {
 
   const ids = { name: useId(), handle: useId(), handleHint: useId(), folder: useId() }
   const paramId = useId()
+  const pickId = useId()
 
   const cancelButton = (
     <Button variant="ghost" size="md" onClick={close} data-testid="create-agent-cancel">
@@ -435,26 +482,41 @@ function CreateAgentBody(): React.JSX.Element {
 
   // ── 1. Pick ──
   if (step === 'pick') {
-    const card = (t: TemplateSummary): React.JSX.Element => (
-      <label key={t.id} className="flex items-start gap-2 cursor-pointer" data-template-card={t.id}>
-        <Radio
+    const card = (t: TemplateSummary): React.JSX.Element => {
+      const Icon = templateIconFor(t)
+      return (
+        <RadioTile
+          key={t.id}
           name="create-agent-template"
-          className="mt-0.5"
           value={t.id}
           checked={picked === t.id}
           onChange={() => setPicked(t.id)}
+          aria-describedby={`${pickId}-${t.id}`}
+          leading={
+            <TileIcon>
+              <Icon size={16} />
+            </TileIcon>
+          }
+          tileProps={{ 'data-template-card': t.id }}
           data-testid={`create-agent-template-${t.id}`}
-        />
-        <span className="min-w-0">
+        >
           <span className={`${SETTING_ROW_LABEL} block`}>{t.name}</span>
-          {t.summary ? <span className={`block ${DIALOG_MUTED}`}>{t.summary}</span> : null}
-          {t.origin === 'library' ? (
-            <span className={`block ${DIALOG_MUTED}`} data-testid={`create-agent-author-${t.id}`}>
-              By {authorLabel(t.author)}
-            </span>
-          ) : null}
-        </span>
-      </label>
+          <span id={`${pickId}-${t.id}`} className="block">
+            {t.summary ? <span className={`block ${DIALOG_MUTED}`}>{t.summary}</span> : null}
+            {t.origin === 'library' ? (
+              <span className="block type-hint text-[var(--color-text-muted)] mt-0.5" data-testid={`create-agent-author-${t.id}`}>
+                By {authorLabel(t.author)}
+              </span>
+            ) : null}
+          </span>
+        </RadioTile>
+      )
+    }
+    const group = (title: string, list: TemplateSummary[], testId: string): React.JSX.Element => (
+      <fieldset className="m-0 p-0 border-0 min-w-0" data-testid={testId}>
+        <legend className="p-0 mb-2 type-hint font-medium text-[var(--color-text-secondary)]">{title}</legend>
+        <div className="space-y-2">{list.map(card)}</div>
+      </fieldset>
     )
     return (
       <TemplateSheetFrame
@@ -481,20 +543,10 @@ function CreateAgentBody(): React.JSX.Element {
           </>
         }
       >
-        <fieldset className="space-y-2" data-testid="create-agent-builtins">
-          <legend className={DIALOG_LABEL}>{CREATE_AGENT_COPY.builtIn}</legend>
-          <div role="radiogroup" aria-label={CREATE_AGENT_COPY.builtIn} className="space-y-2">
-            {groups.builtIn.map(card)}
-          </div>
-        </fieldset>
-        {groups.yours.length ? (
-          <fieldset className="space-y-2" data-testid="create-agent-yours">
-            <legend className={DIALOG_LABEL}>{CREATE_AGENT_COPY.yours}</legend>
-            <div role="radiogroup" aria-label={CREATE_AGENT_COPY.yours} className="space-y-2">
-              {groups.yours.map(card)}
-            </div>
-          </fieldset>
-        ) : null}
+        <div role="radiogroup" aria-label={CREATE_AGENT_COPY.pick} className="space-y-5">
+          {groups.builtIn.length ? group(CREATE_AGENT_COPY.builtIn, groups.builtIn, 'create-agent-builtins') : null}
+          {groups.yours.length ? group(CREATE_AGENT_COPY.yours, groups.yours, 'create-agent-yours') : null}
+        </div>
         {detailError ? (
           <FailedNote what="K2 couldn’t load that template." next="Try again, or pick another kind." detail={detailError} />
         ) : null}
@@ -640,6 +692,11 @@ function CreateAgentBody(): React.JSX.Element {
   if (step === 'tool') {
     const chosen = enabledPresets.find((p) => p.id === tool) ?? null
     const chosenSignIn = chosen ? presetSignIn(accounts, chosen) : null
+    // The Kessel sheet's tool list: each tool's icon and name, the template's
+    // suggestion and the server default tagged, and a tool that isn't signed
+    // in said so quietly. Signed in is the usual case, so it isn't tagged.
+    const states = enabledPresets.map((p) => presetSignIn(accounts, p))
+    const noneSignedIn = states.some((x) => x !== null) && !states.includes('signed_in')
     return (
       <TemplateSheetFrame
         {...frame}
@@ -666,12 +723,12 @@ function CreateAgentBody(): React.JSX.Element {
           </div>
         ) : enabledPresets.length === 0 ? (
           <p className={DIALOG_MUTED} data-testid="create-agent-no-tools">
-            This server has no tools turned on. Turn one on in Settings, then come back.
+            {CREATE_AGENT_NO_TOOLS_ON}
           </p>
         ) : (
           <div role="radiogroup" aria-label={CREATE_AGENT_COPY.tool} className="space-y-2" data-testid="create-agent-tools">
-            {enabledPresets.map((p) => {
-              const s = presetSignIn(accounts, p)
+            {enabledPresets.map((p, i) => {
+              const signIn = states[i]
               const suggested = detail?.agent.tool && detail.agent.tool !== 'default' && matchAgentPreset([p], detail.agent.tool)
               return (
                 <label key={p.id} className="flex items-start gap-2 cursor-pointer" data-create-agent-tool={p.id}>
@@ -692,14 +749,10 @@ function CreateAgentBody(): React.JSX.Element {
                     {p.label}
                     {suggested ? <Tag className="ml-1">Suggested</Tag> : null}
                     {p.id === serverDefaultPreset ? <Tag className="ml-1">Server default</Tag> : null}
-                    {s === 'signed_in' ? (
-                      <Tag tone="ok" className="ml-1" data-testid={`create-agent-signin-${p.id}`}>
-                        Signed in
-                      </Tag>
-                    ) : s === 'not_signed_in' ? (
-                      <Tag tone="warn" className="ml-1" data-testid={`create-agent-signin-${p.id}`}>
+                    {signIn === 'not_signed_in' ? (
+                      <span className="ml-1 type-hint text-[var(--color-text-secondary)]" data-testid={`create-agent-signin-${p.id}`}>
                         Not signed in
-                      </Tag>
+                      </span>
                     ) : null}
                   </span>
                 </label>
@@ -709,8 +762,8 @@ function CreateAgentBody(): React.JSX.Element {
         )}
         {chosenSignIn === 'not_signed_in' ? (
           <Callout tone="info" className="type-hint flex items-center justify-between gap-3" data-testid="create-agent-not-signed-in">
-            <span>{CREATE_AGENT_NOT_SIGNED_IN}</span>
-            <Button variant="quiet" className="flex-shrink-0" onClick={signIn}>
+            <span>{noneSignedIn ? CREATE_AGENT_NO_TOOL : CREATE_AGENT_NOT_SIGNED_IN}</span>
+            <Button variant="quiet" className="flex-shrink-0" onClick={signIn} data-testid="create-agent-sign-in">
               Sign in
             </Button>
           </Callout>
@@ -722,6 +775,8 @@ function CreateAgentBody(): React.JSX.Element {
   // ── 4. Review ──
   const library = (plan?.state === 'ok' ? plan.value.template.origin : pickedSummary?.origin) === 'library'
   const planFailed = plan?.state === 'error' ? hireErrorView(plan.error) : null
+  const chosenPreset = enabledPresets.find((p) => p.id === tool) ?? null
+  const chosenTool = chosenPreset ? { label: chosenPreset.label, tool: presetTool(chosenPreset), signIn: presetSignIn(accounts, chosenPreset) } : null
   return (
     <TemplateSheetFrame
       {...frame}
@@ -771,7 +826,16 @@ function CreateAgentBody(): React.JSX.Element {
           <FailedNote what={planFailed.text} next={planFailed.folderProblem ? 'Go back to change it.' : 'Nothing was made. Try again.'} detail={planFailed.detail} />
         </div>
       ) : plan.state === 'ok' ? (
-        <ReviewBody plan={plan.value} library={library} />
+        <ReviewBody
+          plan={plan.value}
+          library={library}
+          tool={chosenTool}
+          busy={busy}
+          onEdit={(to) => {
+            setFailed(null)
+            setStep(to)
+          }}
+        />
       ) : null}
       {failed ? (
         <div data-testid="create-agent-error">
@@ -791,59 +855,125 @@ function Problem({ text, testId }: { text: string | null; testId: string }): Rea
   )
 }
 
-/** The dry run, drawn: the agent, then every row the daemon returned (none
- *  hidden), then the charter. */
-function ReviewBody({ plan, library }: { plan: HireResult; library: boolean }): React.JSX.Element {
+/** The dry run, drawn: the agent on one card (each row with an Edit that goes
+ *  back to its step), then every row the daemon returned (none hidden) on a
+ *  second, then what it will ask, then the charter, folded unless it's
+ *  someone's own. */
+function ReviewBody({
+  plan,
+  library,
+  tool,
+  busy,
+  onEdit,
+}: {
+  plan: HireResult
+  library: boolean
+  tool: { label: string; tool: string; signIn: SignIn } | null
+  busy: boolean
+  onEdit: (step: Step) => void
+}): React.JSX.Element {
   const open = asArray<HireResult['questions'][number]>(plan.questions).filter((q) => !q.answered)
+  const edit = (to: Step) => (busy ? undefined : () => onEdit(to))
   return (
     <>
-      <div className="space-y-0.5" data-testid="create-agent-review-agent">
-        <p className={SETTING_ROW_LABEL}>
-          {plan.name} <span className="font-mono text-[var(--color-text-secondary)]">@{plan.handle}</span>
-        </p>
-        <p className={`${DIALOG_MUTED} font-mono [overflow-wrap:anywhere]`}>{plan.path}</p>
-        <p className={DIALOG_MUTED}>
-          {plan.template.name} template, version {plan.template.version}
-          {library ? `, by ${authorLabel(plan.template.author)}` : ''}
-        </p>
-      </div>
       {library ? (
         <Callout tone="warn" className="type-hint" data-testid="create-agent-library-note">
           {CREATE_AGENT_LIBRARY_NOTE}
         </Callout>
       ) : null}
-      <div className="space-y-3" data-testid="create-agent-rows">
-        {groupRows(asArray(plan.rows)).map((g, i) => (
-          <ReviewGroup key={`${g.step}-${i}`} title={hireStepLabel(g.step)} testId={`create-agent-group-${g.step}`}>
-            <ul className="m-0 p-0 list-none">
-              {g.rows.map((r, j) => (
-                <ReviewLine
-                  key={`${r.target}-${j}`}
-                  what={g.step === 'permission' ? permissionTarget(r.target) : r.target}
-                  state={hireStatusLabel(r.status)}
-                  note={r.reason}
-                  testId="create-agent-row"
-                />
-              ))}
-            </ul>
-          </ReviewGroup>
-        ))}
-      </div>
+      <ReviewCard testId="create-agent-review-agent">
+        <ReviewRow label="Kind" onEdit={edit('pick')} editLabel="Change the kind">
+          {plan.template.name}
+          <span className="text-[var(--color-text-secondary)]">
+            , version {plan.template.version}
+            {library ? `, by ${authorLabel(plan.template.author)}` : ''}
+          </span>
+        </ReviewRow>
+        <ReviewRow label="Name" onEdit={edit('name')} editLabel="Change the name">
+          {plan.name} <span className="font-mono text-[var(--color-text-secondary)]">@{plan.handle}</span>
+        </ReviewRow>
+        <ReviewRow label="Folder" onEdit={edit('name')} editLabel="Change the folder">
+          <span className="font-mono select-text">{plan.path}</span>
+        </ReviewRow>
+        <ReviewRow label="Tool" onEdit={edit('tool')} editLabel="Change the tool">
+          {tool ? (
+            <span className="inline-flex flex-wrap items-center gap-x-1.5">
+              <span aria-hidden="true" className="inline-flex w-4 justify-center">
+                <AgentIcon agent={tool.tool} size={12} />
+              </span>
+              {tool.label}
+              {tool.signIn === 'not_signed_in' ? <span className="text-[var(--color-text-secondary)]">, not signed in yet</span> : null}
+            </span>
+          ) : (
+            <span className="text-[var(--color-text-secondary)]">The server default</span>
+          )}
+        </ReviewRow>
+      </ReviewCard>
+      <ReviewSection title="What K2 sets up" testId="create-agent-rows">
+        <ReviewCard>
+          {groupRows(asArray(plan.rows)).map((g, i) => (
+            <ReviewRow key={`${g.step}-${i}`} label={hireStepLabel(g.step)} testId={`create-agent-group-${g.step}`}>
+              <ReviewList
+                items={g.rows.map((r, j) => ({
+                  key: `${r.target}-${j}`,
+                  what: g.step === 'permission' ? permissionTarget(r.target) : r.target,
+                  mono: g.step !== 'permission' && g.step !== 'hello',
+                  note: (
+                    <>
+                      {hireStatusLabel(r.status)}
+                      {r.reason ? <span className="block text-[var(--color-text-muted)]">{r.reason}</span> : null}
+                    </>
+                  ),
+                  testId: 'create-agent-row',
+                }))}
+              />
+            </ReviewRow>
+          ))}
+        </ReviewCard>
+      </ReviewSection>
       {open.length ? (
-        <ReviewGroup title="It will ask you" testId="create-agent-open-questions">
-          <ul className="m-0 p-0 list-none">
-            {open.map((q) => (
-              <ReviewLine key={q.id} what={q.ask} />
+        <ReviewSection title="It will ask you" hint="When it starts, in its Thread." testId="create-agent-open-questions">
+          <ReviewCard>
+            {open.map((q, i) => (
+              <ReviewRow key={q.id} label={`Question ${i + 1}`}>
+                {q.ask}
+              </ReviewRow>
             ))}
-          </ul>
-        </ReviewGroup>
+          </ReviewCard>
+        </ReviewSection>
       ) : null}
-      {plan.charter ? (
-        <details open={library} data-testid="create-agent-charter">
-          <summary className="type-row text-[var(--color-text-primary)] cursor-pointer">Charter</summary>
-          <pre className="mt-1 whitespace-pre-wrap type-hint text-[var(--color-text-secondary)] font-mono select-text">{plan.charter}</pre>
-        </details>
-      ) : null}
+      {plan.charter ? <Charter text={plan.charter} startOpen={library} /> : null}
     </>
+  )
+}
+
+/** The charter, folded under its name (open from the start for someone's own
+ *  template), read as formatted text on an inset well. */
+function Charter({ text, startOpen }: { text: string; startOpen: boolean }): React.JSX.Element {
+  const [open, setOpen] = useState(startOpen)
+  const panel = useId()
+  return (
+    <section data-testid="create-agent-charter" data-open={open ? '' : undefined}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={panel}
+        onClick={() => setOpen((v) => !v)}
+        data-k2-focus=""
+        className="relative -mx-1.5 flex w-[calc(100%+0.75rem)] items-center gap-1.5 px-1.5 py-1 text-left cursor-pointer rounded-[var(--radius-selector)] text-[var(--color-text-primary)] hover:bg-[var(--color-row-hover)] transition-colors"
+        data-testid="create-agent-charter-toggle"
+      >
+        <ChevronRightIcon size={14} className={`flex-shrink-0 text-[var(--color-text-secondary)] transition-transform ${open ? 'rotate-90' : ''}`} />
+        <span className="type-row">Charter</span>
+        <span className="type-hint text-[var(--color-text-secondary)]">The agent’s standing instructions</span>
+      </button>
+      <div id={panel} hidden={!open} className="mt-2">
+        <Surface role2="inset" chamfer className="px-4 py-3">
+          <div className="markdown-content type-hint text-[var(--color-text-primary)] select-text [overflow-wrap:anywhere]">
+            <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
+          </div>
+        </Surface>
+      </div>
+    </section>
   )
 }

@@ -1094,6 +1094,16 @@
 [data-style="glass"] [data-style-row][data-style-row][data-material]:hover:not([data-zen-root] *) { border-color: var(--color-text-muted); }
 [data-style="glass"] [data-style-row][data-style-row][data-material][aria-current="true"]:not([data-zen-root] *) { border-color: var(--color-accent-text); }
 [data-style="glass"] [data-style-row] > [data-row-bar]:not([data-zen-root] *) { display: none; }
+/* A tile you pick from a radio group (ui/RadioTile: Create an agent's kinds).
+   At rest the tile's own edge; the control edge under the pointer; picked, the
+   accent as text, 2px (the border plus an inset line), so the choice reads
+   at a glance in both modes. (Doubled attribute to outrank Veil's tile edge
+   and drop.) */
+[data-style="glass"] [data-radio-tile][data-radio-tile][data-material]:hover:not([data-zen-root] *) { border-color: var(--color-control-edge); }
+[data-style="glass"] [data-radio-tile][data-radio-tile][data-material][data-checked]:not([data-zen-root] *) {
+  border-color: var(--color-accent-text);
+  box-shadow: inset 0 0 0 1px var(--color-accent-text), var(--tile-shadow);
+}
 /* The mode toggle is two circles, like the page tabs: the lit one is filled.
    It sits in the terminal's bar (0.46.11), so the circles are its own. */
 [data-style="glass"] [data-mode-toggle]:not([data-zen-root] *) { border-width: 0; border-radius: var(--radius-pill); gap: 4px; }

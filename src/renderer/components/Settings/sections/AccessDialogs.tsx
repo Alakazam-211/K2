@@ -22,7 +22,7 @@ export const DIALOG_MUTED = 'type-hint text-[var(--color-text-secondary)] leadin
 export const MUST_CHANGE_NOTE = 'It’s temporary: the next time they sign in, K2 asks them to choose their own.'
 
 /** Which edges of a scroll box have content past them. */
-function useScrollEdges(): {
+export function useScrollEdges(): {
   ref: React.RefObject<HTMLDivElement | null>
   edges: { top: boolean; bottom: boolean }
   measure: () => void

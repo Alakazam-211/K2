@@ -50,6 +50,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import CreateAgentSheet, {
   CREATE_AGENT_CLOSE_HELD,
   CREATE_AGENT_COPY,
+  CREATE_AGENT_NO_TOOL,
   CREATE_AGENT_NOT_SIGNED_IN,
   buildHireRequest,
   defaultPresetFor,
@@ -308,14 +309,18 @@ describe('CreateAgentSheet', () => {
     expect(screen.getByTestId('create-agent-tools')).toBeTruthy()
   })
 
-  it('Tool: presets with their sign-in state, the template’s suggestion chosen', async () => {
+  it('Tool: a tool that isn’t signed in says so (signed in is the usual case), the template’s suggestion chosen', async () => {
     await toName('writer')
     fireEvent.change(screen.getByTestId('create-agent-param-about'), { target: { value: 'Posts' } })
     await next()
-    await waitFor(() => expect(screen.getByTestId('create-agent-signin-p-claude')).toBeTruthy())
-    expect(screen.getByTestId('create-agent-signin-p-claude').textContent).toBe('Signed in')
+    await waitFor(() => expect(screen.getByTestId('create-agent-signin-p-codex')).toBeTruthy())
     expect(screen.getByTestId('create-agent-signin-p-codex').textContent).toBe('Not signed in')
+    expect(screen.queryByTestId('create-agent-signin-p-claude')).toBeNull()
     expect(screen.queryByTestId('create-agent-signin-p-aider')).toBeNull()
+    // The Kessel sheet's tags: the template's suggestion and the server default.
+    const tags = (id: string) => Array.from(screen.getByTestId(`create-agent-tool-${id}`).closest('label')!.querySelectorAll('.k2-tag')).map((t) => t.textContent)
+    expect(tags('p-codex')).toEqual(['Suggested'])
+    expect(tags('p-claude')).toEqual(['Server default'])
     expect((screen.getByTestId('create-agent-tool-p-codex') as HTMLInputElement).checked).toBe(true)
     expect(screen.getByTestId('create-agent-not-signed-in').textContent).toContain(CREATE_AGENT_NOT_SIGNED_IN)
     fireEvent.click(screen.getByTestId('create-agent-tool-p-claude'))
@@ -456,7 +461,110 @@ describe('CreateAgentSheet', () => {
     await next()
     await waitFor(() => expect(screen.getByTestId('create-agent-library-note')).toBeTruthy())
     expect(screen.getByTestId('create-agent-review-agent').textContent).toContain('by rosson')
-    expect((screen.getByTestId('create-agent-charter') as HTMLDetailsElement).open).toBe(true)
+    expect(screen.getByTestId('create-agent-charter-toggle').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('Pick: the picked card carries the selected edge; picking another moves it', async () => {
+    await openSheet()
+    const tile = (id: string) => screen.getByTestId(`create-agent-template-${id}`).closest('[data-radio-tile]') as HTMLElement
+    expect(tile('general').hasAttribute('data-checked')).toBe(true)
+    expect(tile('writer').hasAttribute('data-checked')).toBe(false)
+    fireEvent.click(screen.getByTestId('create-agent-template-writer'))
+    expect(tile('writer').hasAttribute('data-checked')).toBe(true)
+    expect(tile('general').hasAttribute('data-checked')).toBe(false)
+    // One group across both headings: every card is a radio of one name.
+    const names = new Set(screen.getAllByRole('radio').map((r) => (r as HTMLInputElement).name))
+    expect(names.size).toBe(1)
+    // Each card's summary describes its radio.
+    const r = screen.getByTestId('create-agent-template-writer')
+    expect(document.getElementById(r.getAttribute('aria-describedby')!)?.textContent).toBe('writer summary')
+  })
+
+  it('Tool: none signed in says so, and Sign in asks for the chosen tool', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string, params?: { id?: string }) => {
+      if (route === 'agent-templates') return LIST
+      if (route === 'agent-templates/show') return { ok: true, template: DETAILS[params?.id ?? ''] }
+      if (route === 'agents/hire-root') return { ok: true, root: '/home/r/agents/', default: true }
+      if (route === 'llm/accounts/list') return { tools: ACCOUNTS.tools.map((t) => ({ ...t, accounts: [] })) }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    await toName('general')
+    await next()
+    await waitFor(() => expect(screen.getByTestId('create-agent-not-signed-in')).toBeTruthy())
+    expect(screen.getByTestId('create-agent-not-signed-in').textContent).toContain(CREATE_AGENT_NO_TOOL)
+    fireEvent.click(screen.getByTestId('create-agent-sign-in'))
+    expect(h.requestLlmSignIn).toHaveBeenCalledWith({ tool: 'claude', toolLabel: 'Claude' })
+    expect(useAgentTemplatesStore.getState().createOpen).toBe(false)
+  })
+
+  it('Review: one card of the agent, each row’s Edit going back to its step', async () => {
+    await toReview()
+    const card = screen.getByTestId('create-agent-review-agent')
+    expect(card.textContent).toContain('Writer, version 1')
+    expect(card.textContent).toContain('Max @max')
+    expect(card.textContent).toContain('/home/r/agents/max')
+    expect(card.textContent).toContain('Codex')
+    expect(card.textContent).toContain('not signed in yet')
+    fireEvent.click(screen.getByRole('button', { name: 'Change the tool' }))
+    expect(screen.getByTestId('create-agent-tools')).toBeTruthy()
+    await next()
+    await waitFor(() => expect(screen.getByTestId('create-agent-rows')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Change the folder' }))
+    expect(screen.getByTestId('create-agent-folder')).toBeTruthy()
+    // The name step keeps what was typed.
+    expect((screen.getByTestId('create-agent-name') as HTMLInputElement).value).toBe('Max')
+    fireEvent.click(screen.getByTestId('create-agent-back'))
+    expect((screen.getByTestId('create-agent-template-writer') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('Review: no Edit while the agent is being made', async () => {
+    await toReview()
+    h.daemonCliPost.mockImplementation(() => new Promise(() => {}))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-agent-create'))
+    })
+    expect(screen.queryByRole('button', { name: 'Change the name' })).toBeNull()
+  })
+
+  it('a built-in’s charter starts folded; its toggle opens it', async () => {
+    await toReview()
+    const toggle = screen.getByTestId('create-agent-charter-toggle')
+    const panel = document.getElementById(toggle.getAttribute('aria-controls')!)!
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(panel.hidden).toBe(true)
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(panel.hidden).toBe(false)
+    expect(panel.textContent).toContain('You write for Rosson.')
+  })
+
+  it('the footer’s hairline shows only while the body scrolls under it', async () => {
+    await openSheet()
+    const body = screen.getByTestId('create-agent-sheet-body')
+    const foot = screen.getByTestId('create-agent-sheet-footer')
+    expect(foot.className).toContain('border-transparent')
+    Object.defineProperty(body, 'scrollHeight', { configurable: true, value: 900 })
+    Object.defineProperty(body, 'clientHeight', { configurable: true, value: 400 })
+    fireEvent.scroll(body)
+    expect(foot.className).toContain('border-[var(--color-border)]')
+    expect(foot.hasAttribute('data-scrolled-under')).toBe(true)
+    Object.defineProperty(body, 'scrollTop', { configurable: true, value: 500 })
+    fireEvent.scroll(body)
+    expect(foot.className).toContain('border-transparent')
+    // Scrolled: the head's hairline shows instead.
+    expect(screen.getByTestId('create-agent-sheet-head').className).toContain('border-[var(--color-border)]')
+  })
+
+  it('every step and state keeps one height', async () => {
+    await openSheet()
+    const sheet = screen.getByTestId('create-agent-sheet')
+    const h0 = sheet.className.match(/\bh-\[[^\]]+\]/)?.[0]
+    expect(h0).toBeTruthy()
+    fireEvent.click(screen.getByTestId('create-agent-template-writer'))
+    await next()
+    await waitFor(() => expect(screen.getByTestId('create-agent-name')).toBeTruthy())
+    expect(sheet.className.match(/\bh-\[[^\]]+\]/)?.[0]).toBe(h0)
+    expect(sheet.className).not.toMatch(/\bmax-h-/)
   })
 
   it('an older server (404, no code) says it can’t create from templates yet', async () => {

@@ -182,3 +182,32 @@ describe('Settings → Styles list in Glass: the Usage tile, pressable', () => {
     }
   })
 })
+
+describe('RadioTile (a card you pick from a radio group): the picked edge', () => {
+  const tile = readFileSync(join(repo, 'src/renderer/components/ui/RadioTile.tsx'), 'utf8')
+  const sel = (tail: string): string => `[data-style="glass"] [data-radio-tile][data-radio-tile][data-material]${tail}:not([data-zen-root] *)`
+  const mix = (a: Rgb, b: Rgb, t: number): Rgb => a.map((c, i) => c * t + b[i] * (1 - t)) as Rgb
+
+  it('Terminal: the hairline at rest, the control edge on hover, the readable accent when picked', () => {
+    expect(tile).toContain("'border-[var(--color-accent-text)] bg-[color-mix(in_srgb,var(--color-accent)_8%,var(--color-bg-surface))]'")
+    expect(tile).toContain("'border-[var(--color-border)] bg-[var(--color-bg-surface)]', !disabled && 'hover:border-[var(--color-control-edge)]'")
+  })
+
+  it('Glass: the control edge on hover; picked, the readable accent 2px wide, after hover so a hovered pick keeps it', () => {
+    expect(rule(generated, sel(':hover'))).toContain('border-color: var(--color-control-edge)')
+    const picked = rule(generated, sel('[data-checked]'))
+    expect(picked).toContain('border-color: var(--color-accent-text)')
+    expect(picked).toContain('inset 0 0 0 1px var(--color-accent-text)')
+    expect(generated.indexOf(sel('[data-checked]'))).toBeGreaterThan(generated.indexOf(sel(':hover')))
+  })
+
+  it.each(LOOKS)('the picked edge holds 3:1 on its own fill and on the sheet (%s %s)', (style, id) => {
+    const p = palette(style, id)
+    const surface = resolve(style, id, p['bg-surface'])
+    // Terminal tints the picked tile with 8% of the accent; Glass keeps the tile fill.
+    const fill = style === 'terminal' ? mix(resolve(style, id, p.accent), surface, 0.08) : surface
+    for (const [name, g] of [['fill', fill], ['sheet', surface]] as const) {
+      expect(contrast(accentText(style, id), g), `${id} picked edge on its ${name}`).toBeGreaterThanOrEqual(3)
+    }
+  })
+})

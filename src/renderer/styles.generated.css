@@ -469,7 +469,7 @@
   --color-bg-hover: rgba(255, 255, 255, 0.08);
   --color-border: #333333;
   --color-border-strong: rgba(255, 255, 255, 0.28);
-  --color-control-edge: #787880;
+  --color-control-edge: #7e7e86;
   --color-divider: #525255;
   --color-text-primary: #ffffff;
   --color-text-secondary: #c7c7cc;
@@ -565,7 +565,7 @@
   --color-bg-hover: rgba(60, 60, 67, 0.08);
   --color-border: #eaeaea;
   --color-border-strong: rgba(60, 60, 67, 0.35);
-  --color-control-edge: #8a8a8f;
+  --color-control-edge: #828287;
   --color-divider: #ababae;
   --color-text-primary: #000000;
   --color-text-secondary: #58585d;

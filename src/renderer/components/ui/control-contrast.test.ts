@@ -376,3 +376,19 @@ describe('Code in a sentence', () => {
     expect(body).toContain('font-size: 0.9em')
   })
 })
+
+describe('Outlined controls on a hovered list row (Glass)', () => {
+  // A row's Disconnect… / Remove… button sits on the row-hover band while the
+  // pointer is on the row; its edge must still reach 3:1 against that band.
+  it.each([['glass', 'obsidian'], ['glass', 'veil']] as const)('%s %s keeps the control edge at 3:1 on the row-hover band', (style, id) => {
+    const p = palette(style, id)
+    const m = /^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/.exec(p['row-hover'])
+    if (!m) throw new Error(`row-hover is not rgba(): ${p['row-hover']}`)
+    const band: Rgb = [Number(m[1]), Number(m[2]), Number(m[3])]
+    // Settings cards (the ground under every list row) are bg-surface.
+    for (const ground of ['bg-surface']) {
+      const hovered = over(band, hex(p[ground]), Number(m[4]))
+      expect(contrast(hex(p['control-edge']), hovered), `${id} on ${ground}`).toBeGreaterThanOrEqual(3)
+    }
+  })
+})

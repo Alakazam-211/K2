@@ -23,6 +23,7 @@ import { nextCheckDelayMs } from '@/lib/host-pool'
 import { LOCAL_HOME_HOST, savedHostForKey } from '@/lib/host-key'
 import { roomFailure, type RoomFailure } from '@/lib/room-failure'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { Button } from '@/components/ui'
 
 export interface RoomFailureActions {
   retry(): void
@@ -87,7 +88,20 @@ export function useRoomFailure(hostKey: string): RoomFailure | null {
   })
 }
 
-/** The banner. Pure presentation: the caller passes the state and actions. */
+/**
+ * The banner. Pure presentation: the caller passes the state and actions.
+ *
+ * One markup, two looks, through the Style contract only:
+ *   - Terminal: a square strip on the surface with a bottom rule; the action
+ *     is the shared quiet Button (cut corners).
+ *   - Glass: `data-material="tile"` makes it a tile (rounded box radius, the
+ *     tile edge, sheen and shadow); the Gate's `--gap-pane` gap floats it off
+ *     the room below. The action is the same quiet Button (a pill in Glass).
+ * The title wraps to two lines at most (a long server name breaks anywhere);
+ * the button label truncates past 45% of the row. Under 32rem (a narrow
+ * window or split) the button drops under the text and may use the full
+ * width. Both keep their full text in `title`.
+ */
 export function RoomFailureView({
   failure,
   actions,
@@ -101,26 +115,41 @@ export function RoomFailureView({
     else if (failure.action === 'open-server') actions.openServer()
   }
   return (
+    // Not <Surface bordered={false}>: that zeroes --k2-ch-bw, which inherits
+    // and would drop the Retry button's diagonal edge in Terminal.
     <div
       role="alert"
       data-room-failure={failure.kind}
-      className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]"
+      data-surface="surface"
+      data-material="tile"
+      className="@container flex flex-shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 bg-[var(--color-bg-surface)] rounded-[var(--radius-box)] border-b border-[var(--color-border)]"
     >
-      <div className="min-w-0">
-        <p className="text-xs text-[var(--color-text-primary)]">{failure.title}</p>
+      <div className="min-w-0 flex-1 @max-[32rem]:basis-full">
+        <p
+          className="type-name text-[var(--color-text-primary)] line-clamp-2 [overflow-wrap:anywhere]"
+          title={failure.title}
+          data-room-failure-title=""
+        >
+          {failure.title}
+        </p>
         {failure.detail && (
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{failure.detail}</p>
+          <p className="type-hint text-[var(--color-text-muted)] mt-0.5 [overflow-wrap:anywhere]" data-room-failure-detail="">
+            {failure.detail}
+          </p>
         )}
       </div>
       {failure.action && failure.actionLabel && (
-        <button
-          type="button"
+        <Button
+          variant="quiet"
           data-room-failure-action={failure.action}
           onClick={onClick}
-          className="flex-shrink-0 px-3 py-1 text-xs text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 no-drag cursor-pointer"
+          title={failure.actionLabel}
+          className="flex-shrink-0 max-w-[45%] @max-[32rem]:max-w-full"
         >
-          {failure.actionLabel}
-        </button>
+          {/* The label truncates, not the button: overflow on the button
+              would clip Terminal's chamfer edge. */}
+          <span className="block truncate">{failure.actionLabel}</span>
+        </Button>
       )}
     </div>
   )
@@ -144,7 +173,9 @@ export function RoomFailureGate({
   const failure = useRoomFailure(hostKey)
   if (!failure) return <>{children}</>
   return (
-    <div className="flex flex-col h-full min-h-0" data-room-failing={failure.kind}>
+    // --gap-pane: 0 in Terminal (the strip sits on the room), a tile gap in
+    // Glass (the banner floats as its own tile above the room's tiles).
+    <div className="flex flex-col h-full min-h-0 gap-[var(--gap-pane)]" data-room-failing={failure.kind}>
       <RoomFailureView failure={failure} actions={actions ?? roomFailureActions(hostKey)} />
       <div className="flex-1 min-h-0 opacity-50 pointer-events-none" aria-disabled="true" inert>
         {children}

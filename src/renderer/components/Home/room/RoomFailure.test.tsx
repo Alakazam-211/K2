@@ -128,7 +128,110 @@ describe('RoomFailureView', () => {
   }
 })
 
+describe('RoomFailureView look (Terminal strip, Glass tile; tokens only)', () => {
+  const offline = (label = 'dharma') => {
+    const f = roomFailure({
+      serverLabel: label,
+      saved: true,
+      entry: entry({ reach: 'offline', boot: null }),
+      nextCheckAt: 5_000,
+      now: 0,
+    })
+    if (!f) throw new Error('no failure')
+    return f
+  }
+
+  it('is a Glass tile and a Terminal strip on the surface, painted from tokens', () => {
+    const { el, root } = mount(createElement(RoomFailureView, { failure: offline(), actions: spyActions() }))
+    const alert = el.querySelector<HTMLElement>('[role="alert"]')!
+    // Glass paints [data-material="tile"] (radius, edge, sheen, shadow);
+    // Terminal ignores it and keeps the square strip with a bottom rule.
+    expect(alert.getAttribute('data-material')).toBe('tile')
+    expect(alert.className).toContain('bg-[var(--color-bg-surface)]')
+    expect(alert.className).toContain('rounded-[var(--radius-box)]')
+    expect(alert.className).toContain('border-b border-[var(--color-border)]')
+    // No raw colours anywhere; the banner's own text uses the type scale
+    // (the shared Button owns its size).
+    expect(alert.outerHTML).not.toMatch(/#[0-9a-f]{3,6}\b/i)
+    expect(alert.querySelector('div')!.outerHTML).not.toMatch(/text-\[\d+px\]/)
+    const title = el.querySelector<HTMLElement>('[data-room-failure-title]')!
+    expect(title.className).toContain('text-[var(--color-text-primary)]')
+    const detail = el.querySelector<HTMLElement>('[data-room-failure-detail]')!
+    expect(detail.textContent).toBe('Next try in 5 s.')
+    expect(detail.className).toContain('text-[var(--color-text-muted)]')
+    act(() => root.unmount())
+    el.remove()
+  })
+
+  it('the action is the shared quiet Button (pill in Glass, cut corners in Terminal), not accent text', () => {
+    const { el, root } = mount(createElement(RoomFailureView, { failure: offline(), actions: spyActions() }))
+    const b = button(el)
+    expect(b.getAttribute('data-k2-chamfer')).toBe('control')
+    expect(b.className).toContain('rounded-[var(--radius-field)]')
+    expect(b.className).toContain('border-[var(--color-control-edge)]')
+    expect(b.className).toContain('k2-focus')
+    expect(b.className).not.toContain('text-[var(--color-accent)]')
+    act(() => root.unmount())
+    el.remove()
+  })
+
+  it('a long server name wraps the title (two lines at most) and truncates the button label', () => {
+    const long = 'a-very-long-server-name-that-would-push-the-button-off-the-edge.k2.dev'
+    const failure = roomFailure({ serverLabel: long, saved: true, entry: entry({ auth: 'signin-required' }) })!
+    const { el, root } = mount(createElement(RoomFailureView, { failure, actions: spyActions() }))
+    const title = el.querySelector<HTMLElement>('[data-room-failure-title]')!
+    expect(title.className).toContain('line-clamp-2')
+    expect(title.className).toContain('[overflow-wrap:anywhere]')
+    expect(title.getAttribute('title')).toBe(`Sign in to ${long}.`)
+    const b = button(el)
+    expect(b.className).toContain('max-w-[45%]')
+    // Narrow (under 32rem): the button drops under the text, full width.
+    expect(el.querySelector('[role="alert"]')!.className).toContain('@container')
+    expect(el.querySelector('[data-room-failure-title]')!.parentElement!.className).toContain('@max-[32rem]:basis-full')
+    expect(b.className).toContain('@max-[32rem]:max-w-full')
+    expect(b.className).toContain('flex-shrink-0')
+    expect(b.getAttribute('title')).toBe(`Sign in to ${long}`)
+    expect(b.querySelector('span')?.className).toContain('truncate')
+    act(() => root.unmount())
+    el.remove()
+  })
+
+  it('every kind with an action renders its one quiet button; removed renders none', () => {
+    const kinds: Array<Partial<HostEntry> | undefined> = [
+      undefined,
+      { reach: 'offline', boot: null },
+      { reach: 'starting' },
+      { auth: 'signing-in' },
+      { auth: 'signin-required' },
+      { auth: 'rotate-required' },
+      { auth: 'kicked' },
+      { boot: null },
+      { role: 'viewer' },
+    ]
+    for (const patch of kinds) {
+      const failure = roomFailure({ serverLabel: 'dharma', saved: true, entry: patch ? entry(patch) : undefined })!
+      const { el, root } = mount(createElement(RoomFailureView, { failure, actions: spyActions() }))
+      expect(el.querySelectorAll('[data-room-failure-action]'), failure.kind).toHaveLength(1)
+      expect(button(el).getAttribute('data-k2-chamfer'), failure.kind).toBe('control')
+      act(() => root.unmount())
+      el.remove()
+    }
+    const removed = roomFailure({ serverLabel: 'dharma', saved: false, entry: undefined })!
+    const { el, root } = mount(createElement(RoomFailureView, { failure: removed, actions: spyActions() }))
+    expect(el.querySelector('[data-room-failure-action]')).toBeNull()
+    act(() => root.unmount())
+    el.remove()
+  })
+})
+
 describe('RoomFailureGate (the pool drives it)', () => {
+  it('floats the banner off the room by the pane gap (0 in Terminal, a tile gap in Glass)', () => {
+    setEntry(entry({ reach: 'offline', boot: null }))
+    const { el, root } = mount(createElement(RoomFailureGate, { hostKey: KEY, actions: spyActions() }, createElement('p', null, 'x')))
+    expect(el.querySelector('[data-room-failing]')?.className).toContain('gap-[var(--gap-pane)]')
+    act(() => root.unmount())
+  })
+
   it('a usable server renders the room as is', () => {
     setEntry(entry({}))
     const actions = spyActions()

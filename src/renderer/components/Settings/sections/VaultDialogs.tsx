@@ -25,6 +25,7 @@ import { fromBase64, toBase64, vaultApi, type VaultAuditRow, type VaultPreset, t
 import {
   ADD_KINDS,
   actorWords,
+  agentUseWords,
   auditActionWords,
   ceilingChoices,
   deliveryChoices,
@@ -33,6 +34,7 @@ import {
   deliveryReadable,
   isMultilineKind,
   REVEAL_SHOW_MS,
+  sourceWords,
   whenWords,
   withCurrent,
 } from './vault-copy'
@@ -1017,11 +1019,23 @@ export function HistoryDialog({ secret, onClose }: { secret: VaultSecret; onClos
   }, [secret.id, nonce])
   return (
     <Sheet title={`History of ${secret.name}`} intro="Every save, change and use, newest first." onClose={onClose} testId="vault-history-panel">
-      {secret.ref ? (
-        <Surface chamfer material="tile">
-          <CopyLine label="Reference agents can use" value={secret.ref} testId="vault-ref" />
-        </Surface>
-      ) : null}
+      <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]" data-testid="vault-history-facts">
+        <div className="px-4 py-2.5">
+          <p className="type-hint text-[var(--color-text-secondary)]">Where it came from</p>
+          <p className={SETTING_ROW_LABEL}>
+            {sourceWords(secret)}. It’s on version {secret.latestVersion}.
+          </p>
+        </div>
+        <div className="px-4 py-2.5">
+          <p className="type-hint text-[var(--color-text-secondary)]">What agents can do</p>
+          <p className={SETTING_ROW_LABEL}>
+            {secret.status === 'disabled'
+              ? 'Nothing: it’s off until you turn it on.'
+              : `They can ${agentUseWords(secret.defaultDelivery)}. Change it with How agents get it.`}
+          </p>
+        </div>
+        {secret.ref ? <CopyLine label="Reference agents can use" value={secret.ref} testId="vault-ref" /> : null}
+      </Surface>
       {error ? (
         <FailedNote what="Couldn’t load the history." detail={error} next="The secret is fine. Try again in a moment." />
       ) : rows === null ? (

@@ -1,7 +1,8 @@
 // Settings → Vault → Incoming / Sent (prd-agent-secret-handoff-v1 §10.3).
 //
 // Secrets agents handed to each other, by name: who sent what to whom, its
-// status, when, and the delivery id that matches the audit lines. A person
+// status and when (the delivery id that matches the audit lines is the
+// line's title). A person
 // decides pending incoming rows here (Accept / Accept as… / Decline), the
 // same call as the Thread card. Never a value: the daemon's rows hold none.
 // Layout: the Settings card group, one row per delivery; Replace (which
@@ -12,33 +13,50 @@ import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { Button, Input, Tag, type TagTone } from '@/components/ui'
 import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { ConfirmSheet } from './AccessDialogs'
-import { handoffApi, shortDelivery, splitPeer, type HandoffView } from './handoff-api'
-import { deliveryLabel, whenWords } from './vault-copy'
+import { handoffApi, splitPeer, type HandoffView } from './handoff-api'
+import { agentUseWords, deliveryReadable, whenWords } from './vault-copy'
 import type { ServerScope } from '@/kessel/server-scope'
 
 const NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/
 
-const STATUS: Record<string, { label: string; tone: TagTone }> = {
+/** States a person must notice get a tag (sentence case); the rest are
+ *  words at the start of the row's quiet line. */
+const IN_TAG: Record<string, { label: string; tone: TagTone }> = {
   pending: { label: 'Waiting for you', tone: 'warn' },
   held: { label: 'Held for the owner', tone: 'warn' },
-  landed: { label: 'In the vault', tone: 'ok' },
-  declined: { label: 'Declined', tone: 'muted' },
   expired: { label: 'Expired', tone: 'muted' },
-  unsent: { label: 'Taken back', tone: 'muted' },
-  unknown: { label: 'No answer yet', tone: 'muted' },
-  refused: { label: 'Refused', tone: 'danger' },
+}
+const OUT_TAG: Record<string, { label: string; tone: TagTone }> = {
+  expired: { label: 'Expired', tone: 'muted' },
 }
 
-function StatusTag({ status }: { status: string }): React.JSX.Element {
-  const s = STATUS[status] ?? { label: status, tone: 'muted' as TagTone }
-  return <Tag tone={s.tone}>{s.label}</Tag>
+const STATUS_WORDS: Record<string, string> = {
+  landed: 'Accepted',
+  declined: 'Declined',
+  unsent: 'Taken back',
+  unknown: 'No answer yet',
+  refused: 'Refused',
+  pending: 'Not accepted yet',
+  held: 'Held for their owner',
 }
 
-/** What accepting gives the receiving agent (accepting is consent): how it
- *  gets it, and the most its agents may take it as without asking again. */
-function consentWords(delivery: string, ceiling: string): string {
-  const more = ceiling && ceiling !== delivery ? ` Later its agents may take it as far as “${deliveryLabel(ceiling)}” without asking you again.` : ''
-  return `If you accept, the agent gets it this way: ${deliveryLabel(delivery)}.${more}`
+function StatusTag({ status, tags }: { status: string; tags: Record<string, { label: string; tone: TagTone }> }): React.JSX.Element | null {
+  const t = tags[status]
+  return t ? (
+    <Tag tone={t.tone} data-case="as-written">
+      {t.label}
+    </Tag>
+  ) : null
+}
+
+/** What accepting lets the receiving workspace's agents do (accepting is
+ *  consent), and how far they may go later without asking again. */
+function consentWords(workspace: string, delivery: string, ceiling: string): string {
+  const more =
+    ceiling && ceiling !== delivery && deliveryReadable(ceiling) && !deliveryReadable(delivery)
+      ? ' Later they may read it without asking you again.'
+      : ''
+  return `If you accept, ${workspace}’s agents can ${agentUseWords(delivery)}.${more}`
 }
 
 function peerWords(peer: string): string {
@@ -46,15 +64,31 @@ function peerWords(peer: string): string {
   return host ? `${agent} on ${host}` : agent
 }
 
-/** "From sales on lab.example.com to ops · 10 Nov 08:30 · hd_7f3c…" */
-function WhoLine({ from, to, at, id }: { from: string; to: string; at: string; id: string }): React.JSX.Element {
+/** One quiet line: "Accepted by alex · from sales on lab.example.com to ops ·
+ *  10 Nov 08:30". The delivery id (what audit lines quote) is its title. */
+function WhoLine({
+  from,
+  to,
+  at,
+  id,
+  status,
+  tags,
+  decidedBy,
+}: {
+  from: string
+  to: string
+  at: string
+  id: string
+  status: string
+  tags: Record<string, { label: string; tone: TagTone }>
+  decidedBy?: string | null
+}): React.JSX.Element {
+  const words = tags[status] ? '' : (STATUS_WORDS[status] ?? '')
+  const lead = words ? `${words}${decidedBy && status !== 'pending' ? ` by ${decidedBy}` : ''} · from` : 'From'
   return (
-    <p className={SETTING_ROW_HINT}>
-      From {from} to {to}
-      {at ? ` · ${whenWords(at)}` : ''} ·{' '}
-      <span className="font-mono" title={`Delivery ${id}: the id in the audit log`}>
-        {shortDelivery(id)}
-      </span>
+    <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed truncate" title={`Delivery ${id}, as the audit log names it`}>
+      {lead} {from} to {to}
+      {at ? ` · ${whenWords(at)}` : ''}
     </p>
   )
 }
@@ -74,6 +108,7 @@ function IncomingRow({
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [failed, setFailed] = useState<'accept' | 'decline'>('accept')
   const nameId = useId()
 
   const decide = async (body: { action: 'accept' | 'decline'; as?: string; replace?: boolean }): Promise<void> => {
@@ -89,8 +124,8 @@ function IncomingRow({
         setClash(true)
         setRenaming(true)
       }
-      const what = body.action === 'decline' ? 'Couldn’t decline it' : 'Couldn’t accept it'
-      setError(`${what}. The server said: ${daemonErrorText(e).trim().replace(/[.\s]+$/, '')}.`)
+      setError(daemonErrorText(e).trim().replace(/[.\s]+$/, ''))
+      setFailed(body.action)
     } finally {
       setBusy(false)
     }
@@ -98,7 +133,7 @@ function IncomingRow({
 
   const pending = row.status === 'pending'
   const shownName = row.landedName && row.status === 'landed' ? row.landedName : row.name
-  const consent = pending && row.landsAs ? consentWords(row.landsAs.delivery, row.landsAs.ceiling) : null
+  const consent = pending && row.landsAs ? consentWords(row.workspace, row.landsAs.delivery, row.landsAs.ceiling) : null
   const nameOk = NAME_RE.test(name.trim())
   return (
     <div className="px-4 py-3" data-testid="vault-incoming-row" data-delivery={row.deliveryId} data-status={row.status}>
@@ -106,17 +141,23 @@ function IncomingRow({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="type-name font-mono text-[var(--color-text-primary)]">{shownName}</span>
-            <StatusTag status={row.status} />
+            <StatusTag status={row.status} tags={IN_TAG} />
           </div>
-          <WhoLine from={peerWords(row.peer)} to={row.workspace} at={row.createdAt} id={row.deliveryId} />
+          <WhoLine
+            from={peerWords(row.peer)}
+            to={row.workspace}
+            at={row.createdAt}
+            id={row.deliveryId}
+            status={row.status}
+            tags={IN_TAG}
+            decidedBy={row.decidedBy}
+          />
           {row.note ? <p className={`${SETTING_ROW_HINT} whitespace-pre-wrap break-words`}>Their note: “{row.note}”</p> : null}
           {consent ? (
             <p className={SETTING_ROW_HINT} data-testid="vault-incoming-consent">
               {consent}
             </p>
           ) : null}
-          {row.status === 'landed' && row.ref ? <p className={`${SETTING_ROW_HINT} font-mono select-all`}>{row.ref}</p> : null}
-          {row.decidedBy && !pending ? <p className={SETTING_ROW_HINT}>Decided by {row.decidedBy}</p> : null}
         </div>
         {pending ? (
           <div className="flex items-center gap-2 flex-shrink-0">
@@ -175,9 +216,12 @@ function IncomingRow({
         </form>
       ) : null}
       {error ? (
-        <p role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-2 leading-relaxed max-w-[75ch]">
-          {error} Nothing changed; try again.
-        </p>
+        <div role="alert" className="mt-2 max-w-[75ch]">
+          <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed">
+            Couldn’t {failed} {row.name}. Nothing changed{clash ? '; pick another name or replace the one there.' : '; you can try again.'}
+          </p>
+          <p className={SETTING_ROW_HINT}>The server said: {error}.</p>
+        </div>
       ) : null}
       {confirmReplace ? (
         <ConfirmSheet
@@ -281,11 +325,11 @@ export function SentList({ scope }: { scope: ServerScope }): React.JSX.Element {
     >
       {rows?.map((r) => (
         <div key={r.deliveryId} className="px-4 py-3" data-testid="vault-sent-row" data-status={r.status}>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="type-name font-mono text-[var(--color-text-primary)]">{r.name}</span>
-            <StatusTag status={r.status} />
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="type-name font-mono text-[var(--color-text-primary)] truncate">{r.name}</span>
+            <StatusTag status={r.status} tags={OUT_TAG} />
           </div>
-          <WhoLine from={r.workspace} to={peerWords(r.peer)} at={r.createdAt} id={r.deliveryId} />
+          <WhoLine from={r.workspace} to={peerWords(r.peer)} at={r.createdAt} id={r.deliveryId} status={r.status} tags={OUT_TAG} decidedBy={r.decidedBy} />
           {r.note ? <p className={`${SETTING_ROW_HINT} whitespace-pre-wrap break-words`}>Note sent with it: “{r.note}”</p> : null}
         </div>
       ))}

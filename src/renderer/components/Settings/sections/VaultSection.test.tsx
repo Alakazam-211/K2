@@ -271,16 +271,19 @@ describe('VaultSection', () => {
     expect(screen.getByTestId('vault-recovery-banner')).toBeTruthy()
   })
 
-  it('groups Server / each workspace / chats; badges readable delivery; warns on mixed scripts', async () => {
+  it('groups Server / each workspace / chats; says when agents can read it; warns on mixed scripts', async () => {
     await renderPage()
     const groups = screen.getAllByTestId('vault-group').map((g) => g.getAttribute('data-group'))
     expect(groups).toEqual(['server', 'ws:sales', 'session'])
-    expect(within(row('SERVER_TOKEN')).getByTestId('vault-agent-can-see').textContent).toBe('Agents can read it')
+    expect(within(row('SERVER_TOKEN')).getByTestId('vault-agent-can-see').textContent).toBe(' · agents can read it')
+    // Plain words in the quiet line, not a tag; no delivery mechanism, source or version in the row.
+    expect(row('SERVER_TOKEN').querySelector('.k2-tag')).toBeNull()
+    expect(row('STRIPE_KEY').textContent).not.toMatch(/version|Added by|K2 adds it/)
     expect(within(row('STRIPE_KEY')).queryByTestId('vault-agent-can-see')).toBeNull()
     const chat = row('CHAT_KEY')
     expect(chat.textContent).toContain('xn--pple-43d.com')
     expect(within(chat).getByTestId('vault-mixed-script').textContent).toContain('mixed scripts')
-    expect(row('STRIPE_KEY').textContent).toContain('only sent to api.stripe.com')
+    expect(row('STRIPE_KEY').textContent).toContain('API key · api.stripe.com')
     // The reference agents use is in the row's history, with Copy.
     menu('STRIPE_KEY', /^History/)
     expect((await screen.findByTestId('vault-ref')).textContent).toBe('k2v://ws/sales/STRIPE_KEY')
@@ -711,15 +714,18 @@ describe('Vault → Incoming / Sent (prd-agent-secret-handoff-v1 §10.3)', () =>
     })
   })
 
-  it('lists incoming rows with peer, status and short id; Accept posts decide and reloads', async () => {
+  it('lists incoming rows with peer and status, no raw ids; Accept posts decide and reloads', async () => {
     await renderPage()
     fireEvent.click(screen.getByRole('tab', { name: 'Incoming' }))
     const rows = await screen.findAllByTestId('vault-incoming-row')
     expect(rows).toHaveLength(2)
     expect(rows[0]!.textContent).toContain('From sales on rosson.k2.dev to ops')
     expect(rows[0]!.textContent).toContain('Waiting for you')
-    expect(rows[0]!.textContent).toContain('hd_1111…')
-    expect(rows[1]!.textContent).toContain('k2v://ws/ops/OLD_KEY')
+    // The delivery id and the reference stay out of the row's text (the id is the line's title).
+    expect(rows[0]!.textContent).not.toContain('hd_1111')
+    expect(rows[0]!.querySelector('[title*="hd_1111aaaa"]')).not.toBeNull()
+    expect(rows[1]!.textContent).not.toContain('k2v://')
+    expect(rows[1]!.textContent).toContain('Accepted by owner · from sales on rosson.k2.dev to ops')
     expect(within(rows[1]!).queryByTestId('vault-incoming-accept')).toBeNull()
     postHandler = (route) => {
       if (route === 'vault/incoming/decide') {
@@ -778,7 +784,6 @@ describe('Vault → Incoming / Sent (prd-agent-secret-handoff-v1 §10.3)', () =>
     requestVaultTab('sent')
     render(<VaultSection scope={primaryScope()} />)
     const rows = await screen.findAllByTestId('vault-sent-row')
-    expect(rows[0]!.textContent).toContain('From sales to ops')
-    expect(rows[0]!.textContent).toContain('In the vault')
+    expect(rows[0]!.textContent).toContain('Accepted · from sales to ops')
   })
 })

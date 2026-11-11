@@ -32,7 +32,7 @@ import { vaultApi, type VaultPreset, type VaultRequest, type VaultSecret, type V
 import { AccessAuditLink } from '../shared/AccessAuditLink'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { useServerSupports } from '@/lib/server-capabilities'
-import { takeRequestedVaultTab } from './handoff-api'
+import { shortDay, takeRequestedVaultTab } from './handoff-api'
 import { IncomingList, SentList } from './HandoffLists'
 import type { ServerScope } from '@/kessel/server-scope'
 import { useActiveHostRole } from './useActiveHostRole'
@@ -47,7 +47,7 @@ import {
   ShareDialog,
   SitesDialog,
 } from './VaultDialogs'
-import { deliveryLabel, groupSecrets, kindLabel, sourceWords, whenWords } from './vault-copy'
+import { groupSecrets, kindLabel, sitesShort, whenWords } from './vault-copy'
 
 export {
   REVEAL_SHOW_MS,
@@ -105,9 +105,26 @@ const OWNER_ONLY_REVEAL = 'Only an Owner or Admin of this server can see a value
 
 type RowAction = 'reveal' | 'rotate' | 'sites' | 'delivery' | 'share' | 'toggle' | 'history' | 'copy' | 'delete'
 
-/** One secret: its name (a person's words first, when it has them), what it
- *  is and where it may go, how agents get it, and where it came from. Show
- *  on the right; everything else in the row's menu, Delete last. */
+/** A state tag a person must notice (Off, Expired, Waiting for you), in
+ *  sentence case so it reads as words, not a shout. */
+export function StateTag({ tone, children, title, testId }: { tone: TagTone; children: string; title?: string; testId?: string }): React.JSX.Element {
+  return (
+    <Tag tone={tone} data-case="as-written" title={title} data-testid={testId}>
+      {children}
+    </Tag>
+  )
+}
+
+/** One quiet line that never wraps: the full text is its title. */
+const QUIET_LINE = 'type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed truncate'
+
+const isPast = (ts: string | null | undefined): boolean => !!ts && Number.isFinite(Date.parse(ts)) && Date.parse(ts) < Date.now()
+
+/** One secret in two short lines: its own words (or name), then quietly
+ *  NAME · kind · sites, and "agents can read it" when they can. A tag only
+ *  for a state to notice (Off, Expired). Where it came from, its version and
+ *  how agents get it are in History and How agents get it. Show value on the
+ *  right; everything else in the row's menu, Delete last. */
 export function SecretRow({
   secret,
   member,
@@ -120,51 +137,45 @@ export function SecretRow({
   onAction: (a: RowAction) => void
 }): React.JSX.Element {
   const off = secret.status === 'disabled'
+  const expired = isPast(secret.expiresAt)
   const sites = secret.hostsDisplay ?? secret.hosts.map((origin) => ({ origin, unicode: '', mixedScript: false }))
+  const siteNames = sites.map((h) => siteLabel(h.origin))
+  const mixed = sites.filter((h) => h.mixedScript)
   const title = secret.description?.trim() || secret.name
+  const facts = [
+    ...(title !== secret.name ? [secret.name] : []),
+    kindLabel(secret.kind),
+    sitesShort(siteNames),
+    ...(secret.expiresAt && !expired ? [`until ${shortDay(secret.expiresAt) || whenWords(secret.expiresAt)}`] : []),
+  ].join(' · ')
   return (
     <div className="px-4 py-3 transition-colors hover:bg-[var(--color-wash-1)]" data-testid="vault-secret-row" data-secret={secret.name}>
-      <div className="flex items-start justify-between gap-6">
+      <div className="flex items-center justify-between gap-6">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap min-w-0">
-            <span className={`type-name ${off ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-primary)]'}`}>{title}</span>
-            {off ? <Tag tone="muted">Off</Tag> : null}
-            {secret.agentCanSee ? (
-              <Tag tone="warn" data-testid="vault-agent-can-see" title="Agents get the value itself, as a file, a variable or printed.">
-                Agents can read it
-              </Tag>
-            ) : null}
+          <div className="flex items-center gap-2 min-w-0">
+            <span className={`type-name truncate ${off ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-primary)]'}`} title={title}>
+              {title}
+            </span>
+            {off ? <StateTag tone="muted" title="Agents can’t use it until you turn it on.">Off</StateTag> : null}
+            {expired ? <StateTag tone="muted" title="Rotate it to give agents a new value.">Expired</StateTag> : null}
           </div>
-          <p className={SETTING_ROW_HINT}>
-            {title !== secret.name ? <span className="font-mono">{secret.name} · </span> : null}
-            {kindLabel(secret.kind)} ·{' '}
-            {sites.length === 0 ? (
-              'no sites'
-            ) : (
-              <>
-                only sent to{' '}
-                {sites.map((h, i) => (
-                  <span key={h.origin}>
-                    {i > 0 ? ', ' : ''}
-                    <span className="font-mono">{siteLabel(h.origin)}</span>
-                    {h.mixedScript && (
-                      <span className="text-[var(--color-status-error-soft)]" data-testid="vault-mixed-script">
-                        {' '}
-                        (mixed scripts{h.unicode ? `; reads as ${h.unicode}` : ''})
-                      </span>
-                    )}
-                  </span>
-                ))}
-              </>
-            )}
+          <p className={QUIET_LINE} title={[facts, siteNames.length > 1 ? `Sites: ${siteNames.join(', ')}` : ''].filter(Boolean).join('\n')}>
+            {facts}
+            {secret.agentCanSee ? (
+              <span data-testid="vault-agent-can-see" title="Agents get the value itself, so they can read it.">
+                {' · agents can read it'}
+              </span>
+            ) : null}
           </p>
-          <p className={SETTING_ROW_HINT}>
-            {off ? 'Off: agents can’t use it' : `Agents: ${deliveryLabel(secret.defaultDelivery)}`} · {sourceWords(secret)} · version {secret.latestVersion}
-            {secret.expiresAt ? ` · until ${whenWords(secret.expiresAt)}` : ''}
-          </p>
+          {mixed.map((h) => (
+            <p key={h.origin} className={`${SETTING_ROW_HINT} text-[var(--color-status-error-soft)]`} data-testid="vault-mixed-script">
+              <span className="font-mono">{siteLabel(h.origin)}</span> uses mixed scripts{h.unicode ? ` and reads as ${h.unicode}` : ''}. Check it’s the site you meant.
+            </p>
+          ))}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <Button
+            variant="quiet"
             onClick={() => onAction('reveal')}
             disabled={member || busy}
             title={member ? OWNER_ONLY_REVEAL : undefined}
@@ -205,17 +216,19 @@ function SystemRow({ secret, onReveal }: { secret: VaultSecret; onReveal: () => 
   const title = secret.description?.trim() || secret.name
   return (
     <div className="px-4 py-3" data-testid="vault-system-row">
-      <div className="flex items-start justify-between gap-6">
+      <div className="flex items-center justify-between gap-6">
         <div className="flex-1 min-w-0">
-          <p className="type-name text-[var(--color-text-primary)]">{title}</p>
-          <p className={SETTING_ROW_HINT}>
-            {title !== secret.name ? <span className="font-mono">{secret.name} · </span> : null}
-            {kindLabel(secret.kind)} · version {secret.latestVersion}
-            {secret.status !== 'active' ? ` · ${secret.status}` : ''}
+          <p className="type-name text-[var(--color-text-primary)] truncate" title={title}>
+            {title}
+          </p>
+          <p className={QUIET_LINE}>
+            {title !== secret.name ? `${secret.name} · ` : ''}
+            {kindLabel(secret.kind)}
+            {secret.status === 'disabled' ? ' · off' : secret.status !== 'active' ? ` · ${secret.status}` : ''}
           </p>
         </div>
         {secret.personReveal && secret.status === 'active' ? (
-          <Button onClick={onReveal} aria-label={`Show the value of ${secret.name}`} data-testid="vault-reveal-start">
+          <Button variant="quiet" onClick={onReveal} aria-label={`Show the value of ${secret.name}`} data-testid="vault-reveal-start">
             Show value
           </Button>
         ) : null}
@@ -226,11 +239,23 @@ function SystemRow({ secret, onReveal }: { secret: VaultSecret; onReveal: () => 
 
 // ── Requests ─────────────────────────────────────────────────────────
 
-const REQUEST_STATUS: Record<string, { label: string; tone: TagTone }> = {
-  pending: { label: 'Waiting', tone: 'warn' },
-  set: { label: 'Saved', tone: 'ok' },
-  void: { label: 'Declined', tone: 'muted' },
+/** Only states a person must notice get a tag; the rest are words. */
+const REQUEST_TAG: Record<string, { label: string; tone: TagTone }> = {
+  pending: { label: 'Waiting for you', tone: 'warn' },
   expired: { label: 'Expired', tone: 'muted' },
+}
+
+/** "Saved by alex · asked by atlas · 2 Nov 11:05" */
+function requestLine(r: VaultRequest): string {
+  const when = whenWords(r.createdAt)
+  const asked = `asked by ${r.requestedBy}`
+  const lead =
+    r.status === 'set'
+      ? `Saved${r.answeredBy ? ` by ${r.answeredBy}` : ''} · ${asked}`
+      : r.status === 'void'
+        ? `Declined${r.answeredBy ? ` by ${r.answeredBy}` : ''} · ${asked}`
+        : `Asked by ${r.requestedBy}`
+  return when ? `${lead} · ${when}` : lead
 }
 
 function RequestsList(): React.JSX.Element {
@@ -277,20 +302,15 @@ function RequestsList(): React.JSX.Element {
       }
     >
       {rows?.map((r) => {
-        const st = REQUEST_STATUS[r.status] ?? { label: r.status, tone: 'muted' as TagTone }
+        const tag = REQUEST_TAG[r.status]
         return (
-          <div key={r.cardId} className="px-4 py-3" data-testid="vault-request-row">
-            <div className="flex items-start justify-between gap-6">
-              <div className="flex-1 min-w-0">
-                <p className="type-name text-[var(--color-text-primary)] font-mono">{r.name}</p>
-                <p className={SETTING_ROW_HINT}>
-                  Asked by {r.requestedBy} · {whenWords(r.createdAt)}
-                  {r.answeredBy ? ` · answered by ${r.answeredBy}` : ''}
-                </p>
-                {r.prompt ? <p className={`${SETTING_ROW_HINT} whitespace-pre-wrap break-words`}>“{r.prompt}”</p> : null}
-              </div>
-              <Tag tone={st.tone}>{st.label}</Tag>
+          <div key={r.cardId} className="px-4 py-3" data-testid="vault-request-row" data-status={r.status}>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="type-name text-[var(--color-text-primary)] font-mono truncate">{r.name}</span>
+              {tag ? <StateTag tone={tag.tone}>{tag.label}</StateTag> : null}
             </div>
+            <p className={QUIET_LINE}>{requestLine(r)}</p>
+            {r.prompt ? <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed whitespace-pre-wrap break-words">“{r.prompt}”</p> : null}
           </div>
         )
       })}
@@ -536,8 +556,8 @@ export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Eleme
           action={<Button onClick={retry}>Try again</Button>}
           testId="vault-not-open"
         >
-          Your secrets are kept safe, but until it opens agents can’t use them and you can’t add or change any. Fix what the server says below, then
-          try again.
+          Your secrets are kept safe, but until it opens agents can’t use them and you can’t add or change any. If your Mac asks for its password,
+          enter it to unlock the keychain; if nothing asks, quit and reopen K2. Then choose Try again.
         </SettingsLoadState>
       </div>
     )
@@ -626,7 +646,8 @@ export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Eleme
         </SettingsGroup>
       ) : null}
 
-      {status && status.open ? <AboutVault status={status} /> : null}
+      {/* Only beside a list: an empty or failed page keeps to its one card. */}
+      {status && status.open && loaded && !error && groups.length > 0 ? <AboutVault status={status} /> : null}
     </div>
   )
 

@@ -22,6 +22,17 @@ export function deliveryLabel(d: string): string {
   return DELIVERY_LABEL[d] ?? d
 }
 
+/** What agents can do with a secret given this way, in plain words (no
+ * mechanism): "use it without seeing it", "read it"… Lower case, so it
+ * reads inside a sentence. */
+export function agentUseWords(d: string): string {
+  if (d === 'fetch' || d === 'proxy') return 'use it without seeing it'
+  if (d === 'agent') return 'sign with it without seeing it'
+  if (d === 'file' || d === 'env' || d === 'api') return 'read it'
+  if (d === 'none') return 'not use it'
+  return 'use it'
+}
+
 /** Can an agent read the value with this delivery? (file, env, api; the
  * daemon's `Delivery::readable`). fetch, proxy and agent never show it. */
 export function deliveryReadable(d: string): boolean {
@@ -99,6 +110,13 @@ export function sourceWords(s: VaultSecret): string {
   }
   if (s.origin.startsWith('adopt:')) return 'Moved in from older K2 storage'
   return `Added by ${originLabel(s)}`
+}
+
+/** A row's sites, short: "api.github.com", "api.github.com +2 more",
+ * "no sites". The full list is in the row's title and Edit sites. */
+export function sitesShort(sites: readonly string[]): string {
+  if (sites.length === 0) return 'no sites'
+  return sites.length === 1 ? sites[0]! : `${sites[0]} +${sites.length - 1} more`
 }
 
 /** "10 Nov 08:30" from an RFC 3339 time (UTC, so tests and servers agree). */

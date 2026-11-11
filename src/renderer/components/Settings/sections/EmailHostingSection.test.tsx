@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   fetchApprovals: vi.fn(),
   disableServer: vi.fn(),
   addDomain: vi.fn(),
+  fetchPreflight: vi.fn(),
 }))
 
 vi.mock('./email-api', async (orig) => ({
@@ -24,6 +25,7 @@ vi.mock('./email-api', async (orig) => ({
   disableServer: (...a: unknown[]) => h.disableServer(...a),
   addDomain: (...a: unknown[]) => h.addDomain(...a),
   fetchDomainDetail: () => new Promise(() => {}),
+  fetchPreflight: (...a: unknown[]) => h.fetchPreflight(...a),
   onWindowServerMailChanged: () => () => {},
 }))
 
@@ -96,7 +98,8 @@ describe('EmailHostingSection', () => {
     render(<EmailHostingSection />)
     fireEvent.click(await screen.findByRole('button', { name: 'Turn off…' }))
     fireEvent.click(screen.getByRole('button', { name: 'Turn off' }))
-    expect(await screen.findByText('The email server is still on.')).toBeTruthy()
+    // The plain line leads; the server's own words follow quietly.
+    expect(await screen.findByText('Couldn’t stop the email server in time.')).toBeTruthy()
     expect(screen.getByTestId('dialog-error').textContent).toMatch(/systemctl stop timed out/)
   })
 
@@ -119,5 +122,22 @@ describe('EmailHostingSection', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Add domain' }).at(-1)!)
     await waitFor(() => expect(h.addDomain).toHaveBeenCalledWith('example.org'))
     expect(await screen.findByTestId('hosting-domain-back')).toBeTruthy()
+  })
+
+  it('keeps Install off while a check must be fixed, and says why', async () => {
+    h.fetchMailStatus.mockResolvedValue({ ...RUNNING, state: 'not-installed', version: null, hostname: null, portPlan: null })
+    h.fetchPreflight.mockResolvedValue({ ok: false, portPlan: 'tls-alpn', checks: [
+      { id: 'os', label: 'This server runs Linux', status: 'pass', detail: '' },
+      { id: 'public-ip', label: 'Public address and reverse DNS', status: 'fail', detail: 'Reverse DNS isn’t set yet' },
+    ] })
+    render(<EmailHostingSection />)
+    expect(await screen.findByTestId('hosting-install-blocked')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Install email server' }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it('says how mail apps connect in words, with the raw plan quiet', async () => {
+    h.fetchMailStatus.mockResolvedValue(RUNNING)
+    render(<EmailHostingSection />)
+    expect(await screen.findByText('Secure connection on port 443')).toBeTruthy()
   })
 })

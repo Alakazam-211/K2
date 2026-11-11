@@ -156,7 +156,7 @@ function ParticipantRow({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 min-w-0">
             <span className={`${SETTING_ROW_LABEL} truncate`}>{name}</span>
-            {isPrimary && <Tag tone="accent">Primary</Tag>}
+            {isPrimary && <Tag tone="accent" data-case="as-written">Primary</Tag>}
             <SaveNote state={saved ? 'saved' : 'idle'} />
           </div>
           <p className={SETTING_ROW_HINT}>{LEVEL_HINT[participant.level]}</p>
@@ -541,7 +541,10 @@ export function InboxAccessPanel({
   }
   return (
     <div className="space-y-2">
-      <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">Workspace access</h3>
+      <div>
+        <p className="type-row text-[var(--color-text-primary)]">Workspace access</p>
+        <p className="type-hint text-[var(--color-text-secondary)] mt-0.5">Which workspaces’ agents can use this address, and what they may do.</p>
+      </div>
       <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">{rows}</div>
       {failure}
 

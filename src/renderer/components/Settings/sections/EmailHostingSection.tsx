@@ -89,7 +89,7 @@ import {
 } from '../controls/SettingControls'
 import { Button, Callout, Checkbox, Input, Surface, Tag } from '@/components/ui'
 import { AccessSheet, CopyLine, DIALOG_FIELD, DIALOG_MUTED, FailedNote, Field } from './AccessDialogs'
-import { HealthWord, StatusDot, type HealthTone } from './ConnectionsParts'
+import { StatusDot, type HealthTone } from './ConnectionsParts'
 import { LinuxOnlyNote } from './LinuxOnlyNote'
 
 export const EMAIL_HOSTING_MANIFEST: SettingEntry[] = [
@@ -225,12 +225,22 @@ function CopyButton({ text, label }: { text: string; label: string }): React.JSX
   )
 }
 
+/** A problem word's ink: the status text colour pulled 30% toward the
+ *  primary text (the Tag's recipe), so it keeps 4.5:1 on a card and on the
+ *  list-row hover band in all four looks (Paper and Veil amber was 3.8:1). */
+const WORD_INK: Record<HealthTone, string> = {
+  ok: 'text-[var(--color-text-primary)]',
+  neutral: 'text-[var(--color-text-secondary)]',
+  warn: 'text-[color-mix(in_srgb,var(--color-status-warn-text)_70%,var(--color-text-primary))]',
+  error: 'text-[color-mix(in_srgb,var(--color-status-error-soft)_70%,var(--color-text-primary))]',
+}
+
 /** A status as a dot and a word: the words carry it, colour only on a problem. */
 function StatusWord({ tone, children }: { tone: HealthTone; children: React.ReactNode }): React.JSX.Element {
   return (
     <span className="inline-flex items-center gap-1.5 type-hint whitespace-nowrap" data-status-word={tone}>
       <StatusDot tone={tone} />
-      <HealthWord tone={tone}>{children}</HealthWord>
+      <span className={`font-medium ${WORD_INK[tone]}`}>{children}</span>
     </span>
   )
 }
@@ -302,28 +312,113 @@ function PreflightRows({ report }: { report: PreflightReport }): React.JSX.Eleme
   )
 }
 
+/** The install steps in plain words (ids from `supervisor::ENABLE_STEPS`). */
+const STEP_WORDS: Record<string, string> = {
+  preflight: 'Check this server',
+  download: 'Download the mail server',
+  verify: 'Check the download is genuine',
+  extract: 'Install the mail server',
+  'system-user': 'Give it its own account on this server',
+  dirs: 'Make folders for mail',
+  config: 'Clear old settings',
+  unit: 'Set it to start with the server',
+  start: 'First start',
+  bootstrap: 'Finish its first-time setup',
+  'restart-normal': 'Restart it normally',
+  'server-config': 'Turn on the mail ports',
+  'service-account': 'Create an account for K2',
+  'api-key': 'Create a key for K2',
+  'recovery-off': 'Remove the setup password',
+  restart: 'Restart with the final settings',
+}
+
 function InstallSteps({ status }: { status: MailStatus }): React.JSX.Element {
   const steps = status.enableProgress?.steps ?? {}
   const current = status.enableProgress?.current
+  const [showDone, setShowDone] = useState(false)
+  const [showLater, setShowLater] = useState(false)
+  const done = ENABLE_STEPS.filter((s) => s.id in steps)
+  const rest = ENABLE_STEPS.filter((s) => !(s.id in steps))
+  // The step working now (or stopped at), then the rest folded away.
+  const nowIdx = Math.max(0, rest.findIndex((s) => s.id === current))
+  const now = rest.slice(0, nowIdx + 1)
+  const later = rest.slice(nowIdx + 1)
+  const row = (s: { id: string; label: string }, isDone: boolean): React.JSX.Element => {
+    const active = current === s.id
+    return (
+      <div key={s.id} className="px-4 py-2.5 flex items-center justify-between gap-6" data-testid="hosting-step">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <StatusDot tone={isDone ? 'ok' : active ? 'warn' : 'neutral'} />
+          <span className={isDone || active ? SETTING_ROW_LABEL : 'type-row text-[var(--color-text-secondary)]'}>{STEP_WORDS[s.id] ?? s.label}</span>
+        </div>
+        <span className="type-hint text-[var(--color-text-secondary)] whitespace-nowrap">
+          {isDone ? 'Done' : active ? (status.state === 'installing' ? 'Working…' : 'Stopped here') : 'Waiting'}
+        </span>
+      </div>
+    )
+  }
   return (
     <>
-      {ENABLE_STEPS.map((s) => {
-        const done = s.id in steps
-        const active = current === s.id
-        return (
-          <div key={s.id} className="px-4 py-2.5 flex items-center justify-between gap-6" data-testid="hosting-step">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <StatusDot tone={done ? 'ok' : active ? 'warn' : 'neutral'} />
-              <span className={done || active ? SETTING_ROW_LABEL : 'type-row text-[var(--color-text-secondary)]'}>{s.label}</span>
-            </div>
-            <span className="type-hint text-[var(--color-text-secondary)] whitespace-nowrap">
-              {done ? 'Done' : active ? (status.state === 'installing' ? 'Working…' : 'Stopped here') : 'Waiting'}
+      {done.length > 0 ? (
+        <button
+          type="button"
+          data-k2-focus=""
+          aria-expanded={showDone}
+          onClick={() => setShowDone((v) => !v)}
+          className={`relative w-full text-left px-4 py-2.5 flex items-center justify-between gap-6 cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
+          data-testid="hosting-steps-done"
+        >
+          <span className="flex items-center gap-2.5 min-w-0">
+            <StatusDot tone="ok" />
+            <span className={SETTING_ROW_LABEL}>
+              {done.length} of {ENABLE_STEPS.length} steps done
             </span>
-          </div>
-        )
-      })}
+          </span>
+          <span className="type-hint text-[var(--color-text-secondary)] whitespace-nowrap">{showDone ? 'Hide' : 'Show'}</span>
+        </button>
+      ) : null}
+      {showDone ? done.map((s) => row(s, true)) : null}
+      {now.map((s) => row(s, false))}
+      {later.length > 0 ? (
+        <button
+          type="button"
+          data-k2-focus=""
+          aria-expanded={showLater}
+          onClick={() => setShowLater((v) => !v)}
+          className={`relative w-full text-left px-4 py-2.5 flex items-center justify-between gap-6 cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
+          data-testid="hosting-steps-later"
+        >
+          <span className="flex items-center gap-2.5 min-w-0">
+            <StatusDot tone="neutral" />
+            <span className="type-row text-[var(--color-text-secondary)]">
+              {later.length} more step{later.length === 1 ? '' : 's'} after this
+            </span>
+          </span>
+          <span className="type-hint text-[var(--color-text-secondary)] whitespace-nowrap">{showLater ? 'Hide' : 'Show'}</span>
+        </button>
+      ) : null}
+      {showLater ? later.map((s) => row(s, false)) : null}
     </>
   )
+}
+
+/** How mail apps reach the server, in words; the raw plan stays quiet. */
+const PORT_PLAN_WORDS: Record<string, string> = {
+  'tls-alpn': 'Secure connection on port 443',
+  'http-01': 'Secure connection, certificate checked over port 80',
+  'dns-01': 'Secure connection, certificate checked through your DNS',
+}
+
+/** A failure in plain words, from what the server said. The server's own
+ *  reason still shows, quietly, under it. */
+function plainFailure(fallback: string, detail: string): string {
+  const d = detail.toLowerCase()
+  if (/timed? ?out|timeout/.test(d) && /stop|systemctl/.test(d)) return 'Couldn’t stop the email server in time.'
+  if (/no soa|does not exist|nxdomain|no such domain/.test(d)) return 'That domain doesn’t exist; check the spelling.'
+  if (/dns|resolver|lookup/.test(d) && /timed? ?out|timeout|unreachable/.test(d)) return 'Couldn’t reach DNS to check the records.'
+  if (/already exists|exists/.test(d)) return 'That domain is already on this server.'
+  if (/locked|busy/.test(d)) return 'The server was busy.'
+  return fallback
 }
 
 function ServerTab({
@@ -413,6 +508,7 @@ function ServerTab({
   }, [hostname, status.hostname, onChanged])
 
   const versionText = status.version ? `Version ${status.version}` : null
+  const mustFix = preflight ? preflight.checks.filter((c) => c.status === 'fail').length : 0
 
   return (
     <div className="space-y-6">
@@ -448,8 +544,16 @@ function ServerTab({
           </FactRow>
         ) : null}
         {status.portPlan ? (
-          <FactRow label="How mail apps connect" hint="Which ports this server answers on. Set when it installed.">
-            <span className="type-hint font-mono text-[var(--color-text-secondary)] whitespace-nowrap">{status.portPlan}</span>
+          <FactRow
+            label="How mail apps connect"
+            hint={
+              <>
+                Chosen when the server installed.{' '}
+                <span className="font-mono text-[var(--color-text-muted)]">{status.portPlan}</span>
+              </>
+            }
+          >
+            <span className="type-row text-[var(--color-text-secondary)] whitespace-nowrap">{PORT_PLAN_WORDS[status.portPlan] ?? 'Secure connection'}</span>
           </FactRow>
         ) : null}
       </SettingsGroup>
@@ -506,14 +610,19 @@ function ServerTab({
               placeholder="mail.example.com"
             />
           </SettingRow>
-          <div className="px-4 py-3 flex items-center justify-end gap-2">
-            <Button variant="accent" size="md" disabled={!canMutate || busy} onClick={() => void doEnable()}>
+          <div className="px-4 py-3 flex items-center justify-end gap-4">
+            {mustFix > 0 ? (
+              <p className="type-hint text-[var(--color-text-secondary)]" data-testid="hosting-install-blocked">
+                Fix the {mustFix === 1 ? 'check' : `${mustFix} checks`} marked Must fix above, then choose Check again.
+              </p>
+            ) : null}
+            <Button variant="accent" size="md" disabled={!canMutate || busy || mustFix > 0 || preflightBusy} onClick={() => void doEnable()}>
               {busy ? 'Installing…' : 'Install email server'}
             </Button>
           </div>
           {enableError ? (
             <div className="px-4 py-3">
-              <FailedNote what="The email server didn’t install." detail={enableError} next="Nothing changed on this server. Fix what it says, then try again." />
+              <FailedNote what={plainFailure("The email server didn’t install.", enableError)} detail={enableError} next="Nothing changed on this server. Fix what it says, then try again." />
             </div>
           ) : null}
         </SettingsGroup>
@@ -558,7 +667,7 @@ function ServerTab({
       ) : null}
 
       {enableError && !notInstalled ? (
-        <FailedNote what="The email server didn’t start." detail={enableError} next="Nothing else changed. Try again in a moment." />
+        <FailedNote what={plainFailure("The email server didn’t start.", enableError)} detail={enableError} next="Nothing else changed. Try again in a moment." />
       ) : null}
 
       {!notInstalled && !installing ? (
@@ -638,7 +747,7 @@ function DisableDialog({ onClose, onDone }: { onClose: () => void; onDone: (warn
       <p className={DIALOG_MUTED}>
         Your mail is kept. Until you turn the server back on, mail sent to your domains bounces, and agents can’t send.
       </p>
-      {error ? <FailedNote what="The email server is still on." detail={error} next="Nothing changed. Try again in a moment." /> : null}
+      {error ? <FailedNote what={plainFailure("The email server is still on.", error)} detail={error} next="It’s still running and nothing changed. Try again in a moment." /> : null}
     </AccessSheet>
   )
 }
@@ -702,7 +811,7 @@ function UninstallDialog({
           <Input id={typedId} className={`${DIALOG_FIELD} font-mono`} value={typed} disabled={busy} onChange={(e) => setTyped(e.target.value)} placeholder={needs} />
         </Field>
       ) : null}
-      {error ? <FailedNote what="The email server wasn’t uninstalled." detail={error} next="It’s still installed and nothing was deleted. Try again in a moment." /> : null}
+      {error ? <FailedNote what={plainFailure("The email server wasn’t uninstalled.", error)} detail={error} next="It’s still installed and nothing was deleted. Try again in a moment." /> : null}
     </AccessSheet>
   )
 }
@@ -768,7 +877,7 @@ function DomainList({
             data-testid="hosting-domain-row"
             data-domain={d.domain}
             onClick={() => onOpen(d.domain)}
-            className={`w-full text-left px-4 py-3 flex items-center justify-between gap-6 cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
+            className={`relative w-full text-left px-4 py-3 flex items-center justify-between gap-6 cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
           >
             <div className="min-w-0">
               <p className="type-name text-[var(--color-text-primary)] truncate">{d.domain}</p>
@@ -850,7 +959,7 @@ function AddDomainDialog({ onClose, onAdded, onExists }: { onClose: () => void; 
             placeholder="example.com"
           />
         </Field>
-        {error ? <FailedNote what={`Couldn’t add ${dom}.`} detail={error} next="Nothing was added. Check the name, then try again." /> : null}
+        {error ? <FailedNote what={plainFailure(`Couldn’t add ${dom}.`, error)} detail={error} next="Nothing was added. Check the name, then try again." /> : null}
       </form>
     </AccessSheet>
   )
@@ -859,33 +968,33 @@ function AddDomainDialog({ onClose, onAdded, onExists }: { onClose: () => void; 
 function RecordRow({ r }: { r: DnsRecordRow }): React.JSX.Element {
   const tag = recordTag(r.status)
   const live = r.live ?? []
+  const instruction = r.category === 'instruction'
   return (
-    <div className="px-4 py-3" data-testid="hosting-record" data-record={r.id}>
-      <div className="flex items-start justify-between gap-6">
-        <div className="min-w-0">
-          <p className={SETTING_ROW_LABEL}>{r.purpose}</p>
-          <p className={`${SETTING_ROW_HINT} break-all`}>
-            {r.category === 'instruction' ? 'Set at your hosting provider for ' : `${r.type} record at `}
+    <div className="px-4 py-2.5" data-testid="hosting-record" data-record={r.id}>
+      <div className="flex items-baseline justify-between gap-6">
+        <p className="min-w-0 truncate">
+          <span className={SETTING_ROW_LABEL}>{r.purpose}</span>
+          <span className="type-hint text-[var(--color-text-secondary)]">
+            {' · '}
+            {instruction ? 'at your hosting provider for ' : `${r.type} at `}
             <span className="font-mono">{r.name}</span>
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <StatusWord tone={tag.tone}>{tag.label}</StatusWord>
-          {r.category !== 'instruction' ? <CopyButton text={r.expected} label={`the ${r.purpose} value`} /> : null}
-        </div>
+          </span>
+        </p>
+        <StatusWord tone={tag.tone}>{tag.label}</StatusWord>
       </div>
-      <p
+      <div
         data-k2-chamfer="control"
-        className="mt-2 type-hint font-mono text-[var(--color-text-secondary)] break-all bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1"
+        className="mt-1.5 flex items-center gap-2 bg-[var(--color-bg)] border border-[var(--color-border)] pl-2 pr-1 py-1"
       >
-        {r.expectedDisplay}
-      </p>
+        <code className="flex-1 min-w-0 type-hint font-mono text-[var(--color-text-secondary)] break-all">{r.expectedDisplay}</code>
+        {!instruction ? <CopyButton text={r.expected} label={`the ${r.purpose} value`} /> : null}
+      </div>
       {r.status === 'wrong' || (r.status === 'missing' && live.length > 0) ? (
-        <div className="mt-2" role="note">
+        <div className="mt-1.5" role="note">
           <p className="type-hint text-[var(--color-status-error-soft)]">
             {r.status === 'wrong'
-              ? 'Your DNS has a different value here. Replace it with the value above, exactly as shown.'
-              : 'Your DNS has other records at this name, but not this one. Add the value above.'}
+              ? 'Your DNS has a different value here. Replace it with the one above, exactly as shown.'
+              : 'Your DNS has other records at this name, but not this one. Add the one above.'}
           </p>
           <p className={`${SETTING_SERVER_REASON} font-mono`}>Now: {live.join(' · ')}</p>
         </div>
@@ -979,7 +1088,7 @@ function DomainDetailView({
       type="button"
       data-k2-focus=""
       onClick={onBack}
-      className="inline-flex items-center gap-1 type-hint text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer outline-none"
+      className="relative inline-flex items-center gap-1 px-1 -mx-1 type-hint text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer outline-none"
       data-testid="hosting-domain-back"
     >
       <svg aria-hidden="true" viewBox="0 0 16 16" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={1.75}>
@@ -1021,12 +1130,12 @@ function DomainDetailView({
           {detail.status === 'verified'
             ? `Verified on ${fmtDay(detail.verifiedAt)}. K2 checks it again every day.`
             : 'It starts working once the mail routing, sender and signing records below check out.'}{' '}
-          Plus addressing is on (name+anything@{detail.domain} reaches name@{detail.domain}); mail to names that don’t exist is
-          refused.
+          Plus addressing is on: mail to name+anything@{detail.domain} still reaches name@{detail.domain}, so an agent can hand
+          out a tagged address without making a new one. Mail to names that don’t exist is refused.
         </p>
       </div>
 
-      {justAdded ? (
+      {justAdded && !checked ? (
         <Callout tone="ok" role="status" className="type-hint" data-testid="hosting-domain-added">
           Added {detail.domain}. Next, add the records below at your domain’s DNS provider, then choose Check now.
         </Callout>
@@ -1041,7 +1150,7 @@ function DomainDetailView({
         title="DNS records"
         hint={`Add these at your domain’s DNS provider, then choose Check now. Changes can take up to 48 hours to show up.${
           toFix > 0 ? ` ${toFix} to fix.` : ''
-        }${detail.lastCheckedAt ? ` Last checked ${fmtWhen(detail.lastCheckedAt)}.` : ''}`}
+        }${checked ? ' Last checked just now.' : detail.lastCheckedAt ? ` Last checked ${fmtWhen(detail.lastCheckedAt)}.` : ''}`}
         card
         testId="hosting-records"
         action={
@@ -1055,13 +1164,18 @@ function DomainDetailView({
       >
         {checkError ? (
           <div className="px-4 py-3">
-            <FailedNote what="Couldn’t check the records." detail={checkError} next="The results below are from the last check. Try again in a moment." />
+            <FailedNote what={plainFailure("Couldn’t check the records.", checkError)} detail={checkError} next="The results below are from the last check. Try again in a moment." />
           </div>
         ) : checked ? (
-          <p className="px-4 py-3 type-hint text-[var(--color-status-ok-soft)]" role="status" data-testid="hosting-checked">
-            Checked just now.{' '}
-            {toFix > 0 ? `${toFix} record${toFix === 1 ? '' : 's'} still to fix.` : detail.status === 'verified' ? 'Everything checks out.' : 'Waiting for the rest to show up.'}
-          </p>
+          <div className="px-4 py-3" role="status" data-testid="hosting-checked">
+            <StatusWord tone={toFix > 0 ? 'warn' : detail.status === 'verified' ? 'ok' : 'neutral'}>
+              {toFix > 0
+                ? `Checked just now: ${toFix} record${toFix === 1 ? '' : 's'} still to fix`
+                : detail.status === 'verified'
+                  ? 'Checked just now: everything checks out'
+                  : 'Checked just now: waiting for the rest to show up'}
+            </StatusWord>
+          </div>
         ) : null}
         {main.map((r) => (
           <RecordRow key={r.id} r={r} />
@@ -1072,7 +1186,7 @@ function DomainDetailView({
             data-k2-focus=""
             aria-expanded={advancedOpen}
             onClick={() => setAdvancedOpen((v) => !v)}
-            className={`w-full text-left px-4 py-3 flex items-center justify-between gap-6 cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
+            className={`relative w-full text-left px-4 py-3 flex items-center justify-between gap-6 cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
           >
             <span className="min-w-0">
               <span className={`block ${SETTING_ROW_LABEL}`}>Optional records ({advanced.length})</span>
@@ -1261,7 +1375,7 @@ function RemoveDomainDialog({ domain, onClose, onDone }: { domain: string; onClo
           <span className={`block ${DIALOG_MUTED}`}>For good. Leave it off to keep the mail on this server.</span>
         </span>
       </label>
-      {error ? <FailedNote what={`${domain} wasn’t removed.`} detail={error} next="Nothing changed. Try again in a moment." /> : null}
+      {error ? <FailedNote what={plainFailure(`${domain} wasn’t removed.`, error)} detail={error} next="Nothing changed. Try again in a moment." /> : null}
     </AccessSheet>
   )
 }
@@ -1485,7 +1599,7 @@ function RetireDialog({ row, onClose, onDone }: { row: AddressRow; onClose: () =
       <p className={DIALOG_MUTED}>
         It stops receiving mail straight away. Its mailbox is kept for a while, then deleted. {row.holderWorkspace ?? 'The agent'} can make another address in its place.
       </p>
-      {error ? <FailedNote what={`${row.address} wasn’t retired.`} detail={error} next="It still works. Try again in a moment." /> : null}
+      {error ? <FailedNote what={plainFailure(`${row.address} wasn’t retired.`, error)} detail={error} next="It still works. Try again in a moment." /> : null}
     </AccessSheet>
   )
 }
@@ -1524,7 +1638,7 @@ function RotateDialog({ row, onClose, onDone }: { row: AddressRow; onClose: () =
       <p className={DIALOG_MUTED}>
         Mail apps signed in with the old password are signed out, and its app passwords stop working. K2 shows the new one once.
       </p>
-      {error ? <FailedNote what="No new password was made." detail={error} next="The old password still works. Try again in a moment." /> : null}
+      {error ? <FailedNote what={plainFailure("No new password was made.", error)} detail={error} next="The old password still works. Try again in a moment." /> : null}
     </AccessSheet>
   )
 }
@@ -1763,7 +1877,7 @@ function DenyDialog({ item, onClose, onDone }: { item: ApprovalItem; onClose: ()
         <Field label="Reason" htmlFor={id} hint="Say what to change, like “Send it to the vendor contact only.”">
           <Input id={id} autoFocus className={DIALOG_FIELD} value={note} disabled={busy} onChange={(e) => setNote(e.target.value)} />
         </Field>
-        {error ? <FailedNote what="The message wasn’t denied." detail={error} next="It’s still waiting for you. Try again in a moment." /> : null}
+        {error ? <FailedNote what={plainFailure("The message wasn’t denied.", error)} detail={error} next="It’s still waiting for you. Try again in a moment." /> : null}
       </form>
     </AccessSheet>
   )

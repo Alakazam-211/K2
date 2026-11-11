@@ -15,7 +15,7 @@ import {
   type InboxWake,
 } from './mail-watch-api'
 
-const muted = 'text-[10px] text-[var(--color-text-muted)]'
+const muted = 'type-hint text-[var(--color-text-secondary)]'
 
 /** Each workspace that can read this inbox (the Primary and its grants). */
 function readers(inbox: Inbox): { projectId: string; name: string }[] {
@@ -55,12 +55,12 @@ export function InboxWakePanel({ inbox, canMutate }: { inbox: Inbox; canMutate: 
 
   return (
     <div className="pt-2 space-y-1">
-      <div className="text-[11px] text-[var(--color-text-secondary)]">Wakes these agents</div>
-      <div className={muted}>Off for every agent until someone chooses. VIP senders are set on the agent's Mail tab.</div>
-      {error && <div className={`${muted} !text-[var(--color-status-warn)]`}>{error}</div>}
+      <div className="type-row text-[var(--color-text-primary)]">Wakes these agents</div>
+      <div className={muted}>Whether new mail here wakes each agent. Off until someone chooses. VIP senders are the people whose mail should reach an agent right away; set them on the agent’s Mail tab.</div>
+      {error && <div data-wake-error="" className="type-hint text-[var(--color-status-error-soft)]">Couldn’t read which agents this address wakes. <span className="text-[var(--color-text-muted)]">The server said: {error.trim().replace(/[.\s]+$/, '')}.</span></div>}
       {people.map((p) => (
         <div key={p.projectId} className="flex items-center justify-between gap-2 py-0.5">
-          <span className="text-[11px] text-[var(--color-text-primary)] truncate">{p.name}</span>
+          <span className="type-row text-[var(--color-text-primary)] truncate">{p.name}</span>
           <SettingDropdown
             value={wakeValue(wakes?.[p.projectId] ?? null)}
             options={WAKE_OPTIONS}

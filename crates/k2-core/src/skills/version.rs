@@ -331,7 +331,10 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// `k2 thread withdraw` their own obsolete cards (`void` is the old name),
 /// and a person's dismiss turn means "not needed now", never a denial.
 /// Bumped to 55 (0.46.11): the Projects block names `k2 project view`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 55;
+/// Bumped to 56 (0.46.12): hiring and sidecars are two switches; the
+/// Sessions block names "Let this agent manage its sidecars" and "Let this
+/// agent hire agents".
+pub const SKILL_VERSION_WORKSPACE: u32 = 56;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

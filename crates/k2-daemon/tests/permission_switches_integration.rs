@@ -160,6 +160,8 @@ fn rows() -> Vec<Row> {
         }),
         access_row!("compute.manage", "compute_manage", true, |w| s::agents_can_manage_compute(&w.id)),
         access_row!("agents.manage", "agents_manage", false, |w| s::agents_can_manage_agents(&w.id)),
+        // 0.46.12: hiring is its own switch.
+        access_row!("agents.hire", "agents_hire", false, |w| s::agents_can_hire_agents(&w.id)),
         access_row!("apps.build", "apps_build", true, |w| s::agents_app_switches(&w.id).0),
         access_row!("apps.manage-full", "apps_manage_full", true, |w| s::agents_app_switches(&w.id).1),
         Row {
@@ -301,7 +303,60 @@ async fn every_e1_switch_applies_the_same_through_the_card_and_settings() {
         assert_eq!(((row.state)(&a), (row.state)(&b)), (true, true), "{}: the same state through both doors", row.action);
         done.push(row.action);
     }
-    assert_eq!(done.len(), 15, "{done:?}");
+    assert_eq!(done.len(), 16, "{done:?}");
+
+    // ── hiring and sidecars: two switches (0.46.12) ─────────────────
+    // Each alone opens only its own system; the other one's refusal names
+    // its own action on the agent's Ask with: line. This passport has no
+    // live session, so past a switch it is refused as not the main session
+    // (the live allows are in it_sessions' sidecar_cli_integration).
+    let sp = workspace(&home, "e1split", true);
+    let r = post(port, "/cli/agent-access/set", OWNER, Some(json!({ "toggle": "permission_cards", "workspace": sp.id, "value": true }))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let sid = SessionId::new();
+    let passport = k2_daemon::session_token::mint_session_token(
+        &sid,
+        "pane-e1-split",
+        HookPrincipal { workspace_uuid: sp.id.clone(), agent_address: sp.handle.clone() },
+        CredMode::ApiKey,
+        Provider::Anthropic,
+    );
+    let hired = home.join("hired-split");
+    let hire = json!({ "path": hired.to_string_lossy(), "name": "Split" });
+    let sidecar = json!({ "name": "helper", "harness": "claude" });
+    let set = |toggle: &'static str, value: bool| {
+        let body = json!({ "toggle": toggle, "workspace": sp.id, "value": value });
+        async move { post(port, "/cli/agent-access/set", OWNER, Some(body)).await }
+    };
+    let ask_line = |v: &Value| v["permission"]["command"].as_str().unwrap_or_else(|| panic!("no Ask with: line: {v}")).to_string();
+    // Sidecars on, hiring off: the hire is refused and teaches agents.hire.
+    assert_eq!(set("agents_manage", true).await.status, 200);
+    let r = post(port, "/cli/agents/hire", &passport, Some(hire.clone())).await;
+    let v = json_of(&r);
+    assert_eq!((r.status, v["error"]["code"].as_str()), (403, Some("hire_off")), "{}", r.body);
+    assert_eq!(v["permission"]["action"], "agents.hire", "{v}");
+    assert!(ask_line(&v).starts_with("k2 permission request agents.hire"), "{v}");
+    assert!(!hired.exists(), "nothing hired");
+    let r = post(port, "/cli/sidecar/new", &passport, Some(sidecar.clone())).await;
+    assert_eq!((r.status, json_of(&r)["error"]["code"].as_str()), (403, Some("forbidden")), "past the sidecars switch: {}", r.body);
+    // Hiring on, sidecars off: the sidecar is refused and teaches agents.manage.
+    assert_eq!(set("agents_manage", false).await.status, 200);
+    assert_eq!(set("agents_hire", true).await.status, 200);
+    assert!(k2_core::workspace::settings::agents_can_hire_agents(&sp.id) && !k2_core::workspace::settings::agents_can_manage_agents(&sp.id));
+    let r = post(port, "/cli/sidecar/new", &passport, Some(sidecar.clone())).await;
+    let v = json_of(&r);
+    assert_eq!((r.status, v["error"]["code"].as_str()), (403, Some("gated")), "{}", r.body);
+    assert_eq!(v["permission"]["action"], "agents.manage", "{v}");
+    assert!(ask_line(&v).starts_with("k2 permission request agents.manage"), "{v}");
+    let r = post(port, "/cli/agents/hire", &passport, Some(hire.clone())).await;
+    assert_eq!((r.status, json_of(&r)["error"]["code"].as_str()), (403, Some("main_only")), "past the hire switch: {}", r.body);
+    assert!(!hired.exists(), "nothing hired");
+    // A passport never flips either switch itself.
+    for toggle in ["agents_hire", "agents_manage"] {
+        let r = post(port, "/cli/agent-access/set", &passport, Some(json!({ "toggle": toggle, "workspace": sp.id, "value": true }))).await;
+        assert_eq!(r.status, 403, "{toggle}: {}", r.body);
+    }
+    assert!(!k2_core::workspace::settings::agents_can_manage_agents(&sp.id), "still off");
 
     // ── connections.add: one connection, through both doors ──────────
     let a = workspace(&home, "e1conn-a", true);

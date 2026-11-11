@@ -3,8 +3,10 @@
 //! - `POST /cli/sidecar/new`   — open (or resume) a named sidecar.
 //! - `GET  /cli/sidecar/list`  — the workspace's sidecars, live and asleep.
 //! - `POST /cli/sidecar/stop`  — stop the process, keep everything else.
-//! - `POST /cli/agent-access/set` — the "Allow hiring and managing agents"
-//!   switch (Owner/Admin only; not an agent verb).
+//! - `POST /cli/agent-access/set` — the Agent tab's switches, among them
+//!   "Let this agent manage its sidecars" (`agents_manage`) and, since
+//!   0299, "Let this agent hire agents" (`agents_hire`) (Owner/Admin only;
+//!   not an agent verb).
 //!
 //! The daemon owns the whole job (SC2). A sidecar is an ordinary
 //! `tab-<pane group>` harness session spawned in-process through
@@ -468,7 +470,7 @@ pub(crate) fn require_credential(caller: &Caller) -> Result<(), SidecarError> {
     }
 }
 
-pub(crate) const GATED_HINT: &str = "Ask your human to turn on 'Allow hiring and managing agents' in Settings → Workspaces / Agents → {ws} → Agent (or run k2 sidecar access on --workspace {ws} as the owner).";
+pub(crate) const GATED_HINT: &str = "Ask your human to turn on 'Let this agent manage its sidecars' in Settings → Workspaces / Agents → {ws} → Agent (or run k2 sidecar access on --workspace {ws} as the owner).";
 
 /// The interim agent gate (§7.3 rules 1–3). Rule 5 (no more power) is
 /// checked once the preset is known.
@@ -1346,6 +1348,7 @@ fn handle_list(
         "cap": core::cap(),
         "live": live,
         "agentsCanManage": k2_core::workspace::settings::agents_can_manage_agents(&ws.id),
+        "agentsCanHire": k2_core::workspace::settings::agents_can_hire_agents(&ws.id),
         "worktrees": { "open": open_worktrees, "cap": core::cap() },
         "sidecars": sidecars,
     }))
@@ -1744,6 +1747,7 @@ fn handle_access(
     let v = json_body(body)?;
     let toggle = str_field(&v, "toggle").unwrap_or("");
     if toggle != "agents_manage"
+        && toggle != "agents_hire"
         && toggle != "compute"
         && toggle != "vault_manage"
         && toggle != "compute_operate"
@@ -1769,7 +1773,7 @@ fn handle_access(
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'chat_refresh', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'desktop', 'app_users', 'gardens_manage', 'org_chart_manage', 'permission_cards', 'projects_manage', 'sim', 'vault_manage' or 'voice_transcripts'",
+            "toggle must be 'agents_hire', 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'chat_refresh', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'desktop', 'app_users', 'gardens_manage', 'org_chart_manage', 'permission_cards', 'projects_manage', 'sim', 'vault_manage' or 'voice_transcripts'",
         ));
     }
     if toggle == "app_core" || toggle == "app_review" {
@@ -2166,6 +2170,18 @@ fn handle_access(
         return Ok((
             serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "gardens_manage", "agentsCanManageGardens": value }),
             format!("ok {} gardens_manage={value}", ws.handle),
+        ));
+    }
+    if toggle == "agents_hire" {
+        // "Let this agent hire agents" (0299, 0.46.12): split from
+        // `agents_manage`, which now covers only its sidecars. Same single
+        // writer, same Owner/Admin floor; an agent never reaches here.
+        k2_core::workspace::settings::set_agents_can_hire_agents(&ws.id, value)
+            .map_err(|e| err("workspace_not_found", 404, e))?;
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "agents_hire", "agentsCanHire": value }),
+            format!("ok {} agents_hire={value}", ws.handle),
         ));
     }
     if toggle == "vault_manage" {

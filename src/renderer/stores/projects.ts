@@ -279,10 +279,16 @@ interface Project {
   // Per-workspace agents-may-manage-hosted-mail (0/1, default 0).
   // No global master. Written via POST /cli/mail-manage (not workspace/set).
   mailManageEnabled?: number
-  // k2 sidecar v1 — "Allow hiring and managing agents" (0/1, default 0).
-  // Lets the main agent open and stop sidecars. Written via POST
-  // /cli/agent-access/set (Admin; not workspace/set).
+  // k2 sidecar v1 — "Let this agent manage its sidecars" (0/1, default 0;
+  // until 0.46.12 "hire and manage agents"). Lets the main agent open and
+  // stop sidecars. Written via POST /cli/agent-access/set `toggle:
+  // 'agents_manage'` (Admin; not workspace/set).
   agentsCanManageAgents?: number
+  // "Let this agent hire agents" (0/1, default 0; migration 0299, on
+  // wherever agentsCanManageAgents was on). Lets the main agent run
+  // `k2 agent hire`. Written via POST /cli/agent-access/set `toggle:
+  // 'agents_hire'` (Admin). Absent on daemons before 0.46.12 (reads off).
+  agentsCanHireAgents?: number
   // K2 vault (prd-k2-vault-v1 §16.1, 0146) — "Allow managing server-wide
   // secrets" (0/1, default 0). Written via POST /cli/agent-access/set
   // `toggle: 'vault_manage'` (Admin; not workspace/set).

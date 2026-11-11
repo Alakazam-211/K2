@@ -6603,11 +6603,12 @@ RULES
   At most 8 live sidecars per workspace.
 
 WHO
-  Agents: only the main session, only with "Allow hiring and managing
-  agents" on, only its own workspace, only presets, never more power
+  Agents: only the main session, only with "Let this agent manage its
+  sidecars" on, only its own workspace, only presets, never more power
   than itself; it stops only sidecars an agent opened. Sidecars cannot
-  open sidecars. Where agents run as the owner's user, these are
-  guardrails, not locks.
+  open sidecars. Hiring a new agent (k2 agent hire) is a separate
+  switch, "Let this agent hire agents" (agents.hire). Where agents run
+  as the owner's user, these are guardrails, not locks.
 
 HANDBACK
   Write in the brief: "when done, k2 msg <primary> with a summary".
@@ -6687,8 +6688,8 @@ THE MAIN CHAT
 WHO MAY
   Reading (list, past, show): any session, its own workspace only. A
   sandboxed session sees the list only.
-  Opening, starting, stopping: the main session only, with "Allow hiring and
-  managing agents" on (exit 3 gated, or main_only: ask main with k2 msg <ws>).
+  Opening, starting, stopping: the main session only, with "Let this agent
+  manage its sidecars" on (exit 3 gated, or main_only: ask main with k2 msg <ws>).
   An agent never opens a session with more power than itself.
 
 EXIT CODES

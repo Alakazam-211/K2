@@ -9,7 +9,9 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/activity/events", Member),
     // prd-daemon-activity-and-thread-working-v1 RL3: rows + rollups + seq.
     get("/cli/activity/snapshot", Member),
-    // k2 sidecar v1: the "Allow hiring and managing agents" switch.
+    // The Agent tab's switches, among them "Let this agent manage its
+    // sidecars" (`agents_manage`) and "Let this agent hire agents"
+    // (`agents_hire`, 0299).
     post("/cli/agent-access/set", Admin),
     // Agent hire (0.45.6): instances list + recipe hire + teardown are
     // Admin (T7); links GET is Member (a passport sees its own workspace).

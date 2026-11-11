@@ -166,10 +166,11 @@ pub struct Project {
     /// access stay owner-only even when this is ON.
     #[serde(default)]
     pub mail_manage_enabled: i64,
-    /// k2 sidecar v1 (migration 0132) — "Allow hiring and managing
-    /// agents". 1 = this workspace's main agent may open and stop
-    /// sidecars (`k2 sidecar new|stop`); 0 (default) = deny. Written
-    /// only by `POST /cli/agent-access/set` (Admin). Fail-closed.
+    /// k2 sidecar v1 (migration 0132) — "Let this agent manage its
+    /// sidecars" (until 0299 "Allow hiring and managing agents"). 1 = this
+    /// workspace's main agent may open and stop sidecars (`k2 sidecar
+    /// new|stop`); 0 (default) = deny. Written only by `POST
+    /// /cli/agent-access/set {toggle: "agents_manage"}` (Admin). Fail-closed.
     #[serde(default)]
     pub agents_can_manage_agents: i64,
     /// K2 vault (migration 0149) — "Allow managing server-wide secrets"
@@ -247,6 +248,15 @@ pub struct Project {
     /// owner or an Admin). Read by its own query, never in the main SELECT.
     #[serde(default)]
     pub agents_can_refresh_chat: i64,
+    /// "Let this agent hire agents" (`agents_hire`, migration 0299,
+    /// 0.46.12). DEFAULT 0 (off); 0299 turned it on wherever
+    /// `agents_can_manage_agents` was on. Read-only here (the Agent tab
+    /// shows it); written only by `POST /cli/agent-access/set {toggle:
+    /// "agents_hire"}` (Owner/Admin). Read by its own query
+    /// ([`hire_switches`]), never in the main SELECT, so a database before
+    /// 0299 reads as off.
+    #[serde(default)]
+    pub agents_can_hire_agents: i64,
     /// "Show the Mobile tab" (migration 0250, Rosson 2026-10-29). NULL
     /// (`None`) = auto: the room pins the Mobile tab while this server can
     /// run a phone (at least one usable sim lane, the `mobile-sim-v1`
@@ -275,6 +285,18 @@ fn mobile_tab_switches(conn: &Connection) -> std::collections::HashMap<String, O
 /// workspace reads as off (fail closed).
 fn app_users_switches(conn: &Connection) -> std::collections::HashMap<String, i64> {
     let Ok(mut stmt) = conn.prepare("SELECT id, agents_can_manage_app_users FROM projects") else {
+        return std::collections::HashMap::new();
+    };
+    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map(|rows| rows.filter_map(std::result::Result::ok).collect())
+        .unwrap_or_default()
+}
+
+/// Every workspace's "Let this agent hire agents" (0299), by id. A database
+/// before 0299 (no column) or a read error: empty, so every workspace reads
+/// as off (fail closed).
+fn hire_switches(conn: &Connection) -> std::collections::HashMap<String, i64> {
+    let Ok(mut stmt) = conn.prepare("SELECT id, agents_can_hire_agents FROM projects") else {
         return std::collections::HashMap::new();
     };
     stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
@@ -373,16 +395,19 @@ impl Project {
                 agents_can_upgrade_postgres: row.get(43).unwrap_or(0),
                 agents_can_manage_app_users: 0,
                 agents_can_refresh_chat: 0,
+                agents_can_hire_agents: 0,
                 mobile_tab_enabled: None,
             })
         })?;
         let mut out: Vec<Project> = rows.collect::<Result<_>>()?;
         let users = app_users_switches(conn);
         let refresh = chat_refresh_switches(conn);
+        let hire = hire_switches(conn);
         let mobile_tabs = mobile_tab_switches(conn);
         for p in out.iter_mut() {
             p.agents_can_manage_app_users = users.get(&p.id).copied().unwrap_or(0);
             p.agents_can_refresh_chat = refresh.get(&p.id).copied().unwrap_or(0);
+            p.agents_can_hire_agents = hire.get(&p.id).copied().unwrap_or(0);
             p.mobile_tab_enabled = mobile_tabs.get(&p.id).copied().flatten();
         }
         Ok(out)
@@ -452,6 +477,7 @@ impl Project {
                 agents_can_upgrade_postgres: row.get(43).unwrap_or(0),
                 agents_can_manage_app_users: 0,
                 agents_can_refresh_chat: 0,
+                agents_can_hire_agents: 0,
                 mobile_tab_enabled: None,
                 })
             },
@@ -463,6 +489,10 @@ impl Project {
                 .unwrap_or(0);
             p.agents_can_refresh_chat = conn
                 .query_row("SELECT agents_can_refresh_chat FROM projects WHERE id = ?1", params![p.id], |r| r.get(0))
+                .unwrap_or(0);
+            // Its own query: a database before 0299 reads as off.
+            p.agents_can_hire_agents = conn
+                .query_row("SELECT agents_can_hire_agents FROM projects WHERE id = ?1", params![p.id], |r| r.get(0))
                 .unwrap_or(0);
             // Its own query too: a database before 0250 reads as auto.
             p.mobile_tab_enabled = conn
@@ -5413,6 +5443,24 @@ mod unit_tests {
             params![id],
         )
         .expect("0132 tab-row columns");
+    }
+
+    /// 0299: "Let this agent hire agents" is its own column, off by default,
+    /// read by get and list, and apart from the sidecar switch.
+    #[test]
+    fn project_agents_can_hire_agents_is_its_own_switch() {
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-agents-hire");
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!((p.agents_can_manage_agents, p.agents_can_hire_agents), (0, 0), "0299 default is off");
+        assert_eq!(serde_json::to_value(&p).unwrap()["agentsCanHireAgents"], 0);
+        conn.execute("UPDATE projects SET agents_can_hire_agents = 1 WHERE id = ?1", params![id]).unwrap();
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!((p.agents_can_manage_agents, p.agents_can_hire_agents), (0, 1), "hiring alone");
+        let listed = Project::list(&conn).unwrap();
+        let listed_p = listed.iter().find(|x| x.id == id).expect("listed");
+        assert_eq!((listed_p.agents_can_manage_agents, listed_p.agents_can_hire_agents), (0, 1));
+        assert_eq!(serde_json::to_value(listed_p).unwrap()["agentsCanHireAgents"], 1);
     }
 
     #[test]

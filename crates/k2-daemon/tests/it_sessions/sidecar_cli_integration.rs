@@ -1402,7 +1402,7 @@ async fn agent_permission_refusals() {
     assert!(json(&r.body)["error"]["hint"]
         .as_str()
         .expect("hint")
-        .contains("Allow hiring and managing agents"));
+        .contains("Let this agent manage its sidecars"));
     assert!(audit_lines(&env).iter().any(|l| l["event"] == "sidecar-new"
         && l["outcome"] == "refused:gated"
         && l["user"] == format!("agent:{}", ws.handle)));
@@ -1586,6 +1586,79 @@ async fn agent_permission_refusals() {
     // Garbage → forbidden.
     let r = new_sidecar(d.port, "garbage", &ws, "api", "claude", None);
     assert_eq!(r.status, 403, "{}", r.body);
+}
+
+// ── Hiring and sidecars: two switches (0.46.12) ──────────────────────
+
+/// Rosson (0.46.12): "Let this agent manage its sidecars" and "Let this
+/// agent hire agents" are two switches. With live sessions: each one alone
+/// opens only its own system and the other is refused (`hire_off` /
+/// `gated`, each naming its switch); a sidecar uses neither, both on.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hiring_and_sidecars_are_two_switches() {
+    let env = setup();
+    let d = futures_block(test_harness::start(OWNER));
+    let ws = seed_ws(&env, &unique("sp"));
+    let main = live_session_passport(&ws, &ws.id, "claude", &["--dangerously-skip-permissions"]);
+    let hire = |dir: &str| serde_json::json!({ "path": env.home.join(dir).to_string_lossy(), "name": dir });
+    let set = |toggle: &str, value: bool| {
+        let r = post(
+            d.port,
+            "/cli/agent-access/set",
+            OWNER,
+            &serde_json::json!({ "workspace": ws.handle, "toggle": toggle, "value": value }),
+        );
+        assert_eq!(r.status, 200, "{toggle}: {}", r.body);
+    };
+
+    // Sidecars only: a sidecar opens; a hire is refused before any write.
+    set("agents_manage", true);
+    let v = ok_new(&new_sidecar(d.port, &main, &ws, "helper", "claude", None));
+    let helper_pg = v["paneGroupId"].as_str().expect("pg").to_string();
+    let r = post(d.port, "/cli/agents/hire", &main, &hire("hire-a"));
+    assert_eq!((r.status, error_code(&r).as_str()), (403, "hire_off"), "{}", r.body);
+    assert!(json(&r.body)["error"]["hint"]
+        .as_str()
+        .expect("hint")
+        .contains("Let this agent hire agents"));
+    assert!(!env.home.join("hire-a").exists(), "nothing hired");
+
+    // Hiring only: the hire goes through; sidecars are refused.
+    set("agents_manage", false);
+    set("agents_hire", true);
+    let r = post(d.port, "/cli/agents/hire", &main, &hire("hire-b"));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(env.home.join("hire-b").is_dir(), "hired");
+    let r = new_sidecar(d.port, &main, &ws, "second", "claude", None);
+    assert_eq!((r.status, error_code(&r).as_str()), (403, "gated"), "{}", r.body);
+    assert!(json(&r.body)["error"]["hint"]
+        .as_str()
+        .expect("hint")
+        .contains("Let this agent manage its sidecars"));
+    let r = stop_sidecar(d.port, &main, &ws, "helper", false);
+    assert_eq!((r.status, error_code(&r).as_str()), (403, "gated"), "stop is the sidecars switch too: {}", r.body);
+
+    // A sidecar uses neither, with both on.
+    set("agents_manage", true);
+    let helper = k2_daemon::v2_session_map::lookup_by_agent_name(&format!("tab-{helper_pg}"))
+        .expect("helper live");
+    let side = mint(&helper.session_id, &ws.id, &format!("tab-{helper_pg}"));
+    let r = post(d.port, "/cli/agents/hire", &side, &hire("hire-c"));
+    assert_eq!((r.status, error_code(&r).as_str()), (403, "main_only"), "{}", r.body);
+    assert!(!env.home.join("hire-c").exists(), "a sidecar hires nothing");
+    let r = new_sidecar(d.port, &side, &ws, "nested", "claude", None);
+    assert_eq!((r.status, error_code(&r).as_str()), (403, "forbidden"), "{}", r.body);
+
+    // The list reports both switches.
+    let r = list_sidecars(d.port, &main, &ws);
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = json(&r.body);
+    assert_eq!(
+        (v["agentsCanManage"].as_bool(), v["agentsCanHire"].as_bool()),
+        (Some(true), Some(true)),
+        "{v}"
+    );
 }
 
 // ── HTTP shape: Member, 405, 413 + close, cap ────────────────────────

@@ -92,6 +92,7 @@ function project(over: Partial<ProjectWithWorkspaces> = {}): ProjectWithWorkspac
     handle: 'cortana',
     workspaces: [],
     agentsCanManageAgents: 0,
+    agentsCanHireAgents: 0,
     agentsCanManageVault: 0,
     agentsCanUseCompute: 0,
     agentsCanOperateCompute: 0,
@@ -130,6 +131,7 @@ const ADMIN_SWITCHES = [
   'projects.dns-manage-enabled',
   'projects.mail-manage-enabled',
   'projects.agents-can-manage-agents',
+  'projects.agents-can-hire-agents',
   'projects.agents-can-manage-vault',
   'projects.agents-can-use-compute',
   'projects.agents-can-manage-projects',
@@ -175,7 +177,8 @@ describe('Agent tab: a local agent (the window’s room)', () => {
       expect([id, sw(id).disabled]).toEqual([id, false])
     }
     // Compact rows: the long Settings descriptions are hidden in the drawer.
-    expect(screen.getByText('Let this agent hire and manage agents')).toBeTruthy()
+    expect(screen.getByText('Let this agent manage its sidecars')).toBeTruthy()
+    expect(screen.getByText('Let this agent hire agents')).toBeTruthy()
     const desc = screen.getByText(/It can open and stop sidecars, its helper agents/)
     expect(desc.className).toContain('hidden')
   })
@@ -276,6 +279,18 @@ describe('Agent tab: a local agent (the window’s room)', () => {
         host: PRIMARY_HOST,
         route: 'agent-access/set',
         body: { workspace: '/ws/cortana', toggle: 'agents_manage', value: true },
+      }),
+    )
+    // Hiring is its own switch (0.46.12): the sidecars one left it off.
+    expect(useProjectsStore.getState().projects[0].agentsCanHireAgents).toBe(0)
+    expect(sw('projects.agents-can-hire-agents').getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(sw('projects.agents-can-hire-agents'))
+    expect(useProjectsStore.getState().projects[0].agentsCanHireAgents).toBe(1)
+    await waitFor(() =>
+      expect(cli.posts).toContainEqual({
+        host: PRIMARY_HOST,
+        route: 'agent-access/set',
+        body: { workspace: '/ws/cortana', toggle: 'agents_hire', value: true },
       }),
     )
     fireEvent.click(sw('projects.mail-manage-enabled'))

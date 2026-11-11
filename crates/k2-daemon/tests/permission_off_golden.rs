@@ -668,6 +668,8 @@ const WALLS: &[Wall] = &[
     // `k2 sessions open` (prd-workspace-sessions-cli-v1 WS-T8): the same
     // switch-off refusal as sidecar new, no `permission` object while off.
     Wall { id: "a1_agents_manage_open", action: "agents.manage", method: "POST", path_q: "/cli/sessions/open", body: Some("{}") },
+    // 0.46.12: hiring is its own switch (`hire_off` before anything is written).
+    Wall { id: "a1_agents_hire", action: "agents.hire", method: "POST", path_q: "/cli/agents/hire", body: Some("{}") },
     Wall { id: "a1_mail_manage", action: "mail.manage", method: "GET", path_q: "/cli/mail/doctor", body: None },
     Wall { id: "a1_dns_manage", action: "dns.manage", method: "GET", path_q: "/cli/dns/records", body: None },
     Wall { id: "a1_db_agent_access", action: "db.agent-access level=", method: "POST", path_q: "/cli/db/create", body: Some("{}") },

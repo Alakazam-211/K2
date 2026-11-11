@@ -259,7 +259,8 @@ pub fn resolve_shares(agents: &[String], gardens: &[String], sources: &[String])
 /// a shared login could steer that power. `(column, what people call it)`.
 pub const RISKY_SWITCHES: &[(&str, &str)] = &[
     ("agents_can_manage_vault", "manage server-wide secrets"),
-    ("agents_can_manage_agents", "hire and manage agents"),
+    ("agents_can_manage_agents", "manage its sidecars"),
+    ("agents_can_hire_agents", "hire agents"),
     ("agents_can_create_connections", "create connections"),
     ("agents_can_manage_skin", "build and run Apps"),
     ("agents_can_manage_apps_full", "manage Apps end to end"),
@@ -385,12 +386,36 @@ pub fn demo_agent_check(shares: &mut Shares, force: bool) -> Result<Vec<String>,
     Ok(warnings)
 }
 
+/// Was `risk` accepted when the agent was shared? A switch's risk reads
+/// `switch on: <label> (<column>)`, and the column is the stable part: a
+/// label may be reworded (0299 renamed "hire and manage agents" to "manage
+/// its sidecars"). 0299 also split hiring off and turned it on wherever the
+/// old switch was on, so an accepted `agents_can_manage_agents` covers
+/// `agents_can_hire_agents` too.
+fn accepted_covers(accepted: &[String], risk: &str) -> bool {
+    if accepted.iter().any(|a| a == risk) {
+        return true;
+    }
+    let Some(col) = switch_column(risk) else {
+        return false;
+    };
+    accepted
+        .iter()
+        .filter_map(|a| switch_column(a))
+        .any(|c| c == col || (col == "agents_can_hire_agents" && c == "agents_can_manage_agents"))
+}
+
+/// The column of a `switch on: <label> (<column>)` risk.
+fn switch_column(risk: &str) -> Option<&str> {
+    risk.strip_prefix("switch on: ")?.rsplit_once(" (")?.1.strip_suffix(')')
+}
+
 /// M2, on every shared post: the agent's risks now, less those accepted
 /// when it was shared. Any left (the agent gained a switch, a grant, a
 /// mailbox…) refuses the post with 409 `agent_not_demo`.
 pub fn still_demo(shares: &Shares, agent_id: &str) -> Result<(), CliResponse> {
     let accepted = shares.accepted_risks.get(agent_id);
-    let gained: Vec<String> = agent_risks(agent_id).into_iter().filter(|r| !accepted.is_some_and(|a| a.contains(r))).collect();
+    let gained: Vec<String> = agent_risks(agent_id).into_iter().filter(|r| !accepted.is_some_and(|a| accepted_covers(a, r))).collect();
     if gained.is_empty() {
         return Ok(());
     }

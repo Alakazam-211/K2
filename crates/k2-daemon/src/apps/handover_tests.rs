@@ -1469,6 +1469,10 @@ fn handovers_of(app: &str) -> usize {
 fn hire_take_app_offers_the_app_to_the_new_agent_only_after_the_hire() {
     let f = fx("t61");
     switch1(&f.a, true);
+    // 0.46.12: an agent hires with "Let this agent hire agents" on, from
+    // its main session.
+    k2_core::workspace::settings::set_agents_can_hire_agents(&f.a, true).expect("hire on");
+    crate::hire_routes::test_main_session(&format!("sess-{}", f.a));
     let bad = f._home.path().join("not-a-dir-t61");
     std::fs::write(&bad, b"a file, not a folder").unwrap();
     let (st, v) = hire(&agent(&f.a), json!({ "path": bad.to_string_lossy(), "takeApp": f.app }));

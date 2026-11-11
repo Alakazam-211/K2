@@ -1338,10 +1338,12 @@ pub fn set_agents_app_cores(project_id: &str, cores: &[String]) -> Result<(), St
     Ok(())
 }
 
-/// k2 sidecar v1 — "Allow hiring and managing agents"
-/// (`projects.agents_can_manage_agents`, migration 0132). Column only, no
-/// global master. Unknown project → `false` (fail-closed). Keyed on the
-/// passport's workspace UUID, never a client `project=`.
+/// k2 sidecar v1 — "Let this agent manage its sidecars"
+/// (`projects.agents_can_manage_agents`, migration 0132; until 0299 it was
+/// "Allow hiring and managing agents", hiring is now
+/// [`agents_can_hire_agents`]). Column only, no global master. Unknown
+/// project → `false` (fail-closed). Keyed on the passport's workspace
+/// UUID, never a client `project=`.
 pub fn agents_can_manage_agents(project_id: &str) -> bool {
     let db = crate::db::shared();
     let conn = db.lock();
@@ -1363,6 +1365,42 @@ pub fn set_agents_can_manage_agents(project_id: &str, enable: bool) -> Result<()
     let n = conn
         .execute(
             "UPDATE projects SET agents_can_manage_agents = ?1 WHERE id = ?2",
+            rusqlite::params![if enable { 1i64 } else { 0i64 }, project_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("Project not found: {project_id}"));
+    }
+    Ok(())
+}
+
+/// "Let this agent hire agents" (`projects.agents_can_hire_agents`,
+/// migration 0299, 0.46.12): an agent's own `k2 agent hire` (a new
+/// workspace, a template hire). Split from [`agents_can_manage_agents`];
+/// 0299 turned it on wherever that one was on. Column only, no global
+/// master. Unknown project, or a database before 0299 → `false` (fail
+/// closed).
+pub fn agents_can_hire_agents(project_id: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT agents_can_hire_agents FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
+}
+
+/// Persist `projects.agents_can_hire_agents` (0/1). Dedicated writer for
+/// `POST /cli/agent-access/set {toggle: "agents_hire"}` (Owner/Admin) —
+/// **not** on [`allowed_project_setting_fields`] (`workspace/set` must 400).
+pub fn set_agents_can_hire_agents(project_id: &str, enable: bool) -> Result<(), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let n = conn
+        .execute(
+            "UPDATE projects SET agents_can_hire_agents = ?1 WHERE id = ?2",
             rusqlite::params![if enable { 1i64 } else { 0i64 }, project_id],
         )
         .map_err(|e| e.to_string())?;

@@ -907,6 +907,15 @@ FLAGS
   failure's: 4 not_found, 2 usage, 3 refused, 1 other). Only a failure to
   make the workspace itself stops the rest (reported "not run").
 
+WHO MAY
+  A person: the owner, or a login in Settings or a terminal. An agent: only
+  its main session (a sidecar gets main_only, exit 3), and only while
+  "Let this agent hire agents" is on for its workspace (else hire_off, exit
+  3; ask with k2 permission request agents.hire). A --template --dry-run
+  needs only the main session. Opening its own sidecars is a separate
+  switch, "Let this agent manage its sidecars" (k2 sidecar). The owner or
+  an admin turns hiring on: k2 agent access set <ws> agents_hire on.
+
 EXAMPLES
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
   k2 agent hire --template writer --name "Max" --agent codex --launch
@@ -1609,8 +1618,27 @@ base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
 core_token = os.environ.get("PTOKEN", "") or token
 
+# Permission cards on: the daemon's refusal ends with one closing line ("Ask
+# with: k2 permission request agents.hire" for a hire while "Let this agent
+# hire agents" is off). This core talks to the daemon itself (not through the
+# shared transports), so it keeps that line here and prints it last.
+permission_lines = []
+
+def note_permission(resp):
+    p = resp.get("permission") if isinstance(resp, dict) else None
+    if not isinstance(p, dict) or permission_lines:
+        return
+    if isinstance(p.get("command"), str) and p["command"]:
+        permission_lines.append("Ask with: " + p["command"])
+    elif p.get("requestable") is False:
+        if isinstance(p.get("hint"), str) and p["hint"]:
+            permission_lines.append(p["hint"])
+        permission_lines.append("It can't be requested.")
+
 def fail(code, hint, exit_code=1):
     sys.stderr.write(json.dumps({"error": {"code": code, "hint": hint}}) + "\n")
+    for line in permission_lines:
+        sys.stderr.write(line + "\n")
     sys.exit(exit_code)
 
 def http_get(route, params, timeout=30):
@@ -1682,7 +1710,7 @@ def template_exit(code):
     c = (code or "").lower()
     return {"usage": 2, "bad_template": 2, "unknown_template": 4, "not_found": 4,
             "template_conflict": 3, "folder_exists": 3, "owner_only": 3,
-            "system_template": 3}.get(c, 1)
+            "system_template": 3, "hire_off": 3, "main_only": 3}.get(c, 1)
 
 # 0.46.12: with --template, <dir> is optional: the daemon picks
 # <hire root>/<handle> (a dry run of the hire names it; nothing written).
@@ -1691,6 +1719,7 @@ if dir_arg:
 else:
     probe = http_post_json("/cli/agents/hire", template_body({"dryRun": True}), tok=core_token)
     if probe.get("error") or not probe.get("path"):
+        note_permission(probe)
         code, hint = core_error(probe)
         fail(code, hint, template_exit(code))
     path = probe["path"]
@@ -2275,7 +2304,7 @@ def exit_code_for(code):
     c = (code or "").lower()
     if c in ("bad_usage", "path_escape", "catalog_unknown", "usage"):
         return 2
-    if c in ("duplicate_layer", "refused", "precondition", "owner_only"):
+    if c in ("duplicate_layer", "refused", "precondition", "owner_only", "hire_off", "main_only"):
         return 3
     if c in ("not_found", "ambiguous"):
         return 4
@@ -2322,6 +2351,7 @@ if dry_run:
             pb["preset"] = resolved_preset.get("id")
         resp = http_post_json("/cli/agents/hire", pb, tok=core_token)
         if resp.get("error") or not resp.get("ok"):
+            note_permission(resp)
             code, hint = core_error(resp)
             ta_["status"] = "failed"
             ta_["error"] = {"code": code, "hint": hint}
@@ -2392,11 +2422,12 @@ if pending_core or tpl_action:
     resp = http_post_json("/cli/agents/hire", core_body, tok=core_token)
     err = resp.get("error")
     if err or not resp.get("ok"):
+        note_permission(resp)
         code = err.get("code") if isinstance(err, dict) else "daemon_error"
         hint = err.get("hint") if isinstance(err, dict) else (err or json.dumps(resp)[:300])
         bad = dba_core if (code == "owner_only" and dba_core and dba_core["status"] == "pending") else (pending_core[0] if pending_core else tpl_action)
         # Fatal: every later step needs the workspace.
-        exit_for = 3 if code == "owner_only" else (template_exit(code) if tpl_action else None)
+        exit_for = 3 if code in ("owner_only", "hire_off", "main_only") else (template_exit(code) if tpl_action else None)
         step_failed(bad, code or "daemon_error", hint, exit_for, fatal=True)
     by_core = {x.get("step"): x for x in resp.get("steps", [])}
     if tpl_action:

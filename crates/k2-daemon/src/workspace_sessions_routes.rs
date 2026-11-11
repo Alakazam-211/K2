@@ -23,7 +23,7 @@
 //! ([`crate::sidecar_routes::Caller`]); agents see their own workspace
 //! only. Reads need no switch (the same Unix user can read these
 //! transcripts on disk); a sandboxed session gets the roster only.
-//! Opening follows the sidecar gate: "Allow hiring and managing agents",
+//! Opening follows the sidecar gate: "Let this agent manage its sidecars",
 //! own workspace, the main session only, not sandboxed, no more power.
 
 use std::collections::{HashMap, HashSet};

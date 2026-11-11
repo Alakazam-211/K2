@@ -170,7 +170,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 67] = [
+pub(crate) const V1_ACTIONS: [&str; 68] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -291,6 +291,9 @@ pub(crate) const V1_ACTIONS: [&str; 67] = [
     "voice.transcripts-read",
     // 0.46.12 (prd-linux-virtual-desktop-v1 LD-38): "Allow a virtual desktop".
     "desktop.use",
+    // 0.46.12 (Rosson): "Let this agent hire agents", split from
+    // agents.manage (now its sidecars only).
+    "agents.hire",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -516,6 +519,10 @@ pub(crate) const ROWS: &[Row] = &[
     // switch as sidecar new. Its main-only refusal (`main_only`) can't be
     // requested.
     row(ask("agents.manage", Floor::Admin), code(403, "gated"), "/cli/sessions/open", POST),
+    // 0.46.12: an agent's own `k2 agent hire` while "Let this agent hire
+    // agents" is off. Its sidecar-only refusal (`main_only`) can't be
+    // requested.
+    row(ask("agents.hire", Floor::Admin), code(403, "hire_off"), "/cli/agents/hire", POST),
     row(ask("projects.manage", Floor::Admin), code(403, "agent_permission_off"), "/cli/", ANY),
     // `k2 agent harness` / `k2 workspace swap-canonical` on the agent's own
     // workspace (0.46.6): the refusal carries the normalized harness.
@@ -1360,6 +1367,8 @@ mod tests {
             (403, "POST", "/cli/compute/grants/set", vec![], None, json!({"error":{"code":"owner_only"}}), "compute.use"),
             (403, "POST", "/cli/sidecar/new", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
             (403, "POST", "/cli/sessions/open", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
+            // 0.46.12: hiring is its own switch.
+            (403, "POST", "/cli/agents/hire", vec![], None, json!({"error":{"code":"hire_off","hint":"x"},"ok":false}), "agents.hire"),
             (403, "POST", "/cli/project-group/create", vec![], None, json!({"error":{"code":"agent_permission_off"},"ok":false}), "projects.manage"),
             // 0.46.11: the Org Chart's manage verbs without the switch.
             (403, "POST", "/cli/organization/create", vec![], None, json!({"error":{"code":"org_manage_off","hint":"x"},"ok":false}), "organization.manage"),
@@ -1990,7 +1999,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 67);
+        assert_eq!(V1_ACTIONS.len(), 68);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

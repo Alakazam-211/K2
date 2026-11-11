@@ -194,7 +194,7 @@ exit: 0
     {
       "name": "sessions open",
       "usage": "k2 sessions open <id> [--name <name>] [--brief <file>|-] [--brief-text \"...\"] [--force] [--json]",
-      "description": "Reopen a past conversation as a sidecar with the same history; prints its address. Already running: prints that address, never a second copy. Main session only, with Allow hiring and managing agents.",
+      "description": "Reopen a past conversation as a sidecar with the same history; prints its address. Already running: prints that address, never a second copy. Main session only, with Let this agent manage its sidecars.",
       "args": [{"name": "id", "required": true}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Its address name (else a number, <ws>/<n>)."},
@@ -268,7 +268,7 @@ exit: 0
     {
       "name": "sidecar archive",
       "usage": "k2 sidecar archive <name>|--all-stopped [--workspace <ws>] [--json]",
-      "description": "Take a stopped sidecar, or every stopped one, off k2 sidecar list. Its conversation stays: k2 sidecar new with that name and the same harness resumes it, and k2 sessions --past finds it. Refuses a running sidecar (stop it first) and a worktree sidecar (retire it). --all-stopped skips running sidecars, worktree sidecars and any you may not archive, and says which. Agents: the main session, for sidecars an agent of this workspace opened, with Allow hiring and managing agents on.",
+      "description": "Take a stopped sidecar, or every stopped one, off k2 sidecar list. Its conversation stays: k2 sidecar new with that name and the same harness resumes it, and k2 sessions --past finds it. Refuses a running sidecar (stop it first) and a worktree sidecar (retire it). --all-stopped skips running sidecars, worktree sidecars and any you may not archive, and says which. Agents: the main session, for sidecars an agent of this workspace opened, with Let this agent manage its sidecars on.",
       "args": [{"name": "name", "required": false, "description": "The sidecar's name or <workspace>/<name> address."}],
       "flags": [
         {"name": "--all-stopped", "arg": null, "description": "Every stopped sidecar in this workspace."},
@@ -279,7 +279,7 @@ exit: 0
     {
       "name": "sidecar access",
       "usage": "k2 sidecar access on|off|status [--workspace <ws>]",
-      "description": "Owner/Admin: the 'Allow hiring and managing agents' switch for a workspace.",
+      "description": "Owner/Admin: the 'Let this agent manage its sidecars' switch for a workspace (hiring is its own switch: k2 agent access set <ws> agents_hire on|off).",
       "args": [{"name": "on|off|status", "required": true}],
       "flags": [{"name": "--workspace", "arg": "ws", "description": "Target workspace (default: this one)."}]
     },
@@ -490,7 +490,7 @@ exit: 0
     {
       "name": "agent hire",
       "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]... [--answer <question-id>=<text>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
-      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>). Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>). Re-running converges (changed:false). An agent hires only from its main session, with \"Let this agent hire agents\" on (hire_off / main_only, exit 3). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
       "args": [{"name": "dir", "required": false}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
@@ -586,8 +586,8 @@ exit: 0
     },
     {
       "name": "agent access",
-      "usage": "k2 agent access set <workspace> chat_manage|chat_refresh on|off [--json]",
-      "description": "\"Manage Chat / Voice Hosting\" for one workspace's agent: it may run Chat / Voice Hosting on this server, create Spaces and bind them to its Apps. On also makes its own chat account, as a coworker, if it has none; off keeps it. The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
+      "usage": "k2 agent access set <workspace> chat_manage|chat_refresh|agents_hire|agents_manage on|off [--json]",
+      "description": "One switch for one workspace's agent. chat_manage: \"Manage Chat / Voice Hosting\" (it may run Chat / Voice Hosting on this server, create Spaces and bind them to its Apps; on also makes its own chat account, as a coworker, if it has none; off keeps it). chat_refresh: \"Let this agent refresh its pinned chat\". agents_hire: \"Let this agent hire agents\" (its main session may run k2 agent hire). agents_manage: \"Let this agent manage its sidecars\" (its main session may open and stop its sidecars). The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
       "args": [{"name": "workspace", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output."}]
     },

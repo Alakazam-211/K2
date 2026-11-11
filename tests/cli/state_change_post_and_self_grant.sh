@@ -11,6 +11,8 @@
 #      (K2_HOOK_SOCK + passport) is refused with exit 3 / owner_only and
 #      names the setting; the daemon sees NO request.
 #   4. The same hire with `--db-access off` is not refused by that check.
+#   5. 0.46.12: the daemon's `hire_off` refusal ("Let this agent hire
+#      agents" is off) exits 3 and ends with its "Ask with:" line.
 #
 # No daemon build — a python stub records every request. HOME is sandboxed.
 
@@ -66,7 +68,10 @@ class H(BaseHTTPRequestHandler):
         with open(os.path.join(work, "requests.log"), "a") as f:
             f.write("%s %s\n" % (method, parsed.path))
         mode = open(os.path.join(work, "mode")).read().strip()
-        if mode == "new" and method == "GET":
+        if mode == "hireoff" and parsed.path == "/cli/agents/hire":
+            code, body = 403, {"ok": False, "error": {"code": "hire_off", "hint": "Ask your human to turn on 'Let this agent hire agents'."},
+                               "permission": {"action": "agents.hire", "command": "k2 permission request agents.hire --why \"<why>\""}}
+        elif mode == "new" and method == "GET":
             code, body = 405, {"error": "POST required"}
         elif mode == "old" and method == "POST":
             code, body = 405, {"error": "method not allowed for this route"}
@@ -181,6 +186,23 @@ if grep -q "can't grant itself" "$WORK/hire_off.err"; then
 else
     echo "  PASS: --db-access off passes the self-grant check"
     pass=$((pass + 1))
+fi
+
+# ── 5. hire_off: exit 3 and the Ask with: line ──────────────────────────
+echo "== hire refused while Let this agent hire agents is off =="
+echo hireoff >"$WORK/mode"
+set +e
+run_cli agent hire "$WORK/hireoff-agent" >/dev/null 2>"$WORK/hireoff.err"
+rc=$?
+set -e
+echo new >"$WORK/mode"
+assert_eq "hire_off exit 3" "$rc" "3"
+if grep -q '"hire_off"' "$WORK/hireoff.err" && tail -n 1 "$WORK/hireoff.err" | grep -q '^Ask with: k2 permission request agents.hire'; then
+    echo "  PASS: the refusal names hire_off and ends with its Ask with: line"
+    pass=$((pass + 1))
+else
+    echo "  FAIL: hire_off stderr: $(cat "$WORK/hireoff.err")" >&2
+    fail=$((fail + 1))
 fi
 
 echo

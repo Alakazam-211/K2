@@ -898,7 +898,7 @@ pub fn dispatch_get(
             // fire starts a new one. `project_path` is the caller's own
             // workspace for an agent (stamped from its token; a
             // `workspace=` naming another is refused before this arm),
-            // so no "hire and manage agents" switch is needed. History
+            // so no "manage its sidecars" switch is needed. History
             // gets a `changed` row naming who did it.
             let name = params.get("name").cloned().unwrap_or_default();
             if name.trim().is_empty() {

@@ -10,7 +10,8 @@
 //!   POST /v1/agent-teams/unlink
 //!   GET  /v1/agent-teams/links     ?instance=<id> | ?workspace=<ws>
 //! /cli (owner token, Connect logins, agent passports where noted):
-//!   POST /cli/agents/hire          `k2 agent hire <dir>` (converge one path; passports too)
+//!   POST /cli/agents/hire          `k2 agent hire <dir>` (converge one path; passports too:
+//!                                  the main session, with "Let this agent hire agents" on)
 //!   GET  /cli/agents/hire-root     the owner-set hire root; POST sets it (Owner)
 //!   POST /cli/agent-instances/hire  the recipe (Admin)
 //!   GET  /cli/agent-instances       every hire (Admin)
@@ -814,6 +815,9 @@ pub fn handle_cli(
 /// passport (in-cell): a passport never raises `dbAccess` (the 0.44.4
 /// self-grant check, now daemon-side).
 fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
+    if let Err(r) = agent_hire_gate(who, body) {
+        return r;
+    }
     let caller = match who {
         Who::Owner => HireCaller::Owner,
         Who::Login { username, .. } => HireCaller::Login { username: username.clone() },
@@ -863,6 +867,67 @@ fn cli_converge(who: &Who, body: &[u8]) -> CliResponse {
         }
         Err(e) => hire_error_response(&e),
     }
+}
+
+/// The refusal an agent gets when its workspace's "Let this agent hire
+/// agents" is off (`hire_off`; the walls map teaches `agents.hire`).
+pub(crate) const HIRE_OFF_HINT: &str = "Ask your human to turn on 'Let this agent hire agents' in Settings → Workspaces / Agents → {ws} → Agent (or run k2 agent access set {ws} agents_hire on as the owner). Opening your own sidecars is a separate switch.";
+
+/// "Let this agent hire agents" (0299, 0.46.12; prd-agent-templates-v1
+/// AT5): an agent's own `k2 agent hire` needs its workspace's switch, and
+/// only the workspace's main session may hire (a sidecar never can, switch
+/// or not). A template dry run writes nothing, so it needs only the main
+/// session: the agent can show its person the hire before asking. A plain
+/// shell tab is a person typing (as for sidecars); the owner token and
+/// logins have their route floor; keys use `/v1`.
+fn agent_hire_gate(who: &Who, body: &[u8]) -> Result<(), CliResponse> {
+    let Who::Agent { project_id, session_id } = who else {
+        return Ok(());
+    };
+    let v: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
+    let template = v.get("template").and_then(|t| t.as_str()).is_some_and(|t| !t.trim().is_empty());
+    let dry_run = template && v.get("dryRun").and_then(|d| d.as_bool()).unwrap_or(false);
+    let ws = k2_core::workspace_session_handles::workspace_address_name_shared(project_id).unwrap_or_else(|_| project_id.clone());
+    if !dry_run && !k2_core::workspace::settings::agents_can_hire_agents(project_id) {
+        audit("agent-hire", &who.label(), "refused:hire_off");
+        return Err(err(403, "hire_off", HIRE_OFF_HINT.replace("{ws}", &ws)));
+    }
+    if !is_main_session(project_id, session_id) {
+        audit("agent-hire", &who.label(), "refused:main_only");
+        return Err(err(
+            403,
+            "main_only",
+            format!("only the workspace's main session may hire agents; a sidecar can't. Ask it: k2 msg {ws} \"please hire …\""),
+        ));
+    }
+    Ok(())
+}
+
+/// Is this passport's session the workspace's main session (its live
+/// `v2_session_map` key is the workspace id)? A sidecar's key is `tab-…`; a
+/// session that is gone fails closed (as `sidecar_routes::agent_gate` does).
+fn is_main_session(project_id: &str, session_id: &str) -> bool {
+    #[cfg(test)]
+    {
+        if TEST_MAIN_SESSIONS.with(|m| m.borrow().contains(session_id)) {
+            return true;
+        }
+    }
+    crate::v2_session_map::snapshot()
+        .into_iter()
+        .any(|(key, s)| key == project_id && s.session_id.to_string() == session_id)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_MAIN_SESSIONS: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Unit tests: treat this passport session as its workspace's main session
+/// (no PTY is spawned; the integration tests use real sessions).
+#[cfg(test)]
+pub(crate) fn test_main_session(session_id: &str) {
+    TEST_MAIN_SESSIONS.with(|m| m.borrow_mut().insert(session_id.to_string()));
 }
 
 /// The daemon's V1 action catalog, for the template loader (AT6).

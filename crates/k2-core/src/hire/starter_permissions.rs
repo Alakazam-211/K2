@@ -4,6 +4,10 @@
 //!
 //! **Rosson-accepted 11-10; changing either list needs his OK.** Each list is
 //! one line to change, and each is granted only to its own workspace.
+//! (0.46.12: Rosson split "Allow hiring and managing agents" into sidecars,
+//! `agents.manage`, and hiring, `agents.hire`. Both lists held the old
+//! switch, so both hold the two halves, as migration 0299 does for every
+//! workspace that had it on.)
 //!
 //! Both lists hold **standing V1 action ids only** (`V1_ACTIONS`,
 //! `k2-daemon` `permission/walls.rs`; a daemon test checks each one is a
@@ -39,6 +43,7 @@
 /// an Admin).
 pub const KESSEL_STARTER_PERMISSIONS: &[&str] = &[
     "agents.manage",
+    "agents.hire",
     "projects.manage",
     "connections.create",
     "organization.manage",
@@ -50,6 +55,7 @@ pub const KESSEL_STARTER_PERMISSIONS: &[&str] = &[
 /// only while Kessel holds it).
 pub const CHIEF_OF_STAFF_STARTER_PERMISSIONS: &[&str] = &[
     "agents.manage",
+    "agents.hire",
     "connections.create",
     "projects.manage",
     "compute.use",
@@ -72,6 +78,7 @@ pub const CARD_ASKS: &[&str] =
 pub fn standing_switch(action: &str) -> Option<&'static str> {
     Some(match action {
         "agents.manage" => "agents_manage",
+        "agents.hire" => "agents_hire",
         "projects.manage" => "projects_manage",
         "connections.create" => "agents_can_create_connections",
         "organization.manage" => "org_chart_manage",

@@ -125,7 +125,8 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.db-agent-create', section: 'projects', label: 'Let this agent create databases', description: 'It can make new databases; it can always use the ones this workspace owns or was granted', keywords: ['allow this agent to create databases', 'db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
   { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Build and run Apps', description: 'Apps (beta) for this agent: build and run its Apps, manage them end to end, manage their users, and what its Apps may use. The owner turns them on; an admin only off. Loosening the wall always asks you', keywords: ['agents_can_manage_skin', 'agents_can_manage_apps_full', 'app_cores', 'cores', 'apps', 'app', 'build', 'run', 'manage', 'end to end', 'database', 'files', 'rooms', 'thread', 'mail', 'sew', 'passport', 'agent', 'guests', 'roles', 'k2 app access'] },
   { id: 'projects.agents-can-manage-app-users', section: 'projects', label: 'Let this agent manage its Apps\u2019 users', description: 'Its own Apps only: add and remove App users and test guests, passwords, email, names, unlock, roles and its own room, invites, the guests-rooms grant in its own room, App keys that manage users. Users it makes are tied to it. Never a box login. The owner turns it on and off', keywords: ['agents_can_manage_app_users', 'app_users', 'app users', 'test guests', 'users', 'guests', 'passwords', 'invites', 'guests-rooms', 'k2 app access --users'] },
-  { id: 'projects.agents-can-manage-agents', section: 'projects', label: 'Let this agent hire and manage agents', description: 'It can open and stop sidecars, its helper agents', keywords: ['allow hiring and managing agents', 'agents_can_manage_agents', 'sidecar', 'hire', 'agent', 'passport', 'manage agents'] },
+  { id: 'projects.agents-can-manage-agents', section: 'projects', label: 'Let this agent manage its sidecars', description: 'It can open and stop sidecars, its helper agents in this workspace. Sidecars can\u2019t do this themselves', keywords: ['manage its sidecars', 'allow hiring and managing agents', 'agents_can_manage_agents', 'agents_manage', 'sidecar', 'sidecars', 'helper', 'helpers', 'k2 sidecar', 'sessions open', 'agent', 'passport', 'manage agents'] },
+  { id: 'projects.agents-can-hire-agents', section: 'projects', label: 'Let this agent hire agents', description: 'It can hire new agents, each with its own workspace (k2 agent hire). Only its main session can; it can\u2019t give them database access or switches', keywords: ['hire agents', 'hire', 'hiring', 'allow hiring and managing agents', 'agents_can_hire_agents', 'agents_hire', 'k2 agent hire', 'template', 'templates', 'new agent', 'new workspace', 'agent', 'passport'] },
   { id: 'projects.handoff-accept-from', section: 'projects', label: 'Secrets from other agents', description: 'Agents whose secrets go straight into this agent\'s vault; everything else waits for you', keywords: ['handoff', 'accept from', 'vault', 'secret', 'send secret', 'agent to agent'] },
   { id: 'projects.agents-can-manage-vault', section: 'projects', label: 'Let this agent manage server-wide secrets', description: 'It can share this server\'s secrets with other workspaces, never with itself', keywords: ['allow managing server-wide secrets', 'vault_manage', 'vault', 'secret', 'secrets', 'passport', 'agent', 'it agent'] },
   { id: 'projects.agents-can-use-compute', section: 'projects', label: 'Let this agent use compute nodes', description: 'It can run builds and tests on the machines switched on in Settings → Compute, and on ones added later', keywords: ['allow compute nodes', 'agents_can_use_compute', 'compute', 'compute nodes', 'node', 'machines', 'build', 'tests', 'k2 compute', 'passport', 'agent'] },
@@ -1834,6 +1835,7 @@ function ProjectDetail({
                       agent ask for every other one on a card. */}
                   <AgentPermissionCardsRow project={project} />
                   <AgentsManageAgentsToggle project={project} />
+                  <AgentsHireAgentsToggle project={project} />
                   <AgentsManageVaultToggle project={project} />
                   <AgentHandoffAcceptFrom project={project} />
                   <AgentHandoffSendAllow project={project} />
@@ -2256,11 +2258,12 @@ export function DnsManageToggle({
   )
 }
 
-// k2 sidecar v1 — "Allow hiring and managing agents". DEFAULTS OFF.
-// Lets this workspace's main agent open and stop sidecars (later also
-// hire and retire agents). Writes POST /cli/agent-access/set
-// `{workspace, toggle: 'agents_manage', value}` (Owner/Admin). Optimistic
-// store patch; do not fetchProjects() on this path.
+// k2 sidecar v1 — "Let this agent manage its sidecars" (until 0.46.12
+// "hire and manage agents"; hiring is AgentsHireAgentsToggle below).
+// DEFAULTS OFF. Lets this workspace's main agent open and stop sidecars.
+// Writes POST /cli/agent-access/set `{workspace, toggle: 'agents_manage',
+// value}` (Owner/Admin). Optimistic store patch; do not fetchProjects() on
+// this path.
 export function AgentsManageAgentsToggle({
   project,
   compact = false,
@@ -2330,11 +2333,97 @@ export function AgentsManageAgentsToggle({
       }
     >
           <div className={SETTING_ROW_LABEL}>
-            Let this agent hire and manage agents
+            Let this agent manage its sidecars
             <AskedChip row="projects.agents-can-manage-agents" />
           </div>
           <div className={permissionDescClass(compact)}>
-            It can open and stop sidecars, its helper agents. Sidecars can&rsquo;t do this themselves.
+            It can open and stop sidecars, its helper agents in this workspace. Sidecars can&rsquo;t do this themselves.
+          </div>
+      <SaveError state={save.state} />
+    </SettingSwitchRow>
+  )
+}
+
+// "Let this agent hire agents" (0.46.12, Rosson; migration 0299). DEFAULTS
+// OFF; on wherever the old "hire and manage agents" switch was on. Lets this
+// workspace's main agent run `k2 agent hire` (a new workspace, a template
+// hire). Writes POST /cli/agent-access/set `{workspace, toggle:
+// 'agents_hire', value}` (Owner/Admin). Optimistic store patch; do not
+// fetchProjects() on this path.
+export function AgentsHireAgentsToggle({
+  project,
+  compact = false,
+  readOnly = false,
+}: {
+  project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server, or a role below the route floor. */
+  readOnly?: boolean
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
+  const enabled = (project.agentsCanHireAgents ?? 0) === 1
+
+  const toggle = async (): Promise<void> => {
+    if (busy || readOnly) return
+    const next = !enabled
+    const before = project.agentsCanHireAgents
+    setBusy(true)
+    useProjectsStore.setState((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === project.id ? { ...p, agentsCanHireAgents: next ? 1 : 0 } : p,
+      ),
+    }))
+    try {
+      await daemonCliPost(primaryScope(), 'agent-access/set', {
+        workspace: project.path,
+        toggle: 'agents_hire',
+        value: next,
+      })
+      noteOptimisticProjectsMutationSuccess()
+      save.saved()
+      emitProjectsChanged()
+    } catch (err) {
+      useProjectsStore.setState((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === project.id ? { ...p, agentsCanHireAgents: before } : p,
+        ),
+      }))
+      console.error('[agent-access] write failed', err)
+      save.failed(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <SettingSwitchRow
+      compact={compact}
+      control={
+        <>
+          <SaveNote state={save.state} />
+        <Toggle
+          size={compact ? 'sm' : 'md'}
+          checked={enabled}
+          onChange={toggle}
+          disabled={busy || readOnly}
+          data-settings-id="projects.agents-can-hire-agents"
+          title={
+            enabled
+              ? 'This workspace\'s main agent may hire new agents'
+              : 'This workspace\'s agent cannot hire new agents'
+          }
+        />
+        </>
+      }
+    >
+          <div className={SETTING_ROW_LABEL}>
+            Let this agent hire agents
+            <AskedChip row="projects.agents-can-hire-agents" />
+          </div>
+          <div className={permissionDescClass(compact)}>
+            It can hire new agents, each with its own workspace. Only its main session can, never a sidecar, and it can&rsquo;t give them database access or switches.
           </div>
       <SaveError state={save.state} />
     </SettingSwitchRow>

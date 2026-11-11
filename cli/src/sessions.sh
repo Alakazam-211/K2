@@ -28,7 +28,7 @@ Replies arrive in your terminal as [from <address>] …; answer with k2 msg <add
 One conversation never runs twice: opening a live one prints its address.
 <id> is the short id from --past (6+ characters), the full id, or an address.
 Agents see their own workspace only. Opening, starting and stopping follow
-"Allow hiring and managing agents" and the main-session rule (k2 study sessions).
+"Let this agent manage its sidecars" and the main-session rule (k2 study sessions).
 CLIs: claude, codex, grok, gemini, cursor (cursor-agent), pi, hermes.
 Owner: --workspace <ws> on every verb. Also: archives (on-disk archives),
 live <ws> (the owner's raw PTY view), compact, set-label.

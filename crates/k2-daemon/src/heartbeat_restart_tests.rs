@@ -102,7 +102,7 @@ fn an_agent_restarts_its_own_heartbeat_with_no_switch() {
     let me = workspace(&home, "hbrme", &[t.as_str()]);
     assert!(
         !k2_core::workspace::settings::agents_can_manage_agents(&me.id),
-        "the hire-and-manage switch is off for this test"
+        "the sidecars switch is off for this test"
     );
 
     let (s, v) = call_as_agent(&me, &[("name", t.as_str())]);

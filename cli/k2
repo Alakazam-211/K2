@@ -19461,14 +19461,14 @@ if "changed" in v and "before" in v:
 print(line)'
 }
 
-# k2 agent access set <workspace> chat_manage|chat_refresh on|off (Sew for
-# Apps, 0.46.6; the chat refresh switch, 0.46.8): one workspace's agent. The
-# owner or an admin (the daemon refuses an agent: it never loosens its own
-# access).
+# k2 agent access set <workspace> chat_manage|chat_refresh|agents_hire|agents_manage
+# on|off (Sew for Apps, 0.46.6; the chat refresh switch, 0.46.8; hiring and
+# sidecars, 0.46.12): one workspace's agent. The owner or an admin (the
+# daemon refuses an agent: it never loosens its own access).
 cmd_agent_access() {
-    local usage="usage: k2 agent access set <workspace> chat_manage|chat_refresh on|off [--json]"
+    local usage="usage: k2 agent access set <workspace> chat_manage|chat_refresh|agents_hire|agents_manage on|off [--json]"
     case "${1:-}" in
-        -h|--help|"") echo "$usage"; echo "  chat_manage = \"Manage Chat / Voice Hosting\": the agent may run Chat / Voice Hosting here, create Spaces and bind them to its Apps. On also makes its own chat account (off keeps it)."; [ -z "${1:-}" ] && exit 2; return 0 ;;
+        -h|--help|"") echo "$usage"; echo "  chat_manage = \"Manage Chat / Voice Hosting\": the agent may run Chat / Voice Hosting here, create Spaces and bind them to its Apps. On also makes its own chat account (off keeps it)."; echo "  chat_refresh = \"Let this agent refresh its pinned chat\"."; echo "  agents_hire = \"Let this agent hire agents\": its main session may run k2 agent hire (a new agent in its own workspace)."; echo "  agents_manage = \"Let this agent manage its sidecars\": its main session may open and stop its sidecars (also k2 sidecar access on|off)."; [ -z "${1:-}" ] && exit 2; return 0 ;;
         set) shift ;;
         *) echo "$usage" >&2; exit 2 ;;
     esac
@@ -19481,7 +19481,7 @@ cmd_agent_access() {
             *) if [ -z "$ws" ]; then ws="$1"; elif [ -z "$toggle" ]; then toggle="$1"; elif [ -z "$value" ]; then value="$1"; else echo "$usage" >&2; exit 2; fi; shift ;;
         esac
     done
-    [ -n "$ws" ] && { [ "$toggle" = chat_manage ] || [ "$toggle" = chat_refresh ]; } || { echo "$usage" >&2; exit 2; }
+    [ -n "$ws" ] && { [ "$toggle" = chat_manage ] || [ "$toggle" = chat_refresh ] || [ "$toggle" = agents_hire ] || [ "$toggle" = agents_manage ]; } || { echo "$usage" >&2; exit 2; }
     case "$value" in on|off) ;; *) echo "$usage" >&2; exit 2 ;; esac
     _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle="$toggle" K2_CJ_value_b="$([ "$value" = on ] && echo 1 || echo 0)")"
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
@@ -19491,6 +19491,10 @@ import json, sys
 v = json.load(sys.stdin)
 if "agentsCanRefreshChat" in v:
     print("Can refresh its own pinned chat is %s for %s" % ("on" if v.get("agentsCanRefreshChat") else "off", v.get("workspace")))
+elif "agentsCanHire" in v:
+    print("Let this agent hire agents is %s for %s" % ("on" if v.get("agentsCanHire") else "off", v.get("workspace")))
+elif v.get("toggle") == "agents_manage":
+    print("Let this agent manage its sidecars is %s for %s" % ("on" if v.get("agentsCanManage") else "off", v.get("workspace")))
 else:
     print("Manage Chat / Voice Hosting is %s for %s" % ("on" if v.get("agentsCanManageChat") else "off", v.get("workspace")))'
 }
@@ -24374,7 +24378,7 @@ Replies arrive in your terminal as [from <address>] …; answer with k2 msg <add
 One conversation never runs twice: opening a live one prints its address.
 <id> is the short id from --past (6+ characters), the full id, or an address.
 Agents see their own workspace only. Opening, starting and stopping follow
-"Allow hiring and managing agents" and the main-session rule (k2 study sessions).
+"Let this agent manage its sidecars" and the main-session rule (k2 study sessions).
 CLIs: claude, codex, grok, gemini, cursor (cursor-agent), pi, hermes.
 Owner: --workspace <ws> on every verb. Also: archives (on-disk archives),
 live <ws> (the owner's raw PTY view), compact, set-label.
@@ -24804,7 +24808,8 @@ name with the same harness resumes it, and k2 sessions --past finds it. It refus
 running sidecar, and a worktree sidecar (that's retire). --all-stopped skips running
 sidecars, worktree sidecars and any you may not archive, and says which.
 Harnesses: claude, grok, codex, gemini, cursor-agent, pi, hermes (any preset that runs them).
-Agents: only the main session, only with "Allow hiring and managing agents" on.
+Agents: only the main session, only with "Let this agent manage its sidecars" on.
+Hiring a new agent (k2 agent hire) is a separate switch, "Let this agent hire agents".
 Do not put secrets in a brief. --workspace defaults to this workspace.
 
 --worktree runs the sidecar in its own git worktree: folder .worktrees/k2-<name>
@@ -24992,7 +24997,7 @@ for s in v.get("skipped") or []:
 import json, sys, time
 v = json.load(sys.stdin)
 rows = v.get("sidecars", [])
-print("%s: %d live of %d (cap %d); agents may manage: %s" % (v.get("workspace"), v.get("live", 0), len(rows), v.get("cap", 0), "on" if v.get("agentsCanManage") else "off"))
+print("%s: %d live of %d (cap %d); its agent may open sidecars: %s" % (v.get("workspace"), v.get("live", 0), len(rows), v.get("cap", 0), "on" if v.get("agentsCanManage") else "off"))
 if not rows:
     print("(no sidecars)"); sys.exit(0)
 fmt = "%-28s %-20s %-8s %-7s %-14s %-16s %s"
@@ -25019,7 +25024,7 @@ if w.get("open"):
             printf '%s' "$_SC_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
-print("Allow hiring and managing agents: %s for %s" % ("on" if v.get("agentsCanManage") else "off", v.get("workspace")))
+print("Let this agent manage its sidecars: %s for %s" % ("on" if v.get("agentsCanManage") else "off", v.get("workspace")))
 '
             ;;
         interrupt)
@@ -47583,7 +47588,7 @@ cmd_schema() {
     {
       "name": "sessions open",
       "usage": "k2 sessions open <id> [--name <name>] [--brief <file>|-] [--brief-text \"...\"] [--force] [--json]",
-      "description": "Reopen a past conversation as a sidecar with the same history; prints its address. Already running: prints that address, never a second copy. Main session only, with Allow hiring and managing agents.",
+      "description": "Reopen a past conversation as a sidecar with the same history; prints its address. Already running: prints that address, never a second copy. Main session only, with Let this agent manage its sidecars.",
       "args": [{"name": "id", "required": true}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Its address name (else a number, <ws>/<n>)."},
@@ -47657,7 +47662,7 @@ cmd_schema() {
     {
       "name": "sidecar archive",
       "usage": "k2 sidecar archive <name>|--all-stopped [--workspace <ws>] [--json]",
-      "description": "Take a stopped sidecar, or every stopped one, off k2 sidecar list. Its conversation stays: k2 sidecar new with that name and the same harness resumes it, and k2 sessions --past finds it. Refuses a running sidecar (stop it first) and a worktree sidecar (retire it). --all-stopped skips running sidecars, worktree sidecars and any you may not archive, and says which. Agents: the main session, for sidecars an agent of this workspace opened, with Allow hiring and managing agents on.",
+      "description": "Take a stopped sidecar, or every stopped one, off k2 sidecar list. Its conversation stays: k2 sidecar new with that name and the same harness resumes it, and k2 sessions --past finds it. Refuses a running sidecar (stop it first) and a worktree sidecar (retire it). --all-stopped skips running sidecars, worktree sidecars and any you may not archive, and says which. Agents: the main session, for sidecars an agent of this workspace opened, with Let this agent manage its sidecars on.",
       "args": [{"name": "name", "required": false, "description": "The sidecar's name or <workspace>/<name> address."}],
       "flags": [
         {"name": "--all-stopped", "arg": null, "description": "Every stopped sidecar in this workspace."},
@@ -47668,7 +47673,7 @@ cmd_schema() {
     {
       "name": "sidecar access",
       "usage": "k2 sidecar access on|off|status [--workspace <ws>]",
-      "description": "Owner/Admin: the 'Allow hiring and managing agents' switch for a workspace.",
+      "description": "Owner/Admin: the 'Let this agent manage its sidecars' switch for a workspace (hiring is its own switch: k2 agent access set <ws> agents_hire on|off).",
       "args": [{"name": "on|off|status", "required": true}],
       "flags": [{"name": "--workspace", "arg": "ws", "description": "Target workspace (default: this one)."}]
     },
@@ -47879,7 +47884,7 @@ cmd_schema() {
     {
       "name": "agent hire",
       "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]... [--answer <question-id>=<text>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
-      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>). Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>). Re-running converges (changed:false). An agent hires only from its main session, with \"Let this agent hire agents\" on (hire_off / main_only, exit 3). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
       "args": [{"name": "dir", "required": false}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
@@ -47975,8 +47980,8 @@ cmd_schema() {
     },
     {
       "name": "agent access",
-      "usage": "k2 agent access set <workspace> chat_manage|chat_refresh on|off [--json]",
-      "description": "\"Manage Chat / Voice Hosting\" for one workspace's agent: it may run Chat / Voice Hosting on this server, create Spaces and bind them to its Apps. On also makes its own chat account, as a coworker, if it has none; off keeps it. The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
+      "usage": "k2 agent access set <workspace> chat_manage|chat_refresh|agents_hire|agents_manage on|off [--json]",
+      "description": "One switch for one workspace's agent. chat_manage: \"Manage Chat / Voice Hosting\" (it may run Chat / Voice Hosting on this server, create Spaces and bind them to its Apps; on also makes its own chat account, as a coworker, if it has none; off keeps it). chat_refresh: \"Let this agent refresh its pinned chat\". agents_hire: \"Let this agent hire agents\" (its main session may run k2 agent hire). agents_manage: \"Let this agent manage its sidecars\" (its main session may open and stop its sidecars). The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
       "args": [{"name": "workspace", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output."}]
     },
@@ -59397,11 +59402,12 @@ RULES
   At most 8 live sidecars per workspace.
 
 WHO
-  Agents: only the main session, only with "Allow hiring and managing
-  agents" on, only its own workspace, only presets, never more power
+  Agents: only the main session, only with "Let this agent manage its
+  sidecars" on, only its own workspace, only presets, never more power
   than itself; it stops only sidecars an agent opened. Sidecars cannot
-  open sidecars. Where agents run as the owner's user, these are
-  guardrails, not locks.
+  open sidecars. Hiring a new agent (k2 agent hire) is a separate
+  switch, "Let this agent hire agents" (agents.hire). Where agents run
+  as the owner's user, these are guardrails, not locks.
 
 HANDBACK
   Write in the brief: "when done, k2 msg <primary> with a summary".
@@ -59481,8 +59487,8 @@ THE MAIN CHAT
 WHO MAY
   Reading (list, past, show): any session, its own workspace only. A
   sandboxed session sees the list only.
-  Opening, starting, stopping: the main session only, with "Allow hiring and
-  managing agents" on (exit 3 gated, or main_only: ask main with k2 msg <ws>).
+  Opening, starting, stopping: the main session only, with "Let this agent
+  manage its sidecars" on (exit 3 gated, or main_only: ask main with k2 msg <ws>).
   An agent never opens a session with more power than itself.
 
 EXIT CODES
@@ -62898,6 +62904,15 @@ FLAGS
   failure's: 4 not_found, 2 usage, 3 refused, 1 other). Only a failure to
   make the workspace itself stops the rest (reported "not run").
 
+WHO MAY
+  A person: the owner, or a login in Settings or a terminal. An agent: only
+  its main session (a sidecar gets main_only, exit 3), and only while
+  "Let this agent hire agents" is on for its workspace (else hire_off, exit
+  3; ask with k2 permission request agents.hire). A --template --dry-run
+  needs only the main session. Opening its own sidecars is a separate
+  switch, "Let this agent manage its sidecars" (k2 sidecar). The owner or
+  an admin turns hiring on: k2 agent access set <ws> agents_hire on.
+
 EXAMPLES
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
   k2 agent hire --template writer --name "Max" --agent codex --launch
@@ -63600,8 +63615,27 @@ base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
 core_token = os.environ.get("PTOKEN", "") or token
 
+# Permission cards on: the daemon's refusal ends with one closing line ("Ask
+# with: k2 permission request agents.hire" for a hire while "Let this agent
+# hire agents" is off). This core talks to the daemon itself (not through the
+# shared transports), so it keeps that line here and prints it last.
+permission_lines = []
+
+def note_permission(resp):
+    p = resp.get("permission") if isinstance(resp, dict) else None
+    if not isinstance(p, dict) or permission_lines:
+        return
+    if isinstance(p.get("command"), str) and p["command"]:
+        permission_lines.append("Ask with: " + p["command"])
+    elif p.get("requestable") is False:
+        if isinstance(p.get("hint"), str) and p["hint"]:
+            permission_lines.append(p["hint"])
+        permission_lines.append("It can't be requested.")
+
 def fail(code, hint, exit_code=1):
     sys.stderr.write(json.dumps({"error": {"code": code, "hint": hint}}) + "\n")
+    for line in permission_lines:
+        sys.stderr.write(line + "\n")
     sys.exit(exit_code)
 
 def http_get(route, params, timeout=30):
@@ -63673,7 +63707,7 @@ def template_exit(code):
     c = (code or "").lower()
     return {"usage": 2, "bad_template": 2, "unknown_template": 4, "not_found": 4,
             "template_conflict": 3, "folder_exists": 3, "owner_only": 3,
-            "system_template": 3}.get(c, 1)
+            "system_template": 3, "hire_off": 3, "main_only": 3}.get(c, 1)
 
 # 0.46.12: with --template, <dir> is optional: the daemon picks
 # <hire root>/<handle> (a dry run of the hire names it; nothing written).
@@ -63682,6 +63716,7 @@ if dir_arg:
 else:
     probe = http_post_json("/cli/agents/hire", template_body({"dryRun": True}), tok=core_token)
     if probe.get("error") or not probe.get("path"):
+        note_permission(probe)
         code, hint = core_error(probe)
         fail(code, hint, template_exit(code))
     path = probe["path"]
@@ -64266,7 +64301,7 @@ def exit_code_for(code):
     c = (code or "").lower()
     if c in ("bad_usage", "path_escape", "catalog_unknown", "usage"):
         return 2
-    if c in ("duplicate_layer", "refused", "precondition", "owner_only"):
+    if c in ("duplicate_layer", "refused", "precondition", "owner_only", "hire_off", "main_only"):
         return 3
     if c in ("not_found", "ambiguous"):
         return 4
@@ -64313,6 +64348,7 @@ if dry_run:
             pb["preset"] = resolved_preset.get("id")
         resp = http_post_json("/cli/agents/hire", pb, tok=core_token)
         if resp.get("error") or not resp.get("ok"):
+            note_permission(resp)
             code, hint = core_error(resp)
             ta_["status"] = "failed"
             ta_["error"] = {"code": code, "hint": hint}
@@ -64383,11 +64419,12 @@ if pending_core or tpl_action:
     resp = http_post_json("/cli/agents/hire", core_body, tok=core_token)
     err = resp.get("error")
     if err or not resp.get("ok"):
+        note_permission(resp)
         code = err.get("code") if isinstance(err, dict) else "daemon_error"
         hint = err.get("hint") if isinstance(err, dict) else (err or json.dumps(resp)[:300])
         bad = dba_core if (code == "owner_only" and dba_core and dba_core["status"] == "pending") else (pending_core[0] if pending_core else tpl_action)
         # Fatal: every later step needs the workspace.
-        exit_for = 3 if code == "owner_only" else (template_exit(code) if tpl_action else None)
+        exit_for = 3 if code in ("owner_only", "hire_off", "main_only") else (template_exit(code) if tpl_action else None)
         step_failed(bad, code or "daemon_error", hint, exit_for, fatal=True)
     by_core = {x.get("step"): x for x in resp.get("steps", [])}
     if tpl_action:

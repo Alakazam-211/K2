@@ -1,5 +1,6 @@
 //! E1 — the Agent tab's switches (PRD rev 3.1 §5.2): `compute.use`,
-//! `compute.operate`, `compute.manage`, `agents.manage`, `projects.manage`,
+//! `compute.operate`, `compute.manage`, `agents.manage` (its sidecars),
+//! `agents.hire` (0299, 0.46.12: hiring, split from it), `projects.manage`,
 //! `apps.build`, `apps.manage-full`, `apps.core`, `chat.manage`,
 //! `vault.manage`, `gardens.manage`, `dns.manage`, `mail.manage`,
 //! `mail.send-mode`, `db.agent-access`, `organization.manage` and
@@ -378,9 +379,9 @@ pub(crate) static SWITCHES: [Switch; 20] = [
             "agents.manage-off",
             Floor::Admin,
             &[],
-            "Allow hiring and managing agents",
-            "Let {ws} open and stop sidecar agents",
-            "Sidecars work in {ws}'s workspace with its settings. It doesn't cover hiring new agents.",
+            "Let this agent manage its sidecars",
+            "Let {ws} open and stop its sidecars, its helper agents",
+            "Sidecars work in {ws}'s workspace with its settings. Sidecars can't open more. It doesn't cover hiring new agents (agents.hire).",
             &[code_wall("gated", "/cli/sidecar/"), code_wall("gated", "/cli/sessions/open")],
             WallCoverage::PrefixOnly,
         ),
@@ -388,11 +389,35 @@ pub(crate) static SWITCHES: [Switch; 20] = [
             "agents.manage-off",
             Floor::Admin,
             &[],
-            "Allow hiring and managing agents",
+            "Let this agent manage its sidecars",
             "Stop {ws} opening sidecar agents",
             "Sidecars already open keep running until someone stops them.",
         ),
         writer: Writer::Access("agents_manage"),
+    },
+    // 0.46.12 (Rosson): hiring, split from the sidecars switch above
+    // (migration 0299 turned it on wherever that one was on).
+    Switch {
+        on: on_spec(
+            "agents.hire",
+            "agents.hire-off",
+            Floor::Admin,
+            &[],
+            "Let this agent hire agents",
+            "Let {ws} hire new agents: each one gets its own workspace on this server",
+            "Only its main session can hire, never a sidecar. It can't give a new agent database access or switches; those stay with you. It doesn't cover its own sidecars (agents.manage).",
+            &[code_wall("hire_off", "/cli/agents/hire")],
+            WallCoverage::Code,
+        ),
+        off: off_spec(
+            "agents.hire-off",
+            Floor::Admin,
+            &[],
+            "Let this agent hire agents",
+            "Stop {ws} hiring new agents",
+            "Agents it already hired keep working.",
+        ),
+        writer: Writer::Access("agents_hire"),
     },
     Switch {
         on: on_spec(
@@ -789,6 +814,7 @@ fn is_on(sw: &Switch, ctx: &Ctx, want_on: bool) -> Result<bool, String> {
         }
         Writer::Access("compute_manage") => path().map(|_| k2_core::workspace::settings::agents_can_manage_compute(ws)),
         Writer::Access("agents_manage") => path().map(|_| k2_core::workspace::settings::agents_can_manage_agents(ws)),
+        Writer::Access("agents_hire") => path().map(|_| k2_core::workspace::settings::agents_can_hire_agents(ws)),
         Writer::Access("projects_manage") => path().map(|_| k2_core::workspace::settings::agents_can_manage_projects(ws)),
         Writer::Access("chat_manage") => path().map(|_| k2_core::workspace::settings::agents_can_manage_chat(ws)),
         Writer::Access("vault_manage") => path().map(|_| k2_core::workspace::settings::agents_can_manage_vault(ws)),

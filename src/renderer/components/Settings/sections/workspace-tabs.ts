@@ -48,6 +48,7 @@ const LIST_SETTINGS = new Set(['projects.list', 'projects.add'])
 
 const PERMISSION_SETTINGS = new Set([
   'projects.agents-can-manage-agents',
+  'projects.agents-can-hire-agents',
   'projects.agents-can-manage-vault',
   'projects.handoff-accept-from',
   'projects.handoff-send-allow',

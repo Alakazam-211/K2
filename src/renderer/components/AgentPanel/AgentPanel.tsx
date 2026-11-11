@@ -41,6 +41,7 @@ import {
 } from '@/components/AgentIdentity/AgentIdentityFields'
 import {
   AgentsCreateConnectionsToggle,
+  AgentsHireAgentsToggle,
   AgentsManageAgentsToggle,
   AgentsManageProjectsToggle,
   AgentsManageVaultToggle,
@@ -207,6 +208,7 @@ export default function AgentPanel(): React.JSX.Element {
           <DbAgentCreateToggle project={project} compact readOnly={ro('member')} />
           <AgentAppsAccess project={project} compact readOnly={!editable} />
           <AgentsManageAgentsToggle project={project} compact readOnly={ro('admin')} />
+          <AgentsHireAgentsToggle project={project} compact readOnly={ro('admin')} />
           <AgentsManageVaultToggle project={project} compact readOnly={ro('admin')} />
           <AgentsUseComputeToggle project={project} compact readOnly={ro('admin')} />
           <AgentsOperateComputeToggle project={project} compact readOnly={!editable} />

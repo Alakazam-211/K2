@@ -287,6 +287,7 @@ export const PERMISSION_ACTION_ROWS: Readonly<Record<string, string>> = {
   'compute.operate': 'projects.agents-can-operate-compute',
   'compute.manage': 'projects.agents-can-manage-compute',
   'agents.manage': 'projects.agents-can-manage-agents',
+  'agents.hire': 'projects.agents-can-hire-agents',
   'projects.manage': 'projects.agents-can-manage-projects',
   'apps.build': 'projects.agents-can-manage-skin',
   'apps.manage-full': 'projects.agents-can-manage-skin',

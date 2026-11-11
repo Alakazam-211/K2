@@ -25,7 +25,7 @@
 //! permission-card walls teach as `git.land` / `sidecar.retire` (the
 //! person's Allow runs [`land_entry`] / [`retire_entry`] as that person).
 //! Review is a read (agents: their own workspace). Interrupt follows
-//! `sidecar stop`: an agent needs "Allow hiring and managing agents", must
+//! `sidecar stop`: an agent needs "Let this agent manage its sidecars", must
 //! be the main session, and may interrupt only sidecars its workspace
 //! opened.
 

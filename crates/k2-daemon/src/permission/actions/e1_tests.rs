@@ -166,6 +166,7 @@ fn state(w: Writer, ws: &Ws) -> bool {
         }
         Writer::Access("compute_manage") => k2_core::workspace::settings::agents_can_manage_compute(&ws.id),
         Writer::Access("agents_manage") => k2_core::workspace::settings::agents_can_manage_agents(&ws.id),
+        Writer::Access("agents_hire") => k2_core::workspace::settings::agents_can_hire_agents(&ws.id),
         Writer::Access("projects_manage") => k2_core::workspace::settings::agents_can_manage_projects(&ws.id),
         Writer::Access("chat_manage") => k2_core::workspace::settings::agents_can_manage_chat(&ws.id),
         Writer::Access("vault_manage") => k2_core::workspace::settings::agents_can_manage_vault(&ws.id),
@@ -207,11 +208,13 @@ fn prerequisite(w: Writer, ws: &Ws) {
 
 // ── the registry ────────────────────────────────────────────────────
 
-const SWITCH_IDS: [&str; 18] = [
+const SWITCH_IDS: [&str; 19] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
     "agents.manage",
+    // 0.46.12: hiring, split from agents.manage (now its sidecars).
+    "agents.hire",
     "projects.manage",
     "apps.build",
     "apps.manage-full",
@@ -249,8 +252,8 @@ fn e1_registers_17_switch_actions_their_off_twins_and_keep_as_mine() {
     // to=off twins (one per standing switch) + garden.keep-mine.
     let e1: Vec<&str> = ids.iter().copied().filter(|i| want.iter().any(|w| w == i)).collect();
     // 0.46.11: + organization.manage and its twin, + voice.transcripts-read
-    // and its twin.
-    assert_eq!(e1.len(), 20 + 19 + 1, "{e1:?}");
+    // and its twin. 0.46.12: + agents.hire and its twin.
+    assert_eq!(e1.len(), 21 + 20 + 1, "{e1:?}");
     for r in &all {
         k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
     }
@@ -290,7 +293,7 @@ fn the_floors_are_the_codes() {
     for id in ["apps.build-off", "apps.manage-full-off", "apps.core-off", "connections.add", "connections.create", "mail.send-mode"] {
         assert_eq!(floor(id), Floor::Admin, "{id}");
     }
-    for id in ["compute.use", "compute.operate", "agents.manage", "projects.manage", "chat.manage", "vault.manage", "gardens.manage", "dns.manage", "mail.manage", "db.agent-access"] {
+    for id in ["compute.use", "compute.operate", "agents.manage", "agents.hire", "projects.manage", "chat.manage", "vault.manage", "gardens.manage", "dns.manage", "mail.manage", "db.agent-access"] {
         assert_eq!((floor(id), floor(&format!("{id}-off"))), (Floor::Admin, Floor::Admin), "{id}");
     }
     assert_eq!(floor("garden.keep-mine"), Floor::GardenOwner);
@@ -327,6 +330,8 @@ fn the_walls_match_the_refusals() {
     assert_eq!(code("compute.manage"), ["owner_only"]);
     // `/cli/sidecar/` and `k2 sessions open` (prd-workspace-sessions-cli-v1 WS-X4).
     assert_eq!(code("agents.manage"), ["gated", "gated"]);
+    // 0.46.12: an agent's own `k2 agent hire` (`/cli/agents/hire`).
+    assert_eq!(code("agents.hire"), ["hire_off"]);
     assert_eq!(code("projects.manage"), ["agent_permission_off"]);
     assert_eq!(code("apps.build"), ["apps_manage_off"]);
     assert!(code("apps.manage-full").is_empty() && code("apps.core").is_empty());

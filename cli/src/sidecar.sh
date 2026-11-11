@@ -33,7 +33,8 @@ name with the same harness resumes it, and k2 sessions --past finds it. It refus
 running sidecar, and a worktree sidecar (that's retire). --all-stopped skips running
 sidecars, worktree sidecars and any you may not archive, and says which.
 Harnesses: claude, grok, codex, gemini, cursor-agent, pi, hermes (any preset that runs them).
-Agents: only the main session, only with "Allow hiring and managing agents" on.
+Agents: only the main session, only with "Let this agent manage its sidecars" on.
+Hiring a new agent (k2 agent hire) is a separate switch, "Let this agent hire agents".
 Do not put secrets in a brief. --workspace defaults to this workspace.
 
 --worktree runs the sidecar in its own git worktree: folder .worktrees/k2-<name>
@@ -221,7 +222,7 @@ for s in v.get("skipped") or []:
 import json, sys, time
 v = json.load(sys.stdin)
 rows = v.get("sidecars", [])
-print("%s: %d live of %d (cap %d); agents may manage: %s" % (v.get("workspace"), v.get("live", 0), len(rows), v.get("cap", 0), "on" if v.get("agentsCanManage") else "off"))
+print("%s: %d live of %d (cap %d); its agent may open sidecars: %s" % (v.get("workspace"), v.get("live", 0), len(rows), v.get("cap", 0), "on" if v.get("agentsCanManage") else "off"))
 if not rows:
     print("(no sidecars)"); sys.exit(0)
 fmt = "%-28s %-20s %-8s %-7s %-14s %-16s %s"
@@ -248,7 +249,7 @@ if w.get("open"):
             printf '%s' "$_SC_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
-print("Allow hiring and managing agents: %s for %s" % ("on" if v.get("agentsCanManage") else "off", v.get("workspace")))
+print("Let this agent manage its sidecars: %s for %s" % ("on" if v.get("agentsCanManage") else "off", v.get("workspace")))
 '
             ;;
         interrupt)

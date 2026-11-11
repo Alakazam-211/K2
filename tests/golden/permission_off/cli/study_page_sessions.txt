@@ -67,8 +67,8 @@ THE MAIN CHAT
 WHO MAY
   Reading (list, past, show): any session, its own workspace only. A
   sandboxed session sees the list only.
-  Opening, starting, stopping: the main session only, with "Allow hiring and
-  managing agents" on (exit 3 gated, or main_only: ask main with k2 msg <ws>).
+  Opening, starting, stopping: the main session only, with "Let this agent
+  manage its sidecars" on (exit 3 gated, or main_only: ask main with k2 msg <ws>).
   An agent never opens a session with more power than itself.
 
 EXIT CODES

@@ -399,12 +399,42 @@ fn set_column(project_id: &str, column: &str, value: i64) {
     assert_eq!(n, 1, "{column}");
 }
 
+/// 0299: a share force-accepted while "hire and manage agents" was on keeps
+/// posting after the split (both halves on, the sidecar label reworded); a
+/// power it didn't have still refuses.
+#[test]
+fn a_share_accepted_before_the_hire_split_still_posts() {
+    let _home = crate::test_support::TempHome::new();
+    let (a, _) = agent("shrh");
+    set_column(&a, "agents_can_manage_agents", 1);
+    set_column(&a, "agents_can_hire_agents", 1);
+    let mut shares = Shares { agents: vec![a.clone()], ..Default::default() };
+    shares
+        .accepted_risks
+        .insert(a.clone(), vec!["switch on: hire and manage agents (agents_can_manage_agents)".to_string()]);
+    if let Err(r) = still_demo(&shares, &a) {
+        panic!("the old accepted switch covers both halves: {}", r.body);
+    }
+    set_column(&a, "agents_can_manage_vault", 1);
+    let r = still_demo(&shares, &a).err().expect("a new power still refuses");
+    assert!(r.body.contains("agent_not_demo") && r.body.contains("agents_can_manage_vault"), "{}", r.body);
+    // Hiring alone, accepted as hiring alone, doesn't cover the sidecars.
+    let (b, _) = agent("shri");
+    set_column(&b, "agents_can_hire_agents", 1);
+    set_column(&b, "agents_can_manage_agents", 1);
+    let mut shares = Shares { agents: vec![b.clone()], ..Default::default() };
+    shares.accepted_risks.insert(b.clone(), vec!["switch on: hire agents (agents_can_hire_agents)".to_string()]);
+    let r = still_demo(&shares, &b).err().expect("the sidecars switch was never accepted");
+    assert!(r.body.contains("agents_can_manage_agents"), "{}", r.body);
+}
+
 /// Re-review M2: every risky switch (and a linked inbox grant) makes an
 /// agent not a demo agent.
 #[test]
 fn every_risky_switch_makes_an_agent_not_a_demo_agent() {
     let _home = crate::test_support::TempHome::new();
-    assert_eq!(RISKY_SWITCHES.len(), 14);
+    // 0299 (0.46.12): + "hire agents", split from "manage its sidecars".
+    assert_eq!(RISKY_SWITCHES.len(), 15);
     for (column, label) in RISKY_SWITCHES {
         let (a, _) = agent("shrw");
         assert_eq!(agent_risks(&a), Vec::<String>::new(), "fresh");

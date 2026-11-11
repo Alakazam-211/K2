@@ -85,6 +85,7 @@ pub(crate) fn switch_on(id: &str, switch: &str) -> bool {
     use k2_core::workspace::settings as ws;
     match switch {
         "agents_manage" => ws::agents_can_manage_agents(id),
+        "agents_hire" => ws::agents_can_hire_agents(id),
         "projects_manage" => ws::agents_can_manage_projects(id),
         "agents_can_create_connections" => path_of(id).is_some_and(|p| ws::get_agents_can_create_connections(&p)),
         "org_chart_manage" => {
@@ -110,6 +111,7 @@ fn write_on(t: &Target, switch: &str, by: &str) -> Result<(), String> {
     use k2_core::workspace::settings as ws;
     match switch {
         "agents_manage" => ws::set_agents_can_manage_agents(&t.id, true)?,
+        "agents_hire" => ws::set_agents_can_hire_agents(&t.id, true)?,
         "projects_manage" => ws::set_agents_can_manage_projects(&t.id, true)?,
         "agents_can_create_connections" => ws::update_project_setting(&t.path, "agents_can_create_connections", "1")?,
         "compute" => {

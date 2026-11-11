@@ -468,12 +468,82 @@ fn key_links_only_what_it_created_or_was_named() {
 
 // ── /cli converge (k2 agent hire) ────────────────────────────────────
 
+/// An agent's own workspace (made by the owner), with "Let this agent hire
+/// agents" on and the passport's session counted as its main session.
+fn hiring_agent(prefix: &str) -> (String, Who) {
+    let path = ensure_test_root().join(uniq(prefix)).to_string_lossy().into_owned();
+    let r = handle_cli(CLI_HIRE, Who::Owner, true, json!({ "path": path, "name": "Hirer" }).to_string().as_bytes(), &HashMap::new(), None);
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let v: Value = serde_json::from_str(&r.body).unwrap();
+    let id = v["id"].as_str().expect("id").to_string();
+    k2_core::workspace::settings::set_agents_can_hire_agents(&id, true).expect("hire on");
+    let sid = format!("main-{id}");
+    test_main_session(&sid);
+    (id.clone(), Who::Agent { project_id: id, session_id: sid })
+}
+
+fn code_of(r: &crate::cli_response::CliResponse) -> String {
+    let v: Value = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("not JSON ({e}): {}", r.body));
+    v["error"]["code"].as_str().unwrap_or_else(|| panic!("no error code: {}", r.body)).to_string()
+}
+
+/// 0.46.12 (Rosson): hiring and sidecars are two switches. An agent hires
+/// only with "Let this agent hire agents" on (the sidecars switch doesn't
+/// open it), only from its main session (a sidecar can't, switch or not),
+/// and a template dry run needs only the main session. A shell tab is a
+/// person typing.
+#[test]
+fn an_agent_hires_only_with_its_own_switch_and_only_from_its_main_session() {
+    let _home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    let (ws, agent) = hiring_agent("hg");
+    // Hiring off, sidecars on: refused, nothing written, with the switch's name.
+    k2_core::workspace::settings::set_agents_can_hire_agents(&ws, false).unwrap();
+    k2_core::workspace::settings::set_agents_can_manage_agents(&ws, true).unwrap();
+    let path = root.join(uniq("off")).to_string_lossy().into_owned();
+    let r = handle_cli(CLI_HIRE, agent.clone(), true, json!({ "path": path, "name": "Nope" }).to_string().as_bytes(), &HashMap::new(), None);
+    assert_eq!((r.status, code_of(&r).as_str()), ("403 Forbidden", "hire_off"), "{}", r.body);
+    assert!(r.body.contains("Let this agent hire agents"), "{}", r.body);
+    assert!(!Path::new(&path).exists(), "refused before any write");
+    let name = uniq("Tpl");
+    let r = handle_cli(CLI_HIRE, agent.clone(), true, json!({ "template": "writer", "name": name, "launch": false }).to_string().as_bytes(), &HashMap::new(), None);
+    assert_eq!((r.status, code_of(&r).as_str()), ("403 Forbidden", "hire_off"), "a template hire too: {}", r.body);
+    // A template dry run writes nothing: the main session may show it.
+    let (st, plan) = cli(CLI_HIRE, agent.clone(), true, json!({ "template": "writer", "name": name, "dryRun": true }), &[]);
+    assert_eq!((st, plan["dryRun"].as_bool()), (200, Some(true)), "{plan}");
+    assert!(!Path::new(plan["path"].as_str().unwrap()).exists(), "a dry run writes nothing");
+    // Hiring on, sidecars off: the hire goes through.
+    k2_core::workspace::settings::set_agents_can_hire_agents(&ws, true).unwrap();
+    k2_core::workspace::settings::set_agents_can_manage_agents(&ws, false).unwrap();
+    let r = handle_cli(CLI_HIRE, agent.clone(), true, json!({ "path": path, "name": "Yes" }).to_string().as_bytes(), &HashMap::new(), None);
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(Path::new(&path).is_dir());
+    // A sidecar's passport (not the main session) never hires, switch on.
+    let side = Who::Agent { project_id: ws.clone(), session_id: "tab-side-session".into() };
+    let other = root.join(uniq("side")).to_string_lossy().into_owned();
+    let r = handle_cli(CLI_HIRE, side.clone(), true, json!({ "path": other, "name": "Side" }).to_string().as_bytes(), &HashMap::new(), None);
+    assert_eq!((r.status, code_of(&r).as_str()), ("403 Forbidden", "main_only"), "{}", r.body);
+    assert!(!Path::new(&other).exists());
+    let (st, e) = cli(CLI_HIRE, side, true, json!({ "template": "writer", "name": uniq("S"), "dryRun": true }), &[]);
+    assert_eq!((st, e["error"]["code"].as_str()), (403, Some("main_only")), "{e}");
+    // A plain shell tab is a person typing: no switch needed.
+    k2_core::workspace::settings::set_agents_can_hire_agents(&ws, false).unwrap();
+    let shell = Who::Shell { project_id: ws.clone(), session_id: "shell-session".into() };
+    let by_hand = root.join(uniq("sh")).to_string_lossy().into_owned();
+    let r = handle_cli(CLI_HIRE, shell, true, json!({ "path": by_hand, "name": "ByHand" }).to_string().as_bytes(), &HashMap::new(), None);
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    // Every refusal is audited.
+    let sink = super::AUDIT_SINK.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    assert!(sink.iter().any(|(e, _, o)| e == "agent-hire" && o == "refused:hire_off"), "{sink:?}");
+    assert!(sink.iter().any(|(e, _, o)| e == "agent-hire" && o == "refused:main_only"), "{sink:?}");
+}
+
 #[test]
 fn passport_converge_never_raises_db_access() {
     let _home = k2_core::test_env::TempHome::new();
     ensure_test_root();
     let path = ensure_test_root().join(uniq("cli")).to_string_lossy().into_owned();
-    let agent = Who::Agent { project_id: "some-ws".into(), session_id: "s".into() };
+    let (_, agent) = hiring_agent("cliw");
     let r = handle_cli(CLI_HIRE, agent.clone(), true, json!({ "path": path, "dbAccess": "write" }).to_string().as_bytes(), &HashMap::new(), None);
     assert_eq!(r.status, "403 Forbidden", "{}", r.body);
     assert!(r.body.contains("owner_only"), "{}", r.body);

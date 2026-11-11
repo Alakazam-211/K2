@@ -473,9 +473,9 @@ real sidecar stop nobody >/dev/null 2>"$SB/nob.err"; rc=$?
 set -e
 assert_eq "stop unknown exit 4" "$rc" "4"
 
-assert_contains "access status off" "$(real sidecar access status)" "Allow hiring and managing agents: off"
-assert_contains "access on" "$(real sidecar access on)" "Allow hiring and managing agents: on"
-assert_contains "access status on" "$(real sidecar access status)" "Allow hiring and managing agents: on"
+assert_contains "access status off" "$(real sidecar access status)" "Let this agent manage its sidecars: off"
+assert_contains "access on" "$(real sidecar access on)" "Let this agent manage its sidecars: on"
+assert_contains "access status on" "$(real sidecar access status)" "Let this agent manage its sidecars: on"
 
 assert_absent "brief text never in the daemon log" "$(cat "$SB/daemon.log")" "$MARKER"
 assert_contains "audit has sidecar-new" "$(cat "$SB/.k2/auth-audit.jsonl")" '"event":"sidecar-new"'

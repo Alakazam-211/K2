@@ -21,16 +21,18 @@ function componentBody(name: string): string {
 }
 
 // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §7.2, T3): the Agent tab row for
-// "Allow hiring and managing agents" writes ONLY through the Admin route
-// POST /cli/agent-access/set with toggle `agents_manage` — never the
-// generic workspace/set (Member) — and patches the store optimistically.
-describe('Agent-tab "Allow hiring and managing agents" toggle', () => {
+// "Let this agent manage its sidecars" (until 0.46.12 "hire and manage
+// agents") writes ONLY through the Admin route POST /cli/agent-access/set
+// with toggle `agents_manage` — never the generic workspace/set (Member) —
+// and patches the store optimistically.
+describe('Agent-tab "Let this agent manage its sidecars" toggle', () => {
   it('has a manifest id, the Agents group, and posts agent-access/set agents_manage', () => {
     expect(src).toContain("id: 'projects.agents-can-manage-agents'")
     expect(src).toContain('data-settings-id="projects.agents-can-manage-agents"')
     expect(src).toContain('<SettingsGroup title="Agents and secrets" card>')
     expect(src).toContain('<AgentsManageAgentsToggle project={project} />')
-    expect(src).toContain('Let this agent hire and manage agents')
+    expect(src).toContain('Let this agent manage its sidecars')
+    expect(src).not.toContain('Let this agent hire and manage agents')
     const toggle = componentBody('AgentsManageAgentsToggle')
     expect(toggle).toContain("daemonCliPost(primaryScope(), 'agent-access/set'")
     expect(toggle).toContain("toggle: 'agents_manage'")
@@ -40,6 +42,35 @@ describe('Agent-tab "Allow hiring and managing agents" toggle', () => {
     expect(toggle).toContain('noteOptimisticProjectsMutationSuccess()')
     expect(toggle).not.toContain('fetchProjects(')
     expect(toggle).not.toContain('workspace/set')
+  })
+})
+
+// 0.46.12 (Rosson): hiring is its own switch, "Let this agent hire agents",
+// right after the sidecars row; same Admin route, toggle `agents_hire`.
+describe('Agent-tab "Let this agent hire agents" toggle', () => {
+  it('has a manifest id, follows the sidecars row, and posts agent-access/set agents_hire', () => {
+    expect(src).toContain("id: 'projects.agents-can-hire-agents'")
+    expect(src).toContain('data-settings-id="projects.agents-can-hire-agents"')
+    expect(src).toContain('<AgentsHireAgentsToggle project={project} />')
+    expect(src.indexOf('<AgentsHireAgentsToggle project={project} />')).toBeGreaterThan(
+      src.indexOf('<AgentsManageAgentsToggle project={project} />'),
+    )
+    expect(src.indexOf('<AgentsManageVaultToggle project={project} />')).toBeGreaterThan(
+      src.indexOf('<AgentsHireAgentsToggle project={project} />'),
+    )
+    const toggle = componentBody('AgentsHireAgentsToggle')
+    expect(toggle).toContain('Let this agent hire agents')
+    expect(toggle).toContain('<AskedChip row="projects.agents-can-hire-agents" />')
+    expect(toggle).toContain("daemonCliPost(primaryScope(), 'agent-access/set'")
+    expect(toggle).toContain("toggle: 'agents_hire'")
+    expect(toggle).toContain('value: next')
+    expect(toggle).toContain('workspace: project.path')
+    expect(toggle).toContain('agentsCanHireAgents: next ? 1 : 0')
+    expect(toggle).toContain('noteOptimisticProjectsMutationSuccess()')
+    expect(toggle).not.toContain('fetchProjects(')
+    expect(toggle).not.toContain('workspace/set')
+    expect(toggle).not.toContain('agents_manage')
+    expect(componentBody('AgentsManageAgentsToggle')).not.toContain('agents_hire')
   })
 })
 

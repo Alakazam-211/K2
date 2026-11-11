@@ -28,6 +28,8 @@ describe('Agent tab wiring', () => {
     expect(rows).toEqual([
       'AgentPermissionCardsRow',
       'AgentsManageAgentsToggle',
+      // 0.46.12: hiring is its own row, after the sidecars one.
+      'AgentsHireAgentsToggle',
       'AgentsManageVaultToggle',
       'AgentHandoffAcceptFrom',
       'AgentHandoffSendAllow',

@@ -703,3 +703,46 @@ fn template_recipe_member_takes_a_template() {
     let (st, v) = call(V1_HIRE, &who, true, json!({ "agent": { "template": "boss" } }), None);
     assert_eq!(st, 400, "{v}");
 }
+
+/// Daemon-first hello (PRD §3 Hello row): a first template hire starts the
+/// agent and delivers its hello once (then the `onboard` message after it);
+/// a re-apply and a dry run send nothing; `launch: false` opts out.
+#[test]
+fn template_hire_delivers_the_hello_from_the_daemon_once() {
+    let _home = k2_core::test_env::TempHome::new();
+    ensure_test_root();
+    let sent = |handle: &str| -> Vec<(String, Option<String>)> {
+        super::TEST_HELLOS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(h, _, _)| h == handle)
+            .map(|(_, hello, onboard)| (hello.clone(), onboard.clone()))
+            .collect()
+    };
+    let name = uniq("Hal");
+    // A dry run sends nothing.
+    let (st, plan) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": name, "dryRun": true }), &[]);
+    assert_eq!(st, 200, "{plan}");
+    assert_ne!(plan["helloDelivered"], true, "{plan}");
+    assert!(sent(plan["handle"].as_str().unwrap()).is_empty());
+    // The first create: delivered once, the onboard message after it.
+    let (st, out) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": name, "onboard": "Start with the blog." }), &[]);
+    assert_eq!(st, 200, "{out}");
+    assert_eq!((out["helloDelivered"].as_bool(), out["onboardQueued"].as_bool()), (Some(true), Some(true)), "{out}");
+    let handle = out["handle"].as_str().unwrap().to_string();
+    let got = sent(&handle);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(got[0].0.contains("Say hello") && Some(got[0].0.as_str()) == out["hello"].as_str(), "{got:?}");
+    assert_eq!(got[0].1.as_deref(), Some("Start with the blog."));
+    // A re-apply sends nothing.
+    let (st, again) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": name }), &[]);
+    assert_eq!(st, 200, "{again}");
+    assert_eq!(again["helloDelivered"], false, "{again}");
+    assert_eq!(sent(&handle).len(), 1, "the hello goes out once");
+    // `launch: false`: returned for the caller, not sent.
+    let (_, quiet) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": uniq("Quiet"), "launch": false }), &[]);
+    assert_eq!(quiet["helloDelivered"], false, "{quiet}");
+    assert!(quiet["hello"].is_string(), "{quiet}");
+    assert!(sent(quiet["handle"].as_str().unwrap()).is_empty());
+}

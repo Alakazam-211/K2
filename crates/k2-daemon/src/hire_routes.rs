@@ -937,6 +937,21 @@ fn cli_template_hire(
             }
             let mut v = out.to_json();
             v["id"] = serde_json::json!(out.workspace_id);
+            // Daemon-first hello (PRD §3, the Hello row): on the first create
+            // the daemon starts the agent and delivers its hello, then the
+            // hirer's `onboard` message after it. `launch: false` opts out
+            // (the hello is still returned for the caller to send).
+            let launch = extra.get("launch").and_then(|v| v.as_bool()) != Some(false);
+            let onboard = extra.get("onboard").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+            let mut delivered = false;
+            if let (false, true, true, Some(hello)) = (out.dry_run, out.created, launch, out.hello.clone()) {
+                queue_hello(&out.path, &out.handle, hello, onboard.clone(), who, caller);
+                delivered = true;
+            }
+            v["helloDelivered"] = serde_json::json!(delivered);
+            if delivered && onboard.is_some() {
+                v["onboardQueued"] = serde_json::json!(true);
+            }
             if let (Some(app), false) = (take_app, out.dry_run) {
                 v["handover"] = match crate::apps::handover::hire_take(who, app, &out.workspace_id, brief, out.created) {
                     Ok(h) => h,
@@ -946,6 +961,50 @@ fn cli_template_hire(
             ok(v)
         }
         Err(e) => hire_error_response(&e),
+    }
+}
+
+/// What the daemon would have delivered, in unit tests (no session
+/// starts there): `(handle, hello, onboard)`.
+#[cfg(test)]
+pub(crate) static TEST_HELLOS: std::sync::Mutex<Vec<(String, String, Option<String>)>> = std::sync::Mutex::new(Vec::new());
+
+/// Start a new template agent's session and deliver its hello, then the
+/// hirer's `onboard` message after it, off the request thread (the hire
+/// launch path: `ensure_canonical_session`, then a recorded delivery with
+/// wake). The agent stands whether or not this works; a failure is logged.
+fn queue_hello(path: &str, handle: &str, hello: String, onboard: Option<String>, who: &Who, caller: &HireCaller) {
+    #[cfg(test)]
+    {
+        let _ = (path, who, caller);
+        TEST_HELLOS.lock().unwrap_or_else(|p| p.into_inner()).push((handle.to_string(), hello, onboard));
+    }
+    #[cfg(not(test))]
+    {
+        let from = match who {
+            Who::Login { username, .. } => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::Login(username)),
+            Who::Agent { project_id, .. } | Who::Shell { project_id, .. } => crate::compute_routes::ws_handle(project_id),
+            _ => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
+        };
+        let sender = Sender::from_hire_caller(caller, None);
+        let (path, handle) = (path.to_string(), handle.to_string());
+        let label = handle.clone();
+        let spawned = crate::rt::spawn("template-hello", move || {
+            if let Err(e) = crate::canonical_session::ensure_canonical_session(&path) {
+                k2_core::log_debug!("[hire] hello {handle}: launch failed: {e}");
+                return;
+            }
+            for text in std::iter::once(hello).chain(onboard) {
+                let (r, _) = deliver_recorded(&handle, &text, &from, "", true, crate::workspace_msg::DEFAULT_WAKE_TIMEOUT, "hire", &sender);
+                if !r.success {
+                    k2_core::log_debug!("[hire] hello {handle}: {}", r.reason.unwrap_or_default());
+                    return;
+                }
+            }
+        });
+        if let Err(e) = spawned {
+            k2_core::log_debug!("[hire] hello for {label} not started: {e}");
+        }
     }
 }
 

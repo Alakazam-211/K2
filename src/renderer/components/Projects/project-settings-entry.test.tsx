@@ -119,7 +119,7 @@ describe('Project settings from the Projects page', () => {
     fireEvent.contextMenu(row)
     await waitFor(() => expect(useProjectGroupsStore.getState().settingsSheet?.groupId).toBe('g1'))
     expect(useProjectGroupsStore.getState().settingsSheet?.opener).toBe(row)
-    expect(menuLabels()[0]).toBe('Project settings')
+    expect(menuLabels().slice(0, 3)).toEqual(['Project settings', '', 'Pin to top'])
     const sheet = await screen.findByTestId('project-settings-sheet')
     await waitFor(() => expect(sheet.querySelector('[data-testid="project-settings-detail"]')).toBeTruthy())
     // The page is still there behind it, and Settings never opened.
@@ -131,7 +131,7 @@ describe('Project settings from the Projects page', () => {
     useProjectGroupsStore.setState({ navCollapsed: true })
     render(<ProjectsPage />)
     await waitFor(() => expect(screen.getByTestId('dashboard-stub')).toBeTruthy())
-    const icon = screen.getByTitle('Launch • 0 members')
+    const icon = screen.getByTitle('Launch · 0 agents')
     fireEvent.contextMenu(icon)
     await waitFor(() => expect(useProjectGroupsStore.getState().settingsSheet?.groupId).toBe('g1'))
     expect(openSettings).not.toHaveBeenCalled()

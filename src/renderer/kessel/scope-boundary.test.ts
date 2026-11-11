@@ -136,6 +136,11 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.1: the shared icon cache's single-flight GET (was ProjectGroupAvatar).
   'components/Projects/group-icon-cache.ts',
   'components/Projects/ProjectNav.tsx',
+  // 0.46.12: the project bar and the nav's project section act on the window's own server.
+  'components/Projects/ProjectAgentsSection.tsx',
+  'components/Projects/ProjectBar.tsx',
+  // The page's state cards (No dashboard → create one), on the base already.
+  'components/Projects/ProjectStates.tsx',
   'components/Projects/ProjectSettings.tsx',
   'components/Projects/ProjectsPage.tsx',
   'components/RemoteFolderPicker/RemoteFolderPicker.tsx',

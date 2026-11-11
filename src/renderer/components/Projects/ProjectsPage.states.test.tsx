@@ -58,7 +58,7 @@ vi.mock('./projects-api', async () => {
   }
 })
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import ProjectsPage from './ProjectsPage'
 import { EmptyDashboardState, emptyDashboardHint } from './ProjectStates'
 import { usePageViewStore } from '@/stores/page-view'
@@ -150,7 +150,8 @@ describe('the project list', () => {
     const empty = await screen.findByTestId('projects-empty')
     expect(screen.getAllByText('No projects yet')).toHaveLength(1)
     expect(empty.textContent).not.toContain('—')
-    const create = screen.getByRole('button', { name: 'New project' })
+    // (The nav's own + is New project too; this is the canvas's one.)
+    const create = within(empty).getByRole('button', { name: 'New project' })
     expect(create.className).toContain('bg-[var(--color-accent-fill)]')
     expect(create.className).not.toContain('bg-white/')
     fireEvent.click(create)
@@ -230,8 +231,8 @@ describe('one project', () => {
     const state = await screen.findByTestId('project-no-dashboard')
     await waitFor(() => expect(state.textContent).toContain('Only the project’s owner or an admin can add one.'))
     expect(screen.queryByRole('button', { name: 'Create a dashboard' })).toBeNull()
-    // The Feedback tab still opens from the tab row.
-    fireEvent.click(screen.getByRole('button', { name: 'Feedback' }))
+    // The Feedback tab still opens from the project bar.
+    fireEvent.click(screen.getByRole('tab', { name: 'Feedback' }))
     await waitFor(() => expect(screen.queryByTestId('project-no-dashboard')).toBeNull())
   })
 

@@ -22,6 +22,12 @@ import type { SettingEntry } from '@/components/Settings/searchManifest'
 
 export type ProjectRole = 'owner' | 'admin' | 'member'
 
+/** "6 agents" / "1 agent": how Settings → Projects counts a project (the
+ *  Projects nav and project bar say it the same way). */
+export function agentCountText(n: number): string {
+  return `${n} ${n === 1 ? 'agent' : 'agents'}`
+}
+
 /** What the signed-in person may change on the project settings page.
  *  Mirrors the daemon floors (`project_group_routes.rs` is_admin_only +
  *  route_policy): name, pin and agents are any login; picture, color,

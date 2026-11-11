@@ -108,7 +108,10 @@ export default function DashboardPresetsMenu({ showWord = true }: { showWord?: b
       </Button>
 
       {open && (
-        <BarMenuPanel menu={menu} label="Layout" onClose={() => setOpen(false)} testId="layout-menu">
+        <BarMenuPanel menu={menu} label="Arrange this dashboard" onClose={() => setOpen(false)} testId="layout-menu">
+          <div className="px-3 pt-1.5 pb-1 type-hint font-semibold text-[var(--color-text-secondary)]" role="presentation">
+            Arrange this dashboard
+          </div>
           {PRESETS.map((p) => (
             <BarMenuItem
               key={p.shape}

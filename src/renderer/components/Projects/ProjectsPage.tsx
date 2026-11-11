@@ -4,19 +4,18 @@
 // A top-level page selected from the §6.0 switcher; body idiom borrowed
 // from FeedbackPage.tsx: a fixed-inset overlay with its own draggable
 // top bar (which carries the ServerSwitcher + the page switcher, so
-// the server dropdown stays visible here). LEFT NAV = ProjectNav
-// (Pinned + list + member drawer), collapsible to an ICON RAIL via the
-// top-bar toggle (§6.7.1 — the Agents page's sidebar-collapse idiom,
-// persisted per client). The main area shows the selected project under
-// DASHBOARDS-AS-TABS (§6.7.6: one tab per dashboard in `position`
-// order + the Feedback tab — no header row, §6.7.2; project identity
-// lives in the nav, settings via right-click / Settings → Projects).
+// the server dropdown stays visible here). LEFT NAV = ProjectNav: the
+// project list (Pinned, All projects), then the selected project's agents
+// and their files; collapsible to an ICON RAIL from the » / « at its
+// bottom (§6.7.1). The main area shows the selected project under its
+// PROJECT BAR (ProjectBar.tsx, projects-reorg-draft §3.2): identity, the
+// dashboards as tabs + Feedback, and Layout, Settings and Chat.
 //
 // The project CHAT is a full-height right-hand side panel (§6.7.3),
-// toggled from the top bar's right end (the Agents page's right-panel
-// toggle idiom); the unread dot rides the toggle while closed. Esc
-// never navigates away — it focuses the open dashboard's last-used
-// terminal pane (§6.7.4, handled inside ProjectDashboard).
+// opened from the bar's Chat button (with the unread count) and closed
+// from the × in the chat's own header. Esc never navigates away — it
+// focuses the open dashboard's last-used terminal pane (§6.7.4, handled
+// inside ProjectDashboard).
 //
 // P5 fills the dashboard tabs: ProjectDashboard renders the canonical
 // layout blob as percent-width pane columns (kessel canonical-terminal
@@ -38,11 +37,11 @@ import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
 import AnimatedDrawer from '@/components/Layout/AnimatedDrawer'
-import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 import { Surface } from '@/components/ui'
 import ProjectNav, { ProjectNavRail } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
-import DashboardPresetsMenu from './DashboardPresetsMenu'
+import ProjectBar, { useViewerRole } from './ProjectBar'
+import { projectSettingsCaps } from './project-settings'
 import ProjectChatPanel from './ProjectChatPanel'
 import { NoDashboardState, ProjectListLoadState, ProjectLoadState, ProjectsEmptyState } from './ProjectStates'
 import ProjectSettingsSheet from './ProjectSettingsSheet'
@@ -56,18 +55,20 @@ import {
 } from './project-tabs'
 import { requestPaneShortcut } from './dashboard-dnd'
 import { primaryScope } from '@/kessel/server-scope'
-import { useUnreadEntry } from '@/stores/unread'
-import { UnreadBadge } from '@/components/common/UnreadBadge'
 import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 
 const TOPBAR_HEIGHT = TOPBAR_HEIGHT_CSS
 
 // ── Selected-project main area ────────────────────────────────────────────
 
+type TabUpdate = string | null | ((cur: string | null) => string | null)
+
 function SelectedProjectView({
   name,
   show,
   error,
+  tab,
+  setTab,
   onReload,
   retrying = false,
 }: {
@@ -77,14 +78,15 @@ function SelectedProjectView({
   error: string | null
   /** Try again in flight (its button busy on the failure card). */
   retrying?: boolean
-  /** Read the project again (Try again; after creating its dashboard). */
+  /** §6.7.6 — the chosen tab (a dashboard id or the Feedback sentinel),
+   *  held by the page per project so the nav knows the dashboard on
+   *  screen; resolveActiveTab heals a stale id to the first dashboard. */
+  tab: string | null
+  setTab: (next: TabUpdate) => void
+  /** Read the project again (Try again; after creating its dashboard or
+   *  any change made from its bar or the nav). */
   onReload: () => void
 }): React.JSX.Element {
-  // §6.7.6 — the active tab: a dashboard id or the Feedback sentinel.
-  // Selection switches arrive as a fresh mount (the page keys this view
-  // by group id), so tab state resets per project; resolveActiveTab
-  // heals a stale id (deleted dashboard) to the first dashboard.
-  const [tab, setTab] = useState<string | null>(null)
 
   const dashboards = useMemo(() => orderedDashboards(show?.dashboards ?? []), [show?.dashboards])
   const dashboardIds = useMemo(() => dashboards.map((d) => d.id), [dashboards])
@@ -99,11 +101,8 @@ function SelectedProjectView({
 
   // §6.7.3 — the chat side panel renders across ALL dashboard tabs
   // (per-project, never per-dashboard); open/closed is the persisted
-  // store flag the top-bar toggle flips.
+  // store flag the bar's Chat button and the chat's own × flip.
   const chatOpen = useProjectGroupsStore((s) => !s.chatCollapsed)
-  // thread-read-v1: the selected project's chat state, per the daemon.
-  const selectedId = useProjectGroupsStore((s) => s.selectedGroupId)
-  const selectedUnread = useUnreadEntry('project', selectedId)
 
   // P5 — a member-row click (open/focus its canonical pane) lands on a
   // DASHBOARD tab (the first one when Feedback is active); the mounted
@@ -125,73 +124,15 @@ function SelectedProjectView({
   return (
     <div className="flex-1 flex min-h-0 min-w-0">
       <div className="flex-1 flex flex-col min-h-0 min-w-0">
-        {/* §6.7.2 — no project header row (identity lives in the nav;
-            settings via right-click / Settings → Projects). §6.7.6 —
-            dashboards ARE the tabs: one per dashboard + Feedback. */}
-        <div className="px-4 pt-2 border-b border-[var(--color-border)] flex-shrink-0">
-          {/* The scroll container holds only the tabs — the presets
-              popover must not live under overflow-x-auto (clipping). */}
-          <div className="flex items-center gap-1">
-            <div className="flex items-center gap-1 overflow-x-auto flex-1 min-w-0">
-              {dashboards.map((d) => (
-                <button
-                  key={d.id}
-                  type="button"
-                  onClick={() => setTab(d.id)}
-                  className={`px-3 py-1.5 text-[11px] font-medium border-b-2 -mb-px transition-colors cursor-pointer whitespace-nowrap ${
-                    activeTab === d.id
-                      ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                      : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
-                  }`}
-                  title={`Dashboard "${d.name}" — revision ${d.revision}`}
-                >
-                  {d.name}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => setTab(FEEDBACK_TAB)}
-                className={`px-3 py-1.5 text-[11px] font-medium border-b-2 -mb-px transition-colors cursor-pointer whitespace-nowrap ${
-                  activeTab === FEEDBACK_TAB
-                    ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                    : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
-                }`}
-              >
-                Feedback
-              </button>
-            </div>
-            {/* §6.8.4 — the layout-presets menu at the RIGHT end of the
-                tab row; only meaningful over an open dashboard (the
-                mounted ProjectDashboard applies the re-tile). Hidden
-                for viewers (inside the component). */}
-            {activeTab !== FEEDBACK_TAB && activeDashboard !== null && <DashboardPresetsMenu />}
-            {/* Closed chat: its » / « toggle in its own slot at the row's
-                far right (the drawer-toggle principle); the unread dot
-                rides it. Open, the toggle sits in the chat header. */}
-            {!chatOpen && (
-              <div className="-mr-4 -mt-2 flex self-stretch" data-project-chat-toggle-slot="">
-                <DrawerToggleButton
-                  side="right"
-                  placement="room"
-                  name="project chat"
-                  onToggle={() => useProjectGroupsStore.getState().setChatCollapsed(false)}
-                >
-                  {selectedUnread && (selectedUnread.unread > 0 || selectedUnread.waiting > 0) && (
-                    <span className="absolute top-1 right-1 flex" data-project-chat-unread="">
-                      <UnreadBadge
-                        unread={selectedUnread.unread}
-                        waiting={selectedUnread.waiting}
-                        muted={selectedUnread.muted}
-                        variant="dot"
-                        label="project messages"
-                      />
-                    </span>
-                  )}
-                </DrawerToggleButton>
-              </div>
-            )}
-          </div>
-        </div>
+        {/* The project bar (projects-reorg-draft §3.2): which project
+            this is, its dashboards as tabs + Feedback, and its actions. */}
+        <ProjectBar
+          show={show}
+          dashboards={dashboards}
+          activeTab={activeTab}
+          onTab={setTab}
+          onChanged={onReload}
+        />
 
         {activeTab === FEEDBACK_TAB ? (
           /* P7 (§6.6) — the member-scoped feedback board. Keyed upstream
@@ -334,6 +275,22 @@ export default function ProjectsPage(): React.JSX.Element | null {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [isOpen])
 
+  // The selected project's show, never the PREVIOUS project's while a
+  // switch's fetch is in flight.
+  const selectedShow = show && show.id === selectedGroupId ? show : null
+  // The login's role: who may add an agent from the nav (any login today).
+  const role = useViewerRole()
+  const canAddAgents = projectSettingsCaps(role).canEdit
+  // Each project's chosen tab, kept here so the nav knows the dashboard on
+  // screen (its files say "On this dashboard"). On Feedback, the first
+  // dashboard: where a "Show on this dashboard" lands.
+  const [tabByGroup, setTabByGroup] = useState<Record<string, string | null>>({})
+  const navDashboard = useMemo(() => {
+    const ds = orderedDashboards(selectedShow?.dashboards ?? [])
+    const active = resolveActiveTab(selectedGroupId ? (tabByGroup[selectedGroupId] ?? null) : null, ds.map((d) => d.id))
+    return ds.find((d) => d.id === active) ?? ds[0] ?? null
+  }, [selectedShow, selectedGroupId, tabByGroup])
+
   const selectedGroup = useMemo(
     () => groups?.find((g) => g.id === selectedGroupId) ?? null,
     [groups, selectedGroupId],
@@ -381,16 +338,12 @@ export default function ProjectsPage(): React.JSX.Element | null {
 
       {/* Body: left nav (expanded or icon rail, §6.7.1) + main area. */}
       <div className="flex-1 min-h-0 flex">
+        {/* The nav: the project list, then the selected project's agents
+            and their files (ProjectAgentsSection). */}
         {navCollapsed ? (
-          <ProjectNavRail
-            members={show?.id === selectedGroupId ? show?.members ?? null : null}
-            pocWorkspaceId={show?.pocWorkspaceId ?? null}
-          />
+          <ProjectNavRail show={selectedShow} canAddAgents={canAddAgents} onChanged={reloadShow} />
         ) : (
-          <ProjectNav
-            members={show?.id === selectedGroupId ? show?.members ?? null : null}
-            pocWorkspaceId={show?.pocWorkspaceId ?? null}
-          />
+          <ProjectNav show={selectedShow} dashboard={navDashboard} canAddAgents={canAddAgents} onChanged={reloadShow} />
         )}
 
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
@@ -415,6 +368,13 @@ export default function ProjectsPage(): React.JSX.Element | null {
               show={show?.id === selectedGroup.id ? show : null}
               error={showError?.id === selectedGroup.id ? showError.message : null}
               retrying={showRetrying}
+              tab={tabByGroup[selectedGroup.id] ?? null}
+              setTab={(next) =>
+                setTabByGroup((all) => {
+                  const cur = all[selectedGroup.id] ?? null
+                  return { ...all, [selectedGroup.id]: typeof next === 'function' ? next(cur) : next }
+                })
+              }
               onReload={reloadShow}
             />
           )}

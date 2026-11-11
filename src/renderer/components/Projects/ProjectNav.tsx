@@ -1,78 +1,52 @@
-// Projects V1 P4 (prd-projects-v1 §6.1, resolved Q4) — the Projects
-// page's LEFT NAV, mimicking Sidebar.tsx's anatomy exactly: canonical
-// Pinned section on top (project_groups.pinned — the projects.pinned
-// precedent, Sidebar.tsx:698), the unpinned project list below, NO
-// Active section, and the bottom-drawer slot (ActiveBar's position)
-// holding the SELECTED project's member agents in ActiveBar styling —
-// always ALL members, never activity-gated. P5 wired the member rows:
-// click opens/focuses the member's canonical pane in the dashboard;
-// drag (Sidebar's handleProjectMouseDown threshold pattern, bridged
-// via dashboard-dnd.ts) drops it onto a §6.2 drop target. Group-list
-// drag-to-reorder awaits a sort-order route (V1.1).
+// Projects V1 P4 (prd-projects-v1 §6.1) — the Projects page's LEFT NAV,
+// in two parts (0.46.12, Rosson 2026-11-11):
+//   1. which project: a "Projects" header with "+" (New project), then
+//      Pinned and All projects as Settings → Projects shows them (sentence
+//      case, "6 agents"). The list has a capped height and scrolls on its
+//      own, so it never pushes the rest out of a small window;
+//   2. a divider, then the SELECTED project: its picture and name, its
+//      agents (each with its files folded under it) and "Add an agent…"
+//      (ProjectAgentsSection.tsx), scrolling on its own too.
+// The nav collapses to an icon rail (projects on top, the selected
+// project's agents as pictures below), whose toggle sits at the bottom of
+// both (the main nav's pattern). Group-list drag-to-reorder awaits a
+// sort-order route (V1.1).
 
-import React, { useMemo, useRef, useState } from 'react'
-import { useProjectsStore } from '@/stores/projects'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useProjectGroupsStore } from '@/stores/project-groups'
+import { openProjectSettings } from './ProjectSettingsSheet'
+import { NEW_PROJECT_EVENT } from './project-nav-events'
 import { useToastStore } from '@/stores/toast'
-import { useWindowModeStore, noteViewerInteractionBlocked } from '@/stores/window-mode'
 import { showContextMenu } from '@/lib/context-menu'
-import { SetiFileIcon } from '@/lib/seti-file-icons'
-import { KeyCombo } from '@/components/KeySymbol'
-import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
 import { NAV_TOGGLE_BOX } from '@/components/Layout/drawer-toggles'
-import { Button, Input } from '@/components/ui'
+import { Button, Input, cx } from '@/components/ui'
+import {
+  AVATAR_ROUND,
+  SETTING_LIST_ROW_HOVER,
+} from '@/components/Settings/controls/SettingControls'
 import ProjectGroupAvatar from './ProjectGroupAvatar'
-import { openProjectSettings } from './ProjectSettingsSheet'
-import { completeDashDrag, useDashboardDndStore } from './dashboard-dnd'
+import { agentCountText } from './project-settings'
+import { ProjectNavSection, RailAgents } from './ProjectAgentsSection'
 import {
   createProjectGroup,
   createErrorMessage,
-  fetchProjectGroupResources,
   partitionPinned,
   pinProjectGroup,
-  removeWorkspaceResource,
   type ProjectGroup,
-  type ProjectGroupHtmlDoc,
-  type ProjectGroupMemberInfo,
+  type ProjectGroupDashboard,
+  type ProjectGroupShow,
 } from './projects-api'
-import { onWorkspaceResourcesChanged } from '@/stores/session-events'
-import {
-  loadPinnedMemberIds,
-  loadPinnedResourceKeys,
-  resourceDocKey,
-  sortMembersPinnedFirst,
-  sortResourcesPinnedThenAlpha,
-  togglePinnedMember,
-  togglePinnedResource,
-} from './member-pins'
 import { primaryScope } from '@/kessel/server-scope'
 import { ConversationUnreadBadge, muteMenuState, toggleMute } from '@/components/common/UnreadBadge'
 import { unreadKey, unreadSupported, useUnreadStore } from '@/stores/unread'
 
-export const PROJECT_NAV_WIDTH = 280
+export const PROJECT_NAV_WIDTH = 296
 /** Collapsed-rail width (IconRail's RAIL_WIDTH). */
 export const PROJECT_NAV_RAIL_WIDTH = 48
 
-// ── Group row (SingleProjectItem's visual idiom, group-shaped) ────────────
 
-function PinGlyph({ filled }: { filled: boolean }): React.JSX.Element {
-  return (
-    <svg
-      width="10"
-      height="10"
-      viewBox="0 0 24 24"
-      fill={filled ? 'currentColor' : 'none'}
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M12 17v5" />
-      <path d="M9 3h6l-1 7 3 3H7l3-3-1-7z" />
-    </svg>
-  )
-}
+// ── Group row (the Settings → Projects list row) ──────────────────────────
 
 /** The project row menu's mute item (thread-read-v1), or null on a server
  *  without it. Reads the store at click time, never in render. */
@@ -84,9 +58,9 @@ function groupMuteItem(groupId: string): { label: string; next: boolean } | null
 
 /** The one right-click menu for a project, in the nav row and the
  *  collapsed rail alike: Project settings (a sheet over this page with
- *  this project's settings; `openProjectSettings`), Pin/Unpin, and Mute
- *  when the server has it. `togglePin` is the caller's pin action;
- *  `opener` (the row) gets the focus back when the sheet closes. */
+ *  this project's settings; `openProjectSettings`), Pin to top / Unpin,
+ *  and Mute when the server has it. `togglePin` is the caller's pin
+ *  action; `opener` (the row) gets the focus back when the sheet closes. */
 export async function openProjectGroupContextMenu(
   group: ProjectGroup,
   togglePin: () => Promise<void>,
@@ -96,7 +70,7 @@ export async function openProjectGroupContextMenu(
   const clickedId = await showContextMenu([
     { id: 'group-settings', label: 'Project settings' },
     { id: 'separator-pin', label: '', type: 'separator' },
-    { id: 'toggle-pin', label: group.pinned ? 'Unpin' : 'Pin to Top' },
+    { id: 'toggle-pin', label: group.pinned ? 'Unpin' : 'Pin to top' },
     ...(mute ? [{ id: 'toggle-mute', label: mute.label }] : []),
   ])
   if (clickedId === 'toggle-mute' && mute) {
@@ -105,6 +79,24 @@ export async function openProjectGroupContextMenu(
     openProjectSettings(group.id, opener)
   } else if (clickedId === 'toggle-pin') {
     await togglePin()
+  }
+}
+
+/** Pin or unpin a project, refetch the list so it moves sections, and say
+ *  so when the server refuses. */
+async function setGroupPinned(group: ProjectGroup): Promise<void> {
+  try {
+    await pinProjectGroup(primaryScope(), group.id, !group.pinned)
+    // groups-changed also fires; refetch now so the row moves sections
+    // without waiting out the coalesce window.
+    await useProjectGroupsStore.getState().fetchGroups()
+  } catch (err) {
+    useToastStore
+      .getState()
+      .addToast(
+        `Couldn’t ${group.pinned ? 'unpin' : 'pin'} ${group.name}: ${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
   }
 }
 
@@ -117,34 +109,23 @@ function GroupRow({
   selected: boolean
   onSelect: () => void
 }): React.JSX.Element {
-  const [hovered, setHovered] = useState(false)
   const [pinBusy, setPinBusy] = useState(false)
 
-  const togglePin = async (e?: React.MouseEvent): Promise<void> => {
-    e?.stopPropagation()
+  // Pin / Unpin lives in the right-click menu (a keyboard-reachable
+  // menu, not a hover-only glyph); the Pinned section shows the state.
+  const togglePin = async (): Promise<void> => {
     if (pinBusy) return
     setPinBusy(true)
     try {
-      await pinProjectGroup(primaryScope(), group.id, !group.pinned)
-      // groups-changed also fires; refetch now so the row moves sections
-      // without waiting out the coalesce window.
-      await useProjectGroupsStore.getState().fetchGroups()
-    } catch (err) {
-      useToastStore
-        .getState()
-        .addToast(
-          `${group.pinned ? 'Unpin' : 'Pin'} failed: ${err instanceof Error ? err.message : String(err)}`,
-          'error',
-        )
+      await setGroupPinned(group)
     } finally {
       setPinBusy(false)
     }
   }
 
   // Right-click menu (§6.5) — the Sidebar workspace-row idiom
-  // (showContextMenu): "Project Settings" deep-links to Settings →
-  // Projects with THIS project preselected; Pin/Unpin mirrors the
-  // hover pin button (which stays).
+  // (showContextMenu): "Project settings" deep-links to Settings →
+  // Projects with THIS project preselected.
   const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
     e.preventDefault()
     await openProjectGroupContextMenu(group, () => togglePin(), e.currentTarget as HTMLElement)
@@ -153,541 +134,38 @@ function GroupRow({
   return (
     <div className="no-drag" data-group-id={group.id}>
       <button
-        onContextMenu={(e) => void handleContextMenu(e)}
-        className={`w-full flex items-stretch gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
-          selected
-            ? 'bg-white/[0.06] text-[var(--color-text-primary)]'
-            : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
-        }`}
-        style={{
-          borderLeft: selected ? '2px solid var(--color-accent)' : '2px solid transparent',
-        }}
-        onClick={onSelect}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-      >
-        <div className="flex items-center flex-shrink-0">
-          {/* §6.7.1/§6.7.7 — icon when set, else initials on the group's
-              canonical color / stable hashed pick (the shared avatar
-              component the collapsed rail also renders). */}
-          <ProjectGroupAvatar
-            name={group.name}
-            groupId={group.id}
-            size={32}
-            color={group.color}
-          />
-        </div>
-        <div className="flex flex-col justify-center min-w-0 flex-1">
-          <div className="flex items-center gap-2 w-full">
-            <span className="truncate flex-1">{group.name}</span>
-            <ConversationUnreadBadge kind="project" id={group.id} label="project messages" />
-            {(hovered || group.pinned) && (
-              <span
-                onClick={(e) => void togglePin(e)}
-                className={`flex-shrink-0 flex h-4 w-4 items-center justify-center transition-colors cursor-pointer ${
-                  group.pinned
-                    ? 'text-[var(--color-accent)] hover:text-[var(--color-text-primary)]'
-                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
-                } ${pinBusy ? 'opacity-50' : ''}`}
-                title={group.pinned ? 'Unpin' : 'Pin to top'}
-              >
-                <PinGlyph filled={group.pinned} />
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="text-[10px] font-mono text-[var(--color-text-muted)]">
-              {group.memberCount} {group.memberCount === 1 ? 'member' : 'members'}
-            </span>
-          </div>
-        </div>
-      </button>
-    </div>
-  )
-}
-
-// ── Member drawer (the ActiveBar slot — §6.1, resolved Q4/Q18) ────────────
-
-function MemberRow({
-  member,
-  isPoc,
-  isPinned,
-  groupId,
-  onTogglePin,
-}: {
-  member: ProjectGroupMemberInfo
-  isPoc: boolean
-  isPinned: boolean
-  groupId: string
-  onTogglePin: (workspaceId: string) => void
-}): React.JSX.Element {
-  // Icon/color come from the workspace-registry store row (the member
-  // enrichment carries name/path only).
-  const workspace = useProjectsStore((s) => s.projects.find((p) => p.id === member.workspaceId))
-  const displayName = member.agentName ?? member.name ?? member.workspaceId.slice(0, 8)
-  // ⌘N — this member's pane number on the current dashboard (undefined
-  // when it has no terminal pane there / no dashboard is mounted).
-  const paneNum = useProjectGroupsStore((s) => s.dashPaneNumbers[member.workspaceId])
-  // Presence read-only signal (window-mode.ts): viewers can still CLICK
-  // (focus an existing pane — the dashboard decides), but never DRAG.
-  const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
-  // A completed drag fires a trailing click on the same button —
-  // swallow exactly that one.
-  const suppressClickRef = useRef(false)
-
-  const handleClick = (): void => {
-    if (suppressClickRef.current) {
-      suppressClickRef.current = false
-      return
-    }
-    // P5 (§6.1/§6.2): open (or focus — one pane per agent) this
-    // member's canonical terminal pane in the dashboard. The mounted
-    // ProjectDashboard consumes the request.
-    useProjectGroupsStore.getState().requestMemberPane(member.workspaceId)
-  }
-
-  // P5 (§6.2) — drag a member into the dashboard: Sidebar's
-  // handleProjectMouseDown threshold pattern; the pointer streams into
-  // the dashboard-dnd store (the dashboard renders drop-target hints)
-  // and mouseup offers the drop to the mounted dashboard.
-  const handleMouseDown = (e: React.MouseEvent): void => {
-    if (readOnly || e.button !== 0) return
-    const startX = e.clientX
-    const startY = e.clientY
-    let started = false
-
-    const handleMouseMove = (ev: MouseEvent): void => {
-      if (!started && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 5)) {
-        started = true
-        suppressClickRef.current = true
-        document.body.style.cursor = 'grabbing'
-        document.body.style.userSelect = 'none'
-      }
-      if (!started) return
-      useDashboardDndStore.getState().setDrag({
-        payload: { type: 'member', workspaceId: member.workspaceId },
-        x: ev.clientX,
-        y: ev.clientY,
-      })
-    }
-
-    const handleMouseUp = (ev: MouseEvent): void => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      if (!started) return
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      completeDashDrag({ type: 'member', workspaceId: member.workspaceId }, ev.clientX, ev.clientY)
-      useDashboardDndStore.getState().setDrag(null)
-      // The trailing click (mousedown+mouseup on this button) is
-      // swallowed by the flag; re-arm on the next tick in case the
-      // browser skips it (pointer released off-button).
-      setTimeout(() => {
-        suppressClickRef.current = false
-      }, 0)
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-  }
-
-  const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
-    e.preventDefault()
-    e.stopPropagation()
-    if (!groupId) return
-    const clickedId = await showContextMenu([
-      {
-        id: 'toggle-pin',
-        label: isPinned ? 'Unpin from Top' : 'Pin to Top',
-      },
-    ])
-    if (clickedId === 'toggle-pin') onTogglePin(member.workspaceId)
-  }
-
-  return (
-    <button
-      onClick={handleClick}
-      onMouseDown={handleMouseDown}
-      onContextMenu={(e) => void handleContextMenu(e)}
-      className={`no-drag w-full flex items-center gap-2 px-2 py-1 text-left transition-colors select-none text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)] ${
-        readOnly ? 'cursor-default' : 'cursor-pointer'
-      }`}
-      title={member.path ?? undefined}
-    >
-      <ProjectAvatar
-        projectPath={member.path ?? ''}
-        projectName={member.name ?? displayName}
-        projectColor={workspace?.color ?? 'var(--color-text-muted)'}
-        projectId={member.workspaceId}
-        iconUrl={workspace?.iconUrl ?? null}
-        size={18}
-      />
-      <span className="text-[11px] truncate flex-1">{displayName}</span>
-      {isPinned && (
-        <span
-          className="flex-shrink-0 text-[var(--color-text-muted)] opacity-70"
-          title="Pinned to top of Members"
-        >
-          <PinGlyph filled />
-        </span>
-      )}
-      {isPoc && (
-        <span
-          className="flex-shrink-0 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide bg-[var(--color-accent)]/15 text-[var(--color-accent)]"
-          title="Point of Contact — project chat is injected into this agent's session"
-        >
-          PoC
-        </span>
-      )}
-      {paneNum !== undefined && (
-        <span
-          className="flex-shrink-0 text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums"
-          title={`⌘${paneNum} focuses this pane`}
-        >
-          {paneNum}
-        </span>
-      )}
-    </button>
-  )
-}
-
-// ── Resources drawer (Workspace Resources union from member workspaces) ─
-
-/** Click a resource → open/focus it on the mounted project dashboard. */
-function openResourceOnDashboard(doc: ProjectGroupHtmlDoc): void {
-  useProjectGroupsStore.getState().requestFileDocPane(doc.workspaceId, doc.filePath)
-}
-
-function ResourceRow({
-  doc,
-  isPinned,
-  onTogglePin,
-  onRemoved,
-}: {
-  doc: ProjectGroupHtmlDoc
-  isPinned: boolean
-  groupId: string
-  onTogglePin: (doc: ProjectGroupHtmlDoc) => void
-  onRemoved: () => void
-}): React.JSX.Element {
-  const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
-  const suppressClickRef = useRef(false)
-  const owner = doc.agentName ?? doc.workspaceName ?? ''
-
-  const handleClick = (): void => {
-    if (suppressClickRef.current) {
-      suppressClickRef.current = false
-      return
-    }
-    if (noteViewerInteractionBlocked()) return
-    openResourceOnDashboard(doc)
-  }
-
-  const handleMouseDown = (e: React.MouseEvent): void => {
-    if (e.button !== 0) return
-    if (noteViewerInteractionBlocked()) return
-    const startX = e.clientX
-    const startY = e.clientY
-    let started = false
-    const payload = {
-      type: 'htmlDoc' as const,
-      workspaceId: doc.workspaceId,
-      filePath: doc.filePath,
-    }
-
-    const handleMouseMove = (ev: MouseEvent): void => {
-      if (!started && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 5)) {
-        started = true
-        suppressClickRef.current = true
-        document.body.style.cursor = 'grabbing'
-        document.body.style.userSelect = 'none'
-      }
-      if (!started) return
-      useDashboardDndStore.getState().setDrag({ payload, x: ev.clientX, y: ev.clientY })
-    }
-
-    const handleMouseUp = (ev: MouseEvent): void => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      if (!started) return
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      completeDashDrag(payload, ev.clientX, ev.clientY)
-      useDashboardDndStore.getState().setDrag(null)
-      setTimeout(() => {
-        suppressClickRef.current = false
-      }, 0)
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-  }
-
-  const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
-    e.preventDefault()
-    e.stopPropagation()
-    const clickedId = await showContextMenu([
-      {
-        id: 'toggle-pin',
-        label: isPinned ? 'Unpin from Top' : 'Pin to Top',
-      },
-      { id: 'remove', label: 'Remove' },
-    ])
-    if (clickedId === 'toggle-pin') onTogglePin(doc)
-    if (clickedId === 'remove') {
-      try {
-        await removeWorkspaceResource(primaryScope(), doc.workspaceId, doc.filePath)
-        onRemoved()
-      } catch (err) {
-        useToastStore.getState().addToast(
-          `Remove failed: ${err instanceof Error ? err.message : String(err)}`,
-          'error',
-        )
-      }
-    }
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={handleClick}
-      onMouseDown={handleMouseDown}
-      onContextMenu={(e) => void handleContextMenu(e)}
-      className={`no-drag w-full flex items-center gap-2 px-2 py-1 text-left transition-colors select-none text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)] ${
-        readOnly ? 'cursor-default' : 'cursor-pointer'
-      }`}
-      title={doc.filePath}
-    >
-      <span
-        className="flex-shrink-0 w-[18px] h-[18px] flex items-center justify-center"
-        aria-hidden
-      >
-        <SetiFileIcon name={doc.fileName} className="w-4 h-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="text-[11px] truncate leading-tight">{doc.fileName}</div>
-        {owner ? (
-          <div className="text-[10px] text-[var(--color-text-muted)] truncate leading-tight">
-            {owner}
-          </div>
-        ) : null}
-      </div>
-      {doc.missing ? (
-        <span className="flex-shrink-0 text-[9px] uppercase tracking-wide text-[var(--color-status-warn-soft)]">
-          missing
-        </span>
-      ) : null}
-      {isPinned && (
-        <span
-          className="flex-shrink-0 text-[var(--color-text-muted)] opacity-70"
-          title="Pinned to top of Resources"
-        >
-          <PinGlyph filled />
-        </span>
-      )}
-    </button>
-  )
-}
-
-function ResourcesDrawer({ groupId }: { groupId: string }): React.JSX.Element | null {
-  const [collapsed, setCollapsed] = useState(false)
-  const [docs, setDocs] = useState<ProjectGroupHtmlDoc[] | null>(null)
-  const [pinnedKeys, setPinnedKeys] = useState<string[]>(() => loadPinnedResourceKeys(groupId))
-  const revision = useProjectGroupsStore((s) => s.revision)
-
-  React.useEffect(() => {
-    setPinnedKeys(loadPinnedResourceKeys(groupId))
-  }, [groupId])
-
-  React.useEffect(() => {
-    let cancelled = false
-    const load = (): void => {
-      fetchProjectGroupResources(primaryScope(), groupId)
-        .then((d) => {
-          if (!cancelled) setDocs(d)
-        })
-        .catch(() => {
-          if (!cancelled) setDocs([])
-        })
-    }
-    setDocs(null)
-    load()
-    const off = onWorkspaceResourcesChanged(primaryScope(), () => load())
-    return () => {
-      cancelled = true
-      off()
-    }
-  }, [groupId, revision])
-
-  const { sorted, pinnedCount } = useMemo(
-    () => sortResourcesPinnedThenAlpha(docs ?? [], pinnedKeys),
-    [docs, pinnedKeys],
-  )
-
-  const onTogglePin = (doc: ProjectGroupHtmlDoc): void => {
-    setPinnedKeys(togglePinnedResource(groupId, doc))
-  }
-
-  // Hide entirely when empty (after load).
-  if (docs !== null && docs.length === 0) return null
-
-  const count = docs?.length ?? 0
-
-  return (
-    <div className="border-t border-[var(--color-border)] flex flex-col">
-      <button
         type="button"
-        className="no-drag w-full flex items-center gap-1.5 px-3 pt-2 pb-1 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
-        onClick={() => setCollapsed((prev) => !prev)}
+        title={`${group.name} · ${agentCountText(group.memberCount)}`}
+        onContextMenu={(e) => void handleContextMenu(e)}
+        onClick={onSelect}
+        aria-current={selected ? 'true' : undefined}
+        data-k2-focus=""
+        className={cx(
+          'relative w-full flex items-center gap-2.5 px-3 py-1.5 text-left outline-none cursor-pointer select-none',
+          pinBusy ? 'opacity-60' : '',
+          selected ? 'bg-[var(--color-accent)]/15' : SETTING_LIST_ROW_HOVER,
+        )}
       >
-        <span className="text-[10px] font-semibold tracking-wider text-[var(--color-text-muted)] uppercase">
-          Resources
+        {selected && (
+          <span aria-hidden="true" className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--color-accent)]" />
+        )}
+        {/* §6.7.1/§6.7.7 — icon when set, else initials on the group's
+            color (the shared avatar the rail and the bar draw too). */}
+        <span className={AVATAR_ROUND}>
+          <ProjectGroupAvatar name={group.name} groupId={group.id} size={20} color={group.color} />
         </span>
-        <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono">
-          {docs === null ? '…' : count}
-        </span>
-        <span className="flex-1" />
-        <svg
-          className="w-2.5 h-2.5 text-[var(--color-text-muted)] flex-shrink-0"
-          style={{ transition: 'transform 0.2s ease', transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)' }}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2.5}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-        </svg>
+        <span className="min-w-0 flex-1 type-name text-[var(--color-text-primary)] truncate">{group.name}</span>
+        <ConversationUnreadBadge kind="project" id={group.id} variant="dot" label="project messages" />
       </button>
-      <div
-        className="min-h-0"
-        style={{
-          overflowX: 'hidden',
-          overflowY: collapsed ? 'hidden' : 'auto',
-          maxHeight: collapsed ? 0 : 320,
-          transition: 'max-height 0.2s ease',
-        }}
-      >
-        <div className="px-1 pb-1">
-          {docs === null ? (
-            <p className="px-2 py-1.5 text-[10px] text-[var(--color-text-muted)] font-mono">Loading…</p>
-          ) : (
-            sorted.map((doc, index) => (
-              <React.Fragment key={resourceDocKey(doc)}>
-                {index === pinnedCount && pinnedCount > 0 && (
-                  <div className="mx-2 my-1 border-t border-[var(--color-border)]" />
-                )}
-                <ResourceRow
-                  doc={doc}
-                  isPinned={pinnedKeys.includes(resourceDocKey(doc))}
-                  groupId={groupId}
-                  onTogglePin={onTogglePin}
-                  onRemoved={() =>
-                    setDocs((prev) =>
-                      (prev ?? []).filter(
-                        (d) => !(d.workspaceId === doc.workspaceId && d.filePath === doc.filePath),
-                      ),
-                    )
-                  }
-                />
-              </React.Fragment>
-            ))
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function MemberDrawer({
-  members,
-  pocWorkspaceId,
-  groupId,
-}: {
-  members: ProjectGroupMemberInfo[]
-  pocWorkspaceId: string | null
-  groupId: string | null
-}): React.JSX.Element | null {
-  const [collapsed, setCollapsed] = useState(false)
-  const [pinnedIds, setPinnedIds] = useState<string[]>(() =>
-    groupId ? loadPinnedMemberIds(groupId) : [],
-  )
-
-  // Reload pins when the selected project changes.
-  React.useEffect(() => {
-    setPinnedIds(groupId ? loadPinnedMemberIds(groupId) : [])
-  }, [groupId])
-
-  const { sorted, pinnedCount } = useMemo(
-    () => sortMembersPinnedFirst(members, pinnedIds),
-    [members, pinnedIds],
-  )
-
-  const onTogglePin = (workspaceId: string): void => {
-    if (!groupId) return
-    setPinnedIds(togglePinnedMember(groupId, workspaceId))
-  }
-
-  if (members.length === 0) return null
-
-  return (
-    <div className="border-t border-[var(--color-border)] flex flex-col">
-      <button
-        className="no-drag w-full flex items-center gap-1.5 px-3 pt-2 pb-1 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
-        onClick={() => setCollapsed((prev) => !prev)}
-      >
-        <span className="text-[10px] font-semibold tracking-wider text-[var(--color-text-muted)] uppercase">
-          Members
-        </span>
-        <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono">
-          {members.length}
-        </span>
-        <span className="text-[9px] font-mono text-[var(--color-text-muted)] opacity-50">
-          <KeyCombo combo="⌘ 1-9" />
-        </span>
-        <span className="flex-1" />
-        <svg
-          className="w-2.5 h-2.5 text-[var(--color-text-muted)] flex-shrink-0"
-          style={{ transition: 'transform 0.2s ease', transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)' }}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-        </svg>
-      </button>
-      <div
-        className="min-h-0"
-        style={{
-          overflowX: 'hidden',
-          overflowY: collapsed ? 'hidden' : 'auto',
-          maxHeight: collapsed ? 0 : 320,
-          transition: 'max-height 0.2s ease',
-        }}
-      >
-        <div className="px-1 pb-1">
-          {sorted.map((m, index) => (
-            <React.Fragment key={m.workspaceId}>
-              {index === pinnedCount && pinnedCount > 0 && (
-                <div className="mx-2 my-1 border-t border-[var(--color-border)]" />
-              )}
-              <MemberRow
-                member={m}
-                isPoc={m.workspaceId === pocWorkspaceId}
-                isPinned={pinnedIds.includes(m.workspaceId)}
-                groupId={groupId ?? ''}
-                onTogglePin={onTogglePin}
-              />
-            </React.Fragment>
-          ))}
-        </div>
-      </div>
     </div>
   )
 }
 
 // ── "+ New project" (inline create, surfaces name_taken — §6.1) ──────────
 
-/** Inline name input + Create. POSTs `project-group/create`, surfaces
+/** Inline name field + Create. POSTs `project-group/create`, surfaces
  *  `name_taken` inline, refetches + selects the new group on success.
- *  Shared by the nav affordance and the page's no-projects empty state. */
+ *  Shared by the nav's "+" and the page's no-projects empty state. */
 export function CreateProjectForm({ onDone }: { onDone: () => void }): React.JSX.Element {
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -712,7 +190,7 @@ export function CreateProjectForm({ onDone }: { onDone: () => void }): React.JSX
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2" data-create-project-form="">
       <Input
         autoFocus
         type="text"
@@ -726,15 +204,15 @@ export function CreateProjectForm({ onDone }: { onDone: () => void }): React.JSX
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') void submit()
-          // stopPropagation so the page-level Esc (back to Agents)
-          // doesn't also fire — Esc here just cancels the input.
+          // stopPropagation so the page-level Esc doesn't also fire —
+          // Esc here just cancels the field.
           if (e.key === 'Escape') {
             e.stopPropagation()
             onDone()
           }
         }}
         placeholder="Project name"
-        className="w-full disabled:opacity-50"
+        className="w-full"
       />
       {error && (
         <p role="alert" className="type-hint text-[var(--color-status-error-text)] leading-snug">
@@ -758,32 +236,11 @@ export function CreateProjectForm({ onDone }: { onDone: () => void }): React.JSX
   )
 }
 
-function NewProjectAffordance(): React.JSX.Element {
-  const [editing, setEditing] = useState(false)
-
-  if (!editing) {
-    return (
-      <div className="p-3 border-t border-[var(--color-border)] flex items-center gap-2">
-        <button
-          className="no-drag flex-1 min-w-0 flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08] transition-colors"
-          onClick={() => setEditing(true)}
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-          </svg>
-          New Project
-        </button>
-        <ProjectNavCollapseButton />
-      </div>
-    )
-  }
-
-  return (
-    <div className="p-3 border-t border-[var(--color-border)]">
-      <CreateProjectForm onDone={() => setEditing(false)} />
-    </div>
-  )
-}
+const PLUS_ICON = (
+  <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" className="w-3.5 h-3.5 block">
+    <path d="M8 3.5v9M3.5 8h9" />
+  </svg>
+)
 
 /** Collapse the projects nav to its rail, or open it again. The nav is
  *  never fully hidden (it collapses to the rail), so its toggle follows the
@@ -795,7 +252,8 @@ export function ProjectNavCollapseButton(): React.JSX.Element {
   return (
     <button
       type="button"
-      className={`no-drag flex items-center justify-center ${NAV_TOGGLE_BOX} flex-shrink-0 bg-white/[0.04] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08] transition-colors`}
+      className={`k2-focus no-drag flex items-center justify-center ${NAV_TOGGLE_BOX} flex-shrink-0 rounded-[var(--radius-field)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-row-hover)] transition-colors`}
+      data-k2-chamfer="control"
       onClick={() => useProjectGroupsStore.getState().setNavCollapsed(!collapsed)}
       title={label}
       aria-label={label}
@@ -818,40 +276,34 @@ function RailIcon({
   selected: boolean
   onSelect: () => void
 }): React.JSX.Element {
-  // Same menu as expanded GroupRow — collapsed rail had no onContextMenu,
-  // so right-click did nothing when the Projects nav was collapsed.
+  // Same menu as the expanded row.
   const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
     e.preventDefault()
     e.stopPropagation()
-    const opener = e.currentTarget as HTMLElement
-    await openProjectGroupContextMenu(group, async () => {
-      try {
-        await pinProjectGroup(primaryScope(), group.id, !group.pinned)
-        await useProjectGroupsStore.getState().fetchGroups()
-      } catch (err) {
-        useToastStore
-          .getState()
-          .addToast(
-            `${group.pinned ? 'Unpin' : 'Pin'} failed: ${err instanceof Error ? err.message : String(err)}`,
-            'error',
-          )
-      }
-    }, opener)
+    await openProjectGroupContextMenu(group, () => setGroupPinned(group), e.currentTarget as HTMLElement)
   }
 
   return (
     <button
       type="button"
-      className={`no-drag relative flex items-center justify-center w-8 h-8 flex-shrink-0 transition-colors ${
-        selected
-          ? 'bg-white/[0.12]'
-          : 'hover:bg-white/[0.06]'
-      }`}
+      data-k2-focus=""
+      data-rail-group-id={group.id}
+      aria-current={selected ? 'true' : undefined}
+      aria-label={group.name}
+      className={cx(
+        'no-drag relative flex items-center justify-center w-9 h-9 flex-shrink-0 outline-none rounded-[var(--radius-field)]',
+        selected ? 'bg-[var(--color-accent)]/15' : SETTING_LIST_ROW_HOVER,
+      )}
       onClick={onSelect}
       onContextMenu={(e) => void handleContextMenu(e)}
-      title={`${group.name} • ${group.memberCount} ${group.memberCount === 1 ? 'member' : 'members'}`}
+      title={`${group.name} · ${agentCountText(group.memberCount)}`}
     >
-      <ProjectGroupAvatar name={group.name} groupId={group.id} size={20} color={group.color} />
+      {selected && (
+        <span aria-hidden="true" className="absolute -left-1.5 top-1.5 bottom-1.5 w-[3px] bg-[var(--color-accent)]" />
+      )}
+      <span className={AVATAR_ROUND}>
+        <ProjectGroupAvatar name={group.name} groupId={group.id} size={24} color={group.color} />
+      </span>
       <ConversationUnreadBadge
         kind="project"
         id={group.id}
@@ -863,147 +315,20 @@ function RailIcon({
   )
 }
 
-/** The member drawer's rail form: one avatar per member of the
- *  selected project (IconRail's bottom Active-zone anatomy), click =
- *  the SAME open-canonical-pane action as the expanded drawer's row,
- *  tooltip = agent name (+ PoC), ⌘N overlay when the member's terminal
- *  pane is on the current dashboard (the IconRail shortcutIndex
- *  idiom). */
-function RailMember({
-  member,
-  isPoc,
-  isPinned,
-  groupId,
-  onTogglePin,
-}: {
-  member: ProjectGroupMemberInfo
-  isPoc: boolean
-  isPinned: boolean
-  groupId: string
-  onTogglePin: (workspaceId: string) => void
-}): React.JSX.Element {
-  const workspace = useProjectsStore((s) => s.projects.find((p) => p.id === member.workspaceId))
-  const paneNum = useProjectGroupsStore((s) => s.dashPaneNumbers[member.workspaceId])
-  const displayName = member.agentName ?? member.name ?? member.workspaceId.slice(0, 8)
-  // Same as expanded MemberRow: viewers can click-to-focus but not drag tiles.
-  const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
-  const suppressClickRef = useRef(false)
-
-  const handleClick = (): void => {
-    if (suppressClickRef.current) {
-      suppressClickRef.current = false
-      return
-    }
-    useProjectGroupsStore.getState().requestMemberPane(member.workspaceId)
-  }
-
-  // P5 (§6.2) — collapsed-rail members must drag onto the dashboard the same
-  // way expanded MemberRow does (dashboard-dnd bridge). Previously only the
-  // expanded list had onMouseDown, so collapsed avatars could not become tiles.
-  const handleMouseDown = (e: React.MouseEvent): void => {
-    if (readOnly || e.button !== 0) return
-    const startX = e.clientX
-    const startY = e.clientY
-    let started = false
-
-    const handleMouseMove = (ev: MouseEvent): void => {
-      if (!started && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 5)) {
-        started = true
-        suppressClickRef.current = true
-        document.body.style.cursor = 'grabbing'
-        document.body.style.userSelect = 'none'
-      }
-      if (!started) return
-      useDashboardDndStore.getState().setDrag({
-        payload: { type: 'member', workspaceId: member.workspaceId },
-        x: ev.clientX,
-        y: ev.clientY,
-      })
-    }
-
-    const handleMouseUp = (ev: MouseEvent): void => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      if (!started) return
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      completeDashDrag({ type: 'member', workspaceId: member.workspaceId }, ev.clientX, ev.clientY)
-      useDashboardDndStore.getState().setDrag(null)
-      setTimeout(() => {
-        suppressClickRef.current = false
-      }, 0)
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-  }
-
-  const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
-    e.preventDefault()
-    e.stopPropagation()
-    if (!groupId) return
-    const clickedId = await showContextMenu([
-      {
-        id: 'toggle-pin',
-        label: isPinned ? 'Unpin from Top' : 'Pin to Top',
-      },
-    ])
-    if (clickedId === 'toggle-pin') onTogglePin(member.workspaceId)
-  }
-
-  return (
-    <button
-      type="button"
-      className={`no-drag relative flex items-center justify-center w-8 h-8 flex-shrink-0 hover:bg-white/[0.06] transition-colors select-none ${
-        readOnly ? 'cursor-default' : 'cursor-pointer'
-      }`}
-      onClick={handleClick}
-      onMouseDown={handleMouseDown}
-      onContextMenu={(e) => void handleContextMenu(e)}
-      title={
-        isPinned
-          ? `${isPoc ? `${displayName} • PoC` : displayName} (pinned)`
-          : isPoc
-            ? `${displayName} • PoC`
-            : displayName
-      }
-    >
-      <ProjectAvatar
-        projectPath={member.path ?? ''}
-        projectName={member.name ?? displayName}
-        projectColor={workspace?.color ?? 'var(--color-text-muted)'}
-        projectId={member.workspaceId}
-        iconUrl={workspace?.iconUrl ?? null}
-        size={18}
-      />
-      {isPinned && (
-        <span className="absolute top-0 left-0.5 text-[var(--color-text-muted)] opacity-80 pointer-events-none">
-          <PinGlyph filled />
-        </span>
-      )}
-      {paneNum !== undefined && (
-        <span className="absolute bottom-0 right-0.5 text-[8px] font-mono text-[var(--color-text-muted)] tabular-nums leading-none">
-          {paneNum}
-        </span>
-      )}
-    </button>
-  )
-}
-
-/** §6.7.1 — the collapsed Projects nav: a narrow vertical strip of
- *  group avatars (IconRail's anatomy: pinned zone on top, divider,
- *  unpinned list — the SAME order as the expanded nav), click to
- *  select, tooltip with the name. The selected project's MEMBERS keep
- *  a bottom zone after a divider (IconRail's Active-zone anatomy —
- *  the member drawer in rail form); the create affordance lives only
- *  in the expanded nav. */
+/** §6.7.1 — the collapsed Projects nav: a narrow strip of project
+ *  pictures (pinned on top, a divider, the rest — the expanded nav's
+ *  order), click to select, the name and agent count as the tooltip; then
+ *  the selected project's agents as pictures. Creating a project is the
+ *  expanded nav's "+"; the project bar's name opens a switcher while the
+ *  nav is a rail. */
 export function ProjectNavRail({
-  members,
-  pocWorkspaceId,
+  show,
+  canAddAgents,
+  onChanged,
 }: {
-  /** Members of the SELECTED project (the page owns the `show` fetch). */
-  members: ProjectGroupMemberInfo[] | null
-  pocWorkspaceId: string | null
+  show: ProjectGroupShow | null
+  canAddAgents: boolean
+  onChanged: () => void
 }): React.JSX.Element {
   const groups = useProjectGroupsStore((s) => s.groups)
   const selectedGroupId = useProjectGroupsStore((s) => s.selectedGroupId)
@@ -1011,86 +336,24 @@ export function ProjectNavRail({
 
   const { pinned, unpinned } = useMemo(() => partitionPinned(groups ?? []), [groups])
 
-  const [pinnedMemberIds, setPinnedMemberIds] = useState<string[]>(() =>
-    selectedGroupId ? loadPinnedMemberIds(selectedGroupId) : [],
-  )
-  React.useEffect(() => {
-    setPinnedMemberIds(selectedGroupId ? loadPinnedMemberIds(selectedGroupId) : [])
-  }, [selectedGroupId])
-
-  const sortedMembers = useMemo(() => {
-    if (!members) return []
-    return sortMembersPinnedFirst(members, pinnedMemberIds).sorted
-  }, [members, pinnedMemberIds])
-
-  const onToggleMemberPin = (workspaceId: string): void => {
-    if (!selectedGroupId) return
-    setPinnedMemberIds(togglePinnedMember(selectedGroupId, workspaceId))
-  }
-
-  // Workspace Resources (same GET as Settings picker).
-  const [resourceDocs, setResourceDocs] = useState<ProjectGroupHtmlDoc[] | null>(null)
-  const [pinnedResourceKeys, setPinnedResourceKeys] = useState<string[]>(() =>
-    selectedGroupId ? loadPinnedResourceKeys(selectedGroupId) : [],
-  )
-  const revision = useProjectGroupsStore((s) => s.revision)
-  React.useEffect(() => {
-    setPinnedResourceKeys(selectedGroupId ? loadPinnedResourceKeys(selectedGroupId) : [])
-  }, [selectedGroupId])
-  React.useEffect(() => {
-    if (!selectedGroupId) {
-      setResourceDocs(null)
-      return
-    }
-    let cancelled = false
-    setResourceDocs(null)
-    const load = (): void => {
-      fetchProjectGroupResources(primaryScope(), selectedGroupId)
-        .then((d) => {
-          if (!cancelled) setResourceDocs(d)
-        })
-        .catch(() => {
-          if (!cancelled) setResourceDocs([])
-        })
-    }
-    load()
-    const off = onWorkspaceResourcesChanged(primaryScope(), () => load())
-    return () => {
-      cancelled = true
-      off()
-    }
-  }, [selectedGroupId, revision])
-
-  const sortedResourceDocs = useMemo(
-    () => sortResourcesPinnedThenAlpha(resourceDocs ?? [], pinnedResourceKeys).sorted,
-    [resourceDocs, pinnedResourceKeys],
-  )
-
-  const onToggleResourcePin = (doc: ProjectGroupHtmlDoc): void => {
-    if (!selectedGroupId) return
-    setPinnedResourceKeys(togglePinnedResource(selectedGroupId, doc))
-  }
-
   return (
-    <div
+    <nav
+      aria-label="Projects"
       className="flex flex-col items-center h-full bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] py-2 flex-shrink-0"
       style={{ width: PROJECT_NAV_RAIL_WIDTH }}
     >
-      {pinned.length > 0 && (
-        <div className="flex flex-col items-center gap-0.5 pb-1.5 w-full">
-          {pinned.map((group) => (
-            <RailIcon
-              key={group.id}
-              group={group}
-              selected={group.id === selectedGroupId}
-              onSelect={() => selectGroup(group.id)}
-            />
-          ))}
-          <div className="w-6 border-b border-[var(--color-border)] mt-1" />
-        </div>
-      )}
-
-      <div className="flex-1 flex flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden w-full">
+      <div className="flex-shrink min-h-0 flex flex-col items-center gap-1 overflow-y-auto overflow-x-hidden w-full py-0.5">
+        {pinned.map((group) => (
+          <RailIcon
+            key={group.id}
+            group={group}
+            selected={group.id === selectedGroupId}
+            onSelect={() => selectGroup(group.id)}
+          />
+        ))}
+        {pinned.length > 0 && unpinned.length > 0 && (
+          <div aria-hidden="true" className="w-6 border-b border-[var(--color-border)] my-1 flex-shrink-0" />
+        )}
         {unpinned.map((group) => (
           <RailIcon
             key={group.id}
@@ -1100,292 +363,182 @@ export function ProjectNavRail({
           />
         ))}
       </div>
-
-      {/* Bottom zone: Resources (pinned HTML) then Members — rail form. */}
-      {selectedGroupId && sortedResourceDocs.length > 0 && (
-        <div className="flex flex-col items-center w-full flex-shrink-0 pt-1.5">
-          <div className="w-6 border-b border-[var(--color-border)] mb-1" />
-          <div
-            className="flex flex-col items-center gap-0.5 w-full overflow-y-auto overflow-x-hidden"
-            style={{ maxHeight: 160 }}
-          >
-            {sortedResourceDocs.map((doc) => (
-              <RailResource
-                key={resourceDocKey(doc)}
-                doc={doc}
-                isPinned={pinnedResourceKeys.includes(resourceDocKey(doc))}
-                groupId={selectedGroupId}
-                onTogglePin={onToggleResourcePin}
-                onRemoved={() =>
-                  setResourceDocs((prev) =>
-                    (prev ?? []).filter(
-                      (d) => !(d.workspaceId === doc.workspaceId && d.filePath === doc.filePath),
-                    ),
-                  )
-                }
-              />
-            ))}
-          </div>
-        </div>
-      )}
-      {selectedGroupId && sortedMembers.length > 0 && (
-        <div className="flex flex-col items-center w-full flex-shrink-0 pt-1.5">
-          <div className="w-6 border-b border-[var(--color-border)] mb-1" />
-          {/* Same 320px scroll cap as the expanded drawer's list. */}
-          <div
-            className="flex flex-col items-center gap-0.5 w-full overflow-y-auto overflow-x-hidden"
-            style={{ maxHeight: 320 }}
-          >
-            {sortedMembers.map((m) => (
-              <RailMember
-                key={m.workspaceId}
-                member={m}
-                isPoc={m.workspaceId === pocWorkspaceId}
-                isPinned={pinnedMemberIds.includes(m.workspaceId)}
-                groupId={selectedGroupId}
-                onTogglePin={onToggleMemberPin}
-              />
-            ))}
-          </div>
-        </div>
-      )}
+      {show && <RailAgents show={show} canAddAgents={canAddAgents} onChanged={onChanged} />}
       <div className="mt-auto pt-1.5 flex-shrink-0">
         <ProjectNavCollapseButton />
       </div>
-    </div>
-  )
-}
-
-function RailResource({
-  doc,
-  isPinned,
-  onTogglePin,
-  onRemoved,
-}: {
-  doc: ProjectGroupHtmlDoc
-  isPinned: boolean
-  groupId: string
-  onTogglePin: (doc: ProjectGroupHtmlDoc) => void
-  onRemoved: () => void
-}): React.JSX.Element {
-  const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
-  const suppressClickRef = useRef(false)
-  const label = doc.fileName || doc.filePath.split('/').pop() || 'file'
-
-  const handleClick = (): void => {
-    if (suppressClickRef.current) {
-      suppressClickRef.current = false
-      return
-    }
-    if (noteViewerInteractionBlocked()) return
-    openResourceOnDashboard(doc)
-  }
-
-  const handleMouseDown = (e: React.MouseEvent): void => {
-    if (e.button !== 0) return
-    if (noteViewerInteractionBlocked()) return
-    const startX = e.clientX
-    const startY = e.clientY
-    let started = false
-    const payload = {
-      type: 'htmlDoc' as const,
-      workspaceId: doc.workspaceId,
-      filePath: doc.filePath,
-    }
-
-    const handleMouseMove = (ev: MouseEvent): void => {
-      if (!started && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 5)) {
-        started = true
-        suppressClickRef.current = true
-        document.body.style.cursor = 'grabbing'
-        document.body.style.userSelect = 'none'
-      }
-      if (!started) return
-      useDashboardDndStore.getState().setDrag({ payload, x: ev.clientX, y: ev.clientY })
-    }
-
-    const handleMouseUp = (ev: MouseEvent): void => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      if (!started) return
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      completeDashDrag(payload, ev.clientX, ev.clientY)
-      useDashboardDndStore.getState().setDrag(null)
-      setTimeout(() => {
-        suppressClickRef.current = false
-      }, 0)
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-  }
-
-  const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
-    e.preventDefault()
-    e.stopPropagation()
-    const clickedId = await showContextMenu([
-      {
-        id: 'toggle-pin',
-        label: isPinned ? 'Unpin from Top' : 'Pin to Top',
-      },
-      { id: 'remove', label: 'Remove' },
-    ])
-    if (clickedId === 'toggle-pin') onTogglePin(doc)
-    if (clickedId === 'remove') {
-      try {
-        await removeWorkspaceResource(primaryScope(), doc.workspaceId, doc.filePath)
-        onRemoved()
-      } catch (err) {
-        useToastStore.getState().addToast(
-          `Remove failed: ${err instanceof Error ? err.message : String(err)}`,
-          'error',
-        )
-      }
-    }
-  }
-
-  return (
-    <button
-      type="button"
-      className={`no-drag relative flex items-center justify-center w-8 h-8 flex-shrink-0 hover:bg-white/[0.06] transition-colors select-none ${
-        readOnly ? 'cursor-default' : 'cursor-pointer'
-      }`}
-      onClick={handleClick}
-      onMouseDown={handleMouseDown}
-      onContextMenu={(e) => void handleContextMenu(e)}
-      title={`${label}${doc.agentName ? ` · ${doc.agentName}` : ''}${isPinned ? ' (pinned)' : ''}${doc.missing ? ' (missing)' : ''}`}
-    >
-      {isPinned && (
-        <span className="absolute top-0 left-0.5 text-[var(--color-text-muted)] opacity-80 pointer-events-none">
-          <PinGlyph filled />
-        </span>
-      )}
-      <SetiFileIcon name={doc.fileName} className="w-4 h-4" />
-    </button>
+    </nav>
   )
 }
 
 // ── The nav ───────────────────────────────────────────────────────────────
 
+/** A list section's heading ("Pinned", "All projects", "Agents"). */
+export function NavSubheading({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <h3 className="px-4 pt-2 pb-1 type-hint font-semibold text-[var(--color-text-secondary)]">{children}</h3>
+}
+
+
+const LIST_OPEN_KEY = 'k2:projects-nav:list-open'
+
+function readListOpen(): boolean {
+  try {
+    return localStorage.getItem(LIST_OPEN_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
 export default function ProjectNav({
-  members,
-  pocWorkspaceId,
+  show,
+  dashboard,
+  canAddAgents,
+  onChanged,
 }: {
-  /** Members of the SELECTED project (the page owns the `show` fetch). */
-  members: ProjectGroupMemberInfo[] | null
-  pocWorkspaceId: string | null
+  /** The selected project's show (null while it loads or failed). */
+  show: ProjectGroupShow | null
+  /** The dashboard on screen (or the one an open request lands on). */
+  dashboard: ProjectGroupDashboard | null
+  /** Who may add an agent (project-settings.ts: any login). */
+  canAddAgents: boolean
+  /** Refetch the selected project after a change made in the nav. */
+  onChanged: () => void
 }): React.JSX.Element {
   const groups = useProjectGroupsStore((s) => s.groups)
   const selectedGroupId = useProjectGroupsStore((s) => s.selectedGroupId)
   const selectGroup = useProjectGroupsStore((s) => s.selectGroup)
-
-  // Pinned-section collapse persists across launches (Sidebar's
-  // agentsPinnedCollapsed idiom).
-  const [pinnedCollapsed, setPinnedCollapsedRaw] = useState<boolean>(() => {
+  const [creating, setCreating] = useState(false)
+  // The project list folds to just the selected project (per client).
+  const [listOpen, setListOpenRaw] = useState(readListOpen)
+  const setListOpen = (v: boolean): void => {
+    setListOpenRaw(v)
     try {
-      return localStorage.getItem('k2:projects-nav:pinnedCollapsed') === '1'
-    } catch {
-      return false
-    }
-  })
-  const setPinnedCollapsed = (v: boolean): void => {
-    setPinnedCollapsedRaw(v)
-    try {
-      localStorage.setItem('k2:projects-nav:pinnedCollapsed', v ? '1' : '0')
+      localStorage.setItem(LIST_OPEN_KEY, v ? '1' : '0')
     } catch {
       /* ignore */
     }
   }
 
+  useEffect(() => {
+    const onNew = (): void => setCreating(true)
+    window.addEventListener(NEW_PROJECT_EVENT, onNew)
+    return () => window.removeEventListener(NEW_PROJECT_EVENT, onNew)
+  }, [])
+
   const { pinned, unpinned } = useMemo(() => partitionPinned(groups ?? []), [groups])
+  const selected = groups?.find((g) => g.id === selectedGroupId) ?? null
+  const hasGroups = (groups?.length ?? 0) > 0
+
+  // TODO(V1.1): drag-to-reorder within sections — Sidebar's
+  // handleProjectMouseDown threshold + drop-index pattern (needs a
+  // sort-order route; P2 shipped pin only).
+  const rows = (list: ProjectGroup[]): React.JSX.Element[] =>
+    list.map((group) => (
+      <GroupRow
+        key={group.id}
+        group={group}
+        selected={group.id === selectedGroupId}
+        onSelect={() => selectGroup(group.id)}
+      />
+    ))
 
   return (
-    <div
+    <nav
+      aria-label="Projects"
+      data-projects-nav=""
       className="relative flex flex-col h-full flex-shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-surface)]"
       style={{ width: PROJECT_NAV_WIDTH }}
     >
-      {/* Pinned projects — canonical section, always on top (Q4). */}
-      {pinned.length > 0 && (
-        <div className="border-b border-[var(--color-border)]">
+      {/* Header: the list's name, its fold, and New project. */}
+      <div className="flex items-center gap-1.5 h-12 px-4 flex-shrink-0 no-drag">
+        <h2 className="type-title text-[var(--color-text-primary)] truncate">Projects</h2>
+        {hasGroups && (
           <button
             type="button"
-            onClick={() => setPinnedCollapsed(!pinnedCollapsed)}
-            className="no-drag w-full flex items-center gap-1.5 px-4 pt-3 pb-2 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
-            aria-expanded={!pinnedCollapsed}
+            className="k2-focus no-drag flex items-center justify-center w-6 h-6 flex-shrink-0 rounded-[var(--radius-field)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-row-hover)] transition-colors"
+            data-k2-chamfer="control"
+            aria-expanded={listOpen}
+            aria-controls="projects-nav-list"
+            aria-label={listOpen ? 'Fold the project list' : 'Show the project list'}
+            title={listOpen ? 'Fold the list' : 'Show the list'}
+            onClick={() => setListOpen(!listOpen)}
+            data-projects-list-toggle=""
           >
-            <span className="text-[10px] font-semibold tracking-wider text-[var(--color-text-muted)] uppercase">
-              Pinned
-            </span>
-            <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono">
-              {pinned.length}
-            </span>
-            <span className="flex-1" />
-            <svg
-              className="w-2.5 h-2.5 text-[var(--color-text-muted)] flex-shrink-0"
-              style={{ transition: 'transform 0.2s ease', transform: pinnedCollapsed ? 'rotate(0deg)' : 'rotate(90deg)' }}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3 transition-transform" style={{ transform: listOpen ? 'rotate(90deg)' : undefined }}>
+              <path d="M6 3.5 10.5 8 6 12.5" />
             </svg>
           </button>
-          <div
-            style={{
-              overflow: 'hidden',
-              maxHeight: pinnedCollapsed ? 0 : 1200,
-              transition: 'max-height 0.2s ease',
-            }}
-          >
-            {/* TODO(V1.1): drag-to-reorder within sections — Sidebar's
-                handleProjectMouseDown threshold + drop-index pattern
-                (needs a sort-order route; P2 shipped pin only). */}
-            {pinned.map((group) => (
-              <GroupRow
-                key={group.id}
-                group={group}
-                selected={group.id === selectedGroupId}
-                onSelect={() => selectGroup(group.id)}
-              />
-            ))}
-          </div>
+        )}
+        <span className="flex-1" />
+        <Button
+          variant="quiet"
+          className="!px-1.5 flex items-center"
+          aria-label="New project"
+          title="New project"
+          aria-expanded={creating}
+          onClick={() => setCreating((v) => !v)}
+          data-new-project=""
+        >
+          {PLUS_ICON}
+        </Button>
+      </div>
+      {creating && (
+        <div className="px-4 pb-3 flex-shrink-0">
+          <CreateProjectForm onDone={() => setCreating(false)} />
         </div>
       )}
 
-      {/* Section header (FocusGroupSelector's plain-label idiom). */}
-      <div className="px-4 pt-3 pb-2 no-drag">
-        <span className="text-[11px] font-semibold tracking-wide text-[var(--color-text-muted)] uppercase">
-          Projects
-        </span>
-      </div>
-
-      {/* Unpinned project list */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
-        {unpinned.map((group, idx) => (
-          <React.Fragment key={group.id}>
-            <GroupRow
-              group={group}
-              selected={group.id === selectedGroupId}
-              onSelect={() => selectGroup(group.id)}
-            />
-            {idx < unpinned.length - 1 && <div className="border-b border-[var(--color-border)]" />}
-          </React.Fragment>
-        ))}
+      {/* The project list: its own scroll, capped so the selected
+          project's section below always has room (1024×768 included).
+          Folded, only the selected project's row stays. */}
+      <div
+        id="projects-nav-list"
+        className={cx(
+          'overflow-y-auto overflow-x-hidden pb-2',
+          show ? 'flex-shrink min-h-[5rem] max-h-[45%]' : 'flex-1',
+        )}
+        data-projects-list=""
+      >
+        {listOpen ? (
+          <>
+            {pinned.length > 0 && (
+              <section aria-label="Pinned">
+                <NavSubheading>Pinned</NavSubheading>
+                <div className="px-1">{rows(pinned)}</div>
+              </section>
+            )}
+            {unpinned.length > 0 && (
+              <section aria-label="All projects">
+                <NavSubheading>All projects</NavSubheading>
+                <div className="px-1">{rows(unpinned)}</div>
+              </section>
+            )}
+          </>
+        ) : (
+          selected && <div className="px-1">{rows([selected])}</div>
+        )}
         {/* Loading, failed or empty: the canvas says so (one state card,
-            ProjectStates.tsx); the nav keeps just its header and New Project. */}
+            ProjectStates.tsx); the nav keeps just its header and +. */}
       </div>
 
-      {/* Bottom drawers (ActiveBar's position): Resources (pinned HTML)
-          stacked above Members — both for the selected project. */}
-      {selectedGroupId && <ResourcesDrawer groupId={selectedGroupId} />}
-      {selectedGroupId && members && (
-        <MemberDrawer
-          members={members}
-          pocWorkspaceId={pocWorkspaceId}
-          groupId={selectedGroupId}
-        />
+      {show && (
+        <div
+          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden border-t border-[var(--color-border)] pb-2"
+          data-project-section-scroll=""
+        >
+          <ProjectNavSection
+            key={show.id}
+            show={show}
+            dashboard={dashboard}
+            canAddAgents={canAddAgents}
+            onChanged={onChanged}
+          />
+        </div>
       )}
 
-      <NewProjectAffordance />
-    </div>
+      <div className="flex items-center px-3 py-2 flex-shrink-0">
+        <ProjectNavCollapseButton />
+      </div>
+    </nav>
   )
 }

@@ -41,6 +41,7 @@ export function BarMenuPanel({
   onClose,
   className,
   testId,
+  focusFirst,
   children,
 }: {
   menu: AnchoredMenu<HTMLButtonElement>
@@ -49,6 +50,8 @@ export function BarMenuPanel({
   onClose: () => void
   className?: string
   testId?: string
+  /** What gets focus on open (default: the first item or control). */
+  focusFirst?: string
   children: React.ReactNode
 }): React.JSX.Element | null {
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -57,9 +60,9 @@ export function BarMenuPanel({
   useEffect(() => {
     const root = listRef.current
     if (!root) return
-    const first = root.querySelector<HTMLElement>(role === 'menu' ? MENU_ITEM : FOCUSABLE)
+    const first = root.querySelector<HTMLElement>(focusFirst ?? (role === 'menu' ? MENU_ITEM : FOCUSABLE))
     first?.focus({ preventScroll: true })
-  }, [role])
+  }, [role, focusFirst])
 
   const close = (): void => {
     onClose()
@@ -84,8 +87,8 @@ export function BarMenuPanel({
     let next: number | null = null
     if (e.key === 'ArrowDown') next = at < 0 ? 0 : (at + 1) % list.length
     else if (e.key === 'ArrowUp') next = at <= 0 ? list.length - 1 : at - 1
-    else if (e.key === 'Home') next = 0
-    else if (e.key === 'End') next = list.length - 1
+    else if (e.key === 'Home' && !(e.target instanceof HTMLInputElement)) next = 0
+    else if (e.key === 'End' && !(e.target instanceof HTMLInputElement)) next = list.length - 1
     if (next === null) return
     e.preventDefault()
     list[next].focus({ preventScroll: true })

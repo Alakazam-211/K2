@@ -111,6 +111,14 @@ export function AccessSheet({
         <div
           ref={body.ref}
           onScroll={body.measure}
+          // Focus that lands in the body brings the field's own block into view
+          // (a value box and the Show / Load buttons under it), so nothing that
+          // belongs to the focused field hides behind the pinned buttons.
+          onFocus={(e) => {
+            const box = (e.target as HTMLElement).parentElement
+            const scroller = e.currentTarget
+            if (box && box !== scroller && box.offsetHeight < scroller.clientHeight) box.scrollIntoView?.({ block: 'nearest' })
+          }}
           className={`min-h-0 overflow-y-auto px-5 pt-1 ${footer ? 'pb-1' : 'pb-5'}`}
           data-testid="dialog-body"
         >

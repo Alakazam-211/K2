@@ -106,8 +106,9 @@
       "$description": "Chart series for anything past the named ones."
     },
     "status-working": {
-      "$value": "var(--glass-accent)",
-      "$type": "color"
+      "$value": "var(--color-accent-text)",
+      "$type": "color",
+      "$description": "Working marks (the working grid, the Thread strip's dot, starting / installing dots): the highlight colour's legible variant, so they follow the palette's accent and a chosen one. --color-accent-text clears 4.5:1 on bg, bg-surface and bg-elevated (lib/style-accent.ts for a chosen colour), which keeps the marks over 3:1 on selected and hovered rows."
     },
     "status-error": {
       "$value": "#ff3b30",

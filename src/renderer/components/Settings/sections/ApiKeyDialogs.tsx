@@ -4,9 +4,7 @@
 // dialog: closing drops it.
 
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
-import { primaryScope } from '@/kessel/server-scope'
 import { currentShortcutOs } from '@/lib/shortcut-label'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { Button, Callout, Checkbox, Input, Radio, Spinner, Surface } from '@/components/ui'
@@ -16,6 +14,7 @@ import {
   ceilingFormFromLimits,
   ceilingFromForm,
   ceilingSummary,
+  createApiKey,
   EMPTY_CEILING_FORM,
   finishCeilingConfirm,
   finishHireKeyConfirm,
@@ -50,27 +49,55 @@ export function hireConfirmCopy(os: DesktopOs = currentShortcutOs()): string {
 type Problem = { what: string; next: string; detail: string | null }
 
 function ProblemNote({ problem }: { problem: Problem }): React.JSX.Element {
+  // At the foot of a long form, just above the buttons: scrolled into view
+  // (the dialog's title and buttons stay put), so the failure is seen.
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    ref.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [problem])
   return (
-    <Callout tone="error" role="alert" className="type-hint space-y-0.5" data-testid="dialog-error">
-      <p className="font-medium">{problem.what}</p>
-      <p>{problem.next}</p>
-      {problem.detail ? <p>The server said: {problem.detail.trim().replace(/[.\s]+$/, '')}.</p> : null}
-    </Callout>
+    <div ref={ref}>
+      <Callout tone="error" role="alert" className="type-hint space-y-0.5" data-testid="dialog-error">
+        <p className="font-medium">{problem.what}</p>
+        <p>{problem.next}</p>
+        {problem.detail ? <p>The server said: {problem.detail.trim().replace(/[.\s]+$/, '')}.</p> : null}
+      </Callout>
+    </div>
   )
 }
 
-/** The dialog's buttons. When a failure shows above them at the foot of a
- *  long form, they scroll into view with it, so the next step is in sight. */
-function DialogFooter({ problem, children }: { problem: unknown; children: React.ReactNode }): React.JSX.Element {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (problem) ref.current?.scrollIntoView?.({ block: 'nearest' })
-  }, [problem])
+/** How many rows a pick list shows before "Show all": the list grows with
+ *  the dialog's own scroll, never a scroll box of its own. */
+const LIST_CAP = 5
+
+/** The rows to show: the first `LIST_CAP`, plus any ticked one further
+ *  down (a choice is never hidden), or every row once opened. */
+function useShowAll<T>(items: T[], ticked: (item: T) => boolean): { shown: T[]; hidden: number; all: boolean; setAll: (v: boolean) => void } {
+  const [all, setAll] = useState(false)
+  if (all || items.length <= LIST_CAP + 1) return { shown: items, hidden: 0, all, setAll }
+  const shown = items.filter((item, i) => i < LIST_CAP || ticked(item))
+  return { shown, hidden: items.length - shown.length, all, setAll }
+}
+
+/** The last row of a capped pick list: Show all N, or Show fewer. */
+function ShowAllRow({ list, total, noun }: { list: { hidden: number; all: boolean; setAll: (v: boolean) => void }; total: number; noun: string }): React.JSX.Element | null {
+  if (!list.all && list.hidden === 0) return null
   return (
-    <div ref={ref} className="flex justify-end gap-2 pt-1">
-      {children}
-    </div>
+    <button
+      type="button"
+      data-k2-focus=""
+      aria-expanded={list.all}
+      className="relative block w-full text-left px-3 py-2 type-row text-[var(--color-accent-text)] hover:bg-[var(--color-wash-1)] no-drag cursor-pointer"
+      onClick={() => list.setAll(!list.all)}
+    >
+      {list.all ? 'Show fewer' : `Show all ${total} ${noun}`}
+    </button>
   )
+}
+
+/** The first problem marked in a form, scrolled into view. */
+function scrollToFirstProblem(form: HTMLFormElement | null): void {
+  form?.querySelector('[data-field-problem]')?.scrollIntoView?.({ block: 'nearest' })
 }
 
 /** Thrown when this computer has no way to confirm: no Touch ID and no
@@ -245,6 +272,8 @@ function AppAccessLimit({
     const rooms = on ? [...form.rooms.filter((r) => r !== id), id] : form.rooms.filter((r) => r !== id)
     onChange({ ...form, rooms })
   }
+  const firstRooms = useShowAll(roomRows.first, (r) => form.rooms.includes(r.id))
+  const otherRooms = useShowAll(roomRows.other, (r) => form.rooms.includes(r.id))
   const roomBox = (r: CeilingRoom) => (
     <Choice
       key={r.id}
@@ -299,10 +328,12 @@ function AppAccessLimit({
         <>
           <div>
             <p className={DIALOG_LABEL}>Rooms</p>
-            <Surface chamfer material="tile" className="max-h-44 overflow-y-auto divide-y divide-[var(--color-border)]">
-              {roomRows.first.map(roomBox)}
+            <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]" data-testid="app-access-rooms">
+              {firstRooms.shown.map(roomBox)}
+              <ShowAllRow list={firstRooms} total={roomRows.first.length} noun="rooms" />
               {roomRows.other.length > 0 ? <p className={`px-3 py-2 ${DIALOG_MUTED}`}>Other rooms on this server</p> : null}
-              {roomRows.other.map(roomBox)}
+              {otherRooms.shown.map(roomBox)}
+              <ShowAllRow list={otherRooms} total={roomRows.other.length} noun="other rooms" />
             </Surface>
             {form.rooms.length === 0 ? (
               <p className={ERROR_LINE} data-field-problem="">
@@ -380,7 +411,8 @@ export function CreateKeyDialog({
   /** Closed: with the new key's name when one was made. */
   onClose: (created: CreatedKey | null) => void
 }): React.JSX.Element {
-  const ids = { name: useId(), folder: useId(), day: useId(), live: useId(), team: useId() }
+  const ids = { name: useId(), folder: useId(), day: useId(), live: useId(), team: useId(), form: useId() }
+  const formRef = useRef<HTMLFormElement>(null)
   const [name, setName] = useState('')
   const [wsMode, setWsMode] = useState<'pick' | 'all'>('pick')
   const [picked, setPicked] = useState<Set<string>>(new Set())
@@ -400,6 +432,7 @@ export function CreateKeyDialog({
     if (k === 'db' && !on) setHireField('db', 'off')
   }
 
+  const wsList = useShowAll(workspaces, (w) => picked.has(w.slug))
   const anyDoor = Object.values(doors).some(Boolean)
   const wsNeeded = KEY_DOORS.some((d) => d.needsWorkspace && doors[d.key])
   const problems = {
@@ -426,7 +459,7 @@ export function CreateKeyDialog({
       body.hire = apps.length ? { ...h, apps } : h
       body.confirmToken = confirmToken
     }
-    const res = await daemonCliPost<{ id?: string; key?: string; error?: string }>(primaryScope(), 'api-keys/create', body)
+    const res = await createApiKey(body)
     if (!res.key) throw new Error(res.error || 'it answered without a key')
     setCreated({ id: res.id ?? null, name: name.trim() || 'Unnamed key', secret: res.key })
     onCreated()
@@ -445,7 +478,11 @@ export function CreateKeyDialog({
   const submit = async (): Promise<void> => {
     if (busy) return
     setTried(true)
-    if (blocked) return
+    if (blocked) {
+      // After the marks render: bring the first one into view.
+      requestAnimationFrame(() => scrollToFirstProblem(formRef.current))
+      return
+    }
     setBusy(true)
     setProblem(null)
     try {
@@ -463,7 +500,16 @@ export function CreateKeyDialog({
 
   if (created) {
     return (
-      <AccessSheet title="Copy your new API key" onClose={() => onClose(created)} testId="api-key-created-dialog">
+      <AccessSheet
+        title="Copy your new API key"
+        onClose={() => onClose(created)}
+        testId="api-key-created-dialog"
+        footer={
+          <Button variant="accent" size="md" onClick={() => onClose(created)} autoFocus>
+            Done
+          </Button>
+        }
+      >
         <p className={DIALOG_MUTED}>
           {created.name} is ready. This is the only time K2 shows its key: copy it now and paste it into the app that will
           use it. If it’s ever lost, revoke it and create another.
@@ -476,11 +522,6 @@ export function CreateKeyDialog({
             The public API is off on this server, so this key won’t work until it’s turned on.
           </Callout>
         ) : null}
-        <div className="flex justify-end">
-          <Button variant="accent" size="md" onClick={() => onClose(created)} autoFocus>
-            Done
-          </Button>
-        </div>
       </AccessSheet>
     )
   }
@@ -514,8 +555,25 @@ export function CreateKeyDialog({
       onClose={() => onClose(null)}
       busy={busy}
       testId="create-api-key-dialog"
+      footer={
+        <>
+          {tried && blocked && !problem ? (
+            <p className="mr-auto min-w-0 self-center type-hint text-[var(--color-status-error-soft)]" role="alert">
+              Fix the marked choices above, then create the key.
+            </p>
+          ) : null}
+          <Button variant="ghost" size="md" onClick={() => onClose(null)} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={ids.form} variant="accent" size="md" disabled={busy || (confirm.step === 'password' && !confirm.password)}>
+            {busy ? 'Creating…' : confirm.step === 'password' ? 'Confirm and create' : 'Create key'}
+          </Button>
+        </>
+      }
     >
       <form
+        id={ids.form}
+        ref={formRef}
         className="space-y-5"
         onSubmit={(e) => {
           e.preventDefault()
@@ -561,11 +619,11 @@ export function CreateKeyDialog({
               label="Only the ones I pick"
             />
             {wsMode === 'pick' ? (
-              <div className="pl-7 max-h-36 overflow-y-auto divide-y divide-[var(--color-border)]" data-testid="api-key-workspace-list">
+              <div className="pl-7 divide-y divide-[var(--color-border)]" data-testid="api-key-workspace-list">
                 {workspaces.length === 0 ? (
                   <p className={`px-3 py-2.5 ${DIALOG_MUTED}`}>There are no workspaces on this server yet.</p>
                 ) : (
-                  workspaces.map(({ slug, label }) => (
+                  wsList.shown.map(({ slug, label }) => (
                     <Choice
                       key={slug}
                       control={
@@ -586,6 +644,7 @@ export function CreateKeyDialog({
                     />
                   ))
                 )}
+                <ShowAllRow list={wsList} total={workspaces.length} noun="workspaces" />
               </div>
             ) : null}
             <Choice
@@ -674,19 +733,6 @@ export function CreateKeyDialog({
 
         <ConfirmStep confirm={confirm} onSubmit={() => void submit()} />
         {problem ? <ProblemNote problem={problem} /> : null}
-        {tried && blocked && !problem ? (
-          <p className="type-hint text-[var(--color-status-error-soft)]" role="alert">
-            Fix the marked choices above, then create the key.
-          </p>
-        ) : null}
-        <DialogFooter problem={problem ?? (tried && blocked)}>
-          <Button variant="ghost" size="md" onClick={() => onClose(null)} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="accent" size="md" disabled={busy || (confirm.step === 'password' && !confirm.password)}>
-            {busy ? 'Creating…' : confirm.step === 'password' ? 'Confirm and create' : 'Create key'}
-          </Button>
-        </DialogFooter>
       </form>
     </AccessSheet>
   )
@@ -717,6 +763,7 @@ export function AppAccessDialog({
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<Problem | null>(null)
   const roomsMissing = !!form.app && form.rooms.length === 0
+  const formId = useId()
 
   const save = async (): Promise<void> => {
     if (busy || roomsMissing) return
@@ -759,8 +806,19 @@ export function AppAccessDialog({
       onClose={onClose}
       busy={busy}
       testId="edit-app-access"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} variant="accent" size="md" disabled={busy || roomsMissing || (confirm.step === 'password' && !confirm.password)}>
+            {busy ? 'Saving…' : confirm.step === 'password' ? 'Confirm and save' : 'Save'}
+          </Button>
+        </>
+      }
     >
       <form
+        id={formId}
         className="space-y-5"
         onSubmit={(e) => {
           e.preventDefault()
@@ -778,14 +836,6 @@ export function AppAccessDialog({
         <AppAccessLimit form={form} onChange={setForm} opts={ceilingOpts} optsError={ceilingOptsError} />
         <ConfirmStep confirm={confirm} onSubmit={() => void save()} />
         {problem ? <ProblemNote problem={problem} /> : null}
-        <DialogFooter problem={problem}>
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="accent" size="md" disabled={busy || roomsMissing || (confirm.step === 'password' && !confirm.password)}>
-            {busy ? 'Saving…' : confirm.step === 'password' ? 'Confirm and save' : 'Save'}
-          </Button>
-        </DialogFooter>
       </form>
     </AccessSheet>
   )

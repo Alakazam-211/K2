@@ -21,8 +21,40 @@ export const DIALOG_MUTED = 'type-hint text-[var(--color-text-secondary)] leadin
  */
 export const MUST_CHANGE_NOTE = 'It’s temporary: the next time they sign in, K2 asks them to choose their own.'
 
+/** Which edges of a scroll box have content past them. */
+function useScrollEdges(): {
+  ref: React.RefObject<HTMLDivElement | null>
+  edges: { top: boolean; bottom: boolean }
+  measure: () => void
+} {
+  const ref = useRef<HTMLDivElement>(null)
+  const [edges, setEdges] = useState({ top: false, bottom: false })
+  const measure = useCallback(() => {
+    const el = ref.current
+    if (!el) return
+    const top = el.scrollTop > 0
+    const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 1
+    setEdges((prev) => (prev.top === top && prev.bottom === bottom ? prev : { top, bottom }))
+  }, [])
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    // The window, or the form inside (an error, a section opening), resizing.
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    if (el.firstElementChild) ro.observe(el.firstElementChild)
+    return () => ro.disconnect()
+  }, [measure])
+  return { ref, edges, measure }
+}
+
 /** The shared Dialog with a title, a body that scrolls, and Esc to close
- *  (off while a write is in flight). */
+ *  (off while a write is in flight). The title and intro stay at the top
+ *  and the `footer` (the dialog's buttons) at the bottom at any window
+ *  height; only the body between them scrolls, with a hairline on an edge
+ *  that has more past it. */
 export function AccessSheet({
   title,
   intro,
@@ -30,6 +62,7 @@ export function AccessSheet({
   busy = false,
   pressOutside = true,
   testId,
+  footer,
   children,
 }: {
   title: string
@@ -39,16 +72,21 @@ export function AccessSheet({
   /** False: a press outside does nothing (Esc and the × still close). */
   pressOutside?: boolean
   testId: string
+  /** The buttons, kept in view under the scrolling body. A submit button
+   *  here names its form with `form="<id>"`. */
+  footer?: React.ReactNode
   children: React.ReactNode
 }): React.JSX.Element {
   const titleId = useId()
+  const body = useScrollEdges()
   // Esc, the × and a press outside close it (dialog-cancel leaves Esc to an
   // open menu inside first: App, Role); held while a write is in flight.
+  const edge = (on: boolean): string => (on ? 'border-[var(--color-border)]' : 'border-transparent')
   // Portalled to <body>, so the scrim covers the whole window, not just the
   // Settings panel it opens from. Every dialog is one width and opens
   // centred in the window, whatever its height (graders read a top-anchored
   // short confirmation as sitting in a different place from a tall form).
-  // A tall one scrolls inside the frame.
+  // A tall one scrolls between its title and its buttons.
   return createPortal(
     <>
       <DialogScrim />
@@ -63,14 +101,26 @@ export function AccessSheet({
         data-testid={testId}
         className="w-[min(36rem,calc(100vw-2.5rem))] max-h-[calc(100vh-2.5rem)] flex flex-col"
       >
-        {/* The title stays put beside the frame's ×; the rest scrolls. */}
-        <div className="flex-shrink-0 px-5 pt-5 pb-4 pr-10">
+        {/* The title stays put beside the frame's ×; the body scrolls. */}
+        <div className={`flex-shrink-0 px-5 pt-5 pb-3 pr-10 border-b ${edge(body.edges.top)}`} data-testid="dialog-head">
           <h3 id={titleId} className="type-heading text-[var(--color-text-primary)]">
             {title}
           </h3>
           {intro ? <p className={`${DIALOG_MUTED} mt-1`}>{intro}</p> : null}
         </div>
-        <div className="min-h-0 overflow-y-auto px-5 pb-5 space-y-4">{children}</div>
+        <div
+          ref={body.ref}
+          onScroll={body.measure}
+          className={`min-h-0 overflow-y-auto px-5 pt-1 ${footer ? 'pb-1' : 'pb-5'}`}
+          data-testid="dialog-body"
+        >
+          <div className="space-y-4">{children}</div>
+        </div>
+        {footer ? (
+          <div className={`flex-shrink-0 flex justify-end gap-2 px-5 pt-3 pb-5 border-t ${edge(body.edges.bottom)}`} data-testid="dialog-foot">
+            {footer}
+          </div>
+        ) : null}
       </DialogFrame>
     </>,
     document.body,

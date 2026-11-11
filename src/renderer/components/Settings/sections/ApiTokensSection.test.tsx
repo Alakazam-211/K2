@@ -14,8 +14,9 @@ const daemonCliPost = vi.hoisted(() => vi.fn())
 const settingsState = vi.hoisted(() => ({ apiEnabled: true, setSection: vi.fn() }))
 vi.mock('@/lib/daemon-cli', () => ({ daemonCliGet, daemonCliPost }))
 vi.mock('@/kessel/server-scope', () => ({ primaryScope: () => 'primary' }))
+const projectsState = vi.hoisted(() => ({ projects: [] as Array<{ name: string; path: string }> }))
 vi.mock('@/stores/projects', () => ({
-  useProjectsStore: (sel: (s: unknown) => unknown) => sel({ projects: [] }),
+  useProjectsStore: (sel: (s: unknown) => unknown) => sel(projectsState),
 }))
 vi.mock('@/stores/settings', () => {
   const useSettingsStore = (sel: (s: unknown) => unknown) => sel(settingsState)
@@ -56,6 +57,7 @@ const HIRE_KEY = {
 }
 
 beforeEach(() => {
+  projectsState.projects = []
   settingsState.apiEnabled = true
   settingsState.setSection.mockReset()
   daemonCliGet.mockReset()
@@ -325,6 +327,35 @@ describe('ApiTokensSection hire scope', () => {
     expect(body.capabilities).toEqual({ hostSessions: true, canonicalMessage: false, sandboxes: false, db: true })
     expect(body.workspaces).toBe('*')
     expect(body.hire).toBeUndefined()
+  })
+
+  it('keeps the title above the scrolling form and the buttons below it', async () => {
+    render(<ApiTokensSection />)
+    const dialog = await openCreate()
+    const head = within(dialog).getByTestId('dialog-head')
+    const body = within(dialog).getByTestId('dialog-body')
+    const foot = within(dialog).getByTestId('dialog-foot')
+    expect(head.textContent).toContain('Create API key')
+    expect(body.contains(head)).toBe(false)
+    expect(body.className).toContain('overflow-y-auto')
+    expect(within(foot).getByRole('button', { name: 'Create key' })).toBeTruthy()
+    expect(within(foot).getByRole('button', { name: 'Cancel' })).toBeTruthy()
+    expect(body.contains(within(foot).getByRole('button', { name: 'Create key' }))).toBe(false)
+  })
+
+  it('lists the first workspaces with Show all, never a scroll box of its own', async () => {
+    projectsState.projects = Array.from({ length: 9 }, (_, i) => ({ name: `ws-${i + 1}`, path: `/x/ws-${i + 1}` }))
+    render(<ApiTokensSection />)
+    const dialog = await openCreate()
+    const list = within(dialog).getByTestId('api-key-workspace-list')
+    expect(list.className).not.toContain('overflow')
+    expect(within(list).queryByLabelText('ws-6')).toBeNull()
+    fireEvent.click(within(list).getByRole('button', { name: 'Show all 9 workspaces' }))
+    fireEvent.click(within(list).getByLabelText('ws-9'))
+    fireEvent.click(within(list).getByRole('button', { name: 'Show fewer' }))
+    // A ticked workspace stays in sight when the list folds again.
+    expect((within(list).getByLabelText('ws-9') as HTMLInputElement).checked).toBe(true)
+    expect(within(list).queryByLabelText('ws-7')).toBeNull()
   })
 
   it('a failed create stays in the dialog with what failed and the server’s reason', async () => {

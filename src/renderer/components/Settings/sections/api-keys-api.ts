@@ -268,6 +268,11 @@ export function hireLimitsFromForm(f: HireForm, keyHasDb: boolean): Record<strin
   return out
 }
 
+/** Create a key on this window's server. */
+export async function createApiKey(body: Record<string, unknown>): Promise<{ id?: string; key?: string; error?: string }> {
+  return daemonCliPost(primaryScope(), 'api-keys/create', body)
+}
+
 /** Which confirm methods this caller has for a hire-key mint. */
 export async function startHireKeyConfirm(): Promise<{ methods: string[] }> {
   return daemonCliPost(primaryScope(), 'vault/confirm/start', { action: 'hire-key-mint' })

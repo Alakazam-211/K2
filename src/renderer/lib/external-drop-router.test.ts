@@ -182,6 +182,55 @@ describe('buildTerminalDropPayload', () => {
     )
     expect(buildTerminalDropPayload(['/Users/a/my notes.txt'])).toBe('/Users/a/my\\ notes.txt ')
   })
+
+  // The terminal views (TerminalPane, AlacrittyTerminalView) call this
+  // builder for drops and Finder-copied paths, so the escape table is
+  // pinned here once.
+  it('backslash-escapes every shell special in a non-image path', () => {
+    const specials = ` '"\\()&|;<>$\`!#*?[]{}~`
+    const expected = specials
+      .split('')
+      .map((c) => `\\${c}`)
+      .join('')
+    expect(buildTerminalDropPayload([`/tmp/${specials}.txt`])).toBe(`/tmp/${expected}.txt `)
+  })
+
+  it('escapes $ and backticks so a dropped name cannot expand or run a command', () => {
+    expect(buildTerminalDropPayload(['/tmp/$HOME `id`.log'])).toBe('/tmp/\\$HOME\\ \\`id\\`.log ')
+  })
+
+  it('escapes a leading ~ so the shell does not expand it', () => {
+    expect(buildTerminalDropPayload(['~/notes.txt'])).toBe('\\~/notes.txt ')
+  })
+
+  it('escapes the backslashes in a Windows path', () => {
+    expect(buildTerminalDropPayload(['C:\\Users\\a b\\x.txt'])).toBe('C:\\\\Users\\\\a\\ b\\\\x.txt ')
+  })
+
+  it('leaves unicode, dashes, dots and commas as they are', () => {
+    expect(buildTerminalDropPayload(['/tmp/résumé-v1.2,final 日本.txt'])).toBe(
+      '/tmp/résumé-v1.2,final\\ 日本.txt ',
+    )
+  })
+
+  // Today's behaviour, not a ruling: a newline in a file name is not
+  // escaped, so a plain (non-image) drop of such a name would submit the
+  // line early. Change this test if the builder learns to quote it.
+  it('passes a newline in a non-image name through unescaped', () => {
+    expect(buildTerminalDropPayload(['/tmp/a\nb.txt'])).toBe('/tmp/a\nb.txt ')
+  })
+
+  it('single-quotes an image path with a quote in it, POSIX style', () => {
+    expect(buildTerminalDropPayload(["/tmp/it's.png"])).toBe(
+      `${BRACKETED_PASTE_START}'/tmp/it'\\''s.png' ${BRACKETED_PASTE_END}`,
+    )
+  })
+
+  it('leaves a safe image path bare and matches image extensions case-insensitively', () => {
+    expect(buildTerminalDropPayload(['/tmp/SHOT.PNG', '/tmp/doc.pdf'])).toBe(
+      `${BRACKETED_PASTE_START}/tmp/SHOT.PNG /tmp/doc.pdf ${BRACKETED_PASTE_END}`,
+    )
+  })
 })
 
 describe('buildComposeDropPayload', () => {

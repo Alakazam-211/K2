@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   openWorkspaceThread: vi.fn(async (_id: string) => true),
   startChiefOfStaff: vi.fn(async () => 'ws-k5'),
   addToast: vi.fn(),
+  daemonCliPost: vi.fn(),
+  load: vi.fn(async () => {}),
 }))
 
 vi.mock('@/stores/settings', () => ({
@@ -23,10 +25,20 @@ vi.mock('@/components/OwnerAccountPrompt/OwnerAccountPrompt', () => ({ promptEli
 vi.mock('@/lib/open-workspace-thread', () => ({ openWorkspaceThread: (id: string) => h.openWorkspaceThread(id) }))
 vi.mock('@/stores/toast', () => ({ useToastStore: { getState: () => ({ addToast: h.addToast }) } }))
 vi.mock('@/stores/first-run', () => ({
-  useFirstRunStore: { getState: () => ({ startChiefOfStaff: h.startChiefOfStaff }) },
+  useFirstRunStore: { getState: () => ({ startChiefOfStaff: h.startChiefOfStaff, load: h.load }) },
+}))
+vi.mock('@/lib/daemon-cli', () => ({
+  daemonCliGet: vi.fn(),
+  daemonCliPost: (...a: unknown[]) => h.daemonCliPost(...a),
 }))
 
-import { COS_START_FAILED_TEXT, openFirstRunTarget, startChiefOfStaffHire } from './first-run-openers'
+import {
+  COS_START_FAILED_TEXT,
+  DEV_TOOLS_INSTALL_FAILED_TEXT,
+  openFirstRunTarget,
+  startChiefOfStaffHire,
+  startDevToolsInstall,
+} from './first-run-openers'
 import { useK5SheetStore } from '@/stores/k5-sheet'
 import { useLlmSignInRequestStore } from '@/stores/llm-sign-in-request'
 import { usePhonePairingFocusStore } from '@/stores/phone-pairing-focus'
@@ -52,9 +64,32 @@ beforeEach(() => {
     return 'ws-k5'
   })
   h.addToast.mockReset()
+  h.daemonCliPost.mockReset()
+  h.daemonCliPost.mockResolvedValue({ state: 'installing', started: 'started', howTo: [], waiting: [] })
+  h.load.mockClear()
 })
 
 describe('openFirstRunTarget', () => {
+  it("dev_tools POSTs the git-tools install (Apple's installer), then reads the list again", async () => {
+    expect(openFirstRunTarget('dev_tools')).toBe(true)
+    await vi.waitFor(() => expect(h.load).toHaveBeenCalledTimes(1))
+    expect(h.daemonCliPost).toHaveBeenCalledTimes(1)
+    expect(h.daemonCliPost.mock.calls[0][1]).toBe('git-tools/install')
+    expect(h.addToast).not.toHaveBeenCalled()
+    expect(h.openSettings).not.toHaveBeenCalled()
+  })
+
+  it('dev_tools: a refusal is a toast, and the list is read again', async () => {
+    h.daemonCliPost.mockRejectedValue(new Error('Apple’s command line tools are already installed'))
+    await startDevToolsInstall()
+    expect(h.addToast).toHaveBeenCalledWith(
+      `${DEV_TOOLS_INSTALL_FAILED_TEXT}: Apple’s command line tools are already installed`,
+      'error',
+      6000,
+    )
+    expect(h.load).toHaveBeenCalledTimes(1)
+  })
+
   it('llm_sign_in opens LLM tokens with a Claude sign-in asked for', () => {
     expect(openFirstRunTarget('llm_sign_in')).toBe(true)
     expect(h.openSettings).toHaveBeenCalledWith('llm-tokens')

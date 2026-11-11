@@ -37,6 +37,11 @@
 // so whenever the wash shows, so does the step-up. Focus is an inset ring:
 // nothing moves. Tokens only, so every Style and palette draws it.
 //
+// Developer tools (`dev_tools`, first, only while git doesn't run on the
+// server): on a Mac the row opens Apple's installer, then says it's open
+// until git runs and the row reads done. On Linux it opens nothing and shows
+// the distro's install line under it, in mono and selectable.
+//
 // States: nothing until the first answer (the switch may be off, so there is
 // no placeholder to flash); a failed read or gesture after that keeps the
 // last list and says so quietly, with Try again; when the person finishes
@@ -65,6 +70,7 @@ import {
 
 /** The contract's copy: what each step is for, never where or how it looks. */
 export const SETUP_CHECKLIST_COPY: Record<FirstRunRowId, { label: string; line: string }> = {
+  dev_tools: { label: 'Install developer tools', line: 'Apple’s tools include git, which workspaces need.' },
   llm_sign_in: { label: 'Sign in to an AI tool', line: 'Claude, Codex or Grok. Your agents think with it.' },
   chief_of_staff: { label: 'Hire your Chief of Staff', line: 'Your lead agent. K5 hires it with you.' },
   first_agent: { label: 'Make your first agent', line: 'Each workspace is an agent with its own folder.' },
@@ -75,11 +81,21 @@ export const SETUP_CHECKLIST_COPY: Record<FirstRunRowId, { label: string; line: 
 
 export const NEEDS_TUNNEL_NOTE = 'Away from home, your phone needs your subdomain first.'
 export const NEEDS_K5_NOTE = 'You’ll meet K5 first.'
+export const INSTALLING_NOTE = 'Apple’s installer is open. Follow it, and this step finishes by itself.'
+/** `dev_tools` on Linux (no installer to open; the note is the command). */
+export const DEV_TOOLS_LINUX_LINE = 'Workspaces need git.'
 
 /** Each note's copy (a note this client doesn't know never reaches here). */
 export const SETUP_NOTE_COPY: Record<FirstRunNote, string> = {
   needs_tunnel: NEEDS_TUNNEL_NOTE,
   needs_k5: NEEDS_K5_NOTE,
+  installing: INSTALLING_NOTE,
+}
+
+/** A row's line: the copy's, except Linux's `dev_tools` (it opens nothing). */
+export function rowLine(row: FirstRunRow): string {
+  if (row.id === 'dev_tools' && row.opens === null) return DEV_TOOLS_LINUX_LINE
+  return SETUP_CHECKLIST_COPY[row.id].line
 }
 
 
@@ -195,6 +211,7 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
   const skipped = row.state === 'skipped'
   const opens = row.opens !== null
   const note = row.note !== null && todo ? SETUP_NOTE_COPY[row.note] : null
+  const command = todo && row.command ? row.command : null
   // Muted words step up to secondary under the pointer, so they keep 4.5:1
   // on the hover wash.
   const muted = cx('text-[var(--color-text-muted)]', opens && 'group-hover/row:text-[var(--color-text-secondary)]')
@@ -248,7 +265,7 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
             ) : null}
           </span>
           {/* Balanced, so a hint never leaves one word alone on its last line. */}
-          {todo && <span className={cx('block type-hint leading-snug text-balance mt-0.5', muted)}>{copy.line}</span>}
+          {todo && <span className={cx('block type-hint leading-snug text-balance mt-0.5', muted)}>{rowLine(row)}</span>}
           {note ? (
             <span className={cx('block type-hint leading-snug text-balance mt-0.5', muted)} data-setup-note={row.note}>
               {note}
@@ -257,6 +274,17 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
         </span>
         <span className="sr-only">{STATE_TEXT[row.state]}</span>
       </button>
+      {/* Linux's install line: outside the row's button so it can be
+          selected and copied; lined up with the title. */}
+      {command ? (
+        <code
+          className="block pl-[30px] pr-2 pb-1.5 -mt-1 type-hint leading-snug font-mono break-all select-text cursor-text text-[var(--color-text-secondary)]"
+          data-setup-command=""
+          data-testid={`setup-command-${row.id}`}
+        >
+          {command}
+        </code>
+      ) : null}
       {todo && (
         <button
           type="button"

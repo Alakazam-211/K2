@@ -265,6 +265,33 @@ describe('parseFirstRunDoc', () => {
     expect(doc.rows[0]).toEqual({ id: 'chief_of_staff', state: 'todo', opens: null, note: null })
   })
 
+  it('reads the dev_tools row first, its opener and the installing note', () => {
+    const doc = parseFirstRunDoc({
+      enabled: true,
+      rows: [
+        { id: 'dev_tools', state: 'todo', opens: 'dev_tools', note: 'installing' },
+        { id: 'llm_sign_in', state: 'todo', opens: 'llm_sign_in' },
+      ],
+    })
+    expect(doc.rows[0]).toEqual({ id: 'dev_tools', state: 'todo', opens: 'dev_tools', note: 'installing' })
+    expect(doc.rows[0].command).toBeUndefined()
+  })
+
+  it("takes Linux's dev_tools note as the command, and nowhere else", () => {
+    const doc = parseFirstRunDoc({
+      enabled: true,
+      rows: [
+        { id: 'dev_tools', state: 'todo', opens: null, note: 'sudo apt install git' },
+        { id: 'phone', state: 'todo', opens: null, note: 'sudo apt install git' },
+      ],
+    })
+    expect(doc.rows[0]).toEqual({ id: 'dev_tools', state: 'todo', opens: null, note: null, command: 'sudo apt install git' })
+    expect(doc.rows[1]).toEqual({ id: 'phone', state: 'todo', opens: null, note: null })
+    // An unknown opens value with an unknown note: both dropped, no command.
+    const odd = parseFirstRunDoc({ enabled: true, rows: [{ id: 'dev_tools', state: 'todo', opens: 'dev_tools_v2', note: 'brew' }] })
+    expect(odd.rows[0]).toEqual({ id: 'dev_tools', state: 'todo', opens: null, note: null })
+  })
+
   it('shows nothing when off, hidden or finished', () => {
     const base = parseFirstRunDoc(BODY)
     expect(visibleRows(base)?.length).toBe(5)

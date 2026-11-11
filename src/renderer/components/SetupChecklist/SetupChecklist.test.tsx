@@ -50,6 +50,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import {
   ALL_DONE_TEXT,
   CHECKLIST_ERROR_TEXT,
+  DEV_TOOLS_LINUX_LINE,
+  INSTALLING_NOTE,
   GET_STARTED_LABEL,
   GET_STARTED_TEXT,
   NEEDS_K5_NOTE,
@@ -419,6 +421,76 @@ describe('SetupChecklist', () => {
     expect(row.textContent).toContain('Hire your Chief of Staff')
     expect(row.textContent).not.toContain('K5 hires it with you.')
     expect(row.querySelector('[data-setup-note]')).toBeNull()
+  })
+
+  it('the dev_tools row leads with its copy and opens the installer', async () => {
+    h.daemonCliGet.mockResolvedValue(
+      body({
+        rows: [
+          { id: 'dev_tools', state: 'todo', opens: 'dev_tools' },
+          { id: 'llm_sign_in', state: 'todo', opens: 'llm_sign_in' },
+        ],
+      }),
+    )
+    render(<SetupChecklist />)
+    const row = await screen.findByTestId('setup-row-dev_tools')
+    const ids = [...document.querySelectorAll('[data-setup-row]')].map((el) => el.getAttribute('data-setup-row'))
+    expect(ids).toEqual(['dev_tools', 'llm_sign_in'])
+    expect(SETUP_CHECKLIST_COPY.dev_tools).toEqual({
+      label: 'Install developer tools',
+      line: 'Apple’s tools include git, which workspaces need.',
+    })
+    expect(row.textContent).toContain('Install developer tools')
+    expect(row.textContent).toContain('Apple’s tools include git, which workspaces need.')
+    expect(row.getAttribute('aria-current')).toBe('step')
+    expect(row.querySelector('[data-setup-note]')).toBeNull()
+    expect(screen.queryByTestId('setup-command-dev_tools')).toBeNull()
+    fireEvent.click(row)
+    expect(h.open).toHaveBeenCalledWith('dev_tools')
+    expect(screen.getByTestId('setup-skip-dev_tools')).toBeTruthy()
+  })
+
+  it("while Apple's installer is open the dev_tools row says so; done, it drops the note", async () => {
+    h.daemonCliGet.mockResolvedValue(body({ rows: [{ id: 'dev_tools', state: 'todo', opens: 'dev_tools', note: 'installing' }] }))
+    render(<SetupChecklist />)
+    const row = await screen.findByTestId('setup-row-dev_tools')
+    expect(INSTALLING_NOTE).toBe('Apple’s installer is open. Follow it, and this step finishes by itself.')
+    expect(row.querySelector('[data-setup-note="installing"]')?.textContent).toBe(INSTALLING_NOTE)
+    cleanup()
+    resetFirstRunForTests()
+    h.daemonCliGet.mockResolvedValue(
+      body({
+        rows: [
+          { id: 'dev_tools', state: 'done', opens: 'dev_tools', note: 'installing' },
+          { id: 'llm_sign_in', state: 'todo', opens: 'llm_sign_in' },
+        ],
+      }),
+    )
+    render(<SetupChecklist />)
+    const done = await screen.findByTestId('setup-row-dev_tools')
+    expect(done.textContent).toContain('Done')
+    expect(done.querySelector('[data-setup-note]')).toBeNull()
+  })
+
+  it('on Linux the dev_tools row has no button: its line, and the command to run in mono', async () => {
+    h.daemonCliGet.mockResolvedValue(
+      body({ rows: [{ id: 'dev_tools', state: 'todo', opens: null, note: 'sudo apt install git' }] }),
+    )
+    render(<SetupChecklist />)
+    const row = await screen.findByTestId('setup-row-dev_tools')
+    expect((row as HTMLButtonElement).disabled).toBe(true)
+    expect(row.textContent).toContain('Install developer tools')
+    expect(row.textContent).toContain(DEV_TOOLS_LINUX_LINE)
+    expect(DEV_TOOLS_LINUX_LINE).toBe('Workspaces need git.')
+    expect(row.textContent).not.toContain('Apple')
+    const cmd = screen.getByTestId('setup-command-dev_tools')
+    expect(cmd.textContent).toBe('sudo apt install git')
+    expect(cmd.tagName).toBe('CODE')
+    expect(cmd.className).toContain('font-mono')
+    expect(cmd.className).toContain('select-text')
+    expect(row.contains(cmd)).toBe(false)
+    fireEvent.click(row)
+    expect(h.open).not.toHaveBeenCalled()
   })
 
   it('ignores row ids it does not know, and a row whose opens it does not know opens nothing', async () => {

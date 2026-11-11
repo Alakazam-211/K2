@@ -35,13 +35,23 @@ export const FIRST_RUN_COS_START_PATH = 'first-run/chief-of-staff/start'
 
 /** Row ids this client knows, in the contract's order. `chief_of_staff`
  *  takes `first_agent`'s place while the server's K5 switch is on; the
- *  daemon sends one or the other. Unknown ids are dropped. */
-export const FIRST_RUN_ROW_IDS = ['llm_sign_in', 'chief_of_staff', 'first_agent', 'tunnel', 'phone', 'own_sign_in'] as const
+ *  daemon sends one or the other. `dev_tools` comes first, and only while
+ *  git doesn't run on the server. Unknown ids are dropped. */
+export const FIRST_RUN_ROW_IDS = [
+  'dev_tools',
+  'llm_sign_in',
+  'chief_of_staff',
+  'first_agent',
+  'tunnel',
+  'phone',
+  'own_sign_in',
+] as const
 export type FirstRunRowId = (typeof FIRST_RUN_ROW_IDS)[number]
 
 /** What a row's button opens. Unknown values are dropped (the row stays,
  *  without an opener). */
 export const FIRST_RUN_OPENS = [
+  'dev_tools',
   'llm_sign_in',
   'add_workspace',
   'tunnel',
@@ -53,7 +63,7 @@ export const FIRST_RUN_OPENS = [
 export type FirstRunOpens = (typeof FIRST_RUN_OPENS)[number]
 
 export type FirstRunRowState = 'done' | 'todo' | 'skipped'
-export const FIRST_RUN_NOTES = ['needs_tunnel', 'needs_k5'] as const
+export const FIRST_RUN_NOTES = ['needs_tunnel', 'needs_k5', 'installing'] as const
 export type FirstRunNote = (typeof FIRST_RUN_NOTES)[number]
 
 /** The offer the LLM sign-in sheet shows once a tool is signed in. */
@@ -78,6 +88,9 @@ export interface FirstRunRow {
   state: FirstRunRowState
   opens: FirstRunOpens | null
   note: FirstRunNote | null
+  /** `dev_tools` on Linux only (it opens nothing): the distro's install
+   *  line, which the daemon sends as the row's note. */
+  command?: string
 }
 
 export interface FirstRunDoc {
@@ -136,12 +149,20 @@ export function parseFirstRunDoc(raw: unknown): FirstRunDoc {
     const row = r as Record<string, unknown>
     if (!isOneOf(FIRST_RUN_ROW_IDS, row.id) || seen.has(row.id)) continue
     seen.add(row.id)
-    rows.push({
+    const opens = isOneOf(FIRST_RUN_OPENS, row.opens) ? row.opens : null
+    const note = isOneOf(FIRST_RUN_NOTES, row.note) ? row.note : null
+    const parsed: FirstRunRow = {
       id: row.id,
       state: row.state === 'done' || row.state === 'skipped' ? row.state : 'todo',
-      opens: isOneOf(FIRST_RUN_OPENS, row.opens) ? row.opens : null,
-      note: isOneOf(FIRST_RUN_NOTES, row.note) ? row.note : null,
-    })
+      opens,
+      note,
+    }
+    // Linux's dev_tools row opens nothing and carries the command to run
+    // as its note. Only there is an unknown note text; anywhere else it's
+    // dropped.
+    const command = str(row.note)
+    if (row.id === 'dev_tools' && row.opens === null && note === null && command) parsed.command = command.trim()
+    rows.push(parsed)
   }
   return {
     enabled: o.enabled === true,

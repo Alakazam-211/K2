@@ -6,6 +6,13 @@
 // the span no `style` and no `data-mobile-touch-dot`, so a re-render never
 // undoes what this sets. The look is the old React dot's: the same classes,
 // a 200 ms fade, scale 1.5 on release, then gone.
+//
+// The scale lives inside `transform`, after the translate, never in the
+// separate `scale` property: CSS applies `scale` before `transform`, so a
+// separate scale of 1.5 also scaled the translate, and the span's `scale`
+// transition then slid the dot toward the bottom-right on release and back
+// in from there on the next touch (z3mbpZ, 11-10). Only the opacity
+// animates; position and size change at once.
 
 /** The fade after release, ms (the span's `duration-200`). */
 export const DOT_FADE_MS = 200
@@ -18,6 +25,13 @@ export interface DotTimers {
 const windowTimers: DotTimers = {
   set: (fn, ms) => window.setTimeout(fn, ms),
   clear: (id) => window.clearTimeout(id),
+}
+
+/** The dot's transform: centred on (x, y) in the screen's pixels, then
+ *  scaled about its own centre (the translate is never scaled). */
+export function dotTransform(x: number, y: number, scale: number): string {
+  const t = `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%)`
+  return scale === 1 ? t : `${t} scale(${scale})`
 }
 
 export class TouchDot {
@@ -42,8 +56,8 @@ export class TouchDot {
     if (!el) return
     this.cancel()
     el.style.display = ''
-    el.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%)`
-    el.style.scale = down ? '1' : '1.5'
+    el.style.scale = ''
+    el.style.transform = dotTransform(x, y, down ? 1 : 1.5)
     el.style.opacity = down ? '1' : '0'
     el.setAttribute('data-mobile-touch-dot', down ? 'down' : 'up')
     if (!down) {

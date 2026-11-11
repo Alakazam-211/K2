@@ -4,7 +4,7 @@
 // it; a re-attach of the same span never resets a dot mid-drag.
 
 import { describe, expect, it } from 'vitest'
-import { DOT_FADE_MS, TouchDot, type DotTimers } from './touch-dot'
+import { DOT_FADE_MS, dotTransform, TouchDot, type DotTimers } from './touch-dot'
 
 function fakeTimers(): DotTimers & { fire(): void; pending(): number; lastMs: number | null } {
   const q = new Map<number, () => void>()
@@ -30,6 +30,17 @@ function fakeTimers(): DotTimers & { fire(): void; pending(): number; lastMs: nu
 }
 
 describe('TouchDot', () => {
+  it('z3mbpZ: the lift scale never moves the dot (scale after the translate, no separate scale property)', () => {
+    expect(dotTransform(100, 200, 1)).toBe('translate3d(100px, 200px, 0) translate(-50%, -50%)')
+    expect(dotTransform(100, 200, 1.5)).toBe('translate3d(100px, 200px, 0) translate(-50%, -50%) scale(1.5)')
+    const el = document.createElement('span')
+    const dot = new TouchDot(fakeTimers())
+    dot.attach(el)
+    el.style.scale = '1.5' // left over from an older build
+    dot.place(100, 200, true)
+    expect(el.style.scale).toBe('')
+  })
+
   it('starts hidden; a finger down shows it at the point; a move follows it', () => {
     const el = document.createElement('span')
     const dot = new TouchDot(fakeTimers())
@@ -39,7 +50,7 @@ describe('TouchDot', () => {
     dot.place(40, 60, true)
     expect(el.style.display).toBe('')
     expect(el.style.transform).toBe('translate3d(40px, 60px, 0) translate(-50%, -50%)')
-    expect(el.style.scale).toBe('1')
+    expect(el.style.scale, 'never the separate scale property (it would scale the translate)').toBe('')
     expect(el.style.opacity).toBe('1')
     expect(el.getAttribute('data-mobile-touch-dot')).toBe('down')
     dot.place(45, 90, true)
@@ -54,7 +65,9 @@ describe('TouchDot', () => {
     dot.place(10, 10, true)
     dot.place(12, 14, false)
     expect(el.getAttribute('data-mobile-touch-dot')).toBe('up')
-    expect(el.style.scale).toBe('1.5')
+    // Scaled in place: the scale comes after the translate, inside transform.
+    expect(el.style.transform).toBe('translate3d(12px, 14px, 0) translate(-50%, -50%) scale(1.5)')
+    expect(el.style.scale).toBe('')
     expect(el.style.opacity).toBe('0')
     expect(timers.lastMs).toBe(DOT_FADE_MS)
     expect(timers.pending()).toBe(1)

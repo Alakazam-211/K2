@@ -403,15 +403,16 @@ export function DashboardAgentTile({
   // Thread, not live: still checking, the message box is there at once (a
   // Thread post needs the address, not the session; it shares the live
   // tile's draft, so typing carries on when the session attaches). Asleep,
-  // a Wake bar stands where it goes, and stays while it wakes.
+  // a Wake bar stands where it goes, and stays while it wakes. The Wake bar
+  // sits under the Thread's column, as Chatter's does, not in its box: the
+  // box keeps its own corners (Thread/chamfer.ts), so inside it Terminal's
+  // cut (`data-k2-chamfer`) never reached the bar or its Wake.
   const early = phase.kind === 'checking'
-  const bar =
+  const wakeBar =
     phase.kind === 'dormant' ? (
       <TileWakeBar name={name} onWake={() => void wake()} />
     ) : phase.kind === 'waking' ? (
       <TileWakeBar name={name} waking />
-    ) : early ? (
-      <ThreadEarlyCompose addr={addr} conversationId={null} agentName={workspaceId} projectPath={projectPath} displayName={name} />
     ) : null
   return (
     <TileHost view={view}>
@@ -419,12 +420,17 @@ export function DashboardAgentTile({
         addr={addr}
         conversationId={null}
         active={pageLive}
-        composeBar={bar}
+        composeBar={
+          early ? (
+            <ThreadEarlyCompose addr={addr} conversationId={null} agentName={workspaceId} projectPath={projectPath} displayName={name} />
+          ) : null
+        }
         agentName={name}
         // Placed as the live tile's Thread places it, so nothing moves.
         centreEmpty={early}
         textCapPx={textCap}
       />
+      {wakeBar}
     </TileHost>
   )
 }

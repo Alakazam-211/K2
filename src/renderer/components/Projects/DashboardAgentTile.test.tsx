@@ -242,6 +242,9 @@ describe('an asleep tile', () => {
     renderInRoom(room, <Tile phase={DORMANT} />)
     expect(screen.getByTestId('thread-column').getAttribute('data-addr')).toBe('sales')
     expect(screen.getByTestId('tile-wake-bar').textContent).toContain('sales is asleep.')
+    // Under the Thread's box, not in it: inside, the box's own corners win
+    // and Terminal's cut never reached the bar or its Wake.
+    expect(screen.getByTestId('thread-column').contains(screen.getByTestId('tile-wake-bar'))).toBe(false)
     await act(async () => {
       fireEvent.click(screen.getByTestId('tile-wake'))
     })

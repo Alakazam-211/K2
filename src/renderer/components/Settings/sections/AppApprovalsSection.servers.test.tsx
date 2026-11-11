@@ -128,8 +128,9 @@ describe('App Approvals across servers', () => {
     })
     render(<AppApprovalsSection />)
     fireEvent.click(await screen.findByTestId('app-approve-w_box'))
-    fireEvent.click(await screen.findByTestId('app-approve-confirm-w_box'))
+    // A password-only server: the dialog asks for it at once (two presses, no extra step).
     const pw = await screen.findByTestId('app-approve-password')
+    expect(h.post).not.toHaveBeenCalled()
     ;(pw as HTMLInputElement).value = 'hunter2'
     fireEvent.change(pw, { target: { value: 'hunter2' } })
     fireEvent.submit(pw.closest('form')!)

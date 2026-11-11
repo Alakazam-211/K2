@@ -101,7 +101,8 @@ describe('AppApprovalsSection', () => {
     expect(card.textContent).toContain('shop')
     expect(card.textContent).toContain('sales')
     expect(card.textContent).toContain('deploy shop with 1 new cap')
-    expect(card.textContent).toContain('+ cap mail:send')
+    expect(card.textContent).toContain('New permission:')
+    expect(card.textContent).not.toContain('+ cap')
     expect(card.textContent).toContain('asked by agent:sales')
     expect(card.textContent).toContain('Why: the shop sends receipts')
     expect(card.textContent).toContain('Held because: a deploy that adds caps is the owner’s')
@@ -109,7 +110,7 @@ describe('AppApprovalsSection', () => {
     expect(card.textContent).toContain('expires in 6d')
     const install = screen.getByTestId('app-request-w_inst')
     expect(install.textContent).toContain('First install')
-    expect(install.textContent).toContain('+ cap files:read')
+    expect(install.textContent).toContain('New permission: Read files')
     expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('App Approvals (2)')
     expect(h.daemonCliGet).toHaveBeenCalledWith('app/approvals', { state: 'pending' })
     expect(screen.queryByTestId('app-approvals-no-confirm')).toBeNull()
@@ -133,7 +134,7 @@ describe('AppApprovalsSection', () => {
     fireEvent.click(await screen.findByTestId('app-approve-w_dep1'))
     // Asks first: the dialog shows the change; nothing is sent until Approve.
     const dialog = await screen.findByTestId('app-approve-dialog-w_dep1')
-    expect(dialog.textContent).toContain('+ cap mail:send')
+    expect(dialog.textContent).toContain('New permission:')
     expect(h.daemonCliPost).not.toHaveBeenCalled()
     fireEvent.click(screen.getByTestId('app-approve-confirm-w_dep1'))
     await waitFor(() => expect(postsTo('app/approve')).toEqual([{ request: 'w_dep1', confirmToken: 'k2vc_tok' }]))
@@ -145,7 +146,7 @@ describe('AppApprovalsSection', () => {
     const order = h.daemonCliPost.mock.calls.map((c) => c[0])
     expect(order).toEqual(['vault/confirm/start', 'vault/confirm/finish', 'app/approve'])
     await waitFor(() => expect(screen.queryByTestId('app-request-w_dep1')).toBeNull())
-    expect(screen.getByTestId('app-approvals-notice').textContent).toContain('Approved deploy for shop')
+    expect(screen.getByTestId('app-approvals-notice').textContent).toBe('Approved: shop can now deploy shop with 1 new cap.')
   })
 
   it('asks for a password where there is no Touch ID, and never approves without it', async () => {
@@ -174,6 +175,42 @@ describe('AppApprovalsSection', () => {
       },
     ])
     expect(pw.value).toBe('')
+  })
+
+  it('a password-only server asks for the password in the same dialog: Approve… then Approve', async () => {
+    serve([req()], [req()], { available: true, methods: ['vault-password'] })
+    posts({
+      'vault/confirm/start': () => ({ methods: ['vault-password'], expiresIn: 60 }),
+      'vault/confirm/finish': () => ({ token: 'k2vc_pw', expiresIn: 60 }),
+      'app/approve': () => ({ ok: true, status: 'approved', request: req({ status: 'approved' }) }),
+    })
+    render(<AppApprovalsSection />)
+    fireEvent.click(await screen.findByTestId('app-approve-w_dep1'))
+    const pw = (await screen.findByTestId('app-approve-password')) as HTMLInputElement
+    expect(screen.getByTestId('app-approve-dialog-w_dep1').textContent).toContain('New permission:')
+    expect(h.daemonCliPost).not.toHaveBeenCalled()
+    fireEvent.change(pw, { target: { value: 'correct horse battery' } })
+    fireEvent.click(screen.getByTestId('app-approve-submit-w_dep1'))
+    await waitFor(() => expect(postsTo('app/approve')).toEqual([{ request: 'w_dep1', confirmToken: 'k2vc_pw' }]))
+    expect(h.daemonCliPost.mock.calls.map((c) => c[0])).toEqual(['vault/confirm/start', 'vault/confirm/finish', 'app/approve'])
+  })
+
+  it('a wrong password says so plainly and keeps the field for another try', async () => {
+    serve([req()], [req()], { available: true, methods: ['vault-password'] })
+    posts({
+      'vault/confirm/start': () => ({ methods: ['vault-password'], expiresIn: 60 }),
+      'vault/confirm/finish': () => {
+        throw new Error('{"error":{"code":"confirm_failed","hint":"that isn\'t the vault password"}}')
+      },
+    })
+    render(<AppApprovalsSection />)
+    fireEvent.click(await screen.findByTestId('app-approve-w_dep1'))
+    const pw = (await screen.findByTestId('app-approve-password')) as HTMLInputElement
+    fireEvent.change(pw, { target: { value: 'wrong' } })
+    fireEvent.click(screen.getByTestId('app-approve-submit-w_dep1'))
+    expect(await screen.findByText('That password didn’t match. Try again.')).toBeTruthy()
+    expect(screen.getByTestId('app-approve-password')).toBeTruthy()
+    expect(postsTo('app/approve')).toEqual([])
   })
 
   it('deny posts the note the requester reads', async () => {
@@ -251,7 +288,7 @@ describe('AppApprovalsSection', () => {
     fireEvent.click(await screen.findByTestId('app-approve-w_dep1'))
     fireEvent.click(await screen.findByTestId('app-approve-confirm-w_dep1'))
     const notice = await screen.findByTestId('app-approvals-notice')
-    expect(notice.textContent).toContain("but applying it failed: nothing on this daemon applies 'db_raw' requests yet")
+    expect(notice.textContent).toContain("Approved, but it didn’t apply: nothing on this daemon applies 'db_raw' requests yet.")
   })
 
   it('shows a load failure', async () => {
@@ -277,7 +314,7 @@ describe('AppApprovalsSection', () => {
     expect(row.textContent).toContain('Note: not now')
     const f = screen.getByTestId('app-history-w_fail')
     expect(f.textContent).toContain('Approved, failed to apply')
-    expect(f.textContent).toContain('via local-auth')
+    expect(f.textContent).toContain('by owner with Touch ID or the Mac password')
     expect(f.textContent).toContain('nothing applies it yet')
     // The pending one is not a history row; it waits on the Waiting tab.
     expect(screen.queryByTestId('app-history-w_dep1')).toBeNull()

@@ -21,7 +21,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Callout, Input, Surface, Textarea, cx } from '@/components/ui'
 import { formatRelativeTime } from '@/lib/format-relative-time'
-import { daemonErrorText } from '@/lib/daemon-error'
+import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
+import { K2_CAPS } from '@/lib/k2-caps.generated'
 import type { SettingEntry } from '../searchManifest'
 import { vaultConfirmOn } from './vault-api'
 import { currentApprovalServers, useAppApprovalsStore } from '@/stores/app-approvals'
@@ -249,7 +250,7 @@ function ServerBlock({
         </SettingsLoadState>
       ) : null}
       {pending.map((r) => (
-        <RequestCard key={r.id} request={r} scope={g.server.scope} canConfirm={canConfirm} onDone={onDone} />
+        <RequestCard key={r.id} request={r} scope={g.server.scope} canConfirm={canConfirm} methods={ownerConfirm?.methods ?? []} onDone={onDone} />
       ))}
     </section>
   )
@@ -296,7 +297,36 @@ function HistoryBlock({ group: g, multi, onRetry }: { group: ServerApprovals; mu
  *  pending list (it is decided), so its error shows here and in History. */
 type Notice = { tone: 'ok' | 'error'; text: string }
 
-type ConfirmStep = { step: 'review' } | { step: 'starting' } | { step: 'mac' } | { step: 'password'; method: string }
+type ConfirmStep = { step: 'review' } | { step: 'starting' } | { step: 'mac' } | { step: 'password'; method: string; started: boolean }
+
+/** One change line in plain words: "New outside site: api.example.com". */
+export function plainChange(line: string): string {
+  const host = /^\+ host (.+)$/.exec(line)
+  if (host) return `New outside site: ${host[1].replace(/^https?:\/\//, '').replace(/:443$/, '')}`
+  const cap = /^\+ cap (.+)$/.exec(line)
+  if (cap) {
+    const label = (K2_CAPS as Record<string, { label: string } | undefined>)[cap[1]]?.label
+    return `New permission: ${label ? label.replace(/\s*\(.*\)\s*$/, '') : cap[1]}`
+  }
+  const mode = /^Egress mode → (.+)$/.exec(line)
+  if (mode) return `Outside access: ${mode[1]}`
+  return line
+}
+
+/** What approving did, in plain words. */
+function approvedWords(r: AppRequest): string {
+  const hosts = Array.isArray(r.hosts) && r.hosts.length ? r.hosts.map((h) => h.replace(/:443$/, '')) : null
+  if (hosts) return `Approved: ${r.appLabel} can now reach ${hosts.join(', ')}.`
+  const what = r.summary.trim().replace(/[.\s]+$/, '')
+  return `Approved: ${r.appLabel} can now ${what.charAt(0).toLowerCase()}${what.slice(1)}.`
+}
+
+/** How the owner confirmed, in words. */
+const CONFIRM_WORDS: Record<string, string> = {
+  'vault-password': 'the vault password',
+  'connect-password': 'the K2 Connect password',
+  'local-auth': 'Touch ID or the Mac password',
+}
 
 /** The change itself: what it adds, one line each, in a quiet box. */
 function ChangeLines({ r }: { r: AppRequest }): React.JSX.Element | null {
@@ -308,11 +338,11 @@ function ChangeLines({ r }: { r: AppRequest }): React.JSX.Element | null {
       {lines.length > 0 ? (
         <ul
           data-k2-chamfer="surface"
-          className="type-hint font-mono list-none space-y-0.5 border border-[var(--color-border)] bg-[var(--color-bg)] rounded-[var(--radius-field)] px-3 py-2 text-[var(--color-text-primary)]"
+          className="type-hint list-none space-y-0.5 border border-[var(--color-border)] bg-[var(--color-bg)] rounded-[var(--radius-field)] px-3 py-2 text-[var(--color-text-primary)]"
           data-testid="app-request-diff"
         >
           {lines.map((l, i) => (
-            <li key={i}>{l}</li>
+            <li key={i}>{plainChange(l)}</li>
           ))}
         </ul>
       ) : null}
@@ -325,6 +355,7 @@ function RequestCard({
   request: r,
   scope,
   canConfirm,
+  methods = [],
   onDone,
 }: {
   request: AppRequest
@@ -332,13 +363,21 @@ function RequestCard({
    *  denied there. */
   scope: ServerScope
   canConfirm: boolean
+  /** How the server confirms it's the owner (the list's ownerConfirm): a
+   *  password method with no Touch ID puts the password in the dialog at
+   *  once, so approving is one more press. */
+  methods?: string[]
   onDone: (notice: Notice) => Promise<void>
 }): React.JSX.Element {
   const [dialog, setDialog] = useState<'approve' | 'deny' | null>(null)
   const [confirm, setConfirm] = useState<ConfirmStep>({ step: 'review' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** The password didn't match: say so plainly and keep the field. */
+  const [badPassword, setBadPassword] = useState(false)
   const [note, setNote] = useState('')
+  const pwFirst = methods.includes('local-auth') ? undefined : methods.find((m) => m === 'connect-password' || m === 'vault-password')
+  const firstStep = (): ConfirmStep => (pwFirst ? { step: 'password', method: pwFirst, started: false } : { step: 'review' })
   const pwRef = useRef<HTMLInputElement>(null)
   const [hasPw, setHasPw] = useState(false)
   const now = nowSec()
@@ -347,6 +386,7 @@ function RequestCard({
     setDialog(null)
     setConfirm({ step: 'review' })
     setError(null)
+    setBadPassword(false)
     setNote('')
     setHasPw(false)
   }
@@ -365,11 +405,11 @@ function RequestCard({
       // Recorded as approved, but applying it failed: the daemon says why.
       await onDone({
         tone: 'error',
-        text: `Approved ${kindLabel(r.kind).toLowerCase()} for ${r.appLabel}, but applying it failed: ${out.error.hint || out.error.code}`,
+        text: `Approved, but it didn’t apply: ${(out.error.hint || out.error.code).replace(/[.\s]+$/, '')}. ${r.appLabel} stays as it was; its agent can ask again.`,
       })
       return
     }
-    await onDone({ tone: 'ok', text: `Approved ${kindLabel(r.kind).toLowerCase()} for ${r.appLabel}: ${out.note ?? 'it applies now'}.` })
+    await onDone({ tone: 'ok', text: approvedWords(r) })
   }
 
   const approve = async (): Promise<void> => {
@@ -384,7 +424,7 @@ function RequestCard({
       }
       const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
       if (pw) {
-        setConfirm({ step: 'password', method: pw })
+        setConfirm({ step: 'password', method: pw, started: true })
         return
       }
       setConfirm({ step: 'review' })
@@ -395,17 +435,21 @@ function RequestCard({
     }
   }
 
-  const submitPassword = async (method: string): Promise<void> => {
+  const submitPassword = async (method: string, started: boolean): Promise<void> => {
     const el = pwRef.current
     if (!el) return
     const pw = el.value
     el.value = ''
     setHasPw(false)
     setError(null)
+    setBadPassword(false)
     try {
+      if (!started) await vaultConfirmOn(scope).start(APP_APPROVE_CONFIRM_ACTION, r.id)
       await finish(method, pw)
     } catch (e) {
-      setError(daemonErrorText(e))
+      setConfirm({ step: 'password', method, started: false })
+      if (daemonErrorOf(e)?.code === 'confirm_failed') setBadPassword(true)
+      else setError(daemonErrorText(e))
     }
   }
 
@@ -415,7 +459,10 @@ function RequestCard({
     try {
       await denyAppRequest(r.id, note.trim() || undefined, scope)
       close()
-      await onDone({ tone: 'ok', text: `Denied ${kindLabel(r.kind).toLowerCase()} for ${r.appLabel}. ${r.requestedBy} can see why.` })
+      await onDone({
+        tone: 'ok',
+        text: `Denied: ${r.appLabel} stays as it is. ${note.trim() ? `${r.requestedBy} can see why.` : `${r.requestedBy} can ask again later.`}`,
+      })
     } catch (e) {
       setError(daemonErrorText(e))
     } finally {
@@ -466,7 +513,8 @@ function RequestCard({
             title={canConfirm ? undefined : 'No way to confirm on this server yet'}
             onClick={() => {
               setError(null)
-              setConfirm({ step: 'review' })
+              setBadPassword(false)
+              setConfirm(firstStep())
               setDialog('approve')
             }}
             data-testid={`app-approve-${r.id}`}
@@ -489,8 +537,8 @@ function RequestCard({
                 Cancel
               </Button>
               {confirm.step === 'password' ? (
-                <Button type="submit" form={`approve-pw-${r.id}`} variant="accent" size="md" disabled={!hasPw}>
-                  Confirm and approve
+                <Button type="submit" form={`approve-pw-${r.id}`} variant="accent" size="md" disabled={!hasPw} data-testid={`app-approve-submit-${r.id}`}>
+                  Approve
                 </Button>
               ) : (
                 <Button
@@ -518,13 +566,14 @@ function RequestCard({
               id={`approve-pw-${r.id}`}
               onSubmit={(e) => {
                 e.preventDefault()
-                void submitPassword(confirm.method)
+                void submitPassword(confirm.method, confirm.started)
               }}
             >
               <Field
                 label={confirm.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
                 htmlFor={`approve-pw-input-${r.id}`}
-                hint="K2 uses it once, to confirm it’s you."
+                hint={badPassword ? undefined : 'K2 uses it once, to confirm it’s you.'}
+                problem={badPassword ? 'That password didn’t match. Try again.' : null}
               >
                 <Input
                   id={`approve-pw-input-${r.id}`}
@@ -614,8 +663,13 @@ function HistoryRow({ request: r }: { request: AppRequest }): React.JSX.Element 
           <p className={`${SETTING_ROW_HINT} flex flex-wrap items-center gap-x-1.5`}>
             <StatusDot tone={STATUS_DOT[r.status] ?? 'idle'} />
             <span className="text-[var(--color-text-primary)]">{STATUS_WORDS[r.status] ?? r.status}</span>
-            {r.decidedBy ? <span>by {r.decidedBy}</span> : null}
-            {r.confirmVia ? <span>via {r.confirmVia}</span> : null}
+            {r.decidedBy || r.confirmVia ? (
+              <span>
+                {[r.decidedBy ? `by ${r.decidedBy}` : null, r.confirmVia ? `with ${CONFIRM_WORDS[r.confirmVia] ?? r.confirmVia}` : null]
+                  .filter(Boolean)
+                  .join(' ')}
+              </span>
+            ) : null}
             {r.decidedAt ? <span>· {formatRelativeTime(r.decidedAt, now)}</span> : null}
             <span>· asked by {r.requestedBy}</span>
           </p>

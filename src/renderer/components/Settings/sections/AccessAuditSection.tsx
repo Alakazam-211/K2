@@ -29,6 +29,9 @@ import {
   newestFirst,
   type AuthAuditEvent,
 } from './access-audit-api'
+import { auditDetail, auditFields, auditWhat, auditWho, auditWhoText, type DetailContext } from './access-audit-words'
+import { localWhen, localWhenFull } from '../shared/local-time'
+import { useProjectsStore } from '@/stores/projects'
 
 export const ACCESS_AUDIT_MANIFEST: SettingEntry[] = [
   {
@@ -83,90 +86,23 @@ function matchesFilter(ev: AuthAuditEvent, filter: FilterMode): boolean {
   }
 }
 
-/** Who did it, in plain words: an agent's stamp reads "Agent atlas/s1". */
-export function auditWho(user: string): string {
-  const u = user.trim()
-  if (!u || u === '-') return 'Someone'
-  if (u.startsWith('agent:')) return `Agent ${u.slice('agent:'.length)}`
-  if (u.startsWith('connect:')) return u.slice('connect:'.length)
-  return u
-}
-
-const SIGN_IN_FAILURES: Record<string, string> = {
-  bad_creds: 'couldn’t sign in: wrong username or password',
-  locked: 'couldn’t sign in: locked out after too many tries',
-  rate_limited: 'couldn’t sign in: too many tries, so K2 is waiting',
-  blocked_ingress: 'was blocked: came in by a route this server doesn’t accept',
-}
-
-const PERMISSION_WHAT: Record<string, string> = {
-  'permission-request': 'asked for a permission',
-  'permission-answer': 'answered a permission request',
-  'permission-note': 'added a note to a permission request',
-  'permission-undo': 'turned a permission off again',
-  'permission-switch': 'changed a permission switch',
-}
-
-/** What happened, as the rest of a sentence after the person's name. */
-export function auditWhat(ev: AuthAuditEvent): string {
-  const failed = isFailedRecord(ev)
-  const word = ev.outcome.trim().split(/\s+/)[1] ?? ''
-  switch (ev.event) {
-    case 'login':
-      if (!failed) return 'signed in'
-      if (ev.outcome.startsWith('bad_attest')) return 'was blocked: the sign-in couldn’t be verified'
-      return SIGN_IN_FAILURES[ev.outcome] ?? 'couldn’t sign in'
-    case 'logout':
-      return 'signed out'
-    case 'change-password':
-      return failed ? 'couldn’t change their password' : 'changed their password'
-    case 'set-password':
-      return failed ? 'couldn’t set a password' : 'had a password set'
-    case 'add-user':
-      return 'added a person'
-    case 'vault-handoff':
-      if (failed) return 'was refused a secret handoff'
-      if (word === 'send') return 'sent a secret'
-      if (word === 'accept') return 'accepted a secret'
-      if (word === 'decline') return 'declined a secret'
-      if (word === 'expire') return 'let a secret handoff expire'
-      return 'handed off a secret'
-    case 'vault-carry':
-      return word === 'export' ? 'exported secrets from this server’s vault' : 'moved secrets in the vault'
-    default:
-      return PERMISSION_WHAT[ev.event] ?? (ev.event || 'did something')
-  }
-}
-
-/** Where it came from: the address and the route, in plain words. */
-export function auditWhere(ev: AuthAuditEvent): string {
-  const ing = ev.ingress.trim()
-  const route =
-    ing === 'loopback'
-      ? 'on this computer'
-      : ing === 'lan'
-        ? 'local network'
-        : ing === 'tunnel'
-          ? 'through the tunnel'
-          : ing.startsWith('edge:')
-            ? 'web sign-in'
-            : ''
-  const ip = ev.ip && ev.ip !== '-' ? ev.ip : ''
-  return [ip, route].filter(Boolean).join(' · ')
-}
-
-/** Local date and time; the full UTC stamp is in the details. */
-function localWhen(ts: string): string {
-  const d = new Date(ts)
-  if (Number.isNaN(d.getTime())) return ts || '—'
-  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-}
-
-function RecordRow({ ev, open, onToggle, rowId }: { ev: AuthAuditEvent; open: boolean; onToggle: () => void; rowId: string }): React.JSX.Element {
+function RecordRow({
+  ev,
+  ctx,
+  open,
+  onToggle,
+  rowId,
+}: {
+  ev: AuthAuditEvent
+  ctx: DetailContext
+  open: boolean
+  onToggle: () => void
+  rowId: string
+}): React.JSX.Element {
   const failed = isFailedRecord(ev)
   const exported = isAgentVaultExport(ev)
-  const where = auditWhere(ev)
-  const showOutcome = !(ev.event === 'login' && (ev.outcome === 'ok' || SIGN_IN_FAILURES[ev.outcome]))
+  const who = auditWho(ev.user, ctx.ws)
+  const detail = auditDetail(ev, ctx)
   const dot = failed
     ? 'bg-[var(--color-status-error)]'
     : exported
@@ -174,15 +110,7 @@ function RecordRow({ ev, open, onToggle, rowId }: { ev: AuthAuditEvent; open: bo
       : ev.event === 'login'
         ? 'bg-[var(--color-status-ok)]'
         : 'bg-[var(--color-text-muted)]'
-  const fields: Array<[string, string | undefined]> = [
-    ['Time (UTC)', formatAuditTimeUtc(ev.ts)],
-    ['Record', ev.event],
-    ['Result', ev.outcome],
-    ['Account', ev.user],
-    ['Route', ev.ingress],
-    ['Address', ev.ip],
-    ['App', ev.client],
-  ]
+  const fields = open ? auditFields(ev, ctx, { local: localWhenFull(ev.ts), utc: formatAuditTimeUtc(ev.ts) }) : []
   return (
     <li data-audit-row="" data-failed={failed ? 'true' : undefined} data-agent-vault-export={exported ? 'true' : undefined}>
       <button
@@ -196,13 +124,13 @@ function RecordRow({ ev, open, onToggle, rowId }: { ev: AuthAuditEvent; open: bo
         <span aria-hidden="true" className={`mt-1.5 inline-block h-2 w-2 rounded-[var(--radius-status)] ${dot}`} />
         <span className="min-w-0">
           <span className="block type-row text-[var(--color-text-primary)]">
-            <span className="type-name">{auditWho(ev.user)}</span>{' '}
+            <span className="type-name">{who.name}</span>
+            {who.agent ? ' agent' : ''}{' '}
             <span className={failed ? 'text-[var(--color-status-error-soft)]' : undefined}>{auditWhat(ev)}</span>
           </span>
-          {where && <span className="block type-hint text-[var(--color-text-secondary)] mt-0.5">{where}</span>}
-          {showOutcome && ev.outcome && (
-            <span className="block type-hint font-mono text-[var(--color-text-secondary)] mt-0.5 whitespace-pre-wrap break-words">
-              {ev.outcome}
+          {detail && (
+            <span className="block type-hint text-[var(--color-text-secondary)] mt-0.5 break-words" data-audit-detail="">
+              {detail}
             </span>
           )}
         </span>
@@ -214,15 +142,21 @@ function RecordRow({ ev, open, onToggle, rowId }: { ev: AuthAuditEvent; open: bo
         </span>
       </button>
       {open && (
-        <dl id={rowId} className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-4 gap-y-1 px-4 pb-3 pl-9">
-          {fields
-            .filter(([, v]) => v !== undefined && v !== '')
-            .map(([k, v]) => (
-              <React.Fragment key={k}>
-                <dt className="type-hint text-[var(--color-text-secondary)]">{k}</dt>
-                <dd className="type-hint font-mono text-[var(--color-text-primary)] break-words">{v}</dd>
-              </React.Fragment>
-            ))}
+        <dl id={rowId} className="grid grid-cols-[9rem_minmax(0,1fr)] gap-x-4 gap-y-1 px-4 pb-3 pl-9" data-audit-details="">
+          {fields.map((f) => (
+            <React.Fragment key={f.label}>
+              <dt className="type-hint text-[var(--color-text-secondary)]">{f.label}</dt>
+              <dd className="type-hint text-[var(--color-text-primary)] break-words">
+                {f.value}
+                {f.raw && (
+                  <span className="font-mono text-[var(--color-text-muted)]" data-audit-raw="">
+                    {f.value ? ' · ' : ''}
+                    {f.raw}
+                  </span>
+                )}
+              </dd>
+            </React.Fragment>
+          ))}
         </dl>
       )}
     </li>
@@ -238,6 +172,7 @@ export function AccessAuditSection(): React.JSX.Element {
   const [refreshNonce, setRefreshNonce] = useState(0)
   const [view, setView] = useState<ViewState>({ kind: 'loading' })
   const [openRow, setOpenRow] = useState<string | null>(null)
+  const projects = useProjectsStore((st) => st.projects)
 
   useEffect(() => {
     if (!supportsAudit) {
@@ -292,15 +227,34 @@ export function AccessAuditSection(): React.JSX.Element {
     setRefreshNonce((n) => n + 1)
   }, [])
 
+  // Agents are named the way the rest of K2 names them: by their workspace
+  // (the log stamps a workspace id or handle).
+  const ctx = useMemo<DetailContext>(() => {
+    const ws = (key: string): string => {
+      const k = key.trim()
+      const p = projects.find((x) => x.id === k || x.handle === k || x.name === k)
+      return p?.name ?? k
+    }
+    const requests = new Map<string, AuthAuditEvent>()
+    if (view.kind === 'table') {
+      for (const ev of view.events) {
+        if (ev.event !== 'permission-request') continue
+        const id = ev.outcome.trim().replace(/^ok\s+/, '').split(/\s+/)[0]
+        if (id) requests.set(id, ev)
+      }
+    }
+    return { ws, requests }
+  }, [projects, view])
+
   const rows = useMemo(() => {
     if (view.kind !== 'table') return []
     const q = userFilter.trim().toLowerCase()
     return view.events.filter((ev) => {
       if (!matchesFilter(ev, filter)) return false
-      if (q && !ev.user.toLowerCase().includes(q)) return false
+      if (q && !ev.user.toLowerCase().includes(q) && !auditWhoText(ev.user, ctx.ws).toLowerCase().includes(q)) return false
       return true
     })
-  }, [view, filter, userFilter])
+  }, [view, filter, userFilter, ctx])
 
   const agentExports = useMemo(
     () => (view.kind === 'table' ? view.events.filter(isAgentVaultExport).length : 0),
@@ -323,7 +277,8 @@ export function AccessAuditSection(): React.JSX.Element {
       </SettingsLoadState>
     ) : view.kind === 'error' ? (
       <SettingsLoadState kind="error" title="Sign-in history couldn’t load" detail={view.message} action={tryAgain} testId="audit-error">
-        K2 couldn’t read this server’s access log. Nothing is lost; try again in a moment.
+        K2 couldn’t open this server’s access log, so there is nothing to show yet. Nothing in it is lost. Try again in a
+        moment; if it keeps failing, restart K2 on that server.
       </SettingsLoadState>
     ) : view.kind === 'loading' ? (
       <SettingsLoadState kind="loading" title="Loading sign-in history…" testId="audit-loading">
@@ -387,7 +342,7 @@ export function AccessAuditSection(): React.JSX.Element {
                 ? rows.length === 0
                   ? `Nothing for “${who}” here.`
                   : `${rows.length === 1 ? 'One record' : `${rows.length} records`} for “${who}”, newest first.`
-                : 'Newest first. Open a record for the full line.'
+                : 'Newest first. Open a record for every detail.'
             }
             action={<Button onClick={onRefresh}>Refresh</Button>}
             testId="audit-records"
@@ -416,13 +371,14 @@ export function AccessAuditSection(): React.JSX.Element {
                 )}
               </div>
             ) : (
-              <ul className="max-h-[40rem] overflow-y-auto divide-y divide-[var(--color-border)]" data-testid="audit-rows">
+              <ul className="divide-y divide-[var(--color-border)]" data-testid="audit-rows">
                 {rows.map((ev, i) => {
                   const key = `${ev.ts}-${ev.user}-${ev.event}-${i}`
                   return (
                     <RecordRow
                       key={key}
                       ev={ev}
+                      ctx={ctx}
                       rowId={`audit-row-${i}`}
                       open={openRow === key}
                       onToggle={() => setOpenRow((k) => (k === key ? null : key))}

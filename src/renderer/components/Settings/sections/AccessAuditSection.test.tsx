@@ -10,6 +10,11 @@ const h = vi.hoisted(() => ({
   fetchUsersAudit: vi.fn(),
   fetchWhoamiRole: vi.fn(),
   supportsAudit: { value: true },
+  projects: [] as Array<{ id: string; name: string; handle?: string }>,
+}))
+
+vi.mock('@/stores/projects', () => ({
+  useProjectsStore: (sel: (s: { projects: unknown[] }) => unknown) => sel({ projects: h.projects }),
 }))
 
 vi.mock('./access-audit-api', async (importOriginal) => {
@@ -69,6 +74,7 @@ beforeEach(() => {
   h.fetchUsersAudit.mockReset()
   h.fetchWhoamiRole.mockReset()
   h.supportsAudit.value = true
+  h.projects = []
   useConnectHostStore.setState({ activeHost: 'local', serverVersion: null })
 })
 
@@ -161,7 +167,7 @@ describe('AccessAuditSection', () => {
     expect(rowsText(container)[0]).toContain('alice')
     expect(rowsText(container)[0]).toContain('signed in')
     expect(rowsText(container)[0]).toContain('203.0.113.9')
-    expect(rowsText(container)[0]).toContain('web sign-in')
+    expect(rowsText(container)[0]).toContain('through the web address')
     expect(container.textContent).not.toContain('198.51.100.7')
 
     pick('All')
@@ -195,7 +201,7 @@ describe('AccessAuditSection', () => {
     expect(rowsText(container).length).toBe(4)
   })
 
-  it('opening a record shows the raw line with its UTC time', async () => {
+  it('opening a record lists plain labels, with the raw values quietly after', async () => {
     h.fetchWhoamiRole.mockResolvedValue('owner')
     h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [OK], tail: 200 })
     const { container } = render(<AccessAuditSection />)
@@ -204,8 +210,14 @@ describe('AccessAuditSection', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getByText('2026-09-16 14:02:11')).toBeTruthy()
-    expect(screen.getByText('edge:k2-edge-app-2026-09')).toBeTruthy()
+    const details = container.querySelector('[data-audit-details]') as HTMLElement
+    expect(details.textContent).toContain('2026-09-16 14:02:11 UTC')
+    expect(details.textContent).toContain('Came in through')
+    expect(details.textContent).toContain('The web address · edge:k2-edge-app-2026-09')
+    expect(details.textContent).toContain('Sign-in · login')
+    expect(details.textContent).not.toMatch(/\bRoute\b|\bRecord\b/)
+    // A plain sign-in has nothing more to say: no log line.
+    expect(details.textContent).not.toContain('Log line')
   })
 
   it('an agent vault export is marked, shown under Signed in, and bannered; a person export is not', async () => {
@@ -225,17 +237,40 @@ describe('AccessAuditSection', () => {
       expect(container.querySelectorAll('[data-audit-row]').length).toBeGreaterThan(0)
     })
     // Default filter (Signed in) still shows the agent export, not the owner's.
-    expect(screen.getByText(AGENT_EXPORT.outcome)).toBeTruthy()
-    expect(screen.queryByText(OWNER_EXPORT.outcome)).toBeNull()
     const flagged = container.querySelectorAll('[data-audit-row][data-agent-vault-export="true"]')
     expect(flagged.length).toBe(1)
-    expect(flagged[0]?.textContent).toContain('exported secrets from this server’s vault')
-    expect(flagged[0]?.textContent).toContain('Agent ws-sales/sess-9')
+    expect(rowsText(container).length).toBe(2)
+    expect(flagged[0]?.textContent).toContain('ws-sales agent exported secrets from this server’s vault')
+    expect(flagged[0]?.textContent).toContain('STRIPE_KEY and OPENAI_KEY, copied out to another K2 server')
+    // The raw line and the session id stay in the opened record.
+    expect(flagged[0]?.textContent).not.toContain('sess-9')
+    expect(container.textContent).not.toContain(AGENT_EXPORT.outcome)
+    fireEvent.click(flagged[0]!.querySelector('button')!)
+    const details = container.querySelector('[data-audit-details]') as HTMLElement
+    expect(details.textContent).toContain('Session')
+    expect(details.textContent).toContain('sess-9')
+    expect(details.textContent).toContain('Log line')
+    expect(details.textContent).toContain(AGENT_EXPORT.outcome)
     expect(screen.getByTestId('agent-vault-export-banner').textContent).toContain('An agent exported secrets')
-    // All: the owner's export appears, unflagged.
+    // All: the owner's export appears, unflagged, as "You".
     pick('All')
-    expect(screen.getByText(OWNER_EXPORT.outcome)).toBeTruthy()
+    expect(rowsText(container).some((t) => t.startsWith('You exported secrets') && t.includes('X, copied out'))).toBe(true)
     expect(container.querySelectorAll('[data-audit-row][data-agent-vault-export="true"]').length).toBe(1)
+  })
+
+  it('an agent stamped with a workspace id is named by that workspace', async () => {
+    h.projects = [{ id: 'p2', name: 'release-bot', handle: 'release-bot' }]
+    const SEND: AuthAuditEvent = { ts: '2026-10-17T09:00:00.000Z', event: 'vault-handoff', user: 'agent:p2/s4', outcome: 'ok send GITHUB_TOKEN to atlas hd_0000sample pending', ingress: '-', ip: '-' }
+    h.fetchWhoamiRole.mockResolvedValue('owner')
+    h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [OK, SEND], tail: 200 })
+    const { container } = render(<AccessAuditSection />)
+    await waitFor(() => expect(container.querySelectorAll('[data-audit-row]').length).toBe(1))
+    pick('Vault handoffs')
+    expect(rowsText(container)[0]).toContain('release-bot agent sent a secret')
+    expect(rowsText(container)[0]).not.toContain('p2')
+    // The person filter finds it by the name people see.
+    fireEvent.change(screen.getByLabelText('Filter by person'), { target: { value: 'release' } })
+    expect(rowsText(container).length).toBe(1)
   })
 
   it('no agent export: no banner', async () => {
@@ -264,18 +299,21 @@ describe('AccessAuditSection', () => {
     const { container } = render(<AccessAuditSection />)
     await waitFor(() => expect(container.querySelectorAll('[data-audit-row]').length).toBe(1))
     // Signed in (the default) is sign-ins only.
-    expect(screen.queryByText(SEND.outcome)).toBeNull()
+    expect(container.textContent).not.toContain('STRIPE_KEY')
     pick('Vault handoffs')
     expect(screen.getByRole('radio', { name: 'Vault handoffs' }).getAttribute('aria-checked')).toBe('true')
-    expect(screen.getByText(SEND.outcome)).toBeTruthy()
-    expect(screen.getByText(DENY.outcome)).toBeTruthy()
-    expect(rowsText(container)[0]).toContain('was refused a secret handoff')
-    expect(rowsText(container)[1]).toContain('sent a secret')
+    const rows = rowsText(container)
+    expect(rows.length).toBe(2)
+    expect(rows[0]).toContain('ws-sales agent was refused a secret handoff')
+    expect(rows[0]).toContain('LOGIN to ops · Refused: this secret can never be sent')
+    expect(rows[1]).toContain('ws-sales agent sent a secret')
+    expect(screen.getByText('STRIPE_KEY to ops · waiting for them to accept').className).toContain('break-words')
+    // Never the raw line on a row.
+    expect(container.textContent).not.toContain(SEND.outcome)
+    expect(container.textContent).not.toContain('hd_7f3c')
     expect(container.textContent).not.toContain('203.0.113.9')
-    expect(screen.getByText(SEND.outcome).className).toContain('break-words')
     pick('All')
     expect(container.textContent).toContain('203.0.113.9')
-    expect(screen.getByText(SEND.outcome)).toBeTruthy()
   })
 
   it('Permission cards shows only the five permission-* lines (asks, answers, notes, undo, switches)', async () => {
@@ -287,10 +325,10 @@ describe('AccessAuditSection', () => {
       ingress: '-',
       ip: '-',
     })
-    const REQ = line('permission-request', 'ok pr_7f3a2c compute.use billing', 0)
-    const ANS = line('permission-answer', 'ok pr_7f3a2c allow via desktop', 1)
-    const NOTE = line('permission-note', 'ok pr_7f3a2c note', 2)
-    const UNDO = line('permission-undo', 'ok pr_7f3a2c turn off again', 3)
+    const REQ = line('permission-request', 'pr_7f3a2c compute.use pending via=passport', 0)
+    const ANS = line('permission-answer', 'pr_7f3a2c compute.use approved via=login', 1)
+    const NOTE = line('permission-note', 'pr_7f3a2c compute.use approved via=login note=written', 2)
+    const UNDO = line('permission-undo', 'pr_7f3a2c compute.use approved via=login twin=compute.use-off undo=applied', 3)
     const SWITCH = line('permission-switch', 'server on', 4)
     const LOOKALIKE = line('permissions-sync', 'not a card line', 5)
     const HANDOFF: AuthAuditEvent = { ...REQ, ts: '2026-10-21T10:06:00.000Z', event: 'vault-handoff', outcome: 'ok send KEY to ops' }
@@ -298,11 +336,20 @@ describe('AccessAuditSection', () => {
     h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [OK, REQ, ANS, NOTE, UNDO, SWITCH, LOOKALIKE, HANDOFF], tail: 200 })
     const { container } = render(<AccessAuditSection />)
     await waitFor(() => expect(container.querySelectorAll('[data-audit-row]').length).toBe(1))
-    expect(screen.queryByText(REQ.outcome)).toBeNull()
+    expect(rowsText(container).length).toBe(1)
     pick('Permission cards')
-    for (const ev of [REQ, ANS, NOTE, UNDO, SWITCH]) expect(screen.getByText(ev.outcome)).toBeTruthy()
-    expect(screen.queryByText(LOOKALIKE.outcome)).toBeNull()
-    expect(screen.queryByText(HANDOFF.outcome)).toBeNull()
+    const rows = rowsText(container)
+    expect(rows.length).toBe(5)
+    // Newest first: switch, undo, note, answer, request. Plain words, no request ids.
+    expect(rows[0]).toContain('Permission cards turned on for this server')
+    expect(rows[1]).toContain('Turned off again: ws-billing agent’s request to run jobs on compute nodes')
+    expect(rows[2]).toContain('Wrote a note on ws-billing agent’s request to run jobs on compute nodes')
+    expect(rows[3]).toContain('alex answered a permission request')
+    expect(rows[3]).toContain('Allowed ws-billing agent to run jobs on compute nodes')
+    expect(rows[4]).toContain('ws-billing agent asked for a permission')
+    expect(rows[4]).toContain('Run jobs on compute nodes · waiting for an answer')
+    expect(container.textContent).not.toContain('pr_7f3a2c')
+    expect(container.textContent).not.toContain('via=')
     expect(container.textContent).not.toContain('203.0.113.9')
     // A switch's state is not a failure.
     expect(container.querySelectorAll('[data-audit-row][data-failed="true"]').length).toBe(0)
